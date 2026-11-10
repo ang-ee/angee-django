@@ -297,7 +297,7 @@ class TaskProjectOrderingTests(WorkCase):
                 connections.close_all()
         with ThreadPoolExecutor(max_workers=1) as pool:
             with system_context(reason="tests.task_order.move"), self.Task.ordering_write(
-                using=connection.alias, project_ids=(self.project.pk,),
+                project_ids=(self.project.pk,),
             ):
                 future = pool.submit(reorder)
                 self.assertTrue(waiting.wait(5))

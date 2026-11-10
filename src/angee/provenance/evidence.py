@@ -13,7 +13,7 @@ from pydantic import BaseModel, ConfigDict, JsonValue
 from rebac.resources import model_resource_type
 
 from angee.base.models.identity import instances_from_public_ids, public_id_for
-from angee.base.permissions import require_rebac_queryset
+from angee.base.permissions import reader_queryset, require_rebac_queryset
 from angee.base.refs import generic_pointer_model
 
 
@@ -59,6 +59,8 @@ def _readable(
     An unknown model label is a broken store and fails fast. A model without a
     REBAC resource type has no standing permission: admission (``standing``)
     refuses it, display simply finds nothing readable there.
+    Display without an explicit reader follows ambient scope. Admission always
+    requires the named actor, even under system scope.
     """
 
     grouped: dict[str, list[EvidenceReference]] = {}
@@ -75,10 +77,11 @@ def _readable(
                 raise PermissionDenied("Referenced records require a standing permission.")
             continue
         ids = sorted({ref.id for ref in labelled})
+        queryset = require_rebac_queryset(model, actor=actor) if standing else reader_queryset(model, actor)
         found = instances_from_public_ids(
             model,
             ids,
-            queryset=require_rebac_queryset(model, actor=actor).with_action(permission),
+            queryset=queryset.with_action(permission),
         )
         resolved.update(
             (

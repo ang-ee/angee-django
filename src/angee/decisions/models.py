@@ -58,13 +58,16 @@ class Decision(OptimisticLockMixin, AppendOnlyModel, AngeeDataModel, concrete=Tr
 
     @classmethod
     def requester_querysets(cls) -> tuple[models.QuerySet, ...]:
-        """Owner records annotated with ``_decision_id``, in contribution order."""
+        """Structural base-manager rows annotated with ``_decision_id``, in contribution order.
+
+        These queries supply membership predicates, never the viewer's read.
+        """
         return ()
 
     def requesting_records(self) -> Iterable[models.Model]:
         """Owner records retaining this question, contributed by asking capabilities."""
         for rows in type(self).requester_querysets():
-            yield from rows.using(self._state.db).filter(_decision_id=self.pk).order_by("pk").distinct()
+            yield from rows.filter(_decision_id=self.pk).order_by("pk").distinct()
 
     def change_related_records(self) -> tuple[RecordRef, ...]:
         """Publish the question's retained concern identities and their inherited views with its verdict."""

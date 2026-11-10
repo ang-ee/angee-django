@@ -46,7 +46,7 @@ def load_statement_sources(addon_label: str) -> None:
         system_context(reason=f"{addon_label}.testing.statement_sources"),
         override_settings(
             ANGEE_RESOURCE_EXCLUDED_ENTRIES=(
-                *getattr(settings, "ANGEE_RESOURCE_EXCLUDED_ENTRIES", ()),
+                *settings.ANGEE_RESOURCE_EXCLUDED_ENTRIES,
                 *excluded,
             ),
         ),

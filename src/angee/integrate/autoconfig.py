@@ -13,6 +13,7 @@ _Settings = TypedDict(
         "CELERY_BEAT_SCHEDULE:append": dict[str, dict[str, object]],
         "ANGEE_INTEGRATE_OAUTH_CLIENTS": Sequence[Mapping[str, object]] | Mapping[str, Mapping[str, object]],
         "ANGEE_INTEGRATE_OAUTH_STATE_TTL": int,
+        "ANGEE_INTEGRATE_ALLOW_LOCAL_OAUTH_STATE_CACHE": bool,
         "ANGEE_OIDC_DISCOVERY_TTL": int,
         "ANGEE_OAUTH_PROVIDER_TYPE_CLASSES": dict[str, str],
         "ANGEE_RESOURCE_SOURCE_CLASSES.url": str,
@@ -37,6 +38,7 @@ SETTINGS: _Settings = {
     # the single-use redirect state record (shared by connect and OIDC login).
     "ANGEE_INTEGRATE_OAUTH_CLIENTS": (),
     "ANGEE_INTEGRATE_OAUTH_STATE_TTL": 600,
+    "ANGEE_INTEGRATE_ALLOW_LOCAL_OAUTH_STATE_CACHE": False,
     # Lifetime of a cached metadata discovery document; OAuth and OIDC registrations
     # both discover through integrate (the key keeps its historical OIDC name).
     "ANGEE_OIDC_DISCOVERY_TTL": 3600,

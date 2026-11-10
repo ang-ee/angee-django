@@ -14,8 +14,9 @@ import strawberry_django
 from django.core.exceptions import ImproperlyConfigured, ValidationError
 from django.db import connection, models
 from django.db.models.functions import Coalesce, NullIf
-from django.test.utils import CaptureQueriesContext
+from django.test.utils import CaptureQueriesContext, override_settings
 from rebac import (
+    MissingActorError,
     RelationshipTuple,
     SubjectRef,
     actor_context,
@@ -30,6 +31,7 @@ from rebac.testing import install_schema
 from strawberry import auto
 
 from angee.base.models.base import AngeeDataModel
+from angee.base.testing.queries import statement_body, statement_startswith
 from angee.graphql.capabilities import permissions_field
 from angee.graphql.data.hasura import (
     _declared_aliases,
@@ -383,6 +385,27 @@ def relation_grouping_case(transactional_db: None):
 
 def _query(case: Any, actor: SubjectRef, document: str) -> dict[str, Any]:
     return result_data(execute_schema(case.schema, document, user=actor))
+
+
+@override_settings(REBAC_STRICT_MODE=True)
+@pytest.mark.parametrize("prefetch", [False, True])
+def test_guarded_relation_resolvers_use_ambient_scope(relation_grouping_case: Any, prefetch: bool) -> None:
+    """System reads work; a materialized relation cannot authorize a later actorless read."""
+
+    case = relation_grouping_case
+    one = actor_scoped_to_one("target").base_resolver.wrapped_func
+    many = actor_scoped_to_many("parents").base_resolver.wrapped_func
+    with system_context(reason="tests.relations.ambient"):
+        rows = GroupMiddle.objects.all()
+        if prefetch:
+            rows = rows.prefetch_related("parents")
+        middle = rows.get(pk=case.alpha_middle.pk)
+        assert one(middle).pk == case.alpha.pk
+        assert {row.pk for row in many(middle)} == {case.parents[6].pk}
+    with pytest.raises(MissingActorError):
+        one(middle)
+    with pytest.raises(MissingActorError):
+        list(many(middle))
 
 
 def test_related_axes_merge_unreadable_identities_into_null(
@@ -914,9 +937,9 @@ def test_relation_in_resolves_all_operands_with_one_read(relation_grouping_case:
         else:
             count = len(condition(GroupParent.objects.with_actor(case.alice)))
     assert count == 4
-    reads = [query["sql"] for query in queries if query["sql"].startswith("SELECT")
-             and f'FROM "{GroupLabel._meta.db_table}"' in query["sql"]
-             and f'FROM "{GroupParent._meta.db_table}"' not in query["sql"]]
+    reads = [sql for query in queries for sql in (statement_body(query["sql"]),)
+             if statement_startswith(sql, "SELECT") and f'FROM "{GroupLabel._meta.db_table}"' in sql
+             and f'FROM "{GroupParent._meta.db_table}"' not in sql]
     assert len(reads) == 1
     assert " IN (" in reads[0]
 

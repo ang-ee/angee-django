@@ -2,6 +2,7 @@
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { useMemo, useState, type ReactNode } from "react";
 import { afterEach, expect, test, vi } from "vitest";
+import { createUiTestProviders } from "../../testing";
 import { RecordFieldMarksProvider, RecordFieldMarkControl, usePublishActiveRecordForm, useRecordFieldMarks, useRevealedRecordField, type RecordFieldMark } from "./record-field-marks";
 
 vi.mock("../resource/record-chrome-context", () => ({ useRecordChromeContextMaybe: () => ({ recordId: "nte_7", canonicalResource: "notes.Note" }) }));
@@ -9,7 +10,8 @@ vi.mock("../relation/RecordReference", () => ({
   RecordReference: ({ model, id, label }: { model: string; id: string; label: ReactNode }) =>
     <a href={`/${model}/${id}`}>{label}</a>,
 }));
-afterEach(cleanup);
+const { Provider, clearClients } = createUiTestProviders();
+afterEach(() => { cleanup(); clearClients(); });
 
 test("mark and reveal updates do not render a form that only consumes stable dispatch", async () => {
   const renders = vi.fn();
@@ -63,14 +65,13 @@ test("a linked mark opens its record and names its origin on hover", async () =>
     return <RecordFieldMarkControl field="display_name" label="Name" />;
   }
 
-  render(<RecordFieldMarksProvider><Marks /></RecordFieldMarksProvider>);
+  render(<Provider><RecordFieldMarksProvider><Marks /></RecordFieldMarksProvider></Provider>);
   const link = await screen.findByRole("link", { name: "Source" });
   expect(link.getAttribute("href")).toBe("/parties.Party/pty_9");
   expect(screen.getByRole("button", { name: "Unconfirmed: Name" })).toBeTruthy();
   const trigger = link.parentElement!;
   fireEvent.mouseEnter(trigger);
-  fireEvent.mouseMove(trigger);
-  expect(await screen.findByText("Directory: Customer contacts")).toBeTruthy();
+  expect(screen.getByText("Directory: Customer contacts")).toBeTruthy();
 });
 
 test("a reveal mark preserves its origin tooltip", async () => {
@@ -83,11 +84,10 @@ test("a reveal mark preserves its origin tooltip", async () => {
     useRecordFieldMarks(publications);
     return <RecordFieldMarkControl field="display_name" label="Name" />;
   }
-  render(<RecordFieldMarksProvider><Marks /></RecordFieldMarksProvider>);
+  render(<Provider><RecordFieldMarksProvider><Marks /></RecordFieldMarksProvider></Provider>);
   const mark = await screen.findByRole("button", { name: "Source: Name" });
   fireEvent.mouseEnter(mark.parentElement!);
-  fireEvent.mouseMove(mark.parentElement!);
-  expect(await screen.findByText("Imported directory")).toBeTruthy();
+  expect(screen.getByText("Imported directory")).toBeTruthy();
   fireEvent.click(mark);
   expect(onReveal).toHaveBeenCalledOnce();
 });

@@ -26,6 +26,7 @@ from rebac import (
 
 from angee.base.exceptions import RecordAccessSubjectRefused
 from angee.base.models.locks import StaleRevisionError
+from angee.base.testing.queries import statement_startswith
 from angee.messaging.testing.models import Person
 from angee.projects.testing.models import Project, Task
 from angee.provenance.contrib.angee.exceptions import CreationKeyConflict
@@ -237,7 +238,8 @@ def test_proposal_save_leaves_unrelated_deferred_columns_unwritten(
         setattr(deferred, field, "Changed value")
         with CaptureQueriesContext(connection) as queries:
             deferred.save()
-        updates = [query["sql"] for query in queries if query["sql"].startswith(f'UPDATE "{row._meta.db_table}"')]
+        updates = [query["sql"] for query in queries
+                   if statement_startswith(query["sql"], f'UPDATE "{row._meta.db_table}"')]
         assert len(updates) == 1
         assert '"created_at" =' not in updates[0]
         stored = type(row)._base_manager.get(pk=row.pk)

@@ -63,7 +63,7 @@ class LinkCompletion:
 def _require_login_enabled(oauth_client: Any) -> Any:
     """Return the OAuth client when it is enabled for OIDC login, or fail."""
 
-    if not bool(getattr(oauth_client, "login_enabled", False)):
+    if not oauth_client.login_enabled:
         raise OAuthFlowError(INVALID_STATE, 400)
     return oauth_client
 
@@ -231,6 +231,7 @@ class OidcIdentityResolver:
                     )
                     return user
         except ValidationError as error:
+            # Django ValidationError omits code on aggregate errors.
             if getattr(error, "code", None) == "account_already_linked":
                 raise IdentityFlowError(IDENTITY_RESOLUTION_FAILED, 409) from error
             raise

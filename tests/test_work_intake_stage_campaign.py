@@ -8,6 +8,7 @@ from rebac import PermissionDenied, actor_context, system_context
 from rebac.roles import grant as grant_role
 
 from angee.base.models.merge_references import references
+from angee.base.testing.queries import statement_startswith
 from angee.messaging.testing.models import Message, Person, ThreadFollower, ThreadNotification
 from angee.projects.testing.models import Link, Queue, Stage, Task
 from angee.spaces.testing.models import Membership
@@ -138,7 +139,7 @@ def test_link_retargeting_reads_live_without_writing_either_tuple_store(queue_ca
     assert link.with_actor(people["reader"]).has_access("read")
     assert relationship_snapshot() == before
     assert not any(
-        item["sql"].startswith(("INSERT", "UPDATE", "DELETE")) and "rebac_relationship" in item["sql"]
+        statement_startswith(item["sql"], ("INSERT", "UPDATE", "DELETE")) and "rebac_relationship" in item["sql"]
         for item in queries
     )
 
@@ -200,7 +201,7 @@ def test_stage_position_orders_the_task_list_by_the_queue_workflow(queue_case, d
     # One SELECT orders by stage position.
     ordered = [
         query["sql"] for query in queries.captured_queries
-        if query["sql"].startswith(f'SELECT "{Task._meta.db_table}".')
+        if statement_startswith(query["sql"], f'SELECT "{Task._meta.db_table}".')
         and f'ORDER BY "{Stage._meta.db_table}"."position"' in query["sql"]
     ]
     assert len(ordered) == 1, ordered

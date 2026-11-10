@@ -210,6 +210,15 @@
   },
   {
     "package": "@angee/app",
+    "name": "readSharedIdentity",
+    "source": "packages/app/src/providers/auth.tsx",
+    "kind": null,
+    "reason": "Shared identity cache read without rendered anatomy.",
+    "status": "stable",
+    "storyId": null
+  },
+  {
+    "package": "@angee/app",
     "name": "resourcePageRoutes",
     "source": "packages/app/src/define-base-addon.ts",
     "kind": null,

@@ -29,7 +29,7 @@ from requests.exceptions import ConnectTimeout
 from urllib3.exceptions import MaxRetryError, NewConnectionError
 
 from angee.integrate.errors import IntegrationError
-from angee.messaging.backends import ChannelBackend, DeliveryOutcome, DeliveryUncertain
+from angee.messaging.backends import ChannelBackend, DeliveryOutcome, DeliveryUncertain, OutboundEmailNotConfigured
 
 logger = logging.getLogger(__name__)
 
@@ -53,23 +53,24 @@ class AnymailEmailChannelBackend(ChannelBackend):
     def outbound_email_configured(cls) -> bool:
         """Read the deployment's native email transport configuration decision."""
 
-        return bool(getattr(settings, "ANGEE_EMAIL_DELIVERY_CONFIGURED", False))
+        return bool(settings.ANGEE_EMAIL_DELIVERY_CONFIGURED)
 
     def outbound_sender(self) -> tuple[str, str]:
         """Resolve and validate this channel's configured default envelope sender.
 
-        The channel's ``from_email`` config wins over ``DEFAULT_FROM_EMAIL``; an
-        unconfigured transport or an invalid address is refused.
+        The channel's ``from_email`` config wins over ``DEFAULT_FROM_EMAIL``. An
+        unconfigured transport raises :class:`OutboundEmailNotConfigured`; an invalid
+        address is refused under ``channel`` too.
         """
 
         if not self.outbound_email_configured():
-            raise ValidationError("Outbound email delivery is not configured.")
+            raise OutboundEmailNotConfigured
         config = self.bridge.config if isinstance(self.bridge.config, dict) else {}
         name, address = parseaddr(str(config.get("from_email") or settings.DEFAULT_FROM_EMAIL))
         try:
             validate_email(address)
         except ValidationError as error:
-            raise ValidationError("Configure a valid sender address for this email channel.") from error
+            raise ValidationError({"channel": "Configure a valid sender address for this email channel."}) from error
         return name, address
 
     def deliver(self, message: Any) -> DeliveryOutcome:
@@ -78,7 +79,7 @@ class AnymailEmailChannelBackend(ChannelBackend):
         if not self.outbound_email_configured():
             logger.warning(
                 "Outbound email delivery is not configured; message %s was not sent.",
-                getattr(message, "pk", None),
+                message.pk,
             )
             raise IntegrationError("Outbound email delivery is not configured.")
         try:
@@ -89,7 +90,7 @@ class AnymailEmailChannelBackend(ChannelBackend):
         if not email.from_email or not (email.to or email.cc or email.bcc):
             logger.warning(
                 "Outbound email message %s has no complete from/to envelope; it was not sent.",
-                getattr(message, "pk", None),
+                message.pk,
             )
             raise IntegrationError("The email envelope is incomplete.")
         connection = mailers.default
@@ -266,10 +267,10 @@ class AnymailEmailChannelBackend(ChannelBackend):
 
 
 def _address(handle: Any) -> str:
-    value = str(getattr(handle, "value", "") or "").strip()
+    value = str(handle.value or "").strip()
     if "@" not in value:
         return ""
-    return formataddr((str(getattr(handle, "display_name", "") or "").strip(), value))
+    return formataddr((str(handle.display_name or "").strip(), value))
 
 
 def _source_addresses(message: Any, header: str) -> list[str]:

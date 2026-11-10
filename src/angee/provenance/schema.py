@@ -31,7 +31,7 @@ from angee.base.identity import public_subject_ref
 from angee.base.models.base import record_display_label
 from angee.base.models.identity import public_id_for, public_id_of
 from angee.base.pagination import valid_page_size
-from angee.base.permissions import require_rebac_queryset
+from angee.base.permissions import reader_queryset, relation_read_queryset, require_rebac_queryset
 from angee.base.refs import generic_pointer_model
 from angee.base.serialization import json_safe
 from angee.graphql.actions import ActionResult, action_guard, authorized_permission_target
@@ -307,7 +307,7 @@ def _history_reference(record: models.Model, *, pointer: str = "", label: str | 
 def _statement_source_reference(version: Any, actor: Any) -> HistoryReferenceType | None:
     """Prefer a readable retained link; otherwise name the readable principal."""
 
-    link = getattr(version, "_readable_statement_link", None)
+    link = version._readable_statement_link
     if link is not None:
         return _history_reference(link, label=link.statement_source_label)
     source = readable_statement_read(version, actor)[1]
@@ -321,7 +321,7 @@ class RecordHistory:
         self.record = record
         self.actor = actor
         self.model = type(record)
-        self.using = record._state.db
+        self.source = reader_queryset(self.model, actor)
         self.scopes = record.history_scope()
         self.statement_scopes: dict[type[Statement], models.Q] = {}
         for model, scope in record.history_scopes().items():
@@ -381,18 +381,16 @@ class RecordHistory:
             key = table._meta.pk.attname
             historical = get_history_manager_for_model(table).model
             predecessor = (
-                historical._base_manager.using(self.using)
-                .filter(**{key: models.OuterRef(key)}, history_id__lt=models.OuterRef("history_id"))
+                historical._base_manager.filter(
+                    **{key: models.OuterRef(key)},
+                    history_id__lt=models.OuterRef("history_id"),
+                )
                 .order_by("-history_id")
                 .values("history_id")[:1]
             )
             rows = (
                 get_history_manager_for_model(table)
-                .using(self.using)
-                .filter(
-                    predicate,
-                    changeset_id__in=changeset_ids,
-                )
+                .filter(predicate, changeset_id__in=changeset_ids)
                 .annotate(_angee_predecessor_id=models.Subquery(predecessor))
                 .order_by("changeset_id", key, "history_id")
             )
@@ -407,7 +405,7 @@ class RecordHistory:
                 boundaries.append((changeset_id, boundary[0], boundary[-1], predecessor_id))
                 if predecessor_id is not None:
                     predecessor_ids.add(predecessor_id)
-            predecessors = get_history_manager_for_model(table).using(self.using).in_bulk(predecessor_ids)
+            predecessors = get_history_manager_for_model(table).in_bulk(predecessor_ids)
             for changeset_id, first, last, predecessor_id in boundaries:
                 grouped[changeset_id].append((table, first, last, predecessors.get(predecessor_id)))
         return dict(grouped)
@@ -421,11 +419,8 @@ class RecordHistory:
         grouped: defaultdict[Any, list[tuple[type[Statement], Any]]] = defaultdict(list)
         for statement_model, predicate in self.statement_scopes.items():
             versions = (
-                statement_model.history.using(self.using)
-                .filter(
-                    predicate,
-                    changeset_id__in=changeset_ids,
-                )
+                get_history_manager_for_model(statement_model)
+                .filter(predicate, changeset_id__in=changeset_ids)
                 .order_by("history_id")
             )
             for version in versions:
@@ -458,7 +453,7 @@ class RecordHistory:
         readable_links: dict[tuple[type[models.Model], Any], models.Model] = {}
         for link_model, ids in links_by_model.items():
             assert issubclass(link_model, StatementLinkMixin)
-            rows = require_rebac_queryset(link_model, actor=self.actor).with_action("read").filter(pk__in=ids)
+            rows = relation_read_queryset(link_model, self.source).filter(pk__in=ids)
             if link_model.presentation_related:
                 rows = rows.select_related(*link_model.presentation_related)
             readable_links.update({(link_model, row.pk): row for row in rows})
@@ -481,17 +476,10 @@ class RecordHistory:
         result: dict[tuple[type[models.Model], Any, Any | None], frozenset[str]] = {}
         for model, items in snapshots.items():
             keys = {pk for pk, _changeset_id in items}
-            readable = (
-                require_rebac_queryset(model, actor=self.actor)
-                .with_action("read")
-                .using(self.using)
-                .filter(pk__in=keys)
-                if self.actor is not None
-                else model._base_manager.none()
-            )
+            readable = relation_read_queryset(model, self.source).filter(pk__in=keys)
             current = {row.pk: row for row in readable}
             missing = keys - current.keys()
-            retained = set(model._base_manager.using(self.using).filter(pk__in=missing).values_list("pk", flat=True))
+            retained = set(model._base_manager.filter(pk__in=missing).values_list("pk", flat=True))
             hidden = frozenset(field.name for field in model._meta.concrete_fields)
             history = model_history(model)
             decisions: defaultdict[Any, list[frozenset[str]]] = defaultdict(list)
@@ -609,14 +597,7 @@ class RecordHistory:
                 key = table._meta.pk.attname
                 redirected = "merged_into" in {field.name for field in table._meta.fields}
                 fields = ("changeset_id", key, "history_type", *(("merged_into_id",) if redirected else ()))
-                rows = (
-                    get_history_manager_for_model(table)
-                    .using(self.using)
-                    .filter(
-                        changeset_id__in=changeset_ids,
-                    )
-                    .values_list(*fields)
-                )
+                rows = get_history_manager_for_model(table).filter(changeset_id__in=changeset_ids).values_list(*fields)
                 for changeset_id, pk, history_type, *redirect in rows:
                     survivor = model._meta.pk.to_python(boundaries[changeset_id][1])
                     if pk != survivor and (history_type == HistoryType.DELETED or redirect and redirect[0] == survivor):
@@ -624,14 +605,7 @@ class RecordHistory:
         retained: set[tuple[type[models.Model], Any]] = set()
         for model, changeset_ids in by_model.items():
             keys = {pk for changeset_id in changeset_ids for pk in absorbed[changeset_id]}
-            retained.update(
-                (model, pk)
-                for pk in model._base_manager.using(self.using)
-                .filter(
-                    pk__in=keys,
-                )
-                .values_list("pk", flat=True)
-            )
+            retained.update((model, pk) for pk in model._base_manager.filter(pk__in=keys).values_list("pk", flat=True))
         return {
             changeset_id: HistoryMergeType(
                 survivor=HistoryRecordType(
@@ -663,15 +637,11 @@ def _validate_page(limit: int, offset: int) -> None:
 class HistoryQuery:
     @strawberry.field
     def field_provenance(self, model: str, id: PublicID) -> list[FieldProvenanceType] | None:
-        """Applied field statements through their subject and source read gates."""
+        """Applied field statements through ambient subject and source read gates."""
 
         subject_model = provenance_model(model)
         actor = current_actor()
-        queryset = (
-            require_rebac_queryset(subject_model, actor=actor).with_action("read")
-            if actor is not None
-            else subject_model._base_manager.none()
-        )
+        queryset = require_rebac_queryset(subject_model).with_action("read")
         record = instance_for_id(subject_model, id, queryset=queryset)
         if record is None:
             return None
@@ -686,16 +656,12 @@ class HistoryQuery:
         offset: int = 0,
         selected: PublicID | None = None,
     ) -> RecordHistoryType | None:
-        """A record's changesets through its read gate; hidden and unknown records read as null."""
+        """A record's changesets through its ambient read gate; hidden and unknown records read as null."""
 
         _validate_page(limit, offset)
         tracked = history_model(model)
         actor = current_actor()
-        queryset = (
-            require_rebac_queryset(tracked, actor=actor).with_action("read")
-            if actor is not None
-            else tracked._base_manager.none()
-        )
+        queryset = require_rebac_queryset(tracked).with_action("read")
         record = instance_for_id(tracked, id, queryset=queryset)
         if record is None:
             return None
@@ -716,8 +682,7 @@ class HistoryMutation:
             id,
             tracked.history_revert_permission,
         )
-        targets = Changeset._base_manager.db_manager(hints={"instance": record}).all()
-        target = require_instance_for_id(Changeset, changeset, queryset=targets)
+        target = require_instance_for_id(Changeset, changeset, queryset=Changeset._base_manager.all())
         if not target.revertable(record, actor=current_actor()):
             raise ValidationError("This changeset must be reverted from the owner of its complete write boundary.")
         reverted = target.revert()

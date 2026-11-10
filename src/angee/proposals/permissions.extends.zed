@@ -1,7 +1,7 @@
 // Proposal access through live planning and identity relations. Round managers
 // see responders through the round's roster, never by previewing their accounts.
 // @rebac_package: proposals
-// @rebac_schema_revision: 10
+// @rebac_schema_revision: 11
 
 definition projects/project {
     relation proposal_viewer: auth/user | auth/group#member
@@ -28,12 +28,15 @@ definition projects/task {
     relation comment_asker: auth/user // rebac:field=clarification_asker
     relation all_responders_question: proposals/round // rebac:field={"path":"clarification_round","filters":{"assignee__isnull":true,"clarification_by_manager":true,"clarification_passed_at__isnull":false}}
     relation responder_shared_round: proposals/round // rebac:field={"path":"project__source_proposal__round","filters":{"shared_with_responders":true}}
-    permission read_granted = round_responder + shared_clarification_round->respond + clarification_asker + responder_shared_round->respond
+    // Round managers read and share a track's and a question's tasks through the
+    // task's own grants, so the task owner's withholding, trash concealment and
+    // record-task rule bind them. They write what that derived read admits: the
+    // recipient withholding below never covers a manager, who answers for the round.
+    permission read_granted = round_responder + shared_clarification_round->respond + clarification_asker + responder_shared_round->respond + track_proposal->manage + clarification_round->manage
+    permission share_granted = track_proposal->manage + clarification_round->manage
     permission withheld = clarification_round->retired
     permission write_withheld = clarification_recipient
-    permission read = track_proposal->manage + clarification_round->manage
-    permission write = track_proposal->manage + clarification_round->manage
-    permission share = track_proposal->manage + clarification_round->manage
+    permission write = (track_proposal->manage + clarification_round->manage) & read
     permission narrow = clarification_asker - clarification_round->retired
     permission widen = clarification_round->manage
     permission comment_withheld = (comment_granted & clarification_round->discuss_clarification) - (clarification_round->manage + comment_asker + clarification_recipient + all_responders_question->respond)

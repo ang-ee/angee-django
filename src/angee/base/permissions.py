@@ -6,16 +6,18 @@ from collections.abc import Iterator, Mapping
 from dataclasses import dataclass, replace
 from os import PathLike
 from pathlib import Path
-from typing import Any
+from typing import Any, overload
 
 from django.apps import AppConfig, apps
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ImproperlyConfigured, ValidationError
 from django.db import models
+from django.db.models.query import EmptyQuerySet
 from rebac import SubjectRef, check_new, current_actor, proposed_forward_relationships, to_subject_ref
 from rebac import user_subject_type as _user_subject_type
 from rebac.backends import backend
 from rebac.managers import RebacQuerySet
+from rebac.relation_loading import relation_actor
 from rebac.resources import model_for_resource_type, model_resource_type
 from rebac.schema import Definition, PermArrow, PermBinOp, PermExpr, Schema, resolve_schema_path
 from rebac.schema.introspection import relation_dependencies
@@ -61,6 +63,56 @@ def require_rebac_queryset[M: models.Model](model: type[M], *, actor: Any = _AMB
     return queryset.with_actor(actor) if actor is not None else queryset.none()
 
 
+@overload
+def reader_queryset[Q: RebacQuerySet[Any]](source: Q, actor: Any) -> Q: ...
+
+
+@overload
+def reader_queryset[M: models.Model](source: type[M], actor: Any) -> RebacQuerySet[M]: ...
+
+
+def reader_queryset(source: type[models.Model] | RebacQuerySet[Any], actor: Any) -> RebacQuerySet[Any]:
+    """Read as a pinned actor when given, otherwise through REBAC's ambient scope.
+
+    An existing queryset retains its subtype and filters. Unlike
+    ``require_rebac_queryset(..., actor=None)``, an absent reader permits ambient
+    system work; without an ambient actor or system scope, reads fail closed.
+    """
+
+    rows = source if isinstance(source, RebacQuerySet) else require_rebac_queryset(source)
+    return (rows.with_actor(actor) if actor is not None else rows).with_action("read")
+
+
+def relation_read_queryset[M: models.Model](model: type[M], source: models.QuerySet[Any]) -> RebacQuerySet[M]:
+    """``model``'s ``read`` queryset for the rows ``source`` relates to, read as ``source`` reads.
+
+    This is the one rule for an actorless relation read. The reader is REBAC's
+    ``relation_actor(source)``: the source's pinned actor, else the ambient one.
+    With neither, REBAC's ambient scope answers, as it does for ``source``
+    itself: system context reads unscoped and an actorless read fails closed.
+    An emptied ``source`` reads nothing, as it does itself. A read that names no
+    reader on purpose (``require_rebac_queryset(..., actor=None)``) is policy
+    only where its owner's docstring says so, as message pointers and permission
+    projections do.
+    """
+
+    if isinstance(source, EmptyQuerySet):
+        return require_rebac_queryset(model, actor=None).with_action("read").none()
+    return reader_queryset(model, relation_actor(source))
+
+
+def scoped_relation_read[M: models.Model](model: type[M], source: models.QuerySet[Any]) -> RebacQuerySet[M]:
+    """:func:`relation_read_queryset`, eagerly scoped for SQL subquery consumers.
+
+    An emptied ``source`` stays an empty, unscoped queryset: there is no reader to
+    resolve and no bypass to audit, so declaration-time expression probes compose
+    without a database.
+    """
+
+    related = relation_read_queryset(model, source)
+    return related if isinstance(source, EmptyQuerySet) else related.scoped()
+
+
 @dataclass(frozen=True, slots=True)
 class _RebacSchemaBinding:
     source: Path | None
@@ -70,17 +122,18 @@ class _RebacSchemaBinding:
     schema: Schema | None = None
 
 
-_SCHEMA_BINDING = "_angee_rebac_schema_binding"
+SCHEMA_BINDING = "_angee_rebac_schema_binding"
+"""The ``AppConfig.__dict__`` key holding its schema binding; test fixtures restore it with ``rebac_schema``."""
 
 
 def declared_schema_path(app_config: AppConfig) -> Path | None:
     """Retain the native authored declaration before binding generated output."""
 
-    binding = app_config.__dict__.get(_SCHEMA_BINDING)
+    binding = app_config.__dict__.get(SCHEMA_BINDING)
     declaration = getattr(app_config, "rebac_schema", None)
     if not isinstance(binding, _RebacSchemaBinding) or declaration != binding.effective:
         binding = _RebacSchemaBinding(resolve_schema_path(app_config), declaration, declaration)
-        app_config.__dict__[_SCHEMA_BINDING] = binding
+        app_config.__dict__[SCHEMA_BINDING] = binding
     return binding.source
 
 
@@ -88,11 +141,11 @@ def bind_rebac_schema(app_config: AppConfig, path: Path | None) -> None:
     """Bind generated input; ``None`` restores the original native declaration."""
 
     source = declared_schema_path(app_config)
-    binding = app_config.__dict__[_SCHEMA_BINDING]
+    binding = app_config.__dict__[SCHEMA_BINDING]
     assert isinstance(binding, _RebacSchemaBinding)
     effective = path if path is not None else binding.declaration
     setattr(app_config, "rebac_schema", effective)
-    app_config.__dict__[_SCHEMA_BINDING] = _RebacSchemaBinding(source, binding.declaration, effective)
+    app_config.__dict__[SCHEMA_BINDING] = _RebacSchemaBinding(source, binding.declaration, effective)
 
 
 def merged_schema_relpath(package: str) -> Path:
@@ -120,12 +173,12 @@ def declared_rebac_schema(app_config: AppConfig) -> Schema | None:
     """
 
     declared_schema_path(app_config)
-    binding = app_config.__dict__[_SCHEMA_BINDING]
+    binding = app_config.__dict__[SCHEMA_BINDING]
     assert isinstance(binding, _RebacSchemaBinding)
     schema_path = resolve_schema_path(app_config)
     if schema_path is None:
         if binding.signature is not None:
-            app_config.__dict__[_SCHEMA_BINDING] = replace(binding, signature=None, schema=None)
+            app_config.__dict__[SCHEMA_BINDING] = replace(binding, signature=None, schema=None)
         return None
     status = schema_path.stat()
     signature = (
@@ -135,7 +188,7 @@ def declared_rebac_schema(app_config: AppConfig) -> Schema | None:
         binding = replace(
             binding, signature=signature, schema=parse_zed(schema_path.read_text(encoding="utf-8")),
         )
-        app_config.__dict__[_SCHEMA_BINDING] = binding
+        app_config.__dict__[SCHEMA_BINDING] = binding
     return binding.schema
 
 
@@ -281,6 +334,21 @@ def instance_actor(instance: models.Model) -> SubjectRef | None:
     return actor if actor is not None else current_actor()
 
 
+def user_subject_ref(*, user: models.Model | None = None, user_id: Any = None) -> SubjectRef:
+    """Return a user's canonical subject identity without loading a bare primary key.
+
+    A supplied row uses REBAC's native conversion. A bare key uses REBAC's user
+    subject type, the inverse of :func:`actor_user_id`. Callers requiring proof
+    that the user exists must read that row explicitly before constructing its ref.
+    """
+
+    if user is not None:
+        return to_subject_ref(user)
+    if user_id is None:
+        raise ValueError("A user or user_id is required to build a subject reference.")
+    return SubjectRef.of(_user_subject_type(), str(user_id))
+
+
 def actor_user_id(actor: Any) -> Any | None:
     """Return ``actor``'s user primary key, or ``None`` when no user backs it.
 
@@ -318,7 +386,7 @@ def subject_reaches_user(subject: models.Model | SubjectRef, user_id: Any) -> bo
     reference = to_subject_ref(subject)
     if reference.subject_id == "*":
         return True
-    user = SubjectRef.of(_user_subject_type(), str(user_id))
+    user = user_subject_ref(user_id=user_id)
     if reference == user:
         return True
     if not reference.optional_relation:
@@ -371,10 +439,5 @@ def candidate_relationships(instance: models.Model, action: str) -> CandidateRel
     if definition is None:
         return None
     required = frozenset(relation_dependencies(schema, resource_type, action))
-    relationships = proposed_forward_relationships(
-        instance,
-        definition,
-        required_relations=required,
-        using=instance._state.db,
-    )
+    relationships = proposed_forward_relationships(instance, definition, required_relations=required)
     return CandidateRelationships(resource_type, definition, required, relationships)

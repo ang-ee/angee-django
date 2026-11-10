@@ -6,7 +6,7 @@ import json
 from collections.abc import Iterable, Sequence
 from datetime import datetime, timedelta
 from time import monotonic
-from typing import Any, Literal, cast
+from typing import Any, ClassVar, Literal, cast
 from uuid import UUID
 
 from django.apps import apps
@@ -179,6 +179,7 @@ class NotionBackend(BridgeImpl, HttpClientMixin):
     requires_connection_discovery = True
     supports_identity_reads = True
     sync_parallelism = 1
+    mapping_version: ClassVar[int] = 4
 
     def _request[T: BaseModel](
         self,
@@ -226,7 +227,7 @@ class NotionBackend(BridgeImpl, HttpClientMixin):
     def streams(self, *, deadline: float | None = None) -> Iterable[StreamDefinition]:
         """Keep one identity namespace even when pages move between data sources."""
         self.bridge.ensure_vault()
-        return (StreamDefinition("pages", kind=StreamKind.RECORD_REPLICA),)
+        return (StreamDefinition("pages", kind=StreamKind.RECORD_REPLICA, mapping_version=self.mapping_version),)
 
     def extract(self, stream: Any, page_bound: int, *, deadline: float | None = None) -> StreamPage:
         """Commit each bounded batch with its continuation; search absence never deletes."""
@@ -402,7 +403,6 @@ class NotionBackend(BridgeImpl, HttpClientMixin):
                     node.last_edited_time.isoformat(),
                     target=target,
                     projection=self._projection(target),
-                    mapping_version=4,
                     mapped_payload=mapped,
                     dependency_digest=canonical_json_sha256([mapped["parent"], resolved_links]),
                     tombstone=node.is_trashed,
@@ -447,7 +447,6 @@ class NotionBackend(BridgeImpl, HttpClientMixin):
                     target=target,
                     mapped_payload=self._projection(target),
                     dependency_digest=record.dependency_digest,
-                    mapping_version=record.mapping_version,
                 )
             mapped = record.mapped_payload
             parent = pages.with_actor(owner).get(pk=mapped["parent"], vault=vault) if mapped["parent"] else None
@@ -474,7 +473,6 @@ class NotionBackend(BridgeImpl, HttpClientMixin):
                 target=target,
                 mapped_payload=mapped,
                 dependency_digest=record.dependency_digest,
-                mapping_version=record.mapping_version,
             )
 
     def source_url(self, link: Any) -> str:

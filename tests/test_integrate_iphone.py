@@ -10,6 +10,7 @@ from typing import Any
 
 import pytest
 
+from angee.base.testing.queries import statement_startswith
 from angee.integrate_iphone.backup import BackupError, IosBackup
 
 BASE_MTIME_NS = 1_700_000_000_000_000_000
@@ -106,7 +107,7 @@ def test_iter_files_uses_one_query_and_skips_a_malformed_file_id(tmp_path: Path)
         (NOTES_DOMAIN, NOTES_PATH, "20" * 20),
     ]
     assert [item.blob_path.read_bytes() for item in files] == [CAMERA_BYTES, NOTES_BYTES]
-    assert len([query for query in queries if query.lstrip().upper().startswith("SELECT")]) == 1
+    assert len([query for query in queries if statement_startswith(query.lstrip().upper(), "SELECT")]) == 1
 
 
 def test_reader_maps_real_directories_and_skips_missing_or_link_rows(tmp_path: Path) -> None:

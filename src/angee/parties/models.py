@@ -55,7 +55,7 @@ from angee.base.models.identity import public_id_of
 from angee.base.models.merge import MergeableMixin
 from angee.base.models.ownership import OwnerMixin
 from angee.base.models.trash import TrashMixin
-from angee.base.permissions import instance_actor
+from angee.base.permissions import actor_user_id, instance_actor, reader_queryset
 from angee.base.prefetch import prefetched
 from angee.integrate.models import Bridge, IntegrationCreateMode
 from angee.integrate.states import StreamDefinition, StreamDirection, StreamKind
@@ -103,6 +103,8 @@ class Party(
     _angee_base = AngeeHistoryMergeableUnscopedManager()
 
     rebac_grantable = {"reader": "write", "identity_reader": "write"}
+
+    owned_relations = ("addresses", "relationships")
 
     sqid_prefix = "pty_"
     history = ModelHistory(inherit=True, excluded_fields=("handle_count",))
@@ -213,7 +215,7 @@ class Party(
     def lock_subject(self, members: Mapping[str, Any] | None = None) -> Any:
         """Lock identity Handles before the statement owner's core Party lock."""
 
-        owner = apps.get_model("parties", "Party").objects.db_manager(hints={"instance": self})
+        owner = apps.get_model("parties", "Party").objects
         members = members or {}
         handle = members.get("handle")
         handle_ids = (
@@ -227,7 +229,7 @@ class Party(
     def lock_for_merge(self) -> None:
         """Lock this party's Handles before the shared merge owner locks Parties."""
 
-        owner = apps.get_model("parties", "Party").objects.db_manager(hints={"instance": self})
+        owner = apps.get_model("parties", "Party").objects
         handle_ids = owner.handle_statements().filter(subject_id=self.pk).values_list("handle_id", flat=True)
         owner.lock_identity_rows(party_ids=(self.pk,), handle_ids=handle_ids)
 
@@ -335,8 +337,6 @@ class Party(
                 dirty.append(name)
         if dirty:
             self.save(update_fields=[*dirty, "updated_at"])
-
-    decision_methods = ("apply_identity",)
 
     def apply_identity(
         self,
@@ -499,8 +499,7 @@ class Party(
         """
 
         def hint() -> models.Prefetch:
-            parties = type(self).objects.all()
-            return (parties.with_actor(actor) if (actor := self.actor()) else parties).circle_members_prefetch()
+            return reader_queryset(type(self).objects.all(), self.actor()).circle_members_prefetch()
 
         memberships = prefetched(self, VISIBLE_CIRCLE_MEMBERS, hint)
         return list(dict.fromkeys(membership.circle.name for membership in memberships))
@@ -526,7 +525,6 @@ class Party(
 
 class Person(Composable, metaclass=RebacModelBase, inherits="parties.Party"):
     """A human party — carries name parts and an optional platform-user link."""
-
 
     statements = StatementRecords(
         link="integrate.RecordLink",
@@ -575,7 +573,6 @@ class Person(Composable, metaclass=RebacModelBase, inherits="parties.Party"):
 
 class Organization(Composable, metaclass=RebacModelBase, inherits="parties.Party"):
     """An organisation party — carries its legal name and primary domain."""
-
 
     statements = StatementRecords(
         link="integrate.RecordLink",
@@ -783,7 +780,7 @@ class Handle(MergeableMixin, HistoryMixin, TaggedModel, AuditMixin, AngeeDataMod
         super().validate_merge(merged)
         if any(row.platform != self.platform for row in merged):
             raise ValidationError("Only handles on the same platform can be merged.")
-        apps.get_model("parties", "Party").objects.db_manager(self._state.db).lock_identity_rows(
+        apps.get_model("parties", "Party").objects.lock_identity_rows(
             party_ids=(), handle_ids=(self.pk, *(row.pk for row in merged)),
         )
 
@@ -806,7 +803,7 @@ class Handle(MergeableMixin, HistoryMixin, TaggedModel, AuditMixin, AngeeDataMod
         for name, value in values.items():
             setattr(self, name, value)
         if values:
-            self.save(using=self._state.db, update_fields=(*values, "updated_at"))
+            self.save(update_fields=(*values, "updated_at"))
         for row in merged:
             if self.avatar_id is None and row.avatar_id is not None:
                 self.set_avatar(row.avatar)
@@ -1011,7 +1008,7 @@ class AddressManager[AddressT: Address](StatementSubjectManager[AddressT]):
                 party=party,
                 label=" ".join(label.split()).strip()[:64],
                 is_primary=is_primary,
-                created_by_id=getattr(actor, "pk", None),
+                created_by_id=actor_user_id(actor),
                 **normalized,
             )
             row = self.with_actor(actor).insert(row)
@@ -1078,7 +1075,6 @@ class Address(TrashMixin, PartyAspectMixin, HistoryMixin, AuditMixin, AngeeDataM
     two same-labelled addresses — so a CardDAV mapper keys idempotency on the
     address content, not the label.
     """
-
 
     sqid_prefix = "adr_"
     statements = StatementRecords(
@@ -1165,7 +1161,6 @@ class Folder(OwnerMixin, AngeeDataModel, concrete=True):
     tree (``parent``) are deferred until a create path lands to exercise them.
     """
 
-
     sqid_prefix = "fol_"
     name = models.CharField(max_length=200)
     directory = models.ForeignKey(
@@ -1216,6 +1211,11 @@ class Circle(HierarchyMixin, OwnerMixin, AngeeDataModel, concrete=True):
     Circles are an organising surface only — they never gate visibility or
     sharing; REBAC stays the one authorization owner.
     """
+
+    def member_count(self) -> int:
+        """Return the count selected by CircleQuerySet.with_member_counts, or zero."""
+
+        return int(self.__dict__.get("_member_count", 0))
 
     sqid_prefix = "cir_"
     hierarchy_scope_fields = ("owner",)

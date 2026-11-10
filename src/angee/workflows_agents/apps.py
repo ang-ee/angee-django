@@ -5,10 +5,7 @@ from typing import Any
 from django.apps import AppConfig, apps
 from rebac import system_context
 
-from angee.workflows.signals import isolated_run_cleanup, run_stopping
 
-
-@isolated_run_cleanup
 def close_run_conversations(sender: Any, *, run: Any, **kwargs: Any) -> None:
     """Close created sessions and stop created turns on explicitly continued sessions."""
     sessions = apps.get_model("agents", "AgentSession")
@@ -39,4 +36,11 @@ class WorkflowsAgentsConfig(AppConfig):
 
     def ready(self) -> None:
         """Connect once after concrete models have been composed."""
-        run_stopping.connect(close_run_conversations, dispatch_uid="workflows_agents.run_stopping")
+        # Workflow signals import the Celery app, which needs completed autoconfig.
+        from angee.workflows.signals import isolated_run_cleanup, run_stopping
+
+        run_stopping.connect(
+            isolated_run_cleanup(close_run_conversations),
+            dispatch_uid="workflows_agents.run_stopping",
+            weak=False,
+        )

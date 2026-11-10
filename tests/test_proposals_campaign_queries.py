@@ -12,6 +12,7 @@ from rebac import actor_context, system_context, to_subject_ref
 from rebac.backends import backend
 from rebac.backends.local import LocalBackend
 
+from angee.base.testing.queries import is_rebac_revision_read, statement_body, statement_startswith
 from angee.graphql.capabilities import held_permissions, permission_annotations
 from angee.graphql.deletion import DeletePreview
 from angee.projects.testing.models import Task
@@ -20,7 +21,6 @@ from tests.proposals_campaign import campaign as campaign
 from tests.proposals_campaign import campaign_schema as campaign_schema
 from tests.proposals_campaign import campaign_store as campaign_store
 from tests.proposals_models import Proposal, Round
-from tests.queries import is_rebac_revision_read
 from tests.test_project_access import project_access_schema as project_access_schema
 
 # django-zed-rebac owns these fixed policy reads. Application row
@@ -65,20 +65,18 @@ def _list_statement_categories(queries, model, *, roster=False, projection=None,
     roster_prefix = f"SELECT {quote(Proposal._meta.db_table)}.{quote(Proposal._meta.pk.column)},"
     for query in queries:
         statement = query["sql"]
-        # Django records streamed PostgreSQL reads as DECLARE ... FOR SELECT.
-        # Classify their SELECT payload while counting each captured statement.
-        sql = statement.partition(" FOR ")[2] if statement.startswith("DECLARE ") else statement
-        if sql.startswith(row_prefix) or (
+        sql = statement_body(statement)
+        if statement_startswith(sql, row_prefix) or (
             projection and f" AS {quote(projection)} FROM {quote(model._meta.db_table)}" in sql
         ):
             category = "application"
-        elif roster and sql.startswith(roster_prefix):
+        elif roster and statement_startswith(sql, roster_prefix):
             category = "roster"
-        elif sql.startswith('INSERT INTO "rebac_permissionauditevent"'):
+        elif statement_startswith(sql, 'INSERT INTO "rebac_permissionauditevent"'):
             category = "bypass_audit"
         elif is_rebac_revision_read(statement):
             category = "schema_revision"
-        elif sql.startswith("SELECT ") and sql.partition(",")[0].partition(" FROM ")[0].endswith(' AS "pk"'):
+        elif statement_startswith(sql, "SELECT ") and sql.partition(",")[0].partition(" FROM ")[0].endswith(' AS "pk"'):
             # Candidate rows with their verdict: 0.31's batched held and field-visibility reads.
             category = "held_rows"
         else:

@@ -18,9 +18,11 @@ import { AppMenu } from "./AppMenu";
 import { MenuTree, type ChromeMenuItem } from "./menu-tree";
 import { ChromePlaceProvider } from "./refine-menu";
 import { InAppLinkProvider, routerNavigator } from "../lib/in-app-link";
+import { createUiTestProviders } from "../testing";
 
 const media = vi.hoisted(() => ({ large: false }));
-afterEach(() => { cleanup(); vi.restoreAllMocks(); window.sessionStorage.clear(); });
+const { Provider, clearClients } = createUiTestProviders();
+afterEach(() => { cleanup(); clearClients(); vi.restoreAllMocks(); window.sessionStorage.clear(); });
 
 vi.mock("../lib/use-media-query", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../lib/use-media-query")>()),
@@ -144,9 +146,8 @@ describe("AppRail intermediate navigation", () => {
     renderRail({ confined });
     const link = await screen.findByRole("link", { name: label });
     fireEvent.mouseEnter(link);
-    fireEvent.mouseMove(link);
     const tooltipText = (content: string, element: Element | null) => Boolean(element?.closest("[data-base-ui-portal]")) && content.startsWith(label);
-    const tooltip = await screen.findByText(tooltipText);
+    const tooltip = screen.getByText(tooltipText);
     expect(tooltip.textContent).toContain(label);
     expect(link.getAttribute("aria-label")).toBe(label);
     expect(screen.getByRole("link", { name: label })).toBe(link);
@@ -162,8 +163,7 @@ describe("AppRail intermediate navigation", () => {
     }
     const projects = screen.getByRole("link", { name: "Projects" });
     fireEvent.mouseEnter(projects);
-    fireEvent.mouseMove(projects);
-    const hint = await screen.findByText("Projects — drag to reorder; long press to set as default");
+    const hint = screen.getByText("Projects — drag to reorder; long press to set as default");
     expect(hint.closest("[data-base-ui-portal]")).toBeTruthy();
   });
 
@@ -179,12 +179,11 @@ describe("AppRail intermediate navigation", () => {
     } });
     const link = await screen.findByRole("link", { name: label });
     fireEvent.mouseEnter(link);
-    fireEvent.mouseMove(link);
     const hint = !confined ? defaultApp
       ? "Projects — default app; drag to reorder"
       : "Projects — drag to reorder; long press to set as default" : label;
     const tooltipLabel = `${hint} · ${id}`;
-    expect((await screen.findByText(tooltipLabel)).closest("[data-base-ui-portal]")).toBeTruthy();
+    expect((screen.getByText(tooltipLabel)).closest("[data-base-ui-portal]")).toBeTruthy();
     expect(screen.getAllByText(tooltipLabel)).toHaveLength(1);
   });
 
@@ -399,8 +398,7 @@ describe("AppRail order, default app and chooser", () => {
     expect(railPreferences(preferences()).defaultItemId).toBe("notes");
     expect(notes.querySelector(".bg-success")).toBeTruthy();
     fireEvent.mouseEnter(notes);
-    fireEvent.mouseMove(notes);
-    expect(await screen.findByText("Notes — default app; drag to reorder")).toBeTruthy();
+    expect(screen.getByText("Notes — default app; drag to reorder")).toBeTruthy();
   });
 
   test.each([false, true])("Alt+Arrow moves a root through the shared rail order (expanded: %s)", async (expanded) => {
@@ -469,8 +467,7 @@ describe("AppRail order, default app and chooser", () => {
     expect(railPreferences(preferences()).defaultItemId).toBeNull();
     const projects = screen.getByRole("link", { name: "Projects" });
     fireEvent.mouseEnter(projects);
-    fireEvent.mouseMove(projects);
-    expect(await screen.findByText("Projects — drag to reorder; long press to set as default · projects")).toBeTruthy();
+    expect(screen.getByText("Projects — drag to reorder; long press to set as default · projects")).toBeTruthy();
     fireEvent.click(screen.getAllByRole("button", { name: "Collapse app navigation" })[0]!);
     await screen.findByRole("button", { name: "Expand app navigation" });
     expect(rootLabels()).toEqual(["Projects", "Notes", "Help"]);
@@ -569,7 +566,7 @@ function renderRail({ confined = false, preferences: initialPreferences = {}, me
   const router = createRouter({ routeTree: root.addChildren(["/projects", "/settings"].map((path) =>
     createRoute({ getParentRoute: () => root, path }))),
     history: createMemoryHistory({ initialEntries: ["/projects"] }) });
-  render(<RouterProvider router={router} />);
+  render(<Provider><RouterProvider router={router} /></Provider>);
   return { preferences: () => saved.current, router };
 }
 

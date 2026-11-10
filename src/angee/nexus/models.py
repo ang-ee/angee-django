@@ -81,8 +81,8 @@ class Tie(AngeeDataModel, concrete=True):
     def __str__(self) -> str:
         """Return the canonical pair and current gravity for Django displays."""
 
-        party_a_id = getattr(self, "party_a_id", None)
-        party_b_id = getattr(self, "party_b_id", None)
+        party_a_id = self.party_a_id
+        party_b_id = self.party_b_id
         return f"tie:{party_a_id}<->{party_b_id} g={self.gravity:.2f}"
 
     @staticmethod
@@ -128,8 +128,8 @@ class Tie(AngeeDataModel, concrete=True):
     def save(self, *args: Any, **kwargs: Any) -> None:
         """Persist the pair in canonical primary-key order."""
 
-        party_a_id = getattr(self, "party_a_id", None)
-        party_b_id = getattr(self, "party_b_id", None)
+        party_a_id = self.party_a_id
+        party_b_id = self.party_b_id
         if party_a_id is not None and party_b_id is not None and party_a_id > party_b_id:
             party_a = self._state.fields_cache.pop("party_a", None)
             party_b = self._state.fields_cache.pop("party_b", None)

@@ -8,9 +8,9 @@ from django.test.utils import CaptureQueriesContext
 from rebac import system_context
 from rebac.resources import model_for_resource_type
 
+from angee.base.testing.queries import is_rebac_revision_read, statement_startswith
 from tests.conftest import Backend, Drive, Folder, Page, Vault, create_user
 from tests.extraction_models import Extraction as _Extraction  # noqa: F401 -- register source model
-from tests.queries import is_rebac_revision_read
 
 
 @pytest.mark.parametrize(
@@ -46,7 +46,7 @@ def test_large_permission_reads_keep_one_application_statement(
     assert len(queries) == 2, (resource_type, permission, queries.captured_queries)
     assert sum(is_rebac_revision_read(item["sql"]) for item in queries) == 1
     table = connection.ops.quote_name(model._meta.db_table)
-    assert sum(item["sql"].startswith(f"SELECT {table}.") for item in queries) == 1
+    assert sum(statement_startswith(item["sql"], f"SELECT {table}.") for item in queries) == 1
 
 
 @pytest.mark.parametrize(

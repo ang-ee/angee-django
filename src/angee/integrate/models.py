@@ -19,7 +19,8 @@ from __future__ import annotations
 import json
 import logging
 import secrets
-from collections.abc import Collection, Iterable, Mapping
+from collections.abc import Collection, Iterable, Iterator, Mapping
+from contextlib import contextmanager
 from copy import copy, deepcopy
 from dataclasses import replace
 from datetime import datetime, timedelta
@@ -38,6 +39,7 @@ from django.core import checks
 from django.core.exceptions import ImproperlyConfigured, ValidationError
 from django.db import connection, models, transaction
 from django.db.models import OuterRef, Prefetch, Q, Subquery
+from django.db.models.functions import JSONObject
 from django.utils import timezone
 from django_compose.models import Composable
 from rebac import (
@@ -57,7 +59,7 @@ from angee.base.fields.implementation import ImplClassField
 from angee.base.fields.state import StateField
 from angee.base.fields.text import DiagnosticTextField
 from angee.base.lineage import concrete_child, concrete_child_accessor, concrete_child_models
-from angee.base.locks import LockKey, record_lock_key, task_lock, task_locks_are_cross_process
+from angee.base.locks import LockKey, record_lock_key, task_lock, task_lock_is_held, task_locks_are_cross_process
 from angee.base.models.audit import AuditMixin
 from angee.base.models.base import AngeeDataModel, record_display_label
 from angee.base.models.implementations import ImplDefaultsMixin
@@ -83,7 +85,6 @@ from angee.integrate.errors import (
 from angee.integrate.events import EventKind
 from angee.integrate.impl import BridgeImpl, IntegrationImpl, LiveBridgeImpl
 from angee.integrate.live import PairingProjection, PairingState, armed_material_key
-from angee.integrate.locks import bridge_advisory_lock, bridge_is_locked, bridge_session_is_hosted
 from angee.integrate.mixins import SyncStateMixin
 from angee.integrate.net import validate_public_url
 from angee.integrate.oauth.client import OAuthClientProtocol
@@ -114,7 +115,7 @@ from angee.integrate.streams import (
     read_stream_keys,
     sync_bridge,
 )
-from angee.integrate.sync import SyncDispatch, bridge_progress_context
+from angee.integrate.sync import SyncDispatch, progress_bridge_context
 from angee.integrate.webhooks import PinnedWebhookClient, WebhookDeliveryError
 from angee.jobs.enqueue import enqueue_task
 from angee.provenance.context import current_changeset
@@ -262,7 +263,7 @@ class OAuthClientManager[OAuthClientT: OAuthClient](_OAuthClientManagerBase[OAut
     ) -> tuple[Mapping[str, Any], ...]:
         """Return normalized setting entries from an explicit value or settings."""
 
-        raw_entries = getattr(settings, "ANGEE_INTEGRATE_OAUTH_CLIENTS", ()) if entries is None else entries
+        raw_entries = settings.ANGEE_INTEGRATE_OAUTH_CLIENTS if entries is None else entries
         if not raw_entries:
             return ()
         if isinstance(raw_entries, Mapping):
@@ -586,8 +587,13 @@ class OAuthClient(ImplDefaultsMixin, AuditMixin, AngeeDataModel, concrete=True):
         set them by name.
         """
 
+        return self.fill_discovery_fields(discovery, self.DISCOVERY_ENDPOINT_FIELDS)
+
+    def fill_discovery_fields(self, discovery: Mapping[str, Any], fields: Mapping[str, str]) -> bool:
+        """Fill declared blank fields without replacing explicit configuration."""
+
         changed = False
-        for field, key in self.DISCOVERY_ENDPOINT_FIELDS.items():
+        for field, key in fields.items():
             if getattr(self, field, ""):
                 continue
             value = discovery.get(key)
@@ -809,43 +815,45 @@ class ExternalAccount(OwnerMixin, AngeeDataModel, concrete=True):
     def __str__(self) -> str:
         """Return a stable provider-qualified account label."""
 
-        client_slug = getattr(getattr(self, "oauth_client", None), "slug", "?")
+        client_slug = "?" if self.oauth_client_id is None else self.oauth_client.slug
         return f"{client_slug}:{self.external_id}"
 
     @property
     def credential_status(self) -> str:
         """Return the current OAuth credential status, if this account has one."""
 
-        credential = getattr(self, "credential", None)
-        return "" if credential is None else str(getattr(credential, "status", "") or "")
+        credential = self.credential
+        return "" if credential is None else str(credential.status)
+
+    @property
+    def account_label(self) -> str:
+        """Return the account's human subject: its email, display name, or external id."""
+
+        return self.email or self.display_name or self.external_id
 
     @property
     def provider_slug(self) -> str:
         """Return the originating OAuth client's slug."""
 
-        client = getattr(self, "oauth_client", None)
-        return str(getattr(client, "slug", "") or "")
+        return self.oauth_client.slug
 
     @property
     def provider_environment(self) -> str:
         """Return the originating OAuth client's environment."""
 
-        client = getattr(self, "oauth_client", None)
-        return str(getattr(client, "environment", "") or "")
+        return self.oauth_client.environment
 
     @property
     def provider_label(self) -> str:
         """Return the originating OAuth client's display label."""
 
-        client = getattr(self, "oauth_client", None)
-        return str(getattr(client, "display_name", "") or "")
+        return self.oauth_client.display_name
 
     @property
     def provider_icon(self) -> str:
         """Return the originating OAuth client's branding icon."""
 
-        client = getattr(self, "oauth_client", None)
-        return str(getattr(client, "icon", "") or "")
+        return self.oauth_client.icon
 
     @staticmethod
     def display_name_from_claims(claims: Mapping[str, Any], email: str) -> str:
@@ -951,7 +959,11 @@ class CredentialManager[CredentialT: Credential](_CredentialManagerBase[Credenti
         return deleted > 0
 
     def prepare_disconnect(self, credential: Any) -> None:
-        """Validate a disconnect and schedule remote revocation after commit."""
+        """Validate a disconnect and schedule remote revocation after commit.
+
+        The caller holds one transaction through this preparation and deletion,
+        preserving any locks taken by the credential's disconnect guard.
+        """
 
         credential.check_disconnect()
         # Revoking the source grant also releases the resource-specific material
@@ -1070,18 +1082,11 @@ class CredentialManager[CredentialT: Credential](_CredentialManagerBase[Credenti
         return instance
 
     @staticmethod
-    def _oauth_credential_name(oauth_client: Any, external_account: Any | None) -> str:
+    def _oauth_credential_name(oauth_client: OAuthClient, external_account: ExternalAccount | None) -> str:
         """Return a default label for an OAuth credential: the provider, plus its subject."""
 
-        label = str(getattr(oauth_client, "display_name", "") or getattr(oauth_client, "slug", "") or "OAuth")
-        subject = ""
-        if external_account is not None:
-            subject = str(
-                getattr(external_account, "email", "")
-                or getattr(external_account, "display_name", "")
-                or getattr(external_account, "external_id", "")
-                or ""
-            )
+        label = oauth_client.display_name or oauth_client.slug or "OAuth"
+        subject = "" if external_account is None else external_account.account_label
         return f"{label} ({subject})" if subject else label
 
     def create_local_credential(
@@ -1207,13 +1212,16 @@ class Credential(AuditMixin, AngeeDataModel, concrete=True):
 
 
     def check_disconnect(self) -> None:
-        """Validate explicit disconnect; contributions raise a coded ``ValidationError``."""
+        """Validate inside the caller's disconnect transaction, held through deletion.
+
+        Contributions may lock admission facts and raise a coded ``ValidationError``.
+        """
 
     def revoke_remote(self) -> None:
         """Revoke this credential's OAuth token when its provider supports it."""
 
         oauth_client = self.oauth_client
-        if oauth_client is None or not getattr(oauth_client, "revoke_endpoint", ""):
+        if oauth_client is None or not oauth_client.revoke_endpoint:
             return
         token = str(self.reveal().get("access_token") or "")
         if not token:
@@ -1387,11 +1395,11 @@ class Credential(AuditMixin, AngeeDataModel, concrete=True):
 
         if self.name:
             return str(self.name)
-        client = getattr(self, "oauth_client", None)
+        client = self.oauth_client
         if client is not None:
-            provider = str(getattr(client, "slug", "") or getattr(client, "display_name", "") or "credential")
-            account = getattr(self, "external_account", None)
-            subject = str(getattr(account, "external_id", "") or "") if account else ""
+            provider = client.slug or client.display_name or "credential"
+            account = self.external_account
+            subject = "" if account is None else account.external_id
             return f"{provider}: {subject}" if subject else provider
         return "credential"
 
@@ -1401,17 +1409,8 @@ class Credential(AuditMixin, AngeeDataModel, concrete=True):
 
         if self.name:
             return str(self.name)
-        account = getattr(self, "external_account", None)
-        if account is not None:
-            subject = str(
-                getattr(account, "email", "")
-                or getattr(account, "display_name", "")
-                or getattr(account, "external_id", "")
-                or ""
-            )
-            if subject:
-                return subject
-        return "credential"
+        account = self.external_account
+        return (account.account_label if account is not None else "") or "credential"
 
     def ensure_fresh(self) -> None:
         """Renew this credential's token in place when it is near expiry and can refresh.
@@ -1510,8 +1509,10 @@ class Credential(AuditMixin, AngeeDataModel, concrete=True):
                 raise ValueError("This credential cannot be refreshed; reconnect the account.")
             refresh_value = str(current.reveal().get("refresh_token") or "")
             fence = current.refresh_fence
+            oauth_client = current.oauth_client
+            assert oauth_client is not None  # ``refreshable`` requires the OAuth client.
             try:
-                tokens = OAuthClientProtocol(current.oauth_client).refresh_token(refresh_token=refresh_value)
+                tokens = OAuthClientProtocol(oauth_client).refresh_token(refresh_token=refresh_value)
             except (IntegrationError, ValueError) as error:
                 if not (isinstance(error, IntegrationError) and error.transient):
                     with system_context(reason="integrate.credential.refresh.failed"), transaction.atomic():
@@ -1617,10 +1618,10 @@ class IntegrationLifecycle(models.TextChoices):
     PAUSED = "paused", "Paused"
 
     @classmethod
-    def from_value(cls, value: object) -> IntegrationLifecycle:
+    def from_value(cls, value: IntegrationLifecycle | str) -> IntegrationLifecycle:
         """Return the member for one string or enum integration-lifecycle value."""
 
-        raw = str(getattr(value, "value", value)).strip()
+        raw = str(value).strip()
         member = cls.__members__.get(raw)
         if member is not None:
             return cast(IntegrationLifecycle, member)
@@ -1638,10 +1639,10 @@ class IntegrationRuntimeStatus(models.TextChoices):
     PENDING = "pending", "Pending"
 
     @classmethod
-    def from_value(cls, value: object) -> IntegrationRuntimeStatus:
+    def from_value(cls, value: IntegrationRuntimeStatus | str) -> IntegrationRuntimeStatus:
         """Return the member for one string or enum runtime-status value."""
 
-        raw = str(getattr(value, "value", value)).strip()
+        raw = str(value).strip()
         member = cls.__members__.get(raw)
         if member is not None:
             return cast(IntegrationRuntimeStatus, member)
@@ -2033,7 +2034,11 @@ class Integration(StatementSourceMixin, ImplDefaultsMixin, OwnerMixin, AngeeData
 
     @classmethod
     def oauth_projection_expressions(cls) -> dict[str, Any]:
-        """Read the vendor hint and nearest concrete selector as elevated scalars."""
+        """Project public vendor branding and the nearest concrete selector.
+
+        Branding carries only the slug and display name; it grants no access to
+        the admin-only Vendor catalogue. One subquery carries both brand fields.
+        """
 
         vendor = (
             apps.get_model("integrate", "Vendor")
@@ -2058,24 +2063,34 @@ class Integration(StatementSourceMixin, ImplDefaultsMixin, OwnerMixin, AngeeData
                 )
             )
         return {
-            "_connection_vendor_slug": Subquery(vendor.values("slug")[:1]),
+            "_connection_vendor_branding": Subquery(
+                vendor.values(branding=JSONObject(slug="slug", display_name="display_name"))[:1],
+            ),
             "_connection_impl_key": models.Case(*selectors, default=models.Value(""), output_field=models.CharField()),
         }
 
-    def connection_vendor_slug(self) -> str:
-        """Read branding used by connection selection without requiring Vendor read."""
+    def connection_vendor_branding(self) -> dict[str, str]:
+        """Read public connection branding without requiring Vendor read.
 
-        if "_connection_vendor_slug" in self.__dict__:
-            return str(self.__dict__["_connection_vendor_slug"] or "")
+        GraphQL supplies the projection; other callers cache both fields after
+        one elevated read per instance without loading the protected related object.
+        """
+
+        if "_connection_vendor_branding" in self.__dict__:
+            return cast(dict[str, str], self.__dict__["_connection_vendor_branding"])
         vendor = apps.get_model("integrate", "Vendor")
-        return str(
-            vendor.objects.sudo(reason="integrate.connection.vendor")
-            .values_list(
-                "slug",
-                flat=True,
-            )
+        branding = (
+            vendor.objects.sudo(reason="integrate.connection.public_vendor")
+            .values("slug", "display_name")
             .get(pk=self.vendor_id)
         )
+        self.__dict__["_connection_vendor_branding"] = branding
+        return cast(dict[str, str], branding)
+
+    def connection_vendor_slug(self) -> str:
+        """Read the public branding slug used by connection selection."""
+
+        return self.connection_vendor_branding()["slug"]
 
     def is_oauth_connectable(self, *, ready_slugs: Collection[str] | None = None) -> bool:
         """Use registration readiness without constructing a runtime or loading secrets.
@@ -2184,6 +2199,36 @@ class Integration(StatementSourceMixin, ImplDefaultsMixin, OwnerMixin, AngeeData
         if self.declared_concrete_model() is not type(self):
             target = copy(self).sudo(reason="integrate.connection.lock_target").concrete_capability()
         return type(target).objects.lock_if_supported().get(pk=self.pk)
+
+    def sync_lock_key(self) -> LockKey:
+        """Return the advisory task lock held by this capability's sync, live session and discovery work."""
+
+        return record_lock_key(self._meta.label_lower, self.pk, "sync")
+
+    @contextmanager
+    def sync_lock(self) -> Iterator[bool]:
+        """Try to hold this capability's advisory lock for sync, discovery or a live session."""
+
+        if self.pk is None:
+            yield False
+            return
+        with task_lock(self.sync_lock_key()) as acquired:
+            yield acquired
+
+    def sync_is_locked(self) -> bool:
+        """Whether this capability's live sync lock is currently held."""
+
+        return self.pk is not None and task_lock_is_held(self.sync_lock_key())
+
+    def live_session_host_lock_key(self) -> LockKey:
+        """Deduplicate process hosts without borrowing the child's store lock."""
+
+        return record_lock_key(self._meta.label_lower, self.pk, "live-host")
+
+    def session_is_hosted(self) -> bool:
+        """Whether a process host owns startup, execution or child reaping."""
+
+        return self.pk is not None and task_lock_is_held(self.live_session_host_lock_key())
 
     def resume(self) -> None:
         """Recheck Resume admission under the integration lock before connecting."""
@@ -2418,8 +2463,7 @@ class Integration(StatementSourceMixin, ImplDefaultsMixin, OwnerMixin, AngeeData
     def __str__(self) -> str:
         """Return a stable vendor-qualified integration label."""
 
-        vendor_slug = getattr(getattr(self, "vendor", None), "slug", "?")
-        return f"{vendor_slug}:{self.public_id}"
+        return f"{self.connection_vendor_slug()}:{self.public_id}"
 
     def prepare_patch(self, fields: Mapping[str, Any]) -> dict[str, Any]:
         """Apply connection/state/ownership verbs before ordinary native field updates.
@@ -2479,9 +2523,8 @@ class Integration(StatementSourceMixin, ImplDefaultsMixin, OwnerMixin, AngeeData
 
         if self.display_name:
             return str(self.display_name)
-        vendor = getattr(self, "vendor", None)
-        label = str(getattr(vendor, "display_name", "") or getattr(vendor, "slug", "") or "integration")
-        return f"{label} ({self.lifecycle})"
+        branding = self.connection_vendor_branding()
+        return f"{branding['display_name'] or branding['slug']} ({self.lifecycle})"
 
     @property
     def record_display_label(self) -> str:
@@ -2498,7 +2541,7 @@ class Integration(StatementSourceMixin, ImplDefaultsMixin, OwnerMixin, AngeeData
     def connect(self, *, credential: Any = _UNSET, account: Any = _UNSET) -> None:
         """Mark this integration connected, optionally attaching connection rows."""
 
-        self._transition_fields = self._set_connection_fields(credential=credential, account=account)
+        self.transition_fields = self._set_connection_fields(credential=credential, account=account)
 
     def _set_connection_fields(self, *, credential: Any = _UNSET, account: Any = _UNSET) -> set[str]:
         """Attach connection rows and reset health, returning the fields changed."""
@@ -2590,7 +2633,7 @@ class Integration(StatementSourceMixin, ImplDefaultsMixin, OwnerMixin, AngeeData
         """Disconnect this integration without changing its runtime health."""
 
         self.discovery_retry_at = None
-        self._transition_fields = {"discovery_retry_at"}
+        self.transition_fields = {"discovery_retry_at"}
 
     def set_lifecycle(self, lifecycle: IntegrationLifecycle | str) -> None:
         """Move to one declared lifecycle state using this model's transition methods."""
@@ -2812,7 +2855,7 @@ class Integration(StatementSourceMixin, ImplDefaultsMixin, OwnerMixin, AngeeData
         if connection.in_atomic_block:
             raise RuntimeError("Connection discovery requires autocommit.")
         target = self.concrete_capability()
-        with bridge_advisory_lock(target) as acquired:
+        with target.sync_lock() as acquired:
             if not acquired:
                 return {"ok": False, "reason": "locked"}
             with transaction.atomic():
@@ -2881,7 +2924,7 @@ class Integration(StatementSourceMixin, ImplDefaultsMixin, OwnerMixin, AngeeData
         verbatim.
         """
 
-        raw_status = str(getattr(status, "value", status)).strip()
+        raw_status = str(status).strip()
         normalized = IntegrationRuntimeStatus.from_value(status)
         reported_at = timezone.now()
         self.runtime_status = normalized
@@ -3090,7 +3133,7 @@ class Bridge(Composable, metaclass=RebacModelBase, demands="integrate.Integratio
         impl = self.live_impl
         if not isinstance(impl, LiveBridgeImpl):
             return None
-        if cross_process and (bridge_is_locked(self) or bridge_session_is_hosted(self)):
+        if cross_process and (self.sync_is_locked() or self.session_is_hosted()):
             return None
         if self.subscription_state.get("desired") != self.LiveState.LIVE:
             self.start_live()
@@ -3112,7 +3155,7 @@ class Bridge(Composable, metaclass=RebacModelBase, demands="integrate.Integratio
     def is_syncing(self) -> bool:
         """Return whether a worker currently holds this bridge's live sync lock."""
 
-        return bridge_is_locked(self)
+        return self.sync_is_locked()
 
     def live_account_lock_key(self, impl_key: str, external_id: str) -> LockKey:
         """Return the cross-worker lock for one backend-normalized account id."""
@@ -3173,7 +3216,7 @@ class Bridge(Composable, metaclass=RebacModelBase, demands="integrate.Integratio
         identity_key: str,
         drop_identity: bool = False,
         drop_pairing_report: bool = False,
-        desired: Any | None = None,
+        desired: LiveState | str | None = None,
     ) -> None:
         """Apply durable live-session state changes and save only changed fields."""
 
@@ -3182,7 +3225,7 @@ class Bridge(Composable, metaclass=RebacModelBase, demands="integrate.Integratio
         if drop_identity:
             state.pop(identity_key, None)
         if desired is not None:
-            state["desired"] = str(getattr(desired, "value", desired))
+            state["desired"] = str(desired)
         if state != self.subscription_state:
             self.subscription_state = state
             fields.append("subscription_state")
@@ -3205,7 +3248,7 @@ class Bridge(Composable, metaclass=RebacModelBase, demands="integrate.Integratio
                 row.update_live_state(identity_key=identity_key, drop_identity=True, drop_pairing_report=True)
         self.refresh_from_db()
 
-    def release_live_account(self, *, identity_key: str, desired: Any) -> None:
+    def release_live_account(self, *, identity_key: str, desired: LiveState | str) -> None:
         """Clear a void account claim without changing operator-owned lifecycle."""
 
         model = type(self)
@@ -3340,16 +3383,6 @@ class Bridge(Composable, metaclass=RebacModelBase, demands="integrate.Integratio
                 row.record_sync_error(error, now=at)
         self.refresh_from_db()
         return True
-
-    def sync_lock_key(self) -> LockKey:
-        """Return the advisory task lock key for this bridge sync."""
-
-        return record_lock_key(self._meta.label_lower, self.pk, "sync")
-
-    def live_session_host_lock_key(self) -> LockKey:
-        """Deduplicate process hosts without borrowing the child's store lock."""
-
-        return record_lock_key(self._meta.label_lower, self.pk, "live-host")
 
     LIVE_RETRY_BACKOFF_CAP: ClassVar[timedelta] = timedelta(hours=1)
     """Longest wait between automatic restarts of a transiently failing live session."""
@@ -3550,7 +3583,7 @@ class Bridge(Composable, metaclass=RebacModelBase, demands="integrate.Integratio
         """Send one admitted sync task; return false when an execution already owns this sync.
 
         ``persist=False`` sends the token a caller already admitted through
-        :meth:`mark_sync_queued` under its own row lock (the due scheduler).
+        :meth:`admit_due_sync` under its own row lock (the due scheduler).
         """
 
         if self.pk is None:
@@ -3573,20 +3606,41 @@ class Bridge(Composable, metaclass=RebacModelBase, demands="integrate.Integratio
 
         with system_context(reason="integrate.bridge.queue"), transaction.atomic():
             row = self.lock_capability()
-            if not row.discovery_ready:
-                raise IntegrationError("Connection discovery must finish before syncing.")
-            if row.sync_is_dispatched or row.is_syncing:
-                return False
-            row.sync_stage = self.SyncStage.QUEUED
-            row.sync_error = ""
-            row.sync_run_id = None
-            row.sync_progress = row._sync_marker(stage=self.SyncStage.QUEUED, queued_at=now.isoformat())
-            row.save(
-                update_fields=["sync_error", "sync_run_id", "sync_progress", "sync_stage", "updated_at"],
-            )
+            admitted = row._queue_sync(now=now)
         self.sync_stage, self.sync_error, self.sync_progress = row.sync_stage, row.sync_error, row.sync_progress
         self.sync_run_id = row.sync_run_id
-        return True
+        return admitted
+
+    def _queue_sync(self, *, now: datetime, claim_interval: bool = False) -> bool:
+        """Decide and persist admission from this already-locked capability row."""
+
+        if not self.discovery_ready:
+            raise IntegrationError("Connection discovery must finish before syncing.")
+        recovering = self.sync_stage == self.SyncStage.QUEUED
+        admitted = not (self.sync_is_dispatched or self.is_syncing)
+        fields: list[str] = []
+        if admitted:
+            self.sync_stage = self.SyncStage.QUEUED
+            self.sync_error = ""
+            self.sync_run_id = None
+            self.sync_progress = self._sync_marker(stage=self.SyncStage.QUEUED, queued_at=now.isoformat())
+            fields.extend(("sync_error", "sync_run_id", "sync_progress", "sync_stage"))
+        if claim_interval and not (admitted and recovering):
+            self.next_sync_at = self._next_sync_at(now=now)
+            fields.append("next_sync_at")
+        if fields:
+            self.save(update_fields=[*fields, "updated_at"])
+        return admitted
+
+    def admit_due_sync(self, *, now: datetime) -> bool:
+        """Admit scheduled sync from the scheduler's locked row inside its system transaction.
+
+        A fresh or declined admission claims the next interval. Recovery of a
+        stale queue retains its existing claim. The scheduler already holds the
+        capability row lock; this verb takes no second lock or savepoint.
+        """
+
+        return self._queue_sync(now=now, claim_interval=True)
 
     def reset_sync_queue(self, *, now: datetime) -> None:
         """Make a failed queue dispatch due again for the next scheduler pass."""
@@ -3772,7 +3826,7 @@ class Bridge(Composable, metaclass=RebacModelBase, demands="integrate.Integratio
         session actually pairs.
 
         Re-reads under a row lock because the session's pairing report
-        (:class:`~angee.integrate.sync.BridgeProgressReporter`) is the concurrent
+        (:meth:`report_progress`) is the concurrent
         writer of the same ``sync_progress`` dict: the pairing ``details`` (the QR
         the operator is looking at) and the scheduler's ``stage``/``queued_at``
         markers must survive. Dropping the failure is exactly :meth:`_sync_marker`
@@ -3812,7 +3866,7 @@ class Bridge(Composable, metaclass=RebacModelBase, demands="integrate.Integratio
         if not self.mark_sync_started(now=now):
             raise IntegrationError("Connection discovery must finish before syncing.")
         try:
-            with bridge_progress_context(self):
+            with progress_bridge_context(self):
                 result = self.sync()
             if result is SyncDispatch.DISPATCHED:
                 return result
@@ -3858,7 +3912,7 @@ class Bridge(Composable, metaclass=RebacModelBase, demands="integrate.Integratio
             capability = self.concrete_capability()
         if not capability.verify_webhook(request_or_payload):
             return False
-        with bridge_advisory_lock(capability) as acquired:
+        with capability.sync_lock() as acquired:
             if not acquired:
                 raise IntegrationError("The bridge is busy; retry inbound delivery.", transient=True)
             capability.handle_webhook(request_or_payload)
@@ -3914,13 +3968,13 @@ class WebhookSubscriptionManager[WebhookSubscriptionT: WebhookSubscription](Ange
         kind: EventKind,
         payload: Any,
         impl_app: str = "",
-        integration: Any | None = None,
+        integration: Integration | None = None,
     ) -> None:
         """Queue one event fan-out after the current transaction commits."""
 
         kind_value = str(kind)
         body = self._event_body(payload)
-        integration_pk = getattr(integration, "pk", None)
+        integration_pk = integration.pk if integration is not None else None
         transaction.on_commit(
             lambda: self._deliver_event_body(
                 kind=kind_value, body=body, impl_app=impl_app, integration_pk=integration_pk
@@ -3933,7 +3987,7 @@ class WebhookSubscriptionManager[WebhookSubscriptionT: WebhookSubscription](Ange
         kind: EventKind,
         payload: Any,
         impl_app: str = "",
-        integration: Any | None = None,
+        integration: Integration | None = None,
     ) -> dict[str, int]:
         """Deliver one integration event to every matching enabled subscription.
 
@@ -3946,7 +4000,7 @@ class WebhookSubscriptionManager[WebhookSubscriptionT: WebhookSubscription](Ange
             kind=str(kind),
             body=self._event_body(payload),
             impl_app=impl_app,
-            integration_pk=getattr(integration, "pk", None),
+            integration_pk=integration.pk if integration is not None else None,
         )
 
     @staticmethod
@@ -4036,7 +4090,7 @@ class WebhookSubscription(OwnerMixin, AngeeDataModel, concrete=True):
         *,
         kind: str,
         impl_app: str,
-        integration: Any | None = None,
+        integration: Integration | None = None,
         integration_pk: Any | None = None,
     ) -> bool:
         """Return whether this subscription should receive one event."""
@@ -4048,8 +4102,9 @@ class WebhookSubscription(OwnerMixin, AngeeDataModel, concrete=True):
             return False
         if self.integration_filter_id is None:
             return True
-        expected_pk = getattr(integration, "pk", None) if integration_pk is None else integration_pk
-        return self.integration_filter_id == expected_pk
+        if integration_pk is None and integration is not None:
+            integration_pk = integration.pk
+        return self.integration_filter_id == integration_pk
 
     def deliver(self, body: bytes) -> str:
         """POST one signed event body to this subscription's pinned target; raise on non-2xx."""
@@ -4196,6 +4251,14 @@ class SyncStreamManager[SyncStreamT: SyncStream](_SyncStreamManagerBase[SyncStre
         Cursor and policy arguments seed only the first epoch; subsequent calls
         preserve persisted progress and policy. Kind is immutable; direction or
         snapshot changes start a new baseline generation with the persisted policy.
+        A newer mapping version also starts one baseline: its persisted version
+        makes repeated opens idempotent and revisits already-applied identities.
+        A lower declaration preserves progress but becomes the active mapping,
+        so a rollback never stamps old output with a newer version. Returning to
+        the newer declaration then replays any output the rollback may have written.
+        An unknown version is seeded from the oldest applied link mapping, or
+        the declaration when no applied links exist, so deployment alone never replays
+        records already applied at the declared version.
         ``authoritative`` is the declaration's fact: a changed declaration flips the
         current generation through :meth:`set_authoritative`, so an adapter never
         flips it from inside a page.
@@ -4203,6 +4266,8 @@ class SyncStreamManager[SyncStreamT: SyncStream](_SyncStreamManagerBase[SyncStre
 
         if definition.absence_threshold < 1:
             raise ValidationError("A stream absence threshold must be positive.")
+        if definition.mapping_version < 1:
+            raise ValidationError("A stream mapping version must be positive.")
         integration_model = self.model.integration.field.related_model
         if bridge._meta.proxy or integration_model not in bridge._meta.get_parent_list():
             raise ValidationError("A stream bridge must be a concrete Integration child.")
@@ -4218,12 +4283,26 @@ class SyncStreamManager[SyncStreamT: SyncStream](_SyncStreamManagerBase[SyncStre
                 return self.create(integration_id=bridge.pk, **definition.stream_fields())
             if stream.kind != definition.kind:
                 raise ValidationError("A stream's kind cannot change between declarations.")
-            if stream.direction != definition.direction or stream.snapshot != definition.snapshot:
+            if stream.mapping_version is None:
+                applied_version = stream.links.filter(applied_at__isnull=False).aggregate(
+                    version=models.Min("mapping_version"),
+                )["version"]
+                stream.mapping_version = applied_version if applied_version is not None else definition.mapping_version
+                stream.save(update_fields=["mapping_version", "updated_at"])
+            if (
+                stream.direction != definition.direction
+                or stream.snapshot != definition.snapshot
+                or definition.mapping_version > stream.mapping_version
+            ):
                 stream = self.bump_generation(
                     stream,
                     direction=definition.direction,
                     snapshot=definition.snapshot,
+                    mapping_version=definition.mapping_version,
                 )
+            elif stream.mapping_version != definition.mapping_version:
+                stream.mapping_version = definition.mapping_version
+                stream.save(update_fields=["mapping_version", "updated_at"])
             change_authority = stream.authoritative != definition.authoritative
         return self.set_authoritative(stream, definition.authoritative) if change_authority else stream
 
@@ -4234,6 +4313,7 @@ class SyncStreamManager[SyncStreamT: SyncStream](_SyncStreamManagerBase[SyncStre
         cursor: dict[str, Any] | None = None,
         direction: StreamDirection | None = None,
         snapshot: bool | None = None,
+        mapping_version: int | None = None,
     ) -> Any:
         """Create one new baseline while retaining identities and history.
 
@@ -4250,6 +4330,7 @@ class SyncStreamManager[SyncStreamT: SyncStream](_SyncStreamManagerBase[SyncStre
                 cursor={} if cursor is None else cursor,
                 direction=latest.direction if direction is None else direction,
                 snapshot=latest.snapshot if snapshot is None else snapshot,
+                mapping_version=latest.mapping_version if mapping_version is None else mapping_version,
             )
             successor = self.create(
                 integration_id=latest.integration_id,
@@ -4373,6 +4454,8 @@ class SyncStream(SyncStateMixin, AuditMixin, AngeeDataModel, concrete=True):
     flip is a re-derivation, never a migration.
     """
     generation = models.PositiveIntegerField(default=1)
+    mapping_version = models.PositiveIntegerField(null=True, blank=True)
+    """Active declared mapping version; unknown until seeded by :meth:`SyncStreamManager.current`."""
     phase = StateField(choices_enum=StreamPhase, default=StreamPhase.BASELINE)
     state = StateField(choices_enum=StreamState, default=StreamState.OPEN)
     cursor = models.JSONField(default=dict, blank=True)
@@ -4397,7 +4480,7 @@ class SyncStream(SyncStateMixin, AuditMixin, AngeeDataModel, concrete=True):
     def operation_fence(self) -> tuple[Any, ...]:
         """Return all mutable stream facts that external work must fence."""
 
-        return self.state, self.phase, self.cursor, self.reconcile_state, self.resync_required
+        return self.state, self.phase, self.cursor, self.reconcile_state, self.resync_required, self.mapping_version
 
     def accepts_pull(self) -> bool:
         """Whether this generation accepts another inbound page."""

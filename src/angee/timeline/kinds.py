@@ -66,6 +66,17 @@ class TimelineKind(ABC):
         """Whether this record model can carry the kind."""
 
     @abstractmethod
+    def occurs(self, record: models.Model) -> bool:
+        """Whether this record has structural occurrences, before authorizing a branch.
+
+        Query the source's record predicate through its unscoped base manager.
+        Share that predicate with ``queryset`` at its manager/queryset owner;
+        document any deliberately broader structural population on the kind.
+        Return only existence: no permission scope, system context or audit row.
+        A positive result never grants read access; ``queryset`` still owns that.
+        """
+
+    @abstractmethod
     def queryset(self, record: models.Model, actor: Any) -> models.QuerySet:
         """Readable occurrences on this record, one per source primary key."""
 
@@ -73,9 +84,19 @@ class TimelineKind(ABC):
     def present(self, rows: Iterable[Any]) -> dict[int, Presentation]:
         """Describe the selected source rows, batching any additional display dependencies."""
 
-    def waiting_on(self, rows: Any, actor: Any) -> models.QuerySet:
-        """The native subset waiting on the viewer, within the readable branch."""
-        return rows.none()
+    def waiting_on(self, record: models.Model, actor: Any) -> models.QuerySet | None:
+        """Own attention, or return None when no attention is possible on this record.
+
+        Before building a distinct attention authorization scope, probe candidates
+        through the source's unscoped base manager using the same record predicate
+        as ``occurs`` and ``queryset``. Return only existence: no permission scope,
+        system context or audit row. A negative probe returns None; a positive
+        probe still requires the attention owner's unchanged authorization.
+        The reader correlates only its existence to an already readable source row.
+        Use structural base-manager rows without an audit bypass or repeated read
+        scope; retain any distinct authorization the attention rule requires.
+        """
+        return None
 
     def fold(self, record: models.Model) -> tuple[Any, Any] | None:
         """Content type and primary key expressions for a possible parent target."""
@@ -114,16 +135,3 @@ def _forget_kinds(*, setting: str, **_: Any) -> None:
 def actor_label(user: Any) -> str:
     """A selected user's display label, empty when no actor is recorded."""
     return str(user) if user is not None else ""
-
-
-
-
-def timeline_subject(model: type[models.Model]) -> bool:
-    """Whether a model's rows have a timeline of their own.
-
-    A record declares ``timeline_subject = False`` when its rows are bookkeeping read
-    through another record (a sync link's history is evidence on its target), so no kind
-    admits them to the chronology.
-    """
-
-    return bool(getattr(model, "timeline_subject", True))

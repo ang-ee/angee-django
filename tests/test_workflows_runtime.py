@@ -1333,9 +1333,10 @@ def test_failure_text_strips_nul_and_respects_field_bounds(execution, register_s
     assert "\x00" not in retained_run.error + attempt.error + attempt.stacktrace
     expected = "Invalidfailure text" + "x" * 70000
     if phase == "body":
+        bound = StepAttempt._meta.get_field("error").max_length
         assert attempt.result == "failed"
-        assert attempt.error == expected[:StepAttempt._meta.get_field("error").max_length]
-        assert StepRun.system_queryset().get(pk=step_run.pk).output == {"error": attempt.error}
+        assert attempt.error == f"ValueError: {expected}"[:bound]
+        assert StepRun.system_queryset().get(pk=step_run.pk).output == {"error": expected[:bound]}
         assert len(attempt.stacktrace) == StepAttempt._meta.get_field("stacktrace").max_length
         assert retained_run.error == ""
     else:

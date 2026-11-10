@@ -236,6 +236,55 @@ index 923a62037f57f0bd847648bce5b8017b9d584861..630f616837ac999a31a5e1838793d579
        return getList({
          resource: (resource == null ? void 0 : resource.name) || "",
          pagination: paginationProperties,
+@@ -4463,33 +4448,33 @@ var useInvalidate = /* @__PURE__ */ __name(() => {
+             case "all":
+               return queryClient.invalidateQueries({
+                 queryKey: keys2().data(dp).get(),
+-                ...invalidationFilters,
+-                ...invalidationOptions
+-              });
++                ...invalidationFilters
++              },
++              invalidationOptions);
+             case "list":
+               return queryClient.invalidateQueries({
+                 queryKey: queryKey.action("list").get(),
+-                ...invalidationFilters,
+-                ...invalidationOptions
+-              });
++                ...invalidationFilters
++              },
++              invalidationOptions);
+             case "many":
+               return queryClient.invalidateQueries({
+                 queryKey: queryKey.action("many").get(),
+-                ...invalidationFilters,
+-                ...invalidationOptions
+-              });
++                ...invalidationFilters
++              },
++              invalidationOptions);
+             case "resourceAll":
+               return queryClient.invalidateQueries({
+                 queryKey: queryKey.get(),
+-                ...invalidationFilters,
+-                ...invalidationOptions
+-              });
++                ...invalidationFilters
++              },
++              invalidationOptions);
+             case "detail":
+               return queryClient.invalidateQueries({
+                 queryKey: queryKey.action("one").id(id || "").get(),
+-                ...invalidationFilters,
+-                ...invalidationOptions
+-              });
++                ...invalidationFilters
++              },
++              invalidationOptions);
+             default:
+               return;
+           }
 diff --git a/dist/index.cjs.map b/dist/index.cjs.map
 index ddc1bed9f8fcd89cce6eecafe5345734eb8f7942..169a94a6eaa4c7b8c750ffc6f4de1f81bdf6c5dc 100644
 --- a/dist/index.cjs.map
@@ -323,6 +372,55 @@ index 512eb148b3a305a87a6905a69867e8712d4bb9a0..eee4e3692b86427f43122e6a881c48ec
        return getList({
          resource: (resource == null ? void 0 : resource.name) || "",
          pagination: paginationProperties,
+@@ -4357,33 +4342,33 @@ var useInvalidate = /* @__PURE__ */ __name(() => {
+             case "all":
+               return queryClient.invalidateQueries({
+                 queryKey: keys2().data(dp).get(),
+-                ...invalidationFilters,
+-                ...invalidationOptions
+-              });
++                ...invalidationFilters
++              },
++              invalidationOptions);
+             case "list":
+               return queryClient.invalidateQueries({
+                 queryKey: queryKey.action("list").get(),
+-                ...invalidationFilters,
+-                ...invalidationOptions
+-              });
++                ...invalidationFilters
++              },
++              invalidationOptions);
+             case "many":
+               return queryClient.invalidateQueries({
+                 queryKey: queryKey.action("many").get(),
+-                ...invalidationFilters,
+-                ...invalidationOptions
+-              });
++                ...invalidationFilters
++              },
++              invalidationOptions);
+             case "resourceAll":
+               return queryClient.invalidateQueries({
+                 queryKey: queryKey.get(),
+-                ...invalidationFilters,
+-                ...invalidationOptions
+-              });
++                ...invalidationFilters
++              },
++              invalidationOptions);
+             case "detail":
+               return queryClient.invalidateQueries({
+                 queryKey: queryKey.action("one").id(id || "").get(),
+-                ...invalidationFilters,
+-                ...invalidationOptions
+-              });
++                ...invalidationFilters
++              },
++              invalidationOptions);
+             default:
+               return;
+           }
 diff --git a/dist/index.mjs.map b/dist/index.mjs.map
 index 20cf696552110cdb4f4c69eaad39927e920b14aa..bcade87469488c6ed48028ef511296fb13323f7f 100644
 --- a/dist/index.mjs.map
@@ -439,3 +537,53 @@ index a22bf8ca451b953220c2ace6d08e42a4ec44b39f..30071130950e7ec60d71d35716325bed
        }),
      ...queryOptions,
      enabled: isEnabled,
+diff --git a/src/hooks/invalidate/index.tsx b/src/hooks/invalidate/index.tsx
+index 6818b68d0bd1e100b7c3958610eaace0e8f2eb7b..c4e5c4d9a42d1951aa3d63f66da53439630525f1 100644
+--- a/src/hooks/invalidate/index.tsx
++++ b/src/hooks/invalidate/index.tsx
+@@ -52,26 +52,26 @@ export const useInvalidate = (): ((
+               return queryClient.invalidateQueries({
+                 queryKey: keys().data(dp).get(),
+                 ...invalidationFilters,
+-                ...invalidationOptions,
+-              });
++              },
++              invalidationOptions);
+             case "list":
+               return queryClient.invalidateQueries({
+                 queryKey: queryKey.action("list").get(),
+                 ...invalidationFilters,
+-                ...invalidationOptions,
+-              });
++              },
++              invalidationOptions);
+             case "many":
+               return queryClient.invalidateQueries({
+                 queryKey: queryKey.action("many").get(),
+                 ...invalidationFilters,
+-                ...invalidationOptions,
+-              });
++              },
++              invalidationOptions);
+             case "resourceAll":
+               return queryClient.invalidateQueries({
+                 queryKey: queryKey.get(),
+                 ...invalidationFilters,
+-                ...invalidationOptions,
+-              });
++              },
++              invalidationOptions);
+             case "detail":
+               return queryClient.invalidateQueries({
+                 queryKey: queryKey
+@@ -79,8 +79,8 @@ export const useInvalidate = (): ((
+                   .id(id || "")
+                   .get(),
+                 ...invalidationFilters,
+-                ...invalidationOptions,
+-              });
++              },
++              invalidationOptions);
+             default:
+               return;
+           }

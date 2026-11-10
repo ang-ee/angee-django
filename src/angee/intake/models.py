@@ -45,6 +45,7 @@ from angee.provenance.contrib.angee.querysets import AngeeHistoryQuerySet
 from angee.resources.mixins import ResourceLoadMixin
 
 if TYPE_CHECKING:
+    from angee.iam.models import User
     from angee.messaging.models import Message
     from angee.projects.models import Project, Task
     from angee.work.models import Queue
@@ -182,7 +183,7 @@ class NeedManager[NeedT: Need](_NeedManagerBase[NeedT]):
         if not body:
             raise ValidationError({"body": "A manual need requires a body."})
         try:
-            importance_value = NeedImportance(getattr(importance, "value", importance))
+            importance_value = NeedImportance(importance)
         except ValueError as error:
             raise ValidationError({"importance": "Choose normal or important."}) from error
 
@@ -220,7 +221,7 @@ class NeedManager[NeedT: Need](_NeedManagerBase[NeedT]):
             # actor on the instance rather than wrapping the whole save in the
             # queryset insertion scope: that scope would also pin the nested write
             # and defeat the instance-local elevation.
-            need.with_actor(actor).save(force_insert=True, using=self.db)
+            need.with_actor(actor).save(force_insert=True)
             return need
 
     def capture_from_message(
@@ -302,8 +303,8 @@ class NeedManager[NeedT: Need](_NeedManagerBase[NeedT]):
         preview = str(message.preview or "").strip()
         if preview:
             return preview
-        thread = getattr(message, "thread", None)
-        title = getattr(getattr(thread, "title", None), "text", "")
+        thread = message.thread
+        title = thread.title.text if thread is not None and thread.title is not None else ""
         return str(title or "Captured message")
 
     @staticmethod
@@ -750,10 +751,10 @@ class Need(ResourceLoadMixin, HistoryMixin, OptimisticLockMixin, AuditMixin, Ang
         )
 
     @transaction.atomic
-    def admit_requester(self, user: models.Model) -> Any:
+    def admit_requester(self, user: User | None) -> Any:
         """Assign, approve, and follow one person through the existing decision owner."""
 
-        if getattr(user, "kind", None) != "person":
+        if user is None or not user.is_person:
             raise ValidationError({"user": "Choose a person account."})
         with system_context(reason="intake.need.admit_requester.party"):
             party = apps.get_model("parties", "Party").objects.for_user(user)
@@ -855,7 +856,7 @@ class Need(ResourceLoadMixin, HistoryMixin, OptimisticLockMixin, AuditMixin, Ang
             if (
                 action == NeedAccessAction.INTAKE_APPROVE
                 and user is not None
-                and getattr(user, "kind", None) == "person"
+                and user.is_person
             ):
                 with system_context(reason="intake.need.follow_approved_requester"):
                     if locked.target.thread_reader_allowed(user):
@@ -884,7 +885,7 @@ class Need(ResourceLoadMixin, HistoryMixin, OptimisticLockMixin, AuditMixin, Ang
             if locked.task is not None:
                 task = locked.task
             else:
-                title = locked.body or getattr(locked.source_message, "preview", "")
+                title = locked.body or (locked.source_message.preview if locked.source_message is not None else "")
                 task = apps.get_model("projects", "Task").work.capture_triage(
                     queue=queue,
                     project=locked.project,
@@ -945,7 +946,8 @@ def _requested_by_viewer_filter(queryset: models.QuerySet[Any]) -> models.Expres
     """Whether the first Need's party is the viewer's person (MTI child), regardless of later Needs.
 
     It compares the actor with itself only, so it reveals nothing about anyone else's requests;
-    an actor without a user matches nothing. REBAC's broader requester relation
+    no viewer, including system context, or a viewer without a user matches nothing.
+    This is viewer-identity policy, not a relation read. REBAC's broader requester relation
     can include later approved requests; this filter only attributes the first.
     """
 

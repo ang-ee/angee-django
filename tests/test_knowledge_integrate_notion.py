@@ -109,6 +109,19 @@ def targets(bridge):
     }
 
 
+def test_rollback_stamps_the_declared_mapping_in_record_evidence(bridge, api):
+    """Rollback preserves progress without labelling older output with a newer mapping."""
+    api.add(node(10, "Rollback page"), "Body")
+    backend = NotionBackend(integration=bridge)
+    stream = open_stream(bridge, "pages", "", backend)
+    stream.mapping_version = backend.mapping_version + 1
+    stream.save(update_fields=["mapping_version"])
+    reopened = open_stream(bridge, "pages", "", backend)
+    assert (reopened.pk, reopened.cursor) == (stream.pk, stream.cursor)
+    assert advance_stream(reopened, backend).count == 1
+    assert reopened.links.get().mapping_version == backend.mapping_version
+
+
 def test_import_replay_database_rows_and_late_parents(bridge, api):
     parent = node(20, "Parent")
     repeated = "Repeated" * 80

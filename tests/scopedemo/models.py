@@ -22,12 +22,13 @@ from angee.base.managers import AngeeManager
 from angee.base.models.base import AngeeDataModel
 from angee.base.models.ownership import OwnerMixin
 from angee.base.querysets import AngeeQuerySet
+from angee.decisions.mixins import DecisionTargetMixin
 
 SCOPE_MEMBER_RELATION = "direct_member"
 """Direct membership relation on the local ``scopedemo/scope`` test resource."""
 
 
-class ProposalTarget(OwnerMixin, AngeeDataModel):
+class ProposalTarget(DecisionTargetMixin, OwnerMixin, AngeeDataModel):
     """A declared decision-method owner without an update timestamp."""
 
     sqid_prefix = "ptg_"

@@ -18,10 +18,10 @@ from rebac import (
 from rebac.models import active_relationship_model
 
 from angee.base.signals import mute_changes
+from angee.base.testing.queries import is_rebac_revision_read, statement_body, statement_startswith
 from angee.messaging.testing.models import Message, ThreadAttachment, ThreadNotification
 from tests.chatterdemo.models import ChatterDoc
 from tests.messaging_campaign import grant
-from tests.queries import is_rebac_revision_read
 from tests.t3_campaign import campaign_access as campaign_access
 from tests.t3_campaign import campaign_user as campaign_user
 from tests.t3_campaign import messaging_access_schema as messaging_access_schema
@@ -54,7 +54,8 @@ def test_fanout_chunks_account_read_gates_and_delivers_exactly_the_readable_half
     record.thread_reader_ids(accounts[:1])
     with system_context(reason="tests.t3.gate_under_system"), CaptureQueriesContext(connection) as gate_queries:
         assert record.thread_reader_ids([*accounts, accounts[0], to_subject_ref(accounts[0])]) == expected
-    chunks = [q for q in gate_queries if q["sql"].startswith("SELECT") and "EXISTS(" in q["sql"]]
+    statements = [statement_body(q["sql"]) for q in gate_queries]
+    chunks = [sql for sql in statements if statement_startswith(sql, "SELECT") and "EXISTS(" in sql]
     # Native check_bulk_permissions decides 50 items per batch: statements per batch, not per user.
     # 0.31 (2 -> 2 or 3) splits a batch's bounds at its statement-size budget; registry items compile wider.
     per_batch = 3 if campaign_access == "registry" else 2
@@ -63,7 +64,7 @@ def test_fanout_chunks_account_read_gates_and_delivers_exactly_the_readable_half
     # 0.31 (1 per batch -> 0): actor memberships are predicates of the bound statements, never a separate read.
     tuple_table = connection.ops.quote_name(active_relationship_model()._meta.db_table)
     memberships = [
-        q for q in gate_queries if q["sql"].startswith("SELECT DISTINCT") and f"FROM {tuple_table}" in q["sql"]
+        sql for sql in statements if statement_startswith(sql, "SELECT DISTINCT") and f"FROM {tuple_table}" in sql
     ]
     assert memberships == []
     witnesses = sum(is_rebac_revision_read(query["sql"]) for query in gate_queries)
@@ -85,7 +86,8 @@ def test_fanout_chunks_account_read_gates_and_delivers_exactly_the_readable_half
     # Django owns the INSERT chunk size; the native write gate adds one revision
     # read. The remaining overhead is four row reads and BEGIN/COMMIT.
     fields = [
-        field for field in ThreadNotification._meta.concrete_fields
+        field
+        for field in ThreadNotification._meta.concrete_fields
         if not field.generated and not isinstance(field, models.AutoField)
     ]
     insert_size = connection.ops.bulk_batch_size(fields, [None] * count)

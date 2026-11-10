@@ -39,5 +39,5 @@ def _request_actor() -> SubjectRef | None:
     """
 
     token = get_access_token()
-    subject = getattr(token, "subject", None) if token is not None else None
+    subject = token.subject if token is not None else None
     return SubjectRef.parse(subject) if subject else None

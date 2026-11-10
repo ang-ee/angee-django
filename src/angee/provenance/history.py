@@ -19,10 +19,12 @@ from simple_history.models import HistoricalRecords
 from simple_history.signals import pre_create_historical_record
 from simple_history.utils import get_change_reason_from_object, get_history_manager_for_model
 
+from angee.provenance.bases import ChangesetHistory as ChangesetHistory
 from angee.provenance.context import changeset_model_label, current_changeset, write_group
 from angee.provenance.querysets import HistoryQuerySet, model_history
 
-_UNLOADED = object()
+UNLOADED = object()
+"""Default for a history argument the caller has not loaded; the history owner reads it itself."""
 
 
 def _copy_history_metadata(source: models.Model, target: models.Model) -> None:
@@ -31,21 +33,6 @@ def _copy_history_metadata(source: models.Model, target: models.Model) -> None:
     for name in ("_history_date", "_history_user", "_change_reason"):
         if hasattr(source, name):
             setattr(target, name, getattr(source, name))
-
-
-class _ChangesetHistory(models.Model):
-    """Historical attribution shared by every native generated history model."""
-
-    changeset = models.ForeignKey(
-        changeset_model_label(),
-        null=True,
-        blank=True,
-        on_delete=models.PROTECT,
-        related_name="+",
-    )
-
-    class Meta:
-        abstract = True
 
 
 class ModelHistoricalQuerySet[T: models.Model](HistoricalQuerySet[T]):
@@ -100,28 +87,17 @@ class ModelHistoryManager[T: models.Model](HistoryManager[T]):
         history = model_history(tracked)
         if history is None:
             raise ImproperlyConfigured(f"{self.model._meta.label}: no native history capture owner.")
-        by_database: dict[str, list[models.Model]] = {}
-        for obj in objects:
-            alias = obj._state.db or router.db_for_write(tracked, instance=obj)
-            by_database.setdefault(alias, []).append(obj)
-        captured = []
-        for alias, sources in by_database.items():
-            captured.extend(
-                history.bulk_history_create(
-                    tracked,
-                    [obj.pk for obj in sources],
-                    history_type or ("~" if update else "+"),
-                    using=alias,
-                    history_using=self._db,
-                    instances={obj.pk: obj for obj in sources},
-                    batch_size=batch_size,
-                    default_user=default_user,
-                    default_change_reason=default_change_reason,
-                    default_date=default_date,
-                    custom_historical_attrs=custom_historical_attrs,
-                )
-            )
-        return captured
+        return history.bulk_history_create(
+            tracked,
+            [obj.pk for obj in objects],
+            history_type or ("~" if update else "+"),
+            instances={obj.pk: obj for obj in objects},
+            batch_size=batch_size,
+            default_user=default_user,
+            default_change_reason=default_change_reason,
+            default_date=default_date,
+            custom_historical_attrs=custom_historical_attrs,
+        )
 
     def _construct_history(
         self,
@@ -137,6 +113,7 @@ class ModelHistoryManager[T: models.Model](HistoryManager[T]):
     ) -> list[T]:
         """Fill upstream 3.13's constructor-loop gap for explicit deletion history types."""
 
+        # django-simple-history treats its absent enable switch as true.
         if not getattr(settings, "SIMPLE_HISTORY_ENABLED", True):
             return []
         generated = cast(_GeneratedHistory, self.model)
@@ -144,7 +121,9 @@ class ModelHistoryManager[T: models.Model](HistoryManager[T]):
         for instance in objs:
             attrs = {field.attname: getattr(instance, field.attname) for field in generated.tracked_fields}
             row = self.model(
+                # django-simple-history allows an optional instance-level history-date override.
                 history_date=getattr(instance, "_history_date", default_date or timezone.now()),
+                # django-simple-history allows an optional instance-level history-user override.
                 history_user=getattr(
                     instance, "_history_user", default_user or generated.get_default_history_user(instance)
                 ),
@@ -153,6 +132,7 @@ class ModelHistoryManager[T: models.Model](HistoryManager[T]):
                 **attrs,
                 **(custom_historical_attrs or {}),
             )
+            # django-simple-history adds history_relation only when reverse history is configured.
             if hasattr(self.model, "history_relation"):
                 setattr(row, "history_relation_id", instance.pk)
             rows.append(row)
@@ -166,13 +146,16 @@ class ModelHistory(HistoricalRecords):
     def capture_enabled(self) -> bool:
         """Honor the native simple-history switch at the registered history owner."""
 
+        # django-simple-history treats its absent enable switch as true.
         return bool(getattr(settings, "SIMPLE_HISTORY_ENABLED", True))
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         kwargs.setdefault("history_manager", ModelHistoryManager)
         kwargs.setdefault("historical_queryset", ModelHistoricalQuerySet)
-        kwargs.setdefault("bases", (_ChangesetHistory,))
+        kwargs.setdefault("bases", (ChangesetHistory,))
         super().__init__(*args, **kwargs)
+        if not any(issubclass(base, ChangesetHistory) for base in self.bases):
+            self.bases = tuple(base for base in self.bases if base is not models.Model) + (ChangesetHistory,)
 
     def contribute_to_class(self, cls: Any, name: str) -> None:
         super().contribute_to_class(cls, name)
@@ -209,7 +192,7 @@ class ModelHistory(HistoricalRecords):
             weak=False,
         )
 
-    def set_changeset(self, instance: models.Model, history_instance: _ChangesetHistory, **kwargs: Any) -> None:
+    def set_changeset(self, instance: models.Model, history_instance: ChangesetHistory, **kwargs: Any) -> None:
         """Set nullable attribution according to the storage owner's context policy."""
 
         context = current_changeset(required=True, record=True)
@@ -235,7 +218,7 @@ class ModelHistory(HistoricalRecords):
 
         transaction.on_commit(committed)
 
-    def diff(self, first: Any, last: Any, *, previous: Any = _UNLOADED) -> Any:
+    def diff(self, first: Any, last: Any, *, previous: Any = UNLOADED) -> Any:
         """Return the native field delta across one changeset boundary.
 
         Page assemblers pass their already loaded predecessor. Standalone callers
@@ -245,11 +228,10 @@ class ModelHistory(HistoricalRecords):
         target = last.history_object
         model = type(target)
         key = model._meta.pk.attname
-        if previous is _UNLOADED:
+        if previous is UNLOADED:
             previous = (
                 type(last)
-                .objects.using(last._state.db)
-                .filter(**{key: getattr(last, key)}, history_id__lt=first.history_id)
+                .objects.filter(**{key: getattr(last, key)}, history_id__lt=first.history_id)
                 .order_by("-history_id")
                 .first()
             )
@@ -279,8 +261,6 @@ class ModelHistory(HistoricalRecords):
         keys: Iterable[Any],
         history_type: str,
         *,
-        using: str,
-        history_using: str | None = None,
         instances: Mapping[Any, models.Model] | None = None,
         batch_size: int | None = None,
         default_user: models.Model | None = None,
@@ -290,9 +270,7 @@ class ModelHistory(HistoricalRecords):
     ) -> list[models.Model]:
         """Batch stored snapshots of this model and its tracked MTI descendants.
 
-        ``using`` selects the stored source rows. An explicit ``history_using``
-        binds the historical destination; otherwise its native routing policy
-        applies. ``instances`` supplies only native history metadata overrides.
+        ``instances`` supplies only native history metadata overrides.
         Each batch records pending receiver keys, consumed by native receivers.
         """
 
@@ -303,8 +281,7 @@ class ModelHistory(HistoricalRecords):
         with write_group() as group:
             keys = list(dict.fromkeys(keys))
             names = [field.attname for field in self.fields_included(model)]
-            destination = history_using or (using if self.use_base_model_db else router.db_for_write(manager.model))
-            for rows in cast(HistoryQuerySet, model._base_manager.using(using)).capture_batches(keys):
+            for rows in cast(HistoryQuerySet, model._base_manager.all()).capture_batches(keys):
                 snapshots = list(rows.only(*names).order_by())
                 if not snapshots:
                     continue
@@ -312,7 +289,7 @@ class ModelHistory(HistoricalRecords):
                     if instances is not None and snapshot.pk in instances:
                         _copy_history_metadata(instances[snapshot.pk], snapshot)
                 context = current_changeset(required=True, record=True)
-                records = manager.db_manager(destination)._construct_history(
+                records = manager._construct_history(
                     snapshots,
                     batch_size=batch_size,
                     history_type=history_type,
@@ -334,8 +311,6 @@ class ModelHistory(HistoricalRecords):
                         child,
                         keys,
                         history_type,
-                        using=using,
-                        history_using=history_using,
                         instances=instances,
                         batch_size=batch_size,
                         default_user=default_user,
@@ -355,7 +330,7 @@ class ModelHistory(HistoricalRecords):
                 group.seen.remove(key)
                 return
             current_changeset(required=True, record=True)
-            alias = using or instance._state.db or router.db_for_write(model, instance=instance)
+            alias = using or router.db_for_write(model, instance=instance)
             names = [field.attname for field in self.fields_included(model)]
             try:
                 snapshot = model._base_manager.using(alias).only(*names).get(pk=instance.pk)
@@ -375,6 +350,7 @@ class ModelHistory(HistoricalRecords):
         """Snapshot while stored values exist, inside Django's delete transaction."""
 
         super().pre_delete(instance, **kwargs)
+        # django-simple-history treats its absent enable switch as true.
         if getattr(settings, "SIMPLE_HISTORY_ENABLED", True) and not self.cascade_delete_history:
             self.create_historical_record(instance, "-", using=kwargs.get("using"))
 
@@ -436,6 +412,7 @@ class ModelHistory(HistoricalRecords):
     def get_history_user(self, instance: models.Model) -> models.Model | None:
         """Honor a native instance override before attribution storage's user."""
 
+        # django-simple-history allows an optional instance-level history-user override.
         if hasattr(instance, "_history_user"):
             return instance._history_user
         context = current_changeset()
@@ -443,13 +420,13 @@ class ModelHistory(HistoricalRecords):
 
     def get_extra_fields(self, model: Any, fields: Any) -> dict[str, Any]:
         extra = super().get_extra_fields(model, fields)
-        extra["_provenance_history"] = classproperty(lambda cls: self)
+        extra["provenance_history"] = classproperty(lambda cls: self)
         if model._meta.apps is not apps:
             if self.user_id_field is None and self.user_model is None:
                 user = get_user_model()
                 extra["history_user"].remote_field.model = user
                 extra["history_user"].remote_field.field_name = user._meta.pk.name
-            field = _ChangesetHistory._meta.get_field("changeset").clone()
+            field = ChangesetHistory._meta.get_field("changeset").clone()
             field.remote_field.model = apps.get_model(changeset_model_label())
             field.remote_field.field_name = field.remote_field.model._meta.pk.name
             extra["changeset"] = field
@@ -491,6 +468,7 @@ class HistoryMixin(models.Model):
 
         alias = using or router.db_for_write(type(self), instance=self)
         with transaction.atomic(using=alias, savepoint=not raw), write_group():
+            # django-simple-history suppresses capture via an optional instance marker.
             if not raw and not hasattr(self, "skip_history_when_saving"):
                 history = model_history(type(self))
                 if history is not None and history.capture_enabled:

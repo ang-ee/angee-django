@@ -11,12 +11,13 @@ from angee.storage_integrate.models import MountMode
 from angee.storage_integrate.mounts import LocalFolderMountBackend, validate_local_folder_root
 
 
-def create_local_folder_mount(user: Any, *, name: str, path: str, mode: MountMode | str) -> Any:
+def create_local_folder_mount(user: Any, *, name: str, path: str, mode: MountMode) -> Any:
     """Validate and provision one local-folder Mount."""
 
     try:
         root = validate_local_folder_root(path)
     except ValidationError as error:
+        # Django ValidationError has error_dict only for field-keyed errors.
         if hasattr(error, "error_dict"):
             raise
         raise ValidationError({"path": error.messages}) from error

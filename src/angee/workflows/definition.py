@@ -728,6 +728,7 @@ class Definition(BaseModel):
         try:
             config = step.parse_config(node.config) if implementation is not None else node.parsed_config
         except ValidationError as error:
+            # Django ValidationError has message_dict only for field-keyed errors.
             if hasattr(error, "message_dict"):
                 return fallback, [
                     Issue(node=key, path=[*path, *field.split(".")], code="config", message=message)

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from copy import copy
-from typing import Any, ClassVar, Self, TypeVar, cast
+from typing import TYPE_CHECKING, Any, ClassVar, Self, TypeVar, cast
 
 from django.core import checks
 from django.core.exceptions import FieldDoesNotExist, ImproperlyConfigured, ValidationError
@@ -31,12 +31,23 @@ from angee.base.managers import AngeeManager, AngeeUnscopedManager
 from angee.base.models.identity import PublicIdentity, SqidMixin, public_id_of
 from angee.base.models.inputs import InputExtensionsMixin
 from angee.base.models.locks import RowLockMixin
-from angee.base.models.merge_references import MergeContractMixin, named_in_relationships, references
+from angee.base.models.merge_references import (
+    MergeContractMixin,
+    has_live_references,
+    named_in_relationships,
+    owned_reference_parts,
+    references,
+)
 from angee.base.models.timestamps import TimestampMixin
 from angee.base.models.transitions import StateTransitionsMixin
 from angee.base.permissions import DirectRecordAccess, declared_grants, declared_rebac_definition, instance_actor
 from angee.base.querysets import row_lock_paths
 from angee.base.signals import record_access_revoked
+
+if TYPE_CHECKING:
+    from rebac import ObjectRef
+
+    from angee.base.refs import RecordRef
 
 _ModelT = TypeVar("_ModelT", bound=models.Model)
 
@@ -123,15 +134,18 @@ class AngeeModel(
                 position = None
             if isinstance(position, FractionalRankField):
                 moving = [
-                    by_public_id[pid] for pid, values in desired
-                    if pid is not None and values.get(position.name) is not None
+                    by_public_id[pid]
+                    for pid, values in desired
+                    if pid is not None
+                    and values.get(position.name) is not None
                     and position.to_python(values[position.name]) != getattr(by_public_id[pid], position.attname)
                 ]
                 if moving:
                     # Immediate uniqueness forbids cyclic swaps: stage the moving
                     # lines on free ranks, then save their exact final values below.
                     temporary = position.get_temporary_ranks(
-                        moving, (values.get(position.name) for _pid, values in desired),
+                        moving,
+                        (values.get(position.name) for _pid, values in desired),
                     )
                     staged = [copy(line) for line in moving]
                     for line, rank in zip(staged, temporary, strict=True):
@@ -206,16 +220,12 @@ class AngeeModel(
 
         Native historical snapshots may outlive deleted targets. They retain a
         merge identity but do not prevent removal of its reverted creation.
+        Replay removes owned parts in the same boundary before their parent.
+        Any remaining part must block physical deletion, which would otherwise
+        cascade beyond that boundary; source retirement keeps those rows stored.
         """
 
-        live_references = (
-            reference
-            for reference in references(type(self))
-            if reference.blocks_target_delete(type(self))
-        )
-        if named_in_relationships(self) or any(
-            reference.rows(self).using(self._state.db).exists() for reference in live_references
-        ):
+        if next(owned_reference_parts(self), None) is not None or has_live_references(self):
             raise ValidationError(f"{self._meta.label} {self.pk}: live references or grants prevent removal.")
         self.delete()
 
@@ -265,6 +275,35 @@ class AngeeModel(
         """Return the fields hidden when this instance was projected by REBAC."""
 
         return redacted_fields(self)
+
+    change_batch_targets: ClassVar[Callable[..., Iterable[models.Model]] | None] = None
+    """An optional ``(instances, *, update_fields)`` classmethod that coalesces a ``bulk_updated`` batch.
+
+    It returns the rows the batch's readers observe, which write observation
+    publishes as full updates. ``None`` publishes the batch rows themselves as
+    partial updates. Local observers that need the original batch receive it on
+    ``bulk_updated``.
+    """
+
+    def change_read_resource(self) -> ObjectRef | None:
+        """Return the object whose ``read`` governs this row's change events; ``None`` reads the row itself.
+
+        A child or polymorphic edge whose visibility derives from another row
+        names that row. It is captured while the row is live, so create, update
+        and delete events share one authorization boundary. Like every change
+        hook, it runs inside the writing transaction on each observed write.
+        """
+
+        return None
+
+    def change_related_records(self) -> tuple[RecordRef, ...]:
+        """Return the records whose authored reads this row's change invalidates; none by default.
+
+        Adapters project the references one-to-one. A hook that also invalidates
+        inherited views widens its references with ``record_view_refs``.
+        """
+
+        return ()
 
     @property
     def record_display_label(self) -> str:
@@ -432,7 +471,8 @@ class AngeeModel(
         return self._stored_record_access(selected)
 
     def _declared_record_access(
-        self, relations: Sequence[str] | None,
+        self,
+        relations: Sequence[str] | None,
     ) -> tuple[Mapping[str, str], tuple[str, ...]]:
         """The model's share declaration and the requested subset of its relations."""
 

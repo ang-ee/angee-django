@@ -47,6 +47,7 @@ from angee.agents.testing.models import (
 )
 from angee.base.exceptions import TransitionNotAllowed
 from angee.base.locks import task_lock
+from angee.base.testing.queries import statement_startswith
 from angee.graphql.deletion import DeletePreview
 from angee.graphql.schema import SCHEMA_PART_KEYS, GraphQLSchemas
 from angee.graphql.testing.documents import execute_schema
@@ -1179,7 +1180,7 @@ def test_fifty_turn_agent_cascade_has_bounded_guard_queries(composed_tables: Non
             pre_delete.connect(receiver, sender=model, dispatch_uid=dispatch_uid)
     assert turn_calls == 50
     assert turn_queries == 0
-    reads = [query for query in guard_queries if query["sql"].startswith("SELECT")]
+    reads = [query for query in guard_queries if statement_startswith(query["sql"], "SELECT")]
     assert len(reads) <= 2 + 2 * len(sessions), reads
     assert len(guard_queries) <= 4 + 4 * len(sessions), guard_queries
     with system_context(reason="test.agents.delete_queries.verify"):

@@ -12,7 +12,7 @@ from django.test.utils import CaptureQueriesContext
 from rebac import SubjectRef, system_context, to_subject_ref
 
 from angee.agents.testing.models import Agent
-from angee.base.permissions import actor_user_id
+from angee.base.permissions import actor_user_id, user_subject_ref
 
 User = get_user_model()
 
@@ -51,6 +51,20 @@ def test_actor_user_id_uses_the_models_prefixed_resource_type(settings: Any) -> 
     settings.REBAC_TYPE_PREFIX = "tenant/"
     assert actor_user_id(SubjectRef.of("tenant/auth/user", "42")) == 42
     assert actor_user_id(SubjectRef.of("auth/user", "42")) is None
+
+
+@pytest.mark.django_db
+def test_user_subject_ref_is_query_free_and_inverts_actor_user_id(settings: Any) -> None:
+    """A bare key needs no existing row and follows the native subject namespace."""
+    settings.REBAC_TYPE_PREFIX = "tenant/"
+    with CaptureQueriesContext(connection) as captured:
+        reference = user_subject_ref(user_id=42)
+        assert reference == SubjectRef.of("tenant/auth/user", "42")
+        assert actor_user_id(reference) == 42
+        assert user_subject_ref(user=User(pk=42)) == reference
+    assert not captured.captured_queries
+    with pytest.raises(ValueError, match="user or user_id"):
+        user_subject_ref()
 
 
 def test_agent_create_materializes_service_user(composed_tables: None) -> None:

@@ -18,12 +18,7 @@ from django.conf import settings
 from jwt import PyJWKClient
 from jwt.exceptions import PyJWKClientConnectionError, PyJWKClientError, PyJWTError
 
-from angee.integrate.http import HttpClient
-from angee.integrate.oauth.client import (
-    HTTP_TIMEOUT_SECONDS,
-    USER_AGENT,
-    OAuthClientProtocol,
-)
+from angee.integrate.oauth.client import OAuthClientProtocol, oauth_get_json
 from angee.integrate.oauth.errors import (
     INVALID_ID_TOKEN,
     MISSING_ENDPOINT,
@@ -34,7 +29,6 @@ _ALLOWED_JWT_ALGORITHMS = (
     "RS256",
     "ES256",
 )
-_DEFAULT_JWKS_TTL_SECONDS = 3600
 
 
 class OAuthClientOidcProtocol(OAuthClientProtocol):
@@ -99,15 +93,11 @@ class OAuthClientOidcProtocol(OAuthClientProtocol):
 
         if not id_token:
             raise OAuthFlowError(INVALID_ID_TOKEN, 400)
-        issuer = str(getattr(self.oauth_client, "issuer", "") or "")
-        jwks_uri = str(getattr(self.oauth_client, "jwks_uri", "") or "")
-        if not issuer or not jwks_uri:
+        if not self.oauth_client.issuer or not self.oauth_client.jwks_uri:
             self.ensure_endpoints()
-            issuer = str(getattr(self.oauth_client, "issuer", "") or "")
-            jwks_uri = str(getattr(self.oauth_client, "jwks_uri", "") or "")
+        issuer, jwks_uri = self.oauth_client.issuer, self.oauth_client.jwks_uri
         if not issuer or not jwks_uri:
             raise OAuthFlowError(MISSING_ENDPOINT, 400)
-        client_id = str(getattr(self.oauth_client, "client_id", ""))
         try:
             verifier = jwks_client or _jwks_client(jwks_uri)
             signing_key = verifier.get_signing_key_from_jwt(id_token)
@@ -115,7 +105,7 @@ class OAuthClientOidcProtocol(OAuthClientProtocol):
                 id_token,
                 signing_key.key,
                 algorithms=_ALLOWED_JWT_ALGORITHMS,
-                audience=client_id,
+                audience=self.oauth_client.client_id,
                 issuer=issuer,
                 options={"require": ["exp", "iat"], "verify_exp": True, "verify_iss": True, "verify_aud": True},
             )
@@ -127,27 +117,9 @@ class OAuthClientOidcProtocol(OAuthClientProtocol):
             raise OAuthFlowError(INVALID_ID_TOKEN, 400)
         return claims
 
-    def ensure_endpoints(self) -> dict[str, Any]:
-        """Fill blank endpoints on the OAuth client via discovery.
-
-        A no-op when the client carries no ``discovery_url`` (endpoints are then
-        configured explicitly). The discovery document is cached per URL, so an
-        explicitly-configured provider that also sets a discovery URL fetches at
-        most once. In-memory only: the fetched endpoints serve the current request;
-        the operator's discovery action persists them (``discover_endpoints(persist=True)``).
-        """
-
-        return dict(self.oauth_client.discover_endpoints())
-
 
 class _PinnedPyJWKClient(PyJWKClient):
-    """PyJWT JWKS parser whose fetches use Angee's pinned HTTP owner.
-
-    Fetches pass ``allow_private=True``: self-hosted and dev IdPs commonly
-    serve ``jwks_uri`` on private addresses, and the URL is writable only
-    through the admin-gated OAuth client surface — the same posture as the
-    CardDAV backend's self-hosted servers.
-    """
+    """PyJWT JWKS parser whose fetches compose the shared OAuth GET policy."""
 
     def __init__(self, uri: str) -> None:
         """Bind one JWKS URI with PyJWT's JWK-set TTL cache enabled."""
@@ -156,32 +128,19 @@ class _PinnedPyJWKClient(PyJWKClient):
             uri,
             cache_jwk_set=True,
             lifespan=_jwks_ttl_seconds(),
-            headers={"User-Agent": USER_AGENT},
-            timeout=HTTP_TIMEOUT_SECONDS,
         )
 
     def fetch_data(self) -> Any:
-        """Fetch the JWKS document through ``integrate.http.HttpClient``.
+        """Fetch the JWKS document through ``oauth_get_json``.
 
         Only the transport is replaced: PyJWT's ``get_jwk_set`` validates,
         parses and caches the payload this returns.
         """
 
         try:
-            response = HttpClient().get(
-                self.uri,
-                headers={"Accept": "application/json", "User-Agent": USER_AGENT},
-                allow_private=True,
-                timeout=HTTP_TIMEOUT_SECONDS,
-            )
-            if not response.is_success:
-                raise PyJWKClientConnectionError(f"Fail to fetch data from the url, status: {response.status_code}")
-            jwk_set = response.json()
-        except PyJWKClientConnectionError:
-            raise
+            return oauth_get_json(self.uri)
         except Exception as exc:
-            raise PyJWKClientConnectionError(f'Fail to fetch data from the url, err: "{exc}"') from exc
-        return jwk_set
+            raise PyJWKClientConnectionError("Failed to fetch the JWKS document.") from exc
 
 
 @cache
@@ -194,4 +153,4 @@ def _jwks_client(jwks_uri: str) -> _PinnedPyJWKClient:
 def _jwks_ttl_seconds() -> int:
     """Return the configured lifetime for PyJWT's cached JWK set."""
 
-    return int(getattr(settings, "ANGEE_OIDC_JWKS_TTL", _DEFAULT_JWKS_TTL_SECONDS))
+    return int(settings.ANGEE_OIDC_JWKS_TTL)

@@ -12,6 +12,7 @@ from django.test.utils import isolate_apps
 from rebac import actor_context, system_context
 
 from angee.base.models.locks import RowLockMixin
+from angee.base.testing.queries import statement_startswith
 from tests.conftest import create_user
 from tests.linesdemo.models import Document, PinnedLine
 
@@ -88,7 +89,7 @@ def test_collection_write_excludes_rows_entering_predicate_after_validation(
         close_old_connections()
 
         def pause_mutation(execute: Any, sql: str, params: Any, many: bool, context: Any) -> Any:
-            if sql.lstrip().upper().startswith("UPDATE ") and PinnedLine._meta.db_table in sql:
+            if statement_startswith(sql.lstrip().upper(), "UPDATE ") and PinnedLine._meta.db_table in sql:
                 ready.set()
                 if not proceed.wait(timeout=10):
                     raise TimeoutError("Competing insertion did not complete.")

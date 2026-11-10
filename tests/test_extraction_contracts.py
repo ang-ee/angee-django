@@ -203,13 +203,9 @@ def test_mapping_classifies_only_agents_declared_request_errors(text_part):
 
     class Model:
         failure: Exception = RequestError("vendor detail")
-        transient = False
 
         def request_error_types(self):
             return (RequestError,)
-
-        def is_transient_error(self, error):
-            return self.transient
 
         def infer(self, messages, **kwargs):
             raise self.failure
@@ -221,7 +217,7 @@ def test_mapping_classifies_only_agents_declared_request_errors(text_part):
     assert failed.value.code == "request_failed"
     assert "RequestError" not in str(failed.value)
 
-    model.transient = True
+    model.failure = TransientInferenceError("temporary")
     with pytest.raises(TransientInferenceError):
         map_parts([text_part], {"type": "object"}, model, config=config)
 

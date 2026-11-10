@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Iterable
 from typing import TYPE_CHECKING, Any, ClassVar, Self, cast
 
+from django.apps import AppConfig, apps
 from django.core import checks
 from django.db import models
 
@@ -12,6 +13,26 @@ from angee.resources.tiers import ResourceTier
 
 if TYPE_CHECKING:
     from angee.resources.loader import AngeeResource
+
+
+def check_resource_load_mixins(
+    app_configs: Iterable[AppConfig] | None = None, **kwargs: Any,
+) -> list[checks.CheckMessage]:
+    """Refuse post-load hooks the loader cannot dispatch through its declared mixin."""
+
+    configs = app_configs if app_configs is not None else apps.get_app_configs()
+    return [
+        checks.Error(
+            "A model defining after_resource_load must inherit ResourceLoadMixin.",
+            hint="Compose angee.resources.mixins.ResourceLoadMixin and delegate through super().",
+            obj=model,
+            id="resources.E001",
+        )
+        for config in configs for model in config.get_models()
+        # Validate inherited declarations without dispatching an undeclared model hook.
+        if not issubclass(model, ResourceLoadMixin)
+        and any("after_resource_load" in owner.__dict__ for owner in model.__mro__)
+    ]
 
 
 class ResourceLoadMixin(models.Model):

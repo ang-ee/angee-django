@@ -23,6 +23,7 @@ from rebac import (
 
 import tests.test_agents_graphql  # noqa: F401 -- register related models before native database setup
 from angee.base.signals import mute_changes
+from angee.base.testing.queries import statement_body, statement_startswith
 from angee.graphql.deletion import DeletePreview
 from angee.graphql.schema import SCHEMA_PART_KEYS, GraphQLSchemas
 from angee.graphql.testing.documents import execute_schema
@@ -410,7 +411,9 @@ def test_transcript_parts_reuse_complete_prefetch_at_list_scale(
         assert visited == [row["id"] for row in page]
         # Data loads project the owning table first. The first FROM can instead
         # belong to Message's title subquery, so it cannot identify the outer read.
-        mime_queries = tuple(sum(item["sql"].startswith(f"SELECT {table}.") for item in captured) for table in tables)
+        mime_queries = tuple(
+            sum(statement_startswith(item["sql"], f"SELECT {table}.") for item in captured) for table in tables
+        )
         assert mime_queries == expected_mime_queries, captured.captured_queries
         counts.append(len(captured))
     assert counts[0] == counts[1], f"{surface} transcript SQL grew at 3/6 messages: {counts}"
@@ -673,10 +676,10 @@ def test_handle_party_batches_one_related_model_query(
         "Party 2",
     ]
     party_selects = [
-        query["sql"]
+        sql
         for query in queries.captured_queries
-        if query["sql"].lstrip().upper().startswith("SELECT")
-        and f'FROM "{messaging_models.Party._meta.db_table}"' in query["sql"]
+        if statement_startswith((sql := statement_body(query["sql"])), "SELECT")
+        and f'FROM "{messaging_models.Party._meta.db_table}"' in sql
     ]
     # 0.31 (1 -> 2): one read of the parties, and REBAC's one batched decision of their gated fields
     # over the fetched ids.

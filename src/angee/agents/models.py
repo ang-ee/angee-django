@@ -14,6 +14,8 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
+import logging
+import math
 from collections.abc import Collection, Iterable, Iterator, Mapping, Sequence
 from contextlib import AbstractAsyncContextManager, nullcontext
 from dataclasses import dataclass
@@ -28,6 +30,8 @@ from django.conf import settings
 from django.core.exceptions import ImproperlyConfigured, PermissionDenied, ValidationError
 from django.db import models, transaction
 from django_compose.models import Composable
+from pydantic_ai.embeddings import EmbedInputType
+from pydantic_ai.exceptions import UnexpectedModelBehavior
 from pydantic_ai.messages import (
     BinaryContent,
     ModelMessage,
@@ -44,7 +48,7 @@ from pydantic_ai.usage import RequestUsage, RunUsage
 from rebac import SubjectRef, actor_context, current_actor, system_context, to_subject_ref
 from rebac.mixins import RebacModelBase
 
-from angee.agents.backends import InferenceBackend
+from angee.agents.backends import InferenceBackend, TransientInferenceError
 from angee.agents.constants import BUILTIN_MCP_ANGEE as BUILTIN_MCP_ANGEE
 from angee.agents.grants import sync_resource_reader_grants
 from angee.agents.reader_role import sync_resource_reader_role
@@ -517,7 +521,87 @@ class InferenceModel(ResourceLoadMixin, AuditMixin, AngeeDataModel, concrete=Tru
         backend = provider.backend
         return backend.model(self.provider_model_name, credential=credential)
 
-    def is_transient_error(self, error: Exception) -> bool:
+    @property
+    def embedding_dimensions(self) -> int | None:
+        """Native vector size reported at discovery or learned from a successful request."""
+
+        value = self.capabilities.get("embedding_dimensions")
+        return value if type(value) is int and value > 0 else None
+
+    def max_input_tokens(self) -> int | None:
+        """Return the discovery-owned budget without opening a provider binding."""
+
+        return int(self.context_window) if self.context_window else None
+
+    def embed(self, texts: Sequence[str], *, input_type: EmbedInputType, role: str) -> list[list[float]]:
+        """Embed a batch after re-checking its use, lifecycle and exact deployment role.
+
+        Callers admit actor access through ``require_usable`` when selecting a
+        model. Each request re-checks the caller's approval role before binding
+        credentials. The provider owns the native protocol and client lifetime;
+        this model records dimensions in its existing capabilities after success.
+        """
+
+        self.require_capability({InferenceModelUse.EMBEDDING})
+        self.require_approved(role)
+        if input_type not in {"document", "query"}:
+            raise ValueError("Embedding input_type must be 'document' or 'query'.")
+        if isinstance(texts, str | bytes) or not all(isinstance(text, str) for text in texts):
+            raise TypeError("Embedding texts must be a sequence of strings.")
+        if not texts:
+            return []
+        provider: Any = self.provider
+        try:
+            result = provider.backend.embed(self.provider_model_name, texts, input_type=input_type)
+        except provider.backend.request_error_types() as error:
+            if provider.backend.is_transient_error(error):
+                raise TransientInferenceError("Embedding transport failed.") from error
+            raise
+        self.record_usage(result.usage, operation="embed", role=role)
+        vectors = [list(vector) for vector in result.embeddings]
+        if len(vectors) != len(texts):
+            raise UnexpectedModelBehavior("Embedding response must contain one vector per input text.")
+        dimensions = len(vectors[0])
+        if not dimensions or any(
+            len(vector) != dimensions or not all(math.isfinite(value) for value in vector) or not any(vector)
+            for vector in vectors
+        ):
+            raise UnexpectedModelBehavior(
+                "Embedding response must contain finite, nonzero vectors of one positive dimension."
+            )
+        if self.embedding_dimensions is not None and dimensions != self.embedding_dimensions:
+            raise UnexpectedModelBehavior("Embedding dimensions differ from the model's recorded capabilities.")
+        if self.embedding_dimensions is None:
+            self._record_embedding_dimensions(dimensions)
+        return vectors
+
+    def _record_embedding_dimensions(self, dimensions: int) -> None:
+        """Learn an unknown size under a row lock; refuse changes to an existing vector space."""
+
+        with system_context(reason="agents.inference_model.embedding_dimensions"), transaction.atomic():
+            model = type(self).objects.filter(pk=self.pk).lock_if_supported(no_key=True).get()
+            if model.embedding_dimensions is not None and model.embedding_dimensions != dimensions:
+                raise UnexpectedModelBehavior("Embedding dimensions differ from the model's recorded capabilities.")
+            if model.embedding_dimensions is None:
+                model.capabilities = {**model.capabilities, "embedding_dimensions": dimensions}
+                model.save(update_fields=["capabilities"])
+            self.capabilities = model.capabilities
+
+    def record_usage(self, usage: RequestUsage | RunUsage, *, operation: str, role: str = "") -> dict[str, int]:
+        """Record normalized provider accounting without changing inference return types.
+
+        Structured usage events contain deployment identity and counters, never
+        provider inputs or credentials. Session/turn owners still persist their
+        own usage totals from the same normalization contract.
+        """
+
+        normalized = normalize_inference_usage(usage)
+        logging.getLogger("angee.agents.usage").info(
+            "Inference usage", extra={"model_id": self.pk, "operation": operation, "role": role, "usage": normalized},
+        )
+        return normalized
+
+    def is_transient_error(self, error: BaseException) -> bool:
         """Classify a failure through this model's native provider backend."""
 
         with system_context(reason="agents.inference_model.error"):
@@ -551,7 +635,7 @@ class InferenceModel(ResourceLoadMixin, AuditMixin, AngeeDataModel, concrete=Tru
         Denial raises ``PermissionDenied``; malformed policy raises ``ValueError``.
         """
 
-        policy = getattr(settings, "ANGEE_INFERENCE_APPROVED_DEPLOYMENTS", None)
+        policy = settings.ANGEE_INFERENCE_APPROVED_DEPLOYMENTS
         if policy is None:
             return
         if not isinstance(policy, Mapping):
@@ -653,13 +737,18 @@ class InferenceModel(ResourceLoadMixin, AuditMixin, AngeeDataModel, concrete=Tru
             raise TypeError("Inference images must be native pydantic-ai BinaryContent values.")
         if image_parts:
             request_messages.append(ModelRequest(parts=[UserPromptPart(image_parts)]))
-        response = self.chat(
-            request_messages,
-            model_settings=settings,
-            model_request_parameters=inference_request_parameters(output_schema),
-            credential=credential,
-        )
-        usage = normalize_inference_usage(response.usage)
+        try:
+            response = self.chat(
+                request_messages,
+                model_settings=settings,
+                model_request_parameters=inference_request_parameters(output_schema),
+                credential=credential,
+            )
+        except self.request_error_types() as error:
+            if self.is_transient_error(error):
+                raise TransientInferenceError("Inference transport failed.") from error
+            raise
+        usage = self.record_usage(response.usage, operation="infer")
         try:
             output = decode_inference_output(response) if isinstance(output_schema, Mapping) else None
         except ValueError as error:
@@ -845,7 +934,7 @@ class MCPServer(ResourceLoadMixin, AuditMixin, AngeeDataModel, concrete=True):
         if self.url:
             return str(self.url)
         if self.builtin == BUILTIN_MCP_ANGEE:
-            return str(getattr(settings, "ANGEE_BUILTIN_MCP_URL", "") or "").strip()
+            return str(settings.ANGEE_BUILTIN_MCP_URL or "").strip()
         return ""
 
     @property
@@ -988,7 +1077,6 @@ class MCPToolManager[ToolT: MCPTool](AngeeHistoryManager[ToolT]):
 
 class MCPTool(AuditMixin, AngeeDataModel, concrete=True):
     """One tool an MCP server exposes; agents select the tools they may call."""
-
 
     sqid_prefix = "mct_"
     server = models.ForeignKey("agents.MCPServer", on_delete=models.CASCADE, related_name="tools")
@@ -1352,7 +1440,7 @@ class Agent(ServiceUserMixin, ResourceLoadMixin, OwnerMixin, HistoryMixin, Angee
 
         if self.deprovision_blocker() is None:
             return "Deprovision this agent before deleting it."
-        active = getattr(self, "_has_active_turns", None)
+        active = self.__dict__.get("_has_active_turns", None)
         if active is None:
             active = type(self).system_queryset().filter(self.has_active_turns_expression(), pk=self.pk).exists()
         if active:
@@ -1477,6 +1565,7 @@ class Agent(ServiceUserMixin, ResourceLoadMixin, OwnerMixin, HistoryMixin, Angee
     def records_instance(self, kind: OperatorInstanceKind, name: str) -> bool:
         """Whether this agent records the operator ``kind`` instance ``name`` as its own."""
 
+        # The declared kind-to-field mapping selects the instance column.
         return bool(name) and getattr(self, self._INSTANCE_FIELDS[kind]) == name
 
     def workspace_identity_inputs(self) -> dict[str, str]:
@@ -1528,7 +1617,7 @@ class Agent(ServiceUserMixin, ResourceLoadMixin, OwnerMixin, HistoryMixin, Angee
             instances.insert(0, (OperatorInstanceKind.WORKSPACE, status.name))
         for kind, name in instances:
             label = OperatorInstanceKind(kind).label.lower()
-            # Recording it would overwrite — and so forget — this agent's own instance.
+            # The declared kind-to-field mapping selects the column an adoption would overwrite.
             own = getattr(self, self._INSTANCE_FIELDS[kind])
             if own and own != name:
                 return f"This agent already records {label} “{own}”, so it cannot also take over “{name}”."
@@ -1552,7 +1641,7 @@ class Agent(ServiceUserMixin, ResourceLoadMixin, OwnerMixin, HistoryMixin, Angee
 
         self.runtime_status = cast(RuntimeStatus, RuntimeStatus.STOPPED)
         self.last_error = ""
-        self._transition_fields = {"runtime_status", "last_error"}
+        self.transition_fields = {"runtime_status", "last_error"}
 
     @transition(
         lifecycle,
@@ -1574,7 +1663,7 @@ class Agent(ServiceUserMixin, ResourceLoadMixin, OwnerMixin, HistoryMixin, Angee
         self.conflict_name = ""
         self.runtime_status = cast(RuntimeStatus, RuntimeStatus.STOPPED)
         self.last_error = ""
-        self._transition_fields = {
+        self.transition_fields = {
             "workspace",
             "service",
             "conflict_kind",
@@ -1594,7 +1683,7 @@ class Agent(ServiceUserMixin, ResourceLoadMixin, OwnerMixin, HistoryMixin, Angee
 
         self.workspace = workspace
         self.last_error = ""
-        self._transition_fields = {"workspace", "last_error"}
+        self.transition_fields = {"workspace", "last_error"}
 
     @transition(
         lifecycle,
@@ -1607,7 +1696,7 @@ class Agent(ServiceUserMixin, ResourceLoadMixin, OwnerMixin, HistoryMixin, Angee
 
         self.service = service
         self.last_error = ""
-        self._transition_fields = {"service", "last_error"}
+        self.transition_fields = {"service", "last_error"}
 
     @transition(
         lifecycle,
@@ -1623,7 +1712,7 @@ class Agent(ServiceUserMixin, ResourceLoadMixin, OwnerMixin, HistoryMixin, Angee
         """
 
         self.service = ""
-        self._transition_fields = {"service"}
+        self.transition_fields = {"service"}
 
     @transition(
         lifecycle,
@@ -1644,7 +1733,7 @@ class Agent(ServiceUserMixin, ResourceLoadMixin, OwnerMixin, HistoryMixin, Angee
         self.service = service
         self.runtime_status = cast(RuntimeStatus, RuntimeStatus.RUNNING)
         self.last_error = ""
-        self._transition_fields = {"workspace", "service", "runtime_status", "last_error"}
+        self.transition_fields = {"workspace", "service", "runtime_status", "last_error"}
 
     @transition(
         lifecycle,
@@ -1665,7 +1754,7 @@ class Agent(ServiceUserMixin, ResourceLoadMixin, OwnerMixin, HistoryMixin, Angee
         self.last_error = ""
         self.conflict_kind = None
         self.conflict_name = ""
-        self._transition_fields = {
+        self.transition_fields = {
             "workspace",
             "service",
             "runtime_status",
@@ -1702,7 +1791,7 @@ class Agent(ServiceUserMixin, ResourceLoadMixin, OwnerMixin, HistoryMixin, Angee
             self.conflict_kind = None
             self.conflict_name = ""
             transition_fields.update({"workspace", "service", "conflict_kind", "conflict_name"})
-        self._transition_fields = transition_fields
+        self.transition_fields = transition_fields
 
     def mark_provision_failed(
         self,
@@ -1740,7 +1829,7 @@ class Agent(ServiceUserMixin, ResourceLoadMixin, OwnerMixin, HistoryMixin, Angee
             transition_fields.update({"conflict_kind", "conflict_name"})
         self.runtime_status = cast(RuntimeStatus, RuntimeStatus.ERROR)
         self.last_error = message[:2000]
-        self._transition_fields = transition_fields
+        self.transition_fields = transition_fields
         self.lifecycle_transitions.force_state(
             self,
             cast(AgentLifecycle, AgentLifecycle.READY if self.workspace else AgentLifecycle.DRAFT),
@@ -1790,11 +1879,12 @@ class Agent(ServiceUserMixin, ResourceLoadMixin, OwnerMixin, HistoryMixin, Angee
         # flow (both also keyed on ``renders_service``).
         if runtime.renders_service and model is not None and self.inference_secret():
             credential = self.inference_credential_for_runtime()
-            backend = getattr(getattr(model, "provider", None), "backend", None)
-            if credential is None or backend is None:
-                raise ValueError("Inference auth requires a model provider backend.")
+            if credential is None:
+                raise ValueError("Inference auth requires a credential.")
             structured["auth_env"] = self._service_env_lines(
-                runtime.auth_env(backend=backend, credential=credential, secret_name=self.inference_secret_name())
+                runtime.auth_env(
+                    backend=model.provider.backend, credential=credential, secret_name=self.inference_secret_name(),
+                )
             )
         # The MCP bearers ride the container env too: one ``${secret.<name>}`` line per
         # credentialed server (the operator resolves it), which the service template renders
@@ -2066,7 +2156,6 @@ class AgentSession(AuditMixin, AngeeDataModel, concrete=True):
     Delete authority derives from the agent, independently of the session's user.
     """
 
-
     sqid_prefix = "ase_"
     agent = models.ForeignKey("agents.Agent", on_delete=models.CASCADE, related_name="sessions")
     # A session is its user's own conversation, not a transferable grant root: deleting
@@ -2325,7 +2414,7 @@ class AgentSession(AuditMixin, AngeeDataModel, concrete=True):
         """Project active turn execution onto the session."""
 
         self.last_error = ""
-        self._transition_fields = {"last_error"}
+        self.transition_fields = {"last_error"}
 
     @transition(
         status,
@@ -2337,7 +2426,7 @@ class AgentSession(AuditMixin, AngeeDataModel, concrete=True):
         """Project a parked session awaiting its next user turn."""
 
         self.last_error = ""
-        self._transition_fields = {"last_error"}
+        self.transition_fields = {"last_error"}
 
     @transition(
         status,
@@ -2367,7 +2456,7 @@ class AgentSession(AuditMixin, AngeeDataModel, concrete=True):
         """Project a session-level runtime error."""
 
         self.last_error = message
-        self._transition_fields = {"last_error"}
+        self.transition_fields = {"last_error"}
 
 
 class AgentTurnQuerySet[TurnT: AgentTurn](AngeeHistoryQuerySet[TurnT]):
@@ -2389,7 +2478,6 @@ _AgentTurnManager = AngeeHistoryManager.from_queryset(AgentTurnQuerySet)
 
 class AgentTurn(AuditMixin, AngeeDataModel, concrete=True):
     """One prompt-to-response cycle with append-only ACP updates."""
-
 
     sqid_prefix = "atn_"
     session = models.ForeignKey("agents.AgentSession", on_delete=models.CASCADE, related_name="turns")
@@ -2484,7 +2572,7 @@ class AgentTurn(AuditMixin, AngeeDataModel, concrete=True):
         """Claim this pending turn for its single runtime execution."""
 
         self.error = ""
-        self._transition_fields = {"error"}
+        self.transition_fields = {"error"}
 
     @transition(
         status,
@@ -2507,7 +2595,7 @@ class AgentTurn(AuditMixin, AngeeDataModel, concrete=True):
         self.text = text
         self.usage = dict(usage)
         self.error = ""
-        self._transition_fields = {"text", "usage", "error"}
+        self.transition_fields = {"text", "usage", "error"}
 
     @transition(
         status,
@@ -2520,7 +2608,7 @@ class AgentTurn(AuditMixin, AngeeDataModel, concrete=True):
 
         self.error = message
         self.usage = dict(usage)
-        self._transition_fields = {"error", "usage"}
+        self.transition_fields = {"error", "usage"}
 
     @transition(
         status,

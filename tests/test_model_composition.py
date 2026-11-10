@@ -221,6 +221,7 @@ def test_native_history_excludes_generated_fields_from_final_model(modules):
 
 
 @pytest.mark.django_db(transaction=True)
+@isolate_apps()
 def test_native_history_saves_virtual_fields_and_preserves_parent_tracking(modules):
     create, emit = modules
     config, module = create("native_history")

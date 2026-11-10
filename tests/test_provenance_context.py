@@ -6,7 +6,6 @@ from typing import Any
 
 import pytest
 from django.apps import apps
-from django.core.exceptions import ValidationError
 from rebac import SubjectRef, actor_context, system_context
 
 from angee.provenance.context import changeset, changeset_model_label, current_changeset
@@ -54,17 +53,6 @@ def test_merge_context_opens_fresh_attribution_when_no_boundary_exists() -> None
         assert selected is not None
     stored = apps.get_model(changeset_model_label())._base_manager.get(pk=selected.pk)
     assert (stored.activity, stored.outcome, stored.touched) == ("merge", "success", [record._meta.label_lower])
-
-
-def test_merge_context_refuses_joining_a_different_database_before_entering() -> None:
-    record = survivor()
-    record._state.db = "different-database"
-    with changeset(fresh=True):
-        parent = current_changeset(record=True)
-        with pytest.raises(ValidationError, match="A fold and its changeset must be routed to one database"):
-            with merge_context(record, join=True):
-                pytest.fail("A cross-database fold entered its persistence body.")
-        assert current_changeset() is parent
 
 
 def test_failed_merge_context_keeps_failure_and_does_not_mark_an_unchanged_survivor() -> None:

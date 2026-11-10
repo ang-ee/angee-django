@@ -9,6 +9,8 @@ from their own ``conftest.py``::
     from angee.base.testing.fixtures import composed_tables as composed_tables
 
 Individual test modules consume the fixture by parameter without re-importing it.
+``angee.base.testing.queries`` classifies captured SQL by its outer statement,
+including reads preceded by CTEs or PostgreSQL cursor declarations.
 This package is not a Django app and does not define models.
 Serving code must not import test support.
 """

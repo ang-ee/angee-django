@@ -47,9 +47,11 @@ from angee.base.models.audit import AuditMixin
 from angee.base.models.base import AngeeModel
 from angee.base.models.identity import SqidMixin
 from angee.base.serialization import strip_null_bytes
+from angee.base.testing.queries import statement_startswith
 from angee.graphql import publishing
 from angee.graphql.access import ChangeReadGate
 from angee.graphql.events import ChangePayload
+from angee.graphql.testing import capture_broadcasts
 from angee.messaging import managers as messaging_managers
 from angee.messaging.backends import (
     ManualChannelBackend,
@@ -242,7 +244,7 @@ def test_ingest_commits_each_message_and_does_not_lock_an_unchanged_observation(
         )
     assert replayed.pk == first.pk
     assert not any("FOR UPDATE" in query["sql"] for query in queries)
-    assert not any(query["sql"].lstrip().startswith("UPDATE") for query in queries)
+    assert not any(statement_startswith(query["sql"].lstrip(), "UPDATE") for query in queries)
 
 
 @pytest.mark.django_db(transaction=True)
@@ -2264,6 +2266,21 @@ def test_email_identity_columns_are_unbounded_and_subject_columns_are_gone() -> 
             model._meta.get_field(field_name)
 
 
+def test_parsed_message_sync_hash_follows_what_ingest_writes() -> None:
+    """Equal envelopes hash equal; another channel, attachment byte or reply pointer flips the digest."""
+
+    attachment = ParsedPart(type="image/png", disposition="attachment", content=b"first")
+    parsed = replace(_parsed("m1", sent_at=_AT), body=ParsedPart(text="Body", children=(attachment,)))
+    digest = parsed.sync_hash(channel_id=1, metadata={})
+    assert digest == replace(parsed).sync_hash(channel_id=1, metadata={})
+    assert digest != parsed.sync_hash(channel_id=2, metadata={})
+    changed = replace(attachment, content=b"second")
+    assert digest != replace(parsed, body=ParsedPart(text="Body", children=(changed,))).sync_hash(
+        channel_id=1, metadata={},
+    )
+    assert digest != replace(parsed, in_reply_to="m0").sync_hash(channel_id=1, metadata={})
+
+
 @pytest.mark.django_db(transaction=True)
 def test_identical_resync_does_not_churn_message_or_parts(channel: Any) -> None:
     """A second identical ingest rewrites nothing — no re-save, stable Part PKs (M3).
@@ -2278,7 +2295,9 @@ def test_identical_resync_does_not_churn_message_or_parts(channel: Any) -> None:
     parsed = _parsed("m1", sent_at=_AT)
     assert _ingest([parsed], channel=channel) == 1
     message = Message._base_manager.get(external_id="m1")
-    assert message.metadata.get("sync_hash")
+    assert message.metadata["sync_hash"] == parsed.sync_hash(
+        channel_id=channel.pk, metadata=Message.ingest_metadata(parsed.metadata),
+    )
     first_updated_at = message.updated_at
     part_pks = set(Part._base_manager.filter(message=message).values_list("pk", flat=True))
     fragment_count = Fragment._base_manager.count()
@@ -2724,19 +2743,19 @@ def _collecting_broadcasts(
 ) -> Iterator[list[tuple[Any, dict[str, Any]]]]:
     """Yield the change payloads broadcast for ``models`` while their publishers are wired.
 
-    Runs ``_broadcast`` and ``on_commit`` inline so a post's broadcast is observable
-    now, and restores each model's prior publisher wiring on exit through the public
+    Runs ``on_commit`` inline so a post's broadcast is observable now, and
+    restores each model's prior publisher wiring on exit through the public
     ``connect_publishers`` / ``disconnect_publishers`` seam.
     """
 
     sent: list[tuple[Any, dict[str, Any]]] = []
-    monkeypatch.setattr(publishing, "_broadcast", lambda model, payload: sent.append((model, payload)))
     monkeypatch.setattr(publishing.transaction, "on_commit", lambda callback, **kwargs: callback())
     already_wired = {model: publishing.disconnect_publishers(model) for model in models}
     for model in models:
         publishing.connect_publishers(model)
     try:
-        yield sent
+        with capture_broadcasts(observer=lambda model, payload: sent.append((model, payload))):
+            yield sent
     finally:
         for model in models:
             publishing.disconnect_publishers(model)
@@ -2952,13 +2971,17 @@ def test_broadcasting_room_creator_socket_gated_by_membership(composed_tables: N
 
         # Following grants no access; an explicit share makes the socket live.
         room.message_subscribe(user=creator)
-        thread.grant_reader(user=creator)
+        thread.grant_reader(user_id=creator.pk)
         assert ChangeReadGate(Thread, creator_subject).filter(change) is not None
 
         # Removing the explicit share makes the socket go dark again.
         room.message_unsubscribe(user=creator)
-        thread.revoke_reader(user=creator)
+        thread.revoke_reader(user_id=creator.pk)
         assert ChangeReadGate(Thread, creator_subject).filter(change) is None
+
+        for change_reader in (thread.grant_reader, thread.revoke_reader):
+            with pytest.raises(get_user_model().DoesNotExist):
+                change_reader(user_id=-1)
 
 
 @pytest.mark.django_db(transaction=True)

@@ -1,10 +1,4 @@
 {
-  "criticalExports": [
-    {
-      "name": "useAgentChatContext",
-      "ownerFile": "src/chat-context.ts"
-    }
-  ],
   "dynamicI18nKeyFamilies": [
     {
       "namespace": "agents",

@@ -8,19 +8,22 @@ import pytest
 from django.db import connection
 from django.test.utils import CaptureQueriesContext
 from django.utils import timezone
-from rebac import RelationshipTuple, system_context, to_object_ref, to_subject_ref, write_relationships
+from rebac import RelationshipTuple, actor_context, system_context, to_object_ref, to_subject_ref, write_relationships
 
 from angee.base.models.identity import public_id_of
 from angee.base.signals import bulk_updated, change_published
+from angee.base.testing.queries import capture_planner_memory, statement_startswith, supports_planner_memory
 from angee.decisions.contracts import DecisionProposal, DecisionRequest
 from angee.decisions.testing.models import Decision
 from angee.graphql import publishing
+from angee.graphql.testing import capture_broadcasts
 from angee.provenance.context import changeset
+from angee.timeline.reading import Timeline
 from angee.workflows.decision_steps import DecisionStep
 from angee.workflows.states import RunStatus, WaitingKind
 from angee.workflows.testing.drivers import decide, deliver_decision_wakes, load_workflow, run_until
 from angee.workflows.testing.models import StepRun, WorkflowRun
-from angee.workflows.timeline import RunKind
+from angee.workflows.timeline import RunKind, TimelineSelection
 from tests.conftest import create_user
 from tests.mtidemo.models import MtiChild, MtiParent
 from tests.test_timeline import read_timeline, timeline_entries
@@ -39,6 +42,88 @@ def kinds(settings):
     ]
 
 
+@pytest.mark.parametrize("viewer", ["admin", "member"])
+def test_timeline_read_planner_memory(review, settings, viewer, record_property):
+    """Budget the actual page statement, with a waiting run and folded and standalone decisions."""
+    if connection.vendor != "postgresql":
+        pytest.skip("PostgreSQL planner budget")
+    assert supports_planner_memory(), "EXPLAIN MEMORY requires PostgreSQL 17 or later"
+    settings.ANGEE_TIMELINE_KINDS = [
+        "angee.workflows.timeline.timeline_kinds", "angee.decisions.timeline.timeline_kinds",
+    ]
+    admin, reviewers, _, question = review
+    run, _step = start_review(review)
+    member = reviewers[0]
+    write_relationships([RelationshipTuple(to_object_ref(run), "reader", to_subject_ref(member))])
+    standalone = Decision.objects.ask(DecisionRequest(
+        kind="standalone", records=(question.review_subject,), assignees=(admin, member),
+        proposal=DecisionProposal(alternatives=[{"key": "done", "label": "Done", "outcome": "done"}]),
+    ), actor=admin)
+    actor = admin if viewer == "admin" else member
+
+    def read():
+        with actor_context(actor):
+            timeline = Timeline(question.review_subject, actor)
+            rows, children = timeline._read(kinds=None, needs_me=False, anchor=None, limit=25)
+        assert {(row["_result_kind"], row["_result_pk"]) for row in rows} == {
+            ("workflows.run", run.pk), ("decisions.decision", standalone.pk),
+        }
+        assert timeline.counts == {"workflows.run": (1, viewer == "member"), "decisions.decision": (1, 1)}
+        assert sum(child.count for group in children.values() for child in group) == 1
+        return rows
+
+    read()  # Warm the same read, as in the console document budgets.
+    with capture_planner_memory(lambda sql: '"timeline_source"' in sql) as plans:
+        read()
+    [plan] = plans
+    memory = plan.allocated_kib
+    record_property("sql_bytes", plan.sql_bytes)
+    record_property("planner_memory_used_kib", plan.used_kib)
+    record_property("planner_memory_allocated_kib", memory)
+    # REBAC 0.32.2's compact aliases: PostgreSQL 18.6 measures 29,591 SQL bytes,
+    # 10,415 KiB used / 16,384 KiB allocated for either actor. Allocation equals the
+    # recorded PostgreSQL 17 value; ceil(16,384 / 1,024) = 16 MiB, with no headroom.
+    assert 0 < memory <= 16 * 1024, (
+        f"Timeline planner allocated {memory} KiB; ceiling 16 MiB. "
+        "Ratchet downward when cost falls; never raise to admit a regression."
+    )
+
+
+def test_timeline_without_open_questions_does_not_build_record_guards(review, monkeypatch):
+    """No question rows means no guarded prefetch or reference population scan."""
+    admin, _reviewers, _, question = review
+
+    def unexpected_guard(*args, **kwargs):
+        pytest.fail("A timeline with no open questions must not build a record guard")
+
+    monkeypatch.setattr("angee.workflows.timeline.with_record_reference_access", unexpected_guard)
+    with actor_context(admin):
+        entries = list(TimelineSelection([question.review_subject], admin).entries([]))
+    assert len(entries) == 1 and entries[0][1:] == ([], [])
+
+
+@pytest.mark.parametrize("readable", [False, True])
+@pytest.mark.parametrize("viewer", ["reviewer", "bystander"])
+def test_run_attention_exposes_only_the_boolean_on_readable_runs(review, settings, readable, viewer):
+    settings.ANGEE_TIMELINE_KINDS = ["angee.workflows.timeline.timeline_kinds"]
+    admin, reviewers, _, question = review
+    run, step = start_review(review)
+    actor = reviewers[0] if viewer == "reviewer" else create_user("attention-bystander")
+    if readable:
+        write_relationships([RelationshipTuple(to_object_ref(run), "reader", to_subject_ref(actor))])
+    assert step.decision.with_actor(actor).has_access("act") is (viewer == "reviewer")
+    # An unrelated ambient administrator must not lend the viewer read or act access.
+    with actor_context(admin):
+        timeline = Timeline(question.review_subject, actor)
+        page = timeline.page()
+    assert len(page.entries) == int(readable)
+    assert page.needs_me == int(readable and viewer == "reviewer")
+    if readable:
+        assert page.entries[0].needs_me is (viewer == "reviewer")
+        assert page.entries[0].target_id == public_id_of(run)
+    assert timeline.counts.get("workflows.run", (0, 0)) == (int(readable), page.needs_me)
+
+
 @pytest.mark.parametrize("redacted_run", [False, True])
 def test_run_invalidation_reuses_its_audited_scope_and_reloads_relations(execution, redacted_run) -> None:
     actor, _sent = execution
@@ -52,8 +137,8 @@ def test_run_invalidation_reuses_its_audited_scope_and_reloads_relations(executi
             assert tuple(kind.targets(row)) == (run,)
             assert tuple(kind.records(run)) == ()
     queries = [query["sql"] for query in captured]
-    assert sum(sql.startswith('INSERT INTO "rebac_permissionauditevent"') for sql in queries) == 1
-    assert sum(sql.startswith("SELECT") for sql in queries) == 2
+    assert sum(statement_startswith(sql, 'INSERT INTO "rebac_permissionauditevent"') for sql in queries) == 1
+    assert sum(statement_startswith(sql, "SELECT") for sql in queries) == 2
     assert sum(f'FROM "{run._meta.db_table}"' in sql for sql in queries) == 1
 
 
@@ -235,29 +320,29 @@ def test_each_committed_workflow_wait_refreshes_the_inherited_record_feed(
             # Read exactly when a subscriber receives the committed invalidation.
             snapshots.append(read_timeline(subject, actor))
 
-    monkeypatch.setattr("angee.graphql.publishing._broadcast", broadcast)
-    workflow = load_workflow({
-        "nodes": {
-            "first": {"step": Question.key, "label": "First review", "next": {"done": ["second"]}},
-            "second": {"step": Question.key, "label": "Second review"},
-        },
-        "results": [{"from": "second", "when": ["done"], "as": "done"}],
-    }, key="timeline-committed-waits", actor=actor)
-    run = WorkflowRun.objects.start(workflow, actor=actor, subject=subject)
-    for node in ("first", "second"):
-        snapshots.clear()
+    with capture_broadcasts(observer=broadcast):
+        workflow = load_workflow({
+            "nodes": {
+                "first": {"step": Question.key, "label": "First review", "next": {"done": ["second"]}},
+                "second": {"step": Question.key, "label": "Second review"},
+            },
+            "results": [{"from": "second", "when": ["done"], "as": "done"}],
+        }, key="timeline-committed-waits", actor=actor)
+        run = WorkflowRun.objects.start(workflow, actor=actor, subject=subject)
+        for node in ("first", "second"):
+            snapshots.clear()
+            run_until(run)
+            step = StepRun.system_queryset().get(run=run, node_key=node)
+            event, = timeline_entries(subject, actor, kind="workflows.run")
+            assert event.detail == f"Waiting · {step.node_label}"
+            assert snapshots, "The declared child feed must refresh after the source write commits."
+            page = snapshots[-1]
+            assert page["timeline_attention"] == page["timeline"]["needs_me"] == 1
+            (line,) = page["timeline"]["entries"]
+            assert line["detail"] == event.detail and line["needs_me"]
+            assert {"kind": "decisions.decision", "count": 1 if node == "first" else 2} in line["children"]
+            decide(step.decision, actor=actor, chosen=["done"])
+            assert deliver_decision_wakes(sent, step.decision_id) == [1]
         run_until(run)
-        step = StepRun.system_queryset().get(run=run, node_key=node)
-        event, = timeline_entries(subject, actor, kind="workflows.run")
-        assert event.detail == f"Waiting · {step.node_label}"
-        assert snapshots, "The declared child feed must refresh after the source write commits."
-        page = snapshots[-1]
-        assert page["timeline_attention"] == page["timeline"]["needs_me"] == 1
-        (line,) = page["timeline"]["entries"]
-        assert line["detail"] == event.detail and line["needs_me"]
-        assert {"kind": "decisions.decision", "count": 1 if node == "first" else 2} in line["children"]
-        decide(step.decision, actor=actor, chosen=["done"])
-        assert deliver_decision_wakes(sent, step.decision_id) == [1]
-    run_until(run)
-    assert snapshots[-1]["timeline_attention"] == 0
-    assert snapshots[-1]["timeline"]["entries"][0]["detail"] == "Succeeded"
+        assert snapshots[-1]["timeline_attention"] == 0
+        assert snapshots[-1]["timeline"]["entries"][0]["detail"] == "Succeeded"

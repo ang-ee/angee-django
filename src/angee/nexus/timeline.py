@@ -7,8 +7,8 @@ from typing import Any
 
 from django.apps import apps
 from django.db import models
-from rebac import system_context
 
+from angee.messaging.managers import MessageQuerySet
 from angee.timeline.kinds import Presentation, RecordIdentity, TimelineKind
 
 CORRESPONDENCE_KIND = "nexus.correspondence"
@@ -37,15 +37,38 @@ class CorrespondenceKind(TimelineKind):
     def eligible(self, model: type[models.Model]) -> bool:
         return issubclass(model, (apps.get_model("parties", "Party"), apps.get_model("parties", "Circle")))
 
-    def queryset(self, record: Any, actor: Any) -> models.QuerySet:
+    def occurs(self, record: Any) -> bool:
+        """Probe membership without the reader-dependent canonical-message collapse.
+
+        A readable redirect remains visible when its survivor is unreadable, so
+        this actor-free probe deliberately includes all untrashed inbox copies.
+        """
+        return apps.get_model("messaging", "Message")._base_manager.filter(
+            self._record_filter(record), MessageQuerySet.inbox_q(), MessageQuerySet.untrashed_q(),
+        ).exists()
+
+    @staticmethod
+    def _record_filter(record: Any) -> models.Q:
+        """The readable message owns its envelope, including private membership edges."""
         party = apps.get_model("parties", "Party")
-        with system_context(reason="nexus.timeline_membership"):
-            parties = party.system_queryset().canonical()
-            parties = parties.in_circle(record, confirmed_only=True) \
-                if isinstance(record, apps.get_model("parties", "Circle")) else parties.filter(pk=record.pk)
-            # The readable message owns its envelope; private handle or membership
-            # rows must not accidentally narrow a record's correspondence.
-            rows = apps.get_model("messaging", "Message").objects.involving_parties(parties)
+        circle = apps.get_model("parties", "Circle")
+        parties = party._base_manager.all().canonical().filter(party.objects.untrashed_q())
+        if isinstance(record, circle):
+            subtree = circle._base_manager.filter(circle.objects.subtree_filter(record))
+            members = apps.get_model("parties", "CircleMember")._base_manager.filter(
+                circle.objects.memberships_filter(subtree, confirmed_only=True),
+            )
+            parties = parties.filter(pk__in=members.order_by().values("party_id"))
+        else:
+            parties = parties.filter(pk=record.pk)
+        return MessageQuerySet.involving_parties_filter(
+            parties,
+            handles=apps.get_model("parties", "Handle")._base_manager.all(),
+            participants=apps.get_model("messaging", "Participant")._base_manager.all(),
+        )
+
+    def queryset(self, record: Any, actor: Any) -> models.QuerySet:
+        rows = apps.get_model("messaging", "Message").objects.filter(self._record_filter(record))
         return rows.with_actor(actor).inbox().canonical().scoped().annotate(
             _order_at=rows.chronological_time(),
         ).select_related("sender", "created_by").with_title_text()

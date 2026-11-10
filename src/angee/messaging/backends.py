@@ -16,6 +16,8 @@ installed.
 
 from __future__ import annotations
 
+import hashlib
+import json
 import logging
 from collections.abc import Sequence
 from contextlib import AbstractContextManager, nullcontext
@@ -26,6 +28,8 @@ from typing import Any, ClassVar
 from django.apps import apps
 from django.core.exceptions import ValidationError
 
+from angee.base.exceptions import DomainError
+from angee.base.serialization import canonical_json_sha256, strip_null_bytes
 from angee.integrate.errors import IntegrationError
 from angee.integrate.http import HttpClientMixin
 from angee.integrate.impl import BridgeImpl, LiveBridgeImpl
@@ -42,6 +46,34 @@ logger = logging.getLogger(__name__)
 
 class PairingActionError(ValueError):
     """A safe, actionable live-channel pairing precondition failure."""
+
+
+class OutboundEmailNotConfigured(DomainError, ValidationError):
+    """No channel backend, or not the requested one, offers configured outbound email delivery.
+
+    A validation refusal keyed to ``channel``, so a sending form shows it beside its
+    channel choice; the schema projects its code.
+    """
+
+    code = "OUTBOUND_EMAIL_NOT_CONFIGURED"
+
+    def __init__(self) -> None:
+        ValidationError.__init__(
+            self,
+            {"channel": ValidationError("Outbound email delivery is not configured.", code=self.code)},
+        )
+
+
+class OutboundEmailChannelMissing(DomainError, ValidationError):
+    """Outbound email is configured, but no selected channel is connected on a backend offering it."""
+
+    code = "OUTBOUND_EMAIL_CHANNEL_MISSING"
+
+    def __init__(self) -> None:
+        ValidationError.__init__(
+            self,
+            {"channel": ValidationError("Select a connected email channel.", code=self.code)},
+        )
 
 
 class DeliveryUncertain(IntegrationError):
@@ -116,6 +148,22 @@ class ParsedPart:
     content: bytes | None = None
     children: tuple[ParsedPart, ...] = ()
 
+    def sync_digest(self) -> dict[str, Any]:
+        """Return a JSON-safe digest of this node and its children, as the message sync hash reads it."""
+
+        return {
+            "type": self.type,
+            "disposition": self.disposition,
+            "role": self.role,
+            "text": self.text,
+            "name": self.name,
+            "cid": self.cid,
+            # Attachment bytes are hashed, not carried, so a large file does not inflate
+            # the digest while a changed byte still flips it.
+            "content": hashlib.sha256(self.content).hexdigest() if self.content is not None else None,
+            "children": [child.sync_digest() for child in self.children],
+        }
+
 
 @dataclass(frozen=True)
 class MediaItem:
@@ -184,17 +232,65 @@ class ParsedMessage:
 
         return replace(self, body=body_part(media=media, body=self.body))
 
+    def sync_hash(self, *, channel_id: Any, metadata: dict[str, Any], received_at: datetime | None = None) -> str:
+        """Return a stable digest of everything an ingest of this message into ``channel_id`` would write.
 
-def media_part(item: Any) -> ParsedPart:
+        Covers the message columns, its part tree and its participants, so an
+        identical re-sync hashes equal and ingest can skip the rewrite. The thread is
+        excluded: a re-thread must still reconcile counters even when nothing else
+        changed, so ingest compares it separately. ``metadata`` is the envelope
+        ingest stores; ``received_at`` is the effective receipt time ingest writes and
+        defaults to this message's own.
+        """
+
+        received_at = received_at if received_at is not None else self.received_at
+        payload = {
+            "channel_id": str(channel_id) if channel_id is not None else None,
+            "direction": self.direction,
+            "subject": strip_null_bytes(self.subject),
+            "headers": [[name, value] for name, value in strip_null_bytes(list(self.headers))],
+            "sent_at": self.sent_at.isoformat() if self.sent_at is not None else None,
+            "received_at": received_at.isoformat() if received_at is not None else None,
+            "metadata": metadata,
+            "sender": (
+                None
+                if self.sender is None
+                else {
+                    "platform": self.sender.platform,
+                    "value": self.sender.value,
+                    "display_name": self.sender.display_name,
+                }
+            ),
+            "recipients": [
+                {
+                    "platform": recipient.handle.platform,
+                    "value": recipient.handle.value,
+                    "display_name": recipient.handle.display_name,
+                    "role": recipient.role,
+                }
+                for recipient in self.recipients
+            ],
+            "body": self.body.sync_digest() if self.body is not None else None,
+        }
+        if self.in_reply_to:
+            # Present only when set: non-reply hashes stay stable across the reply-pointer
+            # rollout, so a full re-import rewrites exactly the rows that gain a parent.
+            payload["in_reply_to"] = self.in_reply_to
+        # Existing source hashes include native JSON's spaces; preserve that persisted spelling.
+        canonical = json.dumps(payload, sort_keys=True, ensure_ascii=False, default=str)
+        return canonical_json_sha256(chunks=(canonical,))
+
+
+def media_part(item: MediaItem) -> ParsedPart:
     """Return one media part, preserving failed downloads as visible marker text.
 
     A media item with ``content=None`` is never dropped: it becomes a
     ``[media unavailable: ...]`` body marker so the message remains loss-aware.
     """
 
-    mime = str(getattr(item, "mime", "") or "application/octet-stream")
-    name = str(getattr(item, "name", "") or "")
-    content = getattr(item, "content", None)
+    mime = str(item.mime or "application/octet-stream")
+    name = str(item.name or "")
+    content = item.content
     if content is None:
         label = name or mime
         return ParsedPart(type="text/plain", role="body", text=f"[media unavailable: {label}]")
@@ -256,9 +352,13 @@ class ChannelBackend(BridgeImpl, HttpClientMixin):
         return False
 
     def outbound_sender(self) -> tuple[str, str]:
-        """Return this channel's validated default ``(name, address)`` email sender."""
+        """Return this channel's validated default ``(name, address)`` email sender.
 
-        raise ValidationError("Select a connected email channel.")
+        A backend that offers no outbound email refuses with
+        :class:`OutboundEmailChannelMissing`.
+        """
+
+        raise OutboundEmailChannelMissing
 
     @classmethod
     def reconciles_delivery(cls) -> bool:
@@ -336,7 +436,7 @@ class ChannelBackend(BridgeImpl, HttpClientMixin):
         logger.warning(
             "Channel backend %s does not support outbound delivery for message %s.",
             type(self).__name__,
-            getattr(message, "pk", None),
+            message.pk,
         )
         return DeliveryOutcome(accepted=False)
 

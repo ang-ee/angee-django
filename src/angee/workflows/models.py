@@ -53,7 +53,6 @@ from angee.workflows.managers import (
     StepWatchManager,
     WorkflowManager,
     WorkflowRunManager,
-    isolate_failure,
 )
 from angee.workflows.resources import TriggerResource, WorkflowDefinitionResource
 from angee.workflows.signals import run_stopping
@@ -73,6 +72,7 @@ from angee.workflows.states import (
 )
 from angee.workflows.steps import AttemptRecord, Fail, Step
 from angee.workflows.subjects import RunSubject
+from angee.workflows.transactions import isolate_failure
 from angee.workflows.triggers import (
     TriggerEventManager,
     TriggerGrantTarget,
@@ -358,7 +358,7 @@ class WorkflowRun(RecordRefMixin, AngeeDataModel, concrete=True):
         """Identify an execution by its workflow and start time."""
         if self.version_id is None:
             return str(self._meta.verbose_name)
-        name = getattr(self, "_workflow_name", None)
+        name = self.__dict__.get("_workflow_name", None)
         if name is None:
             with system_context(reason="workflows.run_label"):
                 name = self.policy_version.workflow.name
@@ -616,7 +616,10 @@ class WorkflowRun(RecordRefMixin, AngeeDataModel, concrete=True):
                     if failure.timed_out:
                         error, stacktrace = failure.diagnostic_error or "", failure.stacktrace
                     else:
-                        error, stacktrace = (settlement.error, settlement.stacktrace) if settlement else ("", "")
+                        error, stacktrace = (
+                            (settlement.diagnostic_error or settlement.error, settlement.stacktrace)
+                            if settlement else ("", "")
+                        )
                     closed = step_run.attempts.close(failure.result, error, stacktrace)
                     if recorded_on_attempt or failure.timed_out and closed:
                         run_error = ""
@@ -857,16 +860,15 @@ class WorkflowRun(RecordRefMixin, AngeeDataModel, concrete=True):
 class WorkflowDecision(Composable, extends="decisions.Decision"):
     """Contribute retained requesting runs to the decision owner's reference seam."""
 
-
     class Meta:
         abstract = True
 
     @classmethod
     def requester_querysets(cls) -> tuple[models.QuerySet, ...]:
-        runs = apps.get_model("workflows", "WorkflowRun").system_queryset().annotate(
+        runs = apps.get_model("workflows", "WorkflowRun")._base_manager.annotate(
             _decision_id=models.F("step_runs__decision_id"),
         )
-        retained = apps.get_model("workflows", "WorkflowRun").system_queryset().filter(
+        retained = apps.get_model("workflows", "WorkflowRun")._base_manager.filter(
             records__content_type__app_label=cls._meta.app_label,
             records__content_type__model=cls._meta.model_name,
             records__operation=RecordOperation.CREATED,
@@ -930,8 +932,7 @@ class StepRun(AngeeDataModel, concrete=True):
         rows = tuple(instances)
         if not rows:
             return ()
-        using = rows[0]._state.db
-        decisions = apps.get_model("decisions", "Decision")._base_manager.using(using).filter(
+        decisions = apps.get_model("decisions", "Decision")._base_manager.filter(
             pk__in={row.decision_id for row in rows if row.decision_id},
         ).defer("proposal", "context", "verdict", "verdict_values") if "decision_id" in update_fields else ()
         return decisions

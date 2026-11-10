@@ -1,0 +1,57 @@
+"""The native pre-migrate lifecycle prepares pgvector before host table DDL."""
+
+from unittest.mock import MagicMock, call
+
+import pytest
+from django.apps import apps
+from django.core.exceptions import ImproperlyConfigured
+from django.db import DatabaseError, connection
+from django.db.models.signals import pre_migrate
+
+from angee.knowledge_graph_pgvector.checks import check_graph_options
+from angee.knowledge_graph_pgvector.signals import prepare_vector_extension
+
+
+def test_pre_migrate_prepares_vector_and_trigrams_once_for_the_addon(monkeypatch):
+    monkeypatch.setattr(connection, "vendor", "postgresql")
+    cursor = MagicMock()
+    monkeypatch.setattr(connection, "cursor", lambda: cursor)
+    pre_migrate.send(sender=apps.get_app_config("knowledge_graph_pgvector"), using="default")
+    assert cursor.__enter__.return_value.execute.call_args_list == [
+        call('CREATE EXTENSION IF NOT EXISTS "vector"'),
+        call('CREATE EXTENSION IF NOT EXISTS "pg_trgm"'),
+    ]
+
+
+def test_pre_migrate_is_a_noop_on_sqlite(monkeypatch):
+    monkeypatch.setattr(connection, "vendor", "sqlite")
+    cursor = MagicMock(side_effect=AssertionError("SQLite does not create PostgreSQL extensions"))
+    monkeypatch.setattr(connection, "cursor", cursor)
+    prepare_vector_extension(None, using="default")
+    cursor.assert_not_called()
+
+
+def test_pre_migrate_reports_extension_installation_and_privilege_failure(monkeypatch):
+    monkeypatch.setattr(connection, "vendor", "postgresql")
+    cursor = MagicMock()
+    cursor.__enter__.return_value.execute.side_effect = DatabaseError("permission denied")
+    monkeypatch.setattr(connection, "cursor", lambda: cursor)
+    with pytest.raises(ImproperlyConfigured, match="vector.*privileges"):
+        prepare_vector_extension(None, using="default")
+
+
+def test_pre_migrate_identifies_pg_trgm_failure_after_vector_succeeds(monkeypatch):
+    monkeypatch.setattr(connection, "vendor", "postgresql")
+    cursor = MagicMock()
+    cursor.__enter__.return_value.execute.side_effect = [None, DatabaseError("permission denied")]
+    monkeypatch.setattr(connection, "cursor", lambda: cursor)
+    with pytest.raises(ImproperlyConfigured, match="pg_trgm.*privileges"):
+        prepare_vector_extension(None, using="default")
+
+
+
+def test_graph_options_are_checked_before_workers_start(settings):
+    settings.ANGEE_KNOWLEDGE_GRAPH = {"hops": 100}
+    assert [error.id for error in check_graph_options(None)] == ["knowledge_graph_pgvector.E001"]
+    settings.ANGEE_KNOWLEDGE_GRAPH = {"hops": 1}
+    assert check_graph_options(None) == []

@@ -63,19 +63,13 @@ def enqueue_due_bridges(*, now: datetime | None = None) -> dict[str, int]:
                 with transaction.atomic():
                     bridge = (
                         due
-                        .lock_if_supported()
+                        .lock_if_supported(skip_locked=True)
                         .filter(pk=pk)
                         .first()
                     )
-                    if bridge is None:
+                    if bridge is None or not bridge.admit_due_sync(now=timestamp):
                         skipped += 1
                         continue
-                    was_queued = bridge.sync_stage == Bridge.SyncStage.QUEUED
-                    if not bridge.mark_sync_queued(now=timestamp):
-                        skipped += 1
-                        continue
-                    if not was_queued:
-                        bridge.claim_sync(now=timestamp)
                 try:
                     bridge.request_sync(now=timestamp, persist=False)
                 except Exception:

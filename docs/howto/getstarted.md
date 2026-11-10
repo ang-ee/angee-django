@@ -130,9 +130,12 @@ Concretely, today:
   authorization (REBAC), aggregates, tiered resources, changeset history in
   Activity with revert, and the React frontend (layouts, list/board/form views).
 - **Also landed.** Agents, integrations, knowledge, storage, communications,
-  and MCP are available as addons. Knowledge's retrieval seam includes a skeleton
-  `knowledge_graph_pgvector` plugin using lexical search; embeddings and Graph RAG
-  are not implemented.
+  and MCP are available as addons. Knowledge's optional
+  [`knowledge_graph_pgvector`](../../src/angee/knowledge_graph_pgvector/README.md)
+  addon adds passage embeddings, hybrid search and graph RAG over readable
+  evidence. It requires PostgreSQL with pgvector and a vault-selected embedding
+  model; entity extraction is opt-in per vault. See the
+  [PostgreSQL prerequisites](../checks.md#local-postgresql-prerequisites).
 
 The shared owners let addons compose existing behavior and permission rules.
 See [Checks](../checks.md) for automated coverage and the browser checks that

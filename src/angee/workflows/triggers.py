@@ -192,7 +192,7 @@ class TriggerSource(ImplBase):
     A registered subclass of a registered source refines it under another key
     and shares its native event: the base alone connects and dispatches.
     """
-    registry_setting = "ANGEE_WORKFLOW_TRIGGER_SOURCE_CLASSES"
+    registry_setting: ClassVar[str] = "ANGEE_WORKFLOW_TRIGGER_SOURCE_CLASSES"
 
     model_label: ClassVar[str] = ""
     fields: ClassVar[tuple[str, ...]] = ()

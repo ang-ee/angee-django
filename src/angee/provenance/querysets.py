@@ -11,6 +11,7 @@ from django.db import NotSupportedError, connections, models, transaction
 from simple_history.exceptions import NotHistoricalModelError
 from simple_history.utils import get_history_manager_for_model
 
+from angee.provenance.bases import ChangesetHistory
 from angee.provenance.context import current_changeset, write_group
 
 if TYPE_CHECKING:
@@ -27,7 +28,7 @@ def model_history(model: type[models.Model]) -> ModelHistory | None:
         manager = get_history_manager_for_model(concrete)
     except NotHistoricalModelError:
         return None
-    return getattr(manager.model, "_provenance_history", None)
+    return manager.model.provenance_history if issubclass(manager.model, ChangesetHistory) else None
 
 
 class HistoryQuerySet(models.QuerySet[_ModelT]):
@@ -80,7 +81,7 @@ class HistoryQuerySet(models.QuerySet[_ModelT]):
             current_changeset(required=True, record=True)
             with transaction.atomic(using=self.db, savepoint=False), write_group():
                 count = sum(super(HistoryQuerySet, rows).update(**kwargs) for rows in self.capture_batches(keys))
-                history.bulk_history_create(history_model, keys, "~", using=self.db)
+                history.bulk_history_create(history_model, keys, "~")
                 self._result_cache = None
                 return count
 
@@ -98,6 +99,7 @@ class HistoryQuerySet(models.QuerySet[_ModelT]):
         stamps = {
             name
             for field in model._meta.concrete_fields
+            # Django temporal fields declare auto_now; other Field subclasses do not.
             if getattr(field, "auto_now", False)
             for name in (field.name, field.attname)
         }
@@ -143,7 +145,6 @@ class HistoryQuerySet(models.QuerySet[_ModelT]):
                     history_model,
                     [row.pk for row in rows],
                     "~" if update_conflicts else "+",
-                    using=self.db,
                     batch_size=batch_size,
                 )
             return rows
@@ -165,7 +166,7 @@ class HistoryQuerySet(models.QuerySet[_ModelT]):
                 return 0, {}
             current_changeset(required=True, record=True)
             with transaction.atomic(using=self.db, savepoint=False), write_group():
-                history.bulk_history_create(history_model, keys, "-", using=self.db)
+                history.bulk_history_create(history_model, keys, "-")
                 counts: dict[str, int] = {}
                 for rows in self.capture_batches(keys):
                     _, deleted = super(HistoryQuerySet, rows).delete()

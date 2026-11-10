@@ -112,6 +112,8 @@ class StreamDefinition:
     config: dict[str, Any] = field(default_factory=dict)
     snapshot: bool = False
     authoritative: bool = False
+    mapping_version: int = 1
+    """Increase when mapping changes require a fresh baseline of existing records."""
 
     @classmethod
     def from_stream(cls, stream: SyncStream) -> StreamDefinition:

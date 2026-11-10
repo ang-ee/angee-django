@@ -7,6 +7,7 @@ input shapes. Native aggregate metadata supplies aliases and bucket predicates.
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
+from enum import Enum
 
 from django.core.exceptions import ImproperlyConfigured
 from django.db import connection, models
@@ -282,7 +283,7 @@ class ResourceQueryProjection:
         parts = path.split(".")
         for size in range(1, len(parts)):
             prefix, field = self.selection(".".join(parts[:size]))
-            if prefix and field is not None and getattr(get_named_type(field.type), "name", None) == "JSON":
+            if prefix and field is not None and get_named_type(field.type).name == "JSON":
                 return path, (prefix,)
         return None, ()
 
@@ -302,7 +303,7 @@ class ResourceQueryProjection:
             if isinstance(named, GraphQLEnumType)
             else ()
         )
-        scalar = "Enum" if isinstance(named, GraphQLEnumType) else getattr(named, "name", "String")
+        scalar = "Enum" if isinstance(named, GraphQLEnumType) else named.name if named is not None else "String"
         _, selected = self.selection(self.canonical(name))
         output = get_named_type(selected.type) if selected is not None else None
         return DataQueryFilter(
@@ -315,12 +316,13 @@ class ResourceQueryProjection:
         if not isinstance(source, GraphQLEnumType):
             return ()
         target_values = (
-            {getattr(item.value, "value", item.value): key for key, item in target.values.items()}
+            {item.value.value if isinstance(item.value, Enum) else item.value: key
+             for key, item in target.values.items()}
             if isinstance(target, GraphQLEnumType) else {}
         )
         mappings: list[DataQueryValueMap] = []
         for key, item in source.values.items():
-            raw = getattr(item.value, "value", item.value)
+            raw = item.value.value if isinstance(item.value, Enum) else item.value
             operand = target_values.get(raw, raw)
             if key != operand:
                 mappings.append(DataQueryValueMap(key, operand))
@@ -371,7 +373,7 @@ class ResourceQueryProjection:
             if relation_field or axis and axis.kind == "relation"
             else "scalar"
         )
-        scalar = display.scalar if display else getattr(named, "name", None)
+        scalar = display.scalar if display else named.name if named is not None else None
         if scalar == "JSON":
             kind = "json"
         values = (
@@ -413,7 +415,7 @@ class ResourceQueryProjection:
         if path is None or not isinstance(node, GraphQLObjectType):
             return DataQueryRelation(model=model, identity_path=path)
         identities = [
-            name for name, field in node.fields.items() if getattr(get_named_type(field.type), "name", None) == "ID"
+            name for name, field in node.fields.items() if get_named_type(field.type).name == "ID"
         ]
         declared = (self.identity_policies or {}).get(node.name, PUBLIC_ID_FIELD_NAME)
         mapped = final_wire_field_names(self.schema, node.name, (declared,))[0]
@@ -422,11 +424,11 @@ class ResourceQueryProjection:
             for interface in node.interfaces
             if interface.name == "Node"
             for name, field in interface.fields.items()
-            if getattr(get_named_type(field.type), "name", None) == "ID"
+            if get_named_type(field.type).name == "ID"
         )
         identity = mapped if mapped in identities else node_identity[0] if len(node_identity) == 1 else None
         labels = [
-            name for name, field in node.fields.items() if getattr(get_named_type(field.type), "name", None) == "String"
+            name for name, field in node.fields.items() if get_named_type(field.type).name == "String"
         ]
         label = next((name for name in PREFERRED_DISPLAY_FIELDS if name in labels), labels[0] if labels else None)
         return DataQueryRelation(

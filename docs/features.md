@@ -79,8 +79,11 @@ actually unique to your product.
   pages, typed properties, wikilink/embed edges, canvases. "Index, don't grep" —
   every change becomes queryable rows. Knowledge provides a retrieval seam;
   [`knowledge_graph_pgvector`](../src/angee/knowledge_graph_pgvector/README.md)
-  is a skeleton plugin using lexical search, with no embeddings. Vector and
-  graph retrieval remain future work.
+  adds PostgreSQL hybrid retrieval over passages: exact vector similarity,
+  full-text search and resolved-link neighbours, with an opt-in entity graph
+  per vault. Every arm uses readable evidence; passage hits and related pages
+  are available through GraphQL and MCP. Vaults select their embedding model;
+  the pgvector backend requires PostgreSQL with the `vector` extension.
 - **Integrate** — third-party systems: a vendor catalogue, accounts, stateless
   providers and stateful bridges, and signed inbound/outbound webhooks.
   **OAuth2 / OIDC** ships as the credential-source sibling and also powers SSO.

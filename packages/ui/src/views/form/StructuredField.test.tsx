@@ -160,6 +160,27 @@ describe("structured FormSpec widgets", () => {
     )).toEqual(["limit"]);
   });
 
+  test("schema-resolved nested values retain presence checks without preempting constraint messages", () => {
+    const [field] = deserializeFormSpec({ properties: {
+      config: { type: "object", widget: "object", presenceRequired: true, properties: {
+        title: { type: "string", presenceRequired: true, minLength: 3 },
+        rows: { type: "array", widget: "list", presenceRequired: true, minItems: 3, items: {
+          type: "object", widget: "object", properties: {
+            note: { type: "string", presenceRequired: true, minLength: 3 },
+          },
+        } },
+      } },
+    } }, defaultWidgets);
+    const value = { title: "no", rows: [{ note: "x" }, {}] };
+
+    expect(structuredFieldErrorPaths(field!, value, true)).toEqual([
+      "config.title", "config.rows", "config.rows.0.note", "config.rows.1.note",
+    ]);
+    expect(structuredFieldErrorPaths(field!, value, true, "config", false)).toEqual([
+      "config.rows.1.note",
+    ]);
+  });
+
   test("keeps an optional nullable Decimal union editable through a null transition", () => {
     const [field] = deserializeFormSpec({ properties: {
       line_total: {

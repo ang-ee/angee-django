@@ -16,6 +16,7 @@ from rebac import (
 )
 from rebac.roles import grant as grant_role
 
+from angee.base.testing.queries import statement_body, statement_startswith
 from tests.conftest import create_platform_admin
 from tests.iam_campaign import iam_admin as iam_admin
 from tests.iam_models import Group
@@ -91,7 +92,8 @@ def test_picker_applies_sql_admission_before_the_capped_limit(iam_admin, monkeyp
         people = User.objects.viewable_people(iam_admin, limit=limit)
     assert [person.username for person in people] == [f"candidate-{i:03}" for i in range(cap)]
     table = User._meta.db_table
-    reads = [q["sql"] for q in captured if q["sql"].startswith("SELECT") and f'FROM "{table}"' in q["sql"]]
+    reads = [sql for q in captured for sql in (statement_body(q["sql"]),)
+             if statement_startswith(sql, "SELECT") and f'FROM "{table}"' in sql]
     # 0.31 (1 -> 2): the selection, then one batched decision of the page's gated fields over
     # exactly the fetched ids.
     [sql, decision] = reads

@@ -10,6 +10,7 @@ composer-derived metadata content types do.)
 
 from __future__ import annotations
 
+from django.apps import AppConfig
 from django.db.models.signals import post_migrate
 from rebac import system_context
 
@@ -23,7 +24,7 @@ def connect() -> None:
     post_migrate.connect(_reconcile_addons, dispatch_uid="angee.platform.reconcile_addons")
 
 
-def _reconcile_addons(*, app_config: object, using: str, **kwargs: object) -> None:
+def _reconcile_addons(*, app_config: AppConfig, using: str, **kwargs: object) -> None:
     """Converge the Addon table after migrations create/alter the platform app."""
 
     addon_model = migrated_model(app_config=app_config, using=using, app_label="platform", model_name="Addon")

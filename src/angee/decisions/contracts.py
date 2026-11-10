@@ -7,8 +7,17 @@ from typing import Any
 from django.apps import apps
 from django.core.exceptions import FieldDoesNotExist, ImproperlyConfigured, ValidationError
 from django.db import models
-from pydantic import BaseModel, ConfigDict, Field, InstanceOf, JsonValue, TypeAdapter, ValidationInfo, model_validator
-from pydantic.experimental.missing_sentinel import MISSING
+from pydantic import (
+    MISSING,
+    BaseModel,
+    ConfigDict,
+    Field,
+    InstanceOf,
+    JsonValue,
+    TypeAdapter,
+    ValidationInfo,
+    model_validator,
+)
 from rebac import RebacMixin
 from rebac.schema.walker import field_gated_actions
 
@@ -16,6 +25,8 @@ from angee.base.fields.state import StateField
 from angee.base.models.identity import instance_from_public_id, public_id_for
 from angee.base.permissions import effective_rebac_definition, require_rebac_queryset
 from angee.base.refs import generic_pointer_model
+from angee.base.validators import SavedRow
+from angee.decisions.mixins import DecisionTargetMixin
 from angee.graphql.data.metadata import data_resource_contributions
 from angee.graphql.schema import schema_parts_for
 from angee.provenance.evidence import EvidenceFact, EvidenceReference
@@ -183,7 +194,7 @@ class RecordActions(BaseModel):
             resolved[name] = decoded
         if self.record:
             call = self.record.call
-            if call == "delete" or call not in getattr(model, "decision_methods", ()):
+            if call == "delete" or not isinstance(record, DecisionTargetMixin) or call not in record.decision_methods:
                 raise ValueError(f"Undeclared decision method: {call}.")
             bound = getattr(record, call, None)
             if not callable(bound):
@@ -284,15 +295,13 @@ class DecisionRequest(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True, arbitrary_types_allowed=True, revalidate_instances="always")
     kind: str = Field(min_length=1, pattern=r"\S")
-    records: tuple[InstanceOf[models.Model], ...] = Field(min_length=1)
+    records: tuple[SavedRow, ...] = Field(min_length=1)
     assignees: tuple[Any, ...] = ()
     proposal: DecisionProposal
     requester: Any = None
     context: InstanceOf[DecisionContext] = Field(default_factory=DecisionContext)
 
     @model_validator(mode="after")
-    def validate_records_and_proposal(self) -> "DecisionRequest":
-        if any(record.pk is None or record._state.adding for record in self.records):
-            raise ValueError("Concerned records must be saved.")
+    def validate_proposal(self) -> "DecisionRequest":
         DecisionProposal.model_validate(self.proposal.model_dump(mode="json"), context={"records": self.records})
         return self

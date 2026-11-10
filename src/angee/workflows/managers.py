@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import Iterator, Mapping, Sequence
+from collections.abc import Iterator, Sequence
 from contextlib import ExitStack, contextmanager, nullcontext
 from contextvars import ContextVar
 from dataclasses import dataclass
@@ -17,7 +17,7 @@ from django.apps import apps
 from django.conf import settings
 from django.core.exceptions import ImproperlyConfigured, PermissionDenied, ValidationError
 from django.db import IntegrityError, OperationalError, connection, transaction
-from django.db.models import NOT_PROVIDED, Count, Exists, F, Max, OuterRef, Q, QuerySet, Sum, Value
+from django.db.models import NOT_PROVIDED, Count, Exists, F, Max, OuterRef, Q, Sum, Value
 from django.db.models.deletion import ProtectedError, RestrictedError
 from django.db.models.functions import Concat, Least, Now
 from pydantic import Field, TypeAdapter
@@ -34,7 +34,7 @@ from angee.base.permissions import actor_user_id
 from angee.base.querysets import AngeeQuerySet, by_key, query_batch_size, row_lock_paths
 from angee.base.refs import RecordRef, record_view_refs
 from angee.base.serialization import canonical_json_sha256
-from angee.base.signals import bulk_updated, changes_muted, mute_changes
+from angee.base.signals import changes_muted, mute_changes, send_bulk_update
 from angee.jobs.enqueue import enqueue_task
 from angee.jobs.timeouts import task_time_budget
 from angee.provenance.contrib.angee.managers import AngeeHistoryManager
@@ -47,6 +47,7 @@ from angee.workflows.definition import (
     Issue,
     SourcedWorkflowExtension,
 )
+from angee.workflows.runner import runner
 from angee.workflows.states import (
     ERROR_OUTCOME,
     AttemptResult,
@@ -58,9 +59,11 @@ from angee.workflows.states import (
     WaitingKind,
 )
 from angee.workflows.steps import StepMode, Superseded
+from angee.workflows.transactions import database_timeout, isolate_failure, sqlstate
 from angee.workflows.triggers import TriggerGrantTarget, TriggerSource
 
 if TYPE_CHECKING:
+    from angee.base.querysets import AngeeUnscopedQuerySet
     from angee.workflows.models import (
         StepAttempt,
         StepRecord,
@@ -72,7 +75,6 @@ if TYPE_CHECKING:
     )
 
 logger = logging.getLogger(__name__)
-RETRYABLE_SQLSTATES = frozenset({"57014", "40P01", "55P03"})
 DISPATCH_RECOVERY_SECONDS = 60
 """Database-clock delivery age after which the tick admits a replacement copy."""
 PRUNE_BATCH_LIMIT = 25
@@ -80,25 +82,6 @@ PRUNE_BATCH_LIMIT = 25
 _held_runs: ContextVar[set[int] | None] = ContextVar("workflows_held_runs", default=None)
 _BLOCK_ACTION: TypeAdapter[NodeKey] = TypeAdapter(NodeKey)
 
-
-def _sqlstate(error: Exception) -> str | None:
-    """Read the native database driver's SQLSTATE at one boundary."""
-    return getattr(error.__cause__, "sqlstate", None)
-
-
-@contextmanager
-def isolate_failure(operation: str) -> Iterator[None]:
-    """Run a diagnostic write in its own savepoint and log its failure as ``operation``.
-
-    A lost claim (``Superseded``) still propagates and aborts its execution transaction.
-    """
-    try:
-        with transaction.atomic():
-            yield
-    except Superseded:
-        raise
-    except Exception:
-        logger.exception("Workflow %s failed.", operation)
 
 
 @dataclass(frozen=True)
@@ -420,9 +403,13 @@ class WorkflowRunQuerySet[T: WorkflowRun](AngeeQuerySet[T]):
         """Select the canonical subject without changing this queryset's read scope."""
         return self.filter(self.model.record_filter(record))
 
-    def about(self, records: Any, *, operations: tuple[str, ...] | None = None, ancestors: bool = True,
-              limit: int | None = None) -> Any:
-        """Runs that worked on readable records and all readable ancestors, oldest first."""
+    def about_filter(self, records: Any, *, operations: tuple[str, ...] | None = None,
+                     limit: int | None = None) -> Q:
+        """Subject/evidence membership; a bounded selection retains this queryset's scope.
+
+        Without a limit this is a structural predicate usable by the base manager.
+        Ancestry expansion and authorization belong to ``about``'s caller scope.
+        """
         if not isinstance(records, (list, tuple)):
             records = (records,)
         subject_filter = Q(pk__in=[])
@@ -431,29 +418,32 @@ class WorkflowRunQuerySet[T: WorkflowRun](AngeeQuerySet[T]):
         for record in records:
             targets |= evidence_model.record_filter(record)
             subject_filter |= self.model.record_filter(record)
-        links = evidence_model.system_queryset().filter(targets)
+        links = evidence_model._base_manager.filter(targets)
         if operations is not None:
             links = links.filter(operation__in=operations)
-        subjects: QuerySet[WorkflowRun, Mapping[str, object]] = self.filter(subject_filter).values("pk")
-        link_runs: QuerySet[StepRecord, Mapping[str, object]] = links.values("run_id")
-        if limit is not None:
-            subjects = self.filter(subject_filter).first_per_group(
-                "subject_content_type_id", "subject_object_id", order_by=["-created_at", "-pk"], limit=limit,
-            ).values("pk")
-            # django-stubs types values() as the base QuerySet; Django keeps StepRecord's queryset class.
-            per_run = cast("AngeeQuerySet[StepRecord]", links.values("content_type_id", "object_id", "run_id").annotate(
-                _created=Max("run__created_at"),
-            ))
-            link_runs = per_run.first_per_group(
-                "content_type_id", "object_id", order_by=[F("_created").desc(), F("run_id").desc()], limit=limit,
-            ).values("run_id")
+        if limit is None:
+            return subject_filter | Q(pk__in=links.order_by().values("run_id"))
+        subjects = self.filter(subject_filter).first_per_group(
+            "subject_content_type_id", "subject_object_id", order_by=["-created_at", "-pk"], limit=limit,
+        ).values("pk")
+        # django-stubs widens values(); Django retains the base queryset's window methods.
+        per_run = cast("AngeeUnscopedQuerySet[StepRecord]", links.values(
+            "content_type_id", "object_id", "run_id",
+        ).annotate(_created=Max("run__created_at")))
+        link_runs = per_run.first_per_group(
+            "content_type_id", "object_id", order_by=[F("_created").desc(), F("run_id").desc()], limit=limit,
+        ).values("run_id")
+        return Q(pk__in=subjects) | Q(pk__in=link_runs)
+
+    def about(self, records: Any, *, operations: tuple[str, ...] | None = None, ancestors: bool = True,
+              limit: int | None = None) -> Any:
+        """Runs that worked on readable records and all readable ancestors, oldest first."""
+
+        rows = self.filter(self.about_filter(records, operations=operations, limit=limit))
         if not ancestors:
-            return self.filter(Q(pk__in=subjects) | Q(pk__in=link_runs)).order_by(
-                "created_at", "pk",
-            ).distinct()
-        ids = set(subjects.values_list("pk", flat=True))
-        ids.update(self.filter(pk__in=link_runs).values_list("pk", flat=True))
-        frontier = ids.copy() if ancestors else set()
+            return rows.order_by("created_at", "pk").distinct()
+        ids = set(rows.values_list("pk", flat=True))
+        frontier = ids.copy()
         while frontier:
             parents = set(self.filter(pk__in=frontier).exclude(parent_step=None)
                           .values_list("parent_step__run_id", flat=True))
@@ -522,7 +512,7 @@ class WorkflowRunQuerySet[T: WorkflowRun](AngeeQuerySet[T]):
         try:
             with transaction.atomic():
                 with system_context(reason="workflows.hold"), (
-                    _database_timeout(timeout, setting="lock_timeout") if timeout is not None else nullcontext()
+                    database_timeout(timeout, setting="lock_timeout") if timeout is not None else nullcontext()
                 ), (transaction.atomic() if timeout is not None else nullcontext()):
                     run = self.filter(pk=run_id).lock_if_supported(no_key=True, skip_locked=skip_locked).first()
                 if run is not None:
@@ -702,9 +692,6 @@ class WorkflowRunManager[T: WorkflowRun](_WorkflowRunManagerBase[T]):
                 for source in sorted(targets, key=lambda item: (item.content_type.pk, item.object_id))
             )
             with self.hold(run.pk) as locked:
-                # Deferred: the runner imports this module's recovery primitives.
-                from angee.workflows.runner import runner
-
                 locked.admit_subject()
                 runner.advance(locked)
             return locked.with_actor(actor)
@@ -755,7 +742,7 @@ class WorkflowRunManager[T: WorkflowRun](_WorkflowRunManagerBase[T]):
             with self.hold_owned(run.pk, timeout=timeout) as runs:
                 return self._cancel_locked(runs, actor=actor or runs[0].run_as)
         except OperationalError as error:
-            if _sqlstate(error) == "55P03":
+            if sqlstate(error) == "55P03":
                 raise ValidationError("The run is still running; retry cancellation.") from error
             raise
 
@@ -919,10 +906,9 @@ class StepRunQuerySet[T: StepRun](AngeeQuerySet[T]):
             keys = list(self.lock_if_supported().order_by("pk").values_list("pk", flat=True))
             changed = sum(batch.update(**values) for batch in by_key(self, keys))
             if changed and not changes_muted():
-                rows = self.model._base_manager.using(self.db).defer("input", "output", "state", "notes")
+                rows = self.model._base_manager.defer("input", "output", "state", "notes")
                 for batch in by_key(rows, keys):
-                    bulk_updated.send_robust(sender=self.model, instances=tuple(batch),
-                                            update_fields=frozenset(values), using=self.db)
+                    send_bulk_update(sender=self.model, instances=batch, update_fields=values)
             return changed
 
     def nodes(self) -> Any:
@@ -1072,9 +1058,10 @@ class StepRunQuerySet[T: StepRun](AngeeQuerySet[T]):
             attempt.result, attempt.diagnostic_error or attempt.error, attempt.stacktrace,
         ) != 1:
             raise Superseded
-        current = self.model._base_manager.using(self.db).defer("input", "output", "state", "notes").get(pk=step_run.pk)
-        bulk_updated.send_robust(sender=self.model, instances=(current,),
-                                update_fields=frozenset(("status", "decision_id")), using=self.db)
+        current = self.model._base_manager.defer("input", "output", "state", "notes").get(pk=step_run.pk)
+        send_bulk_update(
+            sender=self.model, instances=(current,), update_fields=frozenset(("status", "decision_id")),
+        )
 
     def to_succeeded(self, *, output: Any, outcome: str) -> int:
         """Complete selected claims with their validated result and clear their wait."""
@@ -1192,26 +1179,6 @@ class StepAttemptQuerySet[T: StepAttempt](AngeeQuerySet[T]):
         )
 
 
-@contextmanager
-def _database_timeout(timeout: timedelta, *, setting: str = "statement_timeout") -> Iterator[None]:
-    """Bound each PostgreSQL statement, flooring sub-millisecond limits to 1 ms."""
-    previous = None
-    if connection.vendor == "postgresql":
-        with connection.cursor() as cursor:
-            cursor.execute("SELECT current_setting(%s)", [setting])
-            previous = cursor.fetchone()[0]
-            cursor.execute(
-                "SELECT set_config(%s, %s, true)",
-                [setting, str(max(1, int(timeout.total_seconds() * 1000)))],
-            )
-    try:
-        yield
-    finally:
-        if previous is not None:
-            with connection.cursor() as cursor:
-                cursor.execute("SELECT set_config(%s, %s, true)", [setting, previous])
-
-
 _StepRunManagerBase = AngeeManager.from_queryset(StepRunQuerySet)
 
 
@@ -1252,9 +1219,6 @@ class StepRunManager[T: StepRun](_StepRunManagerBase[T]):
                     acknowledged_by_id=actor_user_id(to_subject_ref(actor)) if accept_duplicate else None,
                     reset_dispatches=True,
                 )
-                # Deferred: the runner imports this module's recovery primitives.
-                from angee.workflows.runner import runner
-
                 run.reopen()
                 runner.advance(run)
                 current.refresh_from_db()

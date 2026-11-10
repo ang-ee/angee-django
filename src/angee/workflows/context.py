@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from django.apps import apps
 from django.core.exceptions import PermissionDenied, ValidationError
@@ -15,14 +15,19 @@ from angee.base.models.identity import instance_from_public_id, public_id_for
 from angee.base.permissions import require_rebac_queryset
 from angee.base.querysets import row_lock_paths
 from angee.decisions.contracts import DecisionRequest
-from angee.workflows.runner import runner
 from angee.workflows.states import DONE_OUTCOME, NoteTone, RunRelation
 from angee.workflows.steps import Ask, Done, Fail, NextPage, Step, StepMode, Wait
+
+if TYPE_CHECKING:
+    from angee.workflows.runner import Runner
 
 
 @dataclass
 class StepContext:
-    """One claimed attempt with its already-resolved class and scoped principal."""
+    """One claimed attempt with its already-resolved class and scoped principal.
+
+    ``runner`` is the fence owner that claimed the attempt; the fenced verbs act through it.
+    """
 
     run: Any
     step_run: Any
@@ -32,6 +37,7 @@ class StepContext:
     config: Any
     actor: Any
     now: datetime
+    runner: Runner = field(repr=False)
     pending_records: list[models.Model] = field(default_factory=list, init=False, repr=False)
     pending_notes: list[dict[str, str]] = field(default_factory=list, init=False, repr=False)
 
@@ -147,17 +153,17 @@ class StepContext:
     def begin_effect(self) -> None:
         """Record possible external effects only while this IO attempt owns its fence."""
         self._require_mode(StepMode.IO)
-        runner.begin_effect(self.step_run)
+        self.runner.begin_effect(self.step_run)
 
     def heartbeat(self) -> None:
         """Extend this IO attempt's deadline through the fenced transition owner."""
         self._require_mode(StepMode.IO)
-        runner.heartbeat(self.step_run)
+        self.runner.heartbeat(self.step_run)
 
     def raise_if_canceled(self) -> None:
         """Stop cooperative IO work when cancellation or a newer attempt won."""
         self._require_mode(StepMode.IO)
-        runner.raise_if_canceled(self.step_run)
+        self.runner.raise_if_canceled(self.step_run)
 
     def record(self, record: models.Model, label: str = "", *, operation: str = "read") -> Any:
         """Stage actor-readable evidence for this attempt's successful settlement.
@@ -165,7 +171,7 @@ class StepContext:
         The returned link is unsaved until settlement commits. Failed or
         superseded attempts discard their staged evidence.
         """
-        link = runner.record(self.step_run, record, label=label, operation=operation, actor=self.actor)
+        link = self.runner.record(self.step_run, record, label=label, operation=operation, actor=self.actor)
         self.pending_records.append(link)
         return link
 

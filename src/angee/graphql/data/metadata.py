@@ -238,9 +238,9 @@ def finalize_data_resources(
                 )
             lines_declaration = _single_policy_value(model_label, contributions, "lines_declaration")
             if lines_declaration is not None:
-                from angee.graphql.data.hasura import HasuraLines, _line_metadata
+                from angee.graphql.data.hasura import HasuraLines, line_metadata
 
-                lines = _line_metadata(cast(HasuraLines, lines_declaration), native_resource, schema)
+                lines = line_metadata(cast(HasuraLines, lines_declaration), native_resource, schema)
         roots = _merge_description_values(
             model_label,
             contributions,
@@ -782,6 +782,7 @@ def _grantable_relations(
                         if subject_resource is not None
                         and subject_model is not None
                         and subject_resource.subject_field is not None
+                        # django-zed-rebac extends Options with optional subject relation metadata.
                         and (getattr(subject_model._meta, "rebac_subject_relation", "") or "")
                         == (allowed.relation or "")
                         else None
@@ -816,13 +817,14 @@ def _projected_public_id_field(
         return mapped
 
     node = graphql_schema.get_type(node_name)
+    # graphql-core exposes interfaces on object/interface types, not every named type.
     interfaces = getattr(node, "interfaces", ())
     identity_fields = tuple(
         name
         for interface in interfaces
-        if getattr(interface, "name", None) == "Node"
+        if interface.name == "Node"
         for name, graphql_field in interface.fields.items()
-        if getattr(get_named_type(graphql_field.type), "name", None) == "ID"
+        if get_named_type(graphql_field.type).name == "ID"
     )
     if len(identity_fields) == 1 and any(field.name == identity_fields[0] and field.readable for field in fields):
         return identity_fields[0]
@@ -1008,7 +1010,7 @@ def relation_group_by_fields(
             continue
         if not is_to_one_relation(relation):
             continue
-        related_model = getattr(relation, "related_model", None)
+        related_model = relation.related_model
         if not isinstance(related_model, type) or not issubclass(related_model, models.Model):
             continue
         related_model = cast(type[models.Model], related_model)
@@ -1077,6 +1079,7 @@ def _default_sort(
             # DB detail — NULL placement — the metadata does not need; expose the
             # axis name and direction it wraps.
             expression = term.expression
+            # Django expressions such as F have names; other expression types do not.
             name = getattr(expression, "name", None)
             if not isinstance(name, str):
                 raise ImproperlyConfigured(

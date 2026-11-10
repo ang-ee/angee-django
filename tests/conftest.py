@@ -24,6 +24,7 @@ from rebac.roles import grant as grant_role
 
 from angee.agents.backends import InferenceBackend, InferenceModelSpec
 from angee.agents.testing import models as agents_models  # noqa: F401 -- register shared FK targets
+from angee.base.testing.fixtures import installed_app_registry as installed_app_registry
 from angee.base.testing.packages import write_addon_distribution
 from angee.decisions.testing import models as decisions_models  # noqa: F401 -- register shared FK targets
 from angee.graphql.schema import SCHEMA_PART_KEYS, GraphQLSchemas
@@ -50,6 +51,8 @@ from angee.knowledge.models import MarkdownPage as AbstractMarkdownPage
 from angee.knowledge.models import Page as AbstractPage
 from angee.knowledge.models import RecordBinding as AbstractRecordBinding
 from angee.knowledge.models import Vault as AbstractVault
+from angee.knowledge_graph_pgvector.models import PageIndexState, VaultEmbeddingModel, VaultGraphExtraction
+from angee.knowledge_graph_pgvector.testing import models as pgv_models  # noqa: F401 -- register passage test models
 from angee.knowledge_integrate_notion.models import NotionConnection as AbstractNotionConnection
 from angee.messaging.testing import models as messaging_models  # noqa: F401 -- register messaging test models
 from angee.messaging.testing.models import Channel
@@ -201,7 +204,7 @@ class WebhookSubscription(AbstractWebhookSubscription):
         rebac_resource_type = "integrate/webhook_subscription"
 
 
-class Vault(RecordChangedOptIn, VaultSpace, VaultProjects, AbstractVault):
+class Vault(RecordChangedOptIn, VaultSpace, VaultProjects, VaultGraphExtraction, VaultEmbeddingModel, AbstractVault):
     """Concrete knowledge vault carrying workflow, projects and spaces donors."""
 
     rebac_grantable = AbstractVault.rebac_grantable
@@ -228,7 +231,7 @@ class Vault(RecordChangedOptIn, VaultSpace, VaultProjects, AbstractVault):
         rebac_resource_type = "knowledge/vault"
 
 
-class Page(RecordChangedOptIn, AbstractPage):
+class Page(RecordChangedOptIn, PageIndexState, AbstractPage):
     """Concrete knowledge page used by source-addon tests."""
 
     @classmethod
@@ -692,7 +695,7 @@ def make_mount(
     *,
     drive: Any,
     root: Path,
-    mode: MountMode | str = MountMode.REFERENCE,
+    mode: MountMode = MountMode.REFERENCE,
     config: dict[str, Any] | None = None,
     **attrs: Any,
 ) -> Mount:
@@ -878,6 +881,7 @@ def make_addon(
         monkeypatch.setitem(sys.modules, f"{name}.schema", schema_module)
         tool["graphql"] = {"schema": "schema.schemas"}
     if resources is not None:
+
         def authored_source(value: Any) -> Any:
             if isinstance(value, str):
                 addon, separator, source = value.partition(":")
@@ -888,15 +892,14 @@ def make_addon(
                 return value.removeprefix("resources/")
             if isinstance(value, dict):
                 return {
-                    key: authored_source(item) if key in {"path", "depends_on"} else item
-                    for key, item in value.items()
+                    key: authored_source(item) if key in {"path", "depends_on"} else item for key, item in value.items()
                 }
             if isinstance(value, tuple | list):
                 return [authored_source(item) for item in value]
             return value
+
         tool["resources"] = {
-            key: value if key == "retired_models" else authored_source(value)
-            for key, value in resources.items()
+            key: value if key == "retired_models" else authored_source(value) for key, value in resources.items()
         }
     write_addon_distribution(path, name, depends_on=depends_on, label=label, capabilities=tool, metadata_root=path)
     monkeypatch.syspath_prepend(str(path))
@@ -930,9 +933,13 @@ def catalogue_package(name: str, *, depends_on: tuple[str, ...] = (), descriptio
     """One already-projected catalogue value for isolated marketplace tests."""
 
     return {
-        "name": name, "namespace": name.split(".", 1)[0],
-        "distribution": name.replace(".", "-").replace("_", "-"), "description": description,
-        "keywords": (), "category": "", "depends_on": depends_on,
+        "name": name,
+        "namespace": name.split(".", 1)[0],
+        "distribution": name.replace(".", "-").replace("_", "-"),
+        "description": description,
+        "keywords": (),
+        "category": "",
+        "depends_on": depends_on,
         "requirements": tuple(dependency.replace(".", "-").replace("_", "-") for dependency in depends_on),
     }
 

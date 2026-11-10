@@ -16,6 +16,7 @@ from rebac.models import active_relationship_model
 
 from angee.base.exceptions import RecordAccessSubjectRefused
 from angee.base.identity import public_subject_ref
+from angee.base.testing.queries import statement_startswith
 from angee.graphql.relations import actor_scoped_public_id, actor_scoped_to_one
 from angee.graphql.testing.documents import execute_schema, result_data
 from angee.storage import exceptions, views
@@ -295,7 +296,7 @@ def test_attach_lists_and_detaches_under_the_actor_with_one_scoped_statement(
             listed = list(FileAttachment.objects.for_record(target).values_list("pk", flat=True))
         assert listed == [attachment.pk]
         table = connection.ops.quote_name(FileAttachment._meta.db_table)
-        assert sum(query["sql"].startswith(f"SELECT {table}.") for query in queries) == 1
+        assert sum(statement_startswith(query["sql"], f"SELECT {table}.") for query in queries) == 1
         # Edges delete under the actor through the scoped manager: file write is required.
         with pytest.raises(PermissionDenied):
             FileAttachment.objects.filter(pk=attachment.pk).delete()

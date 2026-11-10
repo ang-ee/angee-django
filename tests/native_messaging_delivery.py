@@ -52,7 +52,6 @@ from angee.messaging.events import message_ingested
 from angee.messaging.managers import DeliveryReconciliationBusy
 from angee.posts import mcp_tools
 from angee.posts.backends import RECONCILIATION_SKEW_MARGIN, FeedBackend, FeedChannelBackend, ParsedPost, RecordRefusal
-from angee.posts.ingest import land_posts
 from angee.posts.models import validate_reply_hold
 from angee.provenance.context import changeset_model
 
@@ -107,7 +106,7 @@ class DeliveryFixtures(TransactionTestCase):
 
     def comment(self):
         with system_context(reason="comment fixtures"):
-            return land_posts(self.feed, [self.post("root"), self.post("comment", parent="root")],
+            return Message.posts.land(self.feed, [self.post("root"), self.post("comment", parent="root")],
                               owner_id=self.operator.pk)[1]
 
     def outbound(self, **values):
@@ -411,7 +410,7 @@ class DeliveryContracts(DeliveryFixtures):
     def test_comment_overlay_preserves_the_original_posts_thread_url(self):
         with system_context(reason="public URL fixture"):
             root = replace(self.post("url-root"), subject_url="https://example.test/post")
-            _, comment = land_posts(self.feed, [root, self.post("url-comment", parent="url-root")],
+            _, comment = Message.posts.land(self.feed, [root, self.post("url-comment", parent="url-root")],
                                     owner_id=self.operator.pk)
             comment.thread.refresh_from_db()
             self.assertEqual(comment.thread.subject_url, root.subject_url)
@@ -581,7 +580,7 @@ class DeliveryContracts(DeliveryFixtures):
         post_save.connect(observe, sender=thread_model)
         try:
             with system_context(reason="ingest counting query shape"), CaptureQueriesContext(connection) as inserted:
-                land_posts(self.feed, [self.post("another-comment", parent="root")], owner_id=self.operator.pk)
+                Message.posts.land(self.feed, [self.post("another-comment", parent="root")], owner_id=self.operator.pk)
         finally:
             post_save.disconnect(observe, sender=thread_model)
         self.assertEqual(saved, [])
@@ -955,7 +954,7 @@ class DeliveryContracts(DeliveryFixtures):
                 result = schema.execute_sync(document, context_value=context)
             self.assertIsNone(result.errors, result.errors)
         with system_context(reason="larger message list fixture"):
-            land_posts(self.feed, [self.post(f"more-{index}", parent="root") for index in range(8)],
+            Message.posts.land(self.feed, [self.post(f"more-{index}", parent="root") for index in range(8)],
                        owner_id=self.operator.pk)
         with actor_context(self.agent), CaptureQueriesContext(connection) as large:
             result = schema.execute_sync(document, context_value=context)
@@ -1155,7 +1154,7 @@ class FeedDeliveryContracts(DeliveryFixtures):
         self.comment()
         provider = self.use_provider()
         with system_context(reason="nested comments under a shared anchor"):
-            first_comment, second_comment = land_posts(
+            first_comment, second_comment = Message.posts.land(
                 self.feed, [self.post("nested-first", parent="comment"), self.post("nested-other", parent="comment")],
                 owner_id=self.operator.pk,
             )
@@ -1446,7 +1445,7 @@ class FeedDeliveryContracts(DeliveryFixtures):
         provider = self.use_provider()
         for retry in (False, True):
             with self.subTest(retry=retry), system_context(reason="trashed operator fixture"):
-                comment = land_posts(self.feed, [self.post(f"operator-{retry}", parent="root")],
+                comment = Message.posts.land(self.feed, [self.post(f"operator-{retry}", parent="root")],
                                      owner_id=self.operator.pk)[0]
             with actor_context(self.agent):
                 row = comment.reply_to_comment(body=f"Reply {retry}", actor=self.agent)
@@ -1587,7 +1586,7 @@ class FeedDeliveryContracts(DeliveryFixtures):
         with system_context(reason="stream ingests a reply the operator trashed"):
             claimed = Message.objects.claim_delivery(row.pk, token=row.external_id)
             accepted = provider.deliver(claimed)
-            landed = land_posts(self.feed, [ParsedPost(ParsedMessage(
+            landed = Message.posts.land(self.feed, [ParsedPost(ParsedMessage(
                 external_id=accepted.provider_id, platform="youtube", direction="outbound",
                 sender=ParsedHandle(platform="youtube", value="publisher"), in_reply_to="comment",
                 sent_at=timezone.now(), body=ParsedPart(text="Thanks!"),
@@ -1608,7 +1607,7 @@ class FeedDeliveryContracts(DeliveryFixtures):
         self.comment()
         provider = self.use_provider()
         with system_context(reason="nested comments under a shared anchor"):
-            first_comment, second_comment = land_posts(
+            first_comment, second_comment = Message.posts.land(
                 self.feed, [self.post("nested-first", parent="comment"), self.post("nested-other", parent="comment")],
                 owner_id=self.operator.pk,
             )
@@ -1662,7 +1661,7 @@ class FeedDeliveryContracts(DeliveryFixtures):
         with system_context(reason="stream beats lost-settlement recovery"):
             claimed = Message.objects.claim_delivery(row.pk, token=row.external_id)
             accepted = provider.deliver(claimed)
-            landed = land_posts(self.feed, [ParsedPost(ParsedMessage(
+            landed = Message.posts.land(self.feed, [ParsedPost(ParsedMessage(
                 external_id=accepted.provider_id, platform="youtube", direction="outbound",
                 sender=ParsedHandle(platform="youtube", value="publisher"), in_reply_to="comment",
                 sent_at=timezone.now(), body=ParsedPart(text="Thanks!"),

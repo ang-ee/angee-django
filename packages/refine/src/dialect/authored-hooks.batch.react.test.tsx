@@ -6,7 +6,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import type { ReactNode } from "react";
 
-import { createAuthoredLiveInvalidation, invalidateAuthoredQueries } from "../query-invalidation";
+import { createLiveInvalidation, invalidateAuthoredQueries } from "../query-invalidation";
 import type { TypedDocumentNode } from "../typed-document";
 import { ActiveDataProviderNameProvider } from "./data-provider-context";
 import {
@@ -237,7 +237,7 @@ describe("useAuthoredQueryBatch", () => {
       relatedModels: ["workflows.WorkflowRun"],
     }))), { wrapper: ({ children }) => <Providers client={client}>{children}</Providers> });
     await waitFor(() => expect(batchMock.calls).toHaveLength(2));
-    const live = createAuthoredLiveInvalidation(client);
+    const live = createLiveInvalidation(client);
     await act(async () => {
       live.push({ model: "workflows.WorkflowRun", id: "run-1",
         relatedRecords: [{ model: "storage.Folder", id: "folder-a" }] });

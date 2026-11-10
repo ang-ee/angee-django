@@ -20,7 +20,7 @@ from angee.knowledge import schema as knowledge_schema
 from tests.conftest import Page, SchemaAddon, addon_schema, create_user, vault_for
 from tests.tables import model_tables
 
-pytestmark = pytest.mark.django_db(transaction=True, reset_sequences=True)
+pytestmark = pytest.mark.django_db(transaction=True)
 
 
 @pytest.fixture
@@ -29,7 +29,7 @@ def referenced_decisions(composed_tables):
     owner, outsider = create_user("reference-owner"), create_user("reference-outsider")
     vault = vault_for(owner)
     with actor_context(owner):
-        page = Page.objects.create_in(vault, title="Reference")
+        page = Page.objects.create_in(vault, pk=vault.pk, title="Reference")
     assert page.pk == vault.pk
     records = (vault, page)
     decisions = []
@@ -180,6 +180,11 @@ def test_record_reference_guard_uses_the_declared_string_key_and_current_actor(c
         object_id = models.CharField(max_length=63)
         target = GenericForeignKey()
 
+        @classmethod
+        def declared_target_models(cls, **kwargs):
+            # Old edges remain readable even after write admission is withdrawn.
+            return {}
+
         class Meta:
             app_label = "auth"
 
@@ -191,9 +196,44 @@ def test_record_reference_guard_uses_the_declared_string_key_and_current_actor(c
                 content_type=ContentType.objects.get_for_model(record), object_id=str(record.pk),
             )
         with actor_context(owner):
-            guarded = with_record_reference_access(TextReference.objects.order_by("pk"))
+            with CaptureQueriesContext(connection) as queries:
+                guarded = with_record_reference_access(TextReference.objects.order_by("pk"))
+            assert len(queries) == 0
+            sql = str(guarded.query)
+            guarded.query.get_compiler(connection=connection).as_sql()
             assert list(guarded.values_list("_angee_record_readable", flat=True)) == [True, False]
-            assert "CAST(" in str(guarded.query) and "varchar(63)" in str(guarded.query)
+            assert "varchar(63)" in sql and ("CAST(" in sql or "::varchar(63)" in sql)
+            assert list(guarded.values("_angee_record_readable").annotate(
+                total=models.Count("pk"),
+            ).order_by("_angee_record_readable")) == [
+                {"_angee_record_readable": False, "total": 1},
+                {"_angee_record_readable": True, "total": 1},
+            ]
         with actor_context(other):
             rebound = with_record_reference_access(guarded)
             assert list(rebound.values_list("_angee_record_readable", flat=True)) == [False, True]
+
+
+@pytest.mark.parametrize("empty", [False, True])
+def test_record_reference_declaration_is_query_free(empty):
+    """Schema and optimizer probes resolve no target types or permission scopes."""
+    with CaptureQueriesContext(connection) as queries:
+        rows = DecisionRecord.objects.none() if empty else DecisionRecord.objects.all()
+        guarded = with_record_reference_access(rows)
+        guarded.filter(_angee_record_readable=True).query.clone()
+        assert actor_scoped_relation_expression(guarded, "decision__kind") is not None
+    assert len(queries) == 0
+    assert guarded.query.is_empty() is empty
+
+
+def test_unused_record_reference_guard_compiles_without_reads(referenced_decisions):
+    """An unused annotation never scans represented types or resolves permissions."""
+    owner, _outsider, _records, decisions = referenced_decisions
+    with CaptureQueriesContext(connection) as queries:
+        guarded = with_record_reference_access(DecisionRecord.objects.with_actor(owner)).order_by("pk")
+        str(guarded.values("pk").query)
+        guarded.values("pk").query.get_compiler(connection=connection).as_sql()
+    assert len(queries) == 0
+    assert list(guarded.values_list("pk", "_angee_record_readable")) == [
+        (row.pk, True) for row in sorted(decisions, key=lambda row: row.pk)
+    ]

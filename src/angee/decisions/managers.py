@@ -32,17 +32,14 @@ class DecisionQuerySet[T: Decision](AppendOnlyQuerySet[T], AngeeQuerySet[T]):
         return self.filter(verdict__isnull=True)
 
     def waiting_on(self, actor: Any) -> Any:
-        """Open assignments, or unassigned questions this actor may answer.
-
-        Retain the caller's read scope. An unassigned question delegates to the
-        composed ``act`` permission rather than inventing a default assignee.
-        """
+        """Open questions this actor may act on, assigned to them or unassigned."""
 
         identity = actor_user_id(to_subject_ref(actor)) if actor is not None else None
         if identity is None:
             return self.none()
-        actionable = self.model.objects.with_actor(actor).with_action("act").scoped().filter(pk=OuterRef("pk"))
-        return self.open().filter(Q(assignees=identity) | (Q(assignees__isnull=True) & Q(Exists(actionable))))
+        return self.with_actor(actor).with_action("act").open().filter(
+            Q(assignees=identity) | Q(assignees__isnull=True),
+        )
 
     def open_for(self, *records: Any) -> Any:
         return self.open().for_records(*records)
@@ -50,11 +47,17 @@ class DecisionQuerySet[T: Decision](AppendOnlyQuerySet[T], AngeeQuerySet[T]):
     def for_records(self, *records: Any) -> Any:
         """Select decisions retaining any of the supplied canonical records."""
 
+        return self.filter(self.for_records_filter(*records))
+
+    @staticmethod
+    def for_records_filter(*records: Any) -> Q:
+        """Structural concern membership, independent of the decision's read policy."""
+
         link = apps.get_model("decisions", "DecisionRecord")
         concerns = Q(pk__in=[])
         for record in records:
             concerns |= link.record_filter(record)
-        return self.filter(pk__in=link.system_queryset().filter(concerns).order_by().values("decision_id"))
+        return Q(pk__in=link._base_manager.filter(concerns).order_by().values("decision_id"))
 
     def attention_expression(self, queryset: Any) -> Exists:
         model = generic_pointer_model(queryset.model)

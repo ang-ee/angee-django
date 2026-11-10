@@ -164,16 +164,19 @@ Use these owners instead of maintaining another contract in an addon:
   promote it to a model or manager method.
 - **Database routing:** Angee runs on one database, Django's `default`. It
   selects no database per operation, and the base system check `angee.E050`
-  refuses any `DATABASE_ROUTERS`. Owners open bare `transaction.atomic()` and
+  requires only the `default` alias in `DATABASES` and refuses any
+  `DATABASE_ROUTERS`. Owners open bare `transaction.atomic()` and
   register bare `transaction.on_commit()`. An alias Django or a library hands in (signal
   `using`, `Collector`, a hook's `using` argument, the `using` of an overridden
   `save()` or `save_base()`, the `db` of an overridden queryset `update()`,
   `delete()` or `bulk_create()`) passes through unchanged, to `super()` and to
   the transaction that override opens, as Django's own implementations do; do
-  not thread aliases through Angee helpers, managers, hooks or tasks. Use
+  not thread aliases through Angee helpers, managers, hooks or tasks.
+  `get_db_connection_name()` belongs only to import-export's own lifecycle;
+  Angee resource adapters do not call it to select a connection. Use
   native relation access, `refresh_from_db` when deferred or stale fields need
-  reloading, and preserve locks and batching. A declared read-only external
-  import source may select its database explicitly. REBAC-managed models and
+  reloading, and preserve locks and batching. External import sources use their
+  own client connections, not additional Django database aliases. REBAC-managed models and
   their relationship store share that one alias; the upstream
   `rebac.checks.check_policy_models` database check (run by `migrate` and
   `check --database default`) verifies the co-location. Permission reads never
@@ -224,6 +227,7 @@ Use these owners instead of maintaining another contract in an addon:
   the hint's attribute through `prefetched(row, to_attr, build)`, which builds the
   hint only for a row loaded another way, so it reads its own value through the
   same prefetch; each hint factory declares its `to_attr` once.
+- Actorless relation reads use [`relation_read_queryset`](../../src/angee/base/permissions.py): ambient system scope reads unscoped; no actor outside system scope fails closed; read-nothing exceptions require a documented policy.
 - Model-backed `hasura_model_resource(...)` surfaces expose sqid public identity. Use
   `AngeeDataModel`/`SqidMixin` for concrete rows. For third-party Django models
   that Angee exposes but does not own, pass an explicit sqid public identity
@@ -473,11 +477,19 @@ Use these owners instead of maintaining another contract in an addon:
   config parsing rejects non-empty values without a model; model-row validation
   still leaves undeclared legacy config alone. Generated choice metadata stays
   deterministic.
+- Autoconfig-declared settings are read directly; their defaults belong only to
+  the owning addon's autoconfig. Bare Django settings modules must declare the
+  capability inputs they use, including explicit empty values for disabled
+  capabilities. Module contribution readers compose
+  [`addon_contribution`](../../src/angee/base/addons.py) instead of probing
+  module attributes through runtime Protocols.
 - **Hooks are declared callable settings, separate from keyed registries.**
   The owning addon registers native Django checks for its specific callable
   settings. [`angee.base.hooks`](../../src/angee/base/hooks.py) supplies shared import and
   validation with `check_hooks`, `resolve_hook` and ordered `resolve_hooks`.
-  Checks import providers without executing them. There is no second list of
+  An absent optional provider contributes no hook; this is resolved at the shared
+  hook owner, without inventing capability settings in callers. Checks import
+  declared providers without executing them. There is no second list of
   hook-setting names; each capability owns its validation and invocation.
 - Cross-addon dependencies are one-way (e.g. `integrate → iam`, never the
   reverse); reject a bridge/diamond addon that would couple both ways.
@@ -533,6 +545,13 @@ Use these owners instead of maintaining another contract in an addon:
   on the target wherever it appears (the bucket only gates registration), so
   reference a field type that some bucket lacks and that bucket's build fails
   loudly rather than leaking.
+- **Resource extension axes are explicit.** Model donors declare each supported
+  filter, sort, aggregate, group, insert and update axis through its
+  `hasura_*able_fields` declaration, collected by
+  [`declared_hasura_resource_fields`](../../src/angee/graphql/data/hasura.py).
+  Readable fields never imply query or write axes. Resource owners compose these
+  declarations as [projects](../../src/angee/projects/schema.py) and
+  [tags](../../src/angee/tags/schema.py) do; they do not infer them from type fields.
 - Use symbolic model references across addon boundaries; avoid import cycles.
 - Build output must be byte-deterministic.
 - **Derived columns have two drift classes and two owners.** Signals own instance
@@ -815,11 +834,12 @@ data through REBAC, never a queryset bypass.
   `system_context`/`asystem_context` for named system-owned work; do not elevate
   a user factory merely because it inserts a row. A gated factory that must
   elevate to create a row returns that row bound to the requesting actor, so
-  callers continue under the original actor, never the elevated one. A read
-  through a model's unscoped `_base_manager` (its `Meta.base_manager_name`, the
-  manager Django's relation descriptors use) is an owner-level bypass: owner
-  code takes it for structural work it owns, such as locks, existence checks and
-  counters, with no audit row, and never returns its rows as an actor's read.
+  callers continue under the original actor, never the elevated one.
+- **Structural reads use Django's `_base_manager`, including in consumers.**
+  It is the model's unscoped read manager (`Meta.base_manager_name`), with no
+  REBAC scope and no audit row. Use it for membership predicates, existence
+  probes and owner-internal lookups, including locks and counters; never use it
+  to return rows to a viewer. Viewer-facing reads retain their actor scope.
 - **System work reads an actor-bound row's relations through
   `<related>.system_context(reason=...)`.** Since REBAC 0.31 a related manager
   keeps its source instance's actor even inside `system_context`. That actor comes
@@ -1093,10 +1113,12 @@ operational identities; statement querysets use `applied()` for winning value
 assertions. Source-copy identity remains reversible pair evidence and never
 chooses a transport or moves channel occurrences.
 
-[`HistoryMixin.history_relations`](../../src/angee/provenance/contrib/angee/history.py) declares owned
+[`PersistenceMixin.owned_relations`](../../src/angee/base/models/persistence.py) declares owned
 reverse-FK collections, such as dashboard widgets or project milestones. These
 rows keep their own history and read gates; document history groups their deltas
-with record identity. `history_tables()` is the one concrete-table inventory.
+with record identity. Live-reference retirement uses those same owned collections
+and preserves outside callers of any part. `history_tables()` is the one
+concrete-table inventory.
 `ChangesetQuerySet.touching(record)` and its inverse `records_touched()` own
 document membership, including MTI, pairs and generated statements. Projections
 consume these scopes instead of rediscovering documents from history rows.
@@ -1134,9 +1156,7 @@ tasks through [`angee.provenance.tasks.Task`](../../src/angee/provenance/tasks.p
 commands through `angee.server.management`'s `ANGEE_SERVER_COMMAND_CONTEXT` hooks, contributed by
 [`provenance`](../../src/angee/provenance/contrib/angee/context.py). The
 [server launcher](../composer.md#flow) supplies the winning command's parsed,
-read-only options at its `execute` boundary; a command's `--database` is a
-Django-supplied alias that a context passes through unchanged from those options,
-never parsed from argv. (`serve`, `runserver` and `test` are
+read-only options at its `execute` boundary. (`serve`, `runserver` and `test` are
 excluded because their requests, connections, tasks and tests own boundaries;
 interactive shells keep the command boundary); a bridge live-session run through
 [`run_bridge_session_job`](../../src/angee/integrate/session_runner.py). A
@@ -1203,15 +1223,15 @@ exception closes the rows as failed. Tests inherit a boundary from the root
   `transaction.on_commit(...)` or a post-commit phase.
   Save guards use `get_transition_save_field(instance)` to read the active save
   field's attname, or `None`, through the public contract.
+  Transition bodies assign companion field names to
+  `StateTransitionsMixin.transition_fields`; `save_state` writes them with the
+  state and resets the collection even on failure. Never delete this attribute.
   Guards follow Django's final concrete fields, including inherited and deferred
   columns. See [seeded transition state](#seeded-transition-state) for initialization.
   Reload committed state through `AngeeModel.refresh_from_db`, or copy loaded
   values from the owner's persisted copy of the same row through
   `StateTransitions.copy_persisted_state`; reload authorization stays private.
   Recovery writes outside the graph use `force_state` with a concrete reason.
-  Compose a custom final save through `persist(instance, *, update_fields)`;
-  the success hook must explicitly forward it to `save_state`, which retains the
-  concurrency guard and transaction.
 - **Give a model an opaque public id by mixing in `SqidMixin` and declaring
   `sqid_prefix = "abc_"`** — the one fact that varies per model. The shared
   `angee.base.fields.SqidField` reads that prefix in `contribute_to_class`; don't
@@ -1602,8 +1622,20 @@ open fresh evaluator scopes for authorization and change-feed reads.
   combines their common columns with Django's `union(all=True)` in one
   statement-local `django-cte` relation. Each branch keeps its permissions and
   attention; one statement applies folding, cursors and the page limit and reads
-  every kind's totals and the page's children. A kind with no readable rows is
-  probed and left out of that statement, so its scope is never compiled there.
+  every kind's totals and the page's children. Each eligible kind's `occurs(record)`
+  checks the same owner-declared record predicate as its readable queryset through
+  `_base_manager` before the read owner builds any scoped branch: one structural
+  existence query, no REBAC scope or
+  system-context audit row. Rows elsewhere in the source table do not admit a
+  branch. A positive probe still requires the kind's normal read authorization.
+  The kind's `waiting_on(record, actor)` probes structural attention candidates
+  on this record before building a distinct authorization scope, reusing the same
+  record predicate through `_base_manager` without REBAC, system context or an
+  audit row. No candidate means `None`, so the reader emits `Value(False)` and
+  compiles no attention scope. A positive probe retains the attention owner's
+  authorization unchanged. Only the boolean crosses to the already-readable
+  branch, without repeating its read scope. Decision attention uses the decision
+  owner's `waiting_on` act scope.
   Display payloads are hydrated only for selected rows, through the kind's own
   queryset. There is no event projection table or backfill requirement. Folding
   hides a child only when a readable parent target occurs on the same record;
@@ -1742,6 +1774,11 @@ reader's scope. A hidden target yields null identity fields; its model and ID
 must also stay unavailable through resource filters and aggregate counts. Addon
 resources declare their record-reference filter axes through the shared Hasura
 resource owner instead of reimplementing this projection.
+The [record-reference guard owner](../../src/angee/graphql/relations.py) keeps
+declarations and optimizer probes query-free. A used guard may read its represented
+content types in one bounded statement per compile, counted by statement budgets,
+as Django's `GenericRelation` resolves content types while compiling. Compile-time
+reads and permission answers are not cached across compilations.
 
 **Polymorphic edges authorize their target in the schema.** Back one relation
 per target type with the edge's `GenericForeignKey`, contributed by the app
@@ -1932,9 +1969,9 @@ bridge advisory lock as polling and delivery settlement.
   on its next pull. The link checks its complete retained reflection precondition;
   that does not replace the remote transport version fence.
 - **Applied evidence has one promoter.** Adapters return the actual mapped
-  payload, mapping version and dependency digest in `ApplyResult`; the driver
-  alone promotes the primary link and pins the history row written for that
-  application. Observation saves the source on the link without changing that
+  payload and dependency digest in `ApplyResult`; the driver takes the declared
+  mapping version from the stream, promotes the primary link and pins the history
+  row written for that application. Observation saves the source on the link without changing that
   protected pointer. History is the observation log; inbound state retains
   simultaneous and closed failures, and refused writes retain link outbox state.
   Unlinked event failures belong to the stream's `inbound` state. Mapping or

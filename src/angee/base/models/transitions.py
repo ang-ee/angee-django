@@ -32,9 +32,10 @@ conditions. Model methods and their callers own the exposed actions.
 
 The decorated method body runs after the source/graph/condition checks and before
 the target write. The primitive owns the state write and then calls
-``on_success``. It does not save the model; transition methods remain ordinary
-model methods and own any persistence of non-state fields. Illegal transitions
-raise ``TransitionNotAllowed`` with the field, source, and target in the message.
+``on_success``. Persistence is explicit: ``save_state`` writes the state together
+with ``StateTransitionsMixin.transition_fields`` supplied by the method body.
+Illegal transitions raise ``TransitionNotAllowed`` with the field, source, and
+target in the message.
 The body, target write and success hook share one ``transaction.atomic``, so a
 hook failure rolls back the body's database writes too. Existing outer
 transactions compose through Django savepoints; commit callbacks wait for the
@@ -70,9 +71,11 @@ from functools import wraps
 from typing import Any, NoReturn, cast
 
 from django.conf import settings
-from django.core.exceptions import ImproperlyConfigured
+from django.core.exceptions import FieldDoesNotExist, ImproperlyConfigured
 from django.db import models, transaction
 from django.db.models.fields.mixins import FieldCacheMixin
+from django.db.models.signals import class_prepared
+from django.dispatch import receiver
 
 from angee.base.exceptions import TransitionNotAllowed
 from angee.base.fields.state import StateField, enum_member_for
@@ -95,6 +98,14 @@ class _TransitionSpec:
     policy: str | None = None
     name: str = ""
     declaration: StateTransitions | None = None
+
+
+def _transition_spec(value: Any) -> _TransitionSpec | None:
+    """Read decorator metadata preserved by functools.wraps on transition methods."""
+
+    # Ordinary Python methods have no transition declaration.
+    spec = getattr(value, "_angee_transition_spec", None)
+    return spec if isinstance(spec, _TransitionSpec) else None
 
 
 def transition(
@@ -146,7 +157,20 @@ def transition(
 
 
 class StateTransitionsMixin(PersistenceMixin):
-    """Own guarded hydration and validate declarations through native class creation."""
+    """Own guarded hydration, declarations and companion fields for state saves.
+
+    Assign ``transition_fields`` to the names of extra fields the next
+    ``save_state`` must write with the guarded state. It defaults to an immutable
+    empty set. The save hook consumes these names and resets the attribute to an
+    empty ``frozenset`` even when its concurrency check or save fails. Readers
+    may inspect it during the save; callers replace it, never delete it.
+    ``force_state`` uses the same contract for saved rows and clears it after
+    an unsaved in-memory write. Other saves do not consume it.
+    """
+
+    transition_fields: set[str] | frozenset[str] = frozenset()
+    _angee_transition_write_fields: set[str] | None = None
+    _angee_transition_save: str | None = None
 
     class Meta:
         abstract = True
@@ -154,6 +178,7 @@ class StateTransitionsMixin(PersistenceMixin):
     def __init_subclass__(cls, **kwargs: Any) -> None:
         super().__init_subclass__(**kwargs)
         for declaration in StateTransitions._iter_declarations(cls):
+            # Django fields acquire model only when contribute_to_class binds them.
             if getattr(declaration.field, "model", None) is not None:
                 field_name = declaration.field.name
                 # Django removes inherited abstract fields with a None class declaration.
@@ -166,7 +191,9 @@ class StateTransitionsMixin(PersistenceMixin):
                 declaration.revalidate_for(cls)
 
     def refresh_from_db(
-        self, using: str | None = None, fields: Iterable[str] | None = None,
+        self,
+        using: str | None = None,
+        fields: Iterable[str] | None = None,
         from_queryset: models.QuerySet[Any] | None = None,
     ) -> None:
         """Reload native stored state without treating hydration as a transition."""
@@ -183,6 +210,9 @@ class StateTransitions:
     ``status_transitions = StateTransitions(status, {Status.DRAFT: [Status.READY]})``
 
     Then decorate the model's own methods with ``@transition(status, ...)``.
+    An abstract donor may reference another abstract source's field. Django's
+    ``class_prepared`` binds that guard only to concrete hosts composing the donor;
+    the source field and hosts without the donor remain unchanged.
     The field's native descriptor guards assignment; the declaration and
     ``StateTransitionsMixin`` validate decorated methods against the
     source-to-target graph during class construction. An optional ``policy_setting``
@@ -212,19 +242,23 @@ class StateTransitions:
         """Attach the declaration and validate the declaring class's methods."""
 
         self.name = name
+        self.owner = cls
         setattr(cls, name, self)
-        if getattr(self.field, "model", None) is not cls:
-            raise ImproperlyConfigured(f"{cls.__name__}.{name} must be declared after the StateField it guards.")
+        # Django fields acquire model only when contribute_to_class binds them.
+        field_owner = getattr(self.field, "model", None)
+        if field_owner is None or field_owner is not cls and not (cls._meta.abstract and field_owner._meta.abstract):
+            raise ImproperlyConfigured(f"{cls.__name__}.{name} must follow a local or abstract source StateField.")
 
         self._declared = self._normalize_graph()
-        self.field.transition_guard = self
+        if field_owner is cls:
+            self.field.transition_guard = self
         if not issubclass(cls, StateTransitionsMixin):
             raise ImproperlyConfigured(
                 f"{cls._meta.label} must inherit StateTransitionsMixin to host StateTransitions."
             )
 
         for method_name, value in cls.__dict__.items():
-            spec = cast(_TransitionSpec | None, getattr(value, "_angee_transition_spec", None))
+            spec = _transition_spec(value)
             if spec is None or not self._matches_field(spec.field):
                 continue
             spec.name = method_name
@@ -235,10 +269,7 @@ class StateTransitions:
     def get_field_names(cls, model: type[models.Model]) -> frozenset[str]:
         """Return guarded state field names, including inherited declarations."""
 
-        return frozenset(
-            value.field.name or value.field.attname
-            for value in cls._iter_declarations(model)
-        )
+        return frozenset(value.field.name or value.field.attname for value in cls._iter_declarations(model))
 
     @classmethod
     def _iter_declarations(cls, model: type[models.Model]) -> Iterator[StateTransitions]:
@@ -279,7 +310,7 @@ class StateTransitions:
             for method_name, value in vars(klass).items():
                 if method_name in seen:
                     continue
-                spec = cast(_TransitionSpec | None, getattr(value, "_angee_transition_spec", None))
+                spec = _transition_spec(value)
                 if spec is None or not self._matches_field(spec.field):
                     continue
                 seen.add(method_name)
@@ -313,8 +344,8 @@ class StateTransitions:
         """
 
         method = getattr(type(instance), method_name)
-        spec = getattr(method, "_angee_transition_spec", None)
-        if not isinstance(spec, _TransitionSpec) or spec.declaration is not self:
+        spec = _transition_spec(method)
+        if spec is None or spec.declaration is not self:
             raise ImproperlyConfigured(f"{method_name!r} is not a transition guarded by {self.name}.")
         try:
             self._allowed_values(instance, spec)
@@ -358,10 +389,9 @@ class StateTransitions:
         self._write_target(instance, target_value)
         if instance.pk is None:
             # Unsaved row: the in-memory write is the whole operation, so a
-            # caller-set _transition_fields must not leak into a later
+            # caller-set transition_fields must not leak into a later
             # save_state on the same instance (saved-row-only contract).
-            if hasattr(instance, "_transition_fields"):
-                delattr(instance, "_transition_fields")
+            cast(StateTransitionsMixin, instance).transition_fields = frozenset()
             return
         try:
             with _transition_save_context(instance, self.field.attname):
@@ -429,7 +459,7 @@ class StateTransitions:
 
         if not self.policy_setting:
             return {}
-        overlay = getattr(settings, self.policy_setting, None)
+        overlay = getattr(settings, self.policy_setting)
         if overlay is None:
             return {}
         if not isinstance(overlay, Mapping):
@@ -462,9 +492,7 @@ class StateTransitions:
                     )
 
     def _matches_field(self, field: StateField) -> bool:
-        return field is self.field or (
-            getattr(field, "name", None) == self.field.name and getattr(field, "attname", None) == self.field.attname
-        )
+        return field is self.field or (field.name == self.field.name and field.attname == self.field.attname)
 
     def _source_matches(self, source_spec: Any, source_key: str) -> bool:
         source_keys = self._source_keys(source_spec)
@@ -490,16 +518,20 @@ class StateTransitions:
         self._write_target(instance, self.field.to_python(target))
 
     def assign(
-        self, instance: models.Model, field: StateField, value: Any, load: Callable[[], Any],
+        self,
+        instance: models.Model,
+        field: StateField,
+        value: Any,
+        load: Callable[[], Any],
     ) -> None:
         """Guard this declaration's model and its native descendants."""
 
-        if not isinstance(instance, self.field.model):
+        if not isinstance(instance, self.owner):
             # A scalar field copy does not opt its new model into domain policy.
             instance.__dict__[field.attname] = value
             return
         target = field.to_python(value)
-        active = cast(set[str] | None, getattr(instance, "_angee_transition_write_fields", None))
+        active = cast(StateTransitionsMixin, instance)._angee_transition_write_fields
         authorized = active is not None and field.attname in active
         if field.attname not in instance.__dict__:
             if instance._state.adding or authorized:
@@ -513,7 +545,6 @@ class StateTransitions:
             return
 
         raise TransitionNotAllowed(_message(field, source, target, "direct assignment is not allowed"))
-
 
     def _write_target(self, instance: models.Model, target: Any) -> None:
         with self._allow_write(instance, {self.field.attname}):
@@ -530,7 +561,10 @@ class StateTransitions:
 
     @classmethod
     def copy_persisted_state(
-        cls, instance: models.Model, source: models.Model, fields: Iterable[str],
+        cls,
+        instance: models.Model,
+        source: models.Model,
+        fields: Iterable[str],
     ) -> None:
         """Copy loaded field values from the owner's persisted copy of the same row.
 
@@ -566,20 +600,45 @@ class StateTransitions:
     def _allow_write(instance: models.Model, fields: set[str]) -> Iterator[None]:
         """Authorize an owner write while preserving any enclosing context."""
 
-        previous = cast(set[str] | None, getattr(instance, "_angee_transition_write_fields", None))
-        setattr(instance, "_angee_transition_write_fields", (previous or set()) | fields)
+        if not fields:
+            yield
+            return
+        guarded = cast(StateTransitionsMixin, instance)
+        previous = guarded._angee_transition_write_fields
+        guarded._angee_transition_write_fields = (previous or set()) | fields
         try:
             yield
         finally:
-            if previous is None:
-                delattr(instance, "_angee_transition_write_fields")
-            else:
-                setattr(instance, "_angee_transition_write_fields", previous)
+            guarded._angee_transition_write_fields = previous
 
     def _raise_not_allowed(self, source: Any, target: Any, reason: str) -> NoReturn:
         raise TransitionNotAllowed(_message(self.field, source, target, reason))
 
 
+@receiver(class_prepared, dispatch_uid="angee.state_transitions.donors")
+def _bind_donor_state_guards(sender: type[models.Model], **kwargs: Any) -> None:
+    """Bind abstract donor declarations to the final host's own field copies."""
+
+    if not issubclass(sender, StateTransitionsMixin):
+        return
+    for declaration in StateTransitions._iter_declarations(sender):
+        if declaration.field.model is declaration.owner:
+            continue
+        try:
+            field = sender._meta.get_field(declaration.field.name)
+        except FieldDoesNotExist as error:
+            raise ImproperlyConfigured(
+                f"{sender._meta.label}.{declaration.name} requires StateField {declaration.field.name!r}."
+            ) from error
+        if isinstance(field, StateField) and field.transition_guard is declaration:
+            continue
+        if not isinstance(field, StateField) or field.model is not sender:
+            raise ImproperlyConfigured(
+                f"{sender._meta.label}.{declaration.name} requires a local StateField {declaration.field.name!r}."
+            )
+        if field.transition_guard is not None and field.transition_guard is not declaration:
+            raise ImproperlyConfigured(f"{sender._meta.label}.{field.name} has competing transition guards.")
+        field.transition_guard = declaration
 
 
 def _as_values(value: Any) -> tuple[Any, ...]:
@@ -592,15 +651,13 @@ def _as_values(value: Any) -> tuple[Any, ...]:
 def _transition_save_context(instance: models.Model, field_name: str) -> Iterator[None]:
     """Expose this save's field and restore any enclosing transition context."""
 
-    previous = get_transition_save_field(instance)
-    setattr(instance, "_angee_transition_save", field_name)
+    guarded = cast(StateTransitionsMixin, instance)
+    previous = guarded._angee_transition_save
+    guarded._angee_transition_save = field_name
     try:
         yield
     finally:
-        if previous is None:
-            delattr(instance, "_angee_transition_save")
-        else:
-            setattr(instance, "_angee_transition_save", previous)
+        guarded._angee_transition_save = previous
 
 
 def get_transition_save_field(instance: models.Model) -> str | None:
@@ -612,7 +669,7 @@ def get_transition_save_field(instance: models.Model) -> str | None:
     it when that hook exits, including on failure.
     """
 
-    return cast(str | None, getattr(instance, "_angee_transition_save", None))
+    return instance._angee_transition_save if isinstance(instance, StateTransitionsMixin) else None
 
 
 def save_state(
@@ -630,25 +687,24 @@ def save_state(
     the guard only *verifies*; ``instance.save`` still performs the ``source ->
     target`` column write, so ``post_save`` receivers, audit stamping, ``changes``
     publishers, and pre-save change trackers observe the real old->new transition.
-
+    ``StateTransitionsMixin.transition_fields`` supplies companion field names
+    and is reset after the attempt, whether the guard and save succeed or fail.
     """
 
     field_name = get_transition_save_field(instance)
     if field_name is None:
         raise ImproperlyConfigured("save_state must run as a StateTransitions on_success hook.")
-    fields = {field_name, *cast(set[str], getattr(instance, "_transition_fields", set()))}
+    guarded = cast(StateTransitionsMixin, instance)
+    fields = {field_name, *guarded.transition_fields}
     try:
         with transaction.atomic():
             _verify_uncontended_source(instance, field_name, source, target)
             instance.save(update_fields=fields)
     finally:
-        if hasattr(instance, "_transition_fields"):
-            delattr(instance, "_transition_fields")
+        guarded.transition_fields = frozenset()
 
 
-def _verify_uncontended_source(
-    instance: models.Model, field_name: str, source: Any, target: Any
-) -> None:
+def _verify_uncontended_source(instance: models.Model, field_name: str, source: Any, target: Any) -> None:
     """Lock the row and reject a committed state that already left ``source``."""
 
     if not isinstance(instance, PersistenceMixin):
@@ -658,8 +714,6 @@ def _verify_uncontended_source(
     field = cast(StateField, instance._meta.get_field(field_name))
     if _state_key(field, committed) != _state_key(field, source):
         raise TransitionNotAllowed(_message(field, source, target, "state changed under a concurrent transition"))
-
-
 
 
 def _state_key(field: StateField, value: Any) -> str:

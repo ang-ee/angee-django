@@ -19,11 +19,9 @@ from rebac import PermissionDenied, actor_context, system_context
 from angee.integrate.discovery import ConnectionDiscovery
 from angee.integrate.errors import IntegrationError
 from angee.integrate.impl import AdapterContractError
-from angee.integrate.locks import bridge_advisory_lock
 from angee.knowledge.mcp_tools import register
 from angee.messaging.backends import ParsedHandle
 from angee.posts.backends import FeedBackend
-from angee.posts.ingest import land_posts
 from angee.posts.models import CommentAnswered
 from angee.provenance.contrib.angee.exceptions import CreationKeyConflict
 from tests.native_messaging_delivery import Channel, DeliveryFixtures, Feed, Message
@@ -55,7 +53,7 @@ class ReplyJoins(DeliveryFixtures):
                     sender=ParsedHandle(platform="youtube", value="publisher"),
                 ),
             )
-            land_posts(self.feed, [native], owner_id=self.operator.pk)
+            Message.posts.land(self.feed, [native], owner_id=self.operator.pk)
             self.assertTrue(comment.reply_state())
             with self.assertRaisesMessage(CommentAnswered, "already answered"):
                 comment.reply_to_comment(body="Stale inference", actor=self.agent, idempotency_key="late-run")
@@ -153,7 +151,7 @@ class ReplyJoins(DeliveryFixtures):
                 close_old_connections()
 
         with patch.object(Feed, "verify_webhook", return_value=True), patch.object(Feed, "handle_webhook") as land:
-            with bridge_advisory_lock(self.feed) as acquired, ThreadPoolExecutor(max_workers=1) as pool:
+            with self.feed.sync_lock() as acquired, ThreadPoolExecutor(max_workers=1) as pool:
                 self.assertTrue(acquired)
                 with self.assertRaises(IntegrationError) as refusal:
                     pool.submit(copy_context().run, inbound).result(timeout=10)

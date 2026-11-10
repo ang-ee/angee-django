@@ -1716,8 +1716,8 @@ def test_expired_imap_budget_does_not_connect_or_advance(monkeypatch: pytest.Mon
     backend = _backend(monkeypatch, account)
     monkeypatch.setattr(imap_backend, "monotonic", lambda: 10.0)
     reports: list[tuple[str, dict[str, Any]]] = []
-    reporter = SimpleNamespace(report=lambda stage, **values: reports.append((stage, values)))
-    monkeypatch.setattr(imap_backend, "current_bridge_progress", lambda: reporter)
+    bridge = SimpleNamespace(report_progress=lambda stage, **values: reports.append((stage, values)))
+    monkeypatch.setattr(imap_backend, "current_progress_bridge", lambda: bridge)
     stream = SimpleNamespace(partition="INBOX", generation=1, cursor={"uidvalidity": 100, "last_uid": 0})
 
     assert backend.streams(deadline=10) == ()

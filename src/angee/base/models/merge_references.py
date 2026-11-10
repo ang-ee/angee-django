@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterator, Mapping
+from collections.abc import Callable, Collection, Iterator, Mapping
 from dataclasses import dataclass
 from enum import StrEnum
 from functools import cache
+from itertools import chain
 from typing import Any, ClassVar
 
 from django.apps import apps
@@ -18,7 +19,7 @@ from django.db.models import DO_NOTHING, Exists, OuterRef, Q
 from django.db.models.deletion import get_candidate_relations_to_delete
 from django.db.models.functions import Cast
 from django.utils import timezone
-from rebac import model_identities
+from rebac import SubjectRef, model_identities
 from rebac.actors import model_can_resolve_subject
 from rebac.models import active_relationship_model
 from rebac.resources import model_resource_type
@@ -99,6 +100,13 @@ class MergeContractMixin(models.Model):
 
         del target
         return True
+
+    @classmethod
+    def live_reference_filter(cls, *, principal: SubjectRef | None) -> Q:
+        """Select live callers; owners of retained evidence may narrow their rows."""
+
+        del principal
+        return Q()
 
     @classmethod
     def check(cls, **kwargs: Any) -> list[checks.CheckMessage]:
@@ -184,7 +192,7 @@ class Reference:
     def rows(self, record: models.Model) -> models.QuerySet[Any]:
         """Return the rows pointing at ``record``, outside any actor scope."""
 
-        return self.model._base_manager.using(record._state.db).filter(**self.lookup(record))
+        return self.model._base_manager.filter(**self.lookup(record))
 
     def retains(self, record: models.Model) -> bool:
         """Include earlier pointer versions when deciding whether evidence survives."""
@@ -192,13 +200,28 @@ class Reference:
         if self.rows(record).exists():
             return True
         return issubclass(self.model, PersistenceMixin) and self.model.retained_reference_exists(
-            record, self.lookup(record),
+            self.lookup(record),
         )
 
     def blocks_target_delete(self, target: type[models.Model]) -> bool:
         """Ask the reference model whether this pointer represents a live blocker."""
 
         return not issubclass(self.model, MergeContractMixin) or self.model.blocks_target_delete(target)
+
+    def is_owned(self, target: type[models.Model]) -> bool:
+        """Whether this pointer holds document parts owned by the target."""
+
+        return False
+
+    def live_rows(self, record: models.Model, *, principal: SubjectRef | None = None) -> models.QuerySet[Any]:
+        """Return outside callers through the reference's and row owner's contracts."""
+
+        rows = self.rows(record)
+        if self.is_owned(type(record)) or not self.blocks_target_delete(type(record)):
+            return rows.none()
+        if issubclass(self.model, MergeContractMixin):
+            rows = rows.filter(self.model.live_reference_filter(principal=principal))
+        return rows
 
 
     def move(self, rows: models.QuerySet[Any], *, survivor: models.Model) -> None:
@@ -215,9 +238,8 @@ class Reference:
         if issubclass(self.model, MergeContractMixin) and self.model.merge_contract is not None:
             if self.model.merge_contract(self, rows, survivor=survivor) is not NotImplemented:
                 return
-        using = rows.db
         target = self.lookup(survivor)
-        held = self.model._base_manager.using(using).filter(**target)
+        held = self.model._base_manager.filter(**target)
         identity = _merge_identity(self.model)
         for fields, condition in unique_field_sets(self.model):
             if not set(self.columns) <= set(fields):
@@ -264,6 +286,15 @@ class ForeignKeyReference(Reference):
 
     field: models.ForeignObject[Any, Any]
 
+    def is_owned(self, target: type[models.Model]) -> bool:
+        """Compose the target's declared document collections through Django relations."""
+
+        return issubclass(target, PersistenceMixin) and any(
+            isinstance(relation := target._meta.get_field(name), models.ManyToOneRel)
+            and relation.field is self.field
+            for name in target.owned_relations
+        )
+
     @property
     def name(self) -> str:
         """Return the foreign key's name."""
@@ -302,8 +333,7 @@ class ForeignKeyReference(Reference):
         """
 
         related = self.field.related_model
-        return (isinstance(survivor, related)
-                or related._base_manager.using(survivor._state.db).filter(pk=survivor.pk).exists())
+        return isinstance(survivor, related) or related._base_manager.filter(pk=survivor.pk).exists()
 
 
 @dataclass(frozen=True, slots=True)
@@ -410,7 +440,7 @@ def references(model: type[models.Model]) -> tuple[Reference, ...]:
     return tuple(_references(model))
 
 
-def named_in_relationships(record: models.Model) -> bool:
+def named_in_relationships(record: models.Model, *, exclude: Collection[str] = ()) -> bool:
     """Return whether stored REBAC relationships name any row retiring ``record`` deletes.
 
     The delete takes the record's multi-table parents and children with it, and
@@ -420,15 +450,61 @@ def named_in_relationships(record: models.Model) -> bool:
     """
 
     model = type(record)
-    rows = active_relationship_model().objects.db_manager(hints={"instance": record})
+    rows = active_relationship_model().objects
     identities = set()
     for owner in concrete_lineage(model):
         if not model_resource_type(owner) and not model_can_resolve_subject(owner):
             continue
-        row = owner._base_manager.db_manager(hints={"instance": record}).filter(pk=record.pk).first()
+        row = owner._base_manager.filter(pk=record.pk).first()
         if row is not None:
             identities.update(model_identities(owner, row))
-    return rows.referencing(identities).exists()
+    return rows.referencing(identities).exclude(relation__in=exclude).exists()
+
+
+def owned_reference_parts(record: models.Model) -> Iterator[models.Model]:
+    """Yield the record's declared owned parts recursively, once per concrete row.
+
+    Parts remain stored for reversible retirement. Their history and outside
+    callers still matter; callers need no knowledge of the declaring addon types.
+    The root record itself is not yielded.
+    """
+
+    seen = {(record._meta.concrete_model, record.pk)}
+    pending = [record]
+    while pending:
+        owner = pending.pop()
+        for reference in references(type(owner)):
+            if not reference.is_owned(type(owner)):
+                continue
+            for part in reference.rows(owner).order_by("pk"):
+                identity = (part._meta.concrete_model, part.pk)
+                if identity not in seen:
+                    seen.add(identity)
+                    yield part
+                    pending.append(part)
+
+
+def has_live_references(
+    record: models.Model,
+    *,
+    principal: SubjectRef | None = None,
+    exclude_relations: Collection[str] = (),
+) -> bool:
+    """Whether outside live rows or stored grants name a record or its owned parts.
+
+    Historical and nonblocking references follow their declared deletion policy.
+    Evidence owners define which rows remain live for ``principal``; omitting it
+    grants no authorship exclusion. ``exclude_relations`` names only stored REBAC
+    relations to disregard, on both the record and its parts. This structural
+    check is unscoped; the caller owns admission and locking before retirement.
+    """
+
+    for current in chain((record,), owned_reference_parts(record)):
+        if named_in_relationships(current, exclude=exclude_relations) or any(
+            reference.live_rows(current, principal=principal).exists() for reference in references(type(current))
+        ):
+            return True
+    return False
 
 
 def _state(row: models.Model, identity: tuple[str, ...]) -> dict[str, Any]:
@@ -444,7 +520,9 @@ def _state(row: models.Model, identity: tuple[str, ...]) -> dict[str, Any]:
         if not field.primary_key
         and field.name not in identity
         and field.name not in _AUDIT_FIELDS
+        # Django temporal fields declare auto_now; other Field subclasses do not.
         and not getattr(field, "auto_now", False)
+        # Django temporal fields declare auto_now_add; other Field subclasses do not.
         and not getattr(field, "auto_now_add", False)
     }
 

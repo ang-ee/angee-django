@@ -13,7 +13,7 @@ from tests.lock_waits import submit
 from tests.t3_campaign import campaign_access as campaign_access
 from tests.t3_campaign import campaign_user as campaign_user
 from tests.t3_campaign import messaging_access_schema as messaging_access_schema
-from tests.test_projects_wave3_campaign import project_case as project_case
+from tests.test_projects_access_projections import project_case as project_case
 
 pytestmark = [
     pytest.mark.django_db(transaction=True),

@@ -19,6 +19,7 @@ from tests.tables import model_tables
 from angee.base.models.base import AngeeModel
 from angee.resources.entries import ResourceEntry
 from angee.resources.exceptions import ResourceLoadError
+from angee.resources.mixins import ResourceLoadMixin
 from angee.resources.models import Resource
 from angee.resources.tests.test_resources import addon, entry
 
@@ -101,7 +102,7 @@ def test_native_import_pipeline_rolls_back_all_groups_grants_and_hooks(
         class Meta:
             app_label = "base"
 
-    class PipelineItem(AngeeModel):
+    class PipelineItem(ResourceLoadMixin, AngeeModel):
         model = models.CharField(max_length=24)
         tags = models.ManyToManyField(PipelineTag)
 

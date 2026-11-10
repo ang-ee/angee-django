@@ -27,7 +27,7 @@ def test_long_running_commands_keep_their_own_contexts(monkeypatch: pytest.Monke
 def test_management_attribution_uses_native_selected_options_and_unwinds(
     monkeypatch: pytest.MonkeyPatch, fail: bool,
 ) -> None:
-    """The Angee adapter attributes the selected database and preserves failure."""
+    """The Angee adapter attributes the command and preserves failure."""
 
     events = []
 
@@ -42,10 +42,10 @@ def test_management_attribution_uses_native_selected_options_and_unwinds(
     monkeypatch.setattr(command_context, "changeset", changeset)
     with pytest.raises(RuntimeError, match="command failed") if fail else nullcontext():
         with command_context.management_context(
-            "migrate", ("manage.py", "migrate", "--database=selected"), MappingProxyType({"database": "selected"}),
+            "migrate", ("manage.py", "migrate"), MappingProxyType({}),
         ):
             if fail:
                 raise RuntimeError("command failed")
     assert events == [{
-        "fresh": True, "activity": "system", "change_reason": "manage.migrate", "process": True, "using": "selected",
+        "fresh": True, "activity": "system", "change_reason": "manage.migrate", "process": True,
     }, "closed"]

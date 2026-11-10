@@ -132,6 +132,8 @@ def test_hook_check_imports_every_declared_path() -> None:
 
 
 def test_hook_check_accepts_unset_optional_hook_and_declared_list_order() -> None:
+    assert check_hook("ANGEE_TEST_UNSET_HOOK") == []
+    assert check_hooks(("ANGEE_TEST_UNSET_HOOK",)) == []
     with override_settings(
         ANGEE_TEST_SINGLE_HOOK="",
         ANGEE_TEST_HOOKS=["builtins.sorted", "builtins.len"],
@@ -219,6 +221,14 @@ def test_a_database_router_is_refused() -> None:
         [error] = check_database_routers()
     assert error.id == "angee.E050"
     assert "DATABASE_ROUTERS" in error.msg
+
+
+@pytest.mark.parametrize("aliases", [(), ("other",), ("default", "other")])
+def test_database_configuration_requires_only_default(settings, aliases) -> None:
+    settings.DATABASES = {alias: {"ENGINE": "django.db.backends.sqlite3"} for alias in aliases}
+    [error] = check_database_routers()
+    assert error.id == "angee.E050"
+    assert "DATABASES" in error.msg
 
 
 @pytest.mark.parametrize("ordering", ["first", "last", "override", "inherited", "plain"])

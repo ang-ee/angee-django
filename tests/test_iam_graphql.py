@@ -40,6 +40,7 @@ from strawberry.django.views import GraphQLView
 
 from angee.agents.testing.models import Agent
 from angee.base.identity import public_data_id_field
+from angee.base.managers import AngeeManager
 from angee.base.models.identity import instance_from_public_id, public_id_for, public_id_of
 from angee.graphql import subscriptions
 from angee.graphql.data.metadata import readable_model_field_names
@@ -1970,12 +1971,14 @@ import os
 os.environ.pop("DJANGO_SETTINGS_MODULE", None)
 from django.conf import settings
 from angee.integrate.autoconfig import SETTINGS as INTEGRATE_SETTINGS
+from angee.provenance.autoconfig import SETTINGS as PROVENANCE_SETTINGS
 settings.configure(
     INSTALLED_APPS=["django.contrib.contenttypes", "rebac", "native_oidc"],
     AUTH_USER_MODEL="native_oidc.User",
     DATABASES={"default": {"ENGINE": "django.db.backends.sqlite3", "NAME": ":memory:"}},
     SECRET_KEY="oidc-disconnect-policy",
     ANGEE_OAUTH_PROVIDER_TYPE_CLASSES=INTEGRATE_SETTINGS["ANGEE_OAUTH_PROVIDER_TYPE_CLASSES"],
+    ANGEE_CHANGESET_MODEL=PROVENANCE_SETTINGS["ANGEE_CHANGESET_MODEL"],
 )
 import django
 django.setup()
@@ -2069,7 +2072,12 @@ def test_discover_oauth_endpoints_persists_the_filled_endpoints(
         "authorization_endpoint": "https://persisted.example/authorize",
         "token_endpoint": "https://persisted.example/token",
     }
-    monkeypatch.setattr(oauth_discovery, "_get_json", lambda url, **kwargs: document)
+
+    def fetch_document(url: str) -> dict[str, str]:
+        assert url == client.discovery_url
+        return document
+
+    monkeypatch.setattr(oauth_discovery, "oauth_get_json", fetch_document)
     discover = "mutation($id: ID!){ discover_oauth_endpoints(id: $id){ ok message } }"
 
     result = _data(_execute(_schema("console"), discover, {"id": str(client.sqid)}, user=admin))
@@ -2195,7 +2203,7 @@ def test_view_as_denial_is_audited_and_missing_admission_fails_closed(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     admin = _platform_admin("preview-denied-admin")
-    monkeypatch.setattr(User._default_manager, "admit_view_as", None)
+    monkeypatch.setattr(User._default_manager, "admit_view_as", AngeeManager().admit_view_as)
     monkeypatch.setattr("angee.graphql.views._get_view", lambda schema_name: None)
     request = RequestFactory().post(
         "/graphql/public/",

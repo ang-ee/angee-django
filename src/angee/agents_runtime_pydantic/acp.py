@@ -20,6 +20,7 @@ import json
 from collections.abc import Iterable
 from typing import Any
 
+from pydantic import BaseModel
 from pydantic_ai.messages import (
     FunctionToolCallEvent,
     FunctionToolResultEvent,
@@ -97,7 +98,7 @@ def _tool_call(part: Any) -> dict[str, Any]:
 
 
 def _tool_args(part: Any) -> Any:
-    args = getattr(part, "args", {})
+    args = part.args
     if isinstance(args, str):
         try:
             return json.loads(args)
@@ -113,7 +114,6 @@ def _json_value(value: Any) -> Any:
         return {str(key): _json_value(item) for key, item in value.items()}
     if isinstance(value, list | tuple):
         return [_json_value(item) for item in value]
-    model_dump = getattr(value, "model_dump", None)
-    if callable(model_dump):
-        return _json_value(model_dump(mode="json"))
+    if isinstance(value, BaseModel):
+        return _json_value(value.model_dump(mode="json"))
     return str(value)

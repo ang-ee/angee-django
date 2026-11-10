@@ -1,9 +1,10 @@
 import { InfiniteQueryObserver, isCancelledError, QueryClient, QueryObserver } from "@tanstack/react-query";
+import { keys } from "@refinedev/core";
 import { afterEach, expect, test, vi } from "vitest";
 
 import {
   authoredQueryReadsChange,
-  createAuthoredLiveInvalidation,
+  createLiveInvalidation,
   invalidateAuthoredQueries,
 } from "./query-invalidation";
 
@@ -37,7 +38,7 @@ test("a related-only feed refreshes its record interest without subscribing to t
     queryFn: async () => ++reads,
   });
   const unsubscribe = observer.subscribe(() => undefined);
-  const live = createAuthoredLiveInvalidation(cache);
+  const live = createLiveInvalidation(cache);
   await vi.advanceTimersByTimeAsync(0);
   live.push({ model: "workflows.WorkflowRun", id: "wfr_other", relatedRecords: [{ model: "notes.Note", id: "nte_other" }] });
   await vi.advanceTimersByTimeAsync(300);
@@ -69,7 +70,7 @@ test("an unrelated row event does not starve an exact record's pending first req
     },
   };
   vi.useFakeTimers();
-  const live = createAuthoredLiveInvalidation(cache);
+  const live = createLiveInvalidation(cache);
   const observer = new QueryObserver(cache, options);
   const unsubscribe = observer.subscribe(() => undefined);
   try {
@@ -113,7 +114,7 @@ test("a related child refreshes an exact parent without unrelated-child starvati
     },
   };
   vi.useFakeTimers();
-  const live = createAuthoredLiveInvalidation(cache);
+  const live = createLiveInvalidation(cache);
   const observer = new QueryObserver(cache, options);
   const unsubscribe = observer.subscribe(() => undefined);
   try {
@@ -141,7 +142,7 @@ test("a related child refreshes an exact parent without unrelated-child starvati
   }
 });
 
-test("a model event during the initial request replaces its snapshot and discards a late response", async () => {
+test("a caller write during the initial request cancels its snapshot and discards a late response", async () => {
   const cache = client();
   const old = pending<string[]>();
   let requests = 0;
@@ -193,7 +194,7 @@ test.each([true, false])("empty %s-disabled/inactive initial requests cancel wit
   };
   const observer = disabled ? new QueryObserver(cache, { ...options, enabled: false }) : undefined;
   const unsubscribe = observer?.subscribe(() => undefined);
-  const request = cache.fetchQuery(options).catch((error: unknown) => error);
+  const request = cache.query(options).catch((error: unknown) => error);
   try {
     await invalidateAuthoredQueries(cache, ["notes.Note"]);
     expect(signal.aborted).toBe(true);
@@ -222,10 +223,10 @@ test("populated disabled/inactive queries retain data and unrelated initial quer
     queryFn: async () => { requests++; return ["current"]; },
   };
   const inactive = { ...options, queryKey: ["notes", "inactive"] };
-  await cache.fetchQuery(options); await cache.fetchQuery(inactive);
+  await cache.query(options); await cache.query(inactive);
   const observer = new QueryObserver(cache, { ...options, enabled: false });
   const unsubscribe = observer.subscribe(() => undefined);
-  const other = cache.fetchQuery({
+  const other = cache.query({
     queryKey: ["tags"], meta: { angeeModels: ["notes.Tag"] },
     queryFn: (context) => { signal = context.signal; return unrelated.promise; },
   });
@@ -245,7 +246,7 @@ test("populated disabled/inactive queries retain data and unrelated initial quer
   }
 });
 
-test("successive events cancel a retained infinite refresh and commit the latest complete pages", async () => {
+test("successive caller writes cancel a retained infinite refresh and commit the latest complete pages", async () => {
   const cache = client();
   const old = pending<{ rows: string[]; next: number | undefined }>();
   const started = pending<void>();
@@ -283,7 +284,7 @@ test("successive events cancel a retained infinite refresh and commit the latest
 test("a burst of row changes refetches each affected read once and leaves unrelated reads alone", async () => {
   vi.useFakeTimers();
   const cache = client();
-  const live = createAuthoredLiveInvalidation(cache);
+  const live = createLiveInvalidation(cache);
   const counts = { inbox: 0, accounts: 0 };
   const inbox = new QueryObserver(cache, {
     queryKey: ["inbox"], meta: { angeeModels: ["messaging.Message", "messaging.Part"] },
@@ -313,7 +314,7 @@ test("a burst of row changes refetches each affected read once and leaves unrela
 test("a continuous change stream still flushes within the max wait", async () => {
   vi.useFakeTimers();
   const cache = client();
-  const live = createAuthoredLiveInvalidation(cache);
+  const live = createLiveInvalidation(cache);
   let requests = 0;
   const observer = new QueryObserver(cache, {
     queryKey: ["inbox"], meta: { angeeModels: ["messaging.Message"] },
@@ -336,7 +337,7 @@ test("a continuous change stream still flushes within the max wait", async () =>
 test("a live change lets a running refresh commit, then refetches once it settles", async () => {
   vi.useFakeTimers();
   const cache = client();
-  const live = createAuthoredLiveInvalidation(cache);
+  const live = createLiveInvalidation(cache);
   const running = pending<string[]>();
   let revision = "initial";
   let runningSignal!: AbortSignal;
@@ -374,7 +375,7 @@ test("a live change lets a running refresh commit, then refetches once it settle
 test("a continuous stream never starves a read slower than its gaps", async () => {
   vi.useFakeTimers();
   const cache = client();
-  const live = createAuthoredLiveInvalidation(cache);
+  const live = createLiveInvalidation(cache);
   let requests = 0;
   let commits = 0;
   const observer = new QueryObserver(cache, {
@@ -400,5 +401,49 @@ test("a continuous stream never starves a read slower than its gaps", async () =
     expect(observer.getCurrentResult().fetchStatus).toBe("idle");
   } finally {
     unsubscribe(); cache.clear();
+  }
+});
+
+test("authored and resource reads share one burst and settle tracking without touching another provider", async () => {
+  vi.useFakeTimers();
+  const cache = client();
+  const live = createLiveInvalidation(cache);
+  const running = pending<number>();
+  const scope = keys().data("console").resource("console:notes.Note").get();
+  const counts = { authored: 0, resource: 0, other: 0 };
+  const authored = new QueryObserver(cache, {
+    queryKey: ["note-summary"], meta: { angeeModels: ["notes.Note"] },
+    queryFn: async () => ++counts.authored,
+  });
+  const resource = new QueryObserver(cache, {
+    queryKey: keys().data("console").resource("console:notes.Note").action("one").id("note_1").get(),
+    queryFn: () => ++counts.resource === 1 ? running.promise : Promise.resolve(counts.resource),
+  });
+  const other = new QueryObserver(cache, {
+    queryKey: keys().data("public").resource("console:notes.Note").action("one").id("note_1").get(),
+    queryFn: async () => ++counts.other,
+  });
+  const stop = [authored.subscribe(() => undefined), resource.subscribe(() => undefined), other.subscribe(() => undefined)];
+  const callback = vi.fn(() => {
+    void cache.invalidateQueries({ queryKey: scope, type: "active" }, { cancelRefetch: false });
+  });
+  const delivery = { queryKey: scope, callback };
+  try {
+    await vi.advanceTimersByTimeAsync(0);
+    for (let event = 0; event < 10; event++) live.push({ model: "notes.Note", id: `note_${event}` }, [delivery]);
+    await vi.advanceTimersByTimeAsync(299);
+    expect(counts).toEqual({ authored: 1, resource: 1, other: 1 });
+    expect(callback).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(counts).toEqual({ authored: 2, resource: 1, other: 1 });
+    expect(callback).toHaveBeenCalledTimes(1);
+    running.resolve(1);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(counts).toEqual({ authored: 2, resource: 2, other: 1 });
+    expect(resource.getCurrentResult().data).toBe(2);
+  } finally {
+    live.clear();
+    running.resolve(1);
+    stop.forEach((unsubscribe) => unsubscribe()); cache.clear();
   }
 });

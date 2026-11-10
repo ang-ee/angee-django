@@ -41,4 +41,5 @@ def auto_now_stamps(model: type[models.Model], now: datetime) -> dict[str, Any]:
 def _auto_now_fields(model: type[models.Model]) -> tuple[str, ...]:
     """Return the names of ``model``'s ``auto_now`` fields, which every write stamps."""
 
+    # Django temporal fields declare auto_now; other Field subclasses do not.
     return tuple(field.name for field in model._meta.concrete_fields if getattr(field, "auto_now", False))

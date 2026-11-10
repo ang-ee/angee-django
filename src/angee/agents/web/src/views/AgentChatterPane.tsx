@@ -73,7 +73,7 @@ export function AgentChatterPane({
   // child's `agentId`) so keep-alive never re-runs `useAcpRuntime`'s lossy reset.
   const [pickedId, setPickedId] = React.useState<string | null>(null);
   const sessionAgentId = session?.agent_id ?? null;
-  const selectedId = pickedId ?? sessionAgentId;
+  const selectedId = agents.some((agent) => agent.id === pickedId) ? pickedId : sessionAgentId;
   const handleSelect = React.useCallback((id: string) => setPickedId(id), []);
   const { openedIds } = useOpenedAgents({ selectedId });
 
@@ -102,16 +102,13 @@ export function AgentChatterPane({
       selectedId={selectedId}
       renderAgent={(id) => {
         const rosterAgent = agents.find((agent) => agent.id === id);
-        const runtimeClass = rosterAgent?.runtime_class
-          ?? (id === resolved.agent_id ? resolved.runtime_class : undefined);
-        if (runtimeClass === undefined) return <LoadingPanel loadingLabel={t("chat.resolving")} />;
+        if (!rosterAgent && id !== resolved.agent_id) return <LoadingPanel loadingLabel={t("chat.resolving")} />;
         return (
           <LazyBoundary pending={<LoadingPanel loadingLabel={t("chat.resolving")} />}>
             <AgentChat
               agentId={id}
               view={liveView}
               modelHandle={rosterAgent?.model?.name ?? resolved.model_handle}
-              runtimeClass={runtimeClass}
               sessionId={id === resolved.agent_id ? resolved.session_id ?? undefined : undefined}
               agents={agents}
               selectedAgentId={selectedId ?? undefined}

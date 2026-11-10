@@ -28,6 +28,7 @@ from angee.agents.testing.drivers import runner as runner  # noqa: F401 - shared
 from angee.agents.testing.drivers import update_chunk as _chunk
 from angee.agents.testing.models import Agent, AgentSession, AgentTurn
 from angee.base.exceptions import TransitionNotAllowed
+from angee.base.testing.queries import statement_body, statement_startswith
 from angee.graphql.publishing import connect_publishers, disconnect_publishers
 from angee.workflows.testing.drivers import capture_tasks as capture_task_sends
 from angee.workflows.testing.drivers import observe
@@ -615,12 +616,13 @@ def test_append_reads_only_lock_and_save_fields_without_system_audits(session: A
             assert turn.append_updates([_chunk("First batch")])
             assert turn.append_updates([_chunk("Second batch")])
         assert PermissionAuditEvent.objects.count() == audits
-    selects = [query["sql"].split(" FROM ", 1)[0] for query in queries if query["sql"].startswith("SELECT ")]
+    selects = [statement_body(query["sql"]).split(" FROM ", 1)[0]
+               for query in queries if statement_startswith(query["sql"], "SELECT ")]
     assert selects
     assert all('"updates"' not in projection for projection in selects)
     turn_selects = [projection for projection in selects if f'"{AgentTurn._meta.db_table}"."status"' in projection]
     assert turn_selects
-    assert all(not projection.startswith("SELECT DISTINCT ") for projection in turn_selects)
+    assert all(not statement_startswith(projection, "SELECT DISTINCT ") for projection in turn_selects)
     timestamp_selects = [
         projection for projection in selects if f'"{AgentTurn._meta.db_table}"."updated_at"' in projection
     ]
@@ -663,7 +665,8 @@ def test_failed_settlement_does_not_rewrite_replay_state(
         session.settle_turn(turn, TurnOutcome(kind=kind, replay_state=["Discard"], usage={"tokens": 1}))
 
     session_updates = [
-        query["sql"] for query in queries if query["sql"].startswith(f'UPDATE "{AgentSession._meta.db_table}" ')
+        query["sql"] for query in queries
+        if statement_startswith(query["sql"], f'UPDATE "{AgentSession._meta.db_table}" ')
     ]
     assert session_updates
     assert all('"replay_state" =' not in query for query in session_updates)

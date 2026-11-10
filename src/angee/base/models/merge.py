@@ -100,13 +100,13 @@ class MergeableMixin(AngeeModel):
 
         if self.merged_into_id is None:
             return self
-        pk = type(self).canonical_ids((self.merged_into_id,), using=self._state.db).get(self.merged_into_id)
+        pk = type(self).canonical_ids((self.merged_into_id,)).get(self.merged_into_id)
         if pk is None:
             raise type(self).DoesNotExist("The merge survivor no longer exists.")
-        return type(self)._base_manager.using(self._state.db).get(pk=pk)
+        return type(self)._base_manager.get(pk=pk)
 
     @classmethod
-    def canonical_ids(cls, ids: Iterable[Any], *, using: str | None = None) -> dict[Any, Any]:
+    def canonical_ids(cls, ids: Iterable[Any]) -> dict[Any, Any]:
         """Resolve existing identities in batches, without loading record bodies.
 
         Missing records are omitted; corrupt redirects fail closed, as on the
@@ -116,7 +116,7 @@ class MergeableMixin(AngeeModel):
         pending = set(ids)
         redirects: dict[Any, Any] = {}
         roots = pending.copy()
-        rows = cls._base_manager.using(using)
+        rows = cls._base_manager.all()
         while pending:
             found = dict(rows.filter(pk__in=pending).values_list("pk", "merged_into_id"))
             redirects.update(found)
@@ -180,7 +180,6 @@ class MergeableMixin(AngeeModel):
         """
 
         model = type(self)
-        using = self._state.db
         actor = instance_actor(self)
         if not records:
             raise ValidationError("Choose the records to merge into this one.")
@@ -188,16 +187,14 @@ class MergeableMixin(AngeeModel):
             raise ValidationError(f"Merge at most {MERGE_LIMIT} records at once.")
         with transaction.atomic(), actor_context(actor):
             found = instances_from_public_ids(
-                model, records, queryset=model._default_manager.with_actor(actor).with_action("read").using(using),
+                model, records, queryset=model._default_manager.with_actor(actor).with_action("read"),
             )
             gone = sorted(set(records) - set(found))
             merged_ids = sorted({row.pk for row in found.values()})
             if self.pk in merged_ids:
                 raise ValidationError("A record cannot be merged into itself.")
             model.lock_merge_records((self, *found.values()))
-            rows = model._base_manager.db_manager(hints={"instance": self}).filter(
-                pk__in=(self.pk, *merged_ids)
-            ).order_by("pk")
+            rows = model._base_manager.filter(pk__in=(self.pk, *merged_ids)).order_by("pk")
             # The kept record only changes, so new rows may still refer to it; a
             # merged record goes, so nothing new may refer to it before the moves.
             locked = {row.pk: row.with_actor(actor) for row in rows.lock_if_supported(no_key=True)}
@@ -220,8 +217,7 @@ class MergeableMixin(AngeeModel):
         """Fold as named system work, joining the caller's changeset and locks.
 
         This entry cannot elevate an actor. It is for admitted merge hooks and
-        system producers; user entrypoints use :meth:`merge`. A joined
-        changeset must use the same database as these records.
+        system producers; user entrypoints use :meth:`merge`.
         """
 
         if not is_sudo():
@@ -229,17 +225,15 @@ class MergeableMixin(AngeeModel):
         if not merged or len(merged) > MERGE_LIMIT:
             raise ValidationError(f"Choose between one and {MERGE_LIMIT} records to fold.")
         model = type(self)
-        if any(type(row) is not model or row._state.db != self._state.db for row in merged):
-            raise ValidationError("A fold requires records of the same model and database.")
+        if any(type(row) is not model for row in merged):
+            raise ValidationError("A fold requires records of the same model.")
         keys = {row.pk for row in merged}
         if self.pk in keys or self.pk is None or None in keys:
             raise ValidationError("A fold requires distinct saved records.")
         ids = sorted(keys)
         with transaction.atomic():
             model.lock_merge_records((self, *merged))
-            rows = model._base_manager.db_manager(hints={"instance": self}).filter(
-                pk__in=[self.pk, *ids]
-            ).order_by("pk")
+            rows = model._base_manager.filter(pk__in=[self.pk, *ids]).order_by("pk")
             locked = {row.pk: row for row in rows.lock_if_supported()}
             if len(locked) != len(ids) + 1:
                 raise ValidationError("A record being folded no longer exists.")
@@ -255,7 +249,6 @@ class MergeableMixin(AngeeModel):
 
         survivor = self
         model = type(survivor)
-        using = survivor._state.db
         with ExitStack() as contexts:
             pre_merge.send(sender=model, survivor=survivor, join=join, contexts=contexts)
             self.validate_merge(merged)
@@ -267,7 +260,7 @@ class MergeableMixin(AngeeModel):
             with system_context(reason=MERGE_REASON):
                 # Redirects are identity, even when a container keeps its members.
                 # Tracked updates make flattening reversible with this same merge.
-                model._base_manager.using(using).filter(
+                model._base_manager.filter(
                     merged_into_id__in=[record.pk for record in merged],
                 ).update(merged_into=survivor)
                 for record in merged:
@@ -303,9 +296,7 @@ class MergeableMixin(AngeeModel):
 
         retained = all(self.retains(record) for record in merged)
         with system_context(reason=MERGE_REASON):
-            rows = type(self)._base_manager.db_manager(hints={"instance": self}).filter(
-                pk__in=[record.pk for record in merged],
-            )
+            rows = type(self)._base_manager.filter(pk__in=[record.pk for record in merged])
             for condition, message in type(self).merge_blockers():
                 if rows.filter(condition).exists():
                     raise ValidationError(message)
@@ -333,7 +324,7 @@ class MergeableMixin(AngeeModel):
             if isinstance(merged, TrashMixin):
                 merged.trash(reason=MERGE_REASON)
             return
-        rows = type(merged)._base_manager.db_manager(hints={"instance": merged}).all()
+        rows = type(merged)._base_manager.all()
         locked = merged.lock_for_delete(queryset=rows)
         if locked is None:
             raise ValidationError(f"{merged} no longer exists.")

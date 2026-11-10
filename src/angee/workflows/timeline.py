@@ -70,12 +70,20 @@ class RunKind(TimelineKind):
     def eligible(self, model: type[models.Model]) -> bool:
         return True
 
+    def occurs(self, record: Any) -> bool:
+        run = apps.get_model("workflows", "WorkflowRun")
+        return run._base_manager.filter(self._record_filter(record)).exists()
+
+    def _record_filter(self, record: Any) -> models.Q:
+        run = apps.get_model("workflows", "WorkflowRun")
+        predicate = run.objects.about_filter(record)
+        if isinstance(record, run):
+            predicate = (predicate | models.Q(parent_step__run=record)) & ~models.Q(pk=record.pk)
+        return predicate
+
     def queryset(self, record: Any, actor: Any) -> models.QuerySet:
         runs = apps.get_model("workflows", "WorkflowRun").objects.with_actor(actor)
-        rows = runs.about(record, ancestors=False)
-        if isinstance(record, rows.model):
-            rows = (rows | runs.filter(parent_step__run=record).distinct()).exclude(pk=record.pk)
-        rows = rows.scoped()
+        rows = runs.filter(self._record_filter(record)).distinct().scoped()
         waiting = apps.get_model("workflows", "StepRun").system_queryset().filter(
             status=StepRunStatus.WAITING,
         ).defer("input", "output", "state", "notes").order_by("rank", "map_index")
@@ -83,13 +91,17 @@ class RunKind(TimelineKind):
             models.Prefetch("step_runs", queryset=waiting, to_attr="timeline_waits"),
         )
 
-    def waiting_on(self, rows: Any, actor: Any) -> models.QuerySet:
-        decisions = apps.get_model("decisions", "Decision").objects.with_actor(actor).waiting_on(actor).scoped()
-        steps = apps.get_model("workflows", "StepRun").objects.with_actor(actor).scoped().filter(
-            status=StepRunStatus.WAITING, waiting_kind=WaitingKind.DECISION,
-            decision_id__in=decisions.values("pk"),
+    def waiting_on(self, record: Any, actor: Any) -> models.QuerySet | None:
+        run = apps.get_model("workflows", "WorkflowRun")
+        waiting = models.Q(
+            status=RunStatus.WAITING,
+            step_runs__status=StepRunStatus.WAITING,
+            step_runs__waiting_kind=WaitingKind.DECISION,
         )
-        return rows.filter(status=RunStatus.WAITING, pk__in=steps.values("run_id"))
+        if not run._base_manager.filter(self._record_filter(record), waiting).exists():
+            return None
+        decisions = apps.get_model("decisions", "Decision").objects.waiting_on(actor)
+        return run._base_manager.filter(waiting, step_runs__decision__in=decisions.values("pk"))
 
     def targets(self, row: Any) -> Iterable[models.Model]:
         return (row,) if row._meta.label == RUN_MODEL else apps.get_model(
@@ -147,10 +159,12 @@ class TimelineSelection:
         """Group selected runs with their ancestors and readable open decisions."""
 
         decisions = apps.get_model("decisions", "Decision").objects.with_actor(self.actor)
-        links = apps.get_model("decisions", "DecisionRecord").objects.with_actor(self.actor)
-        questions = list(decisions.open_for(*self.records).prefetch_related(models.Prefetch(
-            "records", queryset=with_record_reference_access(links),
-        )))
+        questions = list(decisions.open_for(*self.records))
+        if questions:
+            links = apps.get_model("decisions", "DecisionRecord").objects.with_actor(self.actor)
+            models.prefetch_related_objects(questions, models.Prefetch(
+                "records", queryset=with_record_reference_access(links),
+            ))
         by_run = {run.pk: run for run in runs}
         for target in self.targets:
             identity = (target.content_type.pk, target.object_id)

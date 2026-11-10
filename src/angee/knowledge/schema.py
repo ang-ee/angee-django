@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from dataclasses import replace
 from functools import partial
 from typing import TYPE_CHECKING, Annotated, Any, cast
 
@@ -11,11 +12,12 @@ import strawberry_django
 from django.apps import apps
 from django.core.exceptions import ValidationError
 from django.db.models import F, Prefetch
+from graphql import GraphQLObjectType, get_named_type
 from rebac import system_context
 from rebac.resources import model_resource_type
 from strawberry import auto
 from strawberry_django.auth.utils import get_current_user
-from strawberry_django.optimizer import optimize
+from strawberry_django.optimizer import _generate_selection_resolve_info, _get_selections, optimize
 from strawberry_django.utils.requests import get_request
 
 from angee.base.fields.identity import SqidField
@@ -44,8 +46,8 @@ from angee.graphql.node import NODE_DISPLAY_NAME_DESCRIPTION, AngeeNode
 from angee.graphql.related_counts import RelatedCount
 from angee.graphql.relations import actor_scoped_to_one
 from angee.graphql.subscriptions import changes
-from angee.iam.audit import AuthoredRefMixin, TrashedRefMixin, user_label_prefetch
-from angee.iam.identity import user_display_label, user_label, user_public_id
+from angee.iam.audit import AuthoredRefMixin, TrashedRefMixin, user_label_prefetch, user_relation_label
+from angee.iam.identity import user_public_id
 from angee.knowledge.models import (
     AmbiguousMatchError,
     PageQuerySet,
@@ -56,6 +58,7 @@ from angee.knowledge.models import (
     StructuredEditError,
     UnsupportedPageKindError,
 )
+from angee.knowledge.retrieval import RetrievalResult
 from angee.tags.schema import TaggedNode, tags_input_extensions
 
 if TYPE_CHECKING:
@@ -80,6 +83,7 @@ class VaultType(TrashedRefMixin, AngeeNode):
     description: auto
     icon: auto
     accent: auto
+    retrieval_class: auto
     created_at: auto
     updated_at: auto
 
@@ -96,10 +100,7 @@ class VaultType(TrashedRefMixin, AngeeNode):
     def owner_label(self, info: strawberry.Info) -> str | None:
         """Return the owner's display label — no user object exposed."""
 
-        if hasattr(self, "_iam_owner_label_source"):
-            user = cast(Any, self)._iam_owner_label_source
-            return user_label(user) if user is not None else None
-        return user_display_label(cast(Any, self).owner_id, request=get_request(info))
+        return user_relation_label(cast(Any, self), "owner", request=get_request(info))
 
 
 @strawberry.type
@@ -368,6 +369,55 @@ def _markdown_write_payload(write: Callable[[], Any]) -> PageBodyPayload:
     return PageBodyPayload(ok=True, markdown=cast(MarkdownPageType, markdown))
 
 
+@strawberry.type
+class RetrievalHitType:
+    """A ranked page with optional passage evidence from its retrieval backend."""
+
+    page: PageType
+    rank: int
+    heading_path: list[str]
+    start: int | None
+    end: int | None
+    text: str | None
+    score: float | None
+
+
+@strawberry.type
+class RetrievalFailureType:
+    backend: str
+    arm: str
+    vaults: list[str]
+    message: str
+
+
+@strawberry.type
+class RetrievalResultType:
+    hits: list[RetrievalHitType]
+    failures: list[RetrievalFailureType]
+
+    @classmethod
+    def project(cls, result: RetrievalResult, info: strawberry.Info) -> "RetrievalResultType":
+        """Batch Page projections with native hints under the nested hit selection.
+
+        Use the optimizer's own fragment/directive-aware selection traversal so
+        aliases and page extensions get the same hints as a root Page list.
+        """
+
+        raw = info._raw_info
+        for field_name in ("hits", "page"):
+            parent = get_named_type(raw.return_type)
+            assert isinstance(parent, GraphQLObjectType)
+            selections = _get_selections(raw, parent)
+            nodes = [node for group in selections.values() for node in group if node.name.value == field_name]
+            if not nodes:
+                return cast("RetrievalResultType", result)
+            raw = _generate_selection_resolve_info(raw, nodes, parent.fields[field_name].type, parent)
+        pages = {row.pk: row for row in optimize(Page.objects.filter(pk__in=[hit.page.pk for hit in result.hits]), raw)}
+        return cast("RetrievalResultType", replace(result, hits=[
+            replace(hit, page=pages[hit.page.pk]) for hit in result.hits if hit.page.pk in pages
+        ]))
+
+
 class VaultWriteBackend(AngeeHasuraWriteBackend):
     """Write semantics for vaults: create belongs to the manager factory."""
 
@@ -418,6 +468,7 @@ _VAULT_RESOURCE = hasura_model_resource(
         "description",
         "icon",
         "accent",
+        "retrieval_class",
         *declared_hasura_resource_fields(Vault, "hasura_insertable_fields"),
     ],
     updatable=[
@@ -425,6 +476,7 @@ _VAULT_RESOURCE = hasura_model_resource(
         "description",
         "icon",
         "accent",
+        "retrieval_class",
         *declared_hasura_resource_fields(Vault, "hasura_updatable_fields"),
     ],
     write_backend=VaultWriteBackend(Vault, public_id_fields=_VAULT_EXTENSION_PUBLIC_ID_FIELDS),
@@ -499,8 +551,28 @@ class KnowledgeQuery:
         return cast(VaultType, Vault.objects.for_resource(reference))
 
     @strawberry.field
+    def search_passages(
+        self,
+        info: strawberry.Info,
+        query: str,
+        vault: PublicID | None = None,
+        first: int = 20,
+    ) -> RetrievalResultType:
+        """Return each matching page's best passage, where its backend supplies one."""
+
+        rows = Vault.objects.all()
+        if vault is not None:
+            target = require_instance_for_id(Vault, vault)
+            rows = rows.filter(pk=target.pk)
+        return RetrievalResultType.project(rows.search_passages(query, first=first), info)
+
+    @strawberry.field
     def search_pages(
-        self, info: strawberry.Info, query: str, vault: PublicID | None = None, first: int = 20,
+        self,
+        info: strawberry.Info,
+        query: str,
+        vault: PublicID | None = None,
+        first: int = 20,
     ) -> list[PageType]:
         """Search a selected readable vault, or bounded readable backend groups."""
         rows = Vault.objects.all()

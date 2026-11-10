@@ -811,6 +811,10 @@ def test_result_page_loads_each_message_relation_once():
             data = result_data(execute_schema(_schema(), query, request=request))
         assert len(data["inbox_results"]["messages"]) == data["inbox_results"]["count"]
         assert all(message["title"] == "A conversation" for message in data["inbox_results"]["messages"])
+        assert all(
+            message["channel"]["display_name"] == "Explorer-Page-Relations (connected)"
+            for message in data["inbox_results"]["messages"]
+        )
         return len(captured)
 
     seed(1, 0)

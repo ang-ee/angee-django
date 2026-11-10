@@ -29,6 +29,7 @@ from rebac import (
 )
 from strawberry import auto
 
+from angee.base.testing.queries import statement_startswith
 from angee.graphql.data.hasura import AngeeHasuraWriteBackend, HasuraLines, hasura_model_resource
 from angee.graphql.node import AngeeNode
 from angee.graphql.schema import GraphQLSchemas
@@ -497,7 +498,7 @@ def test_save_fetches_kept_lines_without_per_row_growth(composed_tables):
         return sum(
             1
             for query in captured.captured_queries
-            if query["sql"].lstrip().upper().startswith("SELECT") and table in query["sql"]
+            if statement_startswith(query["sql"].lstrip().upper(), "SELECT") and table in query["sql"]
         )
 
     # A per-row fetch (the old N+1) would make the 5-line save cost strictly more
@@ -1056,7 +1057,7 @@ def test_writes_delegate_prepared_values_and_reload_after_owner_lock(composed_ta
     observed = []
 
     def lock(instance, members=None):
-        observed.append((instance.title, instance._state.db))
+        observed.append(instance.title)
         locked = original(instance, members)
         with system_context(reason="simulate current data after owner wait"):
             Document.objects.filter(pk=instance.pk).update(note="Current after wait")
@@ -1070,7 +1071,7 @@ def test_writes_delegate_prepared_values_and_reload_after_owner_lock(composed_ta
         else:
             backend.save(None, doc.public_id, {"title": "After"}, None)
     doc.refresh_from_db()
-    assert observed == [("After", doc._state.db)]
+    assert observed == ["After"]
     assert (doc.title, doc.note) == ("After", "Current after wait")
 
 

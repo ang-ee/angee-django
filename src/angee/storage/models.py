@@ -50,7 +50,7 @@ from django.core.exceptions import (
 )
 from django.core.files.base import ContentFile
 from django.core.files.base import File as DjangoFile
-from django.db import IntegrityError, models, router, transaction
+from django.db import IntegrityError, models, transaction
 from django.db.models import ProtectedError, Q
 from django.db.models.signals import post_save
 from django.urls import reverse
@@ -61,14 +61,12 @@ from rebac import (
     GenericTarget,
     NoActorResolvedError,
     PermissionDenied,
-    SubjectRef,
     current_actor,
     generic_target,
     require_permission,
     system_context,
     to_object_ref,
     to_subject_ref,
-    user_subject_type,
 )
 from rebac.backends import backend as rebac_backend
 from rebac.field_backing import resolve_field_backing
@@ -86,7 +84,7 @@ from angee.base.models.ownership import ItemOwnershipMixin, OwnerMixin, OwnerQue
 from angee.base.models.refs import RecordRefMixin
 from angee.base.models.roles import role_anchor
 from angee.base.models.trash import ArchiveMixin, ArchiveQuerySet, TrashMixin, TrashQuerySet
-from angee.base.permissions import DirectRecordAccess, actor_user_id
+from angee.base.permissions import DirectRecordAccess, actor_user_id, user_subject_ref
 from angee.base.querysets import row_lock_paths
 from angee.provenance.contrib.angee.history import HistoryMixin
 from angee.provenance.contrib.angee.managers import AngeeHistoryManager, AngeeHistoryUnscopedManager
@@ -177,7 +175,7 @@ class Backend(AuditMixin, ArchiveMixin, AngeeDataModel, concrete=True):
     objects = StorageMasterManager()
 
     _storage_cache: ClassVar[OrderedDict[tuple[Any, ...], StorageBackend]] = OrderedDict()
-    """Resolved backend instances keyed by database, row, selected class and resolved config."""
+    """Resolved backend instances keyed by row, selected class and resolved config."""
 
     class Meta:
         """Django model options for storage backends."""
@@ -211,7 +209,7 @@ class Backend(AuditMixin, ArchiveMixin, AngeeDataModel, concrete=True):
 
     @property
     def storage(self) -> StorageBackend:
-        """Return the resolved backend instance, cached per database, row, implementation and config.
+        """Return the resolved backend instance, cached per row, implementation and config.
 
         The cache key includes the resolved config, so rotating an env-backed
         credential takes effect on the next lookup without a worker restart.
@@ -219,7 +217,7 @@ class Backend(AuditMixin, ArchiveMixin, AngeeDataModel, concrete=True):
 
         config = self.resolved_config()
         backend_class = self.get_backend_class_impl()
-        key = (self._state.db, self.pk, backend_class, _frozen(config))
+        key = (self.pk, backend_class, _frozen(config))
         cached = self._storage_cache.pop(key, None)
         if cached is not None:
             self._storage_cache[key] = cached
@@ -303,7 +301,7 @@ class DriveManager[DriveT: Drive](_DriveManagerBase[DriveT]):
         """
 
         slug = str(settings.ANGEE_STORAGE_IMAGE_DRIVE)
-        everyone = DirectRecordAccess(relation="viewer", subject=SubjectRef.of(user_subject_type(), "*"))
+        everyone = DirectRecordAccess(relation="viewer", subject=user_subject_ref(user_id="*"))
         with system_context(reason="storage.drive.image_drive"):
             drive = self.model.system_queryset().filter(slug=slug).first()
             if drive is None:
@@ -642,9 +640,7 @@ class Folder(HierarchyMixin, OwnerMixin, HistoryMixin, AngeeDataModel, concrete=
 
         super().clean()
         self._validate_drive()
-        parent = self._hierarchy_parent()
-        self._reject_cross_scope_parent(parent)
-        self._reject_cycle(parent)
+        self.validate_hierarchy_parent()
 
     def save(self, *args: Any, **kwargs: Any) -> None:
         """Validate folder kinds; native hierarchy owns parent and drive moves."""
@@ -1512,11 +1508,8 @@ class File(TaggedModel, TrashMixin, OwnerMixin, HistoryMixin, AngeeDataModel, co
         reaches into the storage shape from outside.
         """
 
-        path_fn = getattr(self.storage, "path", None)
-        if path_fn is None:
-            return None
         try:
-            return Path(path_fn(self.storage_path))
+            return Path(self.storage.path(self.storage_path))
         except NotImplementedError, ValueError:
             return None
 
@@ -1765,7 +1758,7 @@ class File(TaggedModel, TrashMixin, OwnerMixin, HistoryMixin, AngeeDataModel, co
         relies on its single-writer serialization instead.
         """
 
-        nonce = getattr(self, "_upload_nonce", None)
+        nonce = self._upload_nonce
         with system_context(reason="storage.upload.consume_token"), transaction.atomic():
             locked = type(self)._base_manager.select_for_update().filter(pk=self.pk).first()
             if locked is None:
@@ -1828,13 +1821,12 @@ class File(TaggedModel, TrashMixin, OwnerMixin, HistoryMixin, AngeeDataModel, co
 
         storage = self.storage
         key = self.storage_path
-        using = router.db_for_write(type(self), instance=self)
         drive_id = self.drive_id
         model = type(self)
-        super().delete(using=using)
+        super().delete()
 
         def discard_unreferenced() -> None:
-            if not model.system_queryset().using(using).filter(drive_id=drive_id, storage_path=key).exists():
+            if not model.system_queryset().filter(drive_id=drive_id, storage_path=key).exists():
                 storage.discard(key, context="purge")
 
         transaction.on_commit(discard_unreferenced)
@@ -1845,9 +1837,9 @@ class File(TaggedModel, TrashMixin, OwnerMixin, HistoryMixin, AngeeDataModel, co
         The cleanup for an acquisition its flow created: ``created`` from
         :meth:`FileManager.ingest_bytes` names an insert, not exclusive use, so
         the decision is made here under the row lock. A committed edit or owner
-        change since this instance was read, an attachment, a direct share, or a
-        protected reference keeps the row. Unless the row's own authority is
-        elevated (:meth:`effective_actor`), its actor needs ``delete``; once
+        change since this instance was read, a direct share, or any reverse
+        foreign key keeps the row, regardless of its on-delete policy. Unless
+        the row's own authority is elevated (:meth:`effective_actor`), its actor needs ``delete``; once
         admitted, the retention recheck and the purge run in a system scope.
         """
 
@@ -1860,7 +1852,11 @@ class File(TaggedModel, TrashMixin, OwnerMixin, HistoryMixin, AngeeDataModel, co
                 if (
                     locked is None
                     or (locked.updated_at, locked.owner_id) != (self.updated_at, self.owner_id)
-                    or locked.attachments.exists()
+                    or any(
+                        relation.related_model._base_manager.filter(**{relation.field.name: locked}).exists()
+                        for relation in locked._meta.get_fields(include_hidden=True)
+                        if isinstance(relation, models.ManyToOneRel)
+                    )
                     or locked.system_direct_record_access()
                 ):
                     return False

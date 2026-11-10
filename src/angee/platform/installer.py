@@ -47,8 +47,6 @@ from angee.base.implementations import ImplBase, check_impl_registry, impl_regis
 
 _INSTALLED_APPS_KEY = "INSTALLED_APPS"
 _SETTINGS_FILENAME = "settings.yaml"
-_BACKEND_SETTING = "ANGEE_ADDON_INSTALLER_BACKEND"
-_REGISTRY_SETTING = "ANGEE_ADDON_INSTALLER_BACKEND_CLASSES"
 
 
 class AddonInstallerBackend(ImplBase):
@@ -126,7 +124,7 @@ class LocalInstallerBackend(AddonInstallerBackend):
     def _settings_path(self) -> Path:
         """Return the project ``settings.yaml`` path, or raise when none is configured."""
 
-        base_dir = getattr(settings, "BASE_DIR", None)
+        base_dir = settings.BASE_DIR
         if not base_dir:
             raise FileNotFoundError("settings.BASE_DIR is not configured; no settings.yaml to edit.")
         return Path(base_dir) / _SETTINGS_FILENAME
@@ -231,7 +229,7 @@ class AddonInstaller:
         unreadability as an authoritative empty root set.
         """
 
-        if _INSTALLED_APPS_KEY not in getattr(settings, "ANGEE_PROJECT_YAML_SETTINGS", ()):
+        if _INSTALLED_APPS_KEY not in settings.ANGEE_PROJECT_YAML_SETTINGS:
             return None
         snapshot = self.installed_apps_snapshot()
         return None if snapshot is None else frozenset(snapshot.names)
@@ -239,7 +237,7 @@ class AddonInstaller:
     def installed_apps_snapshot(self) -> InstalledAppsSnapshot | None:
         """Read and validate one exact editable settings document."""
 
-        if _INSTALLED_APPS_KEY not in getattr(settings, "ANGEE_PROJECT_YAML_SETTINGS", ()):
+        if _INSTALLED_APPS_KEY not in settings.ANGEE_PROJECT_YAML_SETTINGS:
             return None
         try:
             text = self.backend.read_settings_text()
@@ -320,7 +318,7 @@ def addon_installer() -> AddonInstaller:
     ``AddonInstallerBackend`` subclass check).
     """
 
-    key = getattr(settings, _BACKEND_SETTING, "local")
+    key = settings.ANGEE_ADDON_INSTALLER_BACKEND
     backend_cls = resolve_impl_class(AddonInstallerBackend, key)
     return AddonInstaller(backend_cls())
 
@@ -338,17 +336,18 @@ def check_installer_backend_selection(app_configs: Any, **kwargs: Any) -> list[C
         return [
             *errors,
             Error(
-                f"settings.{_REGISTRY_SETTING} must be a non-empty mapping of key to dotted path.",
+                f"settings.{AddonInstallerBackend.registry_setting} must be a non-empty mapping of key to dotted path.",
                 id="angee.platform.E001",
-            )
+            ),
         ]
-    selected = getattr(settings, _BACKEND_SETTING, "local")
+    selected = settings.ANGEE_ADDON_INSTALLER_BACKEND
     if selected not in registry:
         return [
             *errors,
             Error(
-                f"settings.{_BACKEND_SETTING} = {selected!r} is not a key in settings.{_REGISTRY_SETTING}.",
+                f"settings.ANGEE_ADDON_INSTALLER_BACKEND = {selected!r} is not a key in "
+                f"settings.{AddonInstallerBackend.registry_setting}.",
                 id="angee.platform.E004",
-            )
+            ),
         ]
     return errors

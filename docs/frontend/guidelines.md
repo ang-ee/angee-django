@@ -1050,8 +1050,10 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
   data is an invalid result, never an `ok` null sentinel.
 - Schema-driven forms import [createJsonSchemaResolver](../../packages/ui/src/views/form/json-schema.ts)
   from `@angee/ui/views/json-schema`. Ajv owns schema validation, formats and
-  discriminator selection; RHF owns original and transformed values. Keep this
-  opt-in adapter out of the UI main entry so other forms do not load Ajv.
+  discriminator selection; RHF owns original and transformed values. Dialog
+  required/presence gates must let that resolver report value constraints and
+  their specific messages; a short value must not silently disable submission.
+  Keep this opt-in adapter out of the UI main entry so other forms do not load Ajv.
 - A widget that consumes a fixed array of object fields declares
   `acceptsRowTemplate: true` in its widget definition. The FormSpec projector
   passes the parsed `rowTemplate` only through that seam and rejects a selected
@@ -1089,13 +1091,14 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
   refetch loop. Opt a model into live cross-actor refresh by declaring
   `changes(Model, field="<model>Changed")` in its `schema.py`; local writes
   invalidate through refine mutations, and subscription pushes invalidate the
-  affected refine resources. Authored reads receive pushes through the
+  affected refine resources. Authored reads and resource hooks share the
   [live coalescer](../../packages/refine/src/query-invalidation.ts): one
   refetch per burst follows within the max wait, and a read still running then
   commits and refetches once it settles instead of being cancelled, so a
   continuous stream (a history backfill) cannot starve slow reads. Declare each
-  read's `models` from the owners its resolver actually reads. Refine's own resource hooks still invalidate per
-  push. Stream foreign-system state (e.g. the operator
+  read's `models` from the owners its resolver actually reads. Resource callbacks
+  receive the burst's union of changed ids and related records; a model-wide
+  change keeps the whole burst model-wide. Stream foreign-system state (e.g. the operator
   daemon's `onWorkspaceStatusChange`) over its own subscriptions.
   A dashboard widget may explicitly declare interval refresh through its
   [refresh contract](../../packages/ui/src/dashboard/headless.ts). Its data

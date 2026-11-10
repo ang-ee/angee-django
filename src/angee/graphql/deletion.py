@@ -368,9 +368,7 @@ def delete_by_public_id(
                     raise ValidationError(RECORD_NOT_FOUND_MESSAGE, code="not_found")
                 instance = locked
             else:
-                lock = getattr(targets, "lock_if_supported", None)
-                locked_targets = lock() if callable(lock) else targets.select_for_update()
-                instance = require_instance_for_id(model, public_id, queryset=locked_targets)
+                instance = require_instance_for_id(model, public_id, queryset=targets.select_for_update())
         preview = DeletePreview.from_instance(instance)
         if confirm and not preview.has_blockers:
             deleted_pk = instance.pk

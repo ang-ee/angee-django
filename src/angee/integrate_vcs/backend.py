@@ -16,13 +16,16 @@ import pathlib
 from collections.abc import Callable, Iterator
 from contextlib import AbstractContextManager, contextmanager
 from dataclasses import dataclass, field
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from django.conf import settings
 from pydantic import BaseModel, ConfigDict, Field
 
 from angee.integrate.http import HttpClientMixin
 from angee.integrate.impl import BridgeImpl
+
+if TYPE_CHECKING:
+    from angee.integrate_vcs.models import VcsBridge
 
 # Directories the local backend never treats as source — a broad ``Source.path`` on a
 # working tree would otherwise walk (and ingest stray ``copier.yml`` from) these.
@@ -157,7 +160,7 @@ class VCSBackend(BridgeImpl, HttpClientMixin):
                 raise ValueError("Materialized source revision differs from the indexed VCS revision")
             yield root, resolved
 
-    def verify_webhook(self, vcs_bridge: Any, request: Any) -> bool:
+    def verify_webhook(self, vcs_bridge: VcsBridge, request: Any) -> bool:
         """Return whether an inbound webhook request is authentic for this bridge."""
 
         raise NotImplementedError("VCSBackend subclasses must implement verify_webhook().")
@@ -265,7 +268,7 @@ class LocalVCSBackend(VCSBackend):
             raise FileNotFoundError(name)
         return descriptor
 
-    def verify_webhook(self, vcs_bridge: Any, request: Any) -> bool:
+    def verify_webhook(self, vcs_bridge: VcsBridge, request: Any) -> bool:
         """Reject inbound webhooks: a local working tree has no host to authenticate."""
 
         del vcs_bridge, request

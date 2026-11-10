@@ -132,7 +132,8 @@ def _permission_annotation(model: type[models.Model], name: str, info: Any = Non
 def permission_expression(queryset: models.QuerySet[Any], name: str) -> models.Expression:
     """Project one permission per row for the target queryset's actor.
 
-    REBAC's native projection decides it inside the row query; a queryset
+    This is viewer-identity policy, not a relation read: elevation grants no
+    capability without a viewer. REBAC's native projection decides it inside the row query; a queryset
     without an actor holds nothing, as does an unpinned queryset inside
     ``system_context``, whose relation actor REBAC leaves unset.
     """

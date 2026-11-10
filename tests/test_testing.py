@@ -41,6 +41,7 @@ import sys
 from django.apps import apps
 from django.conf import settings
 import angee.base.testing.fixtures
+import angee.base.testing.queries
 import angee.graphql.testing.documents
 assert not any(name == "angee.provenance" or name.startswith("angee.provenance.") for name in sys.modules)
 assert not apps.ready

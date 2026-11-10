@@ -44,7 +44,7 @@ from angee.base.models.hierarchy import HierarchyQuerySet
 from angee.base.models.identity import instances_from_public_ids
 from angee.base.models.trash import ArchiveQuerySet
 from angee.base.pagination import clamp_page_size
-from angee.base.permissions import actor_user_id
+from angee.base.permissions import actor_user_id, reader_queryset
 from angee.base.querysets import MergeableQuerySet, by_key
 from angee.base.serialization import canonical_json
 from angee.parties.backends import AvatarReport, ParsedAddress, ParsedAddressbook, ParsedContact, ParsedPhoto
@@ -134,14 +134,18 @@ class CircleQuerySet[CircleT: Circle](HierarchyQuerySet[CircleT], AngeeHistoryQu
         """Readable memberships in these readable circles, optionally confirmed only."""
 
         member_model = apps.get_model("parties", "CircleMember")
-        members = member_model.objects.all()
-        if actor := self.actor():
-            members = members.with_actor(actor)
-        members = members.scoped_for_aggregate()
-        members = members.filter(circle_id__in=Subquery(self.scoped_for_aggregate().order_by().values("pk")))
+        members = reader_queryset(member_model, self.actor())
+        return members.scoped_for_aggregate().filter(self.memberships_filter(
+            self.scoped_for_aggregate(), confirmed_only=confirmed_only,
+        ))
+
+    @staticmethod
+    def memberships_filter(circles: models.QuerySet, *, confirmed_only: bool = False) -> Q:
+        """Membership edges within the caller's readable or structural circles."""
+        predicate = Q(circle_id__in=Subquery(circles.order_by().values("pk")))
         if confirmed_only:
-            members = members.filter(is_confirmed=True, is_dismissed=False)
-        return members
+            predicate &= Q(is_confirmed=True, is_dismissed=False)
+        return predicate
 
     def containing_parties(self, parties: Any, *, confirmed_only: bool = False) -> Self:
         """Readable circles containing these parties through readable memberships."""
@@ -152,10 +156,8 @@ class CircleQuerySet[CircleT: Circle](HierarchyQuerySet[CircleT], AngeeHistoryQu
     def with_member_counts(self) -> Self:
         """Annotate each circle with its distinct readable-person count across its readable subtree."""
 
-        circles = apps.get_model("parties", "Circle").objects.all()
-        people = apps.get_model("parties", "Person").objects.all()
-        if actor := self.actor():
-            circles, people = circles.with_actor(actor), people.with_actor(actor)
+        circles = reader_queryset(apps.get_model("parties", "Circle").objects.all(), self.actor())
+        people = reader_queryset(apps.get_model("parties", "Person").objects.all(), self.actor())
         visible_person_ids = people.scoped_for_aggregate().canonical().values("pk")
         subtree = circles.filter(owner_id=OuterRef(OuterRef("owner_id")), path__startswith=OuterRef(OuterRef("path")))
         subtree_count = (
@@ -387,16 +389,15 @@ class HandleManager[HandleT: Handle](_HandleManagerBase[HandleT]):
 
         if not is_sudo():
             raise PermissionDenied("Handle identity rewrites require an admitted system boundary.")
-        using = self.db
         while True:
             try:
                 with transaction.atomic():
-                    source = self.model.system_queryset().using(using).filter(pk=handle.pk).first()
+                    source = self.model.system_queryset().filter(pk=handle.pk).first()
                     if source is None or source.merged_into_id is not None or source.value != expected_value:
                         return None
                     target = self.find_identity(platform=source.platform, value=value)
                     ids = (source.pk, target.pk) if target is not None else (source.pk,)
-                    handles, _parties = apps.get_model("parties", "Party").objects.db_manager(using).lock_identity_rows(
+                    handles, _parties = apps.get_model("parties", "Party").objects.lock_identity_rows(
                         party_ids=(), handle_ids=ids,
                     )
                     source = handles.get(source.pk)
@@ -416,12 +417,12 @@ class HandleManager[HandleT: Handle](_HandleManagerBase[HandleT]):
                         if dry_run:
                             return False, bool(display_name and not source.display_name)
                         source.value = value
-                        source.save(using=using, update_fields=("value", "updated_at"))
+                        source.save(update_fields=("value", "updated_at"))
                         kept, folded = source, False
                     named = bool(display_name and not kept.display_name)
                     if named:
                         kept.display_name = display_name
-                        kept.save(using=using, update_fields=("display_name", "updated_at"))
+                        kept.save(update_fields=("display_name", "updated_at"))
                     return folded, named
             except IntegrityError:
                 target = self.find_identity(platform=handle.platform, value=value)
@@ -445,7 +446,7 @@ class HandleManager[HandleT: Handle](_HandleManagerBase[HandleT]):
         handles = self.filter(platform=platform)
         handle = handles.filter(external_id=external_id).first() if external_id else None
         if handle is None or handle.value != value:
-            owner = handles.filter(value=value).exclude(pk=getattr(handle, "pk", None)).first()
+            owner = handles.filter(value=value).exclude(pk=(handle.pk if handle is not None else None)).first()
             handle = owner or handle
         return handle.canonical() if handle is not None else None
 
@@ -496,14 +497,12 @@ class HandleManager[HandleT: Handle](_HandleManagerBase[HandleT]):
 
         evidence = tuple(evidence)
         person_model = apps.get_model("parties", "Person")
-        handles_owner = self.db_manager(self._db or user._state.db, hints={"instance": user})
-        using = handles_owner.db
-        link_owner = apps.get_model("parties", "Party").objects.db_manager(using)
+        link_owner = apps.get_model("parties", "Party").objects
         with (
             system_context(reason="parties.handle.claim_control"),
             transaction.atomic(),
         ):
-            handle = handles_owner.upsert(
+            handle = self.upsert(
                 platform=platform,
                 value=value,
                 created_by_id=user.pk,
@@ -515,7 +514,7 @@ class HandleManager[HandleT: Handle](_HandleManagerBase[HandleT]):
                 handle_ids=(handle.pk,),
             )
             handle = handles[handle.pk]
-            person = person_model.objects.db_manager(using).for_user(user)
+            person = person_model.objects.for_user(user)
             if handle.controller_id is not None and handle.controller_id != user.pk:
                 link_owner.assert_handle(
                     person,
@@ -527,7 +526,7 @@ class HandleManager[HandleT: Handle](_HandleManagerBase[HandleT]):
                 return handle
             if handle.controller_id is None:
                 handle.controller = user
-                handle.save(using=using, update_fields=["controller", "updated_at"])
+                handle.save(update_fields=["controller", "updated_at"])
             link_owner.assert_handle(
                 person,
                 handle,
@@ -580,7 +579,7 @@ class PartyStatementQuerySet[StatementT: PartyStatementMixin](StatementQuerySet[
     def members(self) -> Self:
         """One strongest current stance per subject/member, including weak claims."""
         representative = (
-            self.model._base_manager.using(self.db)
+            self.model._base_manager
             .current()
             .filter(aspect="handle")
             .filter(
@@ -595,7 +594,7 @@ class PartyStatementQuerySet[StatementT: PartyStatementMixin](StatementQuerySet[
 
     def to_review(self) -> Self:
         decision = (
-            self.model._base_manager.using(self.db)
+            self.model._base_manager
             .current()
             .filter(aspect="handle")
             .filter(
@@ -667,10 +666,10 @@ class PartyQuerySet[PartyT: Party](MergeableQuerySet[PartyT], StatementSubjectQu
         candidates = self.canonical()
         if isinstance(candidates, ArchiveQuerySet):
             candidates = candidates.unarchived()
-        organizations = apps.get_model("parties", "Organization").objects.filter(legal_name__iregex=pattern)
         actor = self.actor() or current_actor()
-        if actor is not None:
-            organizations = organizations.with_actor(actor)
+        organizations = reader_queryset(apps.get_model("parties", "Organization"), actor).filter(
+            legal_name__iregex=pattern,
+        )
         legal_name_ids = organizations.scoped_for_aggregate().values("pk")
         return candidates.filter(
             Q(display_name__iregex=pattern) | Q(pk__in=Subquery(legal_name_ids)),
@@ -679,8 +678,7 @@ class PartyQuerySet[PartyT: Party](MergeableQuerySet[PartyT], StatementSubjectQu
     def _readable_circles(self) -> Any:
         """Circles read as this queryset's actor, else the ambient one."""
 
-        circles = apps.get_model("parties", "Circle").objects.all()
-        return circles.with_actor(actor) if (actor := self.actor()) else circles
+        return reader_queryset(apps.get_model("parties", "Circle"), self.actor())
 
     def circle_members_prefetch(self) -> Prefetch:
         """Hint the circle memberships this read's actor may see, by circle name.
@@ -750,11 +748,8 @@ class PartyQuerySet[PartyT: Party](MergeableQuerySet[PartyT], StatementSubjectQu
         """Readable current organisation relationships anchored at these parties."""
 
         actor = self.actor() or current_actor()
-        organizations = apps.get_model("parties", "Organization").objects.all()
-        relationships = apps.get_model("parties", "Relationship").objects.canonical()
-        if actor is not None:
-            organizations = organizations.with_actor(actor)
-            relationships = relationships.with_actor(actor)
+        organizations = reader_queryset(apps.get_model("parties", "Organization"), actor)
+        relationships = reader_queryset(apps.get_model("parties", "Relationship").objects.all(), actor).canonical()
         organizations = organizations.scoped_for_aggregate()
         relationships = relationships.scoped_for_aggregate()
         return relationships.filter(
@@ -767,7 +762,7 @@ class PartyQuerySet[PartyT: Party](MergeableQuerySet[PartyT], StatementSubjectQu
         """Return this queryset's Person id linked to ``user_id``, without creating it."""
 
         person_model = apps.get_model("parties", "Person")
-        people = person_model._base_manager.using(self.db).filter(user_id=user_id).values("pk")
+        people = person_model._base_manager.filter(user_id=user_id).values("pk")
         return self.filter(pk__in=Subquery(people)).values_list("pk", flat=True).first()
 
     def account_for_party(self, party_id: Any) -> Any | None:
@@ -776,7 +771,7 @@ class PartyQuerySet[PartyT: Party](MergeableQuerySet[PartyT], StatementSubjectQu
         if self.filter(pk=party_id).values_list("pk", flat=True).first() is None:
             return None
         person_model = apps.get_model("parties", "Person")
-        person = person_model._base_manager.using(self.db).select_related("user").filter(pk=party_id).first()
+        person = person_model._base_manager.select_related("user").filter(pk=party_id).first()
         return person.user if person is not None and person.user_id is not None else None
 
     def same_as_pairs(self, *, limit: int = 50) -> list[SameAsPair]:
@@ -903,7 +898,7 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
     def handle_statements(self) -> Any:
         """Return the unscoped handle-statement owner for internal composition."""
 
-        return apps.get_model("parties", "Party").statements.db_manager(self.db).handles()
+        return apps.get_model("parties", "Party").statements.handles()
 
     @staticmethod
     def rule_source(key: str) -> Any:
@@ -921,11 +916,9 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
         link: Any = None,
     ) -> Any:
         """Assert normal handle facts from native supporting records, preserving person decisions."""
-        owner = self.db_manager(self._db or party._state.db, hints={"instance": party})
-        using = owner.db
         with transaction.atomic():
             source = to_subject_ref(asserted_by)
-            subject = apps.get_model("parties", "Party")._base_manager.using(using).get(pk=party.pk)
+            subject = apps.get_model("parties", "Party")._base_manager.get(pk=party.pk)
             refs = [EvidenceReference.of(row) for row in evidence]
             existing = (
                 subject.statements.current().filter(aspect="handle", handle=handle, asserted_by=str(source)).first()
@@ -955,18 +948,18 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
             handle_model = apps.get_model("parties", "Handle")
             party_model = apps.get_model("parties", "Party")
             handles: dict[int, Any] = {}
-            for batch in by_key(handle_model.objects.using(self.db), sorted(set(handle_ids))):
+            for batch in by_key(handle_model.objects.all(), sorted(set(handle_ids))):
                 handles.update((row.pk, row) for row in batch.order_by("pk").lock_if_supported())
             ids = set(party_ids) | {row.party_id for row in handles.values() if row.party_id is not None}
-            statements = self.handle_statements().using(self.db)
-            for statement_handles in by_key(handle_model._base_manager.using(self.db), sorted(handles)):
+            statements = self.handle_statements()
+            for statement_handles in by_key(handle_model._base_manager.all(), sorted(handles)):
                 ids.update(
                     statements.filter(handle_id__in=statement_handles.values("pk")).values_list("subject_id", flat=True)
                 )
             parties: dict[int, Any] = {}
-            for party_batch in by_key(party_model.objects.using(self.db), sorted(ids)):
+            for party_batch in by_key(party_model.objects.all(), sorted(ids)):
                 parties.update((row.pk, row) for row in party_batch.order_by("pk").lock_if_supported())
-            for statement_handles in by_key(handle_model._base_manager.using(self.db), sorted(handles)):
+            for statement_handles in by_key(handle_model._base_manager.all(), sorted(handles)):
                 keys = list(
                     statements.filter(handle_id__in=statement_handles.values("pk")).values_list("pk", flat=True)
                 )
@@ -1550,7 +1543,7 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
         """
 
         person_model = apps.get_model("parties", "Person")
-        person, _created = person_model.objects.db_manager(self._db or user._state.db).get_or_create(
+        person, _created = person_model.objects.get_or_create(
             user=user,
             defaults={"display_name": _user_display_name(user), "created_by_id": user.pk},
         )
