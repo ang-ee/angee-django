@@ -177,6 +177,7 @@ function useResourceModels(resource: string, canonical: string | null | undefine
 
 function ListViewBody<TRow extends Row = Row>({
   resource,
+  relatedModels,
   source,
   availableViews: declaredViews,
   textFilterField: declaredTextField,
@@ -365,6 +366,7 @@ function ListViewBody<TRow extends Row = Row>({
     !clientRowModel;
   const surfaceProps: UseResourceViewSurfaceProps<TRow> = {
     resource,
+    relatedModels,
     source,
     columns: resolvedColumns,
     fields: queryFields,
