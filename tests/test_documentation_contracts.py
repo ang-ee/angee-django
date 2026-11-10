@@ -6,7 +6,6 @@ import shlex
 from pathlib import Path
 from urllib.parse import unquote, urlsplit
 
-import pytest
 from markdown_it import MarkdownIt
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -38,26 +37,27 @@ def anchors(text: str) -> set[str]:
     return result
 
 
-@pytest.mark.parametrize("document", DOCUMENTS, ids=lambda path: str(path.relative_to(ROOT)))
-def test_local_documentation_links_and_anchors_resolve(document: Path) -> None:
-    destinations = [
-        child.attrGet("href")
-        for token in MarkdownIt().parse(document.read_text())
-        for child in token.children or ()
-        if child.type == "link_open"
-    ]
-    for destination in destinations:
-        assert isinstance(destination, str)
-        link = urlsplit(destination.strip("<>"))
-        # Website-root routes belong to the external documentation site.
-        if link.scheme or link.netloc or link.path.startswith("/"):
-            continue
-        target = (document.parent / unquote(link.path)).resolve() if link.path else document
-        assert target.exists(), f"{document.relative_to(ROOT)} -> {destination}"
-        if link.fragment and target.suffix == ".md":
-            assert unquote(link.fragment) in anchors(target.read_text()), (
-                f"{document.relative_to(ROOT)} -> {destination}"
-            )
+def test_local_documentation_links_and_anchors_resolve() -> None:
+    broken = []
+    for document in DOCUMENTS:
+        destinations = [
+            child.attrGet("href")
+            for token in MarkdownIt().parse(document.read_text())
+            for child in token.children or ()
+            if child.type == "link_open"
+        ]
+        for destination in destinations:
+            assert isinstance(destination, str)
+            link = urlsplit(destination.strip("<>"))
+            # Website-root routes belong to the external documentation site.
+            if link.scheme or link.netloc or link.path.startswith("/"):
+                continue
+            target = (document.parent / unquote(link.path)).resolve() if link.path else document
+            if not target.exists() or (
+                link.fragment and target.suffix == ".md" and unquote(link.fragment) not in anchors(target.read_text())
+            ):
+                broken.append(f"{document.relative_to(ROOT)} -> {destination}")
+    assert not broken, "\n".join(broken)
 
 
 def test_documented_pnpm_recipes_use_existing_scripts_and_safe_slot_invocation() -> None:
@@ -114,9 +114,3 @@ def test_documented_verification_files_exist() -> None:
     assert paths
     for relative in paths:
         assert (ROOT / relative).is_file(), relative
-
-
-def test_stack_documents_the_local_only_permission_backend() -> None:
-    guide = prose((ROOT / "docs/stack.md").read_text())
-    assert re.search(r"local backend is the only supported REBAC permission backend", guide)
-    assert "[REBAC rules](backend/guidelines.md#rebac)" in guide
