@@ -36,6 +36,7 @@ from rebac.models import active_relationship_model
 from rebac.roles import grant as grant_role
 
 from angee.base.models.identity import public_id_for
+from angee.base.permissions import bind_rebac_schema
 from angee.graphql.testing.documents import execute_schema, result_data
 from angee.messaging.testing.models import Handle, Message, Party, Person, Thread
 from angee.projects.testing.models import Project, Task
@@ -596,9 +597,10 @@ def test_the_check_accepts_matching_taggable_models_and_relations(composed_table
     assert _tag_errors(TagAssignment.check()) == []
 
 
-@pytest.mark.usefixtures("declared_permissions")
 def test_the_check_reports_a_taggable_model_without_a_relation() -> None:
     """Without their owners' fragments, the base schema names no taggable type."""
+
+    bind_rebac_schema(apps.get_app_config("tags"), None)
 
     def forbid_query(*args: Any, **kwargs: Any) -> None:
         raise AssertionError("Django model checks must read schema declarations without SQL")

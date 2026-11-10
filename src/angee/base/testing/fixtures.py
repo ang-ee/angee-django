@@ -16,7 +16,6 @@ from pytest_django.plugin import DjangoDbBlocker
 
 from angee.base.permissions import SCHEMA_BINDING
 from angee.base.testing.permissions import composed_permissions as composed_permissions
-from angee.base.testing.permissions import declared_permissions as declared_permissions
 from angee.base.testing.permissions import emit_permissions
 
 

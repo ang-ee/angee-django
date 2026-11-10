@@ -7,7 +7,6 @@ from pathlib import Path
 
 import pytest
 from django.apps import AppConfig, apps
-from django.core.management import call_command
 from django_compose.artifacts import atomic_write
 
 
@@ -61,18 +60,3 @@ def composed_permissions(restore_composed_permission_bindings: None, tmp_path: P
     """
 
     emit_permissions(apps.get_app_configs(), tmp_path / "permissions")
-
-
-@pytest.fixture
-def declared_permissions(composed_tables: None, restore_composed_permission_bindings: None) -> None:
-    """Bind and synchronize each app's authored declaration alone, without other addons' fragments.
-
-    For a test asserting the policy an addon declares by itself; every other test
-    reads the composed policy the session baseline synchronizes.
-    """
-
-    from angee.base.permissions import bind_rebac_schema
-
-    for config in apps.get_app_configs():
-        bind_rebac_schema(config, None)
-    call_command("rebac", "sync", "--force-overwrite", "--yes", verbosity=0)

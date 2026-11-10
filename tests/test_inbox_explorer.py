@@ -50,7 +50,6 @@ def test_same_named_conversations_keep_identity_and_show_source_context():
         assert all(row.platform == "email" and row.account == account.display_name for row in groups.rows)
 
 
-@pytest.mark.usefixtures("declared_permissions")
 def test_file_backlinks_allow_empty_files_and_deduplicate_authorized_messages(tmp_path):
     owner = User.objects.create_user(username="explorer-file-uses")
     other = User.objects.create_user(username="explorer-file-hidden")
@@ -85,6 +84,15 @@ def test_file_backlinks_allow_empty_files_and_deduplicate_authorized_messages(tm
         assert [message.pk for message in first.messages] == [messages[1].pk]
         assert all(row.part.file_id == file.pk for row in [*first.rows, *second.rows])
     with actor_context(other):
+        related = InboxRelated(Message.objects.all().explorer(), target, str(messages[2].sqid))
+        assert related.summary().count == 1
+        page = related.page()
+        assert (page.count, page.message_count) == (1, 1)
+        assert [row.message_id for row in page.rows] == [str(messages[2].sqid)]
+        assert [message.pk for message in page.messages] == [messages[2].pk]
+        assert all(row.part.file_id == file.pk for row in page.rows)
+    stranger = User.objects.create_user(username="explorer-file-stranger")
+    with actor_context(stranger):
         with pytest.raises(ValueError, match="Related content unavailable"):
             InboxRelated(Message.objects.all().explorer(), target).page()
 

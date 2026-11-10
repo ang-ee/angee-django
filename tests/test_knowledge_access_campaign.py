@@ -23,6 +23,7 @@ from tests.conftest import (
     create_user,
     vault_for,
 )
+from tests.extcontrib.models import Record
 from tests.knowledge_campaign import clone_template as clone_template
 from tests.test_knowledge import _grant
 
@@ -82,8 +83,8 @@ def test_record_pages_projection_respects_role_and_both_write_ends(composed_tabl
         RecordBinding.objects.upsert(page=page, target=record, role="related")
     _grant(record, "viewer", reader)
     _grant(vault, "viewer", reader)
-    # The test consumer declares vaults bindable; the no-arm regression below
-    # proves binding reads fail closed for an undeclared record type.
+    # The test consumer declares vaults bindable; the no-arm regression below proves
+    # binding reads fail closed for a record type no fragment declares (extcontrib.Record).
     schema = addon_schema(schemas, "console")
     query = """query ($id: ID!, $role: String) {
       record_knowledge_bindings(model_label: "knowledge.Vault", record_id: $id, role: $role) {
@@ -112,13 +113,16 @@ def test_record_pages_projection_respects_role_and_both_write_ends(composed_tabl
     assert owner_view["record_knowledge_bindings"][0]["page_can_write"] is True
 
 
-@pytest.mark.usefixtures("declared_permissions")
 @pytest.mark.parametrize("seat", ["neither", "record", "knowledge", "both", "administrator"])
 def test_binding_without_record_owner_arm_is_absent_in_every_read_direction_and_event(composed_tables, seat):
+    # No record_binding fragment names this type; a fragment that does breaks the premise here.
+    assert not RecordBinding.declares_target(Record)
     author = create_user("binding-author")
     viewer = create_platform_admin("binding-admin") if seat == "administrator" else create_user("binding-reader")
     knowledge = vault_for(author, name="Knowledge end")
-    record = vault_for(author, name="Record end without a contributed binding arm")
+    with system_context(reason="test.binding.undeclared_record"):
+        record = Record.objects.create(name="Record end without a contributed binding arm")
+    _grant(record, "writer", author)
     with actor_context(author):
         page = Page.objects.create_in(knowledge, title="Bound page")
         # Writable on both ends, but no relation names the record's type.
@@ -128,7 +132,7 @@ def test_binding_without_record_owner_arm_is_absent_in_every_read_direction_and_
         page_binding = RecordBinding.objects.upsert(page=page, target=record)
         vault_binding = RecordBinding.objects.upsert(vault=knowledge, target=record)
     if seat in {"record", "both"}:
-        _grant(record, "viewer", viewer)
+        _grant(record, "reader", viewer)
     if seat in {"knowledge", "both"}:
         _grant(knowledge, "viewer", viewer)
 
@@ -149,7 +153,7 @@ def test_binding_without_record_owner_arm_is_absent_in_every_read_direction_and_
     record_result = result_data(execute_schema(
         schema,
         """query ($id: ID!) {
-          record_knowledge_bindings(model_label: "knowledge.Vault", record_id: $id) { id page vault }
+          record_knowledge_bindings(model_label: "extcontrib.Record", record_id: $id) { id page vault }
         }""",
         {"id": str(record.sqid)}, user=viewer,
     ))
