@@ -8,7 +8,7 @@ Deliberate shares remain independent of these derived permissions.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from contextlib import nullcontext
 from dataclasses import dataclass
 from datetime import date
@@ -47,7 +47,6 @@ from angee.base.exceptions import DomainError, RecordAccessSubjectRefused
 from angee.base.expressions import JSONArraySubquery
 from angee.base.fields.ordering import FractionalRankField
 from angee.base.fields.state import StateField
-from angee.base.managers import AngeeManager
 from angee.base.models.audit import AuditMixin, retained_set_null
 from angee.base.models.base import AngeeDataModel, AngeeModel
 from angee.base.models.locks import ImmutableFieldsMixin, OptimisticLockMixin
@@ -56,7 +55,7 @@ from angee.base.models.roles import role_anchor
 from angee.base.models.transitions import StateTransitions, save_state, transition
 from angee.base.permissions import actor_user_id, instance_actor, subject_reaches_user, user_subject_ref
 from angee.base.prefetch import prefetched
-from angee.base.querysets import AngeeQuerySet, AngeeUnscopedQuerySet, ClosedUpdateQuerySet
+from angee.base.querysets import ClosedUpdateQuerySet
 from angee.base.serialization import STRINGIFIED_JSON, canonical_json_sha256
 from angee.base.validators import validate_value
 from angee.iam.identity import user_label_expression, user_label_queryset
@@ -65,6 +64,9 @@ from angee.money.fields import MoneyField
 from angee.proposals.inputs import RoundTemplate
 from angee.proposals.validators import normalize_topic_key
 from angee.provenance.context import changeset, changeset_model, require_changeset
+from angee.provenance.contrib.angee.history import HistoryMixin
+from angee.provenance.contrib.angee.managers import AngeeHistoryManager
+from angee.provenance.contrib.angee.querysets import AngeeHistoryQuerySet, AngeeHistoryUnscopedQuerySet
 
 if TYPE_CHECKING:
     from django_stubs_ext import WithAnnotations
@@ -232,24 +234,24 @@ class _RoundRequesterWrites(ClosedUpdateQuerySet):
         batch_size: int | None = None,
         ignore_conflicts: bool = False,
         update_conflicts: bool = False,
-        update_fields: Collection[str] | None = None,
-        unique_fields: Collection[str] | None = None,
+        update_fields: Iterable[str] | None = None,
+        unique_fields: Iterable[str] | None = None,
     ) -> list[Any]:
-        if update_conflicts and {"requester_party", "requester_party_id"}.intersection(update_fields or ()):
+        fields = tuple(update_fields) if update_fields is not None else None
+        unique = tuple(unique_fields) if unique_fields is not None else None
+        if update_conflicts and {"requester_party", "requester_party_id"}.intersection(fields or ()):
             raise ValidationError({"requester_party": "Change requester identity through the round instance."})
-        return super().bulk_create(
-            objs, batch_size, ignore_conflicts, update_conflicts, update_fields, unique_fields,
-        )
+        return super().bulk_create(objs, batch_size, ignore_conflicts, update_conflicts, fields, unique)
 
 
-class _RoundBaseQuerySet(_RoundRequesterWrites, AngeeUnscopedQuerySet):
+class _RoundBaseQuerySet(_RoundRequesterWrites, AngeeHistoryUnscopedQuerySet):
     """Keep native unfiltered manager writes under the requester identity contract."""
 
 
 _RoundBaseManager = models.Manager.from_queryset(_RoundBaseQuerySet)
 
 
-class RoundQuerySet[T: Round](_RoundRequesterWrites, AngeeQuerySet[T]):
+class RoundQuerySet[T: Round](_RoundRequesterWrites, AngeeHistoryQuerySet[T]):
     """Round collection scopes shared by record projections."""
 
     def active_for_project(self, project: Project) -> Self:
@@ -267,7 +269,7 @@ class RoundQuerySet[T: Round](_RoundRequesterWrites, AngeeQuerySet[T]):
         )
 
 
-_RoundManagerBase = AngeeManager.from_queryset(RoundQuerySet)
+_RoundManagerBase = AngeeHistoryManager.from_queryset(RoundQuerySet)
 
 
 class RoundManager[T: Round](_RoundManagerBase[T]):
@@ -395,7 +397,15 @@ class _RosterProjection(TypedDict):
     _roster_track_status: str | None
 
 
-class Round(OptimisticLockMixin, ImmutableFieldsMixin, AuditMixin, ThreadedModelMixin, AngeeDataModel, concrete=True):
+class Round(
+    HistoryMixin,
+    OptimisticLockMixin,
+    ImmutableFieldsMixin,
+    AuditMixin,
+    ThreadedModelMixin,
+    AngeeDataModel,
+    concrete=True,
+):
     """A bounded solicitation on one project or task; its chatter is shared."""
 
     _roster_entries: list[WithAnnotations[Proposal, _RosterProjection]]
@@ -1519,7 +1529,7 @@ class Topic(ImmutableFieldsMixin, AuditMixin, AngeeDataModel, concrete=True):
         super().save(*args, **kwargs)
 
 
-class ProposalManager[T: Proposal](AngeeManager[T]):
+class ProposalManager[T: Proposal](AngeeHistoryManager[T]):
     """Own replay-safe message capture into Proposal and Answer rows."""
 
     CAPTURE_PARSER_VERSION = "proposals.capture.v1"
@@ -1725,12 +1735,12 @@ class ProposalManager[T: Proposal](AngeeManager[T]):
             answer.sudo(reason="proposals.capture.answer").save()
 
     def _resolved_sender_party(self, message: Message) -> Party | None:
-        """Resolve the sender through the parties-owned handle matching seam."""
+        """Resolve the sender, through its merge redirect, with the parties-owned handle matching seam."""
 
         if message.sender_id is None:
             return None
-        handle = message.sender
-        assert handle is not None
+        assert message.sender is not None
+        handle = message.sender.canonical()
         if handle.party_id is None:
             apps.get_model("parties", "Party").objects.suggest_for(handle)
             # Matching may assign the party through another Handle instance.
@@ -1748,7 +1758,7 @@ class ProposalManager[T: Proposal](AngeeManager[T]):
         return canonical_json_sha256(chunks=(STRINGIFIED_JSON.encode(payload),))
 
 
-class Proposal(OptimisticLockMixin, ImmutableFieldsMixin, AuditMixin, AngeeDataModel, concrete=True):
+class Proposal(HistoryMixin, OptimisticLockMixin, ImmutableFieldsMixin, AuditMixin, AngeeDataModel, concrete=True):
     """One responder's structured response; its private work lives on ``track``."""
 
     sqid_prefix = "prp_"

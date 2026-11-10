@@ -11,6 +11,7 @@ from angee.base.models.base import AngeeModel
 from angee.base.models.identity import SqidMixin
 from angee.base.models.merge import MergeableMixin
 from angee.base.models.refs import RecordRefMixin
+from angee.provenance.history import HistoryMixin
 
 
 class RecordRefTypedTarget(SqidMixin, AngeeModel):
@@ -129,8 +130,11 @@ class SelfLinkedNode(models.Model):
         db_table = "test_merge_self_linked_node"
 
 
-class TagSlot(models.Model):
-    """A row unique on an expression over its tag key, which no field set describes."""
+class TagSlot(HistoryMixin, models.Model):
+    """A row unique on an expression over its tag key, which no field set describes.
+
+    A tag merge moves it, so it keeps history (``angee.E051``).
+    """
 
     tag = models.ForeignKey("tags.Tag", on_delete=models.CASCADE, related_name="+")
     label = models.CharField(max_length=32)

@@ -30,14 +30,21 @@ from django.db import models
 from rebac import current_actor
 
 from angee.base.models.base import AngeeDataModel
+from angee.base.models.merge_references import MergePolicy
 from angee.base.permissions import actor_user_id
 from angee.nexus.managers import CadenceManager, TieManager
+from angee.provenance.contrib.angee.history import HistoryMixin
 
 
 class Tie(AngeeDataModel, concrete=True):
-    """A fully derived interaction edge between two canonically ordered parties."""
+    """A fully derived interaction edge between two canonically ordered parties.
+
+    A party merge leaves its ties in place: :meth:`TieManager.recompute`
+    rebuilds the pairs from the moved handles and drops the retired ones.
+    """
 
     sqid_prefix = "tie_"
+    merge_policies = {"party_a": MergePolicy.KEEP, "party_b": MergePolicy.KEEP}
 
     party_a = models.ForeignKey(
         "parties.Party",
@@ -145,7 +152,7 @@ class Tie(AngeeDataModel, concrete=True):
         super().save(*args, **kwargs)
 
 
-class Cadence(AngeeDataModel, concrete=True):
+class Cadence(HistoryMixin, AngeeDataModel, concrete=True):
     """One user's human-authored stay-in-touch intent for one party."""
 
     sqid_prefix = "cad_"

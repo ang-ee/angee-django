@@ -41,8 +41,9 @@ from angee.base.models.audit import AuditMixin
 from angee.base.models.base import AngeeDataModel
 from angee.base.models.timestamps import update_fields_with_auto_now
 from angee.base.models.trash import TrashQuerySet
+from angee.base.querysets import MergeableQuerySet
 from angee.integrate.models import IntegrationCreateMode
-from angee.messaging.managers import MessageQuerySet
+from angee.messaging.managers import ChannelManager, MessageQuerySet
 from angee.posts.backends import FeedBackend, ParsedPost
 from angee.posts.managers import (
     FeedFollowManager,
@@ -50,6 +51,7 @@ from angee.posts.managers import (
     PostMetricsManager,
     QuotaManager,
 )
+from angee.provenance.contrib.angee.history import HistoryMixin
 
 if TYPE_CHECKING:
     from angee.messaging.models import Message
@@ -67,7 +69,9 @@ def validate_reply_hold(hours: float | None) -> None:
             raise ValidationError("Reply hold is too large.") from error
 
 
-class Feed(Composable, metaclass=RebacModelBase, inherits="messaging.Channel"):
+class Feed(  # type: ignore[misc]  # HistoryMixin and the untracked Channel lineage type _base_manager apart.
+    HistoryMixin, Composable, metaclass=RebacModelBase, inherits="messaging.Channel"
+):
     """A connected public-content source that polls an external platform for posts.
 
     A ``messaging.Channel`` child (identity, bridge state and message access from
@@ -82,6 +86,7 @@ class Feed(Composable, metaclass=RebacModelBase, inherits="messaging.Channel"):
 
     integration_create_mode: ClassVar[IntegrationCreateMode | None] = IntegrationCreateMode.FORM
     live_impl_field = None
+    objects = ChannelManager()
 
     feed_backend_class = ImplClassField(
         FeedBackend,
@@ -158,7 +163,7 @@ class Feed(Composable, metaclass=RebacModelBase, inherits="messaging.Channel"):
         return timezone.now() + timedelta(hours=hours)
 
 
-class FeedFollow(AuditMixin, AngeeDataModel, concrete=True):
+class FeedFollow(AuditMixin, HistoryMixin, AngeeDataModel, concrete=True):
     """A follow of a :class:`Feed` by a ``parties.Handle`` — the timeline subscription.
 
     The following edge behind a public timeline: a handle subscribes to a feed's
@@ -507,14 +512,14 @@ class MessagePublic(Composable, extends="messaging.Message"):
         """
 
         message = cast("Message", self)
+        # A handle merge keeps messages on the handle they were sent from and moves
+        # the feed's handle: both compare as their survivors.
+        sender = MergeableQuerySet.survivor_id("sender__")
         with system_context(reason="posts.reply.evidence"):
             sender_id, channel_id = (
                 type(message)
                 ._base_manager.filter(pk=message.pk)
-                .values_list(
-                    "sender_id",
-                    "channel_id",
-                )
+                .values_list(sender, "channel_id")
                 .get()
             )
             handle_id = (
@@ -527,12 +532,14 @@ class MessagePublic(Composable, extends="messaging.Message"):
             )
             if handle_id is not None and sender_id == handle_id:
                 return True
-            replies = type(message)._base_manager.filter(parent_id=message.pk, channel_id=channel_id)
+            replies = type(message)._base_manager.filter(parent_id=message.pk, channel_id=channel_id).alias(
+                _sender=sender,
+            )
             active = TrashQuerySet.untrashed_q() & models.Q(
                 direction=message.Direction.OUTBOUND, status__in=message.ACTIVE_OUTBOUND_STATUSES,
             )
             if handle_id is not None:
-                active |= MessageQuerySet.published_q() & models.Q(sender_id=handle_id)
+                active |= MessageQuerySet.published_q() & models.Q(_sender=handle_id)
             possible = models.Q(direction=message.Direction.OUTBOUND) & (
                 models.Q(status__in=message.POSSIBLY_PUBLIC_STATUSES) | models.Q(delivery_possibly_accepted=True)
             )

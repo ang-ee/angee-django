@@ -30,6 +30,7 @@ from django.utils import timezone
 from pydantic import BaseModel, ConfigDict
 
 from angee.base.expressions import WindowSum
+from angee.base.querysets import MergeableQuerySet
 from angee.messaging.inbox import InboxCoverage, InboxPage, MessageInbox
 from angee.messaging.inbox_groups import InboxGroup, InboxGroupPage, InboxGroups, InboxGroupScope
 from angee.messaging.managers import MESSAGE_ORDER
@@ -78,6 +79,20 @@ class InboxNavigator(MessageInbox):
         self.coverage_input = coverage
         self.options = options
 
+    @staticmethod
+    def _resolved_handle(name: str, through: str) -> dict[str, Any]:
+        """Alias the handle reached through ``through`` as its merge survivor, with its party link.
+
+        A handle merge keeps messages and recipients on the retired handle; the
+        navigator reads them as the survivor's activity.
+        """
+
+        return {
+            name: MergeableQuerySet.survivor_id(through),
+            f"{name}_party": MergeableQuerySet.survivor_field(through, "party_id"),
+            f"{name}_confirmed": MergeableQuerySet.survivor_field(through, "party_link_confirmed"),
+        }
+
     def activity(self) -> Any:
         """One row per eligible author/recipient, with authorized canonical identity."""
 
@@ -107,30 +122,34 @@ class InboxNavigator(MessageInbox):
                 _recipient_readable=Exists(self.participants.filter(pk=OuterRef("_recipient__pk"))),
             ).filter(
                 Q(direction="inbound") | Q(direction="outbound", _recipient_readable=True)
+            ).alias(
+                **self._resolved_handle("_sender", "sender__"),
+                **self._resolved_handle("_recipient_handle", "_recipient__handle__"),
             ).annotate(
-                _candidate=Case(When(direction="inbound", then=F("sender_id")), default=F("_recipient__handle_id")),
+                _candidate=Case(When(direction="inbound", then=F("_sender")), default=F("_recipient_handle")),
                 _party=Case(
                     When(
                         direction="inbound",
-                        sender__party_link_confirmed=True,
-                        sender__party_id__in=party_ids,
-                        then=F("sender__party_id"),
+                        _sender_confirmed=True,
+                        _sender_party__in=party_ids,
+                        then=F("_sender_party"),
                     ),
                     When(
                         direction="outbound",
-                        _recipient__handle__party_link_confirmed=True,
-                        _recipient__handle__party_id__in=party_ids,
-                        then=F("_recipient__handle__party_id"),
+                        _recipient_handle_confirmed=True,
+                        _recipient_handle_party__in=party_ids,
+                        then=F("_recipient_handle_party"),
                     ),
                     default=Value(None),
                     output_field=models.BigIntegerField(),
                 ),
             )
         else:
-            activity = activity.filter(direction="inbound").annotate(
-                _candidate=F("sender_id"),
+            activity = activity.filter(direction="inbound").alias(**self._resolved_handle("_sender", "sender__"))
+            activity = activity.annotate(
+                _candidate=F("_sender"),
                 _party=Case(
-                    When(sender__party_link_confirmed=True, sender__party_id__in=party_ids, then=F("sender__party_id")),
+                    When(_sender_confirmed=True, _sender_party__in=party_ids, then=F("_sender_party")),
                     default=Value(None),
                     output_field=models.BigIntegerField(),
                 ),

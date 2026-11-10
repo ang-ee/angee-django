@@ -131,18 +131,17 @@ class InboxResults:
             )
             kwargs.update(objects=accounts, scope_field=f"{prefix}channel_id", empty_label="No account")
         elif axis == "sender":
+            # A handle merge keeps messages on the handle they were sent from; they
+            # group under its survivor, the identity a reader resolves the redirect to.
             handles = self.inbox.handles
-            rows = rows.annotate(
+            rows = rows.alias(_sender=MergeableQuerySet.survivor_id(f"{prefix}sender__")).annotate(
                 _bucket=Case(
-                    When(**{f"{prefix}sender_id__in": Subquery(handles.values("pk"))}, then=F(f"{prefix}sender_id")),
+                    When(_sender__in=Subquery(handles.values("pk")), then=F("_sender")),
                     default=Value(None),
                     output_field=models.BigIntegerField(),
                 )
             )
-            kwargs.update(
-                objects=handles, scope_field=f"{prefix}sender_id",
-                label_field="_sender_name", empty_label="Unknown sender",
-            )
+            kwargs.update(objects=handles, label_field="_sender_name", empty_label="Unknown sender")
         elif axis == "conversation":
             # A conversation groups under the readable survivor of its thread's
             # redirect: readers resolve a merged record to its canonical one. An

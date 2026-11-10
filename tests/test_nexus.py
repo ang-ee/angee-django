@@ -37,6 +37,7 @@ from angee.messaging.testing.models import (
 from angee.nexus.models import Cadence as AbstractCadence
 from angee.nexus.models import Tie as AbstractTie
 from angee.nexus.testing.models import Cadence, Tie
+from angee.provenance.querysets import model_history
 from tests import test_messaging_graphql
 from tests.conftest import SchemaAddon, assert_private_hasura_insert_access
 from tests.test_messaging import ThreadedTicket
@@ -207,6 +208,74 @@ def test_tie_save_canonicalizes_the_pair_and_the_database_rejects_duplicates(com
         assert (tie.party_a_id, tie.party_b_id) == (first.pk, second.pk)
         with pytest.raises(IntegrityError):
             Tie.objects.create(party_a=first, party_b=second)
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.parametrize("shared_counterpart", [True, False], ids=["shared-counterpart", "pair-order"])
+def test_a_party_merge_leaves_ties_to_the_recompute(composed_tables: None, shared_counterpart: bool) -> None:
+    """Derived ties neither move nor keep history: merges they once refused succeed and recompute rebuilds them.
+
+    Moving ``(other, merged)`` onto an older survivor would flip the canonical pair
+    order; a survivor already tied to ``other`` would collide on the pair.
+    """
+
+    del composed_tables
+    owner = User.objects.create_user(username=f"tie-merge-{shared_counterpart}")
+    with system_context(reason="test nexus tie merge"):
+        kept, other, merged = (
+            Party._base_manager.create(display_name=name, created_by=owner) for name in ("Kept", "Other", "Merged")
+        )
+        Tie.objects.create(party_a=other, party_b=merged)
+        if shared_counterpart:
+            Tie.objects.create(party_a=kept, party_b=other)
+        before = set(Tie._base_manager.values_list("party_a_id", "party_b_id"))
+        message = _message(
+            sender=_handle(merged, "merged@example.com"),
+            thread=Thread._base_manager.create(platform="email"),
+            sent_at=_T0,
+            external_id="merged-to-other",
+        )
+        _address(message, _handle(other, "other@example.com"))
+
+    with actor_context(owner):
+        kept.with_actor(owner).merge(records=[merged.public_id])
+    assert set(Tie._base_manager.values_list("party_a_id", "party_b_id")) == before
+    assert model_history(Tie) is None and Tie not in {reference.model for reference in Party.moved_references()}
+    with system_context(reason="test nexus tie merge recompute"):
+        assert Tie.objects.recompute(now=_T0 + timedelta(days=1)) == 1
+    assert set(Tie._base_manager.values_list("party_a_id", "party_b_id")) == {(kept.pk, other.pk)}
+
+
+@pytest.mark.django_db(transaction=True)
+def test_a_handle_merge_keeps_correspondence_on_the_merged_handle_for_readers_to_resolve(
+    composed_tables: None,
+) -> None:
+    """A recipient row stays on the merged handle; ties and party correspondence read it as the survivor's."""
+
+    del composed_tables
+    owner = User.objects.create_user(username="handle-merge-reader")
+    with system_context(reason="test nexus handle merge"):
+        alice, bob = Party._base_manager.create(display_name="Alice", created_by=owner), _party("Bob")
+        old, new = (
+            Handle._base_manager.create(platform="email", value=value, created_by=owner)
+            for value in ("alice@old.example.com", "alice@example.com")
+        )
+        Party.objects.assert_handle(alice, new, asserted_by=owner)
+        message = _message(
+            sender=_handle(bob, "bob@example.com"),
+            thread=Thread._base_manager.create(platform="email"),
+            sent_at=_T0,
+            external_id="bob-to-old",
+        )
+        recipient = _address(message, old)
+
+    with actor_context(owner):
+        new.with_actor(owner).merge(records=[old.public_id])
+    with system_context(reason="test nexus handle merge readers"):
+        assert Participant._base_manager.get(pk=recipient.pk).handle_id == old.pk
+        assert list(Message.objects.involving_parties([alice]).values_list("pk", flat=True)) == [message.pk]
+        assert Tie.objects.recompute(now=_T0 + timedelta(days=1)) == 1
+        assert list(Tie._base_manager.values_list("party_a_id", "party_b_id")) == [tuple(sorted((alice.pk, bob.pk)))]
 
 
 @pytest.mark.django_db(transaction=True)

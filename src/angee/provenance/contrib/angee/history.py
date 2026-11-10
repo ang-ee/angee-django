@@ -30,6 +30,7 @@ from simple_history.manager import HistoryManager
 from simple_history.utils import get_history_manager_for_model
 
 from angee.base.lineage import concrete_child_models, concrete_lineage
+from angee.base.models.locks import ImmutableFieldsMixin
 from angee.base.models.merge_references import MergeContractMixin
 from angee.base.models.persistence import PersistenceMixin
 from angee.base.models.trash import TrashMixin
@@ -314,10 +315,13 @@ class ModelHistory(CaptureHistory):
             if isinstance(row, TrashMixin) and "is_trashed" in changed:
                 row.revert_removal(previous)
                 changed.difference_update(row.TRASH_FIELDS)
-            for name in changed:
-                field = model._meta.get_field(name)
-                setattr(row, field.attname, getattr(previous, field.attname))
+            attnames = [model._meta.get_field(name).attname for name in changed]
+            for attname in attnames:
+                setattr(row, attname, getattr(previous, attname))
             if changed:
+                if isinstance(row, ImmutableFieldsMixin):
+                    # Replay restores the exact predecessor, write-once identities a merge moved included.
+                    row.allow_immutable_save(*attnames)
                 row.save(update_fields=sorted(changed))
         return row.revert_subjects()
 

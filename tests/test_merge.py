@@ -34,6 +34,7 @@ from angee.graphql import records
 from angee.graphql.testing.documents import execute_schema, result_data
 from angee.messaging.testing.models import Directory, Participant, Party, Reaction
 from angee.projects.testing.models import Link, Project, Queue, Task
+from angee.provenance import checks as provenance_checks
 from angee.provenance.context import changeset
 from angee.provenance.statements import (
     SourceKind,
@@ -501,7 +502,7 @@ def test_a_collision_no_field_set_describes_refuses_the_merge() -> None:
 
 
 def test_a_merge_identity_must_be_a_declared_unique_set(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Edges and plain pointing rows (a message's participants and reactions) declare their identity alike."""
+    """Edges and plain pointing rows (a message's reactions) declare their identity alike."""
 
     pointing = [model for model in apps.get_models() if issubclass(model, MergeContractMixin)]
     assert {Participant, Reaction} <= set(pointing)
@@ -509,8 +510,22 @@ def test_a_merge_identity_must_be_a_declared_unique_set(monkeypatch: pytest.Monk
 
     monkeypatch.setattr(CustomColumnEdge, "merge_identity", (("target_ct", "target_id"),))
     assert [error.id for error in CustomColumnEdge.check() if error.id == "angee.E037"] == ["angee.E037"]
-    monkeypatch.setattr(Participant, "merge_identity", (("message", "handle"),))
-    assert [error.id for error in Participant.check() if error.id == "angee.E037"] == ["angee.E037"]
+    monkeypatch.setattr(Reaction, "merge_identity", (("message", "handle"),))
+    assert [error.id for error in Reaction.check() if error.id == "angee.E037"] == ["angee.E037"]
+
+
+def test_a_model_a_revertible_merge_moves_must_keep_history(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Revert replays history only, so ``angee.E051`` names a moved model without it.
+
+    A merge of a model without history (``MergeReferenceNode``) is never revertible and is exempt.
+    """
+
+    assert provenance_checks.check_merge_history() == []
+    tracked = provenance_checks.model_history
+    monkeypatch.setattr(provenance_checks, "model_history", lambda model: None if model is TagSlot else tracked(model))
+    [error] = provenance_checks.check_merge_history()
+    assert (error.id, error.obj) == ("angee.E051", TagSlot)
+    assert error.msg.startswith("recordrefdemo.TagSlot.tag moves in tags.Tag merges")
 
 
 def test_a_moved_stance_keeps_its_recency_so_the_tie_break_keeps_its_winner() -> None:
