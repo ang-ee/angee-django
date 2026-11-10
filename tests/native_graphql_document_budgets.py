@@ -12,6 +12,7 @@ from datetime import UTC, date, datetime, timedelta
 from django.apps import apps
 from django.contrib.auth import get_user_model
 from django.core.management import call_command
+from django.db import connection
 from django.test import TransactionTestCase
 from rebac import actor_context, system_context
 
@@ -248,8 +249,10 @@ PLANNER_BUDGETS = {"person": (18, 458), "projects": (10, 140)}
 class ConsoleDocumentBudgetTests(TransactionTestCase):
     """Each console read stays within its fixed statement and SQL-size ceiling."""
 
-    # SQL-text budgets require stable primary-key widths between test methods.
-    reset_sequences = True
+    # SQLite text budgets need stable key widths after earlier addon tests.
+    # PostgreSQL runs only the planner budget in a fresh composed-host database;
+    # resetting its sequences would collide with setup's existing REBAC audit rows.
+    reset_sequences = connection.vendor == "sqlite"
 
     def setUp(self):
         call_command("rebac", "sync", verbosity=0)
