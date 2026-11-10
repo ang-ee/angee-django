@@ -16,7 +16,15 @@ from django.apps import apps
 from django.contrib.auth import get_user_model
 from django.db import connection, models
 from django.test.utils import CaptureQueriesContext, isolate_apps
-from rebac import RelationshipTuple, actor_context, system_context, to_object_ref, to_subject_ref, write_relationships
+from rebac import (
+    MissingActorError,
+    RelationshipTuple,
+    actor_context,
+    system_context,
+    to_object_ref,
+    to_subject_ref,
+    write_relationships,
+)
 from rebac.backends import reset_backend
 from rebac.schema import parse_zed
 from rebac.testing import install_schema
@@ -320,6 +328,25 @@ def test_history_redacts_the_fields_the_actor_cannot_read_on_the_record(gated_ti
     )
     shown = _history(schema, owner, "scopedemo.OwnedRow", row)
     assert _changes(shown["entries"][0])["title"] == ("Stored secret", "Edited secret")
+
+
+@pytest.mark.parametrize("system", [False, True])
+def test_actorless_history_redactions_follow_ambient_scope(system: bool) -> None:
+    """History uses the same actorless relation rule as other record readers."""
+    owner = create_user("history-ambient-owner")
+    _vault, page = _titled_page(owner)
+    history = provenance_schema.RecordHistory(page, actor=None)
+    versions = history._versions(list(history.changesets().values_list("pk", flat=True)))
+
+    if system:
+        with system_context(reason="tests.history.ambient_redactions"):
+            redactions = history._redactions(versions, {})
+        assert redactions
+        assert all("title" not in fields for fields in redactions.values())
+    else:
+        # Native strict-mode relation reads fail closed by refusing an absent actor.
+        with pytest.raises(MissingActorError):
+            history._redactions(versions, {})
 
 
 def test_history_carries_the_statements_a_changeset_asserted_for_the_record() -> None:

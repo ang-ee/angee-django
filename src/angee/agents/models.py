@@ -1566,6 +1566,7 @@ class Agent(ServiceUserMixin, ResourceLoadMixin, OwnerMixin, HistoryMixin, Angee
     def records_instance(self, kind: OperatorInstanceKind, name: str) -> bool:
         """Whether this agent records the operator ``kind`` instance ``name`` as its own."""
 
+        # The declared kind-to-field mapping selects the instance column.
         return bool(name) and getattr(self, self._INSTANCE_FIELDS[kind]) == name
 
     def workspace_identity_inputs(self) -> dict[str, str]:
@@ -1617,7 +1618,7 @@ class Agent(ServiceUserMixin, ResourceLoadMixin, OwnerMixin, HistoryMixin, Angee
             instances.insert(0, (OperatorInstanceKind.WORKSPACE, status.name))
         for kind, name in instances:
             label = OperatorInstanceKind(kind).label.lower()
-            # Recording it would overwrite — and so forget — this agent's own instance.
+            # The declared kind-to-field mapping selects the column an adoption would overwrite.
             own = getattr(self, self._INSTANCE_FIELDS[kind])
             if own and own != name:
                 return f"This agent already records {label} “{own}”, so it cannot also take over “{name}”."
@@ -1879,11 +1880,12 @@ class Agent(ServiceUserMixin, ResourceLoadMixin, OwnerMixin, HistoryMixin, Angee
         # flow (both also keyed on ``renders_service``).
         if runtime.renders_service and model is not None and self.inference_secret():
             credential = self.inference_credential_for_runtime()
-            backend = getattr(getattr(model, "provider", None), "backend", None)
-            if credential is None or backend is None:
+            if credential is None:
                 raise ValueError("Inference auth requires a model provider backend.")
             structured["auth_env"] = self._service_env_lines(
-                runtime.auth_env(backend=backend, credential=credential, secret_name=self.inference_secret_name())
+                runtime.auth_env(
+                    backend=model.provider.backend, credential=credential, secret_name=self.inference_secret_name(),
+                )
             )
         # The MCP bearers ride the container env too: one ``${secret.<name>}`` line per
         # credentialed server (the operator resolves it), which the service template renders
