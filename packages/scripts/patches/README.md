@@ -1,9 +1,17 @@
 # Refine query-context backport
 
-`refinedev-core-5.0.12.patch` backports exactly the six source changes from
-[Refine PR #7426](https://github.com/refinedev/refine/pull/7426), commit
-`f8e4c53f7aa83eff6563d62a9f09fc71d513e0c3`. Remove this patch and its install-policy
-entry when the first Refine release containing that fix is adopted.
+`refinedev-core-5.0.12.patch` carries two fixes:
+
+- exactly the six source changes from
+  [Refine PR #7426](https://github.com/refinedev/refine/pull/7426), commit
+  `f8e4c53f7aa83eff6563d62a9f09fc71d513e0c3`;
+- `useInvalidate` passes its invalidation options (`cancelRefetch`) to TanStack
+  Query's `invalidateQueries` as options instead of spreading them into the query
+  filters, where they were ignored (`src/hooks/invalidate/index.tsx` and the built
+  `dist/index.cjs`/`dist/index.mjs`). Not yet reported upstream.
+
+Remove each fix, and the patch with its install-policy entry once both are gone,
+when the first Refine release containing it is adopted.
 
 Generate the patch in a disposable workspace with native `pnpm patch` and
 `pnpm patch-commit`. Start from the published `@refinedev/core@5.0.12` tarball,
