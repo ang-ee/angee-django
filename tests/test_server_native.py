@@ -52,6 +52,7 @@ import sys
 from types import ModuleType
 from django.conf import settings
 from rebac import SubjectRef
+from angee.mcp.autoconfig import SETTINGS as MCP_SETTINGS
 verifier = ModuleType('native_mcp_verifier')
 verifier.resolve_actor = lambda token: SubjectRef.of('tests/actor', '1') if token == 'native-route-token' else None
 sys.modules[verifier.__name__] = verifier
@@ -60,6 +61,7 @@ settings.configure(
     SECRET_KEY='native-mcp-mount', ANGEE_MERGE_GUARDS=[], ANGEE_WEB_STATEMENT_TIMEOUT=0,
     ALLOWED_HOSTS=['localhost'], CSRF_TRUSTED_ORIGINS=['http://localhost'],
     ANGEE_MCP_ACTOR_VERIFIER='native_mcp_verifier.resolve_actor',
+    **MCP_SETTINGS,
 )
 import django
 django.setup()

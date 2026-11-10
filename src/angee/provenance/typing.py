@@ -122,7 +122,14 @@ class ProvenancePlugin(Plugin):
     def configured_model() -> type[models.Model] | None:
         """Read storage through the runtime owner after native Django setup."""
 
-        if not settings.configured or not apps.apps_ready or not changeset_model_label():
+        if not settings.configured or not apps.apps_ready:
+            return None
+        try:
+            label = changeset_model_label()
+        except AttributeError:
+            # A shared plugin configuration need not activate provenance storage.
+            return None
+        if not label:
             return None
         try:
             return changeset_model()

@@ -132,6 +132,8 @@ def test_hook_check_imports_every_declared_path() -> None:
 
 
 def test_hook_check_accepts_unset_optional_hook_and_declared_list_order() -> None:
+    assert check_hook("ANGEE_TEST_UNSET_HOOK") == []
+    assert check_hooks(("ANGEE_TEST_UNSET_HOOK",)) == []
     with override_settings(
         ANGEE_TEST_SINGLE_HOOK="",
         ANGEE_TEST_HOOKS=["builtins.sorted", "builtins.len"],

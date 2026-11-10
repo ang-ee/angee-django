@@ -487,7 +487,9 @@ Use these owners instead of maintaining another contract in an addon:
   The owning addon registers native Django checks for its specific callable
   settings. [`angee.base.hooks`](../../src/angee/base/hooks.py) supplies shared import and
   validation with `check_hooks`, `resolve_hook` and ordered `resolve_hooks`.
-  Checks import providers without executing them. There is no second list of
+  An absent optional provider contributes no hook; this is resolved at the shared
+  hook owner, without inventing capability settings in callers. Checks import
+  declared providers without executing them. There is no second list of
   hook-setting names; each capability owns its validation and invocation.
 - Cross-addon dependencies are one-way (e.g. `integrate → iam`, never the
   reverse); reject a bridge/diamond addon that would couple both ways.

@@ -13,9 +13,10 @@ from django.utils.module_loading import import_string
 
 
 def _hook_paths(setting: str) -> tuple[str, ...]:
-    """Read one single or ordered multi-hook declaration without importing it."""
+    """Read an optional single or ordered multi-hook declaration without importing it."""
 
-    configured = getattr(settings, setting)
+    # Optional providers own their setting; an absent provider contributes no hook.
+    configured = getattr(settings, setting, "")
     if isinstance(configured, str):
         paths = (configured,) if configured else ()
     elif isinstance(configured, list | tuple) and all(isinstance(path, str) for path in configured):

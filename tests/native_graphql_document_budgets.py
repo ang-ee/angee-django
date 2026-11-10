@@ -227,25 +227,30 @@ BUDGETS = {
     # through the relation guard; 0.31 compiles both graphs inline instead of deciding their sets.
     ("member", "transcript"): (3, 32, 2600),  # 0.31: 250 -> 32 statements (3 witnesses), 2505 -> 2593 KB;
     # identity_reader: 2593 -> 2600 KB
-    # These documents span multiple planned statements, so statement counts bind
-    # the read. REBAC 0.32's content-hash CTE names alone grow SQLite text from the
-    # 805/251 KiB ceilings to measured 847,914/264,912 bytes, rounded to 829/259 KiB.
+    # REBAC 0.32.2 restores compact aliases inside shared id sets. SQLite 3.53.1
+    # measures person / projects at 720,547 / 225,845 bytes in CI's composed-test
+    # order: ceil(bytes / 1,024) gives 704 / 221 KiB. Statement counts remain unchanged.
     # The PostgreSQL gate below additionally budgets the sum of SELECT allocations.
-    ("member", "person"): (2, 20, 829),
-    ("member", "projects"): (3, 10, 259),
+    ("member", "person"): (2, 20, 704),
+    ("member", "projects"): (3, 10, 221),
     ("member", "identity"): (1, 1, 2),
 }
 
 
-# SELECT count and total planner allocation rounded up to MiB, PostgreSQL 17.
-# Person: 449,416 KiB used / 476,477 KiB allocated across 18 SELECTs; two audit
-# INSERTs also count against the unchanged 20-statement document ceiling.
-# Projects: 117,929 KiB used / 142,513 KiB allocated across all 10 statements.
-PLANNER_BUDGETS = {"person": (18, 466), "projects": (10, 140)}
+# SELECT count and total planner allocation rounded up to MiB. With REBAC 0.32.2's
+# compact aliases, PostgreSQL 18.6 measures person at 439,767 KiB used / 468,317 KiB
+# allocated, below the recorded PostgreSQL 17 allocation of 476,477 KiB: ceil = 458 MiB.
+# Its 18 SELECTs and two audit INSERTs retain the 20-statement document ceiling.
+# Projects: 115,169 KiB used / 142,513 KiB allocated across all 10 SELECTs on PostgreSQL
+# 18.6. Allocation equals the recorded PostgreSQL 17 value: ceil = 140 MiB.
+PLANNER_BUDGETS = {"person": (18, 458), "projects": (10, 140)}
 
 
 class ConsoleDocumentBudgetTests(TransactionTestCase):
     """Each console read stays within its fixed statement and SQL-size ceiling."""
+
+    # Bound identifiers must have the same SQL width regardless of preceding tests.
+    reset_sequences = True
 
     def setUp(self):
         call_command("rebac", "sync", verbosity=0)

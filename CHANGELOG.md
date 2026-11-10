@@ -85,10 +85,12 @@ live in code docstrings.
   `ANGEE_OPERATOR_TOKEN` and `ANGEE_OPERATOR_RESTART_JOB`; readers no longer
   invent missing-setting defaults.
   Money declares `ANGEE_MONEY_REFERENCE_CURRENCY=None`; conversion still requires
-  a project-selected currency. Named hook, live implementation-registry and
-  transition-policy settings are required inputs: empty hook/registry collections
-  and `None` policy overlays express inactivity. Retained migration fields may
-  outlive retired settings.
+  a project-selected currency. Live implementation-registry and transition-policy
+  settings are required inputs: empty registry collections and `None` policy
+  overlays express inactivity. Optional hook providers may be absent; the shared
+  hook resolver then contributes no callable. The optional provenance typing
+  plugin likewise leaves its declared types unchanged when no storage binding is
+  configured. Retained migration fields may outlive retired settings.
 - Base: `AngeeModel` declares `change_read_resource`, `change_related_records`
   and `change_batch_targets`; adapters dispatch through these contracts.
   `AngeeQuerySetMixin` and `SCHEMA_BINDING` replace their underscored names.
@@ -470,12 +472,18 @@ live in code docstrings.
 
 ## Unreleased — django-zed-rebac 0.32
 
+- In 0.32.2, frozen permission id sets compile with Django's compact subquery
+  aliases, including recursive role helpers. This removes the repeated full-table
+  names introduced in 0.32.0 while preserving id-set sharing and statement counts.
+  SQL-text and planner-memory ceilings follow the measured reduction; content-hash
+  id-set names remain.
+
 - In 0.32.1, cross-row validation retains queryset-level bypass authority instead
   of losing it during save admission. Instance sudo audit deduplication follows
   transaction/savepoint rollback, so a rolled-back audit cannot suppress the next
   committed bypass entry.
 
-- The base addon requires `django-zed-rebac>=0.32.1,<0.33` (GraphQL its
+- The base addon requires `django-zed-rebac>=0.32.2,<0.33` (GraphQL its
   `strawberry-django` extra, the dev group its `caveats` extra); the engine now
   requires `django-cte>=5.0.1,<5.1` (locked at the tested 5.0.1).
 - Equal permission id sets across embedded SELECT scopes share one outer

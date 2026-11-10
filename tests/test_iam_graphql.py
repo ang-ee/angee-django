@@ -1971,12 +1971,14 @@ import os
 os.environ.pop("DJANGO_SETTINGS_MODULE", None)
 from django.conf import settings
 from angee.integrate.autoconfig import SETTINGS as INTEGRATE_SETTINGS
+from angee.provenance.autoconfig import SETTINGS as PROVENANCE_SETTINGS
 settings.configure(
     INSTALLED_APPS=["django.contrib.contenttypes", "rebac", "native_oidc"],
     AUTH_USER_MODEL="native_oidc.User",
     DATABASES={"default": {"ENGINE": "django.db.backends.sqlite3", "NAME": ":memory:"}},
     SECRET_KEY="oidc-disconnect-policy",
     ANGEE_OAUTH_PROVIDER_TYPE_CLASSES=INTEGRATE_SETTINGS["ANGEE_OAUTH_PROVIDER_TYPE_CLASSES"],
+    ANGEE_CHANGESET_MODEL=PROVENANCE_SETTINGS["ANGEE_CHANGESET_MODEL"],
 )
 import django
 django.setup()

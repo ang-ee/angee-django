@@ -79,11 +79,11 @@ def test_timeline_read_planner_memory(review, settings, viewer, record_property)
     record_property("sql_bytes", plan.sql_bytes)
     record_property("planner_memory_used_kib", plan.used_kib)
     record_property("planner_memory_allocated_kib", memory)
-    # pgvector/pgvector:pg17 with shared id sets: 34,681 SQL bytes,
-    # 10,653 KiB used / 16,384 KiB allocated for either actor.
-    # The 17 MiB ceiling allows 1 MiB (6.25%) headroom over that measured allocation.
-    assert 0 < memory <= 17 * 1024, (
-        f"Timeline planner allocated {memory} KiB; ceiling 17 MiB. "
+    # REBAC 0.32.2's compact aliases: PostgreSQL 18.6 measures 29,591 SQL bytes,
+    # 10,415 KiB used / 16,384 KiB allocated for either actor. Allocation equals the
+    # recorded PostgreSQL 17 value; ceil(16,384 / 1,024) = 16 MiB, with no headroom.
+    assert 0 < memory <= 16 * 1024, (
+        f"Timeline planner allocated {memory} KiB; ceiling 16 MiB. "
         "Ratchet downward when cost falls; never raise to admit a regression."
     )
 
