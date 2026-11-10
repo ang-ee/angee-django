@@ -56,26 +56,6 @@ definition iam/company {
 """
 
 
-def _managed(package: str, resource_type: str):
-    """Create a SchemaDefinition with a PackageManagedRecord owning it, as sync would."""
-
-    from django.contrib.contenttypes.models import ContentType
-    from django.utils import timezone
-    from rebac.models import PackageManagedRecord, SchemaDefinition
-
-    definition = SchemaDefinition.objects.create(resource_type=resource_type)
-    PackageManagedRecord.objects.create(
-        package=package,
-        external_id=f"definition:{resource_type}",
-        schema_revision=1,
-        target_ct=ContentType.objects.get_for_model(SchemaDefinition),
-        target_pk=definition.pk,
-        content_hash="x",
-        last_synced_at=timezone.now(),
-    )
-    return definition
-
-
 def _managed_relation_for_definition(
     package: str,
     definition,
@@ -208,7 +188,7 @@ def test_reconcile_directly_purges_stale_relations_from_active_store(db) -> None
     )
 
     package = apps.get_app_config("nexus").name
-    definition = _managed(package, "nexus/tie")
+    definition = SchemaDefinition.objects.get(resource_type="nexus/tie")
     stale_backed = _managed_relation_for_definition(
         package,
         definition,
@@ -222,13 +202,7 @@ def test_reconcile_directly_purges_stale_relations_from_active_store(db) -> None
         "legacy_reader",
         backing=None,
     )
-    kept = _managed_relation_for_definition(
-        package,
-        definition,
-        "party_a",
-        backing=backing_to_dict(FieldBinding(path="party_a")),
-        subject_type="parties/party",
-    )
+    kept = definition.relations.get(name="party_a")
 
     relationship_model = active_relationship_model()
     stale_tuple = relationship_model.objects.create(
