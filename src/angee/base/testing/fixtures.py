@@ -13,6 +13,7 @@ from django.core.management import call_command
 from django.db.models.fields.related_descriptors import ReverseManyToOneDescriptor, ReverseOneToOneDescriptor
 from django.db.models.signals import post_migrate
 from pytest_django.plugin import DjangoDbBlocker
+from rebac.backends import reset_backend
 
 from angee.base.permissions import SCHEMA_BINDING
 from angee.base.testing.permissions import composed_permissions as composed_permissions
@@ -163,8 +164,6 @@ def restore_composed_permission_bindings(monkeypatch: pytest.MonkeyPatch) -> Ite
     (``rebac.testing.install_schema``); the next test reads the stored baseline again.
     """
 
-    from rebac.backends import reset_backend
-
     for config in apps.get_app_configs():
         for key in ("rebac_schema", SCHEMA_BINDING):
             existed = key in config.__dict__
@@ -177,10 +176,11 @@ def restore_composed_permission_bindings(monkeypatch: pytest.MonkeyPatch) -> Ite
 
 @pytest.fixture()
 def composed_tables(db: None) -> None:
-    """Use Django's rollback-isolated test tables over the session's permission baseline.
+    """Compatibility alias of pytest-django's ``db`` kept for consumer suites; new tests request ``db``.
 
-    Each test runs in a transaction rolled back at its end, so the REBAC schema and
-    every row the session baseline loads stay in place. A test whose contract needs
+    Every database test runs over the session's permission baseline in a transaction
+    rolled back at its end, so the REBAC schema and every row the baseline loads stay
+    in place. A test whose contract needs
     real commits (other threads or connections, row locks, ``on_commit`` work run
     by a real worker) declares ``django_db(transaction=True)``; its flush restores
     the baseline through ``post_migrate``. Assert ``on_commit`` callbacks with

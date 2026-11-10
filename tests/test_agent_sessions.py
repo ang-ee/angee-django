@@ -121,9 +121,10 @@ def test_post_refuses_non_object_context_before_insertion(
     session: AgentSession,
     capture_tasks: list[Any],
     context: Any,
+    django_capture_on_commit_callbacks: Any,
 ) -> None:
     capture_tasks.clear()
-    with pytest.raises(ValidationError) as refused:
+    with django_capture_on_commit_callbacks(execute=True), pytest.raises(ValidationError) as refused:
         session.post("Refused", context=context)
     assert refused.value.message_dict == {"context": ["Message context must be an object."]}
     assert not session.turns.exists()

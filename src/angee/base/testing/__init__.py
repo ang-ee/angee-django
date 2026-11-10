@@ -2,7 +2,8 @@
 
 Register ``angee.base.testing.fixtures`` in the test suite's root ``pytest_plugins``:
 it binds the installed permission inputs and synchronizes REBAC once per session, and
-``composed_tables`` gives each test rollback isolation over that baseline.
+every database test rolls back over that baseline (``composed_tables`` is a
+compatibility alias of ``db`` for consumer suites).
 ``composed_permissions`` binds a test-owned copy of the inputs for a test that edits
 one. Suites outside that conftest's scope re-export the fixture once from their own
 ``conftest.py``::

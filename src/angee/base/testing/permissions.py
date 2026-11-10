@@ -9,6 +9,8 @@ import pytest
 from django.apps import AppConfig, apps
 from django_compose.artifacts import atomic_write
 
+from angee.base.permissions import bind_rebac_schema, declared_schema_path, merged_schema_relpath
+
 
 def installed_field_owners(app_configs: Iterable[AppConfig]) -> dict[str, dict[str, str]]:
     """Use source composition's field ownership in installed-schema test callers."""
@@ -32,8 +34,6 @@ def emit_permissions(
     ``sources`` defaults to the installed addons' merged permission fragments, the
     inputs the compiler emits for a composed host; the bound sources are returned.
     """
-
-    from angee.base.permissions import bind_rebac_schema, declared_schema_path, merged_schema_relpath
 
     configs = tuple(app_configs)
     if sources is None:

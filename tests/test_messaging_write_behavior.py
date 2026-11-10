@@ -101,7 +101,7 @@ def test_queued_delivery_waits_for_commit_and_persists_status(
 
 
 def test_reserve_delivery_leases_a_due_draft_once_and_publishes_nothing(
-    channel: Any, composed_tables: None, monkeypatch: pytest.MonkeyPatch
+    channel: Any, composed_tables: None, monkeypatch: pytest.MonkeyPatch, django_capture_on_commit_callbacks: Any,
 ) -> None:
     """The row reserves a due draft under its lock; a live lease refuses a second reservation."""
     sent: list[dict[str, Any]] = []
@@ -109,7 +109,11 @@ def test_reserve_delivery_leases_a_due_draft_once_and_publishes_nothing(
         "angee.jobs.enqueue.celery_app.send_task",
         lambda _name, *, kwargs, **_options: sent.append(kwargs),
     )
-    with system_context(reason="messaging reservation setup"), mute_changes():
+    with (
+        django_capture_on_commit_callbacks(execute=True),
+        system_context(reason="messaging reservation setup"),
+        mute_changes(),
+    ):
         message = Message.objects.create(
             channel_id=channel.pk,
             platform="email",

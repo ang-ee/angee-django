@@ -1,11 +1,16 @@
-"""Opt-in pytest attribution boundaries for hosts installing provenance."""
+"""Opt-in pytest support for hosts installing provenance: attribution boundaries and statement principals."""
 
 from collections.abc import Iterator
+from typing import Any
 
 import pytest
+from django.apps import apps
+from django.db.models.signals import post_migrate
 from pytest_django.django_compat import is_django_unittest
+from pytest_django.plugin import DjangoDbBlocker
 
 from angee.provenance.context import changeset
+from angee.provenance.testing import load_statement_sources
 
 
 def pytest_configure(config: pytest.Config) -> None:
@@ -15,6 +20,31 @@ def pytest_configure(config: pytest.Config) -> None:
         "markers",
         "entrypoint_boundaries: the module opens its own changeset boundaries; the autouse test boundary stays closed",
     )
+
+
+@pytest.fixture(scope="session")
+def django_db_setup(django_db_setup: None, django_db_blocker: DjangoDbBlocker) -> Iterator[None]:
+    """The session baseline also holds every installed addon's statement principals.
+
+    Extends the ``angee.base.testing`` fixture of the same name, so this plugin loads
+    after it: the install-tier principals and grants that admission reads
+    (:func:`~angee.provenance.testing.load_statement_sources`) load once, as a
+    composed host's install tier loads them, and again at provenance's turn of the
+    ``post_migrate`` a transactional flush sends, after REBAC's resync.
+    """
+
+    provenance = apps.get_app_config("provenance")
+
+    def load(**kwargs: Any) -> None:
+        load_statement_sources()
+
+    post_migrate.connect(load, sender=provenance, weak=False)
+    try:
+        with django_db_blocker.unblock():
+            load()
+        yield
+    finally:
+        post_migrate.disconnect(load, sender=provenance)
 
 
 @pytest.fixture(autouse=True)

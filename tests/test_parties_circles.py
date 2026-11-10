@@ -696,14 +696,6 @@ def test_merging_handles_on_different_platforms_refuses(composed_tables: None) -
     assert kept == {alias.pk, email.pk}
 
 
-def test_a_consumer_host_reaches_the_rule_sources_through_the_parties_test_plugin(statement_sources: None) -> None:
-    """A host without the framework's composed tables loads parties' install-tier principals from its plugin."""
-
-    del statement_sources
-    for key in ("normalized_twin", "email_domain", "display_name", "signature_phone", "source_sender"):
-        assert Party.objects.rule_source(key).key == f"parties.{key}"
-
-
 def test_a_confirmation_writes_only_the_decision_and_stays_asserted(composed_tables: None) -> None:
     """Confirming a rule's suggestion writes the person's preferred statement beside the untouched producer.
 

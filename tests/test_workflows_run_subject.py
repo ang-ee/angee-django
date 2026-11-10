@@ -69,13 +69,15 @@ def test_request_replay_admits_once_and_settlement_reads_terminal_output(executi
     assert subject.settlements == [{"run": run.pk, "status": RunStatus.SUCCEEDED, "output": {"value": 4}}]
 
 
-def test_admission_refusal_rolls_back_run_evidence_and_dispatch(execution, subject):
+def test_admission_refusal_rolls_back_run_evidence_and_dispatch(
+    execution, subject, django_capture_on_commit_callbacks,
+):
     actor, sent = execution
     workflow = workflow_for(actor)
     RunSubjectRecord.system_queryset().filter(pk=subject.pk).update(refuse_admission=True)
     sent.clear()
 
-    with pytest.raises(ValidationError, match="refuses admission"):
+    with django_capture_on_commit_callbacks(execute=True), pytest.raises(ValidationError, match="refuses admission"):
         WorkflowRun.objects.start(workflow, actor=actor, subject=subject)
 
     assert not WorkflowRun.system_queryset().exists()

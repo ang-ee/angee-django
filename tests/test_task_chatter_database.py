@@ -43,8 +43,7 @@ emit_permissions(configs, Path(os.environ['ANGEE_TEST_PERMISSION_DIR']),
                  sources=extension_source_map(configs, field_owners=installed_field_owners(configs)))
 call_command('migrate', run_syncdb=True, verbosity=0)
 call_command('rebac', 'sync', verbosity=0, stdout=StringIO())
-load_statement_sources('parties')
-load_statement_sources('messaging')
+load_statement_sources()
 with system_context(reason='tests.task.fixture'), changeset(fresh=True):
     ActivityType.objects.create(key='call', name='Call')
     user = get_user_model().objects.create_user(username='actor')
