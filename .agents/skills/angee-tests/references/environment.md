@@ -39,7 +39,7 @@ builds its schemas lazily on its first observable write.
   configured lifecycle.
 - **Django owns static test-table lifecycle.** Register concrete models before
   database setup in installed, unmigrated apps, and use pytest-django's native
-  setup and transactional flush. Share source compositions through the owning
+  setup and per-test rollback; a flush follows only a transactional test. Share source compositions through the owning
   [`resources`](../../../../src/angee/resources/testing/__init__.py),
   [`workflows`](../../../../src/angee/workflows/testing/__init__.py), and
   [`integrate`](../../../../src/angee/integrate/testing/__init__.py) test apps.
