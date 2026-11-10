@@ -17,7 +17,7 @@ pnpmfileChecksum: sha256-47DEQpj8HBSa+/TImW+5JCeuQeRkm5NMpJWZG3hSuFU=
 
 patchedDependencies:
   '@refinedev/core@5.0.12': 4f168eb83b408c82efa76d911df2c053a0a64547ab3acf5c4a35c885fb9ed289
-  nuqs@2.10.1: 2148684edec6dc099ae9f4aaef272464500bb73467292d51851a7da70ccb1db4
+  nuqs@2.10.1: 7df751c14e60ea875197713df7693bf9eff8dde5047768bf32808445ced9e7db
 
 importers:
 
@@ -141,7 +141,7 @@ importers:
         version: 26.7.2(typescript@6.0.3)
       nuqs:
         specifier: 2.10.1
-        version: 2.10.1(patch_hash=2148684edec6dc099ae9f4aaef272464500bb73467292d51851a7da70ccb1db4)(@tanstack/react-router@1.170.46(react-dom@19.3.1(react@19.3.1))(react@19.3.1))(react@19.3.1)
+        version: 2.10.1(patch_hash=7df751c14e60ea875197713df7693bf9eff8dde5047768bf32808445ced9e7db)(@tanstack/react-router@1.170.46(react-dom@19.3.1(react@19.3.1))(react@19.3.1))(react@19.3.1)
       vite:
         specifier: ^8.0.0
         version: 8.3.6(@types/node@26.6.6)(esbuild@0.28.2)(jiti@2.7.0)(yaml@2.9.1)
@@ -312,7 +312,7 @@ importers:
         version: 5.0.12(patch_hash=4f168eb83b408c82efa76d911df2c053a0a64547ab3acf5c4a35c885fb9ed289)(@tanstack/react-query@5.107.1(@types/react@19.3.0)(react@19.3.1))(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.1(react@19.3.1))(react@19.3.1)
       nuqs:
         specifier: 2.10.1
-        version: 2.10.1(patch_hash=2148684edec6dc099ae9f4aaef272464500bb73467292d51851a7da70ccb1db4)(@tanstack/react-router@1.170.46(react-dom@19.3.1(react@19.3.1))(react@19.3.1))(react@19.3.1)
+        version: 2.10.1(patch_hash=7df751c14e60ea875197713df7693bf9eff8dde5047768bf32808445ced9e7db)(@tanstack/react-router@1.170.46(react-dom@19.3.1(react@19.3.1))(react@19.3.1))(react@19.3.1)
       react:
         specifier: ^19.2.7
         version: 19.3.1
@@ -451,7 +451,7 @@ importers:
         version: 1.70.0(@types/react@19.3.0)(react@19.3.1)
       nuqs:
         specifier: 2.10.1
-        version: 2.10.1(patch_hash=2148684edec6dc099ae9f4aaef272464500bb73467292d51851a7da70ccb1db4)(@tanstack/react-router@1.170.46(react-dom@19.3.1(react@19.3.1))(react@19.3.1))(react@19.3.1)
+        version: 2.10.1(patch_hash=7df751c14e60ea875197713df7693bf9eff8dde5047768bf32808445ced9e7db)(@tanstack/react-router@1.170.46(react-dom@19.3.1(react@19.3.1))(react@19.3.1))(react@19.3.1)
       react-day-picker:
         specifier: ^10.0.1
         version: 10.0.2(@types/react@19.3.0)(react@19.3.1)
@@ -1528,7 +1528,7 @@ importers:
         version: link:../../../../packages/ui
       nuqs:
         specifier: 2.10.1
-        version: 2.10.1(patch_hash=2148684edec6dc099ae9f4aaef272464500bb73467292d51851a7da70ccb1db4)(@tanstack/react-router@1.170.46(react-dom@19.3.1(react@19.3.1))(react@19.3.1))(react@19.3.1)
+        version: 2.10.1(patch_hash=7df751c14e60ea875197713df7693bf9eff8dde5047768bf32808445ced9e7db)(@tanstack/react-router@1.170.46(react-dom@19.3.1(react@19.3.1))(react@19.3.1))(react@19.3.1)
     devDependencies:
       '@tanstack/react-query':
         specifier: ^5.102.0
@@ -11798,7 +11798,7 @@ snapshots:
     dependencies:
       esm-env: 1.2.2
 
-  nuqs@2.10.1(patch_hash=2148684edec6dc099ae9f4aaef272464500bb73467292d51851a7da70ccb1db4)(@tanstack/react-router@1.170.46(react-dom@19.3.1(react@19.3.1))(react@19.3.1))(react@19.3.1):
+  nuqs@2.10.1(patch_hash=7df751c14e60ea875197713df7693bf9eff8dde5047768bf32808445ced9e7db)(@tanstack/react-router@1.170.46(react-dom@19.3.1(react@19.3.1))(react@19.3.1))(react@19.3.1):
     dependencies:
       '@standard-schema/spec': 1.1.0
       react: 19.3.1
