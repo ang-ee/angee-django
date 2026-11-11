@@ -15,10 +15,10 @@ from tests.test_knowledge import _grant
 
 
 @pytest.fixture
-def task_project(composed_tables: None) -> tuple[Any, Any, Any, Any]:
+def task_project(db: None) -> tuple[Any, Any, Any, Any]:
     """An owner's project and task, a project reader and an outsider."""
 
-    del composed_tables
+    del db
     owner, reader, outsider = (create_user(name) for name in ("edge-owner", "edge-reader", "edge-outsider"))
     with actor_context(owner):
         project = Project.objects.create(title="Edges")
@@ -68,10 +68,10 @@ def test_link_refuses_undeclared_and_untyped_targets(task_project: Any) -> None:
 
 
 @pytest.fixture
-def bindable(composed_tables: None) -> dict[str, Any]:
+def bindable(db: None) -> dict[str, Any]:
     """A project owner with a drive and a vault, plus a writer who cannot share."""
 
-    del composed_tables
+    del db
     names = ("bind-owner", "bind-writer", "bind-reader", "bind-outsider")
     owner, writer, reader, outsider = (create_user(name) for name in names)
     with system_context(reason="test.bindings.seed"):

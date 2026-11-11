@@ -65,10 +65,10 @@ def _repo_names() -> set[str]:
         return set(Repository.objects.values_list("name", flat=True))
 
 
-def test_discover_repositories_reconciles_and_prunes(composed_tables: None) -> None:
+def test_discover_repositories_reconciles_and_prunes(db: None) -> None:
     """discoverRepositories inventories every repo and prunes ones that vanished."""
 
-    del composed_tables
+    del db
     vcs = _vcs_bridge("disco", config={"stub_repos": REPOS})
 
     assert vcs.discover_repositories() == 2
@@ -81,10 +81,10 @@ def test_discover_repositories_reconciles_and_prunes(composed_tables: None) -> N
     assert _repo_names() == {"acme/widgets"}
 
 
-def test_import_repository_adds_one_without_pruning(composed_tables: None) -> None:
+def test_import_repository_adds_one_without_pruning(db: None) -> None:
     """addRepository inventories the picked repo and leaves the others in place."""
 
-    del composed_tables
+    del db
     vcs = _vcs_bridge("imp", config={"stub_repos": REPOS})
     vcs.discover_repositories()
 
@@ -93,18 +93,18 @@ def test_import_repository_adds_one_without_pruning(composed_tables: None) -> No
     assert _repo_names() == {"acme/widgets", "acme/gadgets"}
 
 
-def test_search_repositories_is_the_typeahead(composed_tables: None) -> None:
+def test_search_repositories_is_the_typeahead(db: None) -> None:
     """searchRepositories returns name-matching host candidates for the typeahead."""
 
-    del composed_tables
+    del db
     vcs = _vcs_bridge("search", config={"stub_repos": REPOS})
     assert [candidate.name for candidate in vcs.search_repositories("widget")] == ["acme/widgets"]
 
 
-def test_search_repositories_uses_backend_declared_scope_key(composed_tables: None) -> None:
+def test_search_repositories_uses_backend_declared_scope_key(db: None) -> None:
     """The VCS bridge asks its backend which config key scopes repository search."""
 
-    del composed_tables
+    del db
     repos = [
         *REPOS,
         {
@@ -120,10 +120,10 @@ def test_search_repositories_uses_backend_declared_scope_key(composed_tables: No
     assert [candidate.name for candidate in vcs.search_repositories("widget")] == ["other/widgets"]
 
 
-def test_source_refresh_materializes_templates(composed_tables: None) -> None:
+def test_source_refresh_materializes_templates(db: None) -> None:
     """A template source refresh walks the tree and upserts Template rows."""
 
-    del composed_tables
+    del db
     vcs = _vcs_bridge("tpl", config={"stub_repos": REPOS, "stub_tree": TREE, "stub_blobs": BLOBS})
     vcs.discover_repositories()
     with system_context(reason="test"):
@@ -137,12 +137,12 @@ def test_source_refresh_materializes_templates(composed_tables: None) -> None:
 
 
 def test_failed_source_completion_rolls_back_template_reconciliation(
-    composed_tables: None,
+    db: None,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A refused completion stamp leaves the previous inventory and stamp in place."""
 
-    del composed_tables
+    del db
     vcs = _vcs_bridge("tpl-rollback", config={"stub_repos": REPOS, "stub_tree": TREE, "stub_blobs": BLOBS})
     vcs.discover_repositories()
     with system_context(reason="test rollback setup"):
@@ -163,10 +163,10 @@ def test_failed_source_completion_rolls_back_template_reconciliation(
         assert Source.objects.get(pk=source.pk).last_synced_at is None
 
 
-def test_run_sync_refreshes_sources_and_records_lifecycle(composed_tables: None) -> None:
+def test_run_sync_refreshes_sources_and_records_lifecycle(db: None) -> None:
     """The Bridge sync owner refreshes sources and records lifecycle telemetry."""
 
-    del composed_tables
+    del db
     vcs = _vcs_bridge("sync", config={"stub_repos": REPOS, "stub_tree": TREE, "stub_blobs": BLOBS})
     vcs.discover_repositories()
     with system_context(reason="test"):
@@ -186,7 +186,7 @@ def test_run_sync_refreshes_sources_and_records_lifecycle(composed_tables: None)
     assert vcs.next_sync_at == vcs.last_sync_completed_at + timedelta(seconds=vcs.poll_interval)
 
 
-def test_local_backend_materializes_templates_through_the_source_flow(composed_tables: None, tmp_path: Any) -> None:
+def test_local_backend_materializes_templates_through_the_source_flow(db: None, tmp_path: Any) -> None:
     """A `local`-backed integration inventories a working tree into Template rows.
 
     Drives the same ``discover → Source.refresh`` path the resource-seeded console
@@ -194,7 +194,7 @@ def test_local_backend_materializes_templates_through_the_source_flow(composed_t
     Template`` and that skip-dirs keep a stray ``copier.yml`` out of the inventory.
     """
 
-    del composed_tables
+    del db
     template_dir = tmp_path / "templates" / "workspaces" / "dev"
     template_dir.mkdir(parents=True)
     (template_dir / "copier.yml").write_text("_angee:\n  kind: workspace\n  name: Dev\n")
@@ -299,8 +299,8 @@ def test_materialized_marker_policy_preserves_path_boundaries_and_ignores_jj(tmp
         source_path(tmp_path, "../outside")
 
 
-def test_discovery_uses_one_resolved_revision_for_tree_and_blobs(composed_tables, monkeypatch):
-    del composed_tables
+def test_discovery_uses_one_resolved_revision_for_tree_and_blobs(db, monkeypatch):
+    del db
     observed = []
     original_tree = StubVCSBackend.ls_tree
     original_blob = StubVCSBackend.cat_file

@@ -24,10 +24,10 @@ pytestmark = pytest.mark.django_db
 
 
 @pytest.fixture
-def reportable(composed_tables: None) -> dict[str, Any]:
+def reportable(db: None) -> dict[str, Any]:
     """A portfolio manager, a signed-in reader, an initiative and a phasal product."""
 
-    del composed_tables
+    del db
     manager, reader = create_user("report-manager"), create_user("report-reader")
     write_relationships([
         RelationshipTuple(ObjectRef("portfolio/role", "portfolio_admin"), "member", to_subject_ref(manager)),

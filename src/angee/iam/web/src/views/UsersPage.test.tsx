@@ -12,7 +12,6 @@ import {
   type ListProps,
 } from "@angee/ui";
 
-vi.mock("../i18n", () => ({ useIamT: () => (key: string) => key }));
 vi.mock("../PrincipalAccess", () => ({ usePrincipalAccessRecordTab: () => ({ id: "access" }) }));
 
 // The page is called as a plain function to read its declarations, so its container reads are stubbed per address.

@@ -35,7 +35,7 @@ from tests.test_messaging import ThreadedTicket
 from tests.test_nexus import _grant, _schema
 from tests.test_timeline import read_timeline
 
-pytestmark = pytest.mark.usefixtures("composed_tables")
+pytestmark = pytest.mark.django_db
 
 T0 = datetime(2026, 1, 10, 12, tzinfo=UTC)
 User = get_user_model()

@@ -15,7 +15,7 @@ User = get_user_model()
 
 
 @pytest.fixture
-def iam_admin(composed_tables: None) -> Any:
+def iam_admin(db: None) -> Any:
     """Use the existing permission sync and a real, non-superuser role grant."""
 
     return create_platform_admin("campaign-admin", password=None)
@@ -38,7 +38,7 @@ def person_events() -> Iterator[list[dict[str, Any]]]:
 
 
 @pytest.fixture
-def legacy_person_emails(composed_tables: None) -> Iterator[None]:
+def legacy_person_emails(db: None) -> Iterator[None]:
     """Reproduce a pre-constraint table, restoring uniqueness even on failure."""
 
     constraint = next(c for c in User._meta.constraints if c.name == "iam_user_person_email_unique")

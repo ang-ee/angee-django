@@ -47,10 +47,10 @@ def test_placement_validates_current_ancestry_after_cached_initiative_moves(lock
             InitiativeProject._validate_ancestry(candidate, lock=lock)
 
 
-def test_portfolio_authenticated_reads_do_not_grant_write(composed_tables: None) -> None:
+def test_portfolio_authenticated_reads_do_not_grant_write(db: None) -> None:
     """Real portfolio products are readable by signed-in actors without tuples."""
 
-    del composed_tables
+    del db
     reader = SubjectRef.of("auth/user", "1")
     with system_context(reason="test.portfolio.product"):
         row = Product.objects.create(name="Shared")

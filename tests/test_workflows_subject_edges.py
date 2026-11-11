@@ -36,7 +36,7 @@ def child_source(monkeypatch):
     owner = GraphQLSchemas([make_addon(schemas={"console": {
         "query": [resource.query], "types": resource.types,
     }})])
-    monkeypatch.setattr(GraphQLSchemas, "_discovered", owner)
+    monkeypatch.setattr(GraphQLSchemas, "from_discovery", classmethod(lambda cls: owner))
     yield
 
 

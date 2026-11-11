@@ -29,11 +29,11 @@ from tests.extraction_models import Extraction as _Extraction  # noqa: F401 -- r
     ),
 )
 def test_large_permission_reads_keep_one_application_statement(
-    composed_tables: None, resource_type: str, permission: str,
+    db: None, resource_type: str, permission: str,
 ) -> None:
     """A compiled scope adds one revision witness to one application query."""
 
-    del composed_tables
+    del db
     model = model_for_resource_type(resource_type)
     assert model is not None, resource_type
     actor = create_user(f"query-{resource_type.replace('/', '-')}")
@@ -50,10 +50,10 @@ def test_large_permission_reads_keep_one_application_statement(
 
 
 @pytest.mark.parametrize("resource_type", ("storage/folder", "knowledge/page"))
-def test_recursive_reads_stay_bounded_across_nineteen_levels(composed_tables: None, resource_type: str) -> None:
+def test_recursive_reads_stay_bounded_across_nineteen_levels(db: None, resource_type: str) -> None:
     """Hierarchy reads stay correct, with a statement count independent of the rows."""
 
-    del composed_tables
+    del db
     actor = create_user(f"depth-{resource_type.replace('/', '-')}")
     model = model_for_resource_type(resource_type)
     assert model is not None

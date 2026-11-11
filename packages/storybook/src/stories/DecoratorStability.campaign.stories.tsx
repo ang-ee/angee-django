@@ -7,7 +7,7 @@ import { Button, Input, useAppearance } from "@angee/ui";
 
 import preview from "../../.storybook/preview";
 import { previewThemeId, themeGlobalValue } from "../theme-global";
-import { RoutedRuntimeFixture, jsonResponse, storyAppearance, storySchema } from "./runtime-fixtures";
+import { RoutedRuntimeFixture, storyAppearance, storySchema } from "./runtime-fixtures";
 
 function DraftProbe({ label }: { label: string }) {
   const [draft, setDraft] = useState("");
@@ -69,7 +69,7 @@ export const PreservesState: StoryObj<typeof meta> = {
   },
 };
 
-const schemas = storySchema(async () => jsonResponse({ data: {} }));
+const schemas = storySchema({});
 
 /** The same environment owner supplied through native preview parameters. */
 export const DataFixturePreservesState: StoryObj<typeof meta> = {

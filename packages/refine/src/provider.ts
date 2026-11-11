@@ -328,6 +328,7 @@ export function createAngeeChangeLiveProvider(
 ): AngeeChangeLiveProvider {
   const resourcesByList = resourcesByListRoot(resources);
   const resourcesByModel = resourcesByModelLabel(resources);
+  const modelsByChanges = modelLabelsByChangesRoot(resources);
   // graphql-ws does not dedup identical documents, so fan one upstream
   // subscription per document and variables out to every mounted consumer — resource hooks
   // (useList/useOne, keyed by list root) and authored queries (keyed by model
@@ -417,15 +418,21 @@ export function createAngeeChangeLiveProvider(
                 }
                 return;
               }
-              // One upstream result is one change, however many consumers share it.
+              // One upstream result is one change of one row, however many consumers share it.
+              // A resource without a feed of its own reads its nearest MTI ancestor's
+              // (its metadata names that root), so the row changed under every model
+              // reading this root, with the same public id.
               const change = liveChangeFromResult(result.data, subscriptionKey, resource);
               const deliveries = [...entry.consumers].filter(
                 (consumer): consumer is LiveDelivery<ChangeEvent> => typeof consumer !== "function",
               );
-              liveInvalidation.push(change, deliveries);
-              entry.consumers.forEach((consumer) => {
-                if (typeof consumer === "function") consumer(change);
-              });
+              for (const model of new Set([change.model, ...(modelsByChanges.get(subscriptionKey) ?? [])])) {
+                const delivered = model === change.model ? change : { ...change, model };
+                liveInvalidation.push(delivered, deliveries);
+                entry.consumers.forEach((consumer) => {
+                  if (typeof consumer === "function") consumer(delivered);
+                });
+              }
             },
             error: (error) => {
               if (!active) return;
@@ -593,6 +600,17 @@ function resourcesByListRoot(
       resource.roots.list ? [[resource.roots.list, resource] as const] : [],
     ),
   );
+}
+
+function modelLabelsByChangesRoot(
+  resources: readonly AngeeLiveResource[],
+): ReadonlyMap<string, readonly string[]> {
+  const models = new Map<string, string[]>();
+  for (const resource of resources) {
+    const root = resource.roots.changes;
+    if (root) models.set(root, [...(models.get(root) ?? []), resource.modelLabel]);
+  }
+  return models;
 }
 
 function resourcesByModelLabel(

@@ -9,7 +9,7 @@ from tests.conftest import create_user
 from tests.test_messaging_graphql import _schema
 
 
-def test_record_reader_needs_source_thread_read(composed_tables: None) -> None:
+def test_record_reader_needs_source_thread_read(db: None) -> None:
     owner = create_user("source-owner")
     reader = create_user("source-record-reader")
     with actor_context(owner):

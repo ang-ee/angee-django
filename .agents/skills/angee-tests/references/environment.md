@@ -53,10 +53,11 @@ builds its schemas lazily on its first observable write.
   labels use the single [`model_tables`](../../../../tests/tables.py) helper. It drops only
   tables it created; it never clears existing tables. Keep production code
   independent of test support.
-- **Patch inherited Django manager methods on the manager class.** Pytest's
-  `monkeypatch` can restore an instance patch as a bound instance attribute;
-  Django's `db_manager()` copies then retain the original manager and lose their
-  binding. Patch `type(manager)` and accept the manager argument in the spy.
+- **Stub a collaborator's manager verb on the manager instance.** Prefer the
+  owner's fake or an outcome; when another owner's verb must fail or be observed,
+  patch `Model.objects` and call the saved bound method. Django's `db_manager()`
+  copies do not inherit an instance patch, and `tests/test_patch_targets.py`
+  refuses `type(manager)` patches.
 - **A relocated virtualenv can retain stale launcher shebangs.** Diagnose the
   interpreter and environment owner when a console script cannot spawn; do not
   assume an application failure. [Checks](../../../../docs/checks.md) owns the supported

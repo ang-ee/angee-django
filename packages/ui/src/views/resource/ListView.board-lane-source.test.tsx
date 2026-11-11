@@ -38,11 +38,6 @@ const harness = vi.hoisted(() => ({
   },
 }));
 
-vi.mock("../../i18n", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../i18n")>()),
-  useUiT: () => (key: string) => key,
-}));
-
 vi.mock("../../feedback", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../feedback")>()),
   useToast: () => harness.toast,
@@ -437,7 +432,7 @@ describe("ListView board laneSource", () => {
     await waitFor(() => {
       expect(
         harness.boardProps?.groups.find((group) => group.key === "stg_hidden")?.label,
-      ).toBe("list.unknownValue");
+      ).toBe("Unknown");
     });
   });
 
@@ -477,7 +472,7 @@ describe("ListView board laneSource", () => {
       expect(rowIdsByLane().stg_new).toEqual(["led_1"]);
     });
     expect(harness.toast.danger).toHaveBeenCalledWith({
-      title: "board.moveFailed",
+      title: "Could not move card",
       description: "write rejected",
     });
     expect(harness.refetch).toHaveBeenCalledTimes(1);

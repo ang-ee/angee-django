@@ -100,7 +100,7 @@ def test_observed_fields_reject_reverse_relation_declarations() -> None:
 @pytest.mark.django_db(transaction=True)
 @pytest.mark.usefixtures("activity_catalog")
 @override_settings(ANGEE_TIMELINE_KINDS=KINDS)
-def test_union_pages_sources_and_counts_the_whole_scope(composed_tables: None) -> None:
+def test_union_pages_sources_and_counts_the_whole_scope() -> None:
     owner = create_platform_admin("timeline-owner")
     with open_changeset(fresh=True, change_reason="vault"):
         vault = vault_for(owner)
@@ -145,7 +145,7 @@ def test_union_pages_sources_and_counts_the_whole_scope(composed_tables: None) -
 @pytest.mark.django_db(transaction=True, reset_sequences=True)
 @pytest.mark.usefixtures("activity_catalog")
 @override_settings(ANGEE_TIMELINE_KINDS=KINDS)
-def test_member_reading_by_grant_pays_a_fixed_rail_cost(composed_tables: None, record_property) -> None:
+def test_member_reading_by_grant_pays_a_fixed_rail_cost(record_property) -> None:
     """A member granted read on the record reads the rail at a fixed cost, however many lines it has."""
     owner, member = create_user("timeline-grant-owner"), create_user("timeline-grant-member")
     with open_changeset(fresh=True, change_reason="vault"):
@@ -187,7 +187,7 @@ def timeline_entries(record, actor=None, *, kind=None):
 
 @pytest.mark.django_db(transaction=True)
 @override_settings(ANGEE_TIMELINE_KINDS=["angee.provenance.timeline.timeline_kinds"])
-def test_existing_and_muted_source_changes_need_no_backfill(composed_tables):
+def test_existing_and_muted_source_changes_need_no_backfill():
     owner = create_platform_admin("timeline-direct")
     with mute_changes(), actor_context(owner), open_changeset(fresh=True, change_reason="Before subscriptions"):
         record = vault_for(owner)

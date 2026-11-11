@@ -62,11 +62,11 @@ def _user(username: str) -> Any:
 
 
 def test_manual_contact_is_unconfirmed_and_dismissed_link_stays_dismissed(
-    composed_tables: None,
+    db: None,
 ) -> None:
     """Manual contact entry creates a reviewable claim and never resurrects its anti-link."""
 
-    del composed_tables
+    del db
     owner = _user("manual-contact-owner")
     with system_context(reason="test manual contact party"):
         party = Party._base_manager.create(display_name="Counterparty", created_by=owner)
@@ -99,8 +99,8 @@ def test_manual_contact_is_unconfirmed_and_dismissed_link_stays_dismissed(
     assert not repeated.handle.party_link_confirmed
 
 
-def test_manual_contact_reuses_a_retained_alias_survivor(composed_tables: None) -> None:
-    del composed_tables
+def test_manual_contact_reuses_a_retained_alias_survivor(db: None) -> None:
+    del db
     owner = _user("manual-contact-redirect-owner")
     with system_context(reason="test manual contact redirect"):
         party = Party._base_manager.create(display_name="Contact", created_by=owner)
@@ -117,11 +117,11 @@ def test_manual_contact_reuses_a_retained_alias_survivor(composed_tables: None) 
 
 
 def test_manual_contact_reuse_preserves_confirmed_owner_and_hides_foreign_handle(
-    composed_tables: None,
+    db: None,
 ) -> None:
     """Global Handle reuse neither overwrites its label nor discloses an unreadable match."""
 
-    del composed_tables
+    del db
     owner = _user("manual-contact-reuse")
     reader = _user("manual-contact-reader")
     foreign = _user("manual-contact-foreign")
@@ -195,10 +195,10 @@ def test_manual_contact_reuse_preserves_confirmed_owner_and_hides_foreign_handle
     assert not reader_proposed.is_dismissed
 
 
-def test_circle_subtree_and_ancestor_scopes(composed_tables: None) -> None:
+def test_circle_subtree_and_ancestor_scopes(db: None) -> None:
     """Circle composes HierarchyMixin: subtree/ancestors read off the path index."""
 
-    del composed_tables
+    del db
     with system_context(reason="test circles"):
         owner = _user("olivia")
         root = Circle._base_manager.create(name="Friends", created_by=owner)
@@ -213,10 +213,10 @@ def test_circle_subtree_and_ancestor_scopes(composed_tables: None) -> None:
         assert other.pk not in subtree
 
 
-def test_circle_reads_follow_the_queryset_actor_not_the_ambient_one(composed_tables: None) -> None:
+def test_circle_reads_follow_the_queryset_actor_not_the_ambient_one(db: None) -> None:
     """Circle names, member counts and unassigned people read through one actor's memberships."""
 
-    del composed_tables
+    del db
     with system_context(reason="test per-actor circles"):
         owner, reader = _user("circle-actor-owner"), _user("circle-actor-reader")
         shared = Person._base_manager.create(display_name="Shared", created_by=owner)
@@ -240,10 +240,10 @@ def test_circle_reads_follow_the_queryset_actor_not_the_ambient_one(composed_tab
         assert Party.objects.filter(pk=loose.pk).unassigned().exists()
 
 
-def test_circle_tree_never_straddles_owners(composed_tables: None) -> None:
+def test_circle_tree_never_straddles_owners(db: None) -> None:
     """hierarchy_scope_fields=("owner",): a parent from another owner is rejected."""
 
-    del composed_tables
+    del db
     with system_context(reason="test circles"):
         mine = Circle._base_manager.create(name="Mine", created_by=_user("me"))
         theirs = Circle._base_manager.create(name="Theirs", created_by=_user("them"))
@@ -252,10 +252,10 @@ def test_circle_tree_never_straddles_owners(composed_tables: None) -> None:
             Circle._base_manager.create(name="Nested", parent=theirs, created_by=mine.created_by)
 
 
-def test_circle_transfer_moves_a_lone_circle_and_never_splits_a_tree(composed_tables: None) -> None:
+def test_circle_transfer_moves_a_lone_circle_and_never_splits_a_tree(db: None) -> None:
     """The owner scopes the tree: a transfer refuses a circle with a parent or children."""
 
-    del composed_tables
+    del db
     with system_context(reason="test circles"):
         owner, recipient = _user("circle-owner"), _user("circle-recipient")
     with actor_context(owner):
@@ -276,10 +276,10 @@ def test_circle_transfer_moves_a_lone_circle_and_never_splits_a_tree(composed_ta
     assert rows[nested.pk].owner_id == recipient.pk
 
 
-def test_circle_membership_is_unique_per_pair(composed_tables: None) -> None:
+def test_circle_membership_is_unique_per_pair(db: None) -> None:
     """One row per (circle, party): a re-suggestion updates, never duplicates."""
 
-    del composed_tables
+    del db
     with system_context(reason="test circles"):
         owner = _user("uma")
         circle = Circle._base_manager.create(name="Family", created_by=owner)
@@ -291,11 +291,11 @@ def test_circle_membership_is_unique_per_pair(composed_tables: None) -> None:
 
 @pytest.mark.parametrize("decision", ("confirm", "dismiss"))
 def test_circle_membership_decisions_preserve_confidence_and_update_timestamp(
-    composed_tables: None, decision: str,
+    db: None, decision: str,
 ) -> None:
     """Review flags and their native timestamp belong to the membership owner."""
 
-    del composed_tables
+    del db
     with system_context(reason="test membership decision timestamp"):
         owner = _user("membership-reviewer")
         circle = Circle._base_manager.create(name="Team", created_by=owner)
@@ -314,10 +314,10 @@ def test_circle_membership_decisions_preserve_confidence_and_update_timestamp(
     assert row.updated_at > previous
 
 
-def test_relationship_kind_renders_both_directions(composed_tables: None) -> None:
+def test_relationship_kind_renders_both_directions(db: None) -> None:
     """One kind row carries both readings via inverse_name; blank means symmetric."""
 
-    del composed_tables
+    del db
     with system_context(reason="test kinds"):
         friend = RelationshipKind._base_manager.create(slug="friend", name="Friend")
         mother = RelationshipKind._base_manager.create(slug="mother", name="Mother", inverse_name="Child")
@@ -332,11 +332,11 @@ def test_relationship_kind_renders_both_directions(composed_tables: None) -> Non
     assert mother.label_for(outbound=False) == "Child"
 
 
-def test_relationship_edge_constraints(composed_tables: None) -> None:
+def test_relationship_edge_constraints(db: None) -> None:
     """A tracked edge is unique per (party, other, kind), never self-referential,
     and every edge names a counterparty (tracked or free-text)."""
 
-    del composed_tables
+    del db
     with system_context(reason="test relationships"):
         owner = _user("rita")
         kind = RelationshipKind._base_manager.create(slug="sibling", name="Sibling")
@@ -351,14 +351,14 @@ def test_relationship_edge_constraints(composed_tables: None) -> None:
             Relationship._base_manager.create(party=maya, kind=kind, created_by=owner)
 
 
-def test_relationship_records_untracked_relatives(composed_tables: None) -> None:
+def test_relationship_records_untracked_relatives(db: None) -> None:
     """A relative who is not a directory entry records as free text (health-gaps).
 
     Two same-kind free-text rows are legitimate (the tracked-pair uniqueness is
     partial), so a family history lists both grandmothers.
     """
 
-    del composed_tables
+    del db
     with system_context(reason="test relationships"):
         owner = _user("gene")
         kind = RelationshipKind._base_manager.create(slug="grandparent", name="Grandparent", inverse_name="Grandchild")
@@ -408,10 +408,10 @@ def _resolved_owner(handle: Any) -> Any:
 
 
 @pytest.mark.parametrize("nameless", ["Unknown", "+1 415 555 2671"])
-def test_an_equal_tie_resolves_to_the_party_with_a_real_name(composed_tables: None, nameless: str) -> None:
+def test_an_equal_tie_resolves_to_the_party_with_a_real_name(db: None, nameless: str) -> None:
     """A nameless duplicate card first in order loses an equal tie; a bare number is no name either."""
 
-    del composed_tables
+    del db
     with system_context(reason="test real-name tie"):
         owner = _user(f"tie-{nameless.strip('+').replace(' ', '')}")
         handle, links = _contested_handle(owner, "ada@example.com", (1.0, False), (1.0, False))
@@ -421,8 +421,8 @@ def test_an_equal_tie_resolves_to_the_party_with_a_real_name(composed_tables: No
         assert _resolved_owner(handle) == second.subject_id
 
 
-def test_a_real_name_never_outranks_a_confirmation_or_a_stronger_score(composed_tables: None) -> None:
-    del composed_tables
+def test_a_real_name_never_outranks_a_confirmation_or_a_stronger_score(db: None) -> None:
+    del db
     with system_context(reason="test real-name rank"):
         owner = _user("tie-rank")
         handle, (confirmed, named) = _contested_handle(owner, "confirmed@example.com", (1.0, True), (1.0, False))
@@ -436,8 +436,8 @@ def test_a_real_name_never_outranks_a_confirmation_or_a_stronger_score(composed_
         assert _resolved_owner(handle) == stronger.subject_id
 
 
-def test_an_all_nameless_tie_keeps_the_link_order(composed_tables: None) -> None:
-    del composed_tables
+def test_an_all_nameless_tie_keeps_the_link_order(db: None) -> None:
+    del db
     with system_context(reason="test nameless tie"):
         handle, links = _contested_handle(_user("tie-nameless"), "nobody@example.com", (1.0, False), (1.0, False))
         for link in links:
@@ -445,10 +445,10 @@ def test_an_all_nameless_tie_keeps_the_link_order(composed_tables: None) -> None
         assert _resolved_owner(handle) == _in_link_order(links)[0].subject_id
 
 
-def test_moving_handle_statements_retains_each_partys_decisions_and_evidence(composed_tables: None) -> None:
+def test_moving_handle_statements_retains_each_partys_decisions_and_evidence(db: None) -> None:
     """A party stating both spellings keeps the stronger current; the weaker stays superseded with its evidence."""
 
-    del composed_tables
+    del db
     with system_context(reason="test move statements"):
         owner = _user("move-statements")
         alias = Handle._base_manager.create(platform="whatsapp", value="113352894324870@lid", created_by=owner)
@@ -488,10 +488,10 @@ def test_moving_handle_statements_retains_each_partys_decisions_and_evidence(com
     assert confirmed.handle_count == 1
 
 
-def test_moving_a_handles_only_statement_leaves_it_unowned(composed_tables: None) -> None:
+def test_moving_a_handles_only_statement_leaves_it_unowned(db: None) -> None:
     """Nothing is deleted, so the move itself re-resolves the handle it empties and recounts its owner."""
 
-    del composed_tables
+    del db
     with system_context(reason="test move lone statement"):
         owner = _user("move-lone-statement")
         alias = Handle._base_manager.create(platform="whatsapp", value="113352894324871@lid", created_by=owner)
@@ -506,10 +506,10 @@ def test_moving_a_handles_only_statement_leaves_it_unowned(composed_tables: None
     assert (alias.party_id, phone.party_id, party.handle_count) == (None, party.pk, 1)
 
 
-def test_a_folded_statement_stays_inspectable_as_superseded(composed_tables: None) -> None:
+def test_a_folded_statement_stays_inspectable_as_superseded(db: None) -> None:
     """A source stating both spellings keeps its stronger statement current; the weaker is retained, not deleted."""
 
-    del composed_tables
+    del db
     with system_context(reason="test move statements fold"):
         owner = _user("move-statements-fold")
         alias = Handle._base_manager.create(platform="whatsapp", value="113352894324872@lid", created_by=owner)
@@ -528,11 +528,11 @@ def test_a_folded_statement_stays_inspectable_as_superseded(composed_tables: Non
 
 
 def test_a_moved_import_statement_stays_beside_the_directorys_and_the_directory_publishes(
-    composed_tables: None, monkeypatch: pytest.MonkeyPatch
+    db: None, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """The statement key carries its source: a takeout's alias and a card's number stay two current stances."""
 
-    del composed_tables
+    del db
     monkeypatch.setattr(ManualChannelBackend, "source_kind", SourceKind.IMPORT)
     statements = Party.statements.model
     with system_context(reason="test mixed-source move"):
@@ -579,9 +579,9 @@ def _handle_merge_fixture(slug: str, digits: str) -> tuple[Any, Any, Any]:
 
 
 def test_merging_a_handle_fills_only_what_the_kept_handle_lacks_and_moves_its_statements(
-    composed_tables: None,
+    db: None,
 ) -> None:
-    del composed_tables
+    del db
     with system_context(reason="test handle merge fill"):
         owner, alias, phone = _handle_merge_fixture("merge-handle-fill", "1941")
         Handle._base_manager.filter(pk=alias.pk).update(
@@ -611,11 +611,11 @@ def test_merging_a_handle_fills_only_what_the_kept_handle_lacks_and_moves_its_st
 
 
 def test_merging_a_handle_keeps_its_correspondence_and_collapses_facts_the_kept_handle_holds(
-    composed_tables: None,
+    db: None,
 ) -> None:
     """Messages and recipients stay on the merged handle; a reaction or tag the phone already has is one fact."""
 
-    del composed_tables
+    del db
     with system_context(reason="test handle merge references"):
         owner, alias, phone = _handle_merge_fixture("merge-handle-references", "1942")
         channel = make_integration("merge-handle-channel", model=Channel, backend_class="manual")
@@ -655,8 +655,8 @@ def test_merging_a_handle_keeps_its_correspondence_and_collapses_facts_the_kept_
     assert tags == ["VIP", "Work"]
 
 
-def test_folding_a_handle_redirects_ingestion_to_the_survivor(composed_tables: None) -> None:
-    del composed_tables
+def test_folding_a_handle_redirects_ingestion_to_the_survivor(db: None) -> None:
+    del db
     with system_context(reason="test handle merge vanished"):
         owner, alias, phone = _handle_merge_fixture("merge-handle-vanished", "1943")
         party = Party._base_manager.create(display_name="Bob", created_by=owner)
@@ -671,10 +671,10 @@ def test_folding_a_handle_redirects_ingestion_to_the_survivor(composed_tables: N
     assert phone.party_id == party.pk
 
 
-def test_merging_handles_on_different_platforms_refuses(composed_tables: None) -> None:
+def test_merging_handles_on_different_platforms_refuses(db: None) -> None:
     """Two platforms are two contact points, never one's spelling of the other."""
 
-    del composed_tables
+    del db
     with system_context(reason="test handle merge platforms"):
         owner, alias, _phone = _handle_merge_fixture("merge-handle-platforms", "1944")
         email = Handle._base_manager.create(platform="email", value="bob-1944@example.test", created_by=owner)
@@ -686,14 +686,14 @@ def test_merging_handles_on_different_platforms_refuses(composed_tables: None) -
     assert kept == {alias.pk, email.pk}
 
 
-def test_a_confirmation_writes_only_the_decision_and_stays_asserted(composed_tables: None) -> None:
+def test_a_confirmation_writes_only_the_decision_and_stays_asserted(db: None) -> None:
     """Confirming a rule's suggestion writes the person's preferred statement beside the untouched producer.
 
     A source that owns the suggestion's score (an Odoo import, a matching rule)
     keeps its row, score and kind; the handle leaves review and is asserted.
     """
 
-    del composed_tables
+    del db
     with system_context(reason="test confirm keeps producer"):
         owner = _user("confirm-producer")
         party = Party._base_manager.create(display_name="Ada Lovelace", created_by=owner)
@@ -716,10 +716,10 @@ def test_a_confirmation_writes_only_the_decision_and_stays_asserted(composed_tab
         assert handle.party_id == party.pk
 
 
-def test_confirm_and_dismiss_drive_resolution(composed_tables: None) -> None:
+def test_confirm_and_dismiss_drive_resolution(db: None) -> None:
     """Confirm outranks any score; dismiss is a durable anti-link that demotes and recounts."""
 
-    del composed_tables
+    del db
     with system_context(reason="test identity"):
         owner = _user("ivan")
         alice = Party._base_manager.create(display_name="Alice", created_by=owner)
@@ -767,10 +767,10 @@ def test_confirm_and_dismiss_drive_resolution(composed_tables: None) -> None:
 
 
 @pytest.mark.parametrize("model", [Party, Person])
-def test_person_for_user_is_the_one_person_per_user_owner(composed_tables: None, model: type[Any]) -> None:
+def test_person_for_user_is_the_one_person_per_user_owner(db: None, model: type[Any]) -> None:
     """The inherited manager always keys the Person.user O2O — never two rows."""
 
-    del composed_tables
+    del db
     with system_context(reason="test for_user"):
         user = User.objects.create_user(username="mona", email="mona@example.com", password="x")
         first = model.objects.for_user(user)
@@ -781,10 +781,10 @@ def test_person_for_user_is_the_one_person_per_user_owner(composed_tables: None,
     assert first.display_name
 
 
-def test_claim_control_writes_control_and_identity_facts(composed_tables: None) -> None:
+def test_claim_control_writes_control_and_identity_facts(db: None) -> None:
     """Handle.claim_control sets the controller (control) and a normal person statement (identity)."""
 
-    del composed_tables
+    del db
     with system_context(reason="test claim_control"):
         user = User.objects.create_user(username="nils", email="nils@example.com", password="x")
         handle = Handle.objects.claim_control(
@@ -811,10 +811,10 @@ def test_claim_control_writes_control_and_identity_facts(composed_tables: None) 
         assert Party.statements.filter(handle=handle, subject=person).count() == 1
 
 
-def test_claim_control_records_a_contested_identity_without_reassigning_control(composed_tables: None) -> None:
+def test_claim_control_records_a_contested_identity_without_reassigning_control(db: None) -> None:
     """A second user's claim stays weak and unconfirmed; the first controller remains in control."""
 
-    del composed_tables
+    del db
     with system_context(reason="test contested claim_control"):
         first_user = User.objects.create_user(username="first", email="shared@example.com", password="x")
         competing_user = User.objects.create_user(username="competing", email="competing@example.com", password="x")
@@ -846,10 +846,10 @@ def test_claim_control_records_a_contested_identity_without_reassigning_control(
     assert competing_link.source_kind == "person"
 
 
-def test_handle_persists_normalized_value_on_create_and_value_update(composed_tables: None) -> None:
+def test_handle_persists_normalized_value_on_create_and_value_update(db: None) -> None:
     """Handle owns its indexed normalization, including Gmail local-part collapsing."""
 
-    del composed_tables
+    del db
     with system_context(reason="test handle normalization"):
         owner = _user("normalized")
         handle = Handle._base_manager.create(
@@ -867,10 +867,10 @@ def test_handle_persists_normalized_value_on_create_and_value_update(composed_ta
     assert handle.normalized_value == "alicesmith@googlemail.com"
 
 
-def test_suggest_for_exact_match_autolinks_at_full_confidence(composed_tables: None) -> None:
+def test_suggest_for_exact_match_autolinks_at_full_confidence(db: None) -> None:
     """An exact normalized-value match to a resolved handle auto-links (gmail dot/plus)."""
 
-    del composed_tables
+    del db
     with system_context(reason="test suggest exact"):
         owner = _user("iris")
         alice = Party._base_manager.create(display_name="Alice", created_by=owner)
@@ -888,10 +888,10 @@ def test_suggest_for_exact_match_autolinks_at_full_confidence(composed_tables: N
     assert link.confidence == 1.0
 
 
-def test_suggest_for_resolved_handle_returns_without_competing_links(composed_tables: None) -> None:
+def test_suggest_for_resolved_handle_returns_without_competing_links(db: None) -> None:
     """A resolved handle is final input to suggest_for, even when a twin disagrees."""
 
-    del composed_tables
+    del db
     with system_context(reason="test suggest resolved noop"):
         owner = _user("resolved-suggestion")
         alice = Party._base_manager.create(display_name="Alice", created_by=owner)
@@ -916,10 +916,10 @@ def test_suggest_for_resolved_handle_returns_without_competing_links(composed_ta
     assert result is None
 
 
-def test_suggest_for_keeps_dismissed_link_dismissed(composed_tables: None) -> None:
+def test_suggest_for_keeps_dismissed_link_dismissed(db: None) -> None:
     """A repeated normalized-value suggestion never resurrects its durable anti-link."""
 
-    del composed_tables
+    del db
     with system_context(reason="test suggest dismissed noop"):
         owner = _user("dismissed-suggestion")
         alice = Party._base_manager.create(display_name="Alice", created_by=owner)
@@ -950,10 +950,10 @@ def test_suggest_for_keeps_dismissed_link_dismissed(composed_tables: None) -> No
     assert unknown.party_id is None
 
 
-def test_suggest_for_records_conflicting_normalized_twins(composed_tables: None) -> None:
+def test_suggest_for_records_conflicting_normalized_twins(db: None) -> None:
     """Resolved normalized twins create one strong suggestion plus weak competing links."""
 
-    del composed_tables
+    del db
     with system_context(reason="test suggest conflicts"):
         owner = _user("twins")
         alice = Party._base_manager.create(display_name="Alice", created_by=owner)
@@ -988,10 +988,10 @@ def test_suggest_for_records_conflicting_normalized_twins(composed_tables: None)
     assert all(link.source_kind == "rule" for link in links)
 
 
-def test_suggest_for_org_domain_suggests_at_low_confidence(composed_tables: None) -> None:
+def test_suggest_for_org_domain_suggests_at_low_confidence(db: None) -> None:
     """An email whose domain matches Organization.domain suggests that org weakly."""
 
-    del composed_tables
+    del db
     with system_context(reason="test suggest domain"):
         owner = _user("omar")
         acme = Organization._base_manager.create(display_name="Acme", domain="acme.com", created_by=owner)
@@ -1005,10 +1005,10 @@ def test_suggest_for_org_domain_suggests_at_low_confidence(composed_tables: None
     assert link.source_kind == "rule"
 
 
-def test_suggest_for_stays_inside_the_parties_the_handle_creator_owns(composed_tables: None) -> None:
+def test_suggest_for_stays_inside_the_parties_the_handle_creator_owns(db: None) -> None:
     """The partition follows party ownership, not who first recorded the party."""
 
-    del composed_tables
+    del db
     with system_context(reason="test suggest owner partition"):
         recorder, owner = _user("rhea"), _user("otto")
         acme = Organization._base_manager.create(
@@ -1026,10 +1026,10 @@ def test_suggest_for_stays_inside_the_parties_the_handle_creator_owns(composed_t
     assert link is not None and link.subject_id == acme.pk
 
 
-def test_suggest_for_no_match_is_a_noop(composed_tables: None) -> None:
+def test_suggest_for_no_match_is_a_noop(db: None) -> None:
     """No twin and no org-domain match leaves the handle unresolved (the Salesforce policy)."""
 
-    del composed_tables
+    del db
     with system_context(reason="test suggest noop"):
         owner = _user("nadia")
         handle = Handle._base_manager.create(platform="email", value="stranger@nowhere.example", created_by=owner)
@@ -1041,12 +1041,12 @@ def test_suggest_for_no_match_is_a_noop(composed_tables: None) -> None:
 
 
 def test_relationship_kind_end_legality_requires_org_counterparty(
-    composed_tables: None,
+    db: None,
     django_assert_num_queries: Any,
 ) -> None:
     """An organization-typed end rejects a person counterparty via clean()/save()."""
 
-    del composed_tables
+    del db
     with system_context(reason="test legality"):
         owner = _user("quinn")
         kind = RelationshipKind._base_manager.create(
@@ -1084,10 +1084,10 @@ def test_relationship_kind_end_legality_requires_org_counterparty(
         relationship.save(update_fields=["notes"])
 
 
-def test_merged_into_flattens_transitively(composed_tables: None) -> None:
+def test_merged_into_flattens_transitively(db: None) -> None:
     """Party.merge atomically flattens chains; PartyQuerySet.canonical drops merged rows."""
 
-    del composed_tables
+    del db
     with system_context(reason="test merge"):
         owner = _user("rex")
         a = Party._base_manager.create(display_name="A", created_by=owner)
@@ -1121,10 +1121,10 @@ def test_has_real_name_rejects_placeholder_and_letterless_names() -> None:
     assert not Party(display_name="   ").has_real_name
 
 
-def test_merge_rejects_reversal_and_database_rejects_self_merge(composed_tables: None) -> None:
+def test_merge_rejects_reversal_and_database_rejects_self_merge(db: None) -> None:
     """The verb rejects A→B when B→A exists; the database is the direct-write floor."""
 
-    del composed_tables
+    del db
     with system_context(reason="test merge reversal"):
         owner = _user("reversal")
         a = Party._base_manager.create(display_name="A", created_by=owner)
@@ -1140,11 +1140,11 @@ def test_merge_rejects_reversal_and_database_rejects_self_merge(composed_tables:
 
 
 def test_a_party_merge_moves_what_points_at_the_merged_party_and_revert_restores_it(
-    composed_tables: None, django_capture_on_commit_callbacks: Any
+    db: None, django_capture_on_commit_callbacks: Any
 ) -> None:
     """Handles, addresses, relationships both ways, follows and participations move; revert restores them."""
 
-    del composed_tables
+    del db
     owner = _user("merge-mover")
     with system_context(reason="test party merge"):
         kept, merged, other = (
@@ -1226,7 +1226,7 @@ def _handle_references(merged: Any, actor: Any) -> list[tuple[Any, str]]:
     ids=["party", "handle"],
 )
 def test_a_merge_revert_restores_every_moved_kind(
-    composed_tables: None, django_capture_on_commit_callbacks: Any, model: Any, values: Any, references: Any,
+    db: None, django_capture_on_commit_callbacks: Any, model: Any, values: Any, references: Any,
 ) -> None:
     """Every row a merge moves keeps history, so reverting the merge puts it back (``angee.E051``).
 
@@ -1234,7 +1234,7 @@ def test_a_merge_revert_restores_every_moved_kind(
     history: the merge records each one's baseline in a changeset of its own.
     """
 
-    del composed_tables
+    del db
     admin = create_platform_admin(f"merge-moved-{model._meta.model_name}")
     with system_context(reason="test merge moved kinds"):
         kept, merged = (model._base_manager.create(**values(name)) for name in ("kept", "merged"))
@@ -1263,7 +1263,7 @@ def test_a_merge_revert_restores_every_moved_kind(
 
 @pytest.mark.parametrize("pre_history", [False, True], ids=["recorded", "pre-history"])
 def test_a_person_merge_reverts_across_its_mti_lineage(
-    composed_tables: None, django_capture_on_commit_callbacks: Any, pre_history: bool,
+    db: None, django_capture_on_commit_callbacks: Any, pre_history: bool,
 ) -> None:
     """A person's versions live on its child table; a party merge still reverts, also for rows older than history.
 
@@ -1272,7 +1272,7 @@ def test_a_person_merge_reverts_across_its_mti_lineage(
     gets a baseline on its first write instead.
     """
 
-    del composed_tables
+    del db
     admin = create_platform_admin(f"mti-merge-{'pre' if pre_history else 'recorded'}")
     with actor_context(admin):
         gamma, delta = (Person.objects.create(display_name=name) for name in ("Gamma", "Delta"))
@@ -1297,10 +1297,10 @@ def test_a_person_merge_reverts_across_its_mti_lineage(
     assert Party._base_manager.get(pk=delta.pk).merged_into_id is None
 
 
-def test_ingest_contact_upserts_carddav_employment_in_place(composed_tables: None) -> None:
+def test_ingest_contact_upserts_carddav_employment_in_place(db: None) -> None:
     """ORG/TITLE/ROLE map to one stable CardDAV edge while manual rows survive."""
 
-    del composed_tables
+    del db
     with system_context(reason="test carddav employment"):
         owner = _user("carddav")
         directory = make_integration(
@@ -1394,7 +1394,7 @@ def test_ingest_contact_upserts_carddav_employment_in_place(composed_tables: Non
     assert Relationship._base_manager.filter(pk=manual.pk).exists()
 
 
-def test_a_card_pass_keeps_its_addresses_local_facts(composed_tables: None) -> None:
+def test_a_card_pass_keeps_its_addresses_local_facts(db: None) -> None:
     """A card address updates its matching row and keeps its coordinates and primary flag.
 
     A new address is created, and only a row the card no longer lists loses the
@@ -1402,7 +1402,7 @@ def test_a_card_pass_keeps_its_addresses_local_facts(composed_tables: None) -> N
     address once leaves one of them asserted.
     """
 
-    del composed_tables
+    del db
     home = ParsedAddress(label="home", street="1 Main St", city="Springfield", country="US")
     work = ParsedAddress(label="work", street="2 Side St", city="Shelbyville", country="US")
     with system_context(reason="test carddav addresses"):
@@ -1442,10 +1442,10 @@ def test_a_card_pass_keeps_its_addresses_local_facts(composed_tables: None) -> N
     assert len(rows) == 4
 
 
-def test_ingest_contact_requires_employee_relationship_kind(composed_tables: None) -> None:
+def test_ingest_contact_requires_employee_relationship_kind(db: None) -> None:
     """Employment sync fails clearly and atomically when its master kind is missing."""
 
-    del composed_tables
+    del db
     with system_context(reason="test carddav missing kind"):
         owner = _user("missing-kind")
         directory = make_integration(
@@ -1507,10 +1507,10 @@ def _system_of_record_statement(party: Any, source: Any, link: Any, **values: An
     )
 
 
-def test_an_authoritative_stream_outranks_a_persons_edit_but_never_a_decision(composed_tables: None) -> None:
+def test_an_authoritative_stream_outranks_a_persons_edit_but_never_a_decision(db: None) -> None:
     """Declaring or flipping ``SyncStream.authoritative`` re-derives the subjects; preferred stays on top (§11.2)."""
 
-    del composed_tables
+    del db
     with system_context(reason="test authoritative stream"):
         owner = _user("authority-owner")
         party = Party._base_manager.create(display_name="Ada (me)", created_by=owner)
@@ -1541,7 +1541,7 @@ def test_an_authoritative_stream_outranks_a_persons_edit_but_never_a_decision(co
         assert SyncStream.objects.bump_generation(stream).authoritative is True
 
 
-def test_an_authoritative_stream_outranks_a_persons_later_edit(composed_tables: None) -> None:
+def test_an_authoritative_stream_outranks_a_persons_later_edit(db: None) -> None:
     """Authority alone decides between the system of record and a person's normal stance, not row age.
 
     An upgrade's folds record the system of record first and the person's stance beside it,
@@ -1549,7 +1549,7 @@ def test_an_authoritative_stream_outranks_a_persons_later_edit(composed_tables: 
     the system of record first instead of tying both at the head of the order.
     """
 
-    del composed_tables
+    del db
     with system_context(reason="test authoritative stream over a later edit"):
         owner = _user("authority-later-owner")
         party = Party._base_manager.create(display_name="Ada (odoo)", created_by=owner)
@@ -1567,10 +1567,10 @@ def test_an_authoritative_stream_outranks_a_persons_later_edit(composed_tables: 
         assert Party.statements.model._base_manager.get(link=link).applied
 
 
-def test_handle_ownership_ranks_source_precedence_before_confidence_and_recency(composed_tables: None) -> None:
+def test_handle_ownership_ranks_source_precedence_before_confidence_and_recency(db: None) -> None:
     """A person's older, weaker normal statement outranks a directory's newer full-confidence one."""
 
-    del composed_tables
+    del db
     with system_context(reason="test handle precedence"):
         owner = _user("precedence-owner")
         handle = Handle._base_manager.create(platform="email", value="shared@example.com", created_by=owner)
@@ -1597,10 +1597,10 @@ def test_handle_ownership_ranks_source_precedence_before_confidence_and_recency(
         assert handle.party_id == stronger.pk
 
 
-def test_dismissing_an_identity_value_clears_it_and_confirming_the_stance_restores_it(composed_tables: None) -> None:
+def test_dismissing_an_identity_value_clears_it_and_confirming_the_stance_restores_it(db: None) -> None:
     """A preferred no-value applies: the removal sticks; ``Statement.confirm`` re-applies the retained values."""
 
-    del composed_tables
+    del db
     with system_context(reason="test identity dismissal"):
         owner = _user("dismiss-owner")
         party = Party._base_manager.create(display_name="Ada", created_by=owner)

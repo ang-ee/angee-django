@@ -22,6 +22,7 @@ from tests.conftest import make_addon
 from tests.tables import model_tables
 
 from angee.base.models.base import AngeeModel
+from angee.base.testing.fixtures import prime_content_types
 from angee.base.testing.queries import statement_startswith
 from angee.resources.entries import EntryGraph, GrantGroup, GrantRow, LoadResult, ResourceEntry
 from angee.resources.exceptions import ResourceLoadError
@@ -499,7 +500,7 @@ def test_resolve_xref_reports_ambiguous_source_rows() -> None:
 
 
 @pytest.mark.django_db(transaction=True)
-def test_resolve_ledger_xref_binds_ledger_and_app_registry_aliases(composed_tables) -> None:
+def test_resolve_ledger_xref_binds_ledger_and_app_registry_aliases() -> None:
     """The loader owns persona lookup: ledger + app-registry aliases in one call.
 
     A demo-seed hook resolves ``<addon>.<xref>`` by the same alias convention the
@@ -2124,7 +2125,7 @@ def test_row_dependency_on_grant_is_applied_before_validation(tmp_path: Path) ->
         assert hooks == [True, True]
 
 
-def test_unchanged_grant_batches_use_one_native_key_read(composed_tables: None, tmp_path: Path) -> None:
+def test_unchanged_grant_batches_use_one_native_key_read(db: None, tmp_path: Path) -> None:
     """Reloading many grants skips every tuple without per-row reads or writes."""
 
     from django.contrib.auth import get_user_model
@@ -2552,5 +2553,4 @@ def test_content_type_label_rows_hash_labels_not_ids(tmp_path: Path) -> None:
                 transaction.set_rollback(True)
     finally:
         # Later tests start from the session's warm content-type cache.
-        ContentType.objects.clear_cache()
-        ContentType.objects.get_for_models(*apps.get_models(), for_concrete_models=False)
+        prime_content_types()

@@ -1,7 +1,6 @@
 """Bridge paging and split coverage use real workflow and integration owners."""
 
 from concurrent.futures import ThreadPoolExecutor
-from contextlib import contextmanager
 from datetime import timedelta
 from threading import Event
 from types import SimpleNamespace
@@ -64,7 +63,7 @@ def cycle(execution, register_step, monkeypatch):
     """A real owner-scoped bridge with deterministic bounded transport."""
     administrator, sent = execution
     bridge = make_integration("workflow-stream", model=SyncCycleTestBridge)
-    extracted, applied, rescanned, declared = [], [], [], []
+    extracted, applied, rescanned, declared, closed = [], [], [], [], []
     local_keys = set()
     transport = SimpleNamespace(
         identity_reads=True,
@@ -73,12 +72,20 @@ def cycle(execution, register_step, monkeypatch):
         pages=None,
         direction=StreamDirection.PULL,
         authoritative=False,
+        parallelism=None,
     )
 
     class Adapter(BridgeImpl):
         @property
         def supports_identity_reads(self):
             return transport.identity_reads
+
+        @property
+        def sync_parallelism(self):
+            return transport.parallelism
+
+        def close(self):
+            closed.append(self)
 
         def streams(self, *, deadline=None):
             declared.append(transport.partitions)
@@ -157,6 +164,8 @@ def cycle(execution, register_step, monkeypatch):
         applied=applied,
         rescanned=rescanned,
         declared=declared,
+        closed=closed,
+        adapter_class=Adapter,
         sent=sent,
     )
 
@@ -203,10 +212,8 @@ def test_stream_pages_commit_cursors_and_sum_only_finalized_counts(cycle):
 
 
 @pytest.mark.parametrize("failure", [None, RuntimeError, WorkerLost, SoftTimeLimitExceeded])
-def test_serialized_bridge_io_releases_its_lock_after_every_exit(cycle, monkeypatch, failure):
-    monkeypatch.setattr(type(cycle.adapter), "sync_parallelism", 1)
-    closed = Mock()
-    monkeypatch.setattr(type(cycle.adapter), "close", closed)
+def test_serialized_bridge_io_releases_its_lock_after_every_exit(cycle, failure):
+    cycle.transport.parallelism = 1
     ctx = SimpleNamespace(heartbeat=Mock(), begin_effect=Mock())
 
     def operation():
@@ -222,39 +229,33 @@ def test_serialized_bridge_io_releases_its_lock_after_every_exit(cycle, monkeypa
         with pytest.raises(Retryable if failure is RuntimeError else failure):
             operation()
     assert not cycle.bridge.sync_is_locked()
-    closed.assert_called_once()
+    assert len(cycle.closed) == 1
     ctx.heartbeat.assert_called_once()
     ctx.begin_effect.assert_called_once()
 
 
-def test_busy_bridge_wait_preserves_checkpoint_without_beginning_an_effect(cycle, monkeypatch):
-    monkeypatch.setattr(type(cycle.adapter), "sync_parallelism", 1)
-    closed = Mock()
-    monkeypatch.setattr(type(cycle.adapter), "close", closed)
-
-    @contextmanager
-    def occupied(_bridge):
-        yield False
-
-    monkeypatch.setattr(type(cycle.bridge), "sync_lock", occupied)
+def test_busy_bridge_wait_preserves_checkpoint_without_beginning_an_effect(cycle):
+    cycle.transport.parallelism = 1
     checkpoint = {"cycle_items": 7, "progress": "retained"}
     ctx = SimpleNamespace(now=timezone.now(), state=checkpoint, heartbeat=Mock(), begin_effect=Mock(),
                           wait=lambda **values: Wait(**values))
-    with steps.bridge_io(ctx, cycle.bridge) as result:
-        assert isinstance(result, Wait)
-        assert result.state is checkpoint
-        assert result.until == ctx.now + timedelta(seconds=1)
+    with cycle.bridge.sync_lock() as held:  # another sync owns the bridge's IO
+        assert held
+        with steps.bridge_io(ctx, cycle.bridge) as result:
+            assert isinstance(result, Wait)
+            assert result.state is checkpoint
+            assert result.until == ctx.now + timedelta(seconds=1)
     ctx.heartbeat.assert_not_called()
     ctx.begin_effect.assert_not_called()
-    closed.assert_called_once()
+    assert len(cycle.closed) == 1
 
 
 @pytest.mark.skipif(connection.vendor != "postgresql", reason="Separate PostgreSQL advisory-lock sessions required.")
 def test_two_partition_runs_wait_without_retry_or_effect_while_bridge_io_is_owned(cycle, monkeypatch):
     """The execution lock covers independent runs, beyond a single map planner."""
     bridge = make_integration("serialized-workflow", model=ConnectionBridge)
-    adapter_type = type(cycle.adapter)
-    monkeypatch.setattr(adapter_type, "sync_parallelism", 1)
+    adapter_type = cycle.adapter_class
+    cycle.transport.parallelism = 1
     monkeypatch.setattr(ConnectionBridge, "capability_impl", property(adapter_type))
     cycle.transport.partitions = ("left", "right")
     entered, release = Event(), Event()

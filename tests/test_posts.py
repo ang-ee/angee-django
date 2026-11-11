@@ -288,15 +288,14 @@ def test_quota_consume_uses_the_backend_gated_lock_contract(
     """Quota consumption locks through locked_get so unsupported backends remain explicit."""
 
     del posts_tables
-    manager_class = type(Quota.objects)
-    original = manager_class.locked_get
+    original = Quota.objects.locked_get
     locked_pks: list[Any] = []
 
-    def locked_get(manager: Any, *args: Any, **kwargs: Any) -> Any:
+    def locked_get(*args: Any, **kwargs: Any) -> Any:
         locked_pks.append(kwargs.get("pk"))
-        return original(manager, *args, **kwargs)
+        return original(*args, **kwargs)
 
-    monkeypatch.setattr(manager_class, "locked_get", locked_get)
+    monkeypatch.setattr(Quota.objects, "locked_get", locked_get)
     with system_context(reason="test quota lock contract"):
         integration = _feed("quota-lock-contract")
         period = Quota.objects.open_period(

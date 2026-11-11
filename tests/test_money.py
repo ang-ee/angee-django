@@ -103,10 +103,10 @@ def test_currency_resource_authors_human_label_and_exact_search_fields() -> None
     assert name_filter is not None and "iContains" in name_filter.operators
 
 
-def test_round_uses_currency_exponent(composed_tables: None) -> None:
+def test_round_uses_currency_exponent(db: None) -> None:
     """The exponent comes from decimal_places: 0 for JPY, 3 for BHD, 2 for EUR."""
 
-    del composed_tables
+    del db
     jpy = _make_currency("JPY", decimal_places=0)
     bhd = _make_currency("BHD", decimal_places=3)
     eur = _make_currency("EUR", decimal_places=2)
@@ -115,10 +115,10 @@ def test_round_uses_currency_exponent(composed_tables: None) -> None:
     assert eur.round(Decimal("2.128")) == Decimal("2.13")
 
 
-def test_round_uses_default_mode_and_explicit_overrides(composed_tables: None) -> None:
+def test_round_uses_default_mode_and_explicit_overrides(db: None) -> None:
     """The money vocabulary supplies a default and allows explicit overrides."""
 
-    del composed_tables
+    del db
     eur = _make_currency("EUR", decimal_places=2)
     jpy = _make_currency("JPY", decimal_places=0)
     bhd = _make_currency("BHD", decimal_places=3)
@@ -133,20 +133,20 @@ def test_round_uses_default_mode_and_explicit_overrides(composed_tables: None) -
     assert bhd.round(Decimal("1.2345"), RoundingMode.HALF_EVEN) == Decimal("1.234")
 
 
-def test_convert_same_currency_returns_amount_untouched(composed_tables: None) -> None:
+def test_convert_same_currency_returns_amount_untouched(db: None) -> None:
     """The identity fast-path needs neither a rate nor the reference setting."""
 
-    del composed_tables
+    del db
     eur = _make_currency("EUR", decimal_places=2)
     amount = Decimal("100.123456")
     assert eur.convert(amount, eur) == amount
 
 
 @pytest.fixture()
-def cross_rates(composed_tables: None) -> Iterator[SimpleNamespace]:
+def cross_rates(db: None) -> Iterator[SimpleNamespace]:
     """Seed USD (reference), EUR and GBP with dated rates per one USD."""
 
-    del composed_tables
+    del db
     usd = _make_currency("USD", decimal_places=2)
     eur = _make_currency("EUR", decimal_places=2)
     gbp = _make_currency("GBP", decimal_places=2)
@@ -208,10 +208,10 @@ def test_rate_for_picks_the_latest_on_or_before_the_date(cross_rates: SimpleName
             rates.rate_for(cross_rates.eur, date(2025, 12, 1))
 
 
-def test_conversion_without_the_setting_raises_improperly_configured(composed_tables: None) -> None:
+def test_conversion_without_the_setting_raises_improperly_configured(db: None) -> None:
     """The reference setting is required at conversion time — no silent default."""
 
-    del composed_tables
+    del db
     eur = _make_currency("EUR", decimal_places=2)
     gbp = _make_currency("GBP", decimal_places=2)
     with (
@@ -222,10 +222,10 @@ def test_conversion_without_the_setting_raises_improperly_configured(composed_ta
         eur.convert(Decimal("1"), gbp)
 
 
-def test_contextual_rates_never_fall_back_to_global_history(composed_tables: None) -> None:
+def test_contextual_rates_never_fall_back_to_global_history(db: None) -> None:
     """An explicit context reads only its exact reference-relative history."""
 
-    del composed_tables
+    del db
     usd = _make_currency("USD")
     eur = _make_currency("EUR")
     context = _make_currency("GBP")
@@ -268,10 +268,10 @@ def test_contextual_rates_never_fall_back_to_global_history(composed_tables: Non
         assert not CurrencyRate.objects.filter(pk=contextual.pk).exists()
 
 
-def test_contextual_rate_priority_precedes_date(composed_tables: None) -> None:
+def test_contextual_rate_priority_precedes_date(db: None) -> None:
     """A higher-priority context fact outranks a newer lower-priority fact."""
 
-    del composed_tables
+    del db
     usd = _make_currency("USD")
     eur = _make_currency("EUR")
     context = _make_currency("GBP")
@@ -300,10 +300,10 @@ def test_contextual_rate_priority_precedes_date(composed_tables: None) -> None:
         ) == Decimal("0.9")
 
 
-def test_context_is_validated_before_same_currency_identity(composed_tables: None) -> None:
+def test_context_is_validated_before_same_currency_identity(db: None) -> None:
     """An invalid contextual owner cannot bypass validation through identity conversion."""
 
-    del composed_tables
+    del db
     usd = _make_currency("USD")
     unsaved_context = Currency(code="EUR", name="EUR")
     with system_context(reason="money contextual identity test"), pytest.raises(ValidationError):
@@ -315,10 +315,10 @@ def test_context_is_validated_before_same_currency_identity(composed_tables: Non
         )
 
 
-def test_currency_rate_identity_is_native_owned(composed_tables: None) -> None:
+def test_currency_rate_identity_is_native_owned(db: None) -> None:
     """Ordinary saves and bulk writes cannot move a rate slot."""
 
-    del composed_tables
+    del db
     eur = _make_currency("EUR")
     gbp = _make_currency("GBP")
     rate = _make_rate(eur, date(2026, 1, 1), "0.9")
@@ -354,10 +354,10 @@ def test_currency_rate_identity_is_native_owned(composed_tables: None) -> None:
         "0.0000000000000000000100",
     ],
 )
-def test_currency_rate_accepts_exact_values_with_trailing_zeros(composed_tables: None, value: str) -> None:
+def test_currency_rate_accepts_exact_values_with_trailing_zeros(db: None, value: str) -> None:
     """Field validation ignores redundant zeros without rounding significant digits."""
 
-    del composed_tables
+    del db
     eur = _make_currency("EUR")
     rate = CurrencyRate(currency=eur, date=date(2026, 1, 1), rate=value)
     with system_context(reason="money exact rate test"), localcontext(prec=6, Emax=9, Emin=-9):
@@ -380,11 +380,11 @@ def test_currency_rate_accepts_exact_values_with_trailing_zeros(composed_tables:
     ],
 )
 def test_currency_rate_rejects_inexact_values_before_writing(
-    composed_tables: None, value: str, error_code: str, existing: bool
+    db: None, value: str, error_code: str, existing: bool
 ) -> None:
     """Native field limits reject inserts and updates independently of Decimal context."""
 
-    del composed_tables
+    del db
     eur = _make_currency("EUR")
     rate = (
         _make_rate(eur, date(2026, 1, 1), "0.9")
@@ -407,10 +407,10 @@ def test_currency_rate_rejects_inexact_values_before_writing(
             assert not CurrencyRate.objects.filter(currency=eur).exists()
 
 
-def test_rate_read_keeps_the_selected_rate_population(composed_tables: None) -> None:
+def test_rate_read_keeps_the_selected_rate_population(db: None) -> None:
     """A rate read resolves within the rows its queryset selected, not the whole table."""
 
-    del composed_tables
+    del db
     usd = _make_currency("USD")
     eur = _make_currency("EUR")
     first = _make_rate(eur, date(2026, 1, 1), "0.9")
@@ -433,11 +433,11 @@ def test_rate_read_keeps_the_selected_rate_population(composed_tables: None) -> 
     ],
 )
 def test_conversion_rejects_invalid_operands_before_dividing(
-    composed_tables: None, rates: tuple[Decimal, Decimal]
+    db: None, rates: tuple[Decimal, Decimal]
 ) -> None:
     """Two negative rates cannot pass as evidence through a positive quotient."""
 
-    del composed_tables
+    del db
     eur, gbp = _make_currency("EUR"), _make_currency("GBP")
     with (
         system_context(reason="money conversion operand test"),

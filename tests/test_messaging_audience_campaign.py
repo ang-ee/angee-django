@@ -312,7 +312,7 @@ def test_follow_and_unfollow_do_not_grant_or_remove_a_read_share(audience_record
     assert case.record.thread_reader_allowed(case.recipient)
 
 
-def test_preference_predicate_and_sql_agree_for_default_internal_and_explicit_subtypes(composed_tables):
+def test_preference_predicate_and_sql_agree_for_default_internal_and_explicit_subtypes(db):
     with system_context(reason="test.audience.preference-matrix"):
         subtypes = [None]
         for key, default, internal in (("public", True, False), ("internal", True, True), ("opt-in", False, False)):

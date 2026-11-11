@@ -5,7 +5,6 @@ import { afterEach, expect, test, vi } from "vitest";
 
 import { StageStatusbar } from "./stage-statusbar";
 
-vi.mock("./i18n", () => ({ useWorkT: () => (key: string) => key }));
 vi.mock("@angee/ui", async (importOriginal) => ({
   ...await importOriginal<typeof import("@angee/ui")>(),
   // Options come back only when the queue is readable, as the owner's hook behaves.
@@ -29,7 +28,7 @@ test("the stage owner hides side stages from the path and names the state withou
   expect(screen.getByRole("list").textContent).toContain("First");
   expect(screen.getByRole("list").textContent).not.toContain("Removed");
   expect(screen.getByText("Removed · Sep 24")).toBeTruthy();
-  expect(screen.queryByRole("button", { name: "task.action.reopen" })).toBeNull();
+  expect(screen.queryByRole("button", { name: "Reopen" })).toBeNull();
 });
 
 test("a reader without the stage row sees the task's projected stage name", () => {

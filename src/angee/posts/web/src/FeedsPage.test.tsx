@@ -89,10 +89,6 @@ vi.mock("@angee/ui", async () => {
   };
 });
 
-vi.mock("./i18n", () => ({
-  usePostsT: () => (key: string) => key,
-}));
-
 import { FeedsPage } from "./FeedsPage";
 
 function feedMessage(): Record<string, unknown> {

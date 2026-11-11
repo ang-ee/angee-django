@@ -56,10 +56,9 @@ def _data_statements(captured: CaptureQueriesContext) -> list[str]:
 
 
 @pytest.mark.django_db(transaction=True)
-def test_close_writes_bookkeeping_only_and_export_records_the_hash(composed_tables: None) -> None:
+def test_close_writes_bookkeeping_only_and_export_records_the_hash() -> None:
     """Closing never re-reads the boundary's history; the export computes and records the digest."""
 
-    del composed_tables
     owner = create_user("changeset-export-owner")
     with system_context(reason="test export"), changeset(fresh=True, change_reason="test.export"):
         Party._base_manager.create(display_name="Exported", created_by=owner)
@@ -77,10 +76,10 @@ def test_close_writes_bookkeeping_only_and_export_records_the_hash(composed_tabl
     assert f'"{Party._meta.label_lower}":[' in document and '"hash"' not in document
 
 
-def test_tracked_save_and_queryset_update_query_budgets(composed_tables: None) -> None:
+def test_tracked_save_and_queryset_update_query_budgets(db: None) -> None:
     """One re-select and one history insert per captured statement, plus the savepoint pair."""
 
-    del composed_tables
+    del db
     owner = create_user("changeset-budget-owner")
     with system_context(reason="test budgets"), changeset(fresh=True, change_reason="test.budget"):
         party = Party._base_manager.create(display_name="Budget", created_by=owner)
@@ -135,10 +134,9 @@ urlpatterns = [path("write/", _write_view), path("read/", _read_view)]
     ROOT_URLCONF=__name__,
     MIDDLEWARE=["rebac.middleware.ActorMiddleware", "angee.provenance.middleware.ChangesetMiddleware"],
 )
-def test_a_request_boundary_costs_one_insert_and_one_close(composed_tables: None) -> None:
+def test_a_request_boundary_costs_one_insert_and_one_close() -> None:
     """A request persists its changeset on the first captured write and closes it once; reads cost nothing."""
 
-    del composed_tables
     model = _changeset_model()
     before = model._base_manager.count()
     with CaptureQueriesContext(connection) as read:

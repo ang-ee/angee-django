@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 from dataclasses import replace
-from pathlib import Path
 from typing import Any
 
 import pytest
@@ -36,19 +35,8 @@ from angee.projects.models import Task as AbstractTask
 from angee.projects.testing.models import Queue, Stage, Task
 from angee.work.models import TaskWork
 from tests import test_sequence  # noqa: F401 -- register Queue's sequence target before database setup
-from tests.composed_host import run_composed_tests
 from tests.conftest import SchemaAddon, create_platform_admin, create_user, standalone_relation
 from tests.tables import model_tables
-
-
-def test_composed_projects_schema_with_work(tmp_path: Path) -> None:
-    """Work's sortable relation path and phase mapping must survive schema import."""
-    run_composed_tests(tmp_path, "tests.test_work_task_access.SchemaImportTests", app="angee.work")
-
-
-def test_duplicate_merge_uses_live_link_backing(tmp_path: Path) -> None:
-    """Merged links follow their new target without writing relationship rows."""
-    run_composed_tests(tmp_path, "tests.test_work_task_access.DuplicateLinkTests", app="angee.work")
 
 
 class RoutingStageContainer(models.Model):

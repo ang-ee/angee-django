@@ -738,7 +738,8 @@ def test_studio_native_field_reads_follow_monitor_on_every_path_and_batch(
     from tests.conftest import make_addon
 
     admin, editor, reader = callers
-    monkeypatch.setattr(GraphQLSchemas, "_discovered", GraphQLSchemas([make_addon(schemas=knowledge_schema.schemas)]))
+    discovered = GraphQLSchemas([make_addon(schemas=knowledge_schema.schemas)])
+    monkeypatch.setattr(GraphQLSchemas, "from_discovery", classmethod(lambda cls: discovered))
 
     def create(key):
         workflow = load_workflow(document("entry"), key=key, actor=admin, subject_model="knowledge.vault")

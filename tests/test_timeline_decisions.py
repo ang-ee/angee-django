@@ -24,7 +24,7 @@ def kinds(settings):
 
 
 @pytest.fixture
-def people(composed_tables):
+def people(db):
     requester, reviewer, bystander = (
         create_user(f"timeline-{role}") for role in ("requester", "reviewer", "bystander")
     )
@@ -145,7 +145,7 @@ def test_withdraw_publishes_the_owner_update_and_clears_attention(people) -> Non
 
 
 @pytest.mark.parametrize("both_records", [False, True])
-def test_merge_keeps_one_occurrence_on_the_survivor(composed_tables, both_records) -> None:
+def test_merge_keeps_one_occurrence_on_the_survivor(db, both_records) -> None:
     requester = create_platform_admin("timeline-merge-owner")
     reviewer = create_user("timeline-merge-reviewer")
     with actor_context(requester):
@@ -187,7 +187,7 @@ def test_rollback_discards_invalidations_and_source_rows(people):
     assert timeline_entries(subject, reviewer)[0].detail == "Complete"
 
 
-def test_union_uses_one_global_order_and_cursor_across_kinds(people, settings, composed_tables, activity_catalog):
+def test_union_uses_one_global_order_and_cursor_across_kinds(people, settings, activity_catalog):
     requester, reviewer, bystander, subject = people
     settings.ANGEE_TIMELINE_KINDS = [
         "angee.decisions.timeline.timeline_kinds", "angee.projects.timeline.timeline_kinds",

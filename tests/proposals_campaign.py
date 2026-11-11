@@ -70,9 +70,9 @@ def as_actor(row: Any, actor: Any) -> Any:
 
 
 @pytest.fixture
-def campaign_schema(composed_tables: Any) -> Any:
+def campaign_schema(db: Any) -> Any:
     """Run the campaign in strict mode without the superuser bypass."""
-    del composed_tables
+    del db
     with override_settings(REBAC_STRICT_MODE=True, REBAC_SUPERUSER_BYPASS=False):
         yield
 

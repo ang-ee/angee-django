@@ -20,23 +20,12 @@ function operationName(document: unknown): string {
   return definitions?.[0]?.name?.value ?? "";
 }
 
-function interpolate(template: string, vars?: Record<string, unknown>): string {
-  if (!vars) return template;
-  return template.replace(/\{(\w+)\}/g, (_match, key: string) =>
-    key in vars ? String(vars[key]) : `{${key}}`,
-  );
-}
-
 vi.mock("@angee/ui", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@angee/ui")>();
   return {
     ...actual,
     // The delete verb confirms through the shared ceremony; the test answers yes.
     useConfirm: () => async () => true,
-    useNamespaceT:
-      (_namespace: string, messages: Record<string, string>) =>
-      (key: string, vars?: Record<string, unknown>) =>
-        interpolate(messages[key] ?? key, vars),
   };
 });
 
@@ -53,8 +42,8 @@ vi.mock("@angee/refine", async (importOriginal) => ({
   },
 }));
 
-vi.mock("@angee/storage", () => ({
-  useStorageT: () => (key: string) => key,
+vi.mock("@angee/storage", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@angee/storage")>()),
   StorageUploadTasks: () => null,
   useStorageUpload: () => ({ tasks: [], upload: vi.fn(), clearFinished: vi.fn() }),
 }));

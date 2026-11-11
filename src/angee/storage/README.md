@@ -11,9 +11,11 @@ A record type accepts attachments once its owner declares it on
 by the edge's `target`, unioned into `target_write`, so attaching requires write
 on the record and an undeclared type is refused. To enable record-scoped uploads
 as well, declare a reverse `GenericRelation` on the canonical, REBAC-typed record
-owner and contribute a matching read/write arm to `storage/file`. The relation
-path must target that model, and the arm must filter `visibility: record`. For
-example, if `example/record` owns the canonical row:
+owner and contribute a matching `read_granted`/`write_granted` arm to
+`storage/file`. The relation path must target that model, and the arm must filter
+`visibility: record`. Storage alone derives `read`, `write` and `share`, which
+withhold a trashed file from everyone who cannot delete it; `storage.E001` refuses
+an arm on those. For example, if `example/record` owns the canonical row:
 
 ```python
 file_attachments = GenericRelation("storage.FileAttachment", related_query_name="example_record")
@@ -27,8 +29,8 @@ definition storage/file_attachment {
 
 definition storage/file {
     relation record: example/record // rebac:field={"path":"attachments__example_record","filters":{"visibility":"record"}}
-    permission read = record->read
-    permission write = record->write
+    permission read_granted = record->read
+    permission write_granted = record->write
 }
 ```
 

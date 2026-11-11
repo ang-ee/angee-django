@@ -29,10 +29,10 @@ def _grant(resource: Any, relation: str, user: Any) -> None:
 
 
 @pytest.fixture
-def sourced(composed_tables: None) -> dict[str, Any]:
+def sourced(db: None) -> dict[str, Any]:
     """A task owner, a task reader who also reads the conversation, and the conversation."""
 
-    del composed_tables
+    del db
     owner, reader, outsider = (create_user(name) for name in ("source-owner", "source-reader", "source-outsider"))
     with actor_context(owner):
         project = Project.objects.create(title="Sourced")

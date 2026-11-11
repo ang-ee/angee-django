@@ -114,10 +114,10 @@ def source_change_publishers() -> Iterator[None]:
 
 
 @pytest.fixture
-def activity_catalog(composed_tables: None) -> None:
+def activity_catalog(db: None) -> None:
     """Load projects' completion subtype and declare the activity types record tasks use."""
 
-    del composed_tables
+    del db
     with system_context(reason="tests.projects.activity_catalog"):
         Resource.objects.load_xref("angee.projects.activity_done", model=messaging_models.MessageSubtype)
         projects_models.ActivityType.objects.create(key="todo", name="To do", glyph="circle-check")

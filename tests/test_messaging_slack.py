@@ -23,9 +23,9 @@ from slack_sdk.errors import SlackApiError
 from slack_sdk.http_retry import RetryHandler
 
 from angee.integrate.credentials import CredentialKind
-from angee.integrate.http import HttpClient
 from angee.integrate.live import PairingState
 from angee.integrate.streams import StreamPage, advance_stream
+from angee.integrate.testing.http import mock_transport
 from angee.integrate.testing.models import RecordLink
 from angee.messaging.backends import ChannelBackend, ParsedMessage, body_part
 from angee.messaging.session import LiveChannelSession
@@ -245,7 +245,7 @@ def test_extract_persists_page_resume_before_history_watermark(monkeypatch: pyte
 
 @pytest.mark.django_db(transaction=True)
 def test_invalid_history_cursor_retains_watermarks_across_generation(
-    composed_tables: None, monkeypatch: pytest.MonkeyPatch
+    monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """One expired page resumes at its committed history and thread watermarks."""
 
@@ -264,7 +264,6 @@ def test_invalid_history_cursor_retains_watermarks_across_generation(
             return {"messages": []}
 
     monkeypatch.setattr(SlackChannelBackend, "client_class", ExpiredHistoryClient)
-    monkeypatch.setattr(SlackChannelBackend, "_backfill_floor", lambda self: "0")
     channel = _slack_channel("slack-invalid-history-cursor")
     cursor = {
         "conversation": {
@@ -274,6 +273,8 @@ def test_invalid_history_cursor_retains_watermarks_across_generation(
         "threads": {"99.000001": "101.000001"},
     }
     with system_context(reason="test slack invalid page cursor"):
+        channel.config = {**channel.config, "backfill_days": 100_000}  # a floor before the 1970 watermarks
+        channel.save(update_fields=["config"])
         stream = current_stream(channel, "messages", "C1", cursor=cursor)
         other = current_stream(
             channel,
@@ -307,6 +308,9 @@ def test_invalid_history_cursor_retains_watermarks_across_generation(
     assert replies[-1]["oldest"] == "101.000001"
 
 
+FILE = "https://files.slack.com/page-file.bin"
+
+
 def test_media_bounded_history_slice_resumes_on_a_fresh_adapter(monkeypatch: pytest.MonkeyPatch) -> None:
     """An interrupted partial history page retains a stable within-page boundary."""
 
@@ -314,19 +318,19 @@ def test_media_bounded_history_slice_resumes_on_a_fresh_adapter(monkeypatch: pyt
         def conversations_history(self, **kwargs: Any) -> dict[str, Any]:
             return {
                 "messages": [
-                    {"ts": "101.000001", "user": "U1", "text": "First", "files": [{"size": 4}]},
-                    {"ts": "102.000001", "user": "U1", "text": "Second", "files": [{"size": 4}]},
+                    {"ts": "101.000001", "user": "U1", "text": "First", "files": [{"size": 4, "url_private": FILE}]},
+                    {"ts": "102.000001", "user": "U1", "text": "Second", "files": [{"size": 4, "url_private": FILE}]},
                 ]
             }
 
     backend = _backend(monkeypatch, MediaPageClient, config={"max_batch_bytes": 4})
-    monkeypatch.setattr(SlackChannelBackend, "_media", lambda *args, **kwargs: ((), 4))
-    first = backend.test_pages.next_batch()
-    stream = backend.test_pages.rows["C1"]
-    assert [message.external_id for message in first] == ["C1/101.000001"]
-    assert stream.cursor["conversation"]["history"]["after_ts"] == "101.000001"
-    resumed = _backend(monkeypatch, MediaPageClient, bridge=backend.bridge)
-    page = resumed.extract(stream, 200)
+    with mock_transport(lambda request: httpx2.Response(200, content=b"four")):  # each file fills the batch budget
+        first = backend.test_pages.next_batch()
+        stream = backend.test_pages.rows["C1"]
+        assert [message.external_id for message in first] == ["C1/101.000001"]
+        assert stream.cursor["conversation"]["history"]["after_ts"] == "101.000001"
+        resumed = _backend(monkeypatch, MediaPageClient, bridge=backend.bridge)
+        page = resumed.extract(stream, 200)
     assert [message.external_id for message in page.records] == ["C1/102.000001"]
 
 
@@ -408,8 +412,6 @@ def test_edited_message_uses_current_text() -> None:
 def test_media_download_uses_bearer_and_failed_files_get_markers(monkeypatch: pytest.MonkeyPatch) -> None:
     """Only accepted messages resolve files; missing files remain visible markers."""
 
-    calls: list[str] = []
-
     class MediaWebClient:
         def __init__(self, *, token: str, retry_handlers: list[RetryHandler] | None = None) -> None:
             assert token == "xoxp-user-token"
@@ -455,19 +457,15 @@ def test_media_download_uses_bearer_and_failed_files_get_markers(monkeypatch: py
 
     backend = _backend(monkeypatch, MediaWebClient)
 
-    def download(file: Mapping[str, Any], *, cap: int | None = None) -> bytes | None:
-        del cap
-        url = str(file.get("url_private") or "")
-        calls.append(url)
-        return b"PDF" if url.endswith("report.pdf") else None
+    def serve(request: httpx2.Request) -> httpx2.Response:
+        return httpx2.Response(200, content=b"PDF") if request.url.path.endswith("report.pdf") else httpx2.Response(404)
 
-    monkeypatch.setattr(backend, "_download_file", download)
-
-    messages = backend.test_pages.next_batch()
+    with mock_transport(serve) as requests:
+        messages = backend.test_pages.next_batch()
 
     assert len(messages) == 1
-    assert calls == ["https://files.slack.com/report.pdf", ""]
-    assert "https://files.slack.com/noise.bin" not in calls
+    assert [str(request.url) for request in requests] == ["https://files.slack.com/report.pdf"]  # noise.bin skipped
+    assert requests[0].headers["authorization"] == "Bearer xoxp-user-token"
     body = messages[0].body
     assert body is not None and body.type == "multipart/mixed"
     assert [part.content for part in body.children] == [b"PDF", None]
@@ -475,7 +473,7 @@ def test_media_download_uses_bearer_and_failed_files_get_markers(monkeypatch: py
     assert "_media_facts" not in messages[0].metadata
 
 
-def test_download_file_stops_streaming_after_the_byte_cap(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_download_file_stops_streaming_after_the_byte_cap() -> None:
     """An unknown-length response is closed after the cap, without reading its tail."""
 
     reads = 0
@@ -487,19 +485,12 @@ def test_download_file_stops_streaming_after_the_byte_cap(monkeypatch: pytest.Mo
                 reads += 1
                 yield b"abcd"
 
-    def handler(request: httpx2.Request) -> httpx2.Response:
-        assert request.headers["authorization"] == "Bearer xoxp-user-token"
-        return httpx2.Response(200, stream=CountingStream())
-
-    def transport(*, allow_private: bool) -> httpx2.MockTransport:
-        assert allow_private is False
-        return httpx2.MockTransport(handler)
-
-    monkeypatch.setattr(HttpClient, "transport_factory", staticmethod(transport))
     backend = SlackChannelBackend(_BridgeStub(config={"max_media_bytes": 5}))
     backend._credential = backend.bridge.credential
 
-    assert backend._download_file({"url_private": "https://files.slack.com/file.bin"}) is None
+    with mock_transport(lambda request: httpx2.Response(200, stream=CountingStream())) as requests:
+        assert backend._download_file({"url_private": "https://files.slack.com/file.bin"}) is None
+    assert requests[0].headers["authorization"] == "Bearer xoxp-user-token"
     assert 0 < reads < 20
 
 
@@ -791,7 +782,7 @@ def _slack_channel(slug: str = "slack") -> Any:
 
 
 @pytest.mark.parametrize("change", ["rotate", "repoint"])
-def test_extract_reloads_credential_and_reused_client_between_pages(composed_tables: None, change: str) -> None:
+def test_extract_reloads_credential_and_reused_client_between_pages(db: None, change: str) -> None:
     """Secret rotation and credential replacement both update the retained client."""
 
     with system_context(reason="tests.slack.credential_freshness"):
@@ -830,7 +821,7 @@ def test_extract_reloads_credential_and_reused_client_between_pages(composed_tab
 @pytest.mark.django_db(transaction=True)
 @pytest.mark.parametrize("last_ts,expected", [("1784700000.000001", 1), ("1784700002.000001", 0)])
 def test_retained_slack_position_continues_without_reimport(
-    composed_tables: None, monkeypatch: pytest.MonkeyPatch, last_ts: str, expected: int,
+    monkeypatch: pytest.MonkeyPatch, last_ts: str, expected: int,
 ) -> None:
     """The conversation's native stream retains its watermark across syncs."""
 
@@ -845,12 +836,10 @@ def test_retained_slack_position_continues_without_reimport(
 
 @pytest.mark.django_db(transaction=True)
 def test_late_reply_below_history_watermark_lands_on_the_next_poll(
-    composed_tables: None,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """An active thread is rescanned even after its parent falls below history oldest."""
 
-    del composed_tables
     IncrementalWebClient.history_calls = []
     IncrementalWebClient.history_responses = []
     IncrementalWebClient.reply_calls = []
@@ -896,12 +885,12 @@ def test_late_reply_below_history_watermark_lands_on_the_next_poll(
 
 
 def test_non_rate_limit_api_error_uses_generic_sync_telemetry(
-    composed_tables: None,
+    db: None,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Slack API failures mark runtime telemetry without changing poll lifecycle."""
 
-    del composed_tables
+    del db
 
     class FailingWebClient:
         def __init__(self, *, token: str, retry_handlers: list[RetryHandler] | None = None) -> None:
@@ -924,12 +913,10 @@ def test_non_rate_limit_api_error_uses_generic_sync_telemetry(
 
 @pytest.mark.django_db(transaction=True)
 def test_connect_probes_before_transaction_and_failed_auth_creates_nothing(
-    composed_tables: None,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """auth.test failure runs outside atomic and leaves no credential or channel."""
 
-    del composed_tables
     from angee.messaging_integrate_slack.connect import create_slack_channel
 
     admin = _platform_admin("msg-slack-probe-admin")
@@ -956,12 +943,10 @@ def test_connect_probes_before_transaction_and_failed_auth_creates_nothing(
 
 @pytest.mark.django_db(transaction=True)
 def test_connect_persists_verified_workspace_in_one_write_phase(
-    composed_tables: None,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Successful auth.test facts become one connected workspace channel."""
 
-    del composed_tables
     from angee.messaging_integrate_slack.connect import create_slack_channel
 
     admin = _platform_admin("msg-slack-connect-admin")

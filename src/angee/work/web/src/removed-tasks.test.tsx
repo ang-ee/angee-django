@@ -1,56 +1,41 @@
 // @vitest-environment happy-dom
 
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { beforeEach, describe, expect, test, vi } from "vitest";
-
-const mocks = vi.hoisted(() => ({
-  rows: [] as Record<string, unknown>[],
-  queryVariables: null as unknown,
-  restore: vi.fn(),
-}));
-
-vi.mock("@angee/refine", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("@angee/refine")>()),
-  useAuthoredQuery: (_document: unknown, variables: unknown) => {
-    mocks.queryVariables = variables;
-    return { data: { removed_tasks: mocks.rows }, error: null };
-  },
-}));
-
-vi.mock("@angee/ui", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("@angee/ui")>()),
-  useActionResultRun: () => async (fire: () => Promise<unknown>) => await fire(),
-  useAuthoredResourceMutation: () => [mocks.restore, { fetching: false, error: null }],
-}));
-
-vi.mock("@angee/projects", () => ({ TASK_MODEL: "projects.Task" }));
+import type { ReactNode } from "react";
+import { expect, test } from "vitest";
+import { RuntimeFixture, storySchema, testDataResource, type GraphQLWireRequest } from "@angee/storybook/testing";
 
 import { RemovedTasks } from "./removed-tasks";
 
-beforeEach(() => {
-  mocks.restore.mockReset();
-  mocks.restore.mockResolvedValue({ restore_task: { ok: true, message: "Task restored." } });
+const removed = {
+  id: "tsk_q", title: "Can this ship today?", revision: 4, parent: "tsk_req",
+  removed_at: "2026-10-01T00:00:00Z", removed_by_label: "Ada", removal_reason: "Answered elsewhere",
+};
+
+function renderRemoved(content: ReactNode, rows: readonly Record<string, unknown>[]): GraphQLWireRequest[] {
+  const requests: GraphQLWireRequest[] = [];
+  const schemas = { console: { ...storySchema({
+    removed_tasks: () => rows,
+    restore_task: (args) => ({ ok: true, message: "Task restored.", id: args.task, validation_errors: null }),
+  }, (request) => requests.push(request)).public!, metadata: { angee: { resources: [testDataResource("projects.Task")] } } } };
+  render(<RuntimeFixture activeSchema="console" schemas={schemas}>{content}</RuntimeFixture>);
+  return requests;
+}
+
+test("lists a parent's removed tasks and restores one at its revision", async () => {
+  const requests = renderRemoved(<RemovedTasks parent="tsk_req" />, [removed]);
+  fireEvent.click(await screen.findByRole("button", { name: "Removed (1)" }));
+  expect(requests.find(({ fields }) => fields.includes("removed_tasks"))?.variables).toEqual({ queue: null, parent: "tsk_req" });
+  expect(screen.getByText("Can this ship today?")).toBeTruthy();
+  expect(screen.getByText("Reason: Answered elsewhere")).toBeTruthy();
+  fireEvent.click(screen.getByRole("button", { name: "Restore" }));
+  await waitFor(() => expect(requests.find(({ fields }) => fields.includes("restore_task"))?.variables)
+    .toEqual({ task: "tsk_q", expected_revision: 4 }));
+  expect(await screen.findByText("Task restored.")).toBeTruthy();
 });
 
-describe("RemovedTasks", () => {
-  test("lists a parent's removed questions and restores one at its revision", async () => {
-    mocks.rows = [{
-      id: "tsk_q", title: "Can this ship today?", revision: 4, parent: "tsk_req",
-      removed_at: "2026-10-01T00:00:00Z", removed_by_label: "Ada", removal_reason: "Answered elsewhere",
-    }];
-    render(<RemovedTasks parent="tsk_req" />);
-
-    expect(mocks.queryVariables).toEqual({ queue: null, parent: "tsk_req" });
-    fireEvent.click(screen.getByRole("button", { name: "Removed (1)" }));
-    expect(screen.getByText("Can this ship today?")).toBeTruthy();
-    expect(screen.getByText("Reason: Answered elsewhere")).toBeTruthy();
-    fireEvent.click(screen.getByRole("button", { name: "Restore" }));
-    await waitFor(() => expect(mocks.restore).toHaveBeenCalledWith({ task: "tsk_q", expected_revision: 4 }));
-  });
-
-  test("renders nothing for a reader the server lists no removed tasks for", () => {
-    mocks.rows = [];
-    const { container } = render(<RemovedTasks queue="que_eng" />);
-    expect(container.textContent).toBe("");
-  });
+test("renders nothing for a reader the server lists no removed tasks for", async () => {
+  const requests = renderRemoved(<RemovedTasks queue="que_eng" />, []);
+  await waitFor(() => expect(requests.some(({ fields }) => fields.includes("removed_tasks"))).toBe(true));
+  expect(screen.queryByRole("button", { name: /Removed/ })).toBeNull();
 });

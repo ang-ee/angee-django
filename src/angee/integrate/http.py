@@ -9,8 +9,9 @@ this module only pins and dials.
 
 One outbound-network policy lives here and everything composes it: integration
 backends reach it as ``self.http`` (:class:`HttpClientMixin`), and the OAuth client
-hands the same :class:`PinnedTransport` to Authlib, whose OAuth2 client is an
-``httpx2.Client`` — a transport from another HTTP stack cannot serve it. TLS trusts
+hands the same ``HttpClient.transport_factory`` transport to Authlib, whose OAuth2
+client is an ``httpx2.Client`` — a transport from another HTTP stack cannot serve
+it. TLS trusts
 the system store through the stdlib context (``ssl.create_default_context``) per
 docs/backend/guidelines.md, not httpx2's own default context.
 
@@ -207,10 +208,11 @@ class HttpClient:
     """
 
     transport_factory: ClassVar[Callable[..., httpx2.BaseTransport]] = PinnedTransport
-    """Build each transport with ``allow_private``.
+    """Build each outbound transport, this client's and the OAuth client's, with ``allow_private``.
 
-    Overrides must be a transport class or a ``staticmethod`` so instance access
-    does not bind the factory to this client.
+    The one network seam: ``angee.integrate.testing.http.mock_transport`` scripts
+    responses here. Overrides must be a transport class or a ``staticmethod`` so
+    instance access does not bind the factory to this client.
     """
 
     def get(
@@ -230,13 +232,13 @@ class HttpClient:
 
     def get_json(
         self, url: str, *, headers: dict[str, str] | None = None, allow_private: bool = False,
-        timeout: int = HTTP_TIMEOUT_SECONDS, transport: httpx2.BaseTransport | None = None,
+        timeout: int = HTTP_TIMEOUT_SECONDS,
     ) -> Any:
         """GET JSON through the shared request policy; preserve HTTP and decoding errors."""
 
         response = self.request(
             "GET", url, headers={"Accept": "application/json", **(headers or {})},
-            allow_private=allow_private, timeout=timeout, transport=transport,
+            allow_private=allow_private, timeout=timeout,
         )
         response.raise_for_status()
         return response.json()
@@ -406,7 +408,6 @@ class HttpClient:
         same_origin_redirects: int = 0,
         max_bytes: int | None = None,
         timeout: int = HTTP_TIMEOUT_SECONDS,
-        transport: httpx2.BaseTransport | None = None,
     ) -> httpx2.Response:
         """Send one pinned request to ``url`` and return the response.
 
@@ -447,7 +448,7 @@ class HttpClient:
                 response._content = content
 
         with httpx2.Client(
-            transport=transport if transport is not None else self.transport_factory(allow_private=allow_private),
+            transport=self.transport_factory(allow_private=allow_private),
             timeout=timeout,
             event_hooks={"response": [read_response]},
         ) as client:

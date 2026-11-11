@@ -45,10 +45,6 @@ vi.mock("@angee/ui", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@angee/ui")>();
   return {
     ...actual,
-    useNamespaceT:
-      (_namespace: string, messages: Record<string, string>) =>
-      (key: string): string =>
-        messages[key] ?? key,
     Card: ({ children }: { children: ReactNode }) => <article>{children}</article>,
     CardContent: ({ children }: { children: ReactNode }) => <div>{children}</div>,
     CardHeader: ({ children }: { children: ReactNode }) => <header>{children}</header>,

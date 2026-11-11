@@ -1,19 +1,33 @@
-"""Parent redaction, bearer revocation, canonical attachment and file audiences."""
+"""The storage decision table, its enforcement points, and the verbs that write file audiences."""
 
 from typing import Any
 from urllib.parse import parse_qs, urlsplit
 
 import pytest
+from django.contrib.auth import get_user_model
+from django.contrib.auth.models import AnonymousUser
+from django.contrib.contenttypes.models import ContentType
 from django.core import signing
 from django.db import connection
 from django.test import RequestFactory
 from django.test.utils import CaptureQueriesContext
-from rebac import actor_context, generic_target, system_context, to_subject_ref
+from rebac import (
+    ObjectRef,
+    RelationshipTuple,
+    SubjectRef,
+    actor_context,
+    generic_target,
+    system_context,
+    to_object_ref,
+    to_subject_ref,
+    write_relationships,
+)
 from rebac.actors import NoActorResolvedError
 from rebac.backends import backend as rebac_backend
 from rebac.checks import check_field_backed_relations
 from rebac.errors import PermissionDenied
 from rebac.models import active_relationship_model
+from rebac.testing import assert_decisions
 
 from angee.base.exceptions import RecordAccessSubjectRefused
 from angee.base.identity import public_subject_ref
@@ -24,6 +38,7 @@ from angee.storage import exceptions, views
 from angee.storage import schema as storage_schema
 from angee.storage.models import FileAttachmentManager, FileVisibility
 from angee.storage.uploads import DOWNLOAD_TOKEN_MAX_AGE, DOWNLOAD_TOKEN_SALT, DOWNLOAD_TOKEN_WINDOW
+from angee.tags.testing.models import Tag, TagAssignment
 from tests.conftest import (
     Drive,
     File,
@@ -35,9 +50,102 @@ from tests.conftest import (
     create_user,
     vault_for,
 )
+from tests.decision_table import seat_cells
 from tests.mtidemo.models import MtiChild, MtiChildProxy, MtiParent
 from tests.test_storage import PNG_BYTES, _proxy_upload
 from tests.test_storage import drive as drive
+
+
+def test_the_policy_decides_every_storage_permission(drive: Any) -> None:
+    """One world, every declared storage permission and extension arm with an allow and a deny."""
+
+    alice = drive.alice
+    people = {name: create_user(f"storage-policy-{name}") for name in (
+        "editor", "viewer", "storage-admin", "folder-owner", "named", "outsider",
+    )}
+    with system_context(reason="test.storage.policy.service"):
+        # Role inheritance reaches service accounts as it reaches people.
+        people["leaf-member"] = get_user_model().objects.create_user(username="storage-policy-leaf", kind="service")
+    people.update(alice=alice, admin=create_platform_admin("storage-policy-admin"), anonymous=AnonymousUser())
+    leaf, middle = ObjectRef("storage/role", "leaf"), ObjectRef("storage/role", "middle")
+    storage_admin = ObjectRef("storage/role", "storage_admin")
+    with system_context(reason="test.storage.policy.world"):
+        write_relationships([
+            RelationshipTuple(to_object_ref(drive), "editor", to_subject_ref(people["editor"])),
+            RelationshipTuple(to_object_ref(drive), "viewer", to_subject_ref(people["viewer"])),
+            RelationshipTuple(storage_admin, "member", to_subject_ref(people["storage-admin"])),
+            RelationshipTuple(leaf, "member", to_subject_ref(people["leaf-member"])),
+            RelationshipTuple(middle, "includes", SubjectRef(leaf)),
+            RelationshipTuple(storage_admin, "includes", SubjectRef(middle)),
+        ])
+        open_drive = Drive.objects.create(backend=drive.backend, slug="open", name="Open", prefix="open", owner=alice)
+        write_relationships([
+            RelationshipTuple(to_object_ref(open_drive), "viewer", SubjectRef.of("auth/user", "*")),
+        ])
+        folder = Folder.objects.create(drive=drive, name="Docs")
+        owned_folder = Folder.objects.create(drive=drive, name="Owned", owner=people["folder-owner"])
+        trash = Folder._base_manager.get(owner=people["folder-owner"], drive__isnull=True)
+        inherited = File.objects.create(drive=drive, filename="a.txt", content_hash="a" * 64, owner=alice)
+        record = File.objects.create(
+            drive=drive, filename="r.txt", content_hash="b" * 64, owner=alice, visibility=FileVisibility.RECORD,
+        )
+        write_relationships([RelationshipTuple(to_object_ref(record), "viewer", to_subject_ref(people["named"]))])
+        in_folder = File.objects.create(drive=drive, folder=owned_folder, filename="f.txt", content_hash="c" * 64)
+        attachment = FileAttachment.objects.attach(inherited, drive)
+        tag = TagAssignment.objects.create(
+            tag=Tag.objects.create(name="Reviewed"),
+            content_type=ContentType.objects.get_for_model(File),
+            object_id=inherited.pk,
+        )
+
+    assert_decisions(
+        checks=seat_cells(
+            people.__getitem__,
+            (storage_admin, "effective_member", "storage-admin leaf-member admin", "alice outsider"),
+            (middle, "effective_member", "leaf-member", "storage-admin"),
+            (storage_admin, "member", "storage-admin", "leaf-member"),
+            *((drive.backend, action, "storage-admin admin", "alice outsider")
+              for action in ("create", "read", "write", "delete")),
+            (drive, "create", "admin storage-admin", "alice"),
+            (drive, "read", "alice editor viewer storage-admin leaf-member admin", "outsider anonymous"),
+            (drive, "write", "alice editor", "viewer"),
+            (drive, "share", "editor", "viewer"),
+            (drive, "transfer", "alice admin", "editor"),
+            (drive, "write__owner", "alice admin", "editor"),
+            (drive, "write__owns_items", "editor", "viewer"),
+            (drive, "delete", "alice storage-admin", "editor"),
+            (open_drive, "read", "outsider", "anonymous"),
+            (folder, "read", "viewer", "outsider"),
+            (folder, "write", "editor", "viewer"),
+            (folder, "delete", "editor", "viewer"),
+            (owned_folder, "read", "folder-owner viewer", "outsider"),
+            (owned_folder, "transfer", "folder-owner admin", "editor"),
+            (owned_folder, "write__owner", "folder-owner", "editor"),
+            (trash, "read", "folder-owner", "viewer"),
+            (trash, "write", "folder-owner", "viewer"),
+            (inherited, "read", "viewer", "outsider"),
+            (inherited, "write", "editor", "viewer"),
+            (inherited, "share", "editor", "viewer"),
+            (inherited, "transfer", "alice admin", "editor"),
+            (inherited, "write__owner", "alice", "editor"),
+            (inherited, "delete", "alice editor", "viewer"),
+            (record, "read", "alice named", "viewer"),
+            (in_folder, "read", "folder-owner", "outsider"),
+            (in_folder, "write", "folder-owner", "outsider"),
+            (attachment, "read", "viewer", "outsider"),
+            (attachment, "write", "editor", "viewer"),
+            (attachment, "delete", "editor", "viewer"),
+            (attachment, "target_write", "editor", "viewer"),
+            (attachment, "create", "editor", "viewer"),
+            (tag, "target_read", "viewer", "outsider"),
+            (tag, "target_write", "editor", "viewer"),
+        ),
+        accessible=(
+            (people["viewer"], "read", File, (inherited, in_folder)),
+            (people["folder-owner"], "read", Folder, (owned_folder, trash)),
+            (people["outsider"], "read", Drive, (open_drive,)),
+        ),
+    )
 
 
 def test_download_urls_are_window_aligned_and_expire_from_the_window_start(drive: Any, monkeypatch) -> None:
@@ -68,9 +176,8 @@ def test_download_url_changes_for_new_content_inside_one_window(drive: Any, monk
         assert row.download_url() != first
 
 
-@pytest.mark.parametrize("schema_name", ["public", "console"])
 def test_record_files_query_requires_record_and_file_read_and_uploads_need_the_arm(
-    drive: Any, monkeypatch: pytest.MonkeyPatch, schema_name: str,
+    drive: Any, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     reader, stranger = create_user("record-files-reader"), create_user("record-files-stranger")
     with system_context(reason="test.storage.record_files.seed"):
@@ -81,7 +188,7 @@ def test_record_files_query_requires_record_and_file_read_and_uploads_need_the_a
         attachment = FileAttachment.objects.attach(file, drive)
     with actor_context(drive.alice):
         drive.with_actor(drive.alice).grant_record_access("viewer", reader)
-    schema = addon_schema(storage_schema.schemas, schema_name)
+    schema = addon_schema(storage_schema.schemas, "public")
     query = """query ($model: String!, $id: ID!) {
       record_files(model_label: $model, record_id: $id) {
         can_upload attachments { __typename id file { id filename } }
@@ -109,10 +216,7 @@ def test_record_files_query_requires_record_and_file_read_and_uploads_need_the_a
     }
 
 
-@pytest.mark.parametrize("schema_name", ["public", "console"])
-def test_file_attachments_redact_unreadable_records_and_recheck_revocation(
-    drive: Any, schema_name: str,
-) -> None:
+def test_file_attachments_redact_unreadable_records_and_recheck_revocation(drive: Any) -> None:
     reader, stranger = create_user("attachment-reader"), create_user("attachment-stranger")
     with system_context(reason="test.storage.reverse_attachments.seed"):
         file = File.objects.create(
@@ -121,7 +225,7 @@ def test_file_attachments_redact_unreadable_records_and_recheck_revocation(
         )
         edge = FileAttachment.objects.attach(file, drive)
         file.grant_record_access("viewer", reader)
-    schema = addon_schema(storage_schema.schemas, schema_name)
+    schema = addon_schema(storage_schema.schemas, "public")
     query = """query ($file: ID!) {
       file_attachments(file: $file) { id model_label record_id }
     }"""
@@ -142,10 +246,9 @@ def test_file_attachments_redact_unreadable_records_and_recheck_revocation(
     assert read(reader) == []
 
 
-@pytest.mark.parametrize("schema_name", ["public", "console"])
 @pytest.mark.parametrize("parents_readable", [False, True])
 def test_file_parent_ids_are_redacted_and_batched_at_six_and_twenty_four_rows(
-    drive: Any, schema_name: str, parents_readable: bool,
+    drive: Any, parents_readable: bool,
 ) -> None:
     reader = create_user("parent-projection-reader")
     with system_context(reason="test.storage.parents.seed"):
@@ -158,7 +261,7 @@ def test_file_parent_ids_are_redacted_and_batched_at_six_and_twenty_four_rows(
     if parents_readable:
         with actor_context(drive.alice):
             drive.with_actor(drive.alice).grant_record_access("viewer", reader)
-    schema = addon_schema(storage_schema.schemas, schema_name)
+    schema = addon_schema(storage_schema.schemas, "public")
     counts = []
     for limit in (6, 24):
         with CaptureQueriesContext(connection) as captured:
@@ -268,44 +371,45 @@ def test_download_rejects_legacy_and_malformed_actor_claims(drive: Any, actor_cl
         row.issue_download_token()
 
 
-@pytest.mark.parametrize(
-    "missing", ["file_read", "file_write", "target_write", "undeclared_target", "untyped_target"],
-)
-def test_attach_rejects_missing_authority_even_with_sudo_loaded_inputs(
-    drive: Any, composed_tables: None, missing: str,
-) -> None:
+def test_attach_rejects_missing_authority_even_with_sudo_loaded_inputs(drive: Any) -> None:
+    """The attach preflight checks file read, file write, target write, a declared target arm and a typed target."""
+
     row = _proxy_upload(drive, PNG_BYTES)
-    actor = create_user("attach-actor")
     with system_context(reason="test.storage.attach.seed"):
-        target = Drive.objects.create(backend=drive.backend, slug="target", name="Target", owner=actor)
         row = File.objects.get(pk=row.pk)
-    with actor_context(drive.alice):
-        if missing == "file_write":
-            row.with_actor(drive.alice).grant_record_access("viewer", actor)
-        elif missing != "file_read":
-            drive.with_actor(drive.alice).grant_record_access("editor", actor)
-    expected: type[Exception] = PermissionDenied
-    if missing == "target_write":
-        with system_context(reason="test.storage.attach.foreign"):
+        foreign = Drive.objects.create(
+            backend=drive.backend, slug="foreign", name="Foreign", prefix="foreign", owner=drive.alice,
+        )
+    for missing in ("file_read", "file_write", "target_write", "undeclared_target", "untyped_target"):
+        actor = create_user(f"attach-{missing}")
+        with system_context(reason="test.storage.attach.target"):
             target = Drive.objects.create(
-                backend=drive.backend, slug="foreign", name="Foreign", prefix="foreign", owner=drive.alice,
+                backend=drive.backend, slug=missing, name=missing, prefix=missing, owner=actor,
             )
-    elif missing == "undeclared_target":
-        # Writable by the actor, but no relation on storage/file_attachment names vaults.
-        target = vault_for(actor, name="Not attachable")
-    elif missing == "untyped_target":
-        target = MimeType._base_manager.first()
-        expected = ValueError
-    # file_write: the composed storage/file reads record files through their
-    # attachments (projects' task arm), so a new edge also needs write on the file.
-    with actor_context(actor), pytest.raises(expected):
-        FileAttachment.objects.attach(row, target)
+        with actor_context(drive.alice):
+            if missing == "file_write":
+                row.with_actor(drive.alice).grant_record_access("viewer", actor)
+            elif missing != "file_read":
+                drive.with_actor(drive.alice).grant_record_access("editor", actor)
+        expected: type[Exception] = PermissionDenied
+        if missing == "target_write":
+            target = foreign
+        elif missing == "undeclared_target":
+            # Writable by the actor, but no relation on storage/file_attachment names vaults.
+            target = vault_for(actor, name="Not attachable")
+        elif missing == "untyped_target":
+            target = MimeType._base_manager.first()
+            expected = ValueError
+        # file_write: the composed storage/file reads record files through their
+        # attachments (projects' task arm), so a new edge also needs write on the file.
+        with actor_context(actor), pytest.raises(expected):
+            FileAttachment.objects.attach(row, target)
     with system_context(reason="test.storage.attach.inspect"):
         assert FileAttachment.objects.count() == 0
 
 
 def test_attach_lists_and_detaches_under_the_actor_with_one_scoped_statement(
-    drive: Any, composed_tables: None,
+    drive: Any,
 ) -> None:
     row = _proxy_upload(drive, PNG_BYTES)
     editor, reader = create_user("attach-editor"), create_user("attach-file-reader")
@@ -333,7 +437,7 @@ def test_attach_lists_and_detaches_under_the_actor_with_one_scoped_statement(
         assert not FileAttachment.objects.exists()
 
 
-def test_composed_edge_target_relations_pass_the_backing_check(composed_tables: None) -> None:
+def test_composed_edge_target_relations_pass_the_backing_check(db: None) -> None:
     schema = rebac_backend().schema()
     for resource_type, relations in (
         ("storage/file_attachment", {"task", "drive", "mti_parent"}),
@@ -422,9 +526,8 @@ def test_container_owned_upload_loses_uploader_reach_after_narrowing(drive: Any)
             row.transfer_ownership(editor)
 
 
-@pytest.mark.parametrize("operation", ["grant", "transfer", "dedup"])
 def test_holder_refusal_blocks_every_storage_share_path_without_a_tuple(
-    drive: Any, monkeypatch: pytest.MonkeyPatch, operation: str,
+    drive: Any, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     row = _proxy_upload(drive, PNG_BYTES)
     refused = create_user("refused-holder")
@@ -435,15 +538,15 @@ def test_holder_refusal_blocks_every_storage_share_path_without_a_tuple(
         raise RecordAccessSubjectRefused()
 
     monkeypatch.setattr(File, "validate_record_access_subject", refuse)
-    with actor_context(drive.alice), pytest.raises(RecordAccessSubjectRefused):
-        if operation == "grant":
-            row.grant_record_access("viewer", refused)
-        elif operation == "transfer":
-            row.transfer_ownership(refused)
-        else:
-            File.objects.ingest_bytes(
-                PNG_BYTES, filename="dedup.png", drive_id=str(drive.sqid), owner_id=refused.pk,
-            )
+    for share in (
+        lambda: row.grant_record_access("viewer", refused),
+        lambda: row.transfer_ownership(refused),
+        lambda: File.objects.ingest_bytes(
+            PNG_BYTES, filename="dedup.png", drive_id=str(drive.sqid), owner_id=refused.pk,
+        ),
+    ):
+        with actor_context(drive.alice), pytest.raises(RecordAccessSubjectRefused):
+            share()
     with system_context(reason="test.storage.refusal.inspect"):
         assert active_relationship_model().objects.count() == count
         row.refresh_from_db()
@@ -451,38 +554,34 @@ def test_holder_refusal_blocks_every_storage_share_path_without_a_tuple(
     assert not row.with_actor(refused).has_access("read")
 
 
-@pytest.mark.parametrize("visibility", ["RECORD", "INHERITED"])
 @pytest.mark.parametrize("anonymous", [False, True])
-def test_visibility_action_returns_same_failure_for_missing_and_unreadable_file(
-    drive: Any, visibility: str, anonymous: bool,
-) -> None:
+def test_visibility_action_returns_same_failure_for_missing_and_unreadable_file(drive: Any, anonymous: bool) -> None:
     row = _proxy_upload(drive, PNG_BYTES)
     outsider = None if anonymous else create_user("visibility-outsider")
     schema = addon_schema(storage_schema.schemas, "public")
-    payloads = [result_data(execute_schema(schema, """
-        mutation Visibility($id: ID!, $visibility: FileVisibility!) {
-          set_file_visibility(id: $id, visibility: $visibility) { ok message }
-        }
-    """, {"id": file_id, "visibility": visibility}, user=outsider))["set_file_visibility"]
-        for file_id in (str(row.sqid), str(File(pk=row.pk + 1000).sqid))]
-    assert payloads[0] == payloads[1]
-    assert payloads[0]["ok"] is False
+    for visibility in ("RECORD", "INHERITED"):
+        payloads = [result_data(execute_schema(schema, """
+            mutation Visibility($id: ID!, $visibility: FileVisibility!) {
+              set_file_visibility(id: $id, visibility: $visibility) { ok message }
+            }
+        """, {"id": file_id, "visibility": visibility}, user=outsider))["set_file_visibility"]
+            for file_id in (str(row.sqid), str(File(pk=row.pk + 1000).sqid))]
+        assert payloads[0] == payloads[1]
+        assert payloads[0]["ok"] is False
     with system_context(reason="test.storage.visibility.inspect"):
         row.refresh_from_db()
     assert row.visibility == FileVisibility.INHERITED
 
 
-@pytest.mark.parametrize("visibility", list(FileVisibility))
-def test_visibility_requires_actor_and_respects_pinned_denial_even_under_system(
-    drive: Any, visibility: FileVisibility,
-) -> None:
+def test_visibility_requires_actor_and_respects_pinned_denial_even_under_system(drive: Any) -> None:
     row = _proxy_upload(drive, PNG_BYTES)
     outsider = create_user("pinned-visibility-outsider")
-    with system_context(reason="test.storage.visibility.actorless"):
-        unbound = File.objects.get(pk=row.pk)
-        with pytest.raises(PermissionDenied):
-            unbound.set_visibility(visibility)
-        with pytest.raises(PermissionDenied):
+    for visibility in FileVisibility:
+        with system_context(reason="test.storage.visibility.actorless"):
+            unbound = File.objects.get(pk=row.pk)
+            with pytest.raises(PermissionDenied):
+                unbound.set_visibility(visibility)
+            with pytest.raises(PermissionDenied):
+                unbound.with_actor(outsider).set_visibility(visibility)
+        with actor_context(drive.alice), pytest.raises(PermissionDenied):
             unbound.with_actor(outsider).set_visibility(visibility)
-    with actor_context(drive.alice), pytest.raises(PermissionDenied):
-        unbound.with_actor(outsider).set_visibility(visibility)

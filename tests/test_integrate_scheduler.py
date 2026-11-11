@@ -208,11 +208,9 @@ def test_enqueued_due_bridge_persists_success_telemetry(transactional_db: None) 
     assert bridge.last_sync_started_at == now
     assert bridge.last_sync_completed_at is not None
     assert bridge.last_sync_completed_at >= now
-    assert bridge.sync_stage == bridge.SyncStage.COMPLETED
-    assert bridge.last_sync_items == 7
     assert bridge.sync_stage == Bridge.SyncStage.COMPLETED
+    assert bridge.last_sync_items == 7
     assert bridge.sync_error == ""
-    assert bridge.sync_progress["stage"] == Bridge.SyncStage.COMPLETED
     assert bridge.sync_progress["items"] == 7
     assert bridge.last_sync_summary["items"] == 7
     assert bridge.sync_streams.model.objects.current_for_bridge(bridge, "records").get().cursor == {"seen": 7}
@@ -304,10 +302,8 @@ def test_enqueued_due_bridge_records_errors_on_integration_runtime_status(transa
     bridge.refresh_from_db()
     integration.refresh_from_db()
     assert bridge.last_sync_started_at == now
-    assert bridge.sync_stage == bridge.SyncStage.FAILED
     assert bridge.sync_stage == Bridge.SyncStage.FAILED
     assert bridge.sync_error == "Integration operation failed."
-    assert bridge.sync_progress["stage"] == Bridge.SyncStage.FAILED
     assert bridge.sync_progress["error"] == "Integration operation failed."
     assert bridge.next_sync_at is not None
     assert bridge.next_sync_at >= now + timedelta(seconds=17)
@@ -383,7 +379,6 @@ def test_bridge_sync_persists_its_progress_report(transactional_db: None) -> Non
     assert result == {"ran": 1, "errors": 0}
     bridge.refresh_from_db()
     assert bridge.sync_stage == Bridge.SyncStage.COMPLETED
-    assert bridge.sync_progress["stage"] == Bridge.SyncStage.COMPLETED
     assert bridge.sync_progress["details"] == {"items": 3, "source": "fixture"}
     assert bridge.sync_progress["message"] == "Scanning vendor rows"
 
@@ -592,10 +587,11 @@ class SyncStageMachine(RuleBasedStateMachine):
     @invariant()
     def row_matches_the_oracle(self) -> None:
         """Failure markers live only on a failed row, outcomes only on their terminal marker, and every
-        marker keeps the reported progress and a queued row's token."""
+        marker keeps the reported progress and a queued row's token; the stage lives on its column alone."""
         row = self.fetch()
         progress = row.sync_progress
         assert (row.sync_stage, row.sync_run_id, row.sync_error) == (self.stage, self.run_id, self.error)
+        assert "stage" not in progress
         assert (progress.get("error"), progress.get("items"), row.last_sync_items) == (
             self.error or None, self.items, self.last_items,
         )
@@ -740,7 +736,7 @@ def test_request_sync_marks_queued_and_defers_task(
     bridge.refresh_from_db()
     assert bridge.sync_stage == Bridge.SyncStage.QUEUED
     assert bridge.sync_error == ""
-    assert bridge.sync_progress == {"stage": Bridge.SyncStage.QUEUED, "queued_at": now.isoformat()}
+    assert bridge.sync_progress == {"queued_at": now.isoformat()}
 
 
 @pytest.mark.django_db(transaction=True)
@@ -802,7 +798,7 @@ def test_request_sync_can_enqueue_duplicate_requests(
     assert len(enqueued) == 2
     bridge.refresh_from_db()
     assert bridge.sync_stage == Bridge.SyncStage.QUEUED
-    assert bridge.sync_progress == {"stage": Bridge.SyncStage.QUEUED, "queued_at": now.isoformat()}
+    assert bridge.sync_progress == {"queued_at": now.isoformat()}
 
 
 def test_stale_bridge_sync_task_payload_is_skipped(
@@ -830,7 +826,7 @@ def test_stale_bridge_sync_task_payload_is_skipped(
     bridge.refresh_from_db()
     assert not bridge.sync_streams.model.objects.current_for_bridge(bridge, "records").exists()
     assert bridge.sync_stage == Bridge.SyncStage.QUEUED
-    assert bridge.sync_progress == {"stage": Bridge.SyncStage.QUEUED, "queued_at": second.isoformat()}
+    assert bridge.sync_progress == {"queued_at": second.isoformat()}
 
 
 @pytest.mark.django_db(transaction=True)
@@ -858,7 +854,7 @@ def test_request_sync_inside_outer_transaction_preserves_caller(
     assert len(enqueued) == 1
     bridge.refresh_from_db()
     assert bridge.sync_stage == Bridge.SyncStage.QUEUED
-    assert bridge.sync_progress == {"stage": Bridge.SyncStage.QUEUED, "queued_at": now.isoformat()}
+    assert bridge.sync_progress == {"queued_at": now.isoformat()}
 
 
 def test_integrate_registry_discovers_bridges_in_deterministic_order(db: None) -> None:

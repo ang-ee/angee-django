@@ -15,10 +15,9 @@ pytestmark = [
 ]
 
 
-def test_a_concurrent_landing_waits_on_the_message_and_skips_the_reaction_it_finds(composed_tables: None) -> None:
+def test_a_concurrent_landing_waits_on_the_message_and_skips_the_reaction_it_finds() -> None:
     """The second landing waits on the first's message lock, then sees its row instead of colliding on it."""
 
-    del composed_tables
     with system_context(reason="test reaction landing race"):
         handle = Handle._base_manager.create(platform="youtube", value="fan")
         message = Message._base_manager.create(thread=Thread._base_manager.create())

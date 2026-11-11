@@ -1,6 +1,5 @@
 """Stage-owned invariants protect defaults, phase mappings and hand transitions."""
 
-from pathlib import Path
 from types import SimpleNamespace
 
 from django.core.exceptions import ValidationError
@@ -8,7 +7,6 @@ from rebac import actor_context, system_context
 
 from angee.graphql.schema import GraphQLSchemas
 from angee.graphql.testing.documents import graphql_request
-from tests.composed_host import run_composed_tests
 from tests.native_work import WorkCase
 
 
@@ -109,7 +107,3 @@ class RuleStageTests(WorkCase):
                         setattr(stage, name, value)
                     with self.subTest(fields=fields, operation=operation), self.assertRaises(ValidationError):
                         getattr(stage, operation)()
-
-
-def test_work_rule_stages(tmp_path: Path):
-    run_composed_tests(tmp_path, "tests.test_work_rule_stages.RuleStageTests", app="angee.work")

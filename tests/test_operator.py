@@ -7,7 +7,7 @@ from datetime import datetime, timedelta, timezone
 from io import StringIO
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Callable, Iterator, cast
+from typing import Callable, Iterator
 
 import httpx2
 import pytest
@@ -19,7 +19,7 @@ from rebac.schema import ConstBinding, parse_zed
 from rebac.testing import install_schema
 
 from angee.integrate.errors import RequestNotSentError
-from angee.integrate.http import HttpClient
+from angee.integrate.testing.http import mock_transport
 from angee.operator import daemon as daemon_module
 from angee.operator import schema as operator_schema
 from angee.operator.daemon import (
@@ -82,42 +82,42 @@ def test_daemon_error_types_a_conflict_with_the_daemon_reported_instance() -> No
         assert unclassified.kind is None
 
 
-def _daemon_answering(monkeypatch: pytest.MonkeyPatch, status: int, body: bytes) -> tuple[OperatorDaemon, list[str]]:
-    """Return a daemon whose every REST call gets ``status``/``body``, and the URLs it called."""
+def _daemon() -> OperatorDaemon:
+    """Return a daemon client bound to a server-side base and the admin bearer."""
 
-    urls: list[str] = []
-
-    class FakeHttpClient:
-        def request(self, method: str, url: str, **kwargs: object) -> httpx2.Response:
-            del method, kwargs
-            urls.append(url)
-            return httpx2.Response(status, content=body)
-
-    monkeypatch.setattr(daemon_module, "HttpClient", FakeHttpClient)
-    daemon = OperatorDaemon(
+    return OperatorDaemon(
         endpoint="http://op/graphql",
         server_base="http://op",
         admin_bearer="admin",
         scope=(),
         ttl="1h",
     )
-    return daemon, urls
 
 
-def test_daemon_request_raises_typed_conflict(monkeypatch: pytest.MonkeyPatch) -> None:
+def _answer(status: int, body: bytes) -> Callable[[httpx2.Request], httpx2.Response]:
+    """Answer every daemon REST call with ``status`` and ``body``."""
+
+    return lambda request: httpx2.Response(status, content=body)
+
+
+MINTED_BODY = b'{"token": "ok", "expires_at": "2099-01-01T00:00:00Z"}'
+
+
+def _urls(requests: list[httpx2.Request]) -> list[str]:
+    return [str(request.url) for request in requests]
+
+
+def test_daemon_request_raises_typed_conflict() -> None:
     """A create the daemon refuses with 409 raises the typed conflict from the REST call."""
 
-    daemon, _ = _daemon_answering(
-        monkeypatch, 409, b'{"kind": "service", "name": "agent-demo", "error": "service agent-demo conflicts"}'
-    )
-
-    with pytest.raises(OperatorDaemonConflict) as raised:
-        daemon.create_service(template="services/agent", workspace="demo", inputs={})
+    body = b'{"kind": "service", "name": "agent-demo", "error": "service agent-demo conflicts"}'
+    with mock_transport(_answer(409, body)), pytest.raises(OperatorDaemonConflict) as raised:
+        _daemon().create_service(template="services/agent", workspace="demo", inputs={})
 
     assert (raised.value.kind, raised.value.name) == (OperatorInstanceKind.SERVICE, "agent-demo")
 
 
-def test_workspace_status_reads_template_inputs_and_mounting_services(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_workspace_status_reads_template_inputs_and_mounting_services() -> None:
     """The status read keeps the template ref, the recorded inputs, and the services (not jobs) mounting it."""
 
     body = json.dumps(
@@ -132,26 +132,26 @@ def test_workspace_status_reads_template_inputs_and_mounting_services(monkeypatc
             ],
         }
     ).encode()
-    daemon, urls = _daemon_answering(monkeypatch, 200, body)
+    with mock_transport(_answer(200, body)) as requests:
+        status = _daemon().workspace_status("demo ws")
 
-    assert daemon.workspace_status("demo ws") == WorkspaceStatus(
+    assert status == WorkspaceStatus(
         name="demo ws",
         template="workspaces/agent-default",
         inputs={"agent_name": "Demo", "instructions": "Hi."},
         services=("agent-demo",),
     )
-    assert urls == ["http://op/workspaces/demo%20ws/status"]
+    assert _urls(requests) == ["http://op/workspaces/demo%20ws/status"]
 
 
-def test_service_status_reads_the_service_listing(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_service_status_reads_the_service_listing() -> None:
     """The daemon has no single-service read; the status comes from its service listing."""
 
     body = b'{"nodes": [{"name": "agent-demo", "runtime": "container", "status": "exited"}], "total_count": 1}'
-    daemon, urls = _daemon_answering(monkeypatch, 200, body)
-
-    assert daemon.service_status("agent-demo") == "exited"
-    assert daemon.service_status("agent-other") is None
-    assert urls == ["http://op/services", "http://op/services"]
+    with mock_transport(_answer(200, body)) as requests:
+        assert _daemon().service_status("agent-demo") == "exited"
+        assert _daemon().service_status("agent-other") is None
+    assert _urls(requests) == ["http://op/services", "http://op/services"]
 
 
 @pytest.mark.parametrize(
@@ -163,13 +163,12 @@ def test_service_status_reads_the_service_listing(monkeypatch: pytest.MonkeyPatc
     ],
 )
 def test_an_instance_is_absent_only_when_the_not_found_names_it(
-    monkeypatch: pytest.MonkeyPatch, call: Callable[[OperatorDaemon], object], body: bytes
+    call: Callable[[OperatorDaemon], object], body: bytes,
 ) -> None:
     """A not-found naming the asked-for instance means it is gone: destroyed already, or no status."""
 
-    daemon, _ = _daemon_answering(monkeypatch, 404, body)
-
-    assert call(daemon) is None
+    with mock_transport(_answer(404, body)):
+        assert call(_daemon()) is None
 
 
 @pytest.mark.parametrize(
@@ -181,144 +180,66 @@ def test_an_instance_is_absent_only_when_the_not_found_names_it(
         b'{"kind": "workspace", "name": "svc", "error": "gone"}',
     ],
 )
-def test_a_not_found_that_names_another_instance_still_raises(monkeypatch: pytest.MonkeyPatch, body: bytes) -> None:
+def test_a_not_found_that_names_another_instance_still_raises(body: bytes) -> None:
     """A plain 404 — a proxy, a mis-mounted URL — or one about another instance is never read as destroyed."""
 
-    daemon, _ = _daemon_answering(monkeypatch, 404, body)
-
-    with pytest.raises(OperatorDaemonNotFound) as raised:
-        daemon.destroy_service("svc")
+    with mock_transport(_answer(404, body)), pytest.raises(OperatorDaemonNotFound) as raised:
+        _daemon().destroy_service("svc")
 
     assert raised.value.status_code == 404
     assert str(raised.value).startswith("operator POST destroy: HTTP 404")
 
 
-def test_daemon_request_uses_the_shared_integrate_http_client(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_daemon_request_uses_the_shared_integrate_http_client() -> None:
     """Operator REST calls ride the shared pinned HTTP owner, allowing local daemon addresses."""
 
-    calls: list[dict[str, object]] = []
+    with mock_transport(_answer(200, b'{"ok": true}')) as requests:
+        assert _daemon()._request("POST", "http://op/workspaces", {"name": "demo"}, timeout=7) == {"ok": True}
 
-    class FakeHttpClient:
-        def request(
-            self,
-            method: str,
-            url: str,
-            *,
-            headers: dict[str, str] | None = None,
-            body: bytes | None = None,
-            allow_private: bool = False,
-            timeout: int = 60,
-        ) -> httpx2.Response:
-            calls.append(
-                {
-                    "method": method,
-                    "url": url,
-                    "headers": headers,
-                    "body": body,
-                    "allow_private": allow_private,
-                    "timeout": timeout,
-                }
-            )
-            return httpx2.Response(200, content=b'{"ok": true}')
-
-    monkeypatch.setattr(daemon_module, "HttpClient", FakeHttpClient)
-    daemon = OperatorDaemon(
-        endpoint="http://op/graphql",
-        server_base="http://op",
-        admin_bearer="admin",
-        scope=(),
-        ttl="1h",
-    )
-
-    assert daemon._request("POST", "http://op/workspaces", {"name": "demo"}, timeout=7) == {"ok": True}
-    call = calls[0]
-    assert call["method"] == "POST"
-    assert call["url"] == "http://op/workspaces"
-    assert call["headers"] == {
-        "Content-Type": "application/json",
-        "Authorization": "Bearer admin",
-    }
-    assert json.loads(cast(bytes, call["body"]).decode()) == {"name": "demo"}
-    assert call["allow_private"] is True
-    assert call["timeout"] == 7
+    [request] = requests
+    assert (request.method, str(request.url)) == ("POST", "http://op/workspaces")
+    assert (request.headers["Content-Type"], request.headers["Authorization"]) == ("application/json", "Bearer admin")
+    assert json.loads(request.content) == {"name": "demo"}
+    assert request.extensions["allow_private"] is True
+    assert request.extensions["timeout"] == dict.fromkeys(("connect", "read", "write", "pool"), 7)
 
 
-def test_resolve_template_ref_reads_collection_envelope(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_resolve_template_ref_reads_collection_envelope() -> None:
     """The daemon's template REST list is a collection envelope, not a bare array."""
 
-    daemon = OperatorDaemon(
-        endpoint="http://op/graphql",
-        server_base="http://op",
-        admin_bearer="admin",
-        scope=(),
-        ttl="1h",
-    )
-
-    def fake_request(
-        self: OperatorDaemon,
-        method: str,
-        url: str,
-        payload: dict[str, object] | None = None,
-        *,
-        timeout: int = 60,
-    ) -> dict[str, object]:
-        del self, payload, timeout
-        assert method == "GET"
-        assert url == "http://op/templates"
-        return {
-            "nodes": [
-                {"name": "agent-default", "kind": "service", "ref": "services/wrong-kind"},
-                {"name": "agent-default", "kind": "workspace", "ref": "workspaces/agent-default"},
-            ],
-            "total_count": 2,
-        }
-
-    monkeypatch.setattr(OperatorDaemon, "_request", fake_request)
-
-    assert daemon.resolve_template_ref(name="agent-default", kind="workspace") == "workspaces/agent-default"
+    templates = {
+        "nodes": [
+            {"name": "agent-default", "kind": "service", "ref": "services/wrong-kind"},
+            {"name": "agent-default", "kind": "workspace", "ref": "workspaces/agent-default"},
+        ],
+        "total_count": 2,
+    }
+    with mock_transport(lambda request: httpx2.Response(200, json=templates)) as requests:
+        assert _daemon().resolve_template_ref(name="agent-default", kind="workspace") == "workspaces/agent-default"
+    assert [(request.method, str(request.url)) for request in requests] == [("GET", "http://op/templates")]
 
 
-def test_file_tools_call_the_files_api_and_carry_the_etag(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_file_tools_call_the_files_api_and_carry_the_etag() -> None:
     """read_file/write_file hit ``/files?source=&path=`` carrying the etag."""
 
-    daemon = OperatorDaemon(
-        endpoint="http://op/graphql",
-        server_base="http://op",
-        admin_bearer="admin",
-        scope=(),
-        ttl="1h",
-    )
-    calls: list[tuple[str, str, dict[str, object] | None]] = []
+    def files(request: httpx2.Request) -> httpx2.Response:
+        if request.method == "GET":
+            return httpx2.Response(200, json={
+                "source": "app", "path": "settings.yaml", "content": "INSTALLED_APPS: []\n", "etag": "e1",
+            })
+        assert request.method == "PUT"
+        return httpx2.Response(200, json={"source": "app", "path": "settings.yaml", "etag": "e2"})
 
-    def fake_request(
-        self: OperatorDaemon,
-        method: str,
-        url: str,
-        payload: dict[str, object] | None = None,
-        *,
-        timeout: int = 60,
-    ) -> dict[str, object]:
-        del self, timeout
-        calls.append((method, url, payload))
-        if method == "GET":
-            return {"source": "app", "path": "settings.yaml", "content": "INSTALLED_APPS: []\n", "etag": "e1"}
-        if method == "PUT":
-            return {"source": "app", "path": "settings.yaml", "etag": "e2"}
-        raise AssertionError(f"Unexpected method: {method}")
+    daemon = _daemon()
+    with mock_transport(files) as requests:
+        remote = daemon.read_file("app", "settings.yaml")
+        assert (remote.content, remote.etag) == ("INSTALLED_APPS: []\n", "e1")
+        assert daemon.write_file("app", "settings.yaml", "INSTALLED_APPS: [x]\n", "e1") == "e2"
 
-    monkeypatch.setattr(OperatorDaemon, "_request", fake_request)
-
-    remote = daemon.read_file("app", "settings.yaml")
-    assert (remote.content, remote.etag) == ("INSTALLED_APPS: []\n", "e1")
-    assert daemon.write_file("app", "settings.yaml", "INSTALLED_APPS: [x]\n", "e1") == "e2"
-
-    get_method, get_url, _ = calls[0]
-    assert get_method == "GET"
-    assert get_url.startswith("http://op/files?") and "source=app" in get_url and "path=settings.yaml" in get_url
-    put_method, put_url, put_payload = calls[1]
-    assert put_method == "PUT" and put_url.startswith("http://op/files?")
-    assert put_payload == {"content": "INSTALLED_APPS: [x]\n", "etag": "e1"}
-    assert len(calls) == 2
+    for request in requests:
+        assert request.url.path == "/files" and dict(request.url.params) == {"source": "app", "path": "settings.yaml"}
+    assert json.loads(requests[1].content) == {"content": "INSTALLED_APPS: [x]\n", "etag": "e1"}
+    assert [request.method for request in requests] == ["GET", "PUT"]
 
 
 # --- endpoint resolution ------------------------------------------------------
@@ -386,57 +307,53 @@ def test_admin_bearer_absent_is_none() -> None:
 # --- minting ------------------------------------------------------------------
 
 
-def test_mint_token_posts_actor_scope_ttl_and_returns_token(
-    settings: pytest.FixtureRequest,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def test_mint_token_posts_actor_scope_ttl_and_returns_token(settings: pytest.FixtureRequest) -> None:
     """A configured bridge mints over the admin bearer and returns the token."""
 
     settings.ANGEE_OPERATOR_URL = "http://localhost:9000"
     settings.ANGEE_OPERATOR_TOKEN = "admin-bearer"
     settings.ANGEE_OPERATOR_TOKEN_SCOPE = ["service:read"]
     settings.ANGEE_OPERATOR_TOKEN_TTL = "30m"
-    seen: dict[str, object] = {}
 
-    def fake_post(self: OperatorDaemon, url: str, payload: dict[str, object]) -> dict[str, object]:
-        seen.update(url=url, payload=payload, bearer=self.admin_bearer)
-        return {"token": "minted-abc", "expires_at": "2099-01-01T00:00:00Z"}
+    with mock_transport(_answer(200, b'{"token": "minted-abc", "expires_at": "2099-01-01T00:00:00Z"}')) as requests:
+        assert OperatorDaemon.from_settings().mint_token("auth/user:abc") == (
+            ConnectionToken("minted-abc", datetime(2099, 1, 1, tzinfo=timezone.utc))
+        )
+    [request] = requests
+    assert str(request.url) == "http://localhost:9000/tokens/mint"
+    assert json.loads(request.content) == {"actor": "auth/user:abc", "scope": ["service:read"], "ttl": "30m"}
+    assert request.headers["Authorization"] == "Bearer admin-bearer"
 
-    monkeypatch.setattr(OperatorDaemon, "_post_json", fake_post)
 
-    assert OperatorDaemon.from_settings().mint_token("auth/user:abc") == (
-        ConnectionToken("minted-abc", datetime(2099, 1, 1, tzinfo=timezone.utc))
-    )
-    assert seen["url"] == "http://localhost:9000/tokens/mint"
-    assert seen["payload"] == {"actor": "auth/user:abc", "scope": ["service:read"], "ttl": "30m"}
-    assert seen["bearer"] == "admin-bearer"
+def test_mint_token_hides_the_connection_when_the_daemon_never_answers(settings: pytest.FixtureRequest) -> None:
+    """A mint sent but never answered hides the connection instead of raising."""
+
+    settings.ANGEE_OPERATOR_URL = "http://localhost:9000"
+    settings.ANGEE_OPERATOR_TOKEN = "admin-bearer"
+
+    def no_answer(request: httpx2.Request) -> httpx2.Response:
+        raise httpx2.ReadTimeout("no answer", request=request)
+
+    with mock_transport(no_answer):
+        assert OperatorDaemon.from_settings().mint_token("auth/user:abc") is None
 
 
 def test_mint_token_derives_host_from_full_graphql_endpoint(
     settings: pytest.FixtureRequest,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """The mint host is derived from a full GraphQL endpoint when that is all that is set."""
 
     settings.ANGEE_OPERATOR_GRAPHQL_ENDPOINT = "http://daemon:9000/graphql"
     settings.ANGEE_OPERATOR_TOKEN = "admin-bearer"
-    seen: dict[str, object] = {}
-
-    def fake_post(self: OperatorDaemon, url: str, payload: dict[str, object]) -> dict[str, object]:
-        seen["url"] = url
-        return {"token": "ok", "expires_at": "2099-01-01T00:00:00Z"}
-
-    monkeypatch.setattr(OperatorDaemon, "_post_json", fake_post)
-
-    assert OperatorDaemon.from_settings().mint_token("auth/user:abc") == (
-        ConnectionToken("ok", datetime(2099, 1, 1, tzinfo=timezone.utc))
-    )
-    assert seen["url"] == "http://daemon:9000/tokens/mint"
+    with mock_transport(_answer(200, MINTED_BODY)) as requests:
+        assert OperatorDaemon.from_settings().mint_token("auth/user:abc") == (
+            ConnectionToken("ok", datetime(2099, 1, 1, tzinfo=timezone.utc))
+        )
+    assert _urls(requests) == ["http://daemon:9000/tokens/mint"]
 
 
 def test_mint_token_preserves_mount_prefix(
     settings: pytest.FixtureRequest,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A daemon behind a path prefix mints under that prefix, not the bare host.
 
@@ -446,40 +363,25 @@ def test_mint_token_preserves_mount_prefix(
 
     settings.ANGEE_OPERATOR_URL = "https://host/operator"
     settings.ANGEE_OPERATOR_TOKEN = "admin-bearer"
-    seen: dict[str, object] = {}
-
-    def fake_post(self: OperatorDaemon, url: str, payload: dict[str, object]) -> dict[str, object]:
-        seen["url"] = url
-        return {"token": "ok", "expires_at": "2099-01-01T00:00:00Z"}
-
-    monkeypatch.setattr(OperatorDaemon, "_post_json", fake_post)
-
-    assert OperatorDaemon.from_settings().mint_token("auth/user:abc") == (
-        ConnectionToken("ok", datetime(2099, 1, 1, tzinfo=timezone.utc))
-    )
-    assert seen["url"] == "https://host/operator/tokens/mint"
+    with mock_transport(_answer(200, MINTED_BODY)) as requests:
+        assert OperatorDaemon.from_settings().mint_token("auth/user:abc") == (
+            ConnectionToken("ok", datetime(2099, 1, 1, tzinfo=timezone.utc))
+        )
+    assert _urls(requests) == ["https://host/operator/tokens/mint"]
 
 
 def test_mint_token_strips_only_trailing_graphql_from_prefixed_endpoint(
     settings: pytest.FixtureRequest,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A prefixed GraphQL endpoint keeps the prefix, dropping only ``/graphql``."""
 
     settings.ANGEE_OPERATOR_GRAPHQL_ENDPOINT = "https://host/operator/graphql"
     settings.ANGEE_OPERATOR_TOKEN = "admin-bearer"
-    seen: dict[str, object] = {}
-
-    def fake_post(self: OperatorDaemon, url: str, payload: dict[str, object]) -> dict[str, object]:
-        seen["url"] = url
-        return {"token": "ok", "expires_at": "2099-01-01T00:00:00Z"}
-
-    monkeypatch.setattr(OperatorDaemon, "_post_json", fake_post)
-
-    assert OperatorDaemon.from_settings().mint_token("auth/user:abc") == (
-        ConnectionToken("ok", datetime(2099, 1, 1, tzinfo=timezone.utc))
-    )
-    assert seen["url"] == "https://host/operator/tokens/mint"
+    with mock_transport(_answer(200, MINTED_BODY)) as requests:
+        assert OperatorDaemon.from_settings().mint_token("auth/user:abc") == (
+            ConnectionToken("ok", datetime(2099, 1, 1, tzinfo=timezone.utc))
+        )
+    assert _urls(requests) == ["https://host/operator/tokens/mint"]
 
 
 def test_mint_token_none_when_unconfigured() -> None:
@@ -488,63 +390,45 @@ def test_mint_token_none_when_unconfigured() -> None:
     assert OperatorDaemon.from_settings().mint_token("auth/user:abc") is None
 
 
-def test_mint_token_none_on_transport_error(
-    settings: pytest.FixtureRequest,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def test_mint_token_none_on_transport_error(settings: pytest.FixtureRequest) -> None:
     """A failed mint call hides the connection rather than raising."""
 
     settings.ANGEE_OPERATOR_URL = "http://localhost:9000"
     settings.ANGEE_OPERATOR_TOKEN = "admin-bearer"
 
-    def boom(self: OperatorDaemon, url: str, payload: dict[str, object]) -> dict[str, object]:
+    def refuse(request: httpx2.Request) -> httpx2.Response:
         raise OSError("connection refused")
 
-    monkeypatch.setattr(OperatorDaemon, "_post_json", boom)
+    with mock_transport(refuse):
+        assert OperatorDaemon.from_settings().mint_token("auth/user:abc") is None
 
-    assert OperatorDaemon.from_settings().mint_token("auth/user:abc") is None
 
-
-def test_not_sent_transport_failure_preserves_daemon_unavailability(
-    settings: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def test_not_sent_transport_failure_preserves_daemon_unavailability(settings: pytest.FixtureRequest) -> None:
     settings.ANGEE_OPERATOR_URL = "http://localhost:9000"
     settings.ANGEE_OPERATOR_TOKEN = "admin-bearer"
 
-    def refuse(self: HttpClient, *args: object, **kwargs: object) -> httpx2.Response:
+    def refuse(request: httpx2.Request) -> httpx2.Response:
         raise RequestNotSentError()
 
-    monkeypatch.setattr(HttpClient, "request", refuse)
     daemon = OperatorDaemon.from_settings()
-    assert daemon.mint_token("auth/user:abc") is None
-    assert daemon.introspect_sdl() is None
-    with pytest.raises(OperatorDaemonError) as raised:
+    with mock_transport(refuse), pytest.raises(OperatorDaemonError) as raised:
+        assert daemon.mint_token("auth/user:abc") is None
+        assert daemon.introspect_sdl() is None
         daemon.read_file("app", "settings.yaml")
     assert isinstance(raised.value.__cause__, RequestNotSentError)
 
 
-def test_mint_token_none_on_daemon_http_error(
-    settings: pytest.FixtureRequest,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def test_mint_token_none_on_daemon_http_error(settings: pytest.FixtureRequest) -> None:
     """A daemon HTTP failure hides the connection rather than bubbling through GraphQL."""
 
     settings.ANGEE_OPERATOR_URL = "http://localhost:9000"
     settings.ANGEE_OPERATOR_TOKEN = "admin-bearer"
 
-    def boom(self: OperatorDaemon, url: str, payload: dict[str, object]) -> dict[str, object]:
-        del self, url, payload
-        raise OperatorDaemonError("operator POST mint: HTTP 500: no")
-
-    monkeypatch.setattr(OperatorDaemon, "_post_json", boom)
-
-    assert OperatorDaemon.from_settings().mint_token("auth/user:abc") is None
+    with mock_transport(_answer(500, b"no")):
+        assert OperatorDaemon.from_settings().mint_token("auth/user:abc") is None
 
 
-def test_mint_token_reuses_cached_actor_token(
-    settings: pytest.FixtureRequest,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def test_mint_token_reuses_cached_actor_token(settings: pytest.FixtureRequest) -> None:
     """A browser connection query reuses the short-lived daemon token for the same actor window."""
 
     cache.clear()
@@ -552,20 +436,19 @@ def test_mint_token_reuses_cached_actor_token(
     settings.ANGEE_OPERATOR_TOKEN = "admin-bearer"
     settings.ANGEE_OPERATOR_TOKEN_SCOPE = ["service:read"]
     settings.ANGEE_OPERATOR_TOKEN_TTL = "30m"
-    calls: list[tuple[str, dict[str, object]]] = []
+    minted: list[httpx2.Request] = []
 
-    def fake_post(self: OperatorDaemon, url: str, payload: dict[str, object]) -> dict[str, object]:
-        del self
-        calls.append((url, payload))
-        return {"token": f"minted-{len(calls)}", "expires_at": "2099-01-01T00:00:00Z"}
+    def mint(request: httpx2.Request) -> httpx2.Response:
+        minted.append(request)
+        return httpx2.Response(200, json={"token": f"minted-{len(minted)}", "expires_at": "2099-01-01T00:00:00Z"})
 
-    monkeypatch.setattr(OperatorDaemon, "_post_json", fake_post)
     daemon = OperatorDaemon.from_settings()
-
-    assert daemon.mint_token("auth/user:abc") == ConnectionToken("minted-1", datetime(2099, 1, 1, tzinfo=timezone.utc))
-    assert daemon.mint_token("auth/user:abc") == ConnectionToken("minted-1", datetime(2099, 1, 1, tzinfo=timezone.utc))
-    assert daemon.mint_token("auth/user:def") == ConnectionToken("minted-2", datetime(2099, 1, 1, tzinfo=timezone.utc))
-    assert calls == [
+    expiry = datetime(2099, 1, 1, tzinfo=timezone.utc)
+    with mock_transport(mint) as requests:
+        assert daemon.mint_token("auth/user:abc") == ConnectionToken("minted-1", expiry)
+        assert daemon.mint_token("auth/user:abc") == ConnectionToken("minted-1", expiry)
+        assert daemon.mint_token("auth/user:def") == ConnectionToken("minted-2", expiry)
+    assert [(str(request.url), json.loads(request.content)) for request in requests] == [
         (
             "http://localhost:9000/tokens/mint",
             {"actor": "auth/user:abc", "scope": ["service:read"], "ttl": "30m"},
@@ -792,22 +675,22 @@ def test_connection_cache_lifetime_uses_issued_expiry_instead_of_requested_ttl(s
     settings.ANGEE_OPERATOR_TOKEN_TTL = "1h"
     now = datetime(2026, 10, 29, tzinfo=timezone.utc)
     monkeypatch.setattr(daemon_module.timezone, "now", lambda: now)
-    monkeypatch.setattr(OperatorDaemon, "_post_json", lambda *args: {
-        "token": "capped", "expires_at": (now + timedelta(seconds=60)).isoformat(),
-    })
+    capped = {"token": "capped", "expires_at": (now + timedelta(seconds=60)).isoformat()}
     stored = []
     monkeypatch.setattr(cache, "set", lambda key, value, timeout: stored.append((value, timeout)))
-    issued = OperatorDaemon.from_settings().mint_token("auth/user:capped")
+    with mock_transport(lambda request: httpx2.Response(200, json=capped)):
+        issued = OperatorDaemon.from_settings().mint_token("auth/user:capped")
     assert issued == ConnectionToken("capped", now + timedelta(seconds=60))
     assert stored == [(issued, 55)]
 
 
 @pytest.mark.parametrize("expiry", [None, "bad", "2000-01-01T00:00:00Z", "2099-01-01T00:00:00"])
-def test_mint_refuses_absent_invalid_naive_or_expired_issue_metadata(settings, monkeypatch, expiry):
+def test_mint_refuses_absent_invalid_naive_or_expired_issue_metadata(settings, expiry):
     settings.ANGEE_OPERATOR_URL = "http://localhost:9000"
     settings.ANGEE_OPERATOR_TOKEN = "admin"
-    monkeypatch.setattr(OperatorDaemon, "_post_json", lambda *args: {"token": "refused", "expires_at": expiry})
-    assert OperatorDaemon.from_settings().mint_token("auth/user:invalid-expiry") is None
+    issued = {"token": "refused", "expires_at": expiry}
+    with mock_transport(lambda request: httpx2.Response(200, json=issued)):
+        assert OperatorDaemon.from_settings().mint_token("auth/user:invalid-expiry") is None
 
 
 def test_operator_has_no_catalogue_execution_or_checkout_api():

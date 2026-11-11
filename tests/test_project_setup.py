@@ -510,10 +510,11 @@ class ServerVerbCase(ProjectSetupFixture):
         self.assertEqual(second.status, "open")
 
 
-@pytest.mark.parametrize(
-    "group", ("ProjectSetupCase", "ProjectAttentionCase", "DashboardVisibilityCase", "ServerVerbCase"),
-)
-def test_project_setup_contracts(tmp_path: Path, group: str):
+def test_project_setup_contracts(tmp_path: Path, subtests: pytest.Subtests):
     run_composed_tests(
-        tmp_path, f"tests.test_project_setup.{group}", app=("angee.intake", "angee.proposals_work", "angee.dashboards"),
+        tmp_path, subtests, app=("angee.intake", "angee.proposals_work", "angee.dashboards"),
+        sqlite=tuple(
+            f"tests.test_project_setup.{group}"
+            for group in ("ProjectSetupCase", "ProjectAttentionCase", "DashboardVisibilityCase", "ServerVerbCase")
+        ),
     )

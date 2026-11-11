@@ -15,7 +15,6 @@ from typing import Any
 
 import pytest
 from django.apps import apps
-from django.contrib.contenttypes.models import ContentType
 from django.core.checks.registry import registry
 from django.db import connection
 from django.test.utils import CaptureQueriesContext
@@ -377,7 +376,6 @@ def test_inbox_statements_leave_the_chatter_arms_out(campaign_access: Any, campa
     """The same population under ``read`` also resolves every record's chatter read."""
 
     world = _inbox_world(campaign_user)
-    ContentType.objects.get_for_models(*apps.get_models())
     for name in ("owner", "project_reader", "record_reader"):
         actor = getattr(world, name)
         for model in (Thread, Message):

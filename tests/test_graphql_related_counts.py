@@ -50,7 +50,7 @@ def schema():
 
 
 @pytest.fixture
-def referenced(composed_tables, decision_counts):
+def referenced(db, decision_counts):
     """One owner-readable decision on each of two records with colliding numeric IDs."""
 
     owner, outsider = create_user("count-owner"), create_user("count-outsider")
@@ -144,7 +144,7 @@ def test_an_unknown_target_model_fails_manage_py_check(settings):
     assert "missing.Model" in error.msg
 
 
-def test_every_declared_count_agrees_with_the_rows_its_group_lists(composed_tables):
+def test_every_declared_count_agrees_with_the_rows_its_group_lists():
     """Each registered declaration counts exactly the rows its read lists, bounded like its group.
 
     The count statement reads under the aggregate scope, the rows under the row

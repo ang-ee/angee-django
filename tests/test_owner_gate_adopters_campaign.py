@@ -13,13 +13,13 @@ from tests.t3_campaign import campaign_access as campaign_access
 from tests.t3_campaign import campaign_user as campaign_user
 
 
-def test_every_adopter_declares_owner_and_transfer_gate(composed_tables):
+def test_every_adopter_declares_owner_and_transfer_gate(db):
     """No composed adopter reports E022 or E027 on the merged schema; a failure names every offender.
 
     Composed adopters are the addons' models and the root conftest's compositions; a test
     module's own probe models install their own schema and are not adopters.
     """
-    del composed_tables
+    del db
     composed = ("angee.", "tests.conftest")
     adopters = [
         model for model in apps.get_models() if issubclass(model, OwnerMixin) and model.__module__.startswith(composed)

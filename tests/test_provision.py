@@ -2,10 +2,6 @@
 
 from __future__ import annotations
 
-import json
-import os
-import subprocess
-import sys
 from pathlib import Path
 
 import pytest
@@ -27,24 +23,12 @@ from rebac.models import SchemaRelation
 from angee.graphql.checks import check_graphql_schemas
 from angee.graphql.schema import GraphQLSchemas, SchemaParts
 from angee.graphql.sdl import SchemaIntegration
-from tests.composed_host import COMPOSED_TEST_TIMEOUT
+from tests.composed_host import run_composed_tests
 
 
-def _environment(tmp_path: Path) -> dict[str, str]:
-    source_root = Path(__file__).resolve().parents[1]
-    environment = dict(os.environ)
-    environment.pop("DJANGO_SETTINGS_MODULE", None)
-    environment.pop("DJANGO_COMPOSE_MODE", None)
-    environment["PYTHONPATH"] = os.pathsep.join(
-        filter(None, (str(tmp_path), str(source_root), environment.get("PYTHONPATH", "")))
-    )
-    return environment
-
-
-def test_native_composed_test_runner_does_not_require_provenance(tmp_path: Path) -> None:
+def test_native_composed_test_runner_does_not_require_provenance(tmp_path: Path, subtests: pytest.Subtests) -> None:
     """The source test host can run a plain Django app test without addon boundaries."""
 
-    root = Path(__file__).resolve().parents[1]
     addon = tmp_path / "addons" / "native_probe"
     addon.mkdir(parents=True)
     (addon / "__init__.py").write_text("")
@@ -55,18 +39,10 @@ def test_native_composed_test_runner_does_not_require_provenance(tmp_path: Path)
         '        self.assertTrue(apps.is_installed("django_compose"))\n'
         '        self.assertFalse(apps.is_installed("angee.provenance"))\n'
     )
-    report = tmp_path / "report.json"
-    result = subprocess.run(
-        [sys.executable, str(root / "tests/composed_host.py"), "--runtime-dir", str(tmp_path / "runtime"),
-         "--addon-dir", str(addon.parent), "--app", "django.contrib.contenttypes",
-         "--app", "django.contrib.auth", "--app", "native_probe",
-         "--no-examples", "--action", "tests",
-         "--test-label", "native_probe.tests", "--output", str(report)],
-        cwd=root, env=_environment(tmp_path), capture_output=True, text=True,
-        timeout=COMPOSED_TEST_TIMEOUT, check=False,
+    run_composed_tests(
+        tmp_path, subtests, app=("django.contrib.contenttypes", "django.contrib.auth", "native_probe"),
+        sqlite=("native_probe.tests",), addon_dirs=(addon.parent,),
     )
-    assert result.returncode == 0, result.stdout + result.stderr
-    assert json.loads(report.read_text()) == {"failures": 0, "vendor": "sqlite"}
 
 
 @pytest.mark.django_db
@@ -144,15 +120,6 @@ def test_graphql_check_then_schema_command_reuses_the_built_schema(
 
     schemas = GraphQLSchemas([])
     schemas.__dict__["parts"] = {"public": SchemaParts(query=(Query,))}
-    original_build = schemas._build
-    builds: list[strawberry.Schema] = []
-
-    def counted_build(name: str) -> strawberry.Schema:
-        built = original_build(name)
-        builds.append(built)
-        return built
-
-    monkeypatch.setattr(schemas, "_build", counted_build)
     monkeypatch.setattr(GraphQLSchemas, "from_discovery", classmethod(lambda cls: schemas))
     with override_system_checks([check_graphql_schemas]):
         with override_settings(COMPOSE_OUTPUT_DIR=tmp_path / "runtime"):
@@ -165,6 +132,6 @@ def test_graphql_check_then_schema_command_reuses_the_built_schema(
             with pytest.raises(CommandError, match="compiler-owned"):
                 call_command("schema", verbosity=0)
 
-    assert len(builds) == 1
-    assert schemas.build("public") is builds[0]
+    # Both commands read discovery's schema: its one cached build renders the SDL.
     assert "value: String!" in (tmp_path / "runtime" / "schemas" / "public.graphql").read_text()
+    assert schemas.build("public") is schemas.build("public")

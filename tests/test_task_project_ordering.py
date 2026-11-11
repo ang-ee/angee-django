@@ -4,7 +4,6 @@ import math
 from concurrent.futures import ThreadPoolExecutor
 from copy import deepcopy
 from dataclasses import replace
-from pathlib import Path
 from threading import Barrier, Event
 from types import SimpleNamespace
 from unittest import skipUnless
@@ -17,7 +16,6 @@ from rebac.schema.parser import parse_zed
 from rebac.testing import install_schema
 
 from angee.graphql.testing.documents import graphql_request
-from tests.composed_host import run_composed_tests
 from tests.native_work import WorkCase
 
 _MOVE = """mutation Move($id: String!, $set: project_tasks_set_input!) {
@@ -353,12 +351,3 @@ class TaskProjectOrderingTests(WorkCase):
             "sort_order",
         ).values_list("sort_order", flat=True))
         self.assertEqual(ranks, [0, 2048, 3072, 4096])
-
-
-def test_task_project_ordering(tmp_path: Path):
-    run_composed_tests(
-        tmp_path,
-        "tests.test_task_project_ordering.TaskProjectOrderingTests",
-        app="angee.work",
-        test_postgresql=connection.vendor == "postgresql",
-    )

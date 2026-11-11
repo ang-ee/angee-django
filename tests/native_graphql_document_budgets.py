@@ -363,19 +363,20 @@ BUDGETS = {
 
 
 # SELECT count and total planner allocation rounded up to MiB, measured on PostgreSQL 17,
-# the CI server, with REBAC 0.33.1: person allocates 480,573 KiB across 19 SELECTs (ceil =
-# 470 MiB; its two audit INSERTs keep the 21-statement document ceiling), projects 142,513
-# KiB across all 10 SELECTs (ceil = 140 MiB). PostgreSQL 18 allocates slightly less and is
+# the CI server, with REBAC 0.33.1: person allocates 496,957 KiB across 19 SELECTs (ceil =
+# 486 MiB; its two audit INSERTs keep the 21-statement document ceiling), projects 150,705
+# KiB across all 10 SELECTs (ceil = 148 MiB). PostgreSQL 18 allocates slightly less and is
 # not the gate's reference.
 PLANNER_BUDGETS = {
-    # REBAC 0.33.1: the inherited witness adds one SELECT; 480,573 KiB across 19 SELECTs.
-    "person": (19, 470),
-    "projects": (10, 140),
+    # Storage's deliberate trash-hiding file read split adds 8 MiB per file permission read; falls with rebac 0.34.
+    # REBAC 0.33.1: the inherited witness adds one SELECT; 496,957 KiB across 19 SELECTs.
+    "person": (19, 486),
+    "projects": (10, 148),
     # The member's inbox selection reads plan the merged policy's non-admin id sets, the largest
-    # remaining planner cost: 1,300,801 / 739,508 / 707,060 KiB. Ratchet down as they fall.
-    "selected": (26, 1271),
-    "connections": (17, 723),
-    "related": (19, 691),
+    # remaining planner cost: 1,325,377 / 764,084 / 731,636 KiB. Ratchet down as they fall.
+    "selected": (26, 1295),
+    "connections": (17, 747),
+    "related": (19, 715),
 }
 
 

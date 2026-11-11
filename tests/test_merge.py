@@ -50,7 +50,7 @@ from tests.mtidemo.models import MtiChild, MtiParent
 from tests.recordrefdemo.models import CustomColumnEdge, MergeReferenceNode, SelfLinkedNode, TagSlot
 from tests.workflow_steps import document
 
-pytestmark = pytest.mark.usefixtures("composed_tables")
+pytestmark = pytest.mark.django_db
 
 
 @pytest.fixture(autouse=True)

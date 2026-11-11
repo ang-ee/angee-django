@@ -1,13 +1,11 @@
 """Task chatter uses the live queue roster without copying followers."""
 
-from pathlib import Path
 
 from django.db import connection
 from django.test.utils import CaptureQueriesContext
 from rebac import actor_context, system_context
 
 from angee.base.testing.queries import statement_startswith
-from tests.composed_host import run_composed_tests
 from tests.native_work import WorkCase
 
 
@@ -85,7 +83,3 @@ class TaskAudienceTests(WorkCase):
             ]
             self.assertEqual(len(roster), 1)
         print(f"Work message_post queries: 6 roster members={counts[6]}, 12 roster members={counts[12]}")
-
-
-def test_work_task_audience(tmp_path: Path):
-    run_composed_tests(tmp_path, "tests.test_work_task_audience.TaskAudienceTests", app="angee.work")

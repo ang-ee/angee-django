@@ -19,7 +19,6 @@ from rebac import (
     write_relationships,
 )
 
-from tests.composed_host import run_composed_tests
 from tests.test_proposals_clarifications import ClarificationCase
 
 
@@ -316,7 +315,3 @@ def test_proposals_work_manifest():
     proposals = tomllib.loads((addon.parent / "proposals/pyproject.toml").read_text())
     assert "angee-work" not in {Requirement(value).name for value in proposals["project"]["dependencies"]}
     assert "work." not in (addon.parent / "proposals/models.py").read_text()
-
-
-def test_proposals_work_composition(tmp_path: Path):
-    run_composed_tests(tmp_path, "tests.test_proposals_work.ProposalsWorkTests", app="angee.proposals_work")

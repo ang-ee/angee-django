@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Container
+
 from django.core.exceptions import ImproperlyConfigured
 from django.db import models
 
@@ -36,6 +38,14 @@ def concrete_lineage(model: type[models.Model]) -> tuple[type[models.Model], ...
                 owners.add(child)
                 pending.append(child)
     return tuple(sorted(owners, key=lambda owner: owner._meta.label_lower))
+
+
+def nearest_lineage_model(
+    model: type[models.Model], owners: Container[type[models.Model]],
+) -> type[models.Model] | None:
+    """Return ``model`` or its nearest MTI ancestor among ``owners``, or ``None``."""
+
+    return next((owner for owner in (model, *model._meta.get_parent_list()) if owner in owners), None)
 
 
 def concrete_child_accessor(parent_model: type[models.Model], child_model: type[models.Model]) -> str:

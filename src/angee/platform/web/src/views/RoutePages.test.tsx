@@ -104,11 +104,6 @@ vi.mock("@angee/ui", async (importOriginal) => ({
   useRouteHref: () => mocks.routeHref,
 }));
 
-vi.mock("../i18n", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../i18n")>()),
-  usePlatformT: () => (key: string) => key,
-}));
-
 vi.mock("./AddonCard", () => ({
   ADDON_MODEL: "platform.Addon",
   AddonCard: () => null,

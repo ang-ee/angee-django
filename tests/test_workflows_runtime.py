@@ -12,7 +12,7 @@ from celery.exceptions import SoftTimeLimitExceeded
 from celery.worker.request import Request
 from django.core.exceptions import PermissionDenied
 from django.core.exceptions import ValidationError as DjangoValidationError
-from django.db import DataError, IntegrityError, OperationalError, transaction
+from django.db import DataError, IntegrityError, OperationalError, connection, transaction
 from django.db.models import F
 from django.db.models.functions import Now
 from hypothesis import HealthCheck, given
@@ -1405,16 +1405,18 @@ def test_failure_recording_database_errors_preserve_successful_body(
     def result_error(*args, **kwargs):
         raise ValueError("Injected result failure.")
 
-    def invalid_write(*args, **kwargs):
-        Workflow.objects.filter(pk=workflow.pk).update(key=None)
+    def invalid_state_write(execute, sql, params, many, context):
+        if failure_write == "state" and sql.startswith("UPDATE") and WorkflowRun._meta.db_table in sql:
+            if RunStatus.FAILED in (params or ()):
+                Workflow.objects.filter(pk=workflow.pk).update(key=None)  # a real NOT NULL violation
+        return execute(sql, params, many, context)
 
     register_step(RetainedBody)
     monkeypatch.setattr(Definition, "result_for", result_error)
-    if failure_write == "state":
-        monkeypatch.setattr(WorkflowRun, "_write_state", invalid_write)
-    else:
+    if failure_write == "publication":
         _fail_run_publication(monkeypatch, workflow)
-    assert runner.execute(step_run.pk)
+    with connection.execute_wrapper(invalid_state_write):
+        assert runner.execute(step_run.pk)
     assert Workflow.system_queryset().get(pk=workflow.pk).name == "Successful body retained"
     assert StepRun.system_queryset().get(pk=step_run.pk).status == StepRunStatus.SUCCEEDED
     attempt = StepAttempt.system_queryset().get(step_run=step_run)

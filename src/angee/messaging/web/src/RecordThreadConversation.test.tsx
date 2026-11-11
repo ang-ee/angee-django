@@ -25,21 +25,10 @@ function operationName(document: unknown): string {
   return definitions?.[0]?.name?.value ?? "";
 }
 
-function interpolate(template: string, vars?: Record<string, unknown>): string {
-  if (!vars) return template;
-  return template.replace(/\{(\w+)\}/g, (_match, key: string) =>
-    key in vars ? String(vars[key]) : `{${key}}`,
-  );
-}
-
 vi.mock("@angee/ui", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@angee/ui")>();
   return {
     ...actual,
-    useNamespaceT:
-      (_namespace: string, messages: Record<string, string>) =>
-      (key: string, vars?: Record<string, unknown>) =>
-        interpolate(messages[key] ?? key, vars),
   };
 });
 
@@ -57,8 +46,8 @@ vi.mock("@angee/refine", async (importOriginal) => ({
   },
 }));
 
-vi.mock("@angee/storage", () => ({
-  useStorageT: () => (key: string) => key,
+vi.mock("@angee/storage", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@angee/storage")>()),
   useStorageUpload: ({ onUploaded }: { onUploaded: typeof mocks.onUploaded }) => {
     mocks.onUploaded = onUploaded;
     return { tasks: mocks.uploadTasks, upload: mocks.upload, clearFinished: vi.fn(), retry: vi.fn() };

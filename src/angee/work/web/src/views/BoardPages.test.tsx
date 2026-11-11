@@ -68,10 +68,6 @@ vi.mock("../cycle-actions", () => ({
   CycleCloseControl: () => null,
 }));
 
-vi.mock("../i18n", () => ({
-  useWorkT: () => (key: string) => key,
-}));
-
 vi.mock("../removed-tasks", () => ({
   RemovedTasks: (props: Record<string, unknown>) => {
     mocks.removedProps = props;
@@ -97,7 +93,7 @@ describe("work board stage lanes", () => {
 
   test("links the board to its queue's settings record instead of leaving Work, and names its crumb", () => {
     const { getByRole } = render(<QueueBoardPage />);
-    expect(getByRole("link", { name: "queue.settings" }).getAttribute("href")).toBe("/work/queues/que_eng");
+    expect(getByRole("link", { name: "Queue settings" }).getAttribute("href")).toBe("/work/queues/que_eng");
     expect(mocks.leafLabel).toBe("Engineering");
   });
 

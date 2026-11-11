@@ -103,7 +103,11 @@ class MCPStreamableHTTPMixin:
         return envelope["result"]
 
     async def _drive(self, body: bytes, *, bearer: str | None) -> tuple[int, bytes]:
-        """Send one StreamableHTTP request to the mounted app and capture the response."""
+        """Send one StreamableHTTP request to the mounted app's root as the server's mount sends it.
+
+        ``angee.server.asgi`` hands a request for ``/mcp`` or ``/mcp/`` to the app as its
+        root: path ``/mcp/`` with the mount prefix in ``root_path``.
+        """
 
         captured: dict[str, Any] = {"status": 0, "body": bytearray()}
 
@@ -129,10 +133,10 @@ class MCPStreamableHTTPMixin:
             "http_version": "1.1",
             "method": "POST",
             "scheme": "http",
-            "path": MOUNT_PATH,
-            "raw_path": MOUNT_PATH.encode(),
+            "path": f"{MOUNT_PATH}/",
+            "raw_path": f"{MOUNT_PATH}/".encode(),
             "query_string": b"",
-            "root_path": "",
+            "root_path": MOUNT_PATH,
             "headers": headers,
             "server": ("localhost", 80),
             "client": ("127.0.0.1", 0),

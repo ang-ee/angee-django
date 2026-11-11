@@ -32,25 +32,6 @@ def project_case(campaign_access, campaign_user):
     return owner, reader, assignee, project, task
 
 
-@pytest.mark.parametrize("path", ("save", "partial", "queryset", "bulk_update"))
-@pytest.mark.parametrize("elevated", (False, True))
-def test_visibility_cannot_bypass_its_verb_even_under_system_context(project_case, path, elevated):
-    owner, _, _, _, task = project_case
-    before = Task._base_manager.filter(pk=task.pk).values().get()
-    context = system_context(reason="tests.t3.visibility") if elevated else actor_context(owner)
-    with context:
-        candidate = Task.objects.get(pk=task.pk)
-        candidate.visibility = "restricted"
-        with pytest.raises((ValidationError, ValueError)):
-            if path == "queryset":
-                Task.objects.filter(pk=task.pk).update(visibility="restricted")
-            elif path == "bulk_update":
-                Task.objects.bulk_update([candidate], ["visibility"])
-            else:
-                candidate.save(**({"update_fields": ("visibility",)} if path == "partial" else {}))
-    assert Task._base_manager.filter(pk=task.pk).values().get() == before
-
-
 @pytest.mark.parametrize("initial,target", (("inherited", "restricted"), ("restricted", "inherited")))
 def test_visibility_hook_sees_locked_old_value_and_refusal_is_atomic(project_case, monkeypatch, initial, target):
     owner, _, _, _, task = project_case

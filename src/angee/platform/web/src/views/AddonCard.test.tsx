@@ -1,7 +1,6 @@
 // @vitest-environment happy-dom
 
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { useCallback } from "react";
 import { beforeEach, describe, expect, test, vi } from "vitest";
 
 import { DisableAddon, EnableAddon, InstallAddon, UninstallAddon } from "../documents";
@@ -38,13 +37,6 @@ vi.mock("@angee/ui", async (importOriginal) => {
       else mocks.toast.danger({ title: outcome?.message });
       return outcome ?? undefined;
     },
-    // Mirror the real (memoized) translator so the namespace bundle resolves to English.
-    useNamespaceT: (_namespace: string, messages: Record<string, string>) =>
-      useCallback(
-        (key: string, values: Record<string, string | number> = {}) =>
-          (messages[key] ?? key).replace(/\{(\w+)\}/g, (_match, name: string) => String(values[name] ?? `{${name}}`)),
-        [messages],
-      ),
   };
 });
 

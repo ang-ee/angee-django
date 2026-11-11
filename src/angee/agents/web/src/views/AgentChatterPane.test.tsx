@@ -45,10 +45,6 @@ vi.mock("@angee/ui", async (importOriginal) => {
   return {
     ...actual,
     useRouteHref: () => sdkMocks.routeHref,
-    useNamespaceT:
-      (_namespace: string, messages: Record<string, string>) =>
-      (key: string) =>
-        messages[key] ?? key,
   };
 });
 

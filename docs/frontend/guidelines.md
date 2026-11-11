@@ -1089,7 +1089,9 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
 - Live model updates ride GraphQL subscriptions through
   refine's live provider and react-query invalidation, not a `setInterval`
   refetch loop. Opt a model into live cross-actor refresh by declaring
-  `changes(Model, field="<model>Changed")` in its `schema.py`; local writes
+  `changes(Model, field="<model>Changed")` in its `schema.py`. A multi-table
+  child without its own reads its nearest ancestor's feed (same key and public
+  id): its writes publish there and its metadata names that root. Local writes
   invalidate through refine mutations, and subscription pushes invalidate the
   affected refine resources. Authored reads and resource hooks share the
   [live coalescer](../../packages/refine/src/query-invalidation.ts): one
@@ -1382,8 +1384,8 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
 - **Live cross-actor refresh requires a `changes()` subscription.** A list/picker
   auto-invalidates from `<model>Changed` on the subscription schema, gated on the
   schema actually declaring it — so a model without
-  `changes(Model, field="<model>Changed")` in its `schema.py` refreshes on local
-  writes only (no live push, no error). Add the subscription to opt a model into
+  `changes(Model, field="<model>Changed")` in its `schema.py`, on itself or an MTI
+  ancestor, refreshes on local writes only (no live push, no error). Add the subscription to opt a model into
   live updates; omit it and you simply get local-write invalidation.
 - **`Workbench` (`layouts/Workbench.tsx`) is the collapsible inner-shell owner;
   `Explorer` is removed.** Every multi-pane content region (console body, storage,
@@ -1901,7 +1903,15 @@ render(<AppRuntimeProvider runtime={{ containers }}><ResourceViewUtilities value
 A data-bound view story declares `parameters.angeeFixture` with its schemas,
 resources, runtime and operation documents; the preview mounts the shared
 [`RuntimeFixture`](../../packages/storybook/src/stories/runtime-fixtures.tsx).
-Transport fixtures use `storySchema(fetch)` and `jsonResponse`. A routed fixture
+Transport fixtures use the GraphQL wire fake
+[`graphqlWireFetch`](../../packages/refine/src/testing-wire.ts)
+(`@angee/refine/testing/wire`, free of Vitest so stories bundle it): it answers
+each root field of a request from the handler named for it, fails loudly on a
+field without a handler or a missing required variable, and reports each parsed
+request; a handler throws `GraphQLError` to answer an error. Stories and addon
+tests wrap it as `storySchema(operations, onRequest)`; framework package tests
+pass it as the `fetch` of a real Angee data provider. Tests match requests by
+`fields` or `operationName`, never by query text. A routed fixture
 reused by tests sets `angeeOwnRuntime: true` and passes
 `appearance={storyAppearance(context.globals)}` into the same owner. Each story
 has one provider stack — appearance, data, toasts and modals.

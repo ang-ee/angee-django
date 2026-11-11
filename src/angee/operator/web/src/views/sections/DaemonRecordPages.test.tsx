@@ -28,10 +28,6 @@ vi.mock("@angee/ui", async () => ({
   useRouteRecordId: () => routerMocks.params.name,
 }));
 
-vi.mock("../../i18n", () => ({
-  useOperatorT: () => (key: string) => key,
-}));
-
 vi.mock("../../data/transport", () => ({
   useOperatorSnapshot: operatorMocks.useOperatorSnapshot,
   useOperatorQuery: () => ({ data: { serviceEndpoint: null }, fetching: false, error: null, refetch: vi.fn() }),
@@ -98,7 +94,7 @@ describe("operator daemon record pages", () => {
     const view = renderPage(<SourceDetail />);
 
     expect(screen.getByRole("status")).toBeTruthy();
-    expect(screen.getAllByText("sources.loading").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("Loading sources…").length).toBeGreaterThan(0);
 
     routerMocks.params = { name: "missing" };
     operatorMocks.useOperatorSnapshot.mockReturnValue({
@@ -109,7 +105,7 @@ describe("operator daemon record pages", () => {
     view.rerender(<SourceDetail />);
 
     expect(screen.getByRole("heading", {
-      name: "sources.detail.notFound",
+      name: "Source not found",
     })).toBeTruthy();
     expect(screen.getByText("missing")).toBeTruthy();
   });
@@ -138,7 +134,7 @@ describe("operator daemon record pages", () => {
     renderPage(<SourceDetail />);
 
     expect(screen.getByRole("heading", { name: "framework" })).toBeTruthy();
-    expect(screen.getByText("sources.detail.overview")).toBeTruthy();
+    expect(screen.getByText("Overview")).toBeTruthy();
     expect(screen.getByText("main")).toBeTruthy();
     expect(screen.getByText("↑2 ↓1")).toBeTruthy();
 
@@ -166,7 +162,7 @@ describe("operator daemon record pages", () => {
     renderPage(<ServiceDetail />);
 
     expect(screen.getByRole("heading", { name: "web" })).toBeTruthy();
-    expect(screen.getByText("services.detail.overview")).toBeTruthy();
+    expect(screen.getByText("Overview")).toBeTruthy();
     expect(screen.getAllByText("node")).toHaveLength(2);
     expect(screen.getByTestId("service-logs").textContent).toBe("web");
   });
@@ -191,7 +187,7 @@ describe("operator daemon record pages", () => {
     renderPage(<WorkspaceDetail />);
 
     expect(screen.getByRole("heading", { name: "notes-dev" })).toBeTruthy();
-    expect(screen.getByText("workspaces.detail.overview")).toBeTruthy();
+    expect(screen.getByText("Overview")).toBeTruthy();
     expect(screen.getAllByText("dev")).toHaveLength(2);
     expect(screen.getByText("/work/notes-dev")).toBeTruthy();
 

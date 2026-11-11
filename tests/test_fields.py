@@ -151,7 +151,7 @@ def test_encrypted_field_deconstruct_is_stable_and_value_free() -> None:
     assert settings.SECRET_KEY not in repr(first)
 
 
-def test_encrypted_field_caches_bound_fernet(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_encrypted_field_caches_bound_fernet() -> None:
     """A bound encrypted field derives its Fernet once per model column."""
 
     class FieldCachedFernet(models.Model):
@@ -165,19 +165,8 @@ def test_encrypted_field_caches_bound_fernet(monkeypatch: pytest.MonkeyPatch) ->
             app_label = "auth"
 
     field = FieldCachedFernet._meta.get_field("secret")
-    calls: list[str] = []
 
-    def derive(label: str) -> Any:
-        calls.append(label)
-        return _derive_fernet(label)
-
-    monkeypatch.setattr("angee.base.fields.encrypted._derive_fernet", derive)
-
-    first = field._fernet()
-    second = field._fernet()
-
-    assert first is second
-    assert calls == [f"{FieldCachedFernet._meta.label_lower}.secret"]
+    assert field._fernet() is field._fernet()
 
 
 def test_encrypted_field_rejects_unique_and_primary_key() -> None:

@@ -28,7 +28,7 @@ def test_ledger_row_admits_its_model_or_a_recorded_multi_table_parent() -> None:
         ledger.require_target_model(ContentTypeRow)
 
 
-@pytest.mark.usefixtures("composed_tables")
+@pytest.mark.django_db
 def test_bound_identity_stays_until_an_owner_replaces_it() -> None:
     """Binding is idempotent; another record needs ``replace``, and the ledger then names it."""
 
@@ -52,7 +52,7 @@ def _entry() -> ResourceEntry:
     return ResourceEntry(addon=apps.get_app_config("iam"), tier="install", source_value="ledger")
 
 
-@pytest.mark.usefixtures("composed_tables")
+@pytest.mark.django_db
 def test_upsert_refuses_a_row_bound_to_another_model_before_writing() -> None:
     """A compatible row takes the new target; an incompatible one is refused and left as it was."""
 
@@ -107,7 +107,6 @@ def test_upsert_refuses_a_row_bound_to_another_model_before_writing() -> None:
 
 
 @pytest.mark.django_db(transaction=True)
-@pytest.mark.usefixtures("composed_tables")
 @pytest.mark.skipif(connection.vendor != "postgresql", reason="PostgreSQL resource ledger row-lock contract")
 def test_concurrent_upserts_converge_on_one_row_and_refuse_another_model() -> None:
     """Two first loads of one xref leave one row; a concurrent load for another model is refused, not merged."""

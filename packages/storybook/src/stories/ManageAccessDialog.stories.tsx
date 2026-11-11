@@ -4,7 +4,7 @@ import { testQueryField, testResourceQuery } from "@angee/metadata/testing";
 import type { Meta, StoryObj } from "@storybook/react-vite";
 import { Button, ManageAccessDialog, type RecordAccessEntry } from "@angee/ui";
 
-import { jsonResponse, storySchema } from "./runtime-fixtures";
+import { storySchema } from "./runtime-fixtures";
 
 const metadata = {
   angee: {
@@ -32,14 +32,12 @@ const metadata = {
   },
 } satisfies AngeeSchemaMetadata;
 
-const schemas = storySchema(async () => jsonResponse({
-  data: {
-    subjects: [
-      { id: "subject-1", name: "Ada Lovelace", assignmentSubject: "auth/user:ada" },
-      { id: "subject-2", name: "Reviewers", assignmentSubject: "auth/group:7#member" },
-    ],
-  },
-}));
+const schemas = storySchema({
+  subjects: () => [
+    { id: "subject-1", name: "Ada Lovelace", assignmentSubject: "auth/user:ada" },
+    { id: "subject-2", name: "Reviewers", assignmentSubject: "auth/group:7#member" },
+  ],
+});
 schemas.public = { ...schemas.public!, metadata };
 
 const entries: readonly RecordAccessEntry[] = [{

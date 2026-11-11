@@ -70,7 +70,7 @@ def _signatures() -> Evidence:
 
 @pytest.mark.parametrize(("kind", "evidence"), [("display_name", _display_names), ("signature_phone", _signatures)])
 def test_a_suggestion_follows_its_evidence_and_a_dismissal_outlasts_it(
-    composed_tables: None, kind: str, evidence: Callable[[], Evidence]
+    db: None, kind: str, evidence: Callable[[], Evidence]
 ) -> None:
     owner, party, supported = evidence()
     statements = Party.statements.model._base_manager

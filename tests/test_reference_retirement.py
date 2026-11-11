@@ -14,7 +14,7 @@ from tests.conftest import create_user
 from tests.mtidemo.models import MtiChild, MtiParent
 from tests.recordrefdemo.models import RecordRefSubjectEdge
 
-pytestmark = pytest.mark.usefixtures("composed_tables")
+pytestmark = pytest.mark.django_db
 
 
 @pytest.mark.parametrize(

@@ -53,7 +53,7 @@ test("generated inspector edits, undo, save, and publication use the native owne
   await waitFor(() => expect((key as HTMLInputElement).value).toBe("renamed"));
   fireEvent.click(screen.getByRole("button", { name: "Save draft" }));
   await waitFor(() => expect(screen.getByRole("button", { name: "Save draft" }).matches("[disabled], [aria-disabled='true']")).toBe(true));
-  const save = requests.mock.calls.map(([request]) => request).find((request) => request.query.includes("save_workflow_draft"));
+  const save = requests.mock.calls.map(([request]) => request).find((request) => request.fields.includes("save_workflow_draft"));
   expect(save.variables).toMatchObject({ revision: 1, nodeKeys: { entry: "renamed" }, layout: { entry: [80, 60] }, draft: {
     nodes: { entry: { config: { target: "nte_7", threshold: 1 } } }, results: [{ from: "entry" }],
   } });
@@ -70,8 +70,8 @@ test("conflicts keep edits and overwrite submits the observed revision", async (
   fireEvent.click(screen.getByRole("button", { name: "Save draft" }));
   expect(await screen.findAllByText("Draft changed since it was loaded.")).toHaveLength(1);
   fireEvent.click(await screen.findByRole("button", { name: "Overwrite with mine" }));
-  await waitFor(() => expect(requests.mock.calls.map(([request]) => request).filter((request) => request.query.includes("save_workflow_draft"))).toHaveLength(2));
-  const saves = requests.mock.calls.map(([request]) => request).filter((request) => request.query.includes("save_workflow_draft"));
+  await waitFor(() => expect(requests.mock.calls.map(([request]) => request).filter((request) => request.fields.includes("save_workflow_draft"))).toHaveLength(2));
+  const saves = requests.mock.calls.map(([request]) => request).filter((request) => request.fields.includes("save_workflow_draft"));
   expect(saves.map((request) => request.variables.revision)).toEqual([1, 2]);
   expect(saves[1].variables.nodeKeys.entry).toBeTruthy();
 });
@@ -154,7 +154,7 @@ test("local duplicate-key refusal uses its own message and never acknowledges a 
   fireEvent.click(screen.getByRole("button", { name: "Save draft" }));
   expect(await screen.findByText("Draft could not be saved. Node keys must be unique.")).toBeTruthy();
   expect(screen.queryByText(/Draft saved\./)).toBeNull();
-  expect(requests.mock.calls.some(([request]) => request.query.includes("save_workflow_draft"))).toBe(false);
+  expect(requests.mock.calls.some(([request]) => request.fields.includes("save_workflow_draft"))).toBe(false);
 });
 
 test("configured outcome issues are visible and flag their node", async () => {
@@ -171,8 +171,8 @@ test("an empty persisted layout displays automatic horizontal positions without 
   expect(screen.getByTestId("rf__node-entry").style.transform).not.toBe(screen.getByTestId("rf__node-second").style.transform);
   fireEvent.change(screen.getByRole("textbox", { name: "Label" }), { target: { value: "Edited" } });
   fireEvent.click(screen.getByRole("button", { name: "Save draft" }));
-  await waitFor(() => expect(requests.mock.calls.some(([request]) => request.query.includes("save_workflow_draft"))).toBe(true));
-  const save = requests.mock.calls.map(([request]) => request).find((request) => request.query.includes("save_workflow_draft"));
+  await waitFor(() => expect(requests.mock.calls.some(([request]) => request.fields.includes("save_workflow_draft"))).toBe(true));
+  const save = requests.mock.calls.map(([request]) => request).find((request) => request.fields.includes("save_workflow_draft"));
   expect(Object.keys(save.variables.layout).sort()).toEqual(["entry", "second"]);
   expect(save.variables.layout.second[0]).toBeGreaterThan(save.variables.layout.entry[0]);
   expect(save.variables.layout.second[1]).toBe(save.variables.layout.entry[1]);
@@ -188,8 +188,8 @@ test("palette excludes internal steps and structural edits persist layout", asyn
   const key = await screen.findByRole("textbox", { name: "Key" });
   expect((key as HTMLInputElement).value).toBe("echo");
   fireEvent.click(screen.getByRole("button", { name: "Save draft" }));
-  await waitFor(() => expect(requests.mock.calls.some(([request]) => request.query.includes("save_workflow_draft"))).toBe(true));
-  const save = requests.mock.calls.map(([request]) => request).find((request) => request.query.includes("save_workflow_draft"));
+  await waitFor(() => expect(requests.mock.calls.some(([request]) => request.fields.includes("save_workflow_draft"))).toBe(true));
+  const save = requests.mock.calls.map(([request]) => request).find((request) => request.fields.includes("save_workflow_draft"));
   const created = Object.entries(save.variables.nodeKeys).find(([, key]) => key === "echo")?.[0];
   expect(created).toBeTruthy();
   expect(save.variables.layout[created!]).toEqual([440, 80]);
@@ -211,8 +211,8 @@ test("adding from a port, inserting, disconnecting, deleting and moving compose 
   fireEvent.click(entry);
   fireEvent.keyDown(entry, { key: "ArrowRight" });
   fireEvent.click(screen.getByRole("button", { name: "Save draft" }));
-  await waitFor(() => expect(requests.mock.calls.some(([request]) => request.query.includes("save_workflow_draft"))).toBe(true));
-  const save = requests.mock.calls.map(([request]) => request).find((request) => request.query.includes("save_workflow_draft"));
+  await waitFor(() => expect(requests.mock.calls.some(([request]) => request.fields.includes("save_workflow_draft"))).toBe(true));
+  const save = requests.mock.calls.map(([request]) => request).find((request) => request.fields.includes("save_workflow_draft"));
   expect(save.variables.draft.nodes.entry.next).toEqual({});
   expect(Object.values(save.variables.nodeKeys)).toEqual(["entry", "echo"]);
   expect(save.variables.layout.entry).toEqual([85, 60]);
@@ -225,8 +225,8 @@ test("a declared config relation uses the native picker and submits its record i
   fireEvent.click(await screen.findByRole("combobox", { name: "Target record: Selected record" }));
   fireEvent.click(await screen.findByRole("option", { name: "Another record" }));
   fireEvent.click(screen.getByRole("button", { name: "Save draft" }));
-  await waitFor(() => expect(requests.mock.calls.some(([request]) => request.query.includes("save_workflow_draft"))).toBe(true));
-  const save = requests.mock.calls.map(([request]) => request).find((request) => request.query.includes("save_workflow_draft"));
+  await waitFor(() => expect(requests.mock.calls.some(([request]) => request.fields.includes("save_workflow_draft"))).toBe(true));
+  const save = requests.mock.calls.map(([request]) => request).find((request) => request.fields.includes("save_workflow_draft"));
   expect(save.variables.draft.nodes.entry.config.target).toBe("nte_8");
 });
 
@@ -255,8 +255,8 @@ test("Studio projects extension points and immutable contributed nodes with thei
   fireEvent.click(screen.getByTestId("rf__node-entry"));
   fireEvent.change(await screen.findByRole("textbox", { name: "Label" }), { target: { value: "Edited entry" } });
   fireEvent.click(screen.getByRole("button", { name: "Save draft" }));
-  await waitFor(() => expect(requests.mock.calls.some(([request]) => request.query.includes("save_workflow_draft"))).toBe(true));
-  const save = requests.mock.calls.map(([request]) => request).find((request) => request.query.includes("save_workflow_draft"));
+  await waitFor(() => expect(requests.mock.calls.some(([request]) => request.fields.includes("save_workflow_draft"))).toBe(true));
+  const save = requests.mock.calls.map(([request]) => request).find((request) => request.fields.includes("save_workflow_draft"));
   expect(save.variables.draft.nodes.contributed_review).toBeUndefined();
   expect(save.variables.layout.contributed_review).toBeUndefined();
 });
@@ -270,13 +270,13 @@ test("typing config keeps graph outcomes and editing available until the history
   await selectEntry();
   const threshold = screen.getByRole("textbox", { name: "Threshold" });
   await screen.findByRole("button", { name: "Add from Done on Entry (entry)" });
-  const count = requests.mock.calls.filter(([request]) => request.query.includes("workflow_step_outcomes")).length;
+  const count = requests.mock.calls.filter(([request]) => request.fields.includes("workflow_step_outcomes")).length;
   fireEvent.focus(threshold);
   fireEvent.change(threshold, { target: { value: "12" } });
   fireEvent.change(threshold, { target: { value: "123" } });
-  expect(requests.mock.calls.filter(([request]) => request.query.includes("workflow_step_outcomes"))).toHaveLength(count);
+  expect(requests.mock.calls.filter(([request]) => request.fields.includes("workflow_step_outcomes"))).toHaveLength(count);
   fireEvent.blur(threshold);
-  await waitFor(() => expect(requests.mock.calls.filter(([request]) => request.query.includes("workflow_step_outcomes"))).toHaveLength(count + 1));
+  await waitFor(() => expect(requests.mock.calls.filter(([request]) => request.fields.includes("workflow_step_outcomes"))).toHaveLength(count + 1));
   expect(screen.getByRole("button", { name: "Add from Done on Entry (entry)" }).matches("[disabled], [aria-disabled='true']")).toBe(false);
   expect(screen.getByRole("button", { name: "Delete Entry (entry)" }).matches("[disabled], [aria-disabled='true']")).toBe(false);
   release?.();
@@ -309,7 +309,7 @@ test("new nodes have distinct accessible keys and never reuse a deleted node key
   fireEvent.click(await screen.findByRole("button", { name: "Delete Echo (echo)" }));
   await add();
   await screen.findByRole("button", { name: "Select Echo (echo_2)" });
-  const ids = requests.mock.calls.filter(([request]) => request.query.includes("workflow_step_outcomes"))
+  const ids = requests.mock.calls.filter(([request]) => request.fields.includes("workflow_step_outcomes"))
     .flatMap(([request]) => request.variables.configurations).filter((entry) => entry.node !== "entry").map((entry) => entry.node);
   expect(new Set(ids).size).toBe(2);
   expect(screen.queryByRole("button", { name: "Select Echo (echo)" })).toBeNull();

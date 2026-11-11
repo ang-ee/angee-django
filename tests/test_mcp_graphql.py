@@ -539,14 +539,13 @@ def test_mcp_reads_conceal_gated_fields_rows_totals_and_group_keys(
 
 @pytest.mark.django_db(transaction=True)
 @pytest.mark.parametrize("mutation", [False, True])
-def test_mcp_only_mutations_hold_an_outer_transaction(composed_tables, monkeypatch, mutation):
+def test_mcp_only_mutations_hold_an_outer_transaction(mutation):
     seen = []
 
     def execute(document, **kwargs):
         seen.append(connection.in_atomic_block)
         return SimpleNamespace(data={"operation": True}, errors=None)
 
-    monkeypatch.setattr(mcp_graphql, "_actor_user", lambda: None)
     document = "mutation { operation }" if mutation else "query { operation }"
     result = mcp_graphql._execute_sync(SimpleNamespace(execute_sync=execute), document, {})
     assert result.data == {"operation": True}

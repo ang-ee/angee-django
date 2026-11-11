@@ -14,7 +14,8 @@ from angee.graphql.testing.documents import execute_schema
 from angee.graphql.testing.documents import result_data as _data
 from angee.integrate.credentials import CredentialKind
 from angee.integrate.streams import CursorInvalid, advance_stream
-from angee.messaging_integrate_imap.backend import ImapChannelBackend
+from angee.messaging_integrate_imap.testing.server import ImapServer, mailbox
+from angee.messaging_integrate_imap.testing.server import imap_server as imap_server
 from tests.conftest import SchemaAddon, Vendor, create_user, current_stream
 from tests.test_messaging_graphql import (
     Channel,
@@ -24,12 +25,12 @@ from tests.test_messaging_graphql import (
     messaging_schema,
     parties_schema,
 )
-from tests.test_messaging_imap import FakeImapAccount, FakeIMAPClient, _eml, _folder
+from tests.test_messaging_imap import _eml
 
 pytest_plugins = ("tests.test_messaging_graphql",)
 
 
-def test_connect_imap_channel_creates_basic_auth_channel(composed_tables: None) -> None:
+def test_connect_imap_channel_creates_basic_auth_channel(db: None) -> None:
     """The IMAP addon creates the credential and channel together."""
 
     admin = _platform_admin("msg-imap-connect-admin")
@@ -79,7 +80,7 @@ def test_connect_imap_channel_creates_basic_auth_channel(composed_tables: None) 
         }
 
 
-def test_connect_imap_channel_reuses_no_credentials_by_label(composed_tables: None) -> None:
+def test_connect_imap_channel_reuses_no_credentials_by_label(db: None) -> None:
     """Two channels with the same display name keep separate Basic-auth secrets."""
 
     admin = _platform_admin("msg-imap-repeat-admin")
@@ -126,7 +127,7 @@ def test_connect_imap_channel_reuses_no_credentials_by_label(composed_tables: No
         }
 
 
-def test_connect_imap_channel_requires_seeded_vendor(composed_tables: None) -> None:
+def test_connect_imap_channel_requires_seeded_vendor(db: None) -> None:
     """The mutation reads the addon-owned vendor catalogue row; it never creates it."""
 
     admin = _platform_admin("msg-imap-missing-vendor-admin")
@@ -166,7 +167,7 @@ def _schema() -> Any:
 
 
 def test_update_imap_channel_credential_replaces_the_login_in_place(
-    composed_tables: None,
+    db: None,
 ) -> None:
     """The record verb rotates the Basic-auth material; channel and credential rows stay."""
 
@@ -193,7 +194,7 @@ def test_update_imap_channel_credential_replaces_the_login_in_place(
         assert saved.credential.reveal() == {"username": "ada.lovelace@example.com", "password": "rotated"}
 
 
-def test_update_imap_channel_credential_refuses_blank_material(composed_tables: None) -> None:
+def test_update_imap_channel_credential_refuses_blank_material(db: None) -> None:
     """The shared credential handler identifies the missing field without rotating the secret."""
 
     admin = _platform_admin("msg-imap-rotate-blank-admin")
@@ -218,7 +219,7 @@ def test_update_imap_channel_credential_refuses_blank_material(composed_tables: 
         assert saved.credential.reveal()["password"] == "mail-password"
 
 
-def test_update_imap_channel_credential_refuses_a_detached_credential(composed_tables: None) -> None:
+def test_update_imap_channel_credential_refuses_a_detached_credential(db: None) -> None:
     """The channel row refuses a rotation when its credential was detached."""
 
     admin = _platform_admin("msg-imap-rotate-detached-admin")
@@ -243,9 +244,9 @@ def test_update_imap_channel_credential_refuses_a_detached_credential(composed_t
 
 
 def test_sample_preview_is_a_paged_query_with_no_mutation_or_dead_output(
-    composed_tables: None, monkeypatch: pytest.MonkeyPatch,
+    db: None, imap_server: ImapServer,
 ) -> None:
-    admin, channel, account = _paused_sample_channel(monkeypatch)
+    admin, channel = _paused_sample_channel(imap_server)
     schema = _schema()
     first = _data(execute_schema(schema, _PREVIEW_QUERY, {"id": channel["id"]}, user=admin))[
         "preview_imap_sample"
@@ -261,7 +262,7 @@ def test_sample_preview_is_a_paged_query_with_no_mutation_or_dead_output(
     assert second["next_before_uid"] is None
     assert "preview_imap_sample" not in schema._schema.mutation_type.fields
     assert "truncated" not in schema._schema.type_map["ImapSamplePreview"].fields
-    assert account.logouts == 2
+    assert imap_server.logouts == 2
     with system_context(reason="test.messaging.imap.preview.cursor"):
         saved = Channel.objects.get(sqid=channel["id"])
         stream = current_stream(saved, "messages", "INBOX")
@@ -269,27 +270,23 @@ def test_sample_preview_is_a_paged_query_with_no_mutation_or_dead_output(
 
 
 def test_sample_preview_denies_non_admin_before_mailbox_probe(
-    composed_tables: None, monkeypatch: pytest.MonkeyPatch,
+    db: None, imap_server: ImapServer,
 ) -> None:
-    _, channel, account = _paused_sample_channel(monkeypatch)
+    _, channel = _paused_sample_channel(imap_server)
     reader = create_user("imap-sample-reader")
 
     result = execute_schema(_schema(), _PREVIEW_QUERY, {"id": channel["id"]}, user=reader)
 
     assert result.errors
-    assert account.logins == []
+    assert imap_server.logins == []
 
 
 @pytest.mark.parametrize("operation", ["preview", "import", "prepare"])
 def test_imap_resolvers_preserve_safe_transport_errors(
-    composed_tables: None, monkeypatch: pytest.MonkeyPatch, operation: str,
+    db: None, imap_server: ImapServer, operation: str,
 ) -> None:
-    admin, channel, _ = _paused_sample_channel(monkeypatch)
-
-    def refuse(self: FakeIMAPClient, username: str, password: str) -> None:
-        raise LoginError("vendor payload mail-password")
-
-    monkeypatch.setattr(FakeIMAPClient, "login", refuse)
+    admin, channel = _paused_sample_channel(imap_server)
+    imap_server.refuse("login", LoginError("vendor payload mail-password"))
     document = {
         "preview": _PREVIEW_QUERY,
         "import": """mutation($id: ID!) {
@@ -307,8 +304,8 @@ def test_imap_resolvers_preserve_safe_transport_errors(
     assert result.errors[0].extensions == {"code": "BAD_USER_INPUT"}
 
 
-def _paused_sample_channel(monkeypatch: pytest.MonkeyPatch) -> tuple[Any, dict[str, Any], FakeImapAccount]:
-    """Create one admitted channel and substitute only the remote IMAP server."""
+def _paused_sample_channel(imap_server: ImapServer) -> tuple[Any, dict[str, Any]]:
+    """Create one admitted channel; only the remote IMAP server is the in-memory one."""
 
     admin = _platform_admin("msg-imap-sample-admin")
     _seed_imap_vendor()
@@ -317,36 +314,23 @@ def _paused_sample_channel(monkeypatch: pytest.MonkeyPatch) -> tuple[Any, dict[s
         saved = Channel.objects.get(sqid=channel["id"])
         saved.pause()
         current_stream(saved, "messages", "INBOX", cursor={"uidvalidity": 100, "last_uid": 1})
-    account = FakeImapAccount({"INBOX": _folder(*(_eml(subject=str(uid)) for uid in range(1, 4)))})
-    monkeypatch.setattr(FakeIMAPClient, "account", account, raising=False)
-    monkeypatch.setattr(ImapChannelBackend, "client_class", FakeIMAPClient)
-    return admin, channel, account
+    imap_server.folders["INBOX"] = mailbox(*(_eml(subject=str(uid)) for uid in range(1, 4)))
+    return admin, channel
 
 
 @pytest.mark.django_db(transaction=True)
 def test_prepare_imap_new_mail_is_future_only_idempotent_and_epoch_safe(
-    composed_tables: None,
-    monkeypatch: pytest.MonkeyPatch,
+    imap_server: ImapServer,
 ) -> None:
     """The paused action skips the current UID set once and never backfills after an epoch change."""
 
     admin = _platform_admin("msg-imap-new-mail-admin")
     _seed_imap_vendor()
     channel = _connect(admin, {**_CONNECT_VARIABLES, "host": "10.0.0.4", "mailboxes": ["INBOX"]})
-    account = FakeImapAccount(
-        {
-            "INBOX": {
-                "flags": (b"\\HasNoChildren",),
-                "uidvalidity": 100,
-                "messages": {
-                    1: {"raw": _eml(subject="old one", message_id="<old-1@example.com>")},
-                    2: {"raw": _eml(subject="old two", message_id="<old-2@example.com>")},
-                },
-            }
-        }
+    imap_server.folders["INBOX"] = mailbox(
+        _eml(subject="old one", message_id="<old-1@example.com>"),
+        _eml(subject="old two", message_id="<old-2@example.com>"),
     )
-    monkeypatch.setattr(FakeIMAPClient, "account", account, raising=False)
-    monkeypatch.setattr(ImapChannelBackend, "client_class", FakeIMAPClient)
     with system_context(reason="test.messaging.imap.new_mail.pause"):
         saved = Channel.objects.get(sqid=channel["id"])
         current_stream(saved, "messages", "INBOX", cursor={"uidvalidity": 100, "last_uid": 1})
@@ -356,7 +340,7 @@ def test_prepare_imap_new_mail_is_future_only_idempotent_and_epoch_safe(
         saved = Channel.objects.get(sqid=channel["id"])
     assert saved.prepare_imap_new_mail(actor=admin) == (1, True)
 
-    account.folders["INBOX"]["messages"][3] = {"raw": _eml(subject="new", message_id="<new@example.com>")}
+    imap_server.deliver("INBOX", _eml(subject="new", message_id="<new@example.com>"))
     with system_context(reason="test.messaging.imap.new_mail.repeat"):
         saved = Channel.objects.get(sqid=channel["id"])
     assert saved.prepare_imap_new_mail(actor=admin) == (1, False)
@@ -387,7 +371,7 @@ def test_prepare_imap_new_mail_is_future_only_idempotent_and_epoch_safe(
         finally:
             backend.close()
 
-        account.folders["INBOX"]["uidvalidity"] = 200
+        imap_server.folders["INBOX"]["uidvalidity"] = 200
         backend = saved.backend
         try:
             with pytest.raises(CursorInvalid) as invalid:
@@ -399,46 +383,30 @@ def test_prepare_imap_new_mail_is_future_only_idempotent_and_epoch_safe(
             backend.close()
 
 
-def test_test_connection_logs_in_through_the_imap_backend(
-    composed_tables: None,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def test_test_connection_logs_in_through_the_imap_backend(db: None, imap_server: ImapServer) -> None:
     """The generic integration verb reaches the channel backend's real login."""
 
     admin = _platform_admin("msg-imap-test-admin")
     _seed_imap_vendor()
     channel = _connect(admin, {**_CONNECT_VARIABLES, "host": "10.0.0.4"})
-    account = FakeImapAccount({"INBOX": {"flags": (b"\\HasNoChildren",), "uidvalidity": 1, "messages": {}}})
-    monkeypatch.setattr(FakeIMAPClient, "account", account, raising=False)
-    monkeypatch.setattr(ImapChannelBackend, "client_class", FakeIMAPClient)
+    imap_server.folders["INBOX"] = mailbox(uidvalidity=1)
 
     result = _data(
         execute_schema(_schema(), _TEST_CONNECTION_MUTATION, {"id": channel["id"]}, user=admin)
     )["test_connection"]
 
     assert result == {"ok": True, "message": "Signed in to 10.0.0.4 as ada@example.com."}
-    assert account.logins == [("login", "ada@example.com", "mail-password")]
-    assert account.logouts == 1
+    assert imap_server.logins == [("login", "ada@example.com", "mail-password")]
+    assert imap_server.logouts == 1
 
 
-def test_test_connection_reports_the_imap_refusal(
-    composed_tables: None,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def test_test_connection_reports_the_imap_refusal(db: None, imap_server: ImapServer) -> None:
     """A rejected login reaches the operator with the account and host named."""
 
     admin = _platform_admin("msg-imap-test-refused-admin")
     _seed_imap_vendor()
     channel = _connect(admin, {**_CONNECT_VARIABLES, "host": "10.0.0.4"})
-    account = FakeImapAccount({})
-    monkeypatch.setattr(FakeIMAPClient, "account", account, raising=False)
-    monkeypatch.setattr(ImapChannelBackend, "client_class", FakeIMAPClient)
-
-    def refuse(self: FakeIMAPClient, username: str, password: str) -> None:
-        del self, username, password
-        raise LoginError("[AUTHENTICATIONFAILED] unexpected vendor payload mail-password")
-
-    monkeypatch.setattr(FakeIMAPClient, "login", refuse)
+    imap_server.refuse("login", LoginError("[AUTHENTICATIONFAILED] unexpected vendor payload mail-password"))
 
     result = _data(
         execute_schema(_schema(), _TEST_CONNECTION_MUTATION, {"id": channel["id"]}, user=admin)

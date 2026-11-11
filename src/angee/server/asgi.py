@@ -8,6 +8,8 @@ are ordered contributions, each a value or a callable returning it
 - ``http_mounts`` holds ``(prefix, application)`` pairs. A prefix is an
   absolute decoded path without a trailing slash (except ``/``); the mounted
   application receives the original path with its prefix added to ``root_path``.
+  A request for exactly the prefix reaches the application as its root, the same
+  scope as a request for ``prefix/``, with no redirect.
 - ``protocols()`` maps ASGI scope types to applications. ``http`` and
   ``lifespan`` are reserved for Django and the server.
 - ``lifespans`` holds factories of fresh async context managers, entered in
@@ -86,6 +88,11 @@ class _Application:
                 if prefix == "/" or relative == prefix or relative.startswith(prefix + "/"):
                     mounted = scope.copy()
                     mounted["root_path"] = root + ("" if prefix == "/" else prefix)
+                    if relative == prefix != "/":
+                        # The exact prefix is the application's root, as ``prefix/`` would be.
+                        mounted["path"] = scope["path"] + "/"
+                        if raw_path := scope.get("raw_path"):
+                            mounted["raw_path"] = raw_path + b"/"
                     await self.mounts[prefix](mounted, receive, send)
                     return
             await self.http(scope, receive, send)

@@ -11,8 +11,8 @@ const mocks = vi.hoisted(() => ({
 const CATEGORY_OPTIONS = ["triage", "backlog", "unstarted", "started", "completed", "canceled", "duplicate"]
   .map((value) => ({ value, label: value }));
 
-vi.mock("@angee/ui", () => ({
-  useUiT: () => (key: string) => key,
+vi.mock("@angee/ui", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@angee/ui")>()),
   ErrorBanner: () => null,
   Button: () => null,
   Chip: ({ children }: { children?: React.ReactNode }) => <span data-badge>{children}</span>,
@@ -25,13 +25,9 @@ vi.mock("@angee/ui", () => ({
   useEnumOptions: (_resource: string, field: string) => (field === "category" ? CATEGORY_OPTIONS : []),
 }));
 
-vi.mock("@angee/refine", () => ({ useAuthoredQuery: () => ({ data: {
+vi.mock("@angee/refine", async (importOriginal) => ({ ...(await importOriginal<typeof import("@angee/refine")>()), useAuthoredQuery: () => ({ data: {
   work_stage_editable_categories: ["BACKLOG", "UNSTARTED", "STARTED", "COMPLETED", "CANCELED"],
 } }) }));
-
-vi.mock("./i18n", () => ({
-  useWorkT: () => (key: string) => key,
-}));
 
 import { QUEUE_FORM_SECTIONS, QUEUE_STAGES_SECTION, QueueSettingsForm, useQueueFormDeclaration } from "./queue-form";
 
@@ -96,7 +92,7 @@ describe("queue settings form declaration", () => {
     const fields = mocks.formProps?.lineFields as readonly LineField[];
     expect(fields.map((field) => field.name)).toEqual(["name", "category", "tone", "rule_owned"]);
     const byName = new Map(fields.map((field) => [field.name, field]));
-    expect(byName.get("rule_owned")).toMatchObject({ label: "stage.ruleOwned", description: "stage.ruleOwned.help" });
+    expect(byName.get("rule_owned")).toMatchObject({ label: "Moved by rules", description: "Only automation rules move tasks into or out of this stage; hand moves and the default stage are refused." });
     const title = mocks.formProps?.children as React.ReactElement<{ name: string; title?: boolean }>;
     expect(title.props).toMatchObject({ name: "name", title: true });
   });
@@ -121,7 +117,7 @@ describe("queue settings form declaration", () => {
       {badges!.render({ rule_owned: true }, null, 0, { formIsDirty: false })}
       {badges!.render({ rule_owned: false }, null, 1, { formIsDirty: false })}
     </>);
-    expect(screen.getAllByText("stage.ruleOwned")).toHaveLength(1);
+    expect(screen.getAllByText("Moved by rules")).toHaveLength(1);
   });
 
   test("a product's own route renders one queue's settings with its FormView props", () => {

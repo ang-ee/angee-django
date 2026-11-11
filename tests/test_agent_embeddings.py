@@ -17,7 +17,7 @@ from tests.conftest import make_integration
 
 
 @pytest.fixture
-def embedding(monkeypatch, settings, composed_tables):
+def embedding(monkeypatch, settings, db):
     settings.ANGEE_INFERENCE_APPROVED_DEPLOYMENTS = None
     monkeypatch.setattr("pydantic_ai.models.ALLOW_MODEL_REQUESTS", False)
     native = TestEmbeddingModel(dimensions=3, settings={})
@@ -177,7 +177,7 @@ def test_max_input_tokens_preserves_unknown_budget(embedding, monkeypatch):
     embedding.native.max_input_tokens.assert_not_awaited()
 
 
-def test_embed_persists_first_use_dimensions_without_losing_live_capabilities(embedding, composed_tables):
+def test_embed_persists_first_use_dimensions_without_losing_live_capabilities(embedding):
     model = embedding.model
     model.provider = make_integration("embedding", model=InferenceProvider, backend_class="manual")
     with system_context(reason="test.embedding.seed"):
@@ -189,7 +189,7 @@ def test_embed_persists_first_use_dimensions_without_losing_live_capabilities(em
     assert model.capabilities == {"newer": "metadata", "embedding_dimensions": 3}
 
 
-def test_embed_stale_first_use_refuses_a_different_recorded_dimension(embedding, composed_tables):
+def test_embed_stale_first_use_refuses_a_different_recorded_dimension(embedding):
     model = embedding.model
     model.provider = make_integration("embedding-drift", model=InferenceProvider, backend_class="manual")
     with system_context(reason="test.embedding.seed"):

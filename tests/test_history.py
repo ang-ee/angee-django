@@ -155,7 +155,7 @@ def test_native_bulk_history_preserves_declared_per_instance_metadata(bulk):
 
 
 @pytest.mark.django_db
-def test_native_bulk_history_defaults_reach_every_tracked_mti_table(composed_tables):
+def test_native_bulk_history_defaults_reach_every_tracked_mti_table():
     from datetime import timedelta
 
     from django.utils import timezone
@@ -199,7 +199,7 @@ def test_native_bulk_capture_can_be_unattributed_when_storage_policy_allows(sett
 
 
 @pytest.mark.django_db
-def test_hierarchy_history_distinguishes_final_creation_from_reparenting(composed_tables):
+def test_hierarchy_history_distinguishes_final_creation_from_reparenting():
     from tests.conftest import Page, vault_for
 
     owner = create_user("hierarchy-history-owner")

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterator
+from contextlib import nullcontext
 from dataclasses import replace
 from typing import Any
 
@@ -266,17 +267,21 @@ def test_task_visibility_has_no_unvalidated_write_path(
         with pytest.raises(ValidationError, match="Transition refused"):
             task.with_actor(owner).set_visibility("inherited")
         assert calls == ["inherited"]
-    elif path in ("save_fields", "save"):
-        task.visibility = "inherited"
-        with pytest.raises(ValidationError, match="immutable"):
-            task.save(update_fields=("visibility", "updated_at") if path == "save_fields" else None)
-    elif path == "update":
-        with pytest.raises(ValueError, match="set_visibility"):
-            ProjectAccessTask.objects.with_actor(writer).filter(pk=task.pk).update(visibility="inherited")
     else:
-        task.visibility = "inherited"
-        with pytest.raises(ValueError, match="set_visibility"):
-            ProjectAccessTask.objects.with_actor(writer).bulk_update([task], ["visibility"])
+        # Neither the pinned writer nor an elevated system context bypasses the verb.
+        for elevation in (nullcontext(), system_context(reason="tests.task_visibility.elevated")):
+            with elevation:
+                if path in ("save_fields", "save"):
+                    task.visibility = "inherited"
+                    with pytest.raises(ValidationError, match="immutable"):
+                        task.save(update_fields=("visibility", "updated_at") if path == "save_fields" else None)
+                elif path == "update":
+                    with pytest.raises(ValueError, match="set_visibility"):
+                        ProjectAccessTask.objects.with_actor(writer).filter(pk=task.pk).update(visibility="inherited")
+                else:
+                    task.visibility = "inherited"
+                    with pytest.raises(ValueError, match="set_visibility"):
+                        ProjectAccessTask.objects.with_actor(writer).bulk_update([task], ["visibility"])
     task.refresh_from_db()
     assert task.visibility == "restricted"
     assert task.revision == initial_revision
@@ -329,24 +334,6 @@ def test_pinned_task_insert_requires_project_write_inside_system_context(
         ProjectAccessTask.objects.as_user(reader).insert(candidate)
     assert ProjectAccessTask._base_manager.count() == 0
     assert ProjectAccessTask.history.count() == 0
-
-
-@pytest.mark.parametrize("allowed", (False, True), ids=("project-reader", "project-writer"))
-def test_direct_task_save_requires_project_write(
-    task_create_case: tuple[Scope, Any, Any],
-    allowed: bool,
-) -> None:
-    """Native instance saves enforce the same project policy as GraphQL inserts."""
-
-    project, reader, admin = task_create_case
-    candidate = ProjectAccessTask(title="Direct task", project=project).with_actor(admin if allowed else reader)
-    if allowed:
-        candidate.save()
-        assert ProjectAccessTask._base_manager.get(pk=candidate.pk).project_id == project.pk
-    else:
-        with pytest.raises(PermissionDenied, match="Write access to the project is required to add a task."):
-            candidate.save()
-        assert not ProjectAccessTask._base_manager.exists()
 
 
 @pytest.mark.parametrize("allowed", (False, True), ids=("project-reader", "project-writer"))

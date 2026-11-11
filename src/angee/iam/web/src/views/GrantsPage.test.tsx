@@ -17,13 +17,6 @@ vi.mock("@angee/ui", () => ({
   defineRowAction: (declaration: Record<string, unknown>) => declaration,
 }));
 
-vi.mock("../i18n", () => ({
-  useIamT: () => (
-    key: string,
-    values?: Record<string, string>,
-  ) => values ? `${key}:${JSON.stringify(values)}` : key,
-}));
-
 import { IamRevokeRole } from "../documents";
 import { GrantsPage } from "./GrantsPage";
 

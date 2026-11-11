@@ -16,53 +16,92 @@ import os
 import subprocess
 import sys
 from pathlib import Path
-from typing import Any
-from unittest import TestSuite
+from typing import TYPE_CHECKING, Any
+from unittest import TestSuite, TextTestResult
 
 import environ
 
-COMPOSED_TEST_TIMEOUT = 1200
+if TYPE_CHECKING:
+    import pytest
+
+COMPOSED_TEST_TIMEOUT = 1500
 """Stop a composed-host subprocess that hangs; this is a hang bound, not a time budget.
 
 Every caller that starts ``composed_host.py`` passes this one value. The rule: stay
 above the slowest real CI run times the run-to-run spread of CI runners, and well
-under a CI shard's own 60-minute limit, so a hang ends with the test named instead
-of the job ending with no verdict. Measured on 2026-10-14: the slowest is the
-workflows posts group on PostgreSQL, 187 s on an idle workstation; on CI it took
-467 s in one run and over 600 s in two others, where the bound was then 600 s and
-stopped it. A SQLite CI shard runs project setup in up to 269 s. One shard's time
-varied up to 1.8 times between runs; over 600 s times 1.8 is over 1,080 s.
+under a CI shard's own 60-minute limit, so a hang ends with the profile named instead
+of the job ending with no verdict. One subprocess runs a whole composed profile. The
+workflows posts profile on PostgreSQL took 467 s in one CI run and over 600 s in two
+others (2026-10-14). The messaging posts profile runs its delivery, feed and
+concurrency labels together: 309 s in the PostgreSQL timing map, 1.15 times the
+workflows posts profile's 269 s, so about 700 s on CI. One shard's time varied up to
+1.8 times between runs; 700 s times 1.8 is about 1,260 s.
 """
+
+
+class ComposedTestResult(TextTestResult):
+    """Keep each passing test beside the failures, errors and skips unittest already records."""
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        self.passed: list[str] = []
+
+    def addSuccess(self, test: Any) -> None:
+        super().addSuccess(test)
+        self.passed.append(test.id())
+
+    def outcomes(self) -> list[tuple[str, str, str]]:
+        """Return ``(test id, status, detail)`` for every test that reported an outcome."""
+
+        return [
+            *((test_id, "passed", "") for test_id in self.passed),
+            *((test.id(), "skipped", reason) for test, reason in self.skipped),
+            *((test.id(), "failed", detail) for test, detail in (*self.failures, *self.errors)),
+        ]
 
 
 def run_composed_tests(
     tmp_path: Path,
-    test_label: str,
+    subtests: pytest.Subtests,
     *,
-    app: str | tuple[str, ...],
-    test_postgresql: bool = False,
+    app: str | tuple[str, ...] | None,
+    sqlite: tuple[str, ...] = (),
+    postgresql: tuple[str, ...] = (),
     addon_dirs: tuple[Path, ...] = (),
 ) -> None:
-    """Run a native contract group without sharing pytest's source-model registry."""
+    """Compose and boot one host profile, run its labels once and report each test as a subtest.
 
+    ``app`` names the root apps the profile composes with their dependency closure;
+    ``None`` composes every installed addon, examples included. pytest's selected
+    database picks the labels: ``postgresql`` runs on the PostgreSQL ``DATABASE_URL``
+    when pytest runs on PostgreSQL, ``sqlite`` on in-memory SQLite otherwise, and a
+    profile with no labels for that database skips. Every test the host ran is one
+    subtest named by its Django test id, so a failure names its behaviour.
+    """
+
+    import pytest
+    from django.db import connection
+
+    labels = postgresql if connection.vendor == "postgresql" else sqlite
+    if not labels:
+        pytest.skip(f"The profile has no composed contracts for {connection.vendor}.")
     root = Path(__file__).resolve().parents[1]
     report = tmp_path / "composed-tests.json"
     env = dict(os.environ)
     env.pop("DJANGO_SETTINGS_MODULE", None)
+    roots = () if app is None else (app,) if isinstance(app, str) else app
     result = subprocess.run(
         [
             sys.executable,
             str(root / "tests/composed_host.py"),
             "--runtime-dir",
             str(tmp_path / "runtime"),
-            *(["--test-postgresql"] if test_postgresql else []),
-            *(argument for name in ((app,) if isinstance(app, str) else app) for argument in ("--app", name)),
+            *(["--test-postgresql"] if connection.vendor == "postgresql" else []),
+            *(argument for name in roots for argument in ("--app", name)),
             *(argument for path in addon_dirs for argument in ("--addon-dir", str(path))),
-            "--no-examples",
             "--action",
             "tests",
-            "--test-label",
-            test_label,
+            *(argument for label in labels for argument in ("--test-label", label)),
             "--output",
             str(report),
         ],
@@ -73,8 +112,21 @@ def run_composed_tests(
         timeout=COMPOSED_TEST_TIMEOUT,
         check=False,
     )
-    assert result.returncode == 0, f"composed tests failed:\n{result.stdout}\n{result.stderr}"
-    assert json.loads(report.read_text())["failures"] == 0
+    if not report.is_file():
+        pytest.fail(f"The composed host stopped before reporting:\n{result.stdout}\n{result.stderr}", pytrace=False)
+    outcome = json.loads(report.read_text())
+    assert outcome["vendor"] == connection.vendor
+    assert outcome["tests"], f"The composed host ran no tests for {labels}."
+    for test_id, status, detail in outcome["tests"]:
+        with subtests.test(msg=test_id):
+            if status == "skipped":
+                # pytest's folded skip summary names one subtest per reason; the id keeps it true.
+                pytest.skip(f"{test_id}: {detail}")
+            if status != "passed":
+                pytest.fail(detail, pytrace=False)
+    # Failed subtests already fail this test; a failing exit without one is unreported.
+    if all(status != "failed" for _, status, _ in outcome["tests"]):
+        assert result.returncode == 0, f"The composed host failed:\n{result.stdout}\n{result.stderr}"
 
 
 def boot(
@@ -467,7 +519,14 @@ def run(args: argparse.Namespace) -> None:
         from django.test.runner import DiscoverRunner
 
         class ComposedTestRunner(DiscoverRunner):
-            """Prepare the generated host's schema before Django checks its models."""
+            """Prepare the generated host's schema before Django checks its models; report every outcome."""
+
+            def get_resultclass(self) -> type[ComposedTestResult]:
+                return ComposedTestResult
+
+            def suite_result(self, suite: TestSuite, result: ComposedTestResult, **kwargs: Any) -> int:
+                args.output.write_text(json.dumps({"vendor": connection.vendor, "tests": result.outcomes()}) + "\n")
+                return super().suite_result(suite, result, **kwargs)
 
             def setup_databases(self, **kwargs: Any) -> Any:
                 databases = super().setup_databases(**kwargs)
@@ -518,7 +577,6 @@ def run(args: argparse.Namespace) -> None:
         # mixed sync/migrate ordering leaves generated foreign keys dangling.
         settings.MIGRATION_MODULES = {config.label: None for config in apps.get_app_configs()}
         failures = ComposedTestRunner(verbosity=1, interactive=False).run_tests(args.test_label)
-        args.output.write_text(json.dumps({"failures": failures, "vendor": connection.vendor}) + "\n")
         raise SystemExit(bool(failures))
     if args.action == "state":
         from django.apps import apps

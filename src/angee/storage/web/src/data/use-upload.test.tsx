@@ -16,15 +16,6 @@ vi.mock("@angee/ui", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@angee/ui")>()),
   errorMessage: (error: unknown, fallback: string) =>
     error instanceof Error ? error.message : fallback,
-  useNamespaceT:
-    (_namespace: string, messages: Record<string, string>) =>
-    (key: string, vars?: Record<string, string | number>) => {
-      let message = messages[key] ?? key;
-      for (const [name, value] of Object.entries(vars ?? {})) {
-        message = message.replace(`{${name}}`, String(value));
-      }
-      return message;
-    },
 }));
 
 vi.mock("@angee/refine", async (importOriginal) => ({
