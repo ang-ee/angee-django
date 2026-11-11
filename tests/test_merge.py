@@ -554,17 +554,17 @@ def test_a_moved_stance_keeps_its_recency_so_the_tie_break_keeps_its_winner() ->
     statements = Party.statements.model
     with system_context(reason="merge test stance recency"):
         owner = create_user("merge-recency")
-        kept = Party._base_manager.create(display_name="Ada Lovelace", created_by=owner)
-        merged = Party._base_manager.create(display_name="Ada King", created_by=owner)
+        # The parties agree on their name, so the merge decides nothing and survivorship alone picks a stance.
+        kept, merged = (Party._base_manager.create(display_name="Ada Lovelace", created_by=owner) for _ in range(2))
         older, newer = (
             statements._base_manager.create(
                 subject=party,
                 aspect="identity",
-                display_name=party.display_name,
+                display_name=name,
                 asserted_by=str(to_subject_ref(make_integration(slug, model=Directory))),
                 source_kind=SourceKind.DIRECTORY,
             )
-            for party, slug in ((merged, "recency-older"), (kept, "recency-newer"))
+            for party, name, slug in ((merged, "Ada King", "recency-older"), (kept, "Ada Lovelace", "recency-newer"))
         )
         statements._base_manager.filter(pk=older.pk).update(updated_at=timezone.now() - timedelta(days=7))
         older.refresh_from_db()
