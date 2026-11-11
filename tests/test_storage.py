@@ -46,8 +46,10 @@ from angee.graphql.schema import GraphQLSchemas
 from angee.graphql.testing.documents import execute_schema, result_data
 from angee.graphql.views import graphql_endpoint
 from angee.messaging.testing.models import Message, Part
+from angee.projects.testing.models import Project, Task
 from angee.storage import exceptions
 from angee.storage import models as storage_models
+from angee.storage.checks import check_derived_permissions
 from angee.storage.models import FileManager, FileQuerySet, FolderQuerySet, UploadState
 from angee.storage.signals import file_finalized
 from angee.storage_integrate.backends import LocalFolderBackend
@@ -647,6 +649,35 @@ def test_soft_delete_trash_restore_and_purge(tmp_path: Path, drive: Any) -> None
         row.purge()
     assert not File._base_manager.filter(content_hash=PNG_SHA256).exists()
     assert not (tmp_path / storage_path).exists()
+
+
+def test_a_fragment_grant_cannot_reach_a_trashed_file(drive: Any) -> None:
+    """Fragments widen the granted arms; ``read``, ``write`` and ``share`` keep a trashed file for its deleters."""
+
+    editor = get_user_model().objects.create_user(username="storage-task-editor")
+    with system_context(reason="test storage fragment grant"):
+        project = Project.objects.create(title="Files", owner=drive.alice)
+        task = Task.objects.create(title="Spec", project=project, owner=drive.alice)
+        row = File.objects.create(
+            drive=drive, filename="spec.txt", content_hash="a" * 64, storage_path="spec.txt",
+            visibility=storage_models.FileVisibility.RECORD, owner=drive.alice, upload_state=UploadState.READY,
+        )
+        FileAttachment.objects.attach(row, task)
+        write_relationships([
+            RelationshipTuple(resource=to_object_ref(project), relation="editor", subject=to_subject_ref(editor)),
+        ])
+
+    def reach(user: Any) -> tuple[bool, ...]:
+        bound = row.with_actor(user)
+        listed = File.objects.with_actor(user).filter(pk=row.pk).exists()
+        return (*(bound.has_access(action) for action in ("read", "write", "share")), listed)
+
+    assert reach(editor) == reach(drive.alice) == (True, True, True, True)
+    with actor_context(drive.alice):
+        File.objects.get(pk=row.pk).delete()
+    assert reach(editor) == (False, False, False, False)
+    assert reach(drive.alice) == (True, True, True, True)
+    assert check_derived_permissions() == []
 
 
 def test_storage_resource_metadata_exposes_delete_previews() -> None:

@@ -93,7 +93,7 @@ into the test database, and `composed_tables` rolls each test back over it.
    ```zed
    // a related row admits only under a column condition (notes → storage/file)
    relation note_record: notes/note // rebac:field={"path":"attachments__note","filters":{"visibility":"record"}}
-   permission read = note_record->read
+   permission read_granted = note_record->read
 
    // the row's own columns admit everyone signed in (money/rate, dashboards)
    relation shared: money/rate // rebac:const={"target_id":"shared","filters":{"context_object_id":""}}
@@ -165,7 +165,7 @@ into the test database, and `composed_tables` rolls each test back over it.
 - Caveated subjects or `with` contexts in any zed → `angee.E024` (`check_rebac_caveats` in `src/angee/base/checks.py`); use step 3.
 - A Python provider, `visible_to`, `is_superuser` branch or queryset filter as authorization → `docs/backend/guidelines.md#rebac` ("Visibility and access are REBAC-native, always").
 - Editing a framework addon's `permissions.zed` to name your role → `docs/backend/guidelines.md#rebac` ("A consumer addon contributes…"); use `permissions.extends.zed`.
-- A fragment that declares a new non-gate permission → `_merge_definition` (`build.py`) raises. A `read` arm on a definition that owns `read_granted` bypasses its withholding → `docs/backend/guidelines.md#rebac` ("Permission fragments widen `read_granted`"); union there. On `messaging/thread` a record's chatter arm goes to `chatter_read`, which the inbox's `read_inbox` skips; `messaging.E003` (`check_derived_reads` in `src/angee/messaging/checks.py`, a seal through `check_sealed_permissions` in `src/angee/base/checks.py`) refuses an arm on a thread or message `read` or `read_inbox`.
+- A fragment that declares a new non-gate permission → `_merge_definition` (`build.py`) raises. A `read` arm on a definition that owns `read_granted` bypasses its withholding → `docs/backend/guidelines.md#rebac` ("Permission fragments widen `read_granted`"); union there. On `messaging/thread` a record's chatter arm goes to `chatter_read`, which the inbox's `read_inbox` skips; `messaging.E003` (`check_derived_reads` in `src/angee/messaging/checks.py`, a seal through `check_sealed_permissions` in `src/angee/base/checks.py`) refuses an arm on a thread or message `read` or `read_inbox`, and `storage.E001` (`check_derived_permissions` in `src/angee/storage/checks.py`) one on `storage/file` `read`, `write` or `share`.
 - `#effective_member` inside a relation's allowed subjects → invalid schema; store the role and arrow (`docs/backend/guidelines.md#rebac`, "Relations constrain stored subjects").
 - Mirroring a column into tuples, or a remote backend → `docs/stack.md#backend` (local backend only).
 - A private share mutation, Django group M2M, or `auth.Permission` sync → `docs/backend/guidelines.md#rebac` ("Declare direct sharing once"; "Membership has one store").

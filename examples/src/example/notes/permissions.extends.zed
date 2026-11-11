@@ -1,6 +1,6 @@
 // Notes-owned record arms contributed to upstream edge definitions.
 // @rebac_package: notes
-// @rebac_schema_revision: 3
+// @rebac_schema_revision: 4
 
 definition storage/file_attachment {
     relation note: notes/note // rebac:field=target
@@ -13,8 +13,8 @@ definition storage/file_attachment {
 definition storage/file {
     relation note_record: notes/note // rebac:field={"path":"attachments__note","filters":{"visibility":"record"}}
 
-    permission read = note_record->read
-    permission write = note_record->write
+    permission read_granted = note_record->read
+    permission write_granted = note_record->write
 }
 
 definition knowledge/record_binding {
