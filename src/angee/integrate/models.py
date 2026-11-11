@@ -3476,7 +3476,7 @@ class Bridge(Composable, metaclass=RebacModelBase, demands="integrate.Integratio
         failure = safe_integration_failure(error)
         self.sync_stage = self.SyncStage.FAILED
         self.sync_error = failure.message
-        self.sync_progress = self._sync_marker(stage=self.SyncStage.FAILED, error=failure.message)
+        self.sync_progress = self._sync_marker(error=failure.message)
         return failure
 
     @staticmethod
@@ -3502,17 +3502,18 @@ class Bridge(Composable, metaclass=RebacModelBase, demands="integrate.Integratio
     ) -> dict[str, Any]:
         """Merge telemetry under a row lock; supplied details replace prior details.
 
-        Dispatch identity belongs to :attr:`sync_run_id`, independently of this
-        payload. A progress report preserves a queued stage until work starts.
+        ``stage`` is a :class:`SyncStage` value that moves :attr:`sync_stage`; a
+        progress report preserves a queued stage until work starts. Dispatch
+        identity belongs to :attr:`sync_run_id`, independently of this payload.
         """
 
+        sync_stage = self.SyncStage(str(stage))
         with transaction.atomic():
             row = type(self).objects.sudo(reason="integrate.bridge.progress").lock_if_supported().get(pk=self.pk)
             existing = row.sync_progress if isinstance(row.sync_progress, Mapping) else {}
-            payload = dict(existing)
+            # ``sync_stage`` owns the stage; drop the copy rows written before kept here.
+            payload = {key: value for key, value in existing.items() if key != "stage"}
             queue_pending = str(row.sync_stage) == str(row.SyncStage.QUEUED)
-            if not queue_pending:
-                payload["stage"] = str(stage)
             if message:
                 payload["message"] = message
             elif "message" in payload:
@@ -3523,8 +3524,8 @@ class Bridge(Composable, metaclass=RebacModelBase, demands="integrate.Integratio
 
             row.sync_progress = payload
             update_fields = ["sync_progress", "updated_at"]
-            if not queue_pending and str(stage) in row.SyncStage.values:
-                row.sync_stage = row.SyncStage(str(stage))
+            if not queue_pending:
+                row.sync_stage = sync_stage
                 update_fields.append("sync_stage")
             row.save(update_fields=update_fields)
         self.sync_progress = payload
@@ -3535,18 +3536,19 @@ class Bridge(Composable, metaclass=RebacModelBase, demands="integrate.Integratio
         """Return ``sync_progress`` with this run's marker keys set, others kept.
 
         ``sync_progress`` has disjoint owners: the scheduler writes the lifecycle
-        marker (``stage``/``queued_at``/``started_at`` and the run's outcome),
+        marker (``queued_at``/``started_at`` and the run's outcome),
         while :meth:`report_progress` writes ``details`` — a live session's pairing
         report lives there, and it is the QR the operator is currently looking
         at. Replacing the whole dict drops it, so a marker merges the way
         :meth:`report_progress` already does and
         sets only the keys it owns. A previous run's outcome is the marker's own
         to drop: a failed run's ``error`` must not ride into the next run's
-        ``completed`` marker.
+        ``completed`` marker. The stage is :attr:`sync_stage` alone; a marker
+        drops the ``stage`` copy rows written before still carry.
         """
 
         existing = self.sync_progress if isinstance(self.sync_progress, Mapping) else {}
-        kept = {key: value for key, value in existing.items() if key not in self._SYNC_OUTCOME_KEYS}
+        kept = {key: value for key, value in existing.items() if key not in (*self._SYNC_OUTCOME_KEYS, "stage")}
         return {**kept, **values}
 
     def mark_sync_started(self, *, now: datetime) -> bool:
@@ -3562,7 +3564,7 @@ class Bridge(Composable, metaclass=RebacModelBase, demands="integrate.Integratio
             row.last_sync_started_at = now
             row.sync_stage = row.SyncStage.SYNCING
             row.sync_error = ""
-            row.sync_progress = row._sync_marker(stage=row.SyncStage.SYNCING, started_at=now.isoformat())
+            row.sync_progress = row._sync_marker(started_at=now.isoformat())
             row.save(update_fields=[*fields, "updated_at"])
         self.refresh_from_db(fields=fields)
         return True
@@ -3623,7 +3625,7 @@ class Bridge(Composable, metaclass=RebacModelBase, demands="integrate.Integratio
             self.sync_stage = self.SyncStage.QUEUED
             self.sync_error = ""
             self.sync_run_id = None
-            self.sync_progress = self._sync_marker(stage=self.SyncStage.QUEUED, queued_at=now.isoformat())
+            self.sync_progress = self._sync_marker(queued_at=now.isoformat())
             fields.extend(("sync_error", "sync_run_id", "sync_progress", "sync_stage"))
         if claim_interval and not (admitted and recovering):
             self.next_sync_at = self._next_sync_at(now=now)
@@ -3745,11 +3747,7 @@ class Bridge(Composable, metaclass=RebacModelBase, demands="integrate.Integratio
         self.last_sync_items = result
         self.sync_stage = self.SyncStage.COMPLETED
         self.sync_error = ""
-        self.sync_progress = self._sync_marker(
-            stage=self.SyncStage.COMPLETED,
-            items=result,
-            completed_at=now.isoformat(),
-        )
+        self.sync_progress = self._sync_marker(items=result, completed_at=now.isoformat())
         self.last_sync_summary = {
             "status": "ok",
             "items": result,

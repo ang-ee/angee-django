@@ -2006,7 +2006,7 @@ def test_partition_failure_preserves_safe_cause_logs_once_and_replaces_healthy_p
     assert refused.value.__cause__ is failure
     stream_bridge.refresh_from_db()
     assert stream_bridge.sync_error == stream_bridge.last_error == expected
-    assert stream_bridge.sync_progress["stage"] == stream_bridge.SyncStage.FAILED
+    assert stream_bridge.sync_stage == stream_bridge.SyncStage.FAILED
     assert stream_bridge.sync_progress["details"] == {
         "stream": "contacts",
         "partition": "/books/a-failed/",

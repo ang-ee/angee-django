@@ -2213,10 +2213,8 @@ def test_channel_sync_lands_threads_parts_and_attachments(
 
     channel.refresh_from_db()
     assert current_stream(channel, "messages", "INBOX").cursor == {"uidvalidity": 100, "last_uid": 3}
-    assert channel.sync_stage == channel.SyncStage.COMPLETED
-    assert channel.last_sync_items == 3
     assert channel.sync_stage == Channel.SyncStage.COMPLETED
-    assert channel.sync_progress["stage"] == Channel.SyncStage.COMPLETED
+    assert channel.last_sync_items == 3
     assert channel.sync_progress["message"] == "Applied stream page"
     assert channel.sync_progress["details"]["backend"] == "ImapChannelBackend"
     assert channel.sync_progress["details"]["partition"] == "INBOX"
@@ -2398,9 +2396,8 @@ def test_failed_run_never_persists_the_cursor(imap_server: ImapServer, composed_
     channel.refresh_from_db()
     assert current_stream(channel, "messages", "INBOX").cursor == {}
     assert Message._base_manager.count() == 0
-    assert channel.sync_stage == channel.SyncStage.FAILED
+    assert channel.sync_stage == Channel.SyncStage.FAILED
     assert channel.sync_error == channel.last_error == "messages (INBOX): Integration operation failed."
-    assert channel.sync_progress["stage"] == Channel.SyncStage.FAILED
     assert channel.sync_progress["details"] == {
         "stream": "messages",
         "partition": "INBOX",

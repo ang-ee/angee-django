@@ -1577,6 +1577,8 @@ def test_a_transient_failure_drops_the_dead_sessions_pairing_report(live_tables:
         channel.record_live_session_failure(ConnectionError("dropped"), now=timezone.now())
     channel.refresh_from_db()
     assert "pairing" not in channel.sync_progress.get("details", {})
+    # The seeded ``stage`` copy predates ``sync_stage`` owning the stage alone; the failure marker drops it.
+    assert "stage" not in channel.sync_progress
     assert channel.live_impl.pairing().state is PairingState.STARTING
     assert channel.live_impl.pairing().qr == ""
 
