@@ -7,7 +7,7 @@ from contextlib import contextmanager
 from typing import Any
 
 import pytest
-from django.apps import apps
+from django.apps import AppConfig, apps
 from django.conf import settings
 from django.core.management import call_command
 from django.db import DEFAULT_DB_ALIAS, connections, transaction
@@ -179,15 +179,18 @@ def django_db_setup(
     local policy to preserve. A host extends this fixture to load its own baseline
     rows; once its outermost layer returns, every row of the default database is the
     recorded baseline. Tests roll back to it. A transactional test's flush empties
-    every table and re-sends ``post_migrate``, whose receivers write only tables the
-    baseline holds; at the last app's turn those tables are emptied again and refilled
-    with the recorded rows, keys included, and Django's content-type cache and REBAC's
-    process backend start again from them, so a flush recomputes nothing.
+    every table and re-sends ``post_migrate``. At the first app's turn every recorded
+    table is emptied again and refilled with the recorded rows, keys included, so the
+    later turns' receivers find the rows they converge instead of rebuilding them. At
+    the last app's turn the recorded rows are restored once more, undoing what those
+    receivers still write (audit rows, reflections the baseline recorded stale), and
+    Django's content-type cache and REBAC's process backend start again from them.
     """
 
-    last = [config for config in apps.get_app_configs() if config.models_module is not None][-1]
+    configs = [config for config in apps.get_app_configs() if config.models_module is not None]
+    first, last = configs[0], configs[-1]
 
-    def restore(*, using: str, **kwargs: Any) -> None:
+    def restore(*, sender: AppConfig, using: str, **kwargs: Any) -> None:
         if using != DEFAULT_DB_ALIAS:
             return
         connection, recorded = connections[using], pytestconfig.stash[SESSION_BASELINE]
@@ -196,17 +199,20 @@ def django_db_setup(
                 cursor.execute(f"DELETE FROM {table}")
             for _, statement, values in recorded:
                 cursor.executemany(statement, values)
-        prime_content_types()
-        reset_backend()
+        if sender is last:
+            prime_content_types()
+            reset_backend()
 
     with django_db_blocker.unblock():
         call_command("rebac", "sync", "--force-overwrite", "--yes", verbosity=0)
         prime_content_types()
-    post_migrate.connect(restore, sender=last, weak=False)
+    for sender in (first, last):
+        post_migrate.connect(restore, sender=sender, weak=False)
     try:
         yield
     finally:
-        post_migrate.disconnect(restore, sender=last)
+        for sender in (first, last):
+            post_migrate.disconnect(restore, sender=sender)
 
 
 @pytest.fixture(autouse=True)

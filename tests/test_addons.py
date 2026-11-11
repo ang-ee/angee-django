@@ -18,6 +18,7 @@ from rebac import system_context
 
 import tests.test_platform_install  # noqa: F401 -- register fixture models before database setup
 from angee.base.testing.packages import write_addon_distribution
+from angee.base.testing.queries import statement_startswith
 from angee.platform import models as platform_models
 from angee.platform.discovery import available_addons
 from angee.resources.models import Resource as AbstractResource
@@ -91,7 +92,7 @@ def _installed_addon(root: Path, name: str, monkeypatch, *, depends_on=(), label
 def test_reconciliation_projects_native_facts_and_preserves_catalogue_history(
     composed_tables, tmp_path, monkeypatch
 ) -> None:
-    """Direct dependencies survive every state; live counts and admission follow Django."""
+    """Direct dependencies survive every state; live counts and admission follow Django; a rerun writes only changes."""
 
     with monkeypatch.context() as patch:
         del composed_tables
@@ -195,6 +196,18 @@ def test_reconciliation_projects_native_facts_and_preserves_catalogue_history(
         assert materialised.depends_on == ["fakeaddon.base"]
         assert materialised.vcs_path == "addons/unavailable"
         assert str(materialised) == local_manifest["name"]
+
+        table = connection.ops.quote_name(addon._meta.db_table)
+        installed_manifest["description"] = "Changed upstream"
+        for written in (1, 0):
+            with system_context(reason="test.platform.reconcile-diff"), CaptureQueriesContext(connection) as queries:
+                addon.objects.reconcile_from_registry(desired=frozenset({loaded.name}))
+                assert addon.objects.get(name="fakeaddon.base").description == "Changed upstream"
+            writes = [
+                query["sql"] for query in queries
+                if table in query["sql"] and statement_startswith(query["sql"], ("INSERT", "UPDATE", "DELETE"))
+            ]
+            assert len(writes) == written, writes
 
 
 def test_enable_preview_refuses_an_unimportable_component(tmp_path, settings, monkeypatch) -> None:
