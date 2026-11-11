@@ -325,6 +325,19 @@ def test_mint_token_posts_actor_scope_ttl_and_returns_token(settings: pytest.Fix
     assert request.headers["Authorization"] == "Bearer admin-bearer"
 
 
+def test_mint_token_hides_the_connection_when_the_daemon_never_answers(settings: pytest.FixtureRequest) -> None:
+    """A mint sent but never answered hides the connection instead of raising."""
+
+    settings.ANGEE_OPERATOR_URL = "http://localhost:9000"
+    settings.ANGEE_OPERATOR_TOKEN = "admin-bearer"
+
+    def no_answer(request: httpx2.Request) -> httpx2.Response:
+        raise httpx2.ReadTimeout("no answer", request=request)
+
+    with mock_transport(no_answer):
+        assert OperatorDaemon.from_settings().mint_token("auth/user:abc") is None
+
+
 def test_mint_token_derives_host_from_full_graphql_endpoint(
     settings: pytest.FixtureRequest,
 ) -> None:
