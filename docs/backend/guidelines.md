@@ -339,6 +339,14 @@ Use these owners instead of maintaining another contract in an addon:
   child subranks serialize within each non-null parent, including children from
   different projects. Root subranks are inert and need no global allocation or
   uniqueness. Explicit numeric ranks, including Stage positions, retain exact values.
+- A pipeline whose stage names and order belong to users composes the `angee.base`
+  [stage primitive](../../src/angee/base/models/stages.py): a concrete `Stage` per
+  addon and `StagedModelMixin` on its records. A lifecycle whose vocabulary belongs
+  to code stays a `StateField` on the record: an outcome such as won or hired is
+  never a stage flag, and a stage reaches a lifecycle only through projection.
+  Addons contribute vocabulary (categories, reservations, applicability) through
+  the primitive's hooks; they never copy its scope, admission, projection or
+  provisioning ([Persistence primitives](#persistence-primitives)).
 - Runtime model modules, generated schemas and codegen stubs are output.
   Change their source declarations. Native Django migration history is reviewed,
   version-controlled project source; preserve it across runtime rebuilds.
@@ -1232,6 +1240,28 @@ exception closes the rows as failed. Tests inherit a boundary from the root
   values from the owner's persisted copy of the same row through
   `StateTransitions.copy_persisted_state`; reload authorization stays private.
   Recovery writes outside the graph use `force_state` with a concrete reason.
+- **Stages are data-owned; lifecycles are code-owned.**
+  [`Stage`](../../src/angee/base/models/stages.py) is the abstract stage row an
+  addon makes concrete with its container foreign key (`container_field_name`);
+  [`StagedModelMixin`](../../src/angee/base/models/stages.py) is the record side.
+  The row carries the user's name, `description`, tone and fractional `position`,
+  the board's default-collapsed `fold` hint (a lane source reads it as
+  `foldField`; a board never writes it back) and `rotting_days`, the dwell after
+  which a resting record needs attention, measured from the record's
+  `stage_entered_at`, which the mixin stamps on every stage change.
+  *Applicability:* an override of `Stage.for_record` narrows a container's stages
+  for one record; scope validation and `resolve_default_stage` both read it, and a
+  container default the record cannot hold falls back to its first applicable
+  stage. *Admission:* the mixin reads the persisted previous stage under the row
+  lock and asks `Stage.validate_transition(previous, following, *, manual, admitted,
+  adding)` for hand moves and every non-sudo write; a verb that owns a reserved
+  entry passes `save(admitted_stage=...)` and must write exactly that stage. A
+  partial save judges the stage and container it stores, not a stale instance's.
+  *Projection:* `project_stage(previous, following)` returns the fields a move
+  writes and the save merges them into `update_fields`; a consumer extends it
+  through `super()` to write its code-owned lifecycle through `StateTransitions`.
+  *Provisioning:* `Stage.provision(container, rows, key=...)` creates a
+  container's missing default stages once, inside the caller's system context.
 - **Give a model an opaque public id by mixing in `SqidMixin` and declaring
   `sqid_prefix = "abc_"`** — the one fact that varies per model. The shared
   `angee.base.fields.SqidField` reads that prefix in `contribute_to_class`; don't
