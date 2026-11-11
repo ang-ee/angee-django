@@ -1027,8 +1027,6 @@ schemas = {
         **_PARTIES_SCHEMA_BUCKET,
         "subscription": [
             changes(Party, field="partyChanged"),
-            changes(Person, field="personChanged"),
-            changes(Organization, field="organizationChanged"),
             changes(Handle, field="handleChanged"),
             changes(Directory, field="directoryChanged"),
             changes(Circle, field="circleChanged"),

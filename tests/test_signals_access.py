@@ -46,6 +46,7 @@ from angee.graphql.schema import DEFAULT_SCHEMA_NAME, GraphQLSchemas
 from angee.graphql.subscriptions import changes
 from angee.graphql.testing import capture_broadcasts
 from tests.conftest import SchemaAddon
+from tests.mtidemo.models import MtiChild, MtiParent
 from tests.tables import model_tables
 
 
@@ -180,9 +181,8 @@ def test_publisher_parent_views_are_explicit(
                 else:
                     assert sent == []
                 sent.clear()
-                with CaptureQueriesContext(connection) as captured:
-                    missing = Parent.objects.create(name="No child")
-                assert sent == [] and len(captured) == 1  # the insert: a parent-class creation has no child to read
+                missing = Parent.objects.create(name="No child")
+                assert sent == []
                 children = [Child.objects.create(name=f"Batched {index}") for index in range(size)]
                 parents = [Parent.objects.get(pk=row.pk) for row in children] + [missing]
                 sent.clear()
@@ -206,6 +206,27 @@ def test_publisher_parent_views_are_explicit(
             finally:
                 signals.change_published.disconnect(dispatch_uid="tests.publisher_parent_views")
                 publishing.disconnect_publishers(Child)
+
+
+@pytest.mark.django_db(transaction=True)
+def test_a_child_without_a_feed_publishes_on_its_ancestors(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A write through an MTI child without a feed publishes as its nearest feed's row; its delete is the parent's."""
+    monkeypatch.setattr(publishing.transaction, "on_commit", lambda callback, **kwargs: callback())
+    publishing.connect_publishers(MtiParent, readable_fields=("title",))
+    try:
+        assert publishing.change_feed(MtiChild) is MtiParent
+        with capture_broadcasts() as sent, system_context(reason="test child feed"):
+            child = MtiChild.objects.create(title="Before")
+            child.title = "After"
+            child.save(update_fields=("title",))
+            child_id = public_id_for(MtiParent, child.pk)
+            child.delete()
+        assert [(event["model"], event["id"], event["action"]) for event in sent] == [
+            ("mtidemo.MtiParent", child_id, action) for action in ("create", "update", "delete")
+        ]
+        assert sent[1]["changed_values"] == {"title": "After"}
+    finally:
+        publishing.disconnect_publishers(MtiParent)
 
 
 @pytest.fixture

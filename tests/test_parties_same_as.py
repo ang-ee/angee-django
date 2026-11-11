@@ -93,7 +93,7 @@ def test_a_merge_keeps_the_chosen_values_over_the_newer_statements_it_moves(
 def test_reverting_a_merge_publishes_the_survivors_restored_values_on_its_record_feed(
     db: None, django_capture_on_commit_callbacks: Any,
 ) -> None:
-    """A person's record page reads ``parties.Person`` live; the revert's restore reaches it like an ordinary edit."""
+    """A person's page reads the Party feed live; the revert's Person restore reaches it like an ordinary edit."""
 
     del db
     owner = get_user_model().objects.create_user(username="merge-revert-feed-owner")
@@ -106,7 +106,7 @@ def test_reverting_a_merge_publishes_the_survivors_restored_values_on_its_record
             boundary.with_actor(owner).revert()
     assert Person._base_manager.get(pk=gamma.pk).display_name == "Feedprobe Gamma"
     assert any(
-        (event["model"], event["id"], event["action"]) == ("parties.Person", gamma.public_id, "update")
+        (event["model"], event["id"], event["action"]) == ("parties.Party", gamma.public_id, "update")
         and "display_name" in event["changed_fields"]
         for event in sent
     ), sent

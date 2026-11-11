@@ -330,16 +330,13 @@ def _on_save(
 ) -> None:
     """Observe each row; an inherited view reads a creation batch once, on its final send.
 
-    The view is read on the database Django saved to. A row created alone through
-    a parent class has no child row yet, so its inherited view reads nothing.
+    The view is read on the database Django saved to.
     """
 
     if raw:
         return
     instances: Iterable[Model] = (instance,)
     if type(instance) is not observed_model:
-        if created and created_batch is None:
-            return
         sources = created_batch if created_batch is not None else (instance,)
         if not sources or instance is not sources[-1]:
             return

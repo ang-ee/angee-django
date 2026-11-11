@@ -11,6 +11,7 @@ from django.core.exceptions import ImproperlyConfigured
 from rebac import RelationshipTuple, system_context, to_object_ref, to_subject_ref, write_relationships
 
 from angee.base.identity import public_subject_ref
+from angee.graphql.publishing import change_feed
 from angee.graphql.schema import SCHEMA_PART_KEYS, GraphQLSchemas
 from angee.graphql.testing.documents import execute_schema
 from angee.graphql.testing.documents import result_data as _data
@@ -161,6 +162,17 @@ def test_resource_metadata_lists_the_concrete_kinds_of_an_mti_parent() -> None:
     wire = {item["modelLabel"]: item for item in schema._schema.extensions["angee"]["resources"]}
     assert wire["parties.Party"]["concreteKinds"] == ["parties.Organization", "parties.Person"]
     assert wire["parties.Handle"]["concreteKinds"] == []
+
+
+def test_mti_children_read_their_parents_change_feed() -> None:
+    """A kind without a feed of its own subscribes to, and publishes on, the Party feed: same key, same public id."""
+
+    resources = {item.model_label: item for item in _schema("console").angee_resources}
+    kinds = ("parties.Party", "parties.Person", "parties.Organization")
+
+    assert {resources[label].roots.changes_name for label in kinds} == {"partyChanged"}
+    assert "changes" not in resources["parties.Person"].capabilities
+    assert change_feed(messaging_models.Person) is messaging_models.Party
 
 
 def test_resource_metadata_omits_concrete_kinds_the_schema_does_not_expose() -> None:
