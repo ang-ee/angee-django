@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from collections import Counter
 from dataclasses import replace
 from datetime import timedelta
 from pathlib import Path
@@ -10,6 +9,7 @@ from typing import Any
 
 import pytest
 import yaml
+from django.apps import apps
 from django.contrib.auth import get_user_model
 from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import ValidationError
@@ -49,7 +49,7 @@ from angee.provenance.statements import (
     StatementSourceMixin,
 )
 from angee.tags.testing.models import Tag, TagAssignment
-from tests.conftest import current_stream, make_integration
+from tests.conftest import create_platform_admin, current_stream, make_integration
 from tests.test_messaging import _grant
 
 User = get_user_model()
@@ -610,16 +610,16 @@ def test_merging_a_handle_fills_only_what_the_kept_handle_lacks_and_moves_its_st
     )
 
 
-def test_merging_a_handle_moves_what_points_at_it_and_collapses_facts_the_kept_handle_holds(
+def test_merging_a_handle_keeps_its_correspondence_and_collapses_facts_the_kept_handle_holds(
     composed_tables: None,
 ) -> None:
-    """A participation, reaction or tag the phone handle already has is one fact; the rest moves."""
+    """Messages and recipients stay on the merged handle; a reaction or tag the phone already has is one fact."""
 
     del composed_tables
     with system_context(reason="test handle merge references"):
         owner, alias, phone = _handle_merge_fixture("merge-handle-references", "1942")
         channel = make_integration("merge-handle-channel", model=Channel, backend_class="manual")
-        thread, other_thread = Thread.objects.create(owner=owner), Thread.objects.create(owner=owner)
+        thread = Thread.objects.create(owner=owner)
         message = Message._base_manager.create(
             channel=channel,
             thread=thread,
@@ -630,12 +630,9 @@ def test_merging_a_handle_moves_what_points_at_it_and_collapses_facts_the_kept_h
             sender=alias,
             created_by=owner,
         )
-        role = Participant.ParticipantRole
+        recipient = Participant._base_manager.create(message=message, thread=thread, handle=alias, role="to")
         for handle in (alias, phone):
-            Participant._base_manager.create(message=message, thread=thread, handle=handle, role=role.FROM)
-            Participant._base_manager.create(thread=thread, handle=handle, role=role.TO)
             Reaction._base_manager.create(message=message, handle=handle, reaction="👍")
-        moved_participant = Participant._base_manager.create(thread=other_thread, handle=alias, role=role.TO)
         moved_reaction = Reaction._base_manager.create(message=message, handle=alias, reaction="❤️")
         vip, work = Tag.objects.create(name="VIP"), Tag.objects.create(name="Work")
         handle_type = ContentType.objects.get_for_model(Handle)
@@ -645,22 +642,15 @@ def test_merging_a_handle_moves_what_points_at_it_and_collapses_facts_the_kept_h
         phone.fold([alias])
 
         message.refresh_from_db()
-        moved_participant.refresh_from_db()
+        recipient.refresh_from_db()
         moved_reaction.refresh_from_db()
-        participants = Counter(
-            Participant._base_manager.filter(handle=phone).values_list("thread_id", "message_id", "role")
-        )
         reactions = sorted(Reaction._base_manager.filter(handle=phone).values_list("reaction", flat=True))
         tags = sorted(
             TagAssignment._base_manager.filter(content_type=handle_type, object_id=phone.pk).values_list(
                 "tag__name", flat=True
             )
         )
-    assert message.sender_id == phone.pk
-    assert (moved_participant.handle_id, moved_reaction.handle_id) == (phone.pk, phone.pk)
-    assert participants == Counter(
-        [(thread.pk, message.pk, role.FROM), (thread.pk, None, role.TO), (other_thread.pk, None, role.TO)]
-    )
+    assert (message.sender_id, recipient.handle_id, moved_reaction.handle_id) == (alias.pk, alias.pk, phone.pk)
     assert reactions == sorted(["👍", "❤️"])
     assert tags == ["VIP", "Work"]
 
@@ -1152,7 +1142,7 @@ def test_merge_rejects_reversal_and_database_rejects_self_merge(composed_tables:
 def test_a_party_merge_moves_what_points_at_the_merged_party_and_revert_restores_it(
     composed_tables: None, django_capture_on_commit_callbacks: Any
 ) -> None:
-    """Handles, addresses, relationships both ways, follows and participations move; revert restores the tracked."""
+    """Handles, addresses, relationships both ways, follows and participations move; revert restores them."""
 
     del composed_tables
     owner = _user("merge-mover")
@@ -1170,11 +1160,11 @@ def test_a_party_merge_moves_what_points_at_the_merged_party_and_revert_restores
             (Relationship, "other_party", {"party": other, "kind": kind}),
             (ProjectParticipant, "party", {"project": project}),
         )
-        tracked = [(handle, "party")] + [
+        follow = ThreadFollower._base_manager.create(thread=Thread._base_manager.create(created_by=owner), party=merged)
+        tracked = [(handle, "party"), (follow, "party")] + [
             (model._base_manager.create(**{field: merged}, **values, created_by=owner), field)
             for model, field, values in rows
         ]
-        follow = ThreadFollower._base_manager.create(thread=Thread._base_manager.create(created_by=owner), party=merged)
 
     def pointed_at(pointers: list[tuple[Any, str]]) -> set[Any]:
         return {type(row)._base_manager.values_list(field, flat=True).get(pk=row.pk) for row, field in pointers}
@@ -1183,7 +1173,7 @@ def test_a_party_merge_moves_what_points_at_the_merged_party_and_revert_restores
     with actor_context(owner), django_capture_on_commit_callbacks(execute=True):
         kept.with_actor(owner).merge(records=[merged.public_id])
     with actor_context(owner):
-        assert pointed_at([*tracked, (follow, "party")]) == {kept.pk}
+        assert pointed_at(tracked) == {kept.pk}
         assert Party._base_manager.get(pk=merged.pk).merged_into_id == kept.pk
         boundary = Party.history.filter(id=merged.pk).order_by("-history_id").first().changeset
         boundary.with_actor(owner).revert()
@@ -1191,25 +1181,120 @@ def test_a_party_merge_moves_what_points_at_the_merged_party_and_revert_restores
     assert Party._base_manager.get(pk=merged.pk).merged_into_id is None
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="Defect: a merge revert restores only history-tracked references; untracked MOVE references "
-    "(ThreadFollower, CircleMember, spaces Membership, proposals, nexus) stay on the survivor.",
+def _party_references(merged: Any, actor: Any) -> list[tuple[Any, str]]:
+    """One row of each further kind a party merge moves that kept no history before ``angee.E051``."""
+
+    model = apps.get_model
+    now = timezone.now()
+    round = model("proposals", "Round")._base_manager.create(
+        project=Project._base_manager.create(title="Engine"), facilitator=actor, name="Bids",
+        requester_party=merged, last_call_at=now, submission_deadline=now + timedelta(days=7),
+    )
+    group = model("spaces", "Group")._base_manager.create(name="Crew", slug="crew")
+    rows = (
+        (CircleMember, {"circle": Circle._base_manager.create(name="Friends")}),
+        (model("spaces", "Membership"), {"group": group}),
+        (model("proposals", "Proposal"), {"round": round, "responder": _user("merge-responder")}),
+        (model("nexus", "Cadence"), {"user": actor, "cadence_days": 30}),
+    )
+    moved = [(kind._base_manager.create(party=merged, **values), "party") for kind, values in rows]
+    return [(round, "requester_party"), *moved]
+
+
+def _handle_references(merged: Any, actor: Any) -> list[tuple[Any, str]]:
+    """One row of each kind a handle merge moves; messages, recipients and feeds stay (KEEP)."""
+
+    del actor
+
+    feed = make_integration("merge-feed", model=apps.get_model("posts", "Feed"), backend_class="feed",
+                            feed_backend_class="stub", handle=merged)
+    message = Message._base_manager.create(thread=Thread._base_manager.create(), channel=feed, sender=merged)
+    rows = (
+        (Reaction, {"message": message, "reaction": "+1"}),
+        (apps.get_model("posts", "FeedFollow"), {"feed": feed}),
+    )
+    moved = [(kind._base_manager.create(handle=merged, **values), "handle") for kind, values in rows]
+    return moved
+
+
+@pytest.mark.parametrize(
+    ("model", "values", "references"),
+    [
+        (Party, lambda name: {"display_name": name}, _party_references),
+        (Handle, lambda name: {"platform": "email", "value": f"{name}@example.com"}, _handle_references),
+    ],
+    ids=["party", "handle"],
 )
-def test_a_party_merge_revert_restores_an_untracked_follow(
-    composed_tables: None, django_capture_on_commit_callbacks: Any
+def test_a_merge_revert_restores_every_moved_kind(
+    composed_tables: None, django_capture_on_commit_callbacks: Any, model: Any, values: Any, references: Any,
 ) -> None:
+    """Every row a merge moves keeps history, so reverting the merge puts it back (``angee.E051``).
+
+    The rows' history is wiped first, as for rows written before their model kept
+    history: the merge records each one's baseline in a changeset of its own.
+    """
+
     del composed_tables
-    owner = _user("merge-follow")
-    with system_context(reason="test party merge follow"):
-        kept, merged = (Party._base_manager.create(display_name=name, created_by=owner) for name in ("Ada", "Ada K"))
-        follow = ThreadFollower._base_manager.create(thread=Thread._base_manager.create(created_by=owner), party=merged)
-    with actor_context(owner), django_capture_on_commit_callbacks(execute=True):
-        kept.with_actor(owner).merge(records=[merged.public_id])
-    with actor_context(owner):
-        Party.history.filter(id=merged.pk).order_by("-history_id").first().changeset.with_actor(owner).revert()
-    follow.refresh_from_db()
-    assert follow.party_id == merged.pk
+    admin = create_platform_admin(f"merge-moved-{model._meta.model_name}")
+    with system_context(reason="test merge moved kinds"):
+        kept, merged = (model._base_manager.create(**values(name)) for name in ("kept", "merged"))
+        rows = references(merged, admin)
+        for row, _field in rows:
+            type(row).history.filter(id=row.pk).delete()
+
+    def pointed_at() -> set[Any]:
+        return {type(row)._base_manager.values_list(field, flat=True).get(pk=row.pk) for row, field in rows}
+
+    with actor_context(admin), django_capture_on_commit_callbacks(execute=True):
+        kept.with_actor(admin).merge(records=[merged.public_id])
+    assert pointed_at() == {kept.pk}
+    boundary = model.history.filter(id=merged.pk).order_by("-history_id").first().changeset
+    baselines = [type(row).history.filter(id=row.pk).order_by("history_id").first() for row, _field in rows]
+    assert {(version.history_type, version.changeset.activity) for version in baselines} == {("~", "system")}
+    assert boundary.pk not in {version.changeset_id for version in baselines}
+    if model is Handle:
+        assert apps.get_model("posts", "Feed")._base_manager.filter(handle=merged).exists()
+        # The feed's own post stays on the merged handle and still reads as channel-authored.
+        assert Message._base_manager.get(sender=merged).reply_state()
+    with actor_context(admin):
+        boundary.with_actor(admin).revert()
+    assert pointed_at() == {merged.pk}
+
+
+@pytest.mark.parametrize("pre_history", [False, True], ids=["recorded", "pre-history"])
+def test_a_person_merge_reverts_across_its_mti_lineage(
+    composed_tables: None, django_capture_on_commit_callbacks: Any, pre_history: bool,
+) -> None:
+    """A person's versions live on its child table; a party merge still reverts, also for rows older than history.
+
+    Creating a ``Person`` records no ``Party`` version, so the revert reads the
+    parent's pre-boundary state from the child's; a row with no history at all
+    gets a baseline on its first write instead.
+    """
+
+    del composed_tables
+    admin = create_platform_admin(f"mti-merge-{'pre' if pre_history else 'recorded'}")
+    with actor_context(admin):
+        gamma, delta = (Person.objects.create(display_name=name) for name in ("Gamma", "Delta"))
+    with system_context(reason="test mti merge"):
+        member = CircleMember._base_manager.create(circle=Circle._base_manager.create(name="Friends"), party=delta)
+        follow = ThreadFollower._base_manager.create(thread=Thread._base_manager.create(), party=delta)
+        if pre_history:
+            for model, pks in ((Party, (gamma.pk, delta.pk)), (Person, (gamma.pk, delta.pk)),
+                               (CircleMember, (member.pk,)), (ThreadFollower, (follow.pk,))):
+                model.history.filter(id__in=pks).delete()
+
+    def parties() -> set[Any]:
+        return {type(row)._base_manager.values_list("party_id", flat=True).get(pk=row.pk) for row in (member, follow)}
+
+    with actor_context(admin), django_capture_on_commit_callbacks(execute=True):
+        Party.objects.get(pk=gamma.pk).with_actor(admin).merge(records=[delta.public_id])
+    assert parties() == {gamma.pk}
+    boundary = Party.history.filter(id=delta.pk).order_by("-history_id").first().changeset
+    with actor_context(admin):
+        boundary.with_actor(admin).revert()
+    assert parties() == {delta.pk}
+    assert Party._base_manager.get(pk=delta.pk).merged_into_id is None
 
 
 def test_ingest_contact_upserts_carddav_employment_in_place(composed_tables: None) -> None:

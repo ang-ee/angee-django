@@ -1097,6 +1097,7 @@ dependencies = [
     { name = "angee-messaging" },
     { name = "angee-parties" },
     { name = "angee-posts" },
+    { name = "angee-provenance" },
     { name = "angee-spaces" },
     { name = "angee-timeline" },
     { name = "angee-web" },
@@ -1109,6 +1110,7 @@ requires-dist = [
     { name = "angee-messaging", editable = "src/angee/messaging" },
     { name = "angee-parties", editable = "src/angee/parties" },
     { name = "angee-posts", editable = "src/angee/posts" },
+    { name = "angee-provenance", editable = "src/angee/provenance" },
     { name = "angee-spaces", editable = "src/angee/spaces" },
     { name = "angee-timeline", editable = "src/angee/timeline" },
     { name = "angee-web", editable = "src/angee/web" },
@@ -1528,6 +1530,7 @@ dependencies = [
     { name = "angee-knowledge" },
     { name = "angee-messaging" },
     { name = "angee-parties" },
+    { name = "angee-provenance" },
     { name = "angee-web" },
     { name = "django-compose" },
 ]
@@ -1539,6 +1542,7 @@ requires-dist = [
     { name = "angee-knowledge", editable = "src/angee/knowledge" },
     { name = "angee-messaging", editable = "src/angee/messaging" },
     { name = "angee-parties", editable = "src/angee/parties" },
+    { name = "angee-provenance", editable = "src/angee/provenance" },
     { name = "angee-web", editable = "src/angee/web" },
     { name = "django-compose", specifier = ">=0.1.0.dev10,<0.2" },
 ]

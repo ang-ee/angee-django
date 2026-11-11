@@ -138,6 +138,19 @@ class MergeableQuerySet(CanonicalQuerySet[_ModelT]):
 
         return Coalesce(ref(f"{through}merged_into_id"), ref(f"{through}pk"))
 
+    @staticmethod
+    def survivor_field(through: str, name: str, *, ref: Callable[[str], Any] = models.F) -> Coalesce:
+        """Return column ``name`` of the survivor of the mergeable row reached through ``through``.
+
+        A row pointing at a retired record reads its survivor's value, as if the
+        merge had moved it. It is a ``Coalesce``: where the survivor's value is
+        null (a survivor with no party), the row's own value reads instead.
+        Redirects are flattened to one hop, so the survivor is one join away.
+        ``ref`` builds each column reference, as in :meth:`survivor_id`.
+        """
+
+        return Coalesce(ref(f"{through}merged_into__{name}"), ref(f"{through}{name}"))
+
     def redirect_group(self, survivor: _ModelT) -> Self:
         """Return ``survivor`` and the one-hop redirects flattened into it.
 
@@ -146,6 +159,16 @@ class MergeableQuerySet(CanonicalQuerySet[_ModelT]):
         """
 
         return self.filter(models.Q(pk=survivor.pk) | models.Q(merged_into_id=survivor.pk))
+
+    def redirect_groups(self, survivors: Any) -> Self:
+        """Return every survivor in ``survivors`` and the one-hop redirects flattened into it.
+
+        ``survivors`` holds canonical primary keys, as values or a subquery. A
+        reader of rows a merge kept on retired records selects them through the
+        groups of the survivors it reads, on the same indexes as :meth:`redirect_group`.
+        """
+
+        return self.filter(models.Q(pk__in=survivors) | models.Q(merged_into_id__in=survivors))
 
     def survivor_ids(self) -> models.QuerySet[Any]:
         """Return each row's :meth:`survivor_id` as ``survivor``.

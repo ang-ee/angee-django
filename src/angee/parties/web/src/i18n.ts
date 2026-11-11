@@ -136,7 +136,7 @@ export const enPartiesMessages: Record<string, string> = {
   "merge.provenance.only": "Only in {name}",
   "merge.provenance.both": "In both records",
   "merge.confirmTitle": "Merge into {name}?",
-  "merge.confirmBody": "{source} is folded into {name} and cannot be separated again.",
+  "merge.confirmBody": "{source} is folded into {name}. The merge can be reverted from the timeline.",
   "merge.summary": "Data retained across the merged records",
   "merge.summary.handles": "{count} handles",
   "merge.summary.circles": "{count} circles",
