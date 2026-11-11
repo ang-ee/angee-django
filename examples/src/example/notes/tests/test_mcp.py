@@ -105,8 +105,8 @@ class MCPStreamableHTTPMixin:
     async def _drive(self, body: bytes, *, bearer: str | None) -> tuple[int, bytes]:
         """Send one StreamableHTTP request to the mounted app's root as the server's mount sends it.
 
-        ``angee.server.asgi`` passes the original path with the mount prefix added to
-        ``root_path``, and the app serves its root, ``/mcp/``.
+        ``angee.server.asgi`` hands a request for ``/mcp`` or ``/mcp/`` to the app as its
+        root: path ``/mcp/`` with the mount prefix in ``root_path``.
         """
 
         captured: dict[str, Any] = {"status": 0, "body": bytearray()}
