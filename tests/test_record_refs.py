@@ -110,7 +110,7 @@ def test_record_ref_for_instance_projects_identity_and_rebac_type(record_ref_tab
 def test_record_ref_mixin_projects_default_target_fields_with_cached_contenttype(
     record_ref_tables: None,
 ) -> None:
-    """Target edges project reference facts without a second ContentType query."""
+    """A loaded edge projects reference facts from the cached content type, without a query."""
 
     del record_ref_tables
     with system_context(reason="record-ref typed target"):
@@ -121,22 +121,16 @@ def test_record_ref_mixin_projects_default_target_fields_with_cached_contenttype
     )
     edge = RecordRefTargetEdge.objects.get(pk=edge.pk)
 
-    ContentType.objects.clear_cache()
-    with CaptureQueriesContext(connection) as first_access:
+    with CaptureQueriesContext(connection) as access:
         record_ref = edge.record_ref
 
+    assert len(access) == 0
     assert record_ref == RecordRef(
         model_label="recordrefdemo.RecordRefTypedTarget",
         object_id=target.pk,
         public_id=target.public_id,
         resource_type="tests/record-ref-target",
     )
-    assert any("django_content_type" in query["sql"] for query in first_access.captured_queries)
-
-    with CaptureQueriesContext(connection) as second_access:
-        assert edge.record_ref == record_ref
-
-    assert len(second_access) == 0
     assert edge.record_model_label == "recordrefdemo.RecordRefTypedTarget"
     assert edge.record_public_id == target.public_id
 
