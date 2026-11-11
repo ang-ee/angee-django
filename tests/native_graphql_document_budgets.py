@@ -69,6 +69,7 @@ fragment MessageSenderFields on HandleType {
   id display_name value party_link_confirmed
   avatar { id url }
   party { id display_name display_avatar { id url } }
+  merged_into { id party_link_confirmed party { id display_name display_avatar { id url } } }
 }
 
 fragment MessagePartFields on PartType {
@@ -131,6 +132,7 @@ fragment MessageSenderFields on HandleType {
   id display_name value party_link_confirmed
   avatar { id url }
   party { id display_name display_avatar { id url } }
+  merged_into { id party_link_confirmed party { id display_name display_avatar { id url } } }
 }
 
 fragment MessagePartFields on PartType {
