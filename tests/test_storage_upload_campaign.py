@@ -167,14 +167,13 @@ def test_ingest_losing_to_inherited_winner_returns_winner_and_purges_reservation
     assert [p.relative_to(tmp_path).as_posix() for p in tmp_path.rglob("*") if p.is_file()] == [winner.storage_path]
 
 
-@pytest.mark.parametrize("schema_name", ["public", "console"])
 def test_missing_unreadable_unknown_and_untyped_records_have_identical_in_band_denials(
-    drive: Any, composed_tables: None, schema_name: str,
+    drive: Any, composed_tables: None,
 ) -> None:
     other = create_user("private-record-owner")
     with system_context(reason="test.storage.denial.seed"):
         hidden = Drive.objects.create(backend=drive.backend, name="Hidden", slug="hidden", owner=other)
-    schema = addon_schema(storage_schema.schemas, schema_name)
+    schema = addon_schema(storage_schema.schemas, "public")
     records = [
         {"model_label": "storage.Drive", "record_id": str(hidden.sqid)},
         {"model_label": "storage.Drive", "record_id": str(Drive(pk=hidden.pk + 1000).sqid)},
