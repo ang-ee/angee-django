@@ -42,6 +42,7 @@ locked dependencies from `pyproject.toml`/`uv.lock`:
 | Scope | Command |
 |---|---|
 | Focused Python test | `uv run --locked python -m pytest -q tests/<test_file>.py` |
+| Changed-path selection: the test files a change reaches, as a pull request's CI picks them | `git diff --name-only <base> \| uv run --locked python scripts/changed_path_selection.py` |
 | Python/addon/template handoff: full SQLite suite; required for shared foundation/composition changes | `env -u DATABASE_URL uv run --locked python -m pytest -q -n auto --dist loadfile --durations=25` |
 | Randomized parallel isolation proof | `uv run --locked python -m pytest -q -n auto --dist loadfile -p randomly --randomly-seed=137 --durations=25` |
 | Python lint | `uv run --locked python -m ruff check . --no-cache` |
@@ -465,35 +466,45 @@ database, and these commands do not create one.
 
 [CI](../.github/workflows/ci.yml) calls
 [reusable checks](../.github/workflows/reusable-checks.yml) on pull requests and
-pushes to `main`. The current tiers are:
+pushes to `main`. A pull request's merge gate is the static tier, the SQLite tests
+its changed paths reach, the packages and the composed stack with its smoke.
+Pushes to `main` and releases run the whole SQLite suite and the PostgreSQL lane,
+so whole suites report after a merge instead of gating it. The current tiers are:
 
-- **Python quality:** Ruff over the source tree, mypy over addons and
-  `lint-imports` over the declared import contracts, using the locked framework
-  environment.
-- **SQLite:** the full framework Python suite once, as six shards that
-  pytest-split cuts into contiguous chunks of equal stored time from the
-  committed [durations](../.test_durations), so each test file stays in one or two
-  shards. Each shard runs
-  `-n auto --dist loadfile` with a 60-minute limit and prints its 25 slowest test
-  durations, with migrations enabled and `DATABASE_URL` unset. Structural tests
-  remain part of this suite. Per-file scheduling keeps a file on one worker, so the
-  heaviest files (the proposals access and agents GraphQL campaigns, about 700
-  stored seconds each) set a floor near 25 minutes on CI. The composed-host tests
-  run here too, one node per composed profile: each composes and boots once and
-  reports every test it ran as a subtest.
-- **PostgreSQL:** in six groups of its own beside the SQLite shards, assigned
-  by pytest-split's `least_duration` algorithm over the
+- **Static** (the `python-quality` job): Ruff over the source tree, mypy over
+  addons, `lint-imports` over the declared import contracts, and the tests that
+  read source and docs without Django: the [patch guard](../tests/test_patch_targets.py)
+  and the [documentation and methodology tests](#agent-methodology-and-documentation),
+  using the locked framework environment.
+- **SQLite:** six shards that pytest-split cuts into contiguous chunks of equal
+  stored time from the committed [durations](../.test_durations), so each test
+  file stays in one or two shards. Each shard runs `-n auto --dist loadfile` with
+  a 60-minute limit and prints its 25 slowest test durations, with migrations
+  enabled and `DATABASE_URL` unset. The composed-host tests run here, one node per
+  composed profile: each composes and boots once and reports every test it ran as
+  a subtest, and the heaviest (the examples profile, about 560 stored seconds)
+  sets the floor of its shard. On a pull request the shards run only the test
+  files [`changed_path_selection.py`](../scripts/changed_path_selection.py) picks
+  from the merge commit's diff against its base: changed test files and the test
+  files that import a changed module through the import graph `lint-imports`
+  checks. A change to an input every test reads without importing it
+  (dependencies, conftests and the shared test plugins, settings and autoconfig,
+  `*.zed` schemas, resource YAML, the workflows, `scripts/`) selects the whole
+  suite; docs, web code and templates select no Python test. What the app
+  registry, signals or composition connect without an import surfaces in the whole
+  suite on `main`.
+- **PostgreSQL:** on `main` and releases, in six groups of its own beside the
+  SQLite shards, assigned by pytest-split's `least_duration` algorithm over the
   [PostgreSQL timings](../.test_durations_postgres) and with the shards' 60-minute
-  limit (CI runs 1.9–2.6 times the local timings the map records; six groups
-  keep that margin), the named PostgreSQL contract selection runs with
+  limit, the named PostgreSQL contract selection runs with
   `-n 4 --dist loadfile --nomigrations` and prints its 25
   slowest test durations; each group writes JUnit output and checks that it did
   not skip tests. Its PostgreSQL 17 service includes pgvector and enables `vector`
   in `template1` before any test database is created. Its server runs with
   `max_locks_per_transaction = 256`, since
   each worker creates every table in one transaction. The `uv` job passes only
-  when Python quality, every SQLite shard and every PostgreSQL group pass, so
-  callers keep one check name.
+  when the static tier and every SQLite shard pass and, outside pull requests,
+  every PostgreSQL group passes, so callers keep one check name.
 - **Packages:** framework package typecheck/test/build and export/distribution
   checks.
 - **Composed stack:** compose the host, check generated documents
@@ -516,19 +527,22 @@ pushes to `main`. The current tiers are:
   suite; the stack job does not repeat that framework suite.
 
 A test missing from the durations still runs: pytest-split gives it the average
-duration and places it in exactly one shard. Refresh the file when a shard nears
-its limit or its balance drifts (the shards' printed estimates against their wall
-times): run `uv run pytest -q -n 4 --dist loadfile --store-durations` in the
-framework checkout and commit `.test_durations`. Ties in the assignment fall back
+duration and places it in exactly one shard. Ties in the assignment fall back
 to collection order, so an opt-in `-p randomly` run must give every shard one
-shared `--randomly-seed`.
+shared `--randomly-seed`. Refresh both maps after a change that moves test cost,
+after changing the PostgreSQL selection, or when a shard nears its limit or its
+balance drifts (the shards' printed estimates against their wall times). Record
+each map with its CI invocation and pytest-split's store, which sums setup, call
+and teardown per test; `--clean-durations` drops the entries of tests the run no
+longer collects, which pytest-split would otherwise keep when it merges into the
+existing map. For the SQLite suite:
 
-Refresh `.test_durations_postgres` after changing the PostgreSQL selection or
-when its group balance drifts. Run the selected tests serially on PostgreSQL so
-the map records per-test costs without xdist scheduling effects;
-`--clean-durations` drops the entries of tests the selection no longer
-collects, which pytest-split would otherwise keep when it merges into the
-existing map:
+```bash
+env -u DATABASE_URL uv run --locked python -m pytest -q -n auto --dist loadfile --store-durations --clean-durations
+```
+
+For the PostgreSQL selection, on a server prepared as in
+[Local PostgreSQL Prerequisites](#local-postgresql-prerequisites):
 
 ```bash
 export DATABASE_URL=postgresql://postgres:postgres@127.0.0.1:5432/angee
@@ -544,17 +558,16 @@ print(' '.join(arg for arg in shlex.split(run.split('uv run --locked python -c',
 PY
 )
 test -n "$pg_tests"
-uv run --locked python -m pytest -q -n 0 --nomigrations --store-durations --clean-durations --durations-path .test_durations_postgres $pg_tests
+uv run --locked python -m pytest -q -n 4 --dist loadfile --nomigrations --store-durations --clean-durations --durations-path .test_durations_postgres $pg_tests
 ```
 
-The current map came from a local serial macOS arm64 run against PostgreSQL
-16.14; host load was not fixed. CI per-test durations have been 1.9–2.6 times
-the local measurements, so use the map for relative group balance and check
-actual CI wall times against the 60-minute limit.
+Both maps came from local macOS arm64 runs of these commands (SQLite with
+`-n 6`) on a loaded host, the PostgreSQL one against `pgvector/pgvector:pg17`
+(PostgreSQL 17.10) with `max_locks_per_transaction = 256`. Use them for relative
+balance and check actual CI wall times against the 60-minute limit.
 
-Separate structural and downstream tiers are not implemented. Separate workflows
-enforce private-path exclusion and other repository policies. The
-[release workflow](../.github/workflows/release.yml) runs on pushes to `main`: it
+Separate workflows enforce private-path exclusion and other repository policies.
+The [release workflow](../.github/workflows/release.yml) runs on pushes to `main`: it
 opens the Version Packages pull request from pending changesets once the
 repository lets GitHub Actions create pull requests, and it publishes only with
 an `NPM_TOKEN` secret ([Changesets](../.changeset/README.md)).

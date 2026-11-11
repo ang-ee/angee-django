@@ -104,11 +104,20 @@ jobs:
       - run: uv run --locked python -m mypy src
         env:
           PYTHONPATH: src
+      # Static test contracts read source and docs without Django: patch
+      # targets, documentation links and recipes, and the agent methodology.
+      - run: >-
+          uv run --locked python -m pytest -p no:django --noconftest -c /dev/null --rootdir=. -q
+          tests/test_patch_targets.py tests/test_documentation_contracts.py tests/test_owner_index.py
+          tests/test_agent_methodology.py tests/test_agent_owner_map_guard.py
+          tests/test_agent_stack_root_policy.py tests/test_agent_work_state_policy.py
 
   # The suite runs as six contiguous shards of equal stored time
   # (.test_durations, pytest-split); a test missing from it still runs in one.
   # loadfile keeps a file on one worker. Allow for long file-scoped campaigns
   # and runner cleanup; retain per-test timings for balancing the shards.
+  # A pull request runs only the test files its changed paths reach
+  # (scripts/changed_path_selection.py); every other event runs the whole suite.
   uv-shard:
     name: uv ${{ matrix.group }}/6
     if: ${{ inputs.uv-enabled }}
@@ -120,21 +129,35 @@ jobs:
         group: [1, 2, 3, 4, 5, 6]
     steps:
       - uses: actions/checkout@v5
+        with:
+          # A pull request's merge commit and its base give the changed paths.
+          fetch-depth: 2
       - uses: astral-sh/setup-uv@v7
         with:
           python-version: ${{ inputs.python-version }}
-      - run: >-
-          uv run pytest -q -n auto --dist loadfile --durations=25
-          --splits 6 --group ${{ matrix.group }} ${{ inputs.pytest-extra-args }}
+      # bash runs with pipefail, so a failed diff or selection fails the shard.
+      - shell: bash
+        env:
+          EVENT: ${{ github.event_name }}
+        run: |
+          if [ "$EVENT" = pull_request ]; then
+            tests=$(git diff --name-only HEAD^1 HEAD | uv run --locked python scripts/changed_path_selection.py)
+            [ -n "$tests" ] || { echo "The changed paths reach no Python test."; exit 0; }
+            echo "$tests"
+          fi
+          # A small selection can leave a shard nothing to run: pytest's exit code 5.
+          uv run pytest -q -n auto --dist loadfile --durations=25 \
+            --splits 6 --group ${{ matrix.group }} ${{ inputs.pytest-extra-args }} $tests \
+            || { [ $? -eq 5 ] && [ -n "$tests" ]; }
 
   # The PostgreSQL selection is balanced over its own timing map
   # (.test_durations_postgres, least_duration): every worker flushes the
   # whole schema between transactional tests, so one job no longer fits.
-  # CI runs 1.9-2.6x the local timings the map records, so six groups under
-  # the SQLite shards' 60-minute limit keep the margin the map cannot predict.
+  # Six groups under the SQLite shards' 60-minute limit keep the margin the
+  # map cannot predict. Pull requests skip it; main and releases run it.
   uv-postgres:
     name: uv postgres ${{ matrix.group }}/6
-    if: ${{ inputs.uv-enabled }}
+    if: ${{ inputs.uv-enabled && github.event_name != 'pull_request' }}
     runs-on: ubuntu-latest
     timeout-minutes: 60
     strategy:
@@ -270,7 +293,7 @@ jobs:
           echo "quality=${{ needs.python-quality.result }} shards=${{ needs.uv-shard.result }} postgres=${{ needs.uv-postgres.result }}"
           test "${{ needs.python-quality.result }}" = success
           test "${{ needs.uv-shard.result }}" = success
-          test "${{ needs.uv-postgres.result }}" = success
+          test "${{ needs.uv-postgres.result }}" = "${{ github.event_name == 'pull_request' && 'skipped' || 'success' }}"
 
   pnpm:
     if: ${{ inputs.pnpm-enabled }}
