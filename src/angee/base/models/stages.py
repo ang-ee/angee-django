@@ -384,7 +384,7 @@ class StagedModelMixin[StageT: Stage = Stage](models.Model):
         rows = model._base_manager.db_manager(using).filter(pk=self.pk)
         if lock:
             rows = rows.select_for_update(of=row_lock_paths(model))
-        return rows.first()
+        return rows.order_by().first()
 
     def _stored_row(self, persisted: Self | None, update_fields: set[str] | None) -> Self:
         """Return the row a save writes: ``self``, or for a partial save a snapshot over ``persisted``.
