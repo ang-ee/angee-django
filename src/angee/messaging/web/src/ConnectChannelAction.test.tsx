@@ -53,15 +53,6 @@ vi.mock("./usePairingConnect", () => ({
   }),
 }));
 
-vi.mock("./i18n", () => ({
-  useMessagingT: () => (key: string) => {
-    if (key === "channel.connect.submit") return "Connect";
-    if (key === "channel.connect.submitting") return "Connecting…";
-    if (key === "channel.demo.error") return "Could not connect demo.";
-    return key;
-  },
-}));
-
 import { mutationDialogValueCodecs } from "@angee/ui";
 import { ConnectChannelAction } from "./ConnectChannelAction";
 
@@ -103,7 +94,7 @@ describe("ConnectChannelAction", () => {
       description: "channel.demo.description",
       submitLabel: "Connect",
       submittingLabel: "Connecting…",
-      errorFallback: "Could not connect demo.",
+      errorFallback: "channel.demo.error",
     });
     expect(actionMocks.dialogProps).not.toHaveProperty("cancelLabel");
 

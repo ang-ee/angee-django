@@ -11,8 +11,8 @@ const mocks = vi.hoisted(() => ({
 const CATEGORY_OPTIONS = ["triage", "backlog", "unstarted", "started", "completed", "canceled", "duplicate"]
   .map((value) => ({ value, label: value }));
 
-vi.mock("@angee/ui", () => ({
-  useUiT: () => (key: string) => key,
+vi.mock("@angee/ui", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@angee/ui")>()),
   ErrorBanner: () => null,
   Button: () => null,
   Chip: ({ children }: { children?: React.ReactNode }) => <span data-badge>{children}</span>,
@@ -25,7 +25,7 @@ vi.mock("@angee/ui", () => ({
   useEnumOptions: (_resource: string, field: string) => (field === "category" ? CATEGORY_OPTIONS : []),
 }));
 
-vi.mock("@angee/refine", () => ({ useAuthoredQuery: () => ({ data: {
+vi.mock("@angee/refine", async (importOriginal) => ({ ...(await importOriginal<typeof import("@angee/refine")>()), useAuthoredQuery: () => ({ data: {
   work_stage_editable_categories: ["BACKLOG", "UNSTARTED", "STARTED", "COMPLETED", "CANCELED"],
 } }) }));
 
