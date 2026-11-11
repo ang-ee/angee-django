@@ -20,7 +20,7 @@ def test_direct_or_dotted_undeclared_scope_is_rejected(key):
         widget_visibility_answers([{"resource": resource, "key": key, "value": "incoming"}], actor=None)
 
 
-@pytest.mark.usefixtures("composed_tables")
+@pytest.mark.django_db
 def test_declared_related_scope_resolves_real_queue_field():
     """``queue__slug`` reads the real Queue rows, scoped to the asking actor."""
 
@@ -36,7 +36,7 @@ def test_declared_related_scope_resolves_real_queue_field():
     assert widget_visibility_answers([{**rule[0], "value": "absent"}], owner) == [False]
 
 
-@pytest.mark.usefixtures("composed_tables")
+@pytest.mark.django_db
 def test_declared_task_queue_scope_validates_in_a_widget_snapshot():
     snapshot = canonical_dashboard_snapshot({
         "schemaVersion": 1,

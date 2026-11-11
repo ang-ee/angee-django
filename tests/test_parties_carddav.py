@@ -146,12 +146,10 @@ def test_photo_download_is_capped_and_uses_the_collection_origin(settings: Any) 
 
 
 def test_connect_probe_failure_writes_no_rows(
-    composed_tables: None,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A rejected external probe runs before atomic and leaves no partial rows."""
 
-    del composed_tables
     probe_atomic_states: list[bool] = []
 
     def reject_probe(backend: CardDavDirectoryBackend) -> None:
@@ -174,12 +172,10 @@ def test_connect_probe_failure_writes_no_rows(
 
 
 def test_connect_probe_success_commits_every_owned_row_atomically(
-    composed_tables: None,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A successful external probe precedes one complete atomic write phase."""
 
-    del composed_tables
     probe_atomic_states: list[bool] = []
     write_atomic_states: list[bool] = []
 

@@ -26,10 +26,10 @@ def _same_as_pair(owner: Any) -> set[Any]:
     return {left.pk, right.pk}
 
 
-def test_same_as_pairs_scope_handles_to_the_pinned_actor(composed_tables: None) -> None:
+def test_same_as_pairs_scope_handles_to_the_pinned_actor(db: None) -> None:
     """A queryset pinned to an actor finds that actor's same_as pairs without an ambient actor."""
 
-    del composed_tables
+    del db
     owner = get_user_model().objects.create_user(username="same-as-owner")
     pair = _same_as_pair(owner)
 
@@ -38,10 +38,10 @@ def test_same_as_pairs_scope_handles_to_the_pinned_actor(composed_tables: None) 
     assert [{candidate.left.pk, candidate.right.pk} for candidate in candidates] == [pair]
 
 
-def test_same_as_pairs_run_under_system_context_without_an_actor(composed_tables: None) -> None:
+def test_same_as_pairs_run_under_system_context_without_an_actor(db: None) -> None:
     """A system scan with no actor at all still finds the pair."""
 
-    del composed_tables
+    del db
     pair = _same_as_pair(get_user_model().objects.create_user(username="same-as-system-owner"))
 
     with system_context(reason="same_as scan"):
@@ -50,10 +50,10 @@ def test_same_as_pairs_run_under_system_context_without_an_actor(composed_tables
     assert [{candidate.left.pk, candidate.right.pk} for candidate in candidates] == [pair]
 
 
-def test_merge_scalar_fields_admit_person_choices_only_between_people(composed_tables: None) -> None:
+def test_merge_scalar_fields_admit_person_choices_only_between_people(db: None) -> None:
     """Merge validation and its GraphQL metadata share the row's declared scalar choices."""
 
-    del composed_tables
+    del db
     with system_context(reason="test.parties.merge_fields"):
         party = Party.objects.create(display_name="Plain")
         person = Person.objects.create(display_name="Person")

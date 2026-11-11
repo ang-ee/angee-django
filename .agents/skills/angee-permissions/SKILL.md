@@ -33,7 +33,7 @@ description: "Declares and wires REBAC permissions for an Angee addon: permissio
 Parsing, sync, point checks, actor-scoped querysets and gated-field projection are
 `django-zed-rebac` (`docs/stack.md#backend`); the test session's `django_db_setup`
 (`src/angee/base/testing/fixtures.py`) binds the merged inputs and syncs them once
-into the test database, and `composed_tables` rolls each test back over it.
+into the test database, and each test requesting `db` rolls back over it.
 
 ## Reuse first
 
@@ -157,7 +157,7 @@ into the test database, and `composed_tables` rolls each test back over it.
        self.assertIsNone(bob_view.is_starred)            # read__is_starred = owner
        self.assertEqual(list(Note.objects.as_user(self.carol).filter(pk=self.welcome.pk)), [])
    ```
-   Composed host (`NotesAuthorizationTests` in `examples/src/example/notes/tests/test_rebac.py`): `TransactionTestCase`, `call_command("rebac", "sync")` in `setUp`, seed through `resources load`. Source-addon tests (`tests/test_scopedemo.py`): request `composed_tables` (the session baseline has merged every fragment and synced it with `--force-overwrite` into the disposable test database) and `backend().check_access(subject=…, action=…, resource=to_object_ref(row))`. Field-backed and const-backed reach leaves no tuples: assert `active_relationship_model().objects.filter(resource_type=…)` is empty when that is the design.
+   Composed host (`NotesAuthorizationTests` in `examples/src/example/notes/tests/test_rebac.py`): `TransactionTestCase`, `call_command("rebac", "sync")` in `setUp`, seed through `resources load`. Source-addon tests (`tests/test_scopedemo.py`): request `db` (the session baseline has merged every fragment and synced it with `--force-overwrite` into the disposable test database) and `backend().check_access(subject=…, action=…, resource=to_object_ref(row))`. Field-backed and const-backed reach leaves no tuples: assert `active_relationship_model().objects.filter(resource_type=…)` is empty when that is the design.
    **Owner rule:** tests exercise the composed runtime model and the schema the fixtures sync (`docs/checks.md#source-addon-test-models`); a test-local schema is justified only where no addon owns the definition, as `tests/scopedemo/permissions.zed` does.
 
 ## Do not

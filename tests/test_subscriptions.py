@@ -521,7 +521,7 @@ def test_ws_query_runs_inside_actor_context() -> None:
 
 @pytest.mark.django_db(transaction=True)
 @override_settings(ANGEE_TIMELINE_KINDS=[])
-def test_ws_queries_refresh_identity_eligibility_and_timeline_admission(composed_tables: None) -> None:
+def test_ws_queries_refresh_identity_eligibility_and_timeline_admission() -> None:
     """Separate operations on one native consumer never reuse HTTP request memos."""
 
     users = get_user_model()

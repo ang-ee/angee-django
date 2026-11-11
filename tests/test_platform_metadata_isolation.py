@@ -97,7 +97,7 @@ def local_source(root):
         return Source.objects.create(repository=Repository.objects.get(name="local-wheels"), kind="addon", path="dist")
 
 
-def test_local_catalogue_reads_built_wheels_without_importing_source(composed_tables, tmp_path, monkeypatch):
+def test_local_catalogue_reads_built_wheels_without_importing_source(db, tmp_path, monkeypatch):
     write_wheel(tmp_path / "dist/local.whl", "local.addon", "local-addon", description="Built locally", code=True)
     (tmp_path / "pyproject.toml").write_text('[build-system]\nrequires=[]\nbuild-backend="must_not_import"\n')
     source = local_source(tmp_path)
@@ -107,7 +107,7 @@ def test_local_catalogue_reads_built_wheels_without_importing_source(composed_ta
         assert row.description == "Built locally" and row.vcs_path == "dist/local.whl"
 
 
-def test_local_source_without_wheels_requires_an_explicit_author_build(composed_tables, tmp_path):
+def test_local_source_without_wheels_requires_an_explicit_author_build(db, tmp_path):
     (tmp_path / "dist").mkdir()
     source = local_source(tmp_path)
     with pytest.raises(ImproperlyConfigured, match="already built wheels"):

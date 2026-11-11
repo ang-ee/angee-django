@@ -409,7 +409,7 @@ def test_attach_rejects_missing_authority_even_with_sudo_loaded_inputs(drive: An
 
 
 def test_attach_lists_and_detaches_under_the_actor_with_one_scoped_statement(
-    drive: Any, composed_tables: None,
+    drive: Any,
 ) -> None:
     row = _proxy_upload(drive, PNG_BYTES)
     editor, reader = create_user("attach-editor"), create_user("attach-file-reader")
@@ -437,7 +437,7 @@ def test_attach_lists_and_detaches_under_the_actor_with_one_scoped_statement(
         assert not FileAttachment.objects.exists()
 
 
-def test_composed_edge_target_relations_pass_the_backing_check(composed_tables: None) -> None:
+def test_composed_edge_target_relations_pass_the_backing_check(db: None) -> None:
     schema = rebac_backend().schema()
     for resource_type, relations in (
         ("storage/file_attachment", {"task", "drive", "mti_parent"}),

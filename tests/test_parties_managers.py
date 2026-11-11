@@ -19,10 +19,10 @@ from tests.tables import model_tables
 
 
 @pytest.mark.parametrize("refresh", [False, True])
-def test_handle_upsert_bounds_source_display_text(composed_tables: None, refresh: bool) -> None:
+def test_handle_upsert_bounds_source_display_text(db: None, refresh: bool) -> None:
     """Create and refresh share the model-declared display-name and label limits."""
 
-    del composed_tables
+    del db
     with system_context(reason="test bounded handle text"):
         prior = Handle.objects.upsert(platform="email", value="bounded@example.test") if refresh else None
         fields = {name: "é" * (Handle._meta.get_field(name).max_length + 1) for name in ("display_name", "label")}
@@ -35,10 +35,10 @@ def test_handle_upsert_bounds_source_display_text(composed_tables: None, refresh
 
 
 @pytest.mark.parametrize("field", ["value", "external_id"])
-def test_handle_upsert_refuses_oversized_identifiers(composed_tables: None, field: str) -> None:
+def test_handle_upsert_refuses_oversized_identifiers(db: None, field: str) -> None:
     """Unlandable identities raise field validation instead of changing their key."""
 
-    del composed_tables
+    del db
     fields = {"value": "bounded@example.test", "external_id": "stable-id"}
     fields[field] = "x" * (Handle._meta.get_field(field).max_length + 1)
     with system_context(reason="test invalid handle identifiers"):
@@ -49,10 +49,10 @@ def test_handle_upsert_refuses_oversized_identifiers(composed_tables: None, fiel
     assert not Handle._base_manager.exists()
 
 
-def test_handle_upsert_refuses_normalization_that_exceeds_its_field(composed_tables: None) -> None:
+def test_handle_upsert_refuses_normalization_that_exceeds_its_field(db: None) -> None:
     """Unicode case normalization may expand an otherwise column-sized identity."""
 
-    del composed_tables
+    del db
     value = "İ" * Handle._meta.get_field("value").max_length
     with system_context(reason="test invalid normalized handle"):
         with pytest.raises(ValidationError) as refused:
@@ -62,10 +62,10 @@ def test_handle_upsert_refuses_normalization_that_exceeds_its_field(composed_tab
 
 
 @pytest.fixture
-def owner(composed_tables: None) -> Any:
+def owner(db: None) -> Any:
     """Create an ordinary actor after the parties test graph is prepared."""
 
-    del composed_tables
+    del db
     return get_user_model().objects.create_user(username="party-lookup-owner")
 
 

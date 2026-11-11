@@ -67,7 +67,7 @@ class HelloQuery:
         return "hi"
 
 
-def test_generated_read_root_conceals_missing_and_hidden_ids(composed_tables: None) -> None:
+def test_generated_read_root_conceals_missing_and_hidden_ids(db: None) -> None:
     user_model = get_user_model()
     viewer = user_model.objects.create_user("read-root-viewer")
     visible = user_model.objects.create_user("read-root-visible")

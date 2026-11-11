@@ -53,7 +53,7 @@ pytestmark = pytest.mark.django_db(transaction=True)
 
 
 @pytest.fixture
-def chat(composed_tables: None, capture_tasks: list[Any], monkeypatch: pytest.MonkeyPatch) -> Iterator[Any]:
+def chat(db: None, capture_tasks: list[Any], monkeypatch: pytest.MonkeyPatch) -> Iterator[Any]:
     owner = get_user_model().objects.create_user(username="acp-owner")
     with system_context(reason="test ACP agent"):
         agent = Agent.objects.create(name="Assistant", owner=owner, runtime_class="pydantic", runtime_status="running")

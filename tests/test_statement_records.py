@@ -65,8 +65,8 @@ def test_a_statement_owns_its_shared_fact_authority(source_kind: SourceKind, aut
     assert statement.fact_authority is authority
 
 
-def test_a_donor_aspect_asserts_and_resolves_through_the_subject(composed_tables: None) -> None:
-    del composed_tables
+def test_a_donor_aspect_asserts_and_resolves_through_the_subject(db: None) -> None:
+    del db
     writer = create_user("donor-aspect-writer")
     with system_context(reason="test donor aspect fixture"):
         record = Claimed.objects.create(name="Acme")
@@ -85,10 +85,10 @@ def test_a_donor_aspect_asserts_and_resolves_through_the_subject(composed_tables
         assert list(record.statements.provenance("vat")) == [statement]
 
 
-def test_a_person_save_states_only_the_aspects_that_admit_a_person(composed_tables: None) -> None:
+def test_a_person_save_states_only_the_aspects_that_admit_a_person(db: None) -> None:
     """An aspect whose precedence leaves PERSON out is written by the save, not stated."""
 
-    del composed_tables
+    del db
     writer = create_user("person-save-writer")
     with system_context(reason="test person save fixture"):
         record = Claimed.objects.create(name="Acme")
@@ -104,10 +104,10 @@ def test_a_person_save_states_only_the_aspects_that_admit_a_person(composed_tabl
         assert [statement.aspect for statement in record.statements.all()] == ["tax"]
 
 
-def test_a_person_create_states_no_group_left_empty(composed_tables: None) -> None:
+def test_a_person_create_states_no_group_left_empty(db: None) -> None:
     """An empty field on create is no fact; clearing it later is an edit and is stated."""
 
-    del composed_tables
+    del db
     admin = create_platform_admin("person-create-admin")
     with actor_context(admin):
         record = Claimed.objects.create(name="Acme")

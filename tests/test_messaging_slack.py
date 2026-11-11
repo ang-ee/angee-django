@@ -245,7 +245,7 @@ def test_extract_persists_page_resume_before_history_watermark(monkeypatch: pyte
 
 @pytest.mark.django_db(transaction=True)
 def test_invalid_history_cursor_retains_watermarks_across_generation(
-    composed_tables: None, monkeypatch: pytest.MonkeyPatch
+    monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """One expired page resumes at its committed history and thread watermarks."""
 
@@ -782,7 +782,7 @@ def _slack_channel(slug: str = "slack") -> Any:
 
 
 @pytest.mark.parametrize("change", ["rotate", "repoint"])
-def test_extract_reloads_credential_and_reused_client_between_pages(composed_tables: None, change: str) -> None:
+def test_extract_reloads_credential_and_reused_client_between_pages(db: None, change: str) -> None:
     """Secret rotation and credential replacement both update the retained client."""
 
     with system_context(reason="tests.slack.credential_freshness"):
@@ -821,7 +821,7 @@ def test_extract_reloads_credential_and_reused_client_between_pages(composed_tab
 @pytest.mark.django_db(transaction=True)
 @pytest.mark.parametrize("last_ts,expected", [("1784700000.000001", 1), ("1784700002.000001", 0)])
 def test_retained_slack_position_continues_without_reimport(
-    composed_tables: None, monkeypatch: pytest.MonkeyPatch, last_ts: str, expected: int,
+    monkeypatch: pytest.MonkeyPatch, last_ts: str, expected: int,
 ) -> None:
     """The conversation's native stream retains its watermark across syncs."""
 
@@ -836,12 +836,10 @@ def test_retained_slack_position_continues_without_reimport(
 
 @pytest.mark.django_db(transaction=True)
 def test_late_reply_below_history_watermark_lands_on_the_next_poll(
-    composed_tables: None,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """An active thread is rescanned even after its parent falls below history oldest."""
 
-    del composed_tables
     IncrementalWebClient.history_calls = []
     IncrementalWebClient.history_responses = []
     IncrementalWebClient.reply_calls = []
@@ -887,12 +885,12 @@ def test_late_reply_below_history_watermark_lands_on_the_next_poll(
 
 
 def test_non_rate_limit_api_error_uses_generic_sync_telemetry(
-    composed_tables: None,
+    db: None,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Slack API failures mark runtime telemetry without changing poll lifecycle."""
 
-    del composed_tables
+    del db
 
     class FailingWebClient:
         def __init__(self, *, token: str, retry_handlers: list[RetryHandler] | None = None) -> None:
@@ -915,12 +913,10 @@ def test_non_rate_limit_api_error_uses_generic_sync_telemetry(
 
 @pytest.mark.django_db(transaction=True)
 def test_connect_probes_before_transaction_and_failed_auth_creates_nothing(
-    composed_tables: None,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """auth.test failure runs outside atomic and leaves no credential or channel."""
 
-    del composed_tables
     from angee.messaging_integrate_slack.connect import create_slack_channel
 
     admin = _platform_admin("msg-slack-probe-admin")
@@ -947,12 +943,10 @@ def test_connect_probes_before_transaction_and_failed_auth_creates_nothing(
 
 @pytest.mark.django_db(transaction=True)
 def test_connect_persists_verified_workspace_in_one_write_phase(
-    composed_tables: None,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Successful auth.test facts become one connected workspace channel."""
 
-    del composed_tables
     from angee.messaging_integrate_slack.connect import create_slack_channel
 
     admin = _platform_admin("msg-slack-connect-admin")

@@ -500,7 +500,7 @@ def test_resolve_xref_reports_ambiguous_source_rows() -> None:
 
 
 @pytest.mark.django_db(transaction=True)
-def test_resolve_ledger_xref_binds_ledger_and_app_registry_aliases(composed_tables) -> None:
+def test_resolve_ledger_xref_binds_ledger_and_app_registry_aliases() -> None:
     """The loader owns persona lookup: ledger + app-registry aliases in one call.
 
     A demo-seed hook resolves ``<addon>.<xref>`` by the same alias convention the
@@ -2125,7 +2125,7 @@ def test_row_dependency_on_grant_is_applied_before_validation(tmp_path: Path) ->
         assert hooks == [True, True]
 
 
-def test_unchanged_grant_batches_use_one_native_key_read(composed_tables: None, tmp_path: Path) -> None:
+def test_unchanged_grant_batches_use_one_native_key_read(db: None, tmp_path: Path) -> None:
     """Reloading many grants skips every tuple without per-row reads or writes."""
 
     from django.contrib.auth import get_user_model

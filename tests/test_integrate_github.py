@@ -50,11 +50,11 @@ def _repo(full_name: str, *, private: bool = False) -> dict[str, Any]:
 
 
 def test_headers_fetch_credential_and_oauth_client_in_one_query(
-    composed_tables: None, django_assert_num_queries: Any
+    db: None, django_assert_num_queries: Any
 ) -> None:
     """Uncached authentication loads the credential and its provider together."""
 
-    del composed_tables
+    del db
     with system_context(reason="test github credential query count"):
         user = get_user_model().objects.create_user(username="github-query")
         oauth_client = OAuthClient.objects.create(slug="github-query", client_id="github-client")

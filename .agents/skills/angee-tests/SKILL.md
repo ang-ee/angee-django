@@ -19,7 +19,7 @@ This skill authors tests; running them, their roots and CI coverage belong to `d
 | File or module | Owns | Reference |
 |---|---|---|
 | `<addon>/testing/models.py`, `tests/settings.py`, `tests/conftest.py` | concrete models of the bare host, the app roster, one-time registration | `src/angee/tags/testing/models.py`, `INSTALLED_APPS` in `tests/settings.py` |
-| `src/angee/base/testing/fixtures.py`, `permissions.py` | `django_db_setup`, `composed_tables`; `composed_permissions` (`permissions.py`) | module docstrings |
+| `src/angee/base/testing/fixtures.py`, `permissions.py` | `django_db_setup`; `composed_permissions` (`permissions.py`) | module docstrings |
 | `tests/conftest.py` | actors and schema drivers: `create_user`, `create_platform_admin`, `vault_for`, `addon_schema` | `tests/test_tags.py` |
 | `src/angee/graphql/testing/documents.py` | document execution as an actor and statement ceilings: `execute_schema`, `result_data`, `measure_graphql_document` | [GraphQL document budgets](../../../docs/checks.md#graphql-document-budgets) |
 | `tests/test_<addon>*.py` (framework) / `<addon>/tests/test_*.py` (consumer) | the test modules, one per concern | `tests/test_work_cycles.py`, `examples/src/example/notes/tests/` |
@@ -32,7 +32,7 @@ This skill authors tests; running them, their roots and CI coverage belong to `d
 
 ## Reuse first
 
-- Database: native `db` (`composed_tables` is its compatibility alias) or `composed_permissions` (`angee.base.testing`); never a private `rebac sync` or table fixture.
+- Database: native `db` or `composed_permissions` (`angee.base.testing`); never a private `rebac sync` or table fixture.
 - Generated cases: `pytest.param(..., id=...)` tables for named examples; Hypothesis (`given`, `example`, `RuleBasedStateMachine`, dev group) for properties and state machines, never a hand-rolled random loop.
 - Actors: `create_user`, `create_platform_admin`, `rebac.actor_context` / `system_context`, `rebac.roles.grant`, a grantee through the model's `grant_record_access`.
 - Stand-in records from owning test apps: `angee.messaging.testing.models` (`Party`, `Handle`), `angee.projects.testing.models` (`Task`, `Queue`, `Cycle`), `tests.conftest` (`Page`, `File`, `Need`, `vault_for`); `tests/mtidemo`, `hierdemo`, `recordrefdemo` for structural probes.
@@ -47,7 +47,7 @@ This skill authors tests; running them, their roots and CI coverage belong to `d
 
 2. **Register concrete models (framework addon only).** The bare host runs no composer, so each abstract source model needs one concrete subclass in an installed app, imported once from the root conftest before database setup (`TagAssignment`, and the const-backed `TagRole` with `managed = False`, in `src/angee/tags/testing/models.py`). A consumer addon has no test models: its tests run on the composed host (step 3). **Owner rule:** Django owns static test-table lifecycle; one concrete model per resource type ([environment and checks](references/environment.md)).
 
-3. **Pick the database contract per module.** Request `db`; REBAC decides over the session baseline, which already binds and synchronizes every addon's merged `permissions.extends.zed`. `composed_tables` is a compatibility alias of `db` kept for consumer suites. `composed_permissions` binds a test-owned copy for a test that edits a `.zed`. Each test rolls back. Mark `django_db(transaction=True)` only for real commit semantics: another connection or thread, a lock race, a vendor check. A changeset or `on_commit` effect runs through `django_capture_on_commit_callbacks(execute=True)` (`test_a_party_merge_moves_what_points_at_the_merged_party_and_revert_restores_it` in `tests/test_parties_circles.py`). Consumer modules are `TransactionTestCase` classes driven through `tests/composed_host.py` (`NotesAuthorizationTests` in `examples/src/example/notes/tests/test_rebac.py`). Mark PostgreSQL-only modules `pytest.mark.skipif(connection.vendor != "postgresql", …)`. **Owner rule:** pytest-django and the base plugin own setup, rollback and flush; `--nomigrations` and PostgreSQL settings belong to the CI selection, never to a module ([Python contracts](../../../docs/checks.md#python-and-composition-contracts)).
+3. **Pick the database contract per module.** Request `db`; REBAC decides over the session baseline, which already binds and synchronizes every addon's merged `permissions.extends.zed`. `composed_permissions` binds a test-owned copy for a test that edits a `.zed`. Each test rolls back. Mark `django_db(transaction=True)` only for real commit semantics: another connection or thread, a lock race, a vendor check. A changeset or `on_commit` effect runs through `django_capture_on_commit_callbacks(execute=True)` (`test_a_party_merge_moves_what_points_at_the_merged_party_and_revert_restores_it` in `tests/test_parties_circles.py`). Consumer modules are `TransactionTestCase` classes driven through `tests/composed_host.py` (`NotesAuthorizationTests` in `examples/src/example/notes/tests/test_rebac.py`). Mark PostgreSQL-only modules `pytest.mark.skipif(connection.vendor != "postgresql", …)`. **Owner rule:** pytest-django and the base plugin own setup, rollback and flush; `--nomigrations` and PostgreSQL settings belong to the CI selection, never to a module ([Python contracts](../../../docs/checks.md#python-and-composition-contracts)).
 
 4. **Prove the domain contract on its owner.** Call the manager or model verb, never a raw `create` standing in for it, and assert outcomes: every transition including each illegal one and its refusal, idempotent reruns, invariants and constraints. Name each table row by the rule it pins.
 
@@ -83,7 +83,7 @@ This skill authors tests; running them, their roots and CI coverage belong to `d
 
 ## Do not
 
-- Write a private REBAC-sync or table fixture beside `db`/`composed_tables`/`composed_permissions`, or create tables by hand instead of `tests/tables.py` `model_tables` ([environment and checks](references/environment.md)).
+- Write a private REBAC-sync or table fixture beside `db`/`composed_permissions`, or create tables by hand instead of `tests/tables.py` `model_tables` ([environment and checks](references/environment.md)).
 - Mark a module transactional for convenience, or let Hypothesis examples share rows.
 - Enumerate every actor against every permission in example tests: that is the decision table's job, once per addon.
 - Re-prove one rule at the model, GraphQL and composed levels, or re-prove a library's guarantee.

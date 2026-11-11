@@ -582,7 +582,7 @@ def test_jwks_fetch_failure_refuses_the_id_token(failure: str) -> None:
 
 
 def test_resolver_existing_external_account_returns_owner(
-    composed_tables: None,
+    db: None,
 ) -> None:
     """An existing external account resolves through its owner relationship."""
 
@@ -607,7 +607,7 @@ def test_resolver_existing_external_account_returns_owner(
     assert account.pk is not None
 
 
-def test_resolver_blocks_non_active_account(composed_tables: None) -> None:
+def test_resolver_blocks_non_active_account(db: None) -> None:
     """A revoked/expired/disabled external account must not log its owner in."""
 
     user = get_user_model().objects.create_user(username="revoked-owner", email="rev@example.com")
@@ -624,7 +624,7 @@ def test_resolver_blocks_non_active_account(composed_tables: None) -> None:
         identity.resolve(oauth_client, sub="sub-revoked", email="rev@example.com", claims={"sub": "sub-revoked"})
 
 
-def test_external_account_manager_coerces_status_member_names(composed_tables: None) -> None:
+def test_external_account_manager_coerces_status_member_names(db: None) -> None:
     """External-account status normalization lives in the manager field owner."""
 
     user = get_user_model().objects.create_user(username="status-owner", email="status@example.com")
@@ -640,7 +640,7 @@ def test_external_account_manager_coerces_status_member_names(composed_tables: N
     assert account.status == AccountStatus.REVOKED
 
 
-def test_resolver_blocks_inactive_user(composed_tables: None) -> None:
+def test_resolver_blocks_inactive_user(db: None) -> None:
     """A deactivated owner must not authenticate via OIDC (parity with the password path)."""
 
     user = get_user_model().objects.create_user(username="inactive-owner", email="ina@example.com")
@@ -654,7 +654,7 @@ def test_resolver_blocks_inactive_user(composed_tables: None) -> None:
         identity.resolve(oauth_client, sub="sub-inactive", email="ina@example.com", claims={"sub": "sub-inactive"})
 
 
-def test_resolver_blocks_existing_external_account_with_service_owner(composed_tables: None) -> None:
+def test_resolver_blocks_existing_external_account_with_service_owner(db: None) -> None:
     """An existing OIDC account cannot authenticate a service principal owner."""
 
     user = get_user_model().objects.create_user(
@@ -675,7 +675,7 @@ def test_resolver_blocks_existing_external_account_with_service_owner(composed_t
 
 
 def test_resolver_link_on_email_match_requires_verified_email(
-    composed_tables: None,
+    db: None,
 ) -> None:
     """Email-match login only trusts provider-verified email addresses."""
 
@@ -695,7 +695,7 @@ def test_resolver_link_on_email_match_requires_verified_email(
 
 
 def test_resolver_create_on_login_requires_verified_email(
-    composed_tables: None,
+    db: None,
 ) -> None:
     """Create-on-login only provisions from provider-verified email addresses."""
 
@@ -714,7 +714,7 @@ def test_resolver_create_on_login_requires_verified_email(
 
 
 def test_resolver_link_on_email_match_creates_external_account(
-    composed_tables: None,
+    db: None,
 ) -> None:
     """Email-match login links a new external account to an existing user."""
 
@@ -735,7 +735,7 @@ def test_resolver_link_on_email_match_creates_external_account(
 
 
 def test_resolver_link_on_email_match_skips_service_accounts(
-    composed_tables: None,
+    db: None,
 ) -> None:
     """Email-match login must never link a service principal row."""
 
@@ -759,9 +759,7 @@ def test_resolver_link_on_email_match_skips_service_accounts(
 
 
 @pytest.mark.django_db(transaction=True)
-def test_resolver_link_on_email_match_rejects_ambiguous_email(
-    composed_tables: None,
-) -> None:
+def test_resolver_link_on_email_match_rejects_ambiguous_email() -> None:
     """Legacy ambiguous email refuses login even when provisioning is enabled."""
 
     user_model = get_user_model()
@@ -797,7 +795,7 @@ def test_resolver_link_on_email_match_rejects_ambiguous_email(
 
 
 def test_resolver_create_on_login_provisions_user_and_external_account(
-    composed_tables: None,
+    db: None,
 ) -> None:
     """Create-on-login provisions a non-superuser user and linked account."""
 
@@ -819,7 +817,7 @@ def test_resolver_create_on_login_provisions_user_and_external_account(
 
 
 def test_resolver_create_on_login_sets_user_names_from_claims(
-    composed_tables: None,
+    db: None,
 ) -> None:
     """Provisioned users receive first and last names from OIDC name claims."""
 
@@ -843,7 +841,7 @@ def test_resolver_create_on_login_sets_user_names_from_claims(
 
 
 def test_async_resolver_create_on_login_provisions_user_and_external_account(
-    composed_tables: None,
+    db: None,
 ) -> None:
     """The ASGI-facing resolver path provisions through thread-sensitive sync ORM."""
 
@@ -867,7 +865,7 @@ def test_async_resolver_create_on_login_provisions_user_and_external_account(
 
 
 def test_resolver_disallowed_domain_raises_403(
-    composed_tables: None,
+    db: None,
 ) -> None:
     """Domain policy blocks linking and provisioning."""
 
@@ -889,7 +887,7 @@ def test_resolver_disallowed_domain_raises_403(
     assert exc_info.value.http_status == 403
 
 
-def test_complete_link_populates_credential_token_fields(composed_tables: None) -> None:
+def test_complete_link_populates_credential_token_fields(db: None) -> None:
     """Credential link persists token-derived expiry, scopes, and refresh telemetry."""
 
     link_user = get_user_model().objects.create_user(username="token-fields", email="tokens@example.com")
@@ -934,7 +932,7 @@ def test_complete_link_populates_credential_token_fields(composed_tables: None) 
     assert credential.reveal()["refresh_token"] == "refresh-token"
 
 
-def test_complete_account_connect_links_oauth_userinfo_claims_and_credential(composed_tables: None) -> None:
+def test_complete_account_connect_links_oauth_userinfo_claims_and_credential(db: None) -> None:
     """A plain OAuth connect flow resolves identity from configured userinfo claims, never an ID token."""
 
     link_user = get_user_model().objects.create_user(username="oauth-connect", email="connect@example.com")
@@ -990,7 +988,7 @@ def test_complete_account_connect_links_oauth_userinfo_claims_and_credential(com
     assert credential.reveal()["access_token"] == "oauth-access"
 
 
-def test_complete_account_connect_falls_back_to_token_response_account(composed_tables: None) -> None:
+def test_complete_account_connect_falls_back_to_token_response_account(db: None) -> None:
     """Restricted tokens can resolve an account without userinfo scope."""
 
     link_user = get_user_model().objects.create_user(
@@ -1042,7 +1040,7 @@ def test_complete_account_connect_falls_back_to_token_response_account(composed_
     }
 
 
-def test_complete_account_connect_rejects_missing_stable_external_id(composed_tables: None) -> None:
+def test_complete_account_connect_rejects_missing_stable_external_id(db: None) -> None:
     """Providers must return the configured stable account id claim."""
 
     link_user = get_user_model().objects.create_user(username="oauth-missing-id", email="missing@example.com")
@@ -1068,7 +1066,7 @@ def test_complete_account_connect_rejects_missing_stable_external_id(composed_ta
 
 
 def test_credential_upsert_reasserts_active_status(
-    composed_tables: None,
+    db: None,
 ) -> None:
     """Re-upserting an OAuth credential reactivates a previously revoked row."""
 
@@ -1087,7 +1085,7 @@ def test_credential_upsert_reasserts_active_status(
 
 @pytest.mark.parametrize("deferred", (False, True), ids=("loaded", "deferred"))
 def test_credential_disconnect_guard_blocks_last_oidc_sign_in(
-    composed_tables: None,
+    db: None,
     deferred: bool,
 ) -> None:
     """The sign-in invariant is enforced with loaded or deferred credential fields."""
@@ -1120,7 +1118,7 @@ def test_credential_disconnect_guard_blocks_last_oidc_sign_in(
 
 
 @pytest.mark.parametrize("other_sign_in", ["password", "oidc", "oauth_only", "local"])
-def test_credential_disconnect_preserves_other_sign_in_methods(composed_tables: None, other_sign_in: str) -> None:
+def test_credential_disconnect_preserves_other_sign_in_methods(db: None, other_sign_in: str) -> None:
     """The model contribution permits alternatives and non-login credentials."""
 
     user = get_user_model().objects.create_user(
@@ -1162,11 +1160,11 @@ def test_credential_disconnect_preserves_other_sign_in_methods(composed_tables: 
 @pytest.mark.parametrize("changed_field", ["password", "login_enabled"])
 @pytest.mark.parametrize("previous", [False, True])
 def test_credential_disconnect_reads_current_sign_in_facts_despite_cached_relations(
-    composed_tables: None, changed_field: str, previous: bool
+    db: None, changed_field: str, previous: bool
 ) -> None:
     """Password and provider-policy changes supersede the credential's cached rows."""
 
-    del composed_tables
+    del db
     user = get_user_model().objects.create_user(
         username="disconnect-stale-cache",
         password="old-password" if changed_field == "password" and previous else None,
@@ -1199,7 +1197,7 @@ def test_credential_disconnect_reads_current_sign_in_facts_despite_cached_relati
 
 
 def test_low_level_credential_delete_does_not_run_disconnect_guard(
-    composed_tables: None,
+    db: None,
 ) -> None:
     """The OIDC guard belongs to explicit disconnect, not model-delete signals."""
 
@@ -1227,7 +1225,7 @@ def test_low_level_credential_delete_does_not_run_disconnect_guard(
         assert not Credential.objects.filter(pk=credential.pk).exists()
 
 
-def test_userinfo_claims_merge_into_link_and_login_claims(composed_tables: None) -> None:
+def test_userinfo_claims_merge_into_link_and_login_claims(db: None) -> None:
     """Userinfo claims enrich, and never override, verified ID-token claims on link and login."""
 
     link_user = get_user_model().objects.create_user(username="merged-claims", email="merged@example.com")
@@ -1278,10 +1276,10 @@ def test_userinfo_claims_merge_into_link_and_login_claims(composed_tables: None)
         assert own_handle.party_id == person.pk
 
 
-def test_complete_login_does_not_claim_an_unverified_email(composed_tables: None) -> None:
+def test_complete_login_does_not_claim_an_unverified_email(db: None) -> None:
     """An OIDC email becomes a parties identity claim only when explicitly verified."""
 
-    del composed_tables
+    del db
     user = get_user_model().objects.create_user(username="unverified-login", email="unverified-account@example.com")
     oauth_client = _oauth_client(slug="unverified-claim")
     ExternalAccount.objects.link(oauth_client, "sub-unverified", owner=user)
@@ -1301,12 +1299,12 @@ def test_complete_login_does_not_claim_an_unverified_email(composed_tables: None
 
 
 def test_complete_login_contains_parties_bookkeeping_failure(
-    composed_tables: None,
+    db: None,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     """A parties bookkeeping refusal is logged but never turns a verified login into failure."""
 
-    del composed_tables
+    del db
     user = get_user_model().objects.create_user(username="bookkeeping-login", email="bookkeeping@example.com")
     oauth_client = _oauth_client(slug="bookkeeping-failure")
     ExternalAccount.objects.link(oauth_client, "sub-bookkeeping", owner=user)
@@ -1325,7 +1323,7 @@ def test_complete_login_contains_parties_bookkeeping_failure(
     assert "Could not record the verified OIDC email in parties" in caplog.text
 
 
-def test_complete_link_rejects_account_owned_by_another_user(composed_tables: None) -> None:
+def test_complete_link_rejects_account_owned_by_another_user(db: None) -> None:
     """Account linking fails when the external account belongs to another user."""
 
     owner = get_user_model().objects.create_user(username="linked-owner", email="owner@example.com")
@@ -1358,7 +1356,7 @@ def test_complete_link_rejects_account_owned_by_another_user(composed_tables: No
     assert exc_info.value.http_status == 409
 
 
-def test_complete_link_binds_to_state_user_after_session_swap(composed_tables: None) -> None:
+def test_complete_link_binds_to_state_user_after_session_swap(db: None) -> None:
     """Account linking uses the start-flow user captured in state, not a later session user."""
 
     start_user = get_user_model().objects.create_user(username="link-start", email="start@example.com")
@@ -1578,10 +1576,10 @@ def test_oidc_group_by_login_enabled() -> None:
     assert by_enabled == {True: 1, False: 1}
 
 
-def test_oidc_login_picker_queryset_scope(composed_tables: None) -> None:
+def test_oidc_login_picker_queryset_scope(db: None) -> None:
     """The OIDC extension owns the public login-picker queryset predicate."""
 
-    del composed_tables
+    del db
     _oauth_client(slug="picker-enabled", oidc=True, is_enabled=True)
     _oauth_client(slug="picker-disabled", oidc=True, is_enabled=False)
     _oauth_client(slug="picker-oauth", oidc=False, is_enabled=True)
@@ -1642,7 +1640,7 @@ def _console_schema() -> Any:
     ]).build("console")
 
 
-@pytest.mark.usefixtures("composed_tables")
+@pytest.mark.django_db
 def test_oidc_link_refines_the_grant_before_userinfo_and_credential_persistence() -> None:
     with override_settings(ANGEE_OAUTH_PROVIDER_TYPE_CLASSES={
         "generic_oauth2": "tests.integrate_fixtures.RefiningProvider",
@@ -1679,7 +1677,7 @@ def test_oidc_link_refines_the_grant_before_userinfo_and_credential_persistence(
         assert Credential.objects.get(user=user, oauth_client=client).secret_value() == "refined"
 
 
-@pytest.mark.usefixtures("composed_tables")
+@pytest.mark.django_db
 def test_google_preset_owns_the_subject_bearing_profile_endpoint() -> None:
     with system_context(reason="test Google preset identity"):
         client = OAuthClient.objects.create(slug="google-profile", provider_type="google")
@@ -1710,7 +1708,7 @@ def test_google_seed_discovers_the_preset_profile_without_a_conflicting_override
     assert client.external_id_from_claims(claims) == "seed-subject"
 
 
-@pytest.mark.usefixtures("composed_tables")
+@pytest.mark.django_db
 @pytest.mark.parametrize("flow_name", ["login", "link", "connect"])
 @pytest.mark.parametrize("request_format", ["form", "json"])
 def test_oauth_completion_returns_typed_outage_for_refused_endpoint(flow_name: str, request_format: str) -> None:
@@ -1730,7 +1728,7 @@ def test_oauth_completion_returns_typed_outage_for_refused_endpoint(flow_name: s
         assert not Credential.objects.filter(user=user, oauth_client=client).exists()
 
 
-@pytest.mark.usefixtures("composed_tables")
+@pytest.mark.django_db
 def test_oidc_login_verifies_code_exchange_when_refinement_omits_id_token() -> None:
     with override_settings(ANGEE_OAUTH_PROVIDER_TYPE_CLASSES={
         "generic_oauth2": "tests.integrate_fixtures.RefiningProvider",
@@ -1779,7 +1777,6 @@ def test_oauth_helpers_map_refused_endpoint_to_transient_flow_error(operation: s
 
 
 @pytest.mark.django_db(transaction=True)
-@pytest.mark.usefixtures("composed_tables")
 @pytest.mark.parametrize("request_format", ["form", "json"])
 def test_blank_secret_public_client_refreshes_credential(request_format: str) -> None:
     with system_context(reason="test public refresh"):
@@ -1804,7 +1801,7 @@ def test_blank_secret_public_client_refreshes_credential(request_format: str) ->
     assert "client_secret" not in fields and "authorization" not in request.headers
 
 
-@pytest.mark.usefixtures("composed_tables")
+@pytest.mark.django_db
 def test_oidc_login_with_blank_secret_public_client() -> None:
     with system_context(reason="test public OIDC login"):
         user = get_user_model().objects.create_user(username="public-login")
@@ -1824,7 +1821,7 @@ def test_oidc_login_with_blank_secret_public_client() -> None:
     assert "client_secret" not in fields and "authorization" not in requests[0].headers
 
 
-@pytest.mark.usefixtures("composed_tables")
+@pytest.mark.django_db
 @pytest.mark.parametrize("flow_name", ["login", "link"])
 @pytest.mark.parametrize("transient", [False, True])
 def test_oidc_completion_returns_typed_integration_error(flow_name: str, transient: bool) -> None:
@@ -1848,7 +1845,7 @@ def test_oidc_completion_returns_typed_integration_error(flow_name: str, transie
     }
 
 
-@pytest.mark.usefixtures("composed_tables")
+@pytest.mark.django_db
 @pytest.mark.parametrize("userinfo_sub", [None, "different-subject", "verified-subject"])
 def test_oidc_userinfo_email_link_requires_matching_subject(userinfo_sub: str | None) -> None:
     user = get_user_model().objects.create_user(username="email-link-target", email="target@example.com")
@@ -1873,7 +1870,7 @@ def test_oidc_userinfo_email_link_requires_matching_subject(userinfo_sub: str | 
 
 @pytest.mark.parametrize("domains,allowed", [(["corp.example"], False), ([], True)])
 def test_signup_without_email_respects_provider_domain_policy(
-    composed_tables: None, domains: list[str], allowed: bool,
+    db: None, domains: list[str], allowed: bool,
 ) -> None:
     client = _oauth_client(create_on_login=True, allowed_email_domains=domains)
     if allowed:
@@ -1887,7 +1884,7 @@ def test_signup_without_email_respects_provider_domain_policy(
 
 
 @pytest.mark.parametrize("unusable", ["revoked", "expired", "disabled"])
-def test_disconnect_does_not_count_unusable_oidc_alternatives(composed_tables: None, unusable: str) -> None:
+def test_disconnect_does_not_count_unusable_oidc_alternatives(db: None, unusable: str) -> None:
     user = get_user_model().objects.create_user("unusable-alternative")
     client = _oauth_client()
     account = ExternalAccount.objects.link(client, "working-subject", owner=user)
@@ -1907,7 +1904,7 @@ def test_disconnect_does_not_count_unusable_oidc_alternatives(composed_tables: N
     assert caught.value.code == "only_sign_in_method"
 
 @pytest.mark.parametrize("selected_status", ["revoked", "expired"])
-def test_disconnect_unusable_account_preserves_the_active_alternative(composed_tables, selected_status) -> None:
+def test_disconnect_unusable_account_preserves_the_active_alternative(db, selected_status) -> None:
     user = get_user_model().objects.create_user("disconnect-unusable-account")
     client = _oauth_client()
     selected = ExternalAccount.objects.link(client, "unusable-selected", owner=user)

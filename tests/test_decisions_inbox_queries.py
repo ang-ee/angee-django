@@ -36,7 +36,7 @@ RECORD = """query InboxRecord($id: String!) {
 }""".replace("FIELDS", FIELDS)
 
 
-def test_inbox_list_group_count_and_record_queries_do_not_scale_per_row(composed_tables, tmp_path):
+def test_inbox_list_group_count_and_record_queries_do_not_scale_per_row(db, tmp_path):
     """Measure real non-admin list, grouped counts, and detail at 1, 10, 50 seats."""
     issuer = create_user("inbox-cost-issuer")
     viewer = create_user("inbox-cost-assignee")

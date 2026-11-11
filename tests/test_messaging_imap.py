@@ -1726,7 +1726,7 @@ def _imap_channel(**config: Any) -> Any:
 
 
 @pytest.mark.parametrize("change", ["rotate", "repoint"])
-def test_extract_reloads_credential_between_pages(composed_tables: None, change: str) -> None:
+def test_extract_reloads_credential_between_pages(db: None, change: str) -> None:
     """A reused backend observes another worker's secret or credential-FK edit."""
 
     with system_context(reason="tests.imap.credential_freshness"):
@@ -1762,7 +1762,7 @@ def test_extract_reloads_credential_between_pages(composed_tables: None, change:
 @pytest.mark.django_db(transaction=True)
 def test_aborted_imap_fetch_keeps_durable_cursor_and_replays_whole_chunk(
     imap_server: ImapServer,
-    composed_tables: None, monkeypatch: pytest.MonkeyPatch,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Fetched but unapplied UIDs cannot be skipped on the same adapter's next attempt."""
 
@@ -1800,7 +1800,7 @@ def test_aborted_imap_fetch_keeps_durable_cursor_and_replays_whole_chunk(
 @pytest.mark.parametrize("last_uid", [1, 2])
 def test_retained_imap_position_continues_without_reimport(
     imap_server: ImapServer,
-    composed_tables: None, last_uid: int,
+    last_uid: int,
 ) -> None:
     """The current mailbox stream owns progress across repeated syncs."""
 
@@ -1821,7 +1821,6 @@ def test_retained_imap_position_continues_without_reimport(
 @pytest.mark.django_db(transaction=True)
 def test_future_only_policy_survives_a_stream_reset(
     imap_server: ImapServer,
-    composed_tables: None,
 ) -> None:
     imap_server.folders.update({"INBOX": mailbox(_eml(message_id="<old@example.com>"))})
     channel = _imap_channel()
@@ -1859,7 +1858,6 @@ def test_future_only_policy_survives_a_stream_reset(
 @pytest.mark.django_db(transaction=True)
 def test_new_mailbox_uses_current_policy_without_restoring_removed_settings(
     imap_server: ImapServer,
-    composed_tables: None,
 ) -> None:
     imap_server.folders.update({"INBOX": mailbox(_eml(message_id="<retained-inbox@example.com>"))})
     channel = _imap_channel()
@@ -1897,7 +1895,7 @@ def test_new_mailbox_uses_current_policy_without_restoring_removed_settings(
 
 
 @pytest.mark.django_db(transaction=True)
-def test_new_mail_boundary_preserves_existing_exclusion(imap_server: ImapServer, composed_tables: None) -> None:
+def test_new_mail_boundary_preserves_existing_exclusion(imap_server: ImapServer) -> None:
     """A repeated starting-point action must not exclude subsequent arrivals."""
 
     imap_server.folders.update(
@@ -1929,11 +1927,9 @@ def test_new_mail_boundary_preserves_existing_exclusion(imap_server: ImapServer,
 @pytest.mark.django_db(transaction=True)
 def test_channel_sync_partitions_mailboxes(
     imap_server: ImapServer,
-    composed_tables: None,
 ) -> None:
     """Independent mailbox streams retain their own cursors without replica links."""
 
-    del composed_tables
     imap_server.folders.update(
         {
             "INBOX": mailbox(_eml(message_id="<in-1@x>", subject="One", body="Inbox body\n")),
@@ -1967,11 +1963,9 @@ def test_channel_sync_partitions_mailboxes(
 @pytest.mark.django_db(transaction=True)
 def test_channel_sync_preserves_overlong_message_id(
     imap_server: ImapServer,
-    composed_tables: None,
 ) -> None:
     """A long but valid Message-ID lands unchanged as the message/thread key."""
 
-    del composed_tables
     long_message_id = f"outlook-{'x' * 700}@example.com"
     imap_server.folders.update(
         {"INBOX": mailbox(_eml(message_id=f"<{long_message_id}>", subject="", body="No subject.\n"))}
@@ -1991,11 +1985,9 @@ def test_channel_sync_preserves_overlong_message_id(
 @pytest.mark.django_db(transaction=True)
 def test_channel_sync_preserves_overlong_display_name_and_content_id(
     imap_server: ImapServer,
-    composed_tables: None,
 ) -> None:
     """Wide RFC-5322 display names and Content-IDs within field limits stay lossless."""
 
-    del composed_tables
     long_display_name = "Ada " + ("Lovelace " * 80).strip()
     long_cid = f"inline-{'x' * 700}@example.com"
     assert len(long_display_name) > 256
@@ -2037,12 +2029,10 @@ def test_channel_sync_preserves_overlong_display_name_and_content_id(
 @pytest.mark.parametrize("excess", [0, 1])
 def test_channel_sync_bounds_display_names_and_discards_oversized_content_id(
     imap_server: ImapServer,
-    composed_tables: None,
     excess: int,
 ) -> None:
     """Column-sized headers stay intact; larger display text and CIDs land safely."""
 
-    del composed_tables
     name_limit = Handle._meta.get_field("display_name").max_length
     cid_limit = Part._meta.get_field("cid").max_length
     name = "é" * (name_limit + excess)
@@ -2073,11 +2063,9 @@ def test_channel_sync_bounds_display_names_and_discards_oversized_content_id(
 @pytest.mark.django_db(transaction=True)
 def test_channel_sync_quarantines_oversized_handle_and_lands_remaining_page(
     imap_server: ImapServer,
-    composed_tables: None,
 ) -> None:
     """A poison sender leaves one field-specific discrepancy and advances the page."""
 
-    del composed_tables
     value = "x" * Handle._meta.get_field("value").max_length + "@example.com"
     imap_server.folders.update(
         {
@@ -2122,12 +2110,10 @@ def test_channel_sync_quarantines_oversized_handle_and_lands_remaining_page(
 @pytest.mark.django_db(transaction=True)
 def test_channel_sync_lands_threads_parts_and_attachments(
     imap_server: ImapServer,
-    composed_tables: None,
     tmp_path: Path,
 ) -> None:
     """One run drains the mailbox through ingest: threading, roles, files, cursor."""
 
-    del composed_tables
     reply_body = "Yes, confirmed!\n\n> Are we still on for Thursday?\n\n-- \nBob\n"
     long_attachment_name = f"{'x' * 588}.txt"
     imap_server.folders.update(
@@ -2226,7 +2212,6 @@ def test_channel_sync_lands_threads_parts_and_attachments(
 @pytest.mark.django_db(transaction=True)
 def test_attributed_quote_reuses_the_original_body_fragment(
     imap_server: ImapServer,
-    composed_tables: None,
 ) -> None:
     """A fully library-segmented reply keeps the content-addressed quote link.
 
@@ -2235,7 +2220,6 @@ def test_attributed_quote_reuses_the_original_body_fragment(
     Fragment row as the root message's body after one channel sync.
     """
 
-    del composed_tables
     reply_body = (
         "Yes, confirmed!\n\nOn Thu, Jul 2, 2026 Ada wrote:\n> Are we still on for Thursday?\n\nBest regards,\nBob\n"
     )
@@ -2289,7 +2273,6 @@ def test_retained_headers_keep_their_emitted_order_and_every_automation_header()
 @pytest.mark.django_db(transaction=True)
 def test_channel_sync_dedups_retained_header_fragments(
     imap_server: ImapServer,
-    composed_tables: None,
 ) -> None:
     """A List-Id lands as a lowercased HEADER part; the shared value is ONE fragment.
 
@@ -2298,7 +2281,6 @@ def test_channel_sync_dedups_retained_header_fragments(
     row referenced by each message's HEADER part.
     """
 
-    del composed_tables
     list_id = "Dev list <dev.example.com>"
     imap_server.folders.update(
         {
@@ -2326,11 +2308,9 @@ def test_channel_sync_dedups_retained_header_fragments(
 @pytest.mark.django_db(transaction=True)
 def test_channel_resync_is_incremental_and_idempotent(
     imap_server: ImapServer,
-    composed_tables: None,
 ) -> None:
     """A second run fetches only new UIDs; a UIDVALIDITY reset converges without dupes."""
 
-    del composed_tables
     imap_server.folders.update(
         {
             "INBOX": mailbox(
@@ -2382,10 +2362,9 @@ def _attached(message_id: str) -> bytes:
 
 
 @pytest.mark.django_db(transaction=True)
-def test_failed_run_never_persists_the_cursor(imap_server: ImapServer, composed_tables: None) -> None:
+def test_failed_run_never_persists_the_cursor(imap_server: ImapServer) -> None:
     """A run that dies after fetching keeps the old cursor, so nothing is skipped."""
 
-    del composed_tables
     imap_server.folders.update({"INBOX": mailbox(_attached("<a@x>"))})
     channel = _imap_channel()
 
@@ -2414,10 +2393,9 @@ def test_failed_run_never_persists_the_cursor(imap_server: ImapServer, composed_
 
 
 @pytest.mark.django_db(transaction=True)
-def test_failed_run_keeps_successfully_ingested_batch_cursor(imap_server: ImapServer, composed_tables: None) -> None:
+def test_failed_run_keeps_successfully_ingested_batch_cursor(imap_server: ImapServer) -> None:
     """A later batch failure resumes after already-landed messages."""
 
-    del composed_tables
     imap_server.folders["INBOX"] = mailbox(_eml(message_id="<a@x>"), _eml(message_id="<b@x>"), _attached("<c@x>"))
     channel = _imap_channel(batch_size=2)
 
@@ -2433,10 +2411,9 @@ def test_failed_run_keeps_successfully_ingested_batch_cursor(imap_server: ImapSe
 
 
 @pytest.mark.django_db(transaction=True)
-def test_failed_second_record_rolls_back_the_whole_page(imap_server: ImapServer, composed_tables: None) -> None:
+def test_failed_second_record_rolls_back_the_whole_page(imap_server: ImapServer) -> None:
     """A later infrastructure failure in one page rolls back its messages and cursor."""
 
-    del composed_tables
     imap_server.folders.update({"INBOX": mailbox(_eml(message_id="<a@x>"), _attached("<b@x>"))})
     channel = _imap_channel(batch_size=2)
 
@@ -2450,11 +2427,9 @@ def test_failed_second_record_rolls_back_the_whole_page(imap_server: ImapServer,
 @pytest.mark.django_db(transaction=True)
 def test_page_closure_resolves_quotes_of_a_later_record(
     imap_server: ImapServer,
-    composed_tables: None,
 ) -> None:
     """The original and its later quoted-only sharer link after both page rows land."""
 
-    del composed_tables
     paragraph = "Please retain this complete paragraph for our meeting tomorrow."
     imap_server.folders.update(
         {

@@ -29,7 +29,7 @@ def _rows(document: Document) -> list[tuple[str, int, int]]:
         return list(document.lines.order_by("position").values_list("label", "quantity", "position"))
 
 
-def test_replacing_lines_checks_the_parent_write_before_elevating(composed_tables: None) -> None:
+def test_replacing_lines_checks_the_parent_write_before_elevating(db: None) -> None:
     """A reader of the parent is refused before any line is written, even with an elevation available."""
 
     reader = create_user("lines-reader")
@@ -45,7 +45,7 @@ def test_replacing_lines_checks_the_parent_write_before_elevating(composed_table
     assert _rows(document) == [("Line", 1, 0)]
 
 
-def test_replace_lines_writes_native_values(composed_tables: None) -> None:
+def test_replace_lines_writes_native_values(db: None) -> None:
     """Updates, creations and removals take foreign keys by attname and many-to-many sets."""
 
     writer = create_user("lines-writer")
@@ -71,7 +71,7 @@ def test_replace_lines_writes_native_values(composed_tables: None) -> None:
         assert set(DocumentLine.objects.get(pk=keep.pk).tags.values_list("pk", flat=True)) == {t.pk for t in tags}
 
 
-def test_appending_lines_still_requires_the_parent_write(composed_tables: None) -> None:
+def test_appending_lines_still_requires_the_parent_write(db: None) -> None:
     """``replace=False`` is a diff mode, not an authorization: a reader cannot append lines."""
 
     reader = create_user("lines-append-reader")
@@ -86,7 +86,7 @@ def test_appending_lines_still_requires_the_parent_write(composed_tables: None) 
     assert _rows(document) == []
 
 
-def test_appending_lines_for_a_new_parent_keeps_provisioned_lines(composed_tables: None) -> None:
+def test_appending_lines_for_a_new_parent_keeps_provisioned_lines(db: None) -> None:
     """``replace=False`` only adds, keeping the lines the parent's own save provisioned."""
 
     with system_context(reason="test.replace_lines.append_seed"):
@@ -97,7 +97,7 @@ def test_appending_lines_for_a_new_parent_keeps_provisioned_lines(composed_table
     assert _rows(document) == [("Provisioned", 1, 0), ("Added", 2, 1)]
 
 
-def test_replace_lines_meets_the_line_row_lock_under_elevation(composed_tables: None) -> None:
+def test_replace_lines_meets_the_line_row_lock_under_elevation(db: None) -> None:
     """The elevation authorizes the write; a locked line's own guard still refuses it."""
 
     writer = create_user("lines-locked-writer")
@@ -126,7 +126,7 @@ def test_line_relation_admits_columns_and_forward_many_to_many_only() -> None:
         ResourceParent.line_relation("name")
 
 
-def test_replace_lines_refuses_a_non_column_before_writing(composed_tables: None) -> None:
+def test_replace_lines_refuses_a_non_column_before_writing(db: None) -> None:
     """Called directly with arbitrary values, the parent refuses a non-column name before any line write."""
 
     with system_context(reason="test.replace_lines.column_seed"):

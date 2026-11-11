@@ -17,7 +17,7 @@ from tests.conftest import MarkdownPage, Page, Vault, create_user, make_integrat
 
 
 @pytest.fixture
-def passage_records(composed_tables):
+def passage_records(db):
     cache.clear()
     owner = create_user("passage-owner")
     vault = vault_for(owner, name="Passages")

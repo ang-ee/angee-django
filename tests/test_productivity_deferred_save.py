@@ -21,8 +21,8 @@ from tests.conftest import Backend, Drive, create_user
 
 
 @pytest.fixture
-def deferred_save_rows(composed_tables: Any) -> Iterator[dict[str, models.Model]]:
-    del composed_tables
+def deferred_save_rows(db: Any) -> Iterator[dict[str, models.Model]]:
+    del db
     with system_context(reason="tests.productivity.deferred_save.setup"):
         queue = Queue.objects.create(key="DEFERRED", name="Deferred", slug="deferred")
         cycle = Cycle.objects.create(queue=queue, number=1, starts_on=date(2026, 1, 1), ends_on=date(2026, 1, 7))

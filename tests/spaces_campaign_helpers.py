@@ -16,7 +16,7 @@ MANAGERS = {"owner", "column_owner", "administrator"}
 
 
 @pytest.fixture
-def roster(composed_tables):
+def roster(db):
     """Keep column ownership, roster authority, and inactive seats independent."""
     actors = {}
     people = {}

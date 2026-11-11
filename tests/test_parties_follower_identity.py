@@ -59,7 +59,7 @@ PERSON_SELECTION = f"{PARTY_SELECTION} nickname birthday anniversary"
 
 
 @pytest.fixture
-def follower_schema(composed_tables: Any) -> Iterator[None]:
+def follower_schema(db: Any) -> Iterator[None]:
     """Reuse the real composed permission fragments, including messaging and spaces, with redacted reads."""
 
     with override_settings(REBAC_FIELD_READ_MODE="redact"):

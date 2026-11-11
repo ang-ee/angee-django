@@ -80,7 +80,7 @@ class AppliedRecord(models.Model):
 
 
 @pytest.fixture
-def stream_bridge(composed_tables: None) -> Iterator[Channel]:
+def stream_bridge(db: None) -> Iterator[Channel]:
     """Run transport tests outside any enclosing Django transaction."""
 
     with system_context(reason="test stream protocol"):

@@ -148,7 +148,7 @@ def test_closed_decisions_on_this_record_skip_act_scope(review, closed, membersh
     assert_attention_omitted(DecisionKind(), record, owner)
 
 
-@pytest.mark.usefixtures("workflow_step_classes", "activity_catalog", "composed_tables")
+@pytest.mark.usefixtures("workflow_step_classes", "activity_catalog")
 def test_attention_population_writes_no_permission_audit_event(review, settings):
     """The page statement and standalone attention avoid audits, before payload hydration."""
     owner, reviewers, _, question = review
@@ -176,7 +176,7 @@ def test_attention_population_writes_no_permission_audit_event(review, settings)
 
 @pytest.mark.django_db(transaction=True)
 @pytest.mark.usefixtures("activity_catalog")
-def test_unrelated_tasks_do_not_compile_a_branch(composed_tables):
+def test_unrelated_tasks_do_not_compile_a_branch():
     owner = create_platform_admin("task-occurrence-owner")
     present = vault_for(owner)
     absent = vault_for(create_user("task-occurrence-other"))
@@ -190,7 +190,7 @@ def test_unrelated_tasks_do_not_compile_a_branch(composed_tables):
 
 
 @pytest.mark.django_db(transaction=True)
-def test_history_probe_requires_closed_membership_on_this_record(composed_tables, settings, monkeypatch):
+def test_history_probe_requires_closed_membership_on_this_record(settings, monkeypatch):
     owner = create_platform_admin("history-occurrence-owner")
     with changeset(fresh=True):
         present = vault_for(owner)

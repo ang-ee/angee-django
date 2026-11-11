@@ -162,10 +162,10 @@ def test_skill_manifest_tolerates_missing_or_malformed_frontmatter() -> None:
 # --- skill discovery ----------------------------------------------------------
 
 
-def test_skill_source_refresh_materializes_and_prunes(composed_tables: None) -> None:
+def test_skill_source_refresh_materializes_and_prunes(db: None) -> None:
     """A skill source refresh walks the tree for ``SKILL.md`` and upserts/prunes rows."""
 
-    del composed_tables
+    del db
     vcs = _vcs_bridge("skills", config={"stub_repos": REPOS, "stub_tree": SKILL_TREE, "stub_blobs": SKILL_BLOBS})
     vcs.discover_repositories()
     with system_context(reason="test"):
@@ -193,10 +193,10 @@ def test_skill_source_refresh_materializes_and_prunes(composed_tables: None) -> 
 # --- inference catalogue sync -------------------------------------------------
 
 
-def test_inference_provider_refresh_upserts_models(composed_tables: None) -> None:
+def test_inference_provider_refresh_upserts_models(db: None) -> None:
     """Refreshing a provider upserts one ``InferenceModel`` per advertised spec."""
 
-    del composed_tables
+    del db
     provider = _provider(
         "anthropic",
         backend_class="stub_inference",
@@ -224,10 +224,10 @@ def test_inference_provider_refresh_upserts_models(composed_tables: None) -> Non
     assert models["claude-haiku-4-5"].display_name == "claude-haiku-4-5"
 
 
-def test_inference_provider_materializes_backend_defaults(composed_tables: None) -> None:
+def test_inference_provider_materializes_backend_defaults(db: None) -> None:
     """Provider backend defaults land on direct child-row creates."""
 
-    del composed_tables
+    del db
     provider = make_integration(
         "provider-defaults",
         model=InferenceProvider,
@@ -237,10 +237,10 @@ def test_inference_provider_materializes_backend_defaults(composed_tables: None)
     assert provider.name == "Anthropic"
 
 
-def test_manual_backend_advertises_no_models(composed_tables: None) -> None:
+def test_manual_backend_advertises_no_models(db: None) -> None:
     """The built-in ``manual`` backend lists nothing — its catalogue is hand-curated."""
 
-    del composed_tables
+    del db
     provider = _provider("manual-vendor", backend_class="manual", name="Manual")
     assert provider.refresh_models() == 0
     with system_context(reason="test read"):
@@ -694,12 +694,12 @@ class _FakeOpenAIClient:
 
 
 def test_anthropic_backend_refresh_syncs_native_and_broker_models(
-    composed_tables: None,
+    db: None,
     monkeypatch: Any,
 ) -> None:
     """Anthropic model sync emits native and broker-prefixed handles from the SDK."""
 
-    del composed_tables
+    del db
     _FakeAnthropicClient.instances.clear()
     monkeypatch.setattr(AnthropicInferenceBackend, "client_class", _FakeAnthropicClient)
     provider = _provider(
@@ -731,7 +731,7 @@ def test_anthropic_backend_refresh_syncs_native_and_broker_models(
     assert models["claude-opus-4-8"].display_name == "Claude Opus 4.8"
 
 
-def test_anthropic_model_chat_uses_native_messages_and_strips_broker_prefix(composed_tables, inference_http):
+def test_anthropic_model_chat_uses_native_messages_and_strips_broker_prefix(db, inference_http):
     provider = _provider("anthropic-chat", backend_class="anthropic", name="Anthropic", material={"api_key": "api-key"})
     with system_context(reason="test anthropic chat"):
         model = InferenceModel.objects.create(provider=provider, name="anthropic/claude-sonnet-4-6")
@@ -755,7 +755,7 @@ def test_anthropic_model_chat_uses_native_messages_and_strips_broker_prefix(comp
     assert all(client.is_closed() for client in clients)
 
 
-def test_anthropic_backend_uses_auth_token_for_oauth_credentials(composed_tables, inference_http):
+def test_anthropic_backend_uses_auth_token_for_oauth_credentials(db, inference_http):
     from angee.agents.runtimes import ANTHROPIC_OAUTH_SYSTEM_PREAMBLE
 
     provider = _provider(
@@ -776,12 +776,12 @@ def test_anthropic_backend_uses_auth_token_for_oauth_credentials(composed_tables
 
 
 def test_openai_backend_refresh_syncs_native_and_broker_models(
-    composed_tables: None,
+    db: None,
     monkeypatch: Any,
 ) -> None:
     """OpenAI model sync emits native and broker-prefixed handles from the SDK."""
 
-    del composed_tables
+    del db
     _FakeOpenAIClient.instances.clear()
     monkeypatch.setattr(OpenAIInferenceBackend, "client_class", _FakeOpenAIClient)
     provider = _provider(
@@ -941,7 +941,7 @@ def test_ollama_discovery_uses_native_capabilities_without_name_guesses(
 
 
 def test_ollama_refresh_repairs_alias_uses_and_preserves_curated_defaults(
-    composed_tables: None, monkeypatch: Any, settings: Any,
+    db: None, monkeypatch: Any, settings: Any,
 ) -> None:
     """Native discovery repairs fallback candidates without changing preferred deployments."""
 
@@ -1003,12 +1003,12 @@ def test_ollama_refresh_repairs_alias_uses_and_preserves_curated_defaults(
 
 
 def test_openai_backend_rejects_oauth_credentials(
-    composed_tables: None,
+    db: None,
     monkeypatch: Any,
 ) -> None:
     """The OpenAI SDK backend is explicit about accepting static API keys only."""
 
-    del composed_tables
+    del db
     _FakeOpenAIClient.instances.clear()
     monkeypatch.setattr(OpenAIInferenceBackend, "client_class", _FakeOpenAIClient)
     provider = _provider(
@@ -1026,7 +1026,7 @@ def test_openai_backend_rejects_oauth_credentials(
     assert _FakeOpenAIClient.instances == []
 
 
-def test_openai_model_chat_uses_native_messages_and_strips_broker_prefix(composed_tables, inference_http):
+def test_openai_model_chat_uses_native_messages_and_strips_broker_prefix(db, inference_http):
     provider = _provider("openai-chat", backend_class="openai", name="OpenAI", material={"api_key": "api-key"})
     with system_context(reason="test openai chat"):
         model = InferenceModel.objects.create(provider=provider, name="openai/gpt-4.1")
@@ -1047,7 +1047,7 @@ def test_openai_model_chat_uses_native_messages_and_strips_broker_prefix(compose
     assert all(client.is_closed() for client in clients)
 
 
-def test_openai_backend_can_configure_max_completion_tokens(composed_tables, inference_http):
+def test_openai_backend_can_configure_max_completion_tokens(db, inference_http):
     provider = _provider(
         "openai-max-completion",
         backend_class="openai",
@@ -1065,7 +1065,7 @@ def test_openai_backend_can_configure_max_completion_tokens(composed_tables, inf
 
 
 @pytest.mark.parametrize("base_url", ["", "http://ollama.internal:11434/v1", "https://models.example.invalid/ollama/v1"])
-def test_ollama_backend_translates_native_thinking_setting(composed_tables, inference_http, base_url):
+def test_ollama_backend_translates_native_thinking_setting(db, inference_http, base_url):
     """Ollama maps deployment and analytical defaults onto its SDK request."""
 
     provider = _provider(
@@ -1250,7 +1250,7 @@ def inference_http(monkeypatch, request):
 
 
 @pytest.mark.parametrize("inference_http", ["tool"], indirect=True)
-def test_direct_native_request_returns_tool_calls_without_executing_a_loop(composed_tables, inference_http):
+def test_direct_native_request_returns_tool_calls_without_executing_a_loop(db, inference_http):
     from pydantic_ai.messages import ToolCallPart
     from pydantic_ai.tools import ToolDefinition
 
@@ -1284,7 +1284,7 @@ def test_direct_native_request_returns_tool_calls_without_executing_a_loop(compo
 @pytest.mark.parametrize("backend_class", ["openai", "ollama"])
 @pytest.mark.parametrize("inference_http", ["structured"], indirect=True)
 def test_direct_inference_builds_one_structured_multimodal_envelope(
-    composed_tables,
+    db,
     inference_http,
     backend_class,
 ):
@@ -1332,7 +1332,7 @@ def test_direct_inference_builds_one_structured_multimodal_envelope(
 
 @pytest.mark.parametrize("inference_http,retryable", [(429, True), (400, False)], indirect=["inference_http"])
 def test_native_provider_errors_preserve_retry_classification_and_close_clients(
-    composed_tables, inference_http, retryable
+    db, inference_http, retryable
 ):
     from pydantic_ai.exceptions import ModelHTTPError
 
@@ -1510,7 +1510,7 @@ def test_model_approval_distinguishes_malformed_policy_from_denial(settings, pol
         InferenceModel().require_approved("mapping")
 
 
-def test_model_requires_read_and_exact_approved_deployment(composed_tables, settings):
+def test_model_requires_read_and_exact_approved_deployment(db, settings):
     provider = _provider("approved-ollama", backend_class="ollama")
     with system_context(reason="test.agents.authorization.seed"):
         model = InferenceModel.objects.create(provider=provider, name="llama")
@@ -1526,7 +1526,7 @@ def test_model_requires_read_and_exact_approved_deployment(composed_tables, sett
         model.require_usable(provider.owner, "mapping", uses={InferenceModelUse.CHAT})
 
 
-def test_usable_models_filter_access_policy_capability_and_order_defaults(composed_tables, settings):
+def test_usable_models_filter_access_policy_capability_and_order_defaults(db, settings):
     provider = _provider("usable-ollama", backend_class="ollama")
     private = _provider("private-ollama", backend_class="ollama")
     with system_context(reason="test.agents.usable.seed"):
@@ -1605,7 +1605,7 @@ def test_ollama_discovers_decision_without_reclassifying_it_as_chat():
     assert InferenceModelUse.DECISION not in TEXT_INFERENCE_MODEL_USES | IMAGE_INFERENCE_MODEL_USES
 
 
-def test_model_decision_rechecks_actor_role_and_capability_before_transport(composed_tables, settings, monkeypatch):
+def test_model_decision_rechecks_actor_role_and_capability_before_transport(db, settings, monkeypatch):
     provider = _provider("decision-ollama", backend_class="ollama")
     with system_context(reason="test.agents.decision.seed"):
         model = InferenceModel.objects.create(provider=provider, name="kev-test", model_use=InferenceModelUse.DECISION)

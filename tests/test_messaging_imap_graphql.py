@@ -30,7 +30,7 @@ from tests.test_messaging_imap import _eml
 pytest_plugins = ("tests.test_messaging_graphql",)
 
 
-def test_connect_imap_channel_creates_basic_auth_channel(composed_tables: None) -> None:
+def test_connect_imap_channel_creates_basic_auth_channel(db: None) -> None:
     """The IMAP addon creates the credential and channel together."""
 
     admin = _platform_admin("msg-imap-connect-admin")
@@ -80,7 +80,7 @@ def test_connect_imap_channel_creates_basic_auth_channel(composed_tables: None) 
         }
 
 
-def test_connect_imap_channel_reuses_no_credentials_by_label(composed_tables: None) -> None:
+def test_connect_imap_channel_reuses_no_credentials_by_label(db: None) -> None:
     """Two channels with the same display name keep separate Basic-auth secrets."""
 
     admin = _platform_admin("msg-imap-repeat-admin")
@@ -127,7 +127,7 @@ def test_connect_imap_channel_reuses_no_credentials_by_label(composed_tables: No
         }
 
 
-def test_connect_imap_channel_requires_seeded_vendor(composed_tables: None) -> None:
+def test_connect_imap_channel_requires_seeded_vendor(db: None) -> None:
     """The mutation reads the addon-owned vendor catalogue row; it never creates it."""
 
     admin = _platform_admin("msg-imap-missing-vendor-admin")
@@ -167,7 +167,7 @@ def _schema() -> Any:
 
 
 def test_update_imap_channel_credential_replaces_the_login_in_place(
-    composed_tables: None,
+    db: None,
 ) -> None:
     """The record verb rotates the Basic-auth material; channel and credential rows stay."""
 
@@ -194,7 +194,7 @@ def test_update_imap_channel_credential_replaces_the_login_in_place(
         assert saved.credential.reveal() == {"username": "ada.lovelace@example.com", "password": "rotated"}
 
 
-def test_update_imap_channel_credential_refuses_blank_material(composed_tables: None) -> None:
+def test_update_imap_channel_credential_refuses_blank_material(db: None) -> None:
     """The shared credential handler identifies the missing field without rotating the secret."""
 
     admin = _platform_admin("msg-imap-rotate-blank-admin")
@@ -219,7 +219,7 @@ def test_update_imap_channel_credential_refuses_blank_material(composed_tables: 
         assert saved.credential.reveal()["password"] == "mail-password"
 
 
-def test_update_imap_channel_credential_refuses_a_detached_credential(composed_tables: None) -> None:
+def test_update_imap_channel_credential_refuses_a_detached_credential(db: None) -> None:
     """The channel row refuses a rotation when its credential was detached."""
 
     admin = _platform_admin("msg-imap-rotate-detached-admin")
@@ -244,7 +244,7 @@ def test_update_imap_channel_credential_refuses_a_detached_credential(composed_t
 
 
 def test_sample_preview_is_a_paged_query_with_no_mutation_or_dead_output(
-    composed_tables: None, imap_server: ImapServer,
+    db: None, imap_server: ImapServer,
 ) -> None:
     admin, channel = _paused_sample_channel(imap_server)
     schema = _schema()
@@ -270,7 +270,7 @@ def test_sample_preview_is_a_paged_query_with_no_mutation_or_dead_output(
 
 
 def test_sample_preview_denies_non_admin_before_mailbox_probe(
-    composed_tables: None, imap_server: ImapServer,
+    db: None, imap_server: ImapServer,
 ) -> None:
     _, channel = _paused_sample_channel(imap_server)
     reader = create_user("imap-sample-reader")
@@ -283,7 +283,7 @@ def test_sample_preview_denies_non_admin_before_mailbox_probe(
 
 @pytest.mark.parametrize("operation", ["preview", "import", "prepare"])
 def test_imap_resolvers_preserve_safe_transport_errors(
-    composed_tables: None, imap_server: ImapServer, operation: str,
+    db: None, imap_server: ImapServer, operation: str,
 ) -> None:
     admin, channel = _paused_sample_channel(imap_server)
     imap_server.refuse("login", LoginError("vendor payload mail-password"))
@@ -320,7 +320,6 @@ def _paused_sample_channel(imap_server: ImapServer) -> tuple[Any, dict[str, Any]
 
 @pytest.mark.django_db(transaction=True)
 def test_prepare_imap_new_mail_is_future_only_idempotent_and_epoch_safe(
-    composed_tables: None,
     imap_server: ImapServer,
 ) -> None:
     """The paused action skips the current UID set once and never backfills after an epoch change."""
@@ -384,7 +383,7 @@ def test_prepare_imap_new_mail_is_future_only_idempotent_and_epoch_safe(
             backend.close()
 
 
-def test_test_connection_logs_in_through_the_imap_backend(composed_tables: None, imap_server: ImapServer) -> None:
+def test_test_connection_logs_in_through_the_imap_backend(db: None, imap_server: ImapServer) -> None:
     """The generic integration verb reaches the channel backend's real login."""
 
     admin = _platform_admin("msg-imap-test-admin")
@@ -401,7 +400,7 @@ def test_test_connection_logs_in_through_the_imap_backend(composed_tables: None,
     assert imap_server.logouts == 1
 
 
-def test_test_connection_reports_the_imap_refusal(composed_tables: None, imap_server: ImapServer) -> None:
+def test_test_connection_reports_the_imap_refusal(db: None, imap_server: ImapServer) -> None:
     """A rejected login reaches the operator with the account and host named."""
 
     admin = _platform_admin("msg-imap-test-refused-admin")

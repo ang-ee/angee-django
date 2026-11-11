@@ -135,7 +135,7 @@ def test_record_membership_is_required_even_for_a_writer(comment_record):
     assert Message._base_manager.filter(pk=foreign.pk).exists()
 
 
-def test_provider_edits_record_no_local_editor_even_with_an_ambient_user(channel, composed_tables):
+def test_provider_edits_record_no_local_editor_even_with_an_ambient_user(channel):
     actor = make_user("sync-operator")
     initial = _parsed("provider-campaign", text="First provider body", sent_at=_AT)
     with actor_context(actor):
@@ -158,7 +158,7 @@ def test_provider_edits_record_no_local_editor_even_with_an_ambient_user(channel
 
 
 @pytest.mark.parametrize("named", [False, True])
-def test_email_and_named_provider_conversations_stay_ownerless_on_repeated_ingest(channel, composed_tables, named):
+def test_email_and_named_provider_conversations_stay_ownerless_on_repeated_ingest(channel, named):
     parsed = _parsed("ownerless-ingest", sent_at=_AT)
     if named:
         parsed = replace(parsed, platform="slack", thread=ParsedThread(external_id="named-conversation"))

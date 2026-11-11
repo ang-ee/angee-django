@@ -9,10 +9,9 @@ from rebac.models import Relationship, RelationshipRegistry
 
 
 @pytest.fixture
-def campaign_access(composed_tables, settings):
+def campaign_access(db, settings):
     """Keep explicit administrator arms under test."""
     settings.REBAC_SUPERUSER_BYPASS = False
-    return composed_tables
 
 
 @pytest.fixture

@@ -15,11 +15,11 @@ from angee.tags.testing.models import Tag, TagAssignment
 from tests.conftest import Vendor
 
 
-def test_tag_attachment_enforces_annotate_on_a_readable_conversation(composed_tables: str) -> None:
+def test_tag_attachment_enforces_annotate_on_a_readable_conversation(db: str) -> None:
     """The tags edge writes through messaging's annotate arm: an annotator who reads may tag, a reader
     may not, and a trashed or foreign message is not a target at all."""
 
-    del composed_tables
+    del db
     with system_context(reason="tests.messaging.annotation_setup"):
         users = apps.get_model("iam", "User").objects
         owner = users.create_user(username="annotation-owner")

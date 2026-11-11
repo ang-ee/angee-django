@@ -54,7 +54,7 @@ def _provisioned_agent(owner: User, *, name: str, workspace: str = "ws", service
     return agent
 
 
-def test_mcp_bearer_resolves_to_single_agent_principal(composed_tables: None) -> None:
+def test_mcp_bearer_resolves_to_single_agent_principal(db: None) -> None:
     """An agent presenting its own derived bearer for an internal server runs as that agent."""
 
     owner = User.objects.create_user(username="mcp-agent-owner", email="mcp-agent@example.com")
@@ -71,7 +71,7 @@ def test_mcp_bearer_resolves_to_single_agent_principal(composed_tables: None) ->
     assert resolve_actor(bearer) == agent.principal_subject()
 
 
-def test_mcp_bearer_declines_agent_without_service_user(composed_tables: None) -> None:
+def test_mcp_bearer_declines_agent_without_service_user(db: None) -> None:
     """Legacy runnable rows without a service principal fail closed."""
 
     owner = User.objects.create_user(username="mcp-missing-user-owner")
@@ -91,7 +91,7 @@ def test_mcp_bearer_declines_agent_without_service_user(composed_tables: None) -
     assert resolve_actor(bearer) is None
 
 
-def test_mcp_bearer_declines_inactive_service_user(composed_tables: None) -> None:
+def test_mcp_bearer_declines_inactive_service_user(db: None) -> None:
     """Deactivation revokes a valid bearer without changing the agent or credential."""
 
     owner = User.objects.create_user(username="mcp-inactive-owner")
@@ -110,7 +110,7 @@ def test_mcp_bearer_declines_inactive_service_user(composed_tables: None) -> Non
 
 
 def test_mcp_bearer_resolves_for_ready_in_process_agent_without_operator_names(
-    composed_tables: None,
+    db: None,
 ) -> None:
     """A READY/RUNNING in-process agent authenticates despite rendering no workspace or service."""
 
@@ -128,7 +128,7 @@ def test_mcp_bearer_resolves_for_ready_in_process_agent_without_operator_names(
     assert resolve_actor(bearer) == agent.principal_subject()
 
 
-def test_mcp_bearer_distinguishes_agents_sharing_one_internal_server(composed_tables: None) -> None:
+def test_mcp_bearer_distinguishes_agents_sharing_one_internal_server(db: None) -> None:
     """Two agents on one internal server each resolve to their own subject; a spoof is declined."""
 
     owner = User.objects.create_user(username="mcp-shared-owner", email="mcp-shared@example.com")
@@ -153,7 +153,7 @@ def test_mcp_bearer_distinguishes_agents_sharing_one_internal_server(composed_ta
     assert resolve_actor(f"{second.sqid}.{first_digest}") is None
 
 
-def test_mcp_bearer_raw_credential_secret_does_not_authenticate(composed_tables: None) -> None:
+def test_mcp_bearer_raw_credential_secret_does_not_authenticate(db: None) -> None:
     """The raw server credential secret is no longer a valid bearer; the derived one is required."""
 
     owner = User.objects.create_user(username="mcp-raw-owner", email="mcp-raw@example.com")
@@ -170,7 +170,7 @@ def test_mcp_bearer_raw_credential_secret_does_not_authenticate(composed_tables:
     assert resolve_actor(bearer) == agent.principal_subject()
 
 
-def test_mcp_bearer_with_valid_agent_and_non_ascii_digest_is_declined(composed_tables: None) -> None:
+def test_mcp_bearer_with_valid_agent_and_non_ascii_digest_is_declined(db: None) -> None:
     """Malformed Unicode digest input declines instead of reaching compare_digest."""
 
     owner = User.objects.create_user(username="mcp-unicode-owner", email="mcp-unicode@example.com")
@@ -189,13 +189,13 @@ def test_mcp_bearer_with_valid_agent_and_non_ascii_digest_is_declined(composed_t
 
 
 @pytest.mark.parametrize("bearer", ["", "no-dot", ".", "agt_only.", ".digest-only"])
-def test_mcp_bearer_malformed_is_declined(composed_tables: None, bearer: str) -> None:
+def test_mcp_bearer_malformed_is_declined(db: None, bearer: str) -> None:
     """A bearer that is empty or missing a non-empty sqid/digest half resolves to no actor."""
 
     assert resolve_actor(bearer) is None
 
 
-def test_mcp_bearer_for_external_server_does_not_authenticate(composed_tables: None) -> None:
+def test_mcp_bearer_for_external_server_does_not_authenticate(db: None) -> None:
     """An external server verifies its own raw token, so its bearer never authenticates here."""
 
     owner = User.objects.create_user(username="mcp-external-owner", email="mcp-external@example.com")
@@ -214,7 +214,7 @@ def test_mcp_bearer_for_external_server_does_not_authenticate(composed_tables: N
     assert resolve_actor(bearer) is None
 
 
-def test_mcp_bearer_from_server_the_agent_lacks_is_declined(composed_tables: None) -> None:
+def test_mcp_bearer_from_server_the_agent_lacks_is_declined(db: None) -> None:
     """A valid agent presenting a bearer for an internal server it is not attached to is declined."""
 
     owner = User.objects.create_user(username="mcp-unattached-owner", email="mcp-unattached@example.com")
@@ -236,7 +236,7 @@ def test_mcp_bearer_from_server_the_agent_lacks_is_declined(composed_tables: Non
     assert resolve_actor(other_bearer) is None
 
 
-def test_mcp_bearer_for_agent_with_no_attached_servers_is_declined(composed_tables: None) -> None:
+def test_mcp_bearer_for_agent_with_no_attached_servers_is_declined(db: None) -> None:
     """A provisioned agent attached to no internal server resolves to no actor."""
 
     owner = User.objects.create_user(username="mcp-zero-owner", email="mcp-zero@example.com")
@@ -251,7 +251,7 @@ def test_mcp_bearer_for_agent_with_no_attached_servers_is_declined(composed_tabl
     assert resolve_actor(bearer) is None
 
 
-def test_mcp_bearer_for_ready_agent_without_service_user_is_declined(composed_tables: None) -> None:
+def test_mcp_bearer_for_ready_agent_without_service_user_is_declined(db: None) -> None:
     """A valid bearer cannot act after its ready agent loses the service principal."""
 
     owner = User.objects.create_user(username="mcp-no-user-owner", email="mcp-no-user@example.com")
@@ -276,7 +276,7 @@ def test_mcp_bearer_for_ready_agent_without_service_user_is_declined(composed_ta
     ],
 )
 def test_mcp_bearer_ignores_template_and_unprovisioned_agents(
-    composed_tables: None,
+    db: None,
     agent_kwargs: dict[str, Any],
     mark_provisioned: bool,
 ) -> None:
@@ -309,7 +309,7 @@ def test_mcp_bearer_ignores_template_and_unprovisioned_agents(
     assert resolve_actor(bearer) is None
 
 
-def test_agent_mcp_m2m_reconciles_server_read_and_tool_use(composed_tables: None) -> None:
+def test_agent_mcp_m2m_reconciles_server_read_and_tool_use(db: None) -> None:
     """Server selection gates catalogue reads; tool selection gates invocation."""
 
     owner = User.objects.create_user(username="mcp-rebac-owner", email="mcp-rebac@example.com")

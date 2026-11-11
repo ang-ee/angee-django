@@ -28,7 +28,7 @@ from tests.test_storage import (  # noqa: F401 -- the image drive avatars land o
     image_drive,
 )
 
-pytestmark = [pytest.mark.django_db, pytest.mark.usefixtures("image_drive", "composed_tables")]
+pytestmark = [pytest.mark.django_db, pytest.mark.usefixtures("image_drive")]
 parties_schema = importlib.import_module("angee.parties.schema")
 
 GIF_BYTES = bytes.fromhex("47494638396101000100800000000000ffffff21f90401000000002c00000000010001000002024401003b")

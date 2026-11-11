@@ -81,7 +81,7 @@ def _colleagues(viewer: Any) -> set[str]:
     return {row["display_name"] for row in _run(viewer, _COLLEAGUES)["colleagues"]}
 
 
-def test_everyone_signed_in_reads_a_name_but_not_the_restricted_fields(composed_tables: None) -> None:
+def test_everyone_signed_in_reads_a_name_but_not_the_restricted_fields(db: None) -> None:
     viewer = _person("name-viewer")
     other = _person("name-other", first_name="Ada", last_name="Lovelace")
 
@@ -95,7 +95,7 @@ def test_everyone_signed_in_reads_a_name_but_not_the_restricted_fields(composed_
     )
 
 
-def test_a_person_reads_their_own_restricted_fields(composed_tables: None) -> None:
+def test_a_person_reads_their_own_restricted_fields(db: None) -> None:
     viewer = _person("own-viewer")
 
     own = User.objects.with_actor(viewer).get(pk=viewer.pk)
@@ -109,7 +109,7 @@ def test_a_person_reads_their_own_restricted_fields(composed_tables: None) -> No
     assert _run(viewer, _PERMITTED)["current_user"]["permitted"] == []
 
 
-def test_a_person_who_manages_no_one_lists_nobody_without_an_error(composed_tables: None) -> None:
+def test_a_person_who_manages_no_one_lists_nobody_without_an_error(db: None) -> None:
     viewer = _person("list-viewer")
     _person("list-other")
 
@@ -118,7 +118,7 @@ def test_a_person_who_manages_no_one_lists_nobody_without_an_error(composed_tabl
     assert _run(viewer, _ACTIVE, {"active": False})["users"] == []
 
 
-def test_a_record_embeds_a_name_for_a_reader_who_manages_no_one(composed_tables: None) -> None:
+def test_a_record_embeds_a_name_for_a_reader_who_manages_no_one(db: None) -> None:
     reader = _person("record-reader")
     author = _person("record-author", first_name="Grace", last_name="Hopper")
     vault = vault_for(reader)
@@ -134,8 +134,8 @@ def test_a_record_embeds_a_name_for_a_reader_who_manages_no_one(composed_tables:
     assert rows == [{"created_by": author.public_id, "created_by_label": "Grace Hopper"}]
 
 
-def test_pickers_offer_a_non_manager_their_colleagues(composed_tables: None) -> None:
-    del composed_tables
+def test_pickers_offer_a_non_manager_their_colleagues(db: None) -> None:
+    del db
     viewer = _person("picker-viewer", first_name="Viewer")
     follower = _person("picker-follower", first_name="Follower")
     former = _person("picker-former", first_name="Former")
@@ -158,10 +158,10 @@ def test_pickers_offer_a_non_manager_their_colleagues(composed_tables: None) -> 
     assert [person.first_name for person in User.objects.visible_people(viewer, search="Follow")] == ["Follower"]
 
 
-def test_a_non_manager_reads_no_restricted_field_of_a_colleague_or_service_account(composed_tables: None) -> None:
+def test_a_non_manager_reads_no_restricted_field_of_a_colleague_or_service_account(db: None) -> None:
     """Through every path a non-manager reaches people by, others' restricted fields read null."""
 
-    del composed_tables
+    del db
     viewer = _person("leak-viewer", first_name="Viewer")
     colleague = _person("leak-colleague", first_name="Colleague")
     service = User.objects.create_user("workflow-leak", kind="service", first_name="Workflow")
@@ -189,8 +189,8 @@ def test_a_non_manager_reads_no_restricted_field_of_a_colleague_or_service_accou
 
 
 @pytest.mark.parametrize("manager", ["platform-admin", "directory-reader", "consumer-role"])
-def test_people_managers_list_every_account_and_filter_by_activity(composed_tables: None, manager: str) -> None:
-    del composed_tables
+def test_people_managers_list_every_account_and_filter_by_activity(db: None, manager: str) -> None:
+    del db
     if manager == "platform-admin":
         viewer = create_platform_admin("people-manager")
     elif manager == "directory-reader":
@@ -215,7 +215,7 @@ def test_people_managers_list_every_account_and_filter_by_activity(composed_tabl
     assert _run(viewer, _PERMITTED)["current_user"]["permitted"] == ["iam.User#list", "iam.User#read__email"]
 
 
-def test_one_account_named_in_the_directory_is_listed_with_its_fields(composed_tables: None) -> None:
+def test_one_account_named_in_the_directory_is_listed_with_its_fields(db: None) -> None:
     viewer = _person("account-reader")
     named = _person("named-account")
     _person("unnamed-account")
@@ -230,7 +230,7 @@ def test_one_account_named_in_the_directory_is_listed_with_its_fields(composed_t
     assert _run(viewer, _PERMITTED)["current_user"]["permitted"] == []
 
 
-def test_the_directory_is_never_everyones(composed_tables: None) -> None:
+def test_the_directory_is_never_everyones(db: None) -> None:
     viewer = _person("wildcard-viewer")
     _person("wildcard-other")
     everyone = SubjectRef.of("auth/user", "*")
@@ -249,10 +249,10 @@ def test_the_directory_is_never_everyones(composed_tables: None) -> None:
     assert set(_offered(viewer)) == {"wildcard-viewer"}
 
 
-def test_disclosed_audiences_reach_only_the_accounts_their_sites_reach(composed_tables: None) -> None:
+def test_disclosed_audiences_reach_only_the_accounts_their_sites_reach(db: None) -> None:
     """Who is active or staff is disclosed only within an actor's reach; outside it, protection holds."""
 
-    del composed_tables
+    del db
     viewer = _person("audience-viewer")
     stranger = _person("audience-stranger")
     staff = _person("audience-staff", is_staff=True)
@@ -278,7 +278,7 @@ def test_disclosed_audiences_reach_only_the_accounts_their_sites_reach(composed_
     assert protected(admin) == {staff.pk}
 
 
-def test_the_policy_decides_every_iam_permission(composed_tables: None) -> None:
+def test_the_policy_decides_every_iam_permission(db: None) -> None:
     """One world, every IAM permission with an allow and a deny: accounts, groups, audiences and roles."""
 
     seats = {name: _person(f"iam-policy-{name}") for name in (

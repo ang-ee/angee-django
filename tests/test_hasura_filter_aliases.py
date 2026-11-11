@@ -53,7 +53,7 @@ def alias_owner(monkeypatch, request):
     }})])
 
 
-def test_scalar_alias_queries_aggregates_and_stored_filters_retain_the_same_read_scope(composed_tables, alias_owner):
+def test_scalar_alias_queries_aggregates_and_stored_filters_retain_the_same_read_scope(db, alias_owner):
     """A readable child cannot filter on an unreadable parent's protected scalar."""
     viewer, other = create_user("alias-viewer"), create_user("alias-other")
     with system_context(reason="filter alias fixtures"):
@@ -111,7 +111,7 @@ def test_alias_metadata_exposes_native_scalar_comparisons(alias_owner):
     {"_and": [{"_not": {"upper_name": {"_eq": "OTHER"}}},
               {"_or": [{"upper_name": {"_eq": "VISIBLE"}}, {"name": {"_eq": "Hidden"}}]}]},
 ])
-def test_filter_providers_run_once_only_when_used_across_native_and_stored_reads(composed_tables, monkeypatch, where):
+def test_filter_providers_run_once_only_when_used_across_native_and_stored_reads(db, monkeypatch, where):
     """Computed filters must not penalize ordinary reads or multiply preparation for aggregates."""
     calls = []
     sources = []

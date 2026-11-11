@@ -22,7 +22,7 @@ from tests.test_productivity_write_behavior import Queue, Stage
 
 
 @pytest.fixture
-def team_case(composed_tables):
+def team_case(db):
     users = {}
     with system_context(reason="test.work.team.setup"):
         team = Group.objects.create(name="Roster", slug="roster", visibility="public")
@@ -129,7 +129,7 @@ def test_team_donor_owns_field_gate_and_native_nullable_relation():
         assert "team" in getattr(ProjectWork, declaration)
 
 
-def test_the_policy_decides_every_work_permission(composed_tables):
+def test_the_policy_decides_every_work_permission(db):
     """One queue world, every work permission and task extension arm with an allow and a deny."""
 
     seats = {role: get_user_model().objects.create_user(username=f"work-policy-{role}", password=None)

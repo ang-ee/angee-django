@@ -374,10 +374,10 @@ def _proxy_upload(drive: Any, payload: bytes, **draft_kwargs: Any) -> Any:
         return fresh.finalize(expected_hash=hashlib.sha256(payload).hexdigest(), expected_size=len(payload))
 
 
-def test_file_attachment_locks_a_native_rebac_target(composed_tables: None) -> None:
+def test_file_attachment_locks_a_native_rebac_target(db: None) -> None:
     """The generic target lock does not require an Angee queryset or model base."""
 
-    del composed_tables
+    del db
     with system_context(reason="test native attachment target"):
         target = NativeAttachmentTarget.objects.create()
         with transaction.atomic():
@@ -410,11 +410,11 @@ def test_file_attachment_scopes_chain_on_a_narrowed_selection(drive: Any) -> Non
     reason="PostgreSQL canonical attachment-target serialization contract",
 )
 def test_file_attachment_attach_serializes_on_canonical_target(
-    tmp_path: Path, drive: Any, composed_tables: None,
+    tmp_path: Path, drive: Any,
 ) -> None:
     """A reviewed target lock fences concurrent changes to its complete File set."""
 
-    del tmp_path, composed_tables
+    del tmp_path
     file = _proxy_upload(drive, PNG_BYTES)
     reviewer = create_platform_admin("storage-attachment-reviewer")
     with system_context(reason="file attachment serialization setup"):

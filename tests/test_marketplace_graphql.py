@@ -56,11 +56,11 @@ def _bridge(root: Path) -> Any:
 
 
 def test_add_source_inventories_the_repo_and_points_an_addon_source_at_it(
-    composed_tables: None, tmp_path: Path,
+    db: None, tmp_path: Path,
 ) -> None:
     """``addSource`` imports the repo and creates one ``Source(kind="addon")``."""
 
-    del composed_tables
+    del db
     bridge = _bridge(tmp_path)
     admin = _platform_admin("add-source-admin")
 
@@ -82,11 +82,11 @@ def test_add_source_inventories_the_repo_and_points_an_addon_source_at_it(
 
 
 def test_scan_prepares_native_package_metadata_into_the_registry(
-    composed_tables: None, tmp_path: Path,
+    db: None, tmp_path: Path,
 ) -> None:
     """``scan`` projects an already-built wheel into a REMOTE ``platform.Addon`` row."""
 
-    del composed_tables
+    del db
     write_wheel(
         tmp_path / "src/angee_demo.whl", "angee.demo", "angee-demo",
         requirements=("angee-platform",), description="A demo addon.",
@@ -118,11 +118,11 @@ def test_scan_prepares_native_package_metadata_into_the_registry(
 
 
 def test_scan_refuses_a_non_addon_source(
-    composed_tables: None, tmp_path: Path,
+    db: None, tmp_path: Path,
 ) -> None:
     """``scan`` of a non-addon source kind is reported, never dispatched."""
 
-    del composed_tables
+    del db
     bridge = _bridge(tmp_path)
     admin = _platform_admin("scan-wrong-kind-admin")
     with system_context(reason="test.marketplace.scan.template_seed"):
@@ -136,11 +136,11 @@ def test_scan_refuses_a_non_addon_source(
 
 
 def test_add_source_denies_a_non_admin(
-    composed_tables: None, tmp_path: Path,
+    db: None, tmp_path: Path,
 ) -> None:
     """The REBAC admin gate denies a non-admin actor."""
 
-    del composed_tables
+    del db
     bridge = _bridge(tmp_path)
     plain = User.objects.create_user(username="mkt-plain", password="mkt-plain")
 

@@ -79,7 +79,7 @@ def _actions(schema: Any, viewer: Any) -> dict[str, list[str]]:
     return {row["username"]: [action.lower() for action in row["account_actions"]] for row in rows}
 
 
-def test_field_gates_keep_identity_and_authority_columns_with_administrators(composed_tables):
+def test_field_gates_keep_identity_and_authority_columns_with_administrators(db):
     admin = create_platform_admin("gate-admin", password=None)
     manager = _manager("gate-manager")
     target = User.objects.create_user("gated", "gated@example.com", "a-password")
@@ -105,7 +105,7 @@ def test_field_gates_keep_identity_and_authority_columns_with_administrators(com
     assert (stored.email, stored.username) == ("admin-set@example.com", "admin-set")
 
 
-def test_writers_never_touch_preferences_or_audit_dates(composed_tables):
+def test_writers_never_touch_preferences_or_audit_dates(db):
     manager = _manager("audit-manager")
     target = User.objects.create_user("audited", "audited@example.com", "a-password")
     changes = (
@@ -131,7 +131,7 @@ def test_writers_never_touch_preferences_or_audit_dates(composed_tables):
     assert stamped.account_revision == revision  # a sign-in never stales an open edit
 
 
-def test_writers_never_update_protected_accounts_but_administrators_do(composed_tables):
+def test_writers_never_update_protected_accounts_but_administrators_do(db):
     admin = create_platform_admin("protected-admin", password=None)
     manager = _manager("protected-manager")
     other = _manager("other-manager")
@@ -157,7 +157,7 @@ def test_update_refuses_a_stale_expected_revision(iam_admin):
     assert _stored(target).first_name == "First"
 
 
-def test_every_account_verb_refuses_protected_accounts(composed_tables):
+def test_every_account_verb_refuses_protected_accounts(db):
     """An administrator's account verbs refuse self, staff, superusers, admins and elevated roles alike."""
 
     admin = create_platform_admin("verb-admin", password=None)
@@ -270,7 +270,7 @@ def test_rename_user_changes_only_name_fields(iam_admin):
     assert result_data(blank)["rename_user"]["ok"] is False
 
 
-def test_consumer_role_manages_ordinary_people_through_its_fragment(composed_tables):
+def test_consumer_role_manages_ordinary_people_through_its_fragment(db):
     manager = _manager("roster-manager")
     target = User.objects.create_user("managed", "managed@example.com", "managed-secret")
     schema = _schema("console")
@@ -288,7 +288,7 @@ def test_consumer_role_manages_ordinary_people_through_its_fragment(composed_tab
     assert denied.errors and _stored(target).check_password(reset["password"])
 
 
-def test_account_actions_project_each_verbs_permission_and_eligibility(composed_tables):
+def test_account_actions_project_each_verbs_permission_and_eligibility(db):
     admin = create_platform_admin("projection-admin", password=None)
     manager = _manager("projection-manager")
     User.objects.create_user("with-password", password="secret")
@@ -327,7 +327,7 @@ def test_account_actions_projection_query_count_stays_flat(iam_admin):
     assert count() == few
 
 
-def test_last_login_reads_through_its_field_gate(composed_tables):
+def test_last_login_reads_through_its_field_gate(db):
     admin = create_platform_admin("login-admin", password=None)
     manager = _manager("login-manager")
     reader = User.objects.create_user("directory-reader")

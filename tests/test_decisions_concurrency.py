@@ -18,7 +18,7 @@ pytestmark = [
 ]
 
 
-def test_competing_assignees_cannot_replace_the_first_answer(composed_tables):
+def test_competing_assignees_cannot_replace_the_first_answer():
     requester = create_user("concurrent-requester")
     reviewer = create_user("concurrent-reviewer")
     subject = vault_for(requester)

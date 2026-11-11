@@ -34,7 +34,7 @@ def linked_tags(line):
 
 
 @pytest.fixture
-def many_to_many(composed_tables, monkeypatch):
+def many_to_many(db, monkeypatch):
     actor = create_platform_admin("relation-answerer")
     with system_context(reason="test.decision_many_to_many"):
         document = Document.objects.create(title="Document")
@@ -165,7 +165,7 @@ def test_many_to_many_is_not_written_when_scalar_full_clean_fails(many_to_many):
 
 
 @pytest.fixture
-def records(composed_tables):
+def records(db):
     issuer = create_platform_admin("concerns-issuer")
     reviewer = create_user("concerns-reviewer")
     outsider = create_user("concerns-outsider")
@@ -220,7 +220,7 @@ def test_empty_concerns_are_rejected(records):
         admit(records, [])
 
 
-def test_change_concerns_deduplicate_before_querying_child_models(composed_tables):
+def test_change_concerns_deduplicate_before_querying_child_models(db):
     from angee.base.refs import RecordRef, record_view_refs
     from tests.mtidemo.models import MtiChild, MtiParent
 
@@ -419,7 +419,7 @@ def test_attention_is_actor_scoped_for_unrelated_resources_and_open_record_read(
     assert not any('decisions_decision' in item["sql"].lower() for item in captured)
 
 
-@pytest.mark.usefixtures("composed_tables")
+@pytest.mark.django_db
 def test_attention_resolves_on_a_mutation_payload_the_optimizer_never_annotated():
     """A created row's payload reads its contributed badge once instead of erroring."""
 

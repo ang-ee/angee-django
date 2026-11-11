@@ -38,7 +38,7 @@ def campaign_schema():
 
 
 def test_message_only_reader_gets_null_for_every_private_to_one_relation_except_its_own_attachment(
-    composed_tables, campaign_schema, tmp_path,
+    db, campaign_schema, tmp_path,
 ):
     viewer, owner = make_user("message-viewer"), make_user("private-owner")
     with system_context(reason="test.messaging.graphql.relations"):
@@ -70,7 +70,7 @@ def test_message_only_reader_gets_null_for_every_private_to_one_relation_except_
     assert result["parts"] == [{"parent": None, "file": {"id": str(private_file.sqid)}}]
 
 
-def test_fragment_counts_include_only_readable_messages_and_parts(composed_tables, campaign_schema):
+def test_fragment_counts_include_only_readable_messages_and_parts(db, campaign_schema):
     viewer = make_user("fragment-viewer")
     with system_context(reason="test.messaging.graphql.fragment"):
         shared = Fragment.objects.upsert(text="Shared content")
@@ -86,7 +86,7 @@ def test_fragment_counts_include_only_readable_messages_and_parts(composed_table
 
 @pytest.mark.parametrize("endpoint", [0, 1])
 def test_generic_message_delete_removes_cross_channel_quote_for_either_endpoint_owner(
-    composed_tables, campaign_schema, endpoint,
+    db, campaign_schema, endpoint,
 ):
     owners = [make_user(f"delete-endpoint-{index}") for index in range(2)]
     with system_context(reason="test.messaging.graphql.edge-delete"):
@@ -105,7 +105,7 @@ def test_generic_message_delete_removes_cross_channel_quote_for_either_endpoint_
 
 @pytest.mark.parametrize("size", [1, 5, 10])
 def test_inbox_scopes_recipients_in_sql_and_batches_record_pointers(
-    composed_tables, campaign_schema, django_assert_max_num_queries, size,
+    db, campaign_schema, django_assert_max_num_queries, size,
 ):
     recipient, other, reader = (make_user(name) for name in ("inbox-recipient", "other-recipient", "record-reader"))
     with system_context(reason="test.messaging.graphql.inbox"):
@@ -144,7 +144,7 @@ def test_inbox_scopes_recipients_in_sql_and_batches_record_pointers(
     assert all(row["message"] is None for row in revoked)
 
 
-def test_thread_attachment_projects_its_record_only_to_the_record_reader(composed_tables, campaign_schema):
+def test_thread_attachment_projects_its_record_only_to_the_record_reader(db, campaign_schema):
     """A thread reader sees the attachment edge; its record's identity needs the record's own read."""
     recipient = make_user("attachment-thread-reader")
     with system_context(reason="test.messaging.graphql.attachment-record"):
@@ -174,7 +174,7 @@ def test_thread_attachment_projects_its_record_only_to_the_record_reader(compose
     assert acked["mark_thread_notification_read"]["attachment"] == shown
 
 
-def test_notification_by_id_and_aggregate_use_recipient_permission(composed_tables, campaign_schema):
+def test_notification_by_id_and_aggregate_use_recipient_permission(db, campaign_schema):
     recipient, owner = make_user("private-inbox"), make_user("thread-reader")
     with system_context(reason="test.messaging.graphql.inbox-scope"):
         thread = Thread.objects.create(owner=owner)
@@ -191,7 +191,7 @@ def test_notification_by_id_and_aggregate_use_recipient_permission(composed_tabl
         assert data["thread_notifications_aggregate"]["aggregate"]["count"] == int(expected is not None)
 
 
-def test_notification_acknowledgement_returns_validation_for_foreign_or_missing_ids(composed_tables, campaign_schema):
+def test_notification_acknowledgement_returns_validation_for_foreign_or_missing_ids(db, campaign_schema):
     recipient, stranger = make_user("ack-recipient"), make_user("ack-stranger")
     with system_context(reason="test.messaging.graphql.ack"):
         thread = Thread.objects.create()
@@ -254,7 +254,7 @@ def test_unlisted_projection_types_regate_sudo_cached_relations(activity_catalog
             assert definition.get_field(name).base_resolver(row) is None, (projection, name)
 
 
-def test_deleting_a_native_thread_does_not_leave_admin_only_message_orphans(composed_tables, campaign_schema):
+def test_deleting_a_native_thread_does_not_leave_admin_only_message_orphans(db, campaign_schema):
     owner = make_user("thread-teardown-owner")
     reader = make_user("thread-teardown-reader")
     with system_context(reason="test.messaging.graphql.thread-teardown"):

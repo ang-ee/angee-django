@@ -295,13 +295,12 @@ def test_usage_limits_allow_a_multi_request_tool_turn(db: Any) -> None:
 
 
 def test_view_context_persists_in_native_history_at_its_turn(
-    composed_tables: None,
     capture_tasks: list[Any],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A consumed view attachment remains in history; a later view follows it."""
 
-    del composed_tables, capture_tasks
+    del capture_tasks
     owner = get_user_model().objects.create_user(username="context-history-owner")
     with system_context(reason="test context history agent"):
         agent = Agent.objects.create(
@@ -380,7 +379,6 @@ def test_view_context_persists_in_native_history_at_its_turn(
     [("owner", True), ("owner", False), ("admin", True), ("unattributed", True)],
 )
 def test_view_context_uses_the_poster_read_scope_and_tools_stay_agent_scoped(
-    composed_tables: None,
     capture_tasks: list[Any],
     monkeypatch: pytest.MonkeyPatch,
     poster_kind: str,
@@ -388,7 +386,7 @@ def test_view_context_uses_the_poster_read_scope_and_tools_stay_agent_scoped(
 ) -> None:
     """Only the render step uses the poster; native tools retain the agent's reach."""
 
-    del composed_tables, capture_tasks
+    del capture_tasks
     owner = get_user_model().objects.create_user(username="render-owner")
     stranger = get_user_model().objects.create_user(username="record-owner")
     poster = create_platform_admin("render-admin") if poster_kind == "admin" else owner
@@ -498,11 +496,10 @@ def test_stream_sink_can_stop_the_native_model_loop() -> None:
 
 
 def test_unsupported_approval_does_not_poison_native_model_history(
-    composed_tables: None,
     capture_tasks: list[Any],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    del composed_tables, capture_tasks
+    del capture_tasks
     owner = get_user_model().objects.create_user(username="native-session-owner")
     with system_context(reason="test native agent session seed"):
         agent = Agent.objects.create(

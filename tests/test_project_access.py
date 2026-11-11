@@ -82,10 +82,10 @@ _TASK_PERMISSIONS_RESOURCE = hasura_model_resource(
 )
 
 
-def test_the_policy_decides_every_projects_permission(composed_tables: Any) -> None:
+def test_the_policy_decides_every_projects_permission(db: Any) -> None:
     """One world, every projects permission and extension arm with an allow and a deny, and its read scopes."""
 
-    del composed_tables
+    del db
     seats = {name: create_user(f"projects-policy-{name}") for name in (
         "owner", "editor", "reader", "team-member", "team-moderator", "task-owner", "assignee",
         "task-reader", "vault-owner", "outsider",
@@ -258,7 +258,7 @@ def test_the_policy_decides_every_projects_permission(composed_tables: Any) -> N
     )
 
 
-def test_task_permissions_are_typed_actor_scoped_and_batched(composed_tables: Any) -> None:
+def test_task_permissions_are_typed_actor_scoped_and_batched(db: Any) -> None:
     """Three permission answers remain one list projection at 1, 10 and 50 rows."""
 
     schema = GraphQLSchemas(
@@ -310,11 +310,11 @@ def test_task_permissions_are_typed_actor_scoped_and_batched(composed_tables: An
 
 
 def test_project_binding_grants_and_revokes_thread_message_access(
-    composed_tables: Any,
+    db: Any,
 ) -> None:
     """A project editor writes a bound thread's message and loses access after unbind."""
 
-    del composed_tables
+    del db
     user_model = apps.get_model("iam", "User")
     owner = user_model.objects.create_user(username="project-owner")
     editor = user_model.objects.create_user(username="project-editor", kind="service")
@@ -395,10 +395,10 @@ def test_project_binding_grants_and_revokes_thread_message_access(
     assert binding.pk is not None
 
 
-def test_binding_edits_and_deletes_require_authority(composed_tables: Any) -> None:
+def test_binding_edits_and_deletes_require_authority(db: Any) -> None:
     """Binding persistence cannot move or revoke access around either side's policy owner."""
 
-    del composed_tables
+    del db
     user_model = apps.get_model("iam", "User")
     owner = user_model.objects.create_user(username="binding-owner")
     outsider = user_model.objects.create_user(username="binding-outsider")

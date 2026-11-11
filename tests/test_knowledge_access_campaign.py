@@ -50,7 +50,7 @@ mutation Clone($template: ID!, $name: String!, $owned: Boolean!, $key: String) {
 """
 
 
-def test_the_policy_decides_every_knowledge_permission(composed_tables):
+def test_the_policy_decides_every_knowledge_permission(db):
     """One world, every knowledge permission and extension arm with an allow and a deny, and its read scopes."""
 
     seats = {name: create_user(f"knowledge-policy-{name}") for name in (
@@ -153,7 +153,7 @@ def test_the_policy_decides_every_knowledge_permission(composed_tables):
     )
 
 
-def test_record_note_is_atomic_and_replays_the_original_binding(composed_tables, monkeypatch):
+def test_record_note_is_atomic_and_replays_the_original_binding(db, monkeypatch):
     owner = create_user("record-note-owner")
     vault = vault_for(owner, name="Notes")
     target = vault_for(owner, name="Target")
@@ -176,7 +176,7 @@ def test_record_note_is_atomic_and_replays_the_original_binding(composed_tables,
 
 
 @pytest.mark.parametrize("missing_end", ["vault", "target"])
-def test_record_note_denial_leaves_no_page_or_receipt(composed_tables, missing_end):
+def test_record_note_denial_leaves_no_page_or_receipt(db, missing_end):
     owner, writer = create_user("note-owner"), create_user("note-writer")
     vault = vault_for(owner, name="Notes")
     target = vault_for(owner, name="Target")
@@ -188,7 +188,7 @@ def test_record_note_denial_leaves_no_page_or_receipt(composed_tables, missing_e
         assert not changeset_model().objects.filter(key="denied-note").exists()
 
 
-def test_record_pages_projection_respects_role_and_both_write_ends(composed_tables):
+def test_record_pages_projection_respects_role_and_both_write_ends(db):
     owner, reader = create_user("page-owner"), create_user("page-reader")
     vault = vault_for(owner, name="Pages")
     record = vault_for(owner, name="Record")
@@ -230,7 +230,7 @@ def test_record_pages_projection_respects_role_and_both_write_ends(composed_tabl
 
 
 @pytest.mark.parametrize("seat", ["both", "administrator"])
-def test_binding_without_record_owner_arm_is_absent_in_every_read_direction_and_event(composed_tables, seat):
+def test_binding_without_record_owner_arm_is_absent_in_every_read_direction_and_event(db, seat):
     """Even an actor who reads both ends, or an administrator, sees no binding to an unarmed record type."""
     # No record_binding fragment names this type; a fragment that does breaks the premise here.
     assert not RecordBinding.declares_target(Record)
@@ -287,7 +287,7 @@ def test_binding_without_record_owner_arm_is_absent_in_every_read_direction_and_
         assert reverse == {"page_record_bindings": [], "vault_record_bindings": []}
 
 
-def test_binding_writes_require_both_ends_and_are_role_keyed(composed_tables):
+def test_binding_writes_require_both_ends_and_are_role_keyed(db):
     author, writer = create_user("binding-owner"), create_user("binding-writer")
     record_writer, reader = create_user("binding-record-writer"), create_user("binding-reader")
     knowledge = vault_for(author, name="Knowledge")
@@ -322,7 +322,7 @@ def test_binding_writes_require_both_ends_and_are_role_keyed(composed_tables):
         assert list(RecordBinding.objects.values_list("pk", flat=True)) == [other_role.pk]
 
 
-def test_binding_selections_chain_on_a_selected_population_and_keep_its_actor(composed_tables):
+def test_binding_selections_chain_on_a_selected_population_and_keep_its_actor(db):
     author, stranger = create_user("binding-chain-author"), create_user("binding-chain-stranger")
     knowledge = vault_for(author, name="Chain knowledge")
     record = vault_for(author, name="Chain record")
@@ -339,7 +339,7 @@ def test_binding_selections_chain_on_a_selected_population_and_keep_its_actor(co
     assert not RecordBinding.objects.with_actor(stranger).filter(role="reference").for_record(record).exists()
 
 
-def test_binding_refuses_undeclared_and_untyped_targets(composed_tables):
+def test_binding_refuses_undeclared_and_untyped_targets(db):
     author = create_user("binding-target-owner")
     knowledge = vault_for(author, name="Knowledge")
     with actor_context(author):
@@ -359,7 +359,7 @@ def test_binding_refuses_undeclared_and_untyped_targets(composed_tables):
         assert result["record_knowledge_can_bind"] is expected, model
 
 
-def test_deleting_target_removes_bindings_without_deleting_knowledge(composed_tables):
+def test_deleting_target_removes_bindings_without_deleting_knowledge(db):
     author = create_user("binding-owner")
     knowledge = vault_for(author, name="Knowledge")
     record = vault_for(author, name="Target")
@@ -444,7 +444,7 @@ def test_graphql_clone_rejects_unauthorized_or_malformed_requests_without_creati
 
 @pytest.mark.parametrize("bound_manager", [False, True])
 def test_record_note_and_binding_keep_locks_replay_and_rollback(
-    composed_tables, monkeypatch, bound_manager,
+    db, monkeypatch, bound_manager,
 ):
     """Admission locks, replay, and failed writes use the model's database."""
 

@@ -90,7 +90,7 @@ _DELETE_AGENT_PREVIEW = """
 """
 
 
-def test_agent_hasura_insert_accepts_enum_member_names(composed_tables: None) -> None:
+def test_agent_hasura_insert_accepts_enum_member_names(db: None) -> None:
     """A console read→write round-trip posts choices columns by member NAME.
 
     Reads project ``TextChoices`` enums serialized by name (``"PYDANTIC"``)
@@ -155,7 +155,7 @@ def test_agent_chat_readiness_requires_its_runtime_transport(
     assert agent.expects_service is expects_service
 
 
-def test_agent_hasura_reader_policy_reconciles_membership_with_the_write(composed_tables: None) -> None:
+def test_agent_hasura_reader_policy_reconciles_membership_with_the_write(db: None) -> None:
     """Hasura patches revoke immediately and grant only a provisioned in-process agent."""
     admin = _platform_admin("agent-reader-admin")
     console = _schema()
@@ -195,7 +195,7 @@ def test_agent_hasura_reader_policy_reconciles_membership_with_the_write(compose
 
 @pytest.mark.parametrize("change", ["lifecycle", "runtime"])
 def test_agent_reader_membership_is_revoked_when_readiness_or_runtime_changes(
-    composed_tables: None, change: str,
+    db: None, change: str,
 ) -> None:
     admin = _platform_admin("reader-revocation-admin")
     with system_context(reason="agent reader revocation fixture"):
@@ -212,7 +212,7 @@ def test_agent_reader_membership_is_revoked_when_readiness_or_runtime_changes(
 
 
 @pytest.mark.parametrize("relation", ["owner", "editor"])
-def test_only_admin_can_change_resource_reader_policy(composed_tables: None, relation: str) -> None:
+def test_only_admin_can_change_resource_reader_policy(db: None, relation: str) -> None:
     admin = _platform_admin("reader-field-admin")
     with system_context(reason="reader field authority fixture"):
         owner = User.objects.create_user(username="reader-field-owner")
@@ -243,7 +243,7 @@ def test_only_admin_can_change_resource_reader_policy(composed_tables: None, rel
     ]["resource_reader"] is True
 
 
-def test_stale_full_save_reconciles_reader_membership_from_locked_policy(composed_tables: None) -> None:
+def test_stale_full_save_reconciles_reader_membership_from_locked_policy(db: None) -> None:
     admin = _platform_admin("stale-reader-admin")
     with system_context(reason="stale reader policy"):
         agent = Agent.objects.create(name="Stale reader", owner=admin, runtime_class="pydantic")
@@ -260,7 +260,7 @@ def test_stale_full_save_reconciles_reader_membership_from_locked_policy(compose
         )
 
 
-def test_agent_hasura_insert_update_and_delete(composed_tables: None) -> None:
+def test_agent_hasura_insert_update_and_delete(db: None) -> None:
     """Agent row writes use the generated Hasura mutation roots."""
 
     admin = _platform_admin("agt-hasura-admin")
@@ -386,7 +386,7 @@ def test_agent_resource_exposes_authored_delete_preview() -> None:
     assert resource.as_wire(schema_name="console")["roots"]["deletePreview"] == "delete_agent"
 
 
-def test_agent_delete_preview_hides_other_users_transcripts_and_confirms(composed_tables: None) -> None:
+def test_agent_delete_preview_hides_other_users_transcripts_and_confirms(db: None) -> None:
     """An owner sees cascade counts but only readable session and turn identities."""
 
     owner = User.objects.create_user(username="agt-preview-owner")
@@ -448,7 +448,7 @@ def test_agent_delete_preview_hides_other_users_transcripts_and_confirms(compose
 
 
 @pytest.mark.parametrize("confirm", [False, True])
-def test_agent_delete_preview_reports_provisioned_blocker(composed_tables: None, confirm: bool) -> None:
+def test_agent_delete_preview_reports_provisioned_blocker(db: None, confirm: bool) -> None:
     """A provisioned agent reports its owning refusal without attempting deletion."""
 
     owner = User.objects.create_user(username="agt-provisioned-preview-owner")
@@ -472,7 +472,7 @@ def test_agent_delete_preview_reports_provisioned_blocker(composed_tables: None,
 @pytest.mark.parametrize("confirm", [False, True])
 @pytest.mark.parametrize("status", ["running", "awaiting_approval"])
 def test_agent_delete_preview_reports_hidden_active_turn_blockers(
-    composed_tables: None,
+    db: None,
     confirm: bool,
     status: str,
 ) -> None:
@@ -508,7 +508,7 @@ def test_agent_delete_preview_reports_hidden_active_turn_blockers(
         assert AgentTurn.objects.filter(pk=turn.pk, status=status).exists()
 
 
-def test_agent_delete_preview_has_constant_query_count_across_sessions(composed_tables: None) -> None:
+def test_agent_delete_preview_has_constant_query_count_across_sessions(db: None) -> None:
     """Collecting 1 or 50 private active sessions adds no per-session blocker queries."""
 
     owner = User.objects.create_user(username="agt-preview-budget-owner")
@@ -539,7 +539,7 @@ def test_agent_delete_preview_has_constant_query_count_across_sessions(composed_
 
 @pytest.mark.parametrize("surface", ["agent", "user"])
 def test_graphql_delete_receivers_refuse_after_preview_race(
-    composed_tables: None, monkeypatch: pytest.MonkeyPatch, surface: str,
+    db: None, monkeypatch: pytest.MonkeyPatch, surface: str,
 ) -> None:
     """Authored and IAM Hasura deletes return readable late refusals and retain all rows."""
 
@@ -586,7 +586,7 @@ def test_graphql_delete_receivers_refuse_after_preview_race(
         assert AgentTurn.objects.filter(pk=turn.pk, status="running").exists()
 
 
-def test_agent_delete_capability_has_constant_query_count(composed_tables: None) -> None:
+def test_agent_delete_capability_has_constant_query_count(db: None) -> None:
     """A narrow can_delete selection batches active turns and lifecycle facts."""
 
     owner = User.objects.create_user(username="agt-delete-budget-owner")
@@ -617,7 +617,7 @@ def test_agent_delete_capability_has_constant_query_count(composed_tables: None)
     assert counts[0] == counts[1], counts
 
 
-def test_a_shared_agents_owner_shows_their_name_without_restricted_fields(composed_tables: None) -> None:
+def test_a_shared_agents_owner_shows_their_name_without_restricted_fields(db: None) -> None:
     """The non-null owner resolves for a reader who is not a people manager, restricted fields withheld."""
 
     owner = User.objects.create_user(username="agt-owner-name", email="agt-owner@example.com", first_name="Owen")
@@ -635,7 +635,7 @@ def test_a_shared_agents_owner_shows_their_name_without_restricted_fields(compos
     }]
 
 
-def test_agent_hasura_delete_blocks_rendered_agents(composed_tables: None) -> None:
+def test_agent_hasura_delete_blocks_rendered_agents(db: None) -> None:
     """Agent delete policy is enforced by the backend write owner, not only the UI."""
 
     admin = _platform_admin("agt-delete-block-admin")
@@ -666,7 +666,7 @@ def test_agent_hasura_delete_blocks_rendered_agents(composed_tables: None) -> No
         assert Agent.objects.filter(pk=agent.pk).exists()
 
 
-def test_owner_deletes_agent_with_idle_sessions_from_several_users(composed_tables: None) -> None:
+def test_owner_deletes_agent_with_idle_sessions_from_several_users(db: None) -> None:
     """Agent delete authority derives to private transcripts without granting read."""
 
     owner = User.objects.create_user(username="agt-cascade-owner")
@@ -719,7 +719,7 @@ def test_owner_deletes_agent_with_idle_sessions_from_several_users(composed_tabl
 
 @pytest.mark.parametrize("delete_path", ["instance", "queryset", "session"])
 def test_agent_transcript_delete_keeps_owner_authority_throughout(
-    composed_tables: None, delete_path: str,
+    db: None, delete_path: str,
 ) -> None:
     """Private sessions and turns delete through their agent without any elevation."""
 
@@ -757,7 +757,7 @@ def test_agent_transcript_delete_keeps_owner_authority_throughout(
 
 
 @pytest.mark.parametrize("actor", ["owner", "admin"])
-def test_agent_owner_or_admin_deletes_a_session_directly(composed_tables: None, actor: str) -> None:
+def test_agent_owner_or_admin_deletes_a_session_directly(db: None, actor: str) -> None:
     """Session deletion derives through the agent and retains the platform admin arm."""
 
     owner = User.objects.create_user(username="agt-direct-session-owner")
@@ -778,7 +778,7 @@ def test_agent_owner_or_admin_deletes_a_session_directly(composed_tables: None, 
         assert not AgentTurn.objects.filter(pk=turn.pk).exists()
 
 
-def test_session_user_without_agent_ownership_cannot_delete_transcripts(composed_tables: None) -> None:
+def test_session_user_without_agent_ownership_cannot_delete_transcripts(db: None) -> None:
     """Session write permission grants neither session nor turn deletion."""
 
     owner = User.objects.create_user(username="agt-session-agent-owner")
@@ -808,7 +808,7 @@ def test_session_user_without_agent_ownership_cannot_delete_transcripts(composed
 
 
 @pytest.mark.parametrize("status", ["running", "awaiting_approval"])
-def test_agent_delete_refuses_active_turns_in_unreadable_sessions(composed_tables: None, status: str) -> None:
+def test_agent_delete_refuses_active_turns_in_unreadable_sessions(db: None, status: str) -> None:
     """The projection and delete verb refuse all active work without disclosing its transcript."""
 
     owner = User.objects.create_user(username="agt-active-agent-owner")
@@ -865,7 +865,7 @@ def test_agent_delete_refuses_active_turns_in_unreadable_sessions(composed_table
     ],
 )
 def test_agent_delete_denies_before_locking_or_disclosing_session_counts(
-    composed_tables: None,
+    db: None,
     monkeypatch: pytest.MonkeyPatch,
     relation: str,
     operation: str,
@@ -918,7 +918,7 @@ def test_agent_delete_denies_before_locking_or_disclosing_session_counts(
 
 
 @pytest.mark.parametrize("status", ["running", "awaiting_approval"])
-def test_agent_session_delete_refuses_an_active_turn(composed_tables: None, status: str) -> None:
+def test_agent_session_delete_refuses_an_active_turn(db: None, status: str) -> None:
     """Even an admin, who may delete sessions, must Stop an active turn first."""
 
     owner = User.objects.create_user(username="agt-active-session-owner")
@@ -944,7 +944,7 @@ def test_agent_session_delete_refuses_an_active_turn(composed_tables: None, stat
 @pytest.mark.parametrize("actor", ["owner", "admin", "system"])
 @pytest.mark.parametrize("status", ["running", "awaiting_approval"])
 def test_agent_queryset_delete_refuses_private_active_turns(
-    composed_tables: None, actor: str, status: str,
+    db: None, actor: str, status: str,
 ) -> None:
     """Bulk deletion refuses hidden active work without exposing a turn identity."""
 
@@ -984,7 +984,7 @@ def test_agent_queryset_delete_refuses_private_active_turns(
     ],
 )
 def test_agent_queryset_delete_requires_deprovisioning(
-    composed_tables: None, actor: str, state: dict[str, str],
+    db: None, actor: str, state: dict[str, str],
 ) -> None:
     """The collector enforces teardown even when no active turn retains the agent."""
 
@@ -1010,7 +1010,7 @@ def test_agent_queryset_delete_requires_deprovisioning(
 @pytest.mark.parametrize("model", [AgentSession, AgentTurn])
 @pytest.mark.parametrize("status", ["running", "awaiting_approval"])
 def test_transcript_queryset_delete_refuses_active_turns(
-    composed_tables: None, model: type[models.Model], status: str,
+    db: None, model: type[models.Model], status: str,
 ) -> None:
     """A system delete beginning below the agent still cannot erase claimed work."""
 
@@ -1040,7 +1040,7 @@ def test_transcript_queryset_delete_refuses_active_turns(
     ],
 )
 def test_user_delete_refuses_active_turn_cascades(
-    composed_tables: None,
+    db: None,
     status: str,
     mutation: str,
     is_preview: bool,
@@ -1075,7 +1075,7 @@ def test_user_delete_refuses_active_turn_cascades(
 
 
 @pytest.mark.parametrize("model", [Agent, AgentTurn])
-def test_instance_delete_uses_current_lifecycle_state(composed_tables: None, model: type[models.Model]) -> None:
+def test_instance_delete_uses_current_lifecycle_state(db: None, model: type[models.Model]) -> None:
     """A stale draft agent or pending turn cannot bypass a later lifecycle change."""
 
     owner = User.objects.create_user(username="agt-stale-delete-owner")
@@ -1098,7 +1098,7 @@ def test_instance_delete_uses_current_lifecycle_state(composed_tables: None, mod
 
 
 @pytest.mark.parametrize("status", ["running", "awaiting_approval"])
-def test_agent_owner_cannot_delete_session_with_hidden_active_turn(composed_tables: None, status: str) -> None:
+def test_agent_owner_cannot_delete_session_with_hidden_active_turn(db: None, status: str) -> None:
     """Delete authority over a private session never bypasses hidden active work."""
 
     owner = User.objects.create_user(username="agt-hidden-active-owner")
@@ -1119,7 +1119,7 @@ def test_agent_owner_cannot_delete_session_with_hidden_active_turn(composed_tabl
 
 
 @pytest.mark.parametrize("model", [Agent, AgentSession, AgentTurn])
-def test_instance_delete_tolerates_a_vanished_row(composed_tables: None, model: type[models.Model]) -> None:
+def test_instance_delete_tolerates_a_vanished_row(db: None, model: type[models.Model]) -> None:
     """A second deletion of an already collected row does not raise DoesNotExist."""
 
     owner = User.objects.create_user(username="agt-vanished-delete-owner")
@@ -1135,7 +1135,7 @@ def test_instance_delete_tolerates_a_vanished_row(composed_tables: None, model: 
 
 
 @pytest.mark.parametrize("delete_path", ["instance", "queryset"])
-def test_fifty_turn_agent_cascade_has_bounded_guard_queries(composed_tables: None, delete_path: str) -> None:
+def test_fifty_turn_agent_cascade_has_bounded_guard_queries(db: None, delete_path: str) -> None:
     """Guards add constant agent work, two reads per session, and native bypass audits."""
 
     owner = User.objects.create_user(username="agt-delete-query-owner")
@@ -1191,7 +1191,7 @@ def test_fifty_turn_agent_cascade_has_bounded_guard_queries(composed_tables: Non
         assert not AgentTurn.objects.filter(session_id__in=[session.pk for session in sessions]).exists()
 
 
-def test_agent_delete_after_stop_uses_current_capability(composed_tables: None) -> None:
+def test_agent_delete_after_stop_uses_current_capability(db: None) -> None:
     """A capability projection from before Stop cannot retain an inactive agent."""
 
     owner = User.objects.create_user(username="agt-stale-capability-owner")
@@ -1211,7 +1211,7 @@ def test_agent_delete_after_stop_uses_current_capability(composed_tables: None) 
 
 
 @pytest.mark.parametrize("lifecycle", ["ready", "deprovisioned"])
-def test_user_delete_leaves_their_agents_ownerless_with_running_work(composed_tables: None, lifecycle: str) -> None:
+def test_user_delete_leaves_their_agents_ownerless_with_running_work(db: None, lifecycle: str) -> None:
     """Deleting an agent's owner clears the owner; the agent, its principal and active turns remain."""
 
     owner = User.objects.create_user(username="agt-user-agent-owner")
@@ -1236,7 +1236,7 @@ def test_user_delete_leaves_their_agents_ownerless_with_running_work(composed_ta
         assert AgentTurn.objects.filter(pk=turn.pk, session=session, status="running").exists()
 
 
-def test_agent_hasura_update_sets_many_to_many_skills(composed_tables: None) -> None:
+def test_agent_hasura_update_sets_many_to_many_skills(db: None) -> None:
     """Generated Hasura updates replace agent skill membership through relation arrays."""
 
     admin = _platform_admin("agt-m2m-admin")
@@ -1283,7 +1283,7 @@ def test_agent_hasura_update_sets_many_to_many_skills(composed_tables: None) -> 
         assert agent.skills.count() == 0
 
 
-def test_agent_update_is_platform_admin_gated(composed_tables: None) -> None:
+def test_agent_update_is_platform_admin_gated(db: None) -> None:
     """Updating an agent through the console is platform-admin gated."""
 
     admin = _platform_admin("agt-crud-admin")
@@ -1302,7 +1302,7 @@ def test_agent_update_is_platform_admin_gated(composed_tables: None) -> None:
     assert renamed == {"name": "Renamed"}
 
 
-def test_refresh_provider_models_is_admin_gated(composed_tables: None) -> None:
+def test_refresh_provider_models_is_admin_gated(db: None) -> None:
     """The `refreshProviderModels` action is platform-admin gated."""
 
     admin = _platform_admin("agt-refresh-admin")
@@ -1316,7 +1316,7 @@ def test_refresh_provider_models_is_admin_gated(composed_tables: None) -> None:
     assert result["ok"] is True
 
 
-def test_inference_models_query_accepts_provider_sqid_filter(composed_tables: None) -> None:
+def test_inference_models_query_accepts_provider_sqid_filter(db: None) -> None:
     """The model catalogue list supports native provider relation filters."""
 
     admin = _platform_admin("agt-model-filter-admin")
@@ -1348,7 +1348,7 @@ def test_inference_models_query_accepts_provider_sqid_filter(composed_tables: No
 
 
 def test_inference_model_groups_aggregate_runs_for_provider_and_capability(
-    composed_tables: None,
+    db: None,
 ) -> None:
     """The model catalogue exposes grouped buckets for list/board views."""
 
@@ -1413,7 +1413,7 @@ def test_inference_model_groups_aggregate_runs_for_provider_and_capability(
     }
 
 
-def test_create_inference_provider_creates_child_row(composed_tables: None) -> None:
+def test_create_inference_provider_creates_child_row(db: None) -> None:
     """InferenceProvider create writes the provider child row directly."""
 
     admin = _platform_admin("agt-provider-create-admin")
@@ -1472,7 +1472,7 @@ def test_native_provider_metadata_owns_required_inputs() -> None:
     assert {"vendor", "owner", "name", "backend_class"} <= set(resource.create_fields)
 
 
-def test_native_provider_create_applies_defaults_before_validation(composed_tables: None) -> None:
+def test_native_provider_create_applies_defaults_before_validation(db: None) -> None:
     """Omitted optional inputs retain model defaults and actor ownership."""
 
     admin = _platform_admin("agt-provider-native-default-admin")
@@ -1492,7 +1492,7 @@ def test_native_provider_create_applies_defaults_before_validation(composed_tabl
     assert created["owner"]["id"] == str(admin.sqid)
 
 
-def test_native_provider_mutation_results_prepare_selected_annotations(composed_tables: None) -> None:
+def test_native_provider_mutation_results_prepare_selected_annotations(db: None) -> None:
     """Create, replay and update return the same native projection as record reads."""
 
     admin = _platform_admin("agt-provider-native-result-admin")
@@ -1529,7 +1529,7 @@ def test_native_provider_mutation_results_prepare_selected_annotations(composed_
         assert InferenceProvider.objects.filter(vendor=seed.vendor).count() == 1
 
 
-def test_native_provider_writes_remain_admin_only_for_owner(composed_tables: None) -> None:
+def test_native_provider_writes_remain_admin_only_for_owner(db: None) -> None:
     """Native model ownership does not broaden the console's admin write policy."""
 
     provider = _provider("agt-provider-native-owner")
@@ -1564,7 +1564,7 @@ def test_native_provider_writes_remain_admin_only_for_owner(composed_tables: Non
         assert InferenceProvider.objects.filter(vendor=provider.vendor).count() == 1
 
 
-def test_update_inference_provider_merges_config_and_removes_null_keys(composed_tables: None) -> None:
+def test_update_inference_provider_merges_config_and_removes_null_keys(db: None) -> None:
     """Untyped provider patches preserve unsent keys and delete explicit null values."""
 
     provider = _provider(
@@ -1593,7 +1593,7 @@ def test_update_inference_provider_merges_config_and_removes_null_keys(composed_
         assert provider.config == expected
 
 
-def test_update_inference_provider_backend_is_create_only(composed_tables: None) -> None:
+def test_update_inference_provider_backend_is_create_only(db: None) -> None:
     """A saved provider cannot switch implementation or absorb another backend's defaults."""
 
     admin = _platform_admin("agt-provider-update-admin")
@@ -1649,10 +1649,10 @@ def test_update_inference_provider_backend_is_create_only(composed_tables: None)
     assert provider.account_id == original_account_id
 
 
-def test_connect_inference_provider_uses_provider_backend_oauth_client(composed_tables: None) -> None:
+def test_connect_inference_provider_uses_provider_backend_oauth_client(db: None) -> None:
     """Provider connect resolves OAuth from provider.backend."""
 
-    del composed_tables
+    del db
     provider = _provider(
         "agt-provider-connect", backend_class="anthropic", name="Anthropic", credential=None, lifecycle="disconnected",
     )
@@ -1698,7 +1698,7 @@ def test_connect_inference_provider_uses_provider_backend_oauth_client(composed_
     assert provider.credential_id == credential.pk
 
 
-def test_inference_provider_projects_shared_connection_readiness(composed_tables: None) -> None:
+def test_inference_provider_projects_shared_connection_readiness(db: None) -> None:
     provider = _provider("provider-readiness", backend_class="anthropic")
     with system_context(reason="test provider ready registration"):
         OAuthClient.objects.create(
@@ -1716,11 +1716,11 @@ def test_inference_provider_projects_shared_connection_readiness(composed_tables
 
 
 def test_connect_inference_provider_uses_shared_oauth_client_error_code(
-    composed_tables: None,
+    db: None,
 ) -> None:
     """Provider connect reports the shared OAuth-client lookup error code."""
 
-    del composed_tables
+    del db
     provider = _provider("agt-provider-missing-oauth", backend_class="anthropic", name="Anthropic")
     mutation = """
         mutation ConnectProvider($id: ID!) {
@@ -1743,7 +1743,7 @@ def test_connect_inference_provider_uses_shared_oauth_client_error_code(
     }
 
 
-def test_create_mcp_server_keeps_defaults_for_omitted_optionals(composed_tables: None) -> None:
+def test_create_mcp_server_keeps_defaults_for_omitted_optionals(db: None) -> None:
     """A create omitting optional non-null fields leaves them at the model default.
 
     Locks the `strawberry.UNSET` input contract: an omitted `config`/`placement` must
@@ -1762,7 +1762,7 @@ def test_create_mcp_server_keeps_defaults_for_omitted_optionals(composed_tables:
     assert created == {"name": "Local MCP", "placement": "EXTERNAL", "config": {}}
 
 
-def test_provision_agent_renders_via_daemon_and_is_admin_gated(composed_tables: None, monkeypatch: Any) -> None:
+def test_provision_agent_renders_via_daemon_and_is_admin_gated(db: None, monkeypatch: Any) -> None:
     """`provisionAgent` syncs secrets, drives the daemon render, and records names.
 
     The daemon is mocked. Asserts the credential secret is synced, the workspace and
@@ -1888,7 +1888,7 @@ def test_provision_agent_renders_via_daemon_and_is_admin_gated(composed_tables: 
     assert ("destroy", "ws-bot") in calls
 
 
-def test_mark_provisioning_never_starts_over_a_provision_under_way(composed_tables: None) -> None:
+def test_mark_provisioning_never_starts_over_a_provision_under_way(db: None) -> None:
     """``PROVISIONING`` is not a source: a second provision cannot run over the first."""
 
     admin = _platform_admin("agt-reenter-admin")
@@ -1898,7 +1898,7 @@ def test_mark_provisioning_never_starts_over_a_provision_under_way(composed_tabl
         agent.mark_provisioning()
 
 
-def test_provision_agent_refuses_while_a_provision_is_under_way(composed_tables: None, monkeypatch: Any) -> None:
+def test_provision_agent_refuses_while_a_provision_is_under_way(db: None, monkeypatch: Any) -> None:
     """A provision that finds the row ``PROVISIONING`` refuses without touching the daemon or the row.
 
     The lock is free here — a stalled provision looks like this — so the refusal comes from
@@ -1916,7 +1916,7 @@ def test_provision_agent_refuses_while_a_provision_is_under_way(composed_tables:
     assert _agent_state(agent, admin)["lifecycle"] == "PROVISIONING"
 
 
-def test_deprovision_agent_from_empty_provisioning_row_is_idempotent(composed_tables: None, monkeypatch: Any) -> None:
+def test_deprovision_agent_from_empty_provisioning_row_is_idempotent(db: None, monkeypatch: Any) -> None:
     """A teardown retry for a stuck PROVISIONING row with no daemon names clears locally."""
 
     admin = _platform_admin("agt-empty-deprov-admin")
@@ -1944,7 +1944,7 @@ def test_deprovision_agent_from_empty_provisioning_row_is_idempotent(composed_ta
 
 
 def test_provision_agent_reports_racing_deprovision_without_clobbering_state(
-    composed_tables: None, monkeypatch: Any
+    db: None, monkeypatch: Any
 ) -> None:
     """If teardown advances the row before final record, provision reports failure and leaves it."""
 
@@ -1979,7 +1979,7 @@ def test_provision_agent_reports_racing_deprovision_without_clobbering_state(
 
 
 def test_provision_agent_failure_tears_down_service_then_workspace_and_records_error(
-    composed_tables: None, monkeypatch: Any
+    db: None, monkeypatch: Any
 ) -> None:
     """A service-start failure removes its persisted entry before the workspace."""
 
@@ -2061,7 +2061,7 @@ def test_provision_agent_failure_tears_down_service_then_workspace_and_records_e
 
 
 def test_deprovision_agent_keeps_the_names_when_the_daemon_answers_a_plain_404(
-    composed_tables: None, monkeypatch: Any
+    db: None, monkeypatch: Any
 ) -> None:
     """A not-found that does not name the instance (a proxy, a wrong mount) is a failure, not a destroy.
 
@@ -2099,7 +2099,7 @@ def test_deprovision_agent_keeps_the_names_when_the_daemon_answers_a_plain_404(
     )
 
 
-def test_provision_agent_records_error_when_plan_resolution_fails(composed_tables: None, monkeypatch: Any) -> None:
+def test_provision_agent_records_error_when_plan_resolution_fails(db: None, monkeypatch: Any) -> None:
     """A plan-resolution failure records ERROR — the agent never strands in PROVISIONING.
 
     `_render_plan` reads the credential chain and agent inputs before the daemon render; a
@@ -2146,7 +2146,7 @@ def test_provision_agent_records_error_when_plan_resolution_fails(composed_table
         assert "Credential refresh requires autocommit" in agent.last_error
 
 
-def test_reprovision_agent_recreates_service_over_existing_workspace(composed_tables: None, monkeypatch: Any) -> None:
+def test_reprovision_agent_recreates_service_over_existing_workspace(db: None, monkeypatch: Any) -> None:
     """`reprovisionAgent` destroys the old service and recreates it over the kept workspace."""
 
     admin = _platform_admin("agt-reprov-admin")
@@ -2209,7 +2209,7 @@ def test_reprovision_agent_recreates_service_over_existing_workspace(composed_ta
 
 
 def test_reprovision_agent_failure_clears_destroyed_service_but_keeps_workspace(
-    composed_tables: None, monkeypatch: Any
+    db: None, monkeypatch: Any
 ) -> None:
     """When the old service is destroyed but the recreate fails, the stale name is cleared.
 
@@ -2434,7 +2434,7 @@ def _conflicted_agent(
 
 
 def test_provision_agent_records_the_conflicting_workspace_and_offers_adopt_and_replace(
-    composed_tables: None, monkeypatch: Any
+    db: None, monkeypatch: Any
 ) -> None:
     """A 409 over an unrecorded workspace is a recorded outcome; Provision then stays hidden."""
 
@@ -2467,7 +2467,7 @@ def test_provision_agent_records_the_conflicting_workspace_and_offers_adopt_and_
 
 
 def test_provision_agent_conflict_over_another_agents_instance_names_it_only_to_the_admin(
-    composed_tables: None, monkeypatch: Any
+    db: None, monkeypatch: Any
 ) -> None:
     """A conflict with an instance another agent records is never recorded for adoption.
 
@@ -2489,7 +2489,7 @@ def test_provision_agent_conflict_over_another_agents_instance_names_it_only_to_
     assert "Owner" not in state["last_error"] and "another agent" in state["last_error"]
 
 
-def test_renaming_an_agent_clears_its_conflicting_workspace(composed_tables: None, monkeypatch: Any) -> None:
+def test_renaming_an_agent_clears_its_conflicting_workspace(db: None, monkeypatch: Any) -> None:
     """The conflicting workspace's name derived from the old agent name; a rename makes it stale."""
 
     admin = _platform_admin("agt-rename-admin")
@@ -2521,7 +2521,7 @@ def test_renaming_an_agent_clears_its_conflicting_workspace(composed_tables: Non
     ],
 )
 def test_provision_agent_keeps_the_names_whose_rollback_destroy_failed(
-    composed_tables: None, monkeypatch: Any, failing_destroy: str, kept: tuple[str, str, str], destroys: list[str]
+    db: None, monkeypatch: Any, failing_destroy: str, kept: tuple[str, str, str], destroys: list[str]
 ) -> None:
     """A failed rollback leaves its instance recorded, so the agent never forgets it.
 
@@ -2547,7 +2547,7 @@ def test_provision_agent_keeps_the_names_whose_rollback_destroy_failed(
     "verb", ["provision_agent", "adopt_agent", "replace_agent", "reprovision_agent", "deprovision_agent"]
 )
 def test_a_lifecycle_verb_is_refused_while_another_holds_the_agent(
-    composed_tables: None, monkeypatch: Any, verb: str
+    db: None, monkeypatch: Any, verb: str
 ) -> None:
     """The five verbs share one advisory lock per agent; a refused verb touches neither daemon nor row."""
 
@@ -2578,7 +2578,7 @@ def test_a_lifecycle_verb_is_refused_while_another_holds_the_agent(
     assert _agent_state(agent, admin) == before
 
 
-def test_adopt_agent_keeps_a_running_container_as_it_is(composed_tables: None, monkeypatch: Any) -> None:
+def test_adopt_agent_keeps_a_running_container_as_it_is(db: None, monkeypatch: Any) -> None:
     """Adopt records the workspace and its running service and changes nothing on the daemon."""
 
     admin = _platform_admin("agt-adopt-admin")
@@ -2606,7 +2606,7 @@ def test_adopt_agent_keeps_a_running_container_as_it_is(composed_tables: None, m
     )
 
 
-def test_adopt_agent_starts_a_stopped_service(composed_tables: None, monkeypatch: Any) -> None:
+def test_adopt_agent_starts_a_stopped_service(db: None, monkeypatch: Any) -> None:
     """A stopped adopted service is brought up; it is not re-rendered."""
 
     admin = _platform_admin("agt-adopt-start-admin")
@@ -2619,7 +2619,7 @@ def test_adopt_agent_starts_a_stopped_service(composed_tables: None, monkeypatch
 
 
 def test_adopt_agent_without_a_mounting_service_records_the_workspace_and_asks_for_reprovision(
-    composed_tables: None, monkeypatch: Any
+    db: None, monkeypatch: Any
 ) -> None:
     """Adopt renders nothing: a workspace with no service is recorded, and Reprovision renders one."""
 
@@ -2649,7 +2649,7 @@ def test_adopt_agent_without_a_mounting_service_records_the_workspace_and_asks_f
     ],
 )
 def test_adopt_agent_refuses_an_instance_that_does_not_verify_as_this_agents(
-    composed_tables: None, monkeypatch: Any, operator_state: dict[str, Any], holder: dict[str, str], refusal: str
+    db: None, monkeypatch: Any, operator_state: dict[str, Any], holder: dict[str, str], refusal: str
 ) -> None:
     """Adopt verifies template, identity inputs, mounting services and records before changing anything."""
 
@@ -2680,7 +2680,7 @@ def test_adopt_agent_refuses_an_instance_that_does_not_verify_as_this_agents(
     )
 
 
-def test_adopt_agent_turns_a_record_race_into_the_other_agents_name(composed_tables: None, monkeypatch: Any) -> None:
+def test_adopt_agent_turns_a_record_race_into_the_other_agents_name(db: None, monkeypatch: Any) -> None:
     """The unique instance constraint refuses a record another agent won meanwhile."""
 
     admin = _platform_admin("agt-adopt-race-admin")
@@ -2695,7 +2695,7 @@ def test_adopt_agent_turns_a_record_race_into_the_other_agents_name(composed_tab
     assert _agent_state(agent, admin)["conflict_name"] == "ws-taken"
 
 
-def test_adopt_agent_failing_after_the_record_keeps_the_instance(composed_tables: None, monkeypatch: Any) -> None:
+def test_adopt_agent_failing_after_the_record_keeps_the_instance(db: None, monkeypatch: Any) -> None:
     """Once recorded, a failed start leaves the workspace and service on the agent, never forgotten."""
 
     admin = _platform_admin("agt-adopt-startfail-admin")
@@ -2717,7 +2717,7 @@ def test_adopt_agent_failing_after_the_record_keeps_the_instance(composed_tables
 
 @pytest.mark.parametrize("verb", ["adopt_agent", "replace_agent", "deprovision_agent"])
 def test_an_unreachable_operator_during_the_conflict_read_changes_nothing(
-    composed_tables: None, monkeypatch: Any, verb: str
+    db: None, monkeypatch: Any, verb: str
 ) -> None:
     """The verification read failing refuses the verb; nothing is recorded or destroyed."""
 
@@ -2734,7 +2734,7 @@ def test_an_unreachable_operator_during_the_conflict_read_changes_nothing(
 
 
 def test_replace_agent_destroys_the_verified_conflicting_instance_then_provisions_afresh(
-    composed_tables: None, monkeypatch: Any
+    db: None, monkeypatch: Any
 ) -> None:
     """Replace records the conflicting instance, destroys it, and renders anew."""
 
@@ -2765,7 +2765,7 @@ def test_replace_agent_destroys_the_verified_conflicting_instance_then_provision
 
 
 def test_replace_agent_refuses_to_destroy_a_workspace_this_agent_did_not_render(
-    composed_tables: None, monkeypatch: Any
+    db: None, monkeypatch: Any
 ) -> None:
     """A conflicting workspace from another template is never destroyed by Replace."""
 
@@ -2782,7 +2782,7 @@ def test_replace_agent_refuses_to_destroy_a_workspace_this_agent_did_not_render(
 
 
 def test_replace_agent_refuses_before_destroying_when_it_could_not_provision(
-    composed_tables: None, monkeypatch: Any
+    db: None, monkeypatch: Any
 ) -> None:
     """A replace that could not rebuild the agent never destroys the conflicting instance."""
 
@@ -2805,7 +2805,7 @@ def test_replace_agent_refuses_before_destroying_when_it_could_not_provision(
 
 
 def test_a_service_conflict_keeps_the_new_workspace_and_replace_clears_both(
-    composed_tables: None, monkeypatch: Any
+    db: None, monkeypatch: Any
 ) -> None:
     """A 409 on the service keeps the workspace this provision created; Replace then rebuilds both."""
 
@@ -2844,7 +2844,7 @@ def test_a_service_conflict_keeps_the_new_workspace_and_replace_clears_both(
     assert _agent_state(agent, admin)["conflict_kind"] is None
 
 
-def test_reprovision_agent_records_a_service_conflict(composed_tables: None, monkeypatch: Any) -> None:
+def test_reprovision_agent_records_a_service_conflict(db: None, monkeypatch: Any) -> None:
     """A 409 while recreating the service is recorded, keeping the workspace and forgetting the destroyed service."""
 
     admin = _platform_admin("agt-reprov-conflict-admin")
@@ -2906,7 +2906,7 @@ def _service_conflict(name: str) -> OperatorDaemonConflict:
 
 
 def test_reprovision_agent_never_forgets_the_new_service_on_a_later_conflict(
-    composed_tables: None, monkeypatch: Any
+    db: None, monkeypatch: Any
 ) -> None:
     """The old service is forgotten when destroyed; the new one, same name, stays recorded."""
 
@@ -2927,7 +2927,7 @@ def test_reprovision_agent_never_forgets_the_new_service_on_a_later_conflict(
     )
 
 
-def test_a_409_over_an_instance_this_agent_records_is_a_plain_failure(composed_tables: None, monkeypatch: Any) -> None:
+def test_a_409_over_an_instance_this_agent_records_is_a_plain_failure(db: None, monkeypatch: Any) -> None:
     """It is never recorded as a conflict the agent "does not record"; the verb's own creation is undone."""
 
     admin = _platform_admin("agt-own-409-admin")
@@ -2961,7 +2961,7 @@ def test_a_409_over_an_instance_this_agent_records_is_a_plain_failure(composed_t
     ],
 )
 def test_a_conflicting_instance_never_overwrites_one_this_agent_records(
-    composed_tables: None,
+    db: None,
     monkeypatch: Any,
     recorded: dict[str, str],
     conflict: tuple[str, str],
@@ -3002,7 +3002,7 @@ def test_a_conflicting_instance_never_overwrites_one_this_agent_records(
 
 @pytest.mark.parametrize("verb", ["adopt_agent", "replace_agent", "deprovision_agent"])
 def test_a_service_conflict_without_a_recorded_workspace_cannot_be_verified(
-    composed_tables: None, monkeypatch: Any, verb: str
+    db: None, monkeypatch: Any, verb: str
 ) -> None:
     """The daemon is never asked about an empty workspace name; only Deprovision proceeds, destroying nothing."""
 
@@ -3030,7 +3030,7 @@ def test_a_service_conflict_without_a_recorded_workspace_cannot_be_verified(
         assert state["conflict_name"] == "agent-ws-orphan"
 
 
-def test_deprovision_agent_destroys_the_verified_conflicting_instance(composed_tables: None, monkeypatch: Any) -> None:
+def test_deprovision_agent_destroys_the_verified_conflicting_instance(db: None, monkeypatch: Any) -> None:
     """Deprovision records the conflicting instance as the agent's own, then destroys it."""
 
     admin = _platform_admin("agt-deprov-conflict-admin")
@@ -3055,7 +3055,7 @@ def test_deprovision_agent_destroys_the_verified_conflicting_instance(composed_t
 
 
 def test_deprovision_agent_keeps_a_recorded_instance_whose_destroy_failed(
-    composed_tables: None, monkeypatch: Any
+    db: None, monkeypatch: Any
 ) -> None:
     """After the record, a refused workspace destroy keeps that workspace on the agent for a retry."""
 
@@ -3085,7 +3085,7 @@ def test_deprovision_agent_keeps_a_recorded_instance_whose_destroy_failed(
     [({"template": "ref:stale-template"}, False), ({}, True)],
 )
 def test_deprovision_agent_clears_a_conflict_it_cannot_verify_without_destroying_anything(
-    composed_tables: None, monkeypatch: Any, operator_state: dict[str, Any], holder: bool
+    db: None, monkeypatch: Any, operator_state: dict[str, Any], holder: bool
 ) -> None:
     """The non-destructive way out: an instance that is not this agent's stays; the record is cleared."""
 
@@ -3107,7 +3107,7 @@ def test_deprovision_agent_clears_a_conflict_it_cannot_verify_without_destroying
         assert owner.workspace == "ws-taken"
 
 
-def test_two_agents_cannot_record_the_same_operator_instance(composed_tables: None) -> None:
+def test_two_agents_cannot_record_the_same_operator_instance(db: None) -> None:
     """The partial unique constraints allow any number of blank names, and one agent per instance."""
 
     admin = _platform_admin("agt-unique-admin")
@@ -3120,7 +3120,7 @@ def test_two_agents_cannot_record_the_same_operator_instance(composed_tables: No
                 Agent.objects.create(name="Copy", owner=admin, **duplicate)
 
 
-def test_agent_verb_eligibility_selects_without_per_row_queries(composed_tables: None) -> None:
+def test_agent_verb_eligibility_selects_without_per_row_queries(db: None) -> None:
     """``can_*`` answer from each row's own columns and annotations, so a list costs the same at any size."""
 
     admin = _platform_admin("agt-eligibility-admin")
@@ -3150,7 +3150,7 @@ def test_agent_verb_eligibility_selects_without_per_row_queries(composed_tables:
 
 
 def test_provision_agent_refuses_when_inference_credential_has_no_secret(
-    composed_tables: None, monkeypatch: Any
+    db: None, monkeypatch: Any
 ) -> None:
     """A model-backed agent whose credential yields no secret is refused before any render.
 
@@ -3180,7 +3180,7 @@ def test_provision_agent_refuses_when_inference_credential_has_no_secret(
         assert (agent.workspace, agent.service) == ("", "")
 
 
-def test_agent_inference_credential_override_wins_over_model_chain(composed_tables: None) -> None:
+def test_agent_inference_credential_override_wins_over_model_chain(db: None) -> None:
     """A per-agent ``inference_credential`` overrides the model's integration credential.
 
     Pointing the agent at a connected OAuth credential makes inference authenticate with that
@@ -3220,7 +3220,7 @@ def test_agent_inference_credential_override_wins_over_model_chain(composed_tabl
         assert service_inputs["model"] == "claude-opus-4-8"
 
 
-def test_agent_chat_endpoint_mints_route_token_and_is_admin_gated(composed_tables: None, monkeypatch: Any) -> None:
+def test_agent_chat_endpoint_mints_route_token_and_is_admin_gated(db: None, monkeypatch: Any) -> None:
     """`agentChatEndpoint` returns the routed url + per-actor route token + mcpServers.
 
     The daemon is mocked. Asserts the resolver looks the agent's `service` up, mints a
@@ -3292,7 +3292,7 @@ def test_agent_chat_endpoint_mints_route_token_and_is_admin_gated(composed_table
 
 @pytest.mark.parametrize("secure", [False, True])
 def test_in_process_chat_endpoint_uses_cookie_origin_and_call_permission(
-    composed_tables: None,
+    db: None,
     secure: bool,
     settings: Any,
 ) -> None:
@@ -3324,7 +3324,7 @@ def test_in_process_chat_endpoint_uses_cookie_origin_and_call_permission(
     assert execute_schema(console, query, {"id": str(agent.sqid)}, user=owner).errors
 
 
-def test_container_chat_endpoint_still_requires_platform_admin_for_its_owner(composed_tables: None) -> None:
+def test_container_chat_endpoint_still_requires_platform_admin_for_its_owner(db: None) -> None:
     owner = User.objects.create_user(username="agt-container-owner")
     with system_context(reason="test.agents.container_endpoint"):
         agent = Agent.objects.create(name="Container", owner=owner, runtime_class="claude_code", service="svc")
@@ -3338,7 +3338,7 @@ def test_container_chat_endpoint_still_requires_platform_admin_for_its_owner(com
     assert "Platform admin" in result.errors[0].message
 
 
-def test_agent_chat_endpoint_errors_when_agent_not_running(composed_tables: None) -> None:
+def test_agent_chat_endpoint_errors_when_agent_not_running(db: None) -> None:
     """`agentChatEndpoint` errors when the agent has no rendered `service`."""
 
     admin = _platform_admin("agt-chat-stopped-admin")
@@ -3355,7 +3355,7 @@ def test_agent_chat_endpoint_errors_when_agent_not_running(composed_tables: None
 
 
 def test_resolve_session_for_view_resolves_the_actors_running_agent(
-    composed_tables: None,
+    db: None,
 ) -> None:
     """`resolveSessionForView` resolves the actor's running agent for the side chatter.
 
@@ -3411,7 +3411,7 @@ def test_resolve_session_for_view_resolves_the_actors_running_agent(
     assert viewer_session is None
 
 
-def test_chat_surfaces_hide_a_model_handle_the_actor_cannot_read(composed_tables: None, settings: Any) -> None:
+def test_chat_surfaces_hide_a_model_handle_the_actor_cannot_read(db: None, settings: Any) -> None:
     """Agent ownership selects chat; the model's own read decides whether its handle is shown."""
 
     settings.ALLOWED_HOSTS = ["localhost"]
@@ -3441,7 +3441,7 @@ def test_chat_surfaces_hide_a_model_handle_the_actor_cannot_read(composed_tables
     assert agent.readable_model_handle(_platform_admin("agt-private-model-admin")) == "private-runtime-model"
 
 
-def test_chat_selection_breaks_timestamp_ties_and_keeps_actor_sessions(composed_tables: None) -> None:
+def test_chat_selection_breaks_timestamp_ties_and_keeps_actor_sessions(db: None) -> None:
     """Equal update times select one stable agent and the actor's latest open session."""
 
     owner = User.objects.create_user(username="chat-selection-owner")
@@ -3476,7 +3476,7 @@ def test_chat_selection_breaks_timestamp_ties_and_keeps_actor_sessions(composed_
         assert Agent.objects.chat_for_actor() is None
 
 
-def test_agent_session_reads_and_view_resolution(composed_tables: None, capture_tasks: list[Any]) -> None:
+def test_agent_session_reads_and_view_resolution(db: None, capture_tasks: list[Any]) -> None:
     """The GraphQL read side retains caller-scoped sessions, turns and view resolution."""
 
     owner = User.objects.create_user(username="agt-chat-owner")
@@ -3519,7 +3519,7 @@ def test_agent_session_reads_and_view_resolution(composed_tables: None, capture_
     assert not any("agent_turns" in field["name"] for field in mutation_fields["__schema"]["mutationType"]["fields"])
 
 
-def test_deprovision_in_process_agent_closes_open_sessions(composed_tables: None) -> None:
+def test_deprovision_in_process_agent_closes_open_sessions(db: None) -> None:
     """In-process teardown closes persisted sessions through their cancellation verb."""
 
     admin = _platform_admin("agt-chat-deprovision")
@@ -3548,7 +3548,7 @@ def test_deprovision_in_process_agent_closes_open_sessions(composed_tables: None
         assert set(AgentTurn.objects.filter(session__agent=agent).values_list("status", flat=True)) == {"canceled"}
 
 
-def test_provision_workspace_inputs_from_agent_fields(composed_tables: None) -> None:
+def test_provision_workspace_inputs_from_agent_fields(db: None) -> None:
     """The workspace inputs come from the agent's structured fields (not raw JSON)."""
 
     owner = User.objects.create_user(username="agt-wsi-owner", email="wsi@example.com")
@@ -3566,7 +3566,7 @@ def test_provision_workspace_inputs_from_agent_fields(composed_tables: None) -> 
 
 
 def test_render_agent_prompt_builds_system_context_and_is_admin_gated(
-    composed_tables: None,
+    db: None,
 ) -> None:
     """`renderAgentPrompt` returns a ``<system_context>`` block for the open view.
 
@@ -3600,7 +3600,7 @@ def test_render_agent_prompt_builds_system_context_and_is_admin_gated(
     assert empty == ""
 
 
-def test_render_view_context_never_previews_encrypted_secret(composed_tables: None) -> None:
+def test_render_view_context_never_previews_encrypted_secret(db: None) -> None:
     """A view of a secret-bearing model previews the row but never its EncryptedField.
 
     The block is sent to a third-party LLM, so a column whose Python value decrypts to a
@@ -3626,7 +3626,7 @@ def test_render_view_context_never_previews_encrypted_secret(composed_tables: No
 
 
 def test_mcp_config_emits_secret_ref_auth_header_for_credentialed_server(
-    composed_tables: None,
+    db: None,
 ) -> None:
     """A credentialed MCP server renders a ``${<env>}`` Authorization header.
 
@@ -3663,7 +3663,7 @@ def test_mcp_config_emits_secret_ref_auth_header_for_credentialed_server(
 
 
 @pytest.mark.parametrize("placement", [MCPPlacement.EXTERNAL, MCPPlacement.INTERNAL])
-def test_mcp_authenticated_operations_require_a_configured_credential(composed_tables: None, placement: str) -> None:
+def test_mcp_authenticated_operations_require_a_configured_credential(db: None, placement: str) -> None:
     """An uncredentialed server remains public and cannot mint authenticated secrets."""
 
     with system_context(reason="test.agents.mcp_missing_credential"):
@@ -3681,7 +3681,7 @@ def test_mcp_authenticated_operations_require_a_configured_credential(composed_t
                 operation()
 
 
-def test_mcp_secrets_derive_per_agent_bearer_for_internal_server(composed_tables: None) -> None:
+def test_mcp_secrets_derive_per_agent_bearer_for_internal_server(db: None) -> None:
     """An internal server syncs the per-agent derived bearer, not the raw credential secret."""
 
     owner = User.objects.create_user(username="agt-mcpint-owner", email="mcpint@example.com")
@@ -3707,7 +3707,7 @@ def test_mcp_secrets_derive_per_agent_bearer_for_internal_server(composed_tables
 
 
 def test_mcp_config_resolves_builtin_server_from_settings(
-    composed_tables: None,
+    db: None,
     settings: Any,
 ) -> None:
     """The built-in Angee MCP server is selected by model config, not seeded URL."""
@@ -3733,7 +3733,7 @@ def test_mcp_config_resolves_builtin_server_from_settings(
     }
 
 
-def test_provision_service_inputs_credential_drives_auth_env(composed_tables: None) -> None:
+def test_provision_service_inputs_credential_drives_auth_env(db: None) -> None:
     """The provider backend maps credential kind to service auth env."""
 
     owner = User.objects.create_user(username="agt-svci-owner", email="svci@example.com")
@@ -3766,7 +3766,7 @@ def test_provision_service_inputs_credential_drives_auth_env(composed_tables: No
     assert oauth_inputs["model"] == "claude-opus-4-8"
 
 
-def test_provision_service_inputs_allow_an_unauthenticated_backend(composed_tables: None) -> None:
+def test_provision_service_inputs_allow_an_unauthenticated_backend(db: None) -> None:
     """Only an in-process runtime is ready for a no-auth backend."""
 
     owner = User.objects.create_user(username="agt-svc-ollama-agent", email="ollama@example.com")
@@ -3784,7 +3784,7 @@ def test_provision_service_inputs_allow_an_unauthenticated_backend(composed_tabl
         assert service_agent.inference_credential_ready() is False
 
 
-def test_provision_service_inputs_opencode_refuses_oauth_credential(composed_tables: None) -> None:
+def test_provision_service_inputs_opencode_refuses_oauth_credential(db: None) -> None:
     """OpenCode OAuth is off by default (no plugin in the image), so the pairing is refused."""
 
     oauth_provider = _provider("agt-oc-oauth", backend_class="anthropic", kind=CredentialKind.OAUTH, name="O")
@@ -3798,7 +3798,7 @@ def test_provision_service_inputs_opencode_refuses_oauth_credential(composed_tab
 
 
 @override_settings(ANGEE_OPENCODE_OAUTH_ENABLED=True)
-def test_provision_service_inputs_opencode_oauth_when_enabled(composed_tables: None) -> None:
+def test_provision_service_inputs_opencode_oauth_when_enabled(db: None) -> None:
     """With the opt-in on, OpenCode OAuth syncs a base64 auth.json and the decode env var."""
 
     oauth_provider = _provider(
@@ -3824,7 +3824,7 @@ def test_provision_service_inputs_opencode_oauth_when_enabled(composed_tables: N
 
 
 @override_settings(ANGEE_OPENCODE_OAUTH_ENABLED=True)
-def test_provision_service_inputs_opencode_oauth_requires_refresh_token(composed_tables: None) -> None:
+def test_provision_service_inputs_opencode_oauth_requires_refresh_token(db: None) -> None:
     """An OAuth credential with no refresh token can't be refreshed in-container, so it's refused."""
 
     oauth_provider = _provider(
@@ -3843,7 +3843,7 @@ def test_provision_service_inputs_opencode_oauth_requires_refresh_token(composed
             agent.provision_service_inputs()
 
 
-def test_provision_service_inputs_workspace_only_runtime_skips_service_auth(composed_tables: None) -> None:
+def test_provision_service_inputs_workspace_only_runtime_skips_service_auth(db: None) -> None:
     """A model-backed workspace-only (``none``) agent is ready and renders no service auth.
 
     The readiness gate allows a workspace-only runtime regardless of credential kind, so the
@@ -3865,7 +3865,7 @@ def test_provision_service_inputs_workspace_only_runtime_skips_service_auth(comp
     assert "auth_env" not in inputs
 
 
-def test_claude_code_service_inputs_use_provider_model_name(composed_tables: None) -> None:
+def test_claude_code_service_inputs_use_provider_model_name(db: None) -> None:
     """Claude Code talks to Anthropic directly, so broker aliases render as provider ids."""
 
     owner = User.objects.create_user(username="agt-cc-model-agent-owner", email="cc-model@example.com")
@@ -3887,7 +3887,7 @@ def test_claude_code_service_inputs_use_provider_model_name(composed_tables: Non
         assert agent.provision_service_inputs()["model"] == "claude-opus-4-8"
 
 
-def test_opencode_service_inputs_keep_selected_broker_model(composed_tables: None) -> None:
+def test_opencode_service_inputs_keep_selected_broker_model(db: None) -> None:
     """OpenCode expects the provider/model handle, so the selected catalogue row renders as-is."""
 
     owner = User.objects.create_user(username="agt-oc-model-agent-owner", email="oc-model@example.com")

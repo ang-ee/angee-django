@@ -9,8 +9,8 @@ from tests import test_messaging as messaging_models
 from tests.test_messaging_graphql import _platform_admin, _schema
 
 
-def test_record_stream_projects_latest_edit_and_unpaged_reply_count(composed_tables):
-    del composed_tables
+def test_record_stream_projects_latest_edit_and_unpaged_reply_count(db):
+    del db
     reader = _platform_admin("stream-reader")
     with system_context(reason="test.messaging.stream.seed"):
         ticket = messaging_models.ThreadedTicket.objects.create(title="Conversation")

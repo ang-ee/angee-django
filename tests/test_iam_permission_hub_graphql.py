@@ -48,7 +48,7 @@ iam_roles = importlib.import_module("angee.iam.roles")
 @pytest.mark.parametrize("storage", ["denormalized", "registry"])
 @pytest.mark.parametrize("via_group", [False, True])
 def test_platform_admin_is_grantable_without_django_superuser(
-    composed_tables: None,
+    db: None,
     storage: str,
     via_group: bool,
 ) -> None:
@@ -89,7 +89,7 @@ def test_platform_admin_is_grantable_without_django_superuser(
 
 
 def test_permission_hub_queries_are_admin_only(
-    composed_tables: None,
+    db: None,
 ) -> None:
     """Console permission-hub queries require platform-admin reach."""
 
@@ -141,7 +141,7 @@ def test_permission_hub_queries_are_admin_only(
 
 
 def test_users_resource_includes_service_accounts(
-    composed_tables: None,
+    db: None,
 ) -> None:
     """The identity catalogue includes service users so access grants can select agents."""
 
@@ -173,7 +173,7 @@ def test_users_resource_includes_service_accounts(
 
 
 def test_rebac_relationships_resource_is_admin_scoped(
-    composed_tables: None,
+    db: None,
 ) -> None:
     """The relationships Hasura resource lists rows for admins, empty otherwise.
 
@@ -215,7 +215,7 @@ def test_rebac_relationships_resource_is_admin_scoped(
 
 
 def test_roles_grants_resources_are_admin_scoped(
-    composed_tables: None,
+    db: None,
 ) -> None:
     """The ``iam_roles`` / ``iam_grants`` computed resources list for admins only.
 
@@ -248,7 +248,7 @@ def test_roles_grants_resources_are_admin_scoped(
 
 
 def test_roles_query_excludes_role_types_missing_from_rebac_schema(
-    composed_tables: None,
+    db: None,
 ) -> None:
     """Tuple-derived roles are limited to resource types in the installed schema."""
 
@@ -298,7 +298,7 @@ def test_roles_query_excludes_role_types_missing_from_rebac_schema(
 
 
 def test_roles_include_declared_empty_and_tuple_only_legacy_rows(
-    composed_tables: None,
+    db: None,
 ) -> None:
     """Schema names are grantable while retained tuple-only role ids stay visible."""
 
@@ -354,7 +354,7 @@ def test_roles_include_declared_empty_and_tuple_only_legacy_rows(
     assert rejected.errors is not None
 
 
-def test_the_overview_reads_only_grantable_roles_within_one_page(composed_tables: None) -> None:
+def test_the_overview_reads_only_grantable_roles_within_one_page(db: None) -> None:
     """The overview's grant picker reads ``where: {grantable}`` with ``limit`` at the page bound.
 
     The grantable catalogue is the composition's declared role objects; this one
@@ -382,7 +382,7 @@ def test_the_overview_reads_only_grantable_roles_within_one_page(composed_tables
 
 
 def test_grants_query_labels_principals_by_display_name(
-    composed_tables: None,
+    db: None,
 ) -> None:
     """The grants list surfaces each principal's display name, not a raw id."""
 
@@ -420,7 +420,7 @@ def test_grants_query_labels_principals_by_display_name(
 
 
 def test_iam_overview_aggregates_do_not_depend_on_paginated_rows(
-    composed_tables: None,
+    db: None,
 ) -> None:
     """The IAM overview is a backend aggregate, not a summary of page-limited rows."""
 
@@ -523,7 +523,7 @@ def test_iam_overview_aggregates_do_not_depend_on_paginated_rows(
 
 
 def test_iam_overview_privileged_grants_on_registry_relationship_storage(
-    composed_tables: None,
+    db: None,
 ) -> None:
     """Privileged-grant filtering works on the FK-backed registry relationship store.
 
@@ -561,7 +561,7 @@ def test_iam_overview_privileged_grants_on_registry_relationship_storage(
 
 
 def test_permission_hub_mutations_are_admin_only(
-    composed_tables: None,
+    db: None,
 ) -> None:
     """Console role-grant mutations require platform-admin reach."""
 
@@ -605,7 +605,7 @@ def test_permission_hub_mutations_are_admin_only(
 
 
 def test_grant_role_then_revoke_role_writes_and_removes_role_tuple(
-    composed_tables: None,
+    db: None,
 ) -> None:
     """The permission-hub mutations persist and remove direct role tuples."""
 
@@ -651,7 +651,7 @@ def test_grant_role_then_revoke_role_writes_and_removes_role_tuple(
 
 
 def test_grant_role_accepts_canonical_user_subject(
-    composed_tables: None,
+    db: None,
 ) -> None:
     """The grant mutation accepts the canonical subject exposed by UserType."""
 
@@ -700,7 +700,7 @@ def test_grant_role_accepts_canonical_user_subject(
 
 
 def test_grant_role_rejects_noncanonical_subject(
-    composed_tables: None,
+    db: None,
 ) -> None:
     """Encoded Relay IDs are not accepted as public principal IDs."""
 
@@ -730,7 +730,7 @@ def test_grant_role_rejects_noncanonical_subject(
 
 
 def test_revoke_role_returns_false_for_missing_membership(
-    composed_tables: None,
+    db: None,
 ) -> None:
     """No-op role revocation reports false."""
 
@@ -758,7 +758,7 @@ def test_revoke_role_returns_false_for_missing_membership(
 
 @pytest.mark.parametrize("storage", ["denormalized", "registry"])
 def test_caveated_grants_have_distinct_identity_and_revoke_exact_selected_tuple(
-    composed_tables: None,
+    db: None,
     storage: str,
 ) -> None:
     """Caveat identity and selected-row deletion use the native tuple key in both stores."""
@@ -822,7 +822,7 @@ def test_caveated_grants_have_distinct_identity_and_revoke_exact_selected_tuple(
 
 
 def test_role_refs_are_current_user_only(
-    composed_tables: None,
+    db: None,
 ) -> None:
     """Role refs are exposed only for the session user."""
 
@@ -857,7 +857,7 @@ def test_role_refs_are_current_user_only(
 
 @pytest.mark.parametrize("storage", ["denormalized", "registry"])
 def test_group_members_and_bindings_preserve_canonical_tuple_identity(
-    composed_tables: None,
+    db: None,
     storage: str,
 ) -> None:
     """Group detail projects direct members and group-set bindings in both stores."""
@@ -938,7 +938,7 @@ def test_group_members_and_bindings_preserve_canonical_tuple_identity(
 
 @pytest.mark.parametrize("storage", ["denormalized", "registry"])
 def test_recipient_resources_follow_user_and_group_read_permissions(
-    composed_tables: None,
+    db: None,
     storage: str,
 ) -> None:
     """A non-admin sharer discovers readable service users and its member groups."""
@@ -1046,7 +1046,7 @@ def _type_block(sdl: str, type_name: str) -> str:
     end = sdl.index("\n}", start) + 2
     return sdl[start:end]
 
-def test_stored_assignment_subject_labels_ignore_activity_and_option_pagination(composed_tables: None) -> None:
+def test_stored_assignment_subject_labels_ignore_activity_and_option_pagination(db: None) -> None:
     """Stored user/group aliases retain names; people's names resolve for everyone, unreadable groups never."""
     admin = _platform_admin("subject-label-admin")
     reader = User.objects.create_user(username="subject-label-reader", first_name="Reader")

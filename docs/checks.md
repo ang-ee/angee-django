@@ -190,9 +190,8 @@ default over a session baseline: the base plugin binds the installed addons' mer
 permission inputs (a composed host binds its generated ones), and its
 `django_db_setup` synchronizes REBAC once per worker; a host extends that fixture
 to load its own baseline rows, and the plugin records every row once the outermost
-extension returns. The framework-generic
-[`composed_tables`](../src/angee/base/testing/fixtures.py) fixture is a
-compatibility alias of the native `db` fixture, kept for consumer suites. Declare `django_db(transaction=True)` only when the
+extension returns. A database test requests pytest-django's native `db` fixture or
+carries a `django_db` mark. Declare `django_db(transaction=True)` only when the
 contract needs real commits: other threads or connections, row locks, or
 `on_commit` work a real worker runs; its flush restores the recorded baseline
 rows, keys included, instead of recomputing them. Assert `on_commit` callbacks with pytest-django's
@@ -206,8 +205,7 @@ Hosts installing provenance also register
 [`angee.provenance.testing.fixtures`](../src/angee/provenance/testing/fixtures.py),
 after the base plugin: it adds test attribution and loads every installed addon's
 install-tier statement principals (`provenance.Rule` and `Seed` rows and their
-grants) into the session baseline. The parties plugin's `statement_sources` fixture
-remains only for consumers that still request it.
+grants) into the session baseline.
 
 Declare a test-local model under Django's `isolate_apps` when the code under test
 accepts a registry. When its owner reads the installed registry (content types, the

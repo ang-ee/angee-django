@@ -26,7 +26,7 @@ from tests.conftest import create_user
 
 
 @pytest.fixture
-def record_access_target(composed_tables: None) -> tuple[Project, Any, Any]:
+def record_access_target(db: None) -> tuple[Project, Any, Any]:
     """Provide a real owner-backed resource with no actor pinned to its instance."""
 
     owner, outsider = create_user("access-owner"), create_user("access-outsider")

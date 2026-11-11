@@ -60,7 +60,7 @@ def _handle_history(actor, handle):
     return result_data(result)["history"]
 
 
-def test_message_reader_sees_the_sender_envelope_never_the_directory_handle(composed_tables):
+def test_message_reader_sees_the_sender_envelope_never_the_directory_handle(db):
     owner, reader = (make_user(name) for name in ("sender-source-owner", "sender-source-reader"))
     with system_context(reason="source sender read fixtures"):
         party = Party.objects.create(display_name="Private sender Party", notes="Private", created_by=owner)
@@ -102,7 +102,7 @@ def test_message_reader_sees_the_sender_envelope_never_the_directory_handle(comp
     assert_access(message, reader, "read", False)
 
 
-def test_the_policy_decides_every_messaging_permission(composed_tables):
+def test_the_policy_decides_every_messaging_permission(db):
     """One world, every messaging permission and extension arm with an allow and a deny, and its read scopes."""
 
     seats = {name: make_user(name) for name in (
@@ -277,7 +277,7 @@ def test_the_policy_decides_every_messaging_permission(composed_tables):
     )
 
 
-def test_channel_thread_is_ownerless_and_channel_transfer_moves_delete_access(composed_tables):
+def test_channel_thread_is_ownerless_and_channel_transfer_moves_delete_access(db):
     owner, successor = make_user("channel-owner"), make_user("channel-successor")
     with system_context(reason="test.messaging.channel-thread"):
         vendor = Vendor.objects.create(slug="campaign", display_name="Campaign")
@@ -301,7 +301,7 @@ def test_channel_thread_is_ownerless_and_channel_transfer_moves_delete_access(co
     assert not Thread._base_manager.filter(pk=thread.pk).exists()
 
 
-def test_channel_identity_creation_rolls_back_as_one_transaction(composed_tables):
+def test_channel_identity_creation_rolls_back_as_one_transaction(db):
     owner = make_user("rollback-owner")
     with system_context(reason="test.messaging.rollback"):
         vendor = Vendor.objects.create(slug="rollback", display_name="Rollback")
@@ -314,7 +314,7 @@ def test_channel_identity_creation_rolls_back_as_one_transaction(composed_tables
     assert not Thread._base_manager.filter(external_id="rolled-back").exists()
 
 
-def test_channel_bound_thread_refuses_an_explicit_personal_owner(composed_tables):
+def test_channel_bound_thread_refuses_an_explicit_personal_owner(db):
     """The channel owns its threads even outside provider identity resolution."""
     owner = make_user("channel-invariant-owner")
     with system_context(reason="test.messaging.channel-invariant"):

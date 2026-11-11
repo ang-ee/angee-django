@@ -26,10 +26,10 @@ class CapturedAuditReference(HistoryMixin, AuditMixin):
         db_table = "test_captured_audit_reference"
 
 
-def test_collector_nullification_captures_each_persisted_audit_state(composed_tables: Any) -> None:
+def test_collector_nullification_captures_each_persisted_audit_state(db: Any) -> None:
     """Deleting an auditor must retain the row and record both native FK updates."""
 
-    del composed_tables
+    del db
     actor = create_user("captured-retained-auditor")
     with system_context(reason="test audit collector capture"):
         row = CapturedAuditReference.objects.create(name="retained", created_by=actor, updated_by=actor)
@@ -70,10 +70,10 @@ class ClosedAuditReference(AuditMixin):
 
 
 @pytest.mark.parametrize("model", [ClosedAuditReference, ClosedCapturedAuditReference])
-def test_closed_update_policy_retains_native_audit_nullification(model, composed_tables: Any) -> None:
+def test_closed_update_policy_retains_native_audit_nullification(model, db: Any) -> None:
     """Collector-owned nulls pass the guard and keep capture when selected."""
 
-    del composed_tables
+    del db
     actor = create_user("closed-retained-auditor")
     with system_context(reason="test closed audit collector"):
         row = model.objects.create(name="retained", created_by=actor, updated_by=actor)

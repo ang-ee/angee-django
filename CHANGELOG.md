@@ -10,6 +10,12 @@ live in code docstrings.
 
 ## Unreleased — shared addon contracts, native embeddings and graph retrieval
 
+- The `composed_tables` test fixture is removed: a database test requests
+  pytest-django's `db` or carries a `django_db` mark, and rolls back over the
+  session baseline `angee.base.testing.fixtures` records. The
+  `angee.parties.testing.fixtures` plugin and its `statement_sources` fixture are
+  removed too; `angee.provenance.testing.fixtures` loads every installed addon's
+  statement principals into that baseline.
 - `storage/file` derives `read`, `write` and `share` from the new
   `read_granted`, `write_granted` and `share_granted` alone and withholds a
   trashed file from everyone who cannot delete it, as knowledge pages and

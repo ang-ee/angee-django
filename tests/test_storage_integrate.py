@@ -41,10 +41,10 @@ BASE_MTIME_NS = 1_700_000_000_000_000_000
 
 
 @pytest.fixture()
-def mount_env(tmp_path: Path, composed_tables: None) -> SimpleNamespace:
+def mount_env(tmp_path: Path, db: None) -> SimpleNamespace:
     """Seed the local vendor and managed default drive used by Mount tests."""
 
-    del composed_tables
+    del db
     managed_root = tmp_path / "managed"
     managed_root.mkdir()
     owner = create_platform_admin(

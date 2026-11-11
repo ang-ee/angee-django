@@ -409,7 +409,7 @@ def test_application_uses_owner_write_permission(review):
     assert question.review_subject.name != "Applied"
 
 
-def test_concrete_action_owner_applies_child_fields_with_canonical_concern(composed_tables):
+def test_concrete_action_owner_applies_child_fields_with_canonical_concern(db):
     actor = create_platform_admin("concrete-review")
     reader = create_user("concrete-reader")
     with system_context(reason="test concrete decision target"):
@@ -438,7 +438,7 @@ def test_concrete_action_owner_applies_child_fields_with_canonical_concern(compo
 
 
 @pytest.mark.parametrize("model", ["storage.Drive", "missing.Model", "not-a-model", ""])
-def test_action_model_must_share_the_concerned_identity(composed_tables, model):
+def test_action_model_must_share_the_concerned_identity(db, model):
     actor = create_platform_admin("invalid-concrete-review")
     with system_context(reason="test invalid decision target"):
         record = MtiChild.objects.create(detail="Before")

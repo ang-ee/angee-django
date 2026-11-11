@@ -37,7 +37,7 @@ def test_query_parameters_replace_existing_keys_and_preserve_unrelated_values():
     assert with_query("https://provider.example/profile?lang=en", {}) == "https://provider.example/profile?lang=en"
 
 
-@pytest.mark.usefixtures("composed_tables")
+@pytest.mark.django_db
 @pytest.mark.parametrize("refused", [False, True])
 def test_addon_refines_grant_through_authlib_before_identity_or_persistence(refused):
     with override_settings(ANGEE_OAUTH_PROVIDER_TYPE_CLASSES={
@@ -83,7 +83,7 @@ def test_addon_refines_grant_through_authlib_before_identity_or_persistence(refu
         }
 
 
-@pytest.mark.usefixtures("composed_tables")
+@pytest.mark.django_db
 def test_registration_snapshot_uses_readiness_and_environment_priority_without_secret_columns():
     with system_context(reason="test registration readiness"):
         OAuthClient.objects.create(slug="preferred", environment="dev", display_name="Development", client_id="dev")
@@ -111,7 +111,7 @@ def test_registration_snapshot_uses_readiness_and_environment_priority_without_s
     assert operation_registration_slugs() == {"preferred"}
 
 
-@pytest.mark.usefixtures("composed_tables")
+@pytest.mark.django_db
 @pytest.mark.parametrize("actor_kind", ["owner", "reader"])
 def test_non_admin_connection_projection_batches_health_and_restricts_credential_status(monkeypatch, actor_kind):
     @strawberry_django.type(Feed)
@@ -163,7 +163,7 @@ def test_non_admin_connection_projection_batches_health_and_restricts_credential
     decrypt.assert_not_called()
 
 
-@pytest.mark.usefixtures("composed_tables")
+@pytest.mark.django_db
 @pytest.mark.parametrize("rows", [1, 6])
 @pytest.mark.parametrize("expired_row", [False, True])
 def test_connection_health_listing_decrypts_only_the_expired_row(monkeypatch, rows, expired_row):
@@ -208,7 +208,7 @@ def test_credential_health_derives_refreshability_from_owning_facts(status, fail
     assert credential.is_reconnect_required is expected
 
 
-@pytest.mark.usefixtures("composed_tables")
+@pytest.mark.django_db
 def test_expired_refreshable_grant_is_reused_but_failed_refresh_requires_consent():
     with system_context(reason="test consent predicate"):
         integration = make_integration(
@@ -223,7 +223,7 @@ def test_expired_refreshable_grant_is_reused_but_failed_refresh_requires_consent
         assert Credential.objects.live_oauth_for_user(credential.user, credential.oauth_client) is None
 
 
-@pytest.mark.usefixtures("composed_tables")
+@pytest.mark.django_db
 def test_material_and_client_changes_immediately_change_refreshability():
     with system_context(reason="test derived refreshability"):
         integration = make_integration("material-refreshability", kind="oauth", material={"access_token": "fake"})
@@ -244,7 +244,6 @@ def test_material_and_client_changes_immediately_change_refreshability():
 
 
 @pytest.mark.django_db(transaction=True)
-@pytest.mark.usefixtures("composed_tables")
 @pytest.mark.parametrize("forced", [False, True])
 @pytest.mark.parametrize("not_sent", [False, True])
 def test_transport_failure_during_refresh_preserves_consent_health(forced, not_sent):
@@ -293,7 +292,7 @@ def test_provider_choices_are_contributed_through_the_native_impl_registry():
 
 
 
-@pytest.mark.usefixtures("composed_tables")
+@pytest.mark.django_db
 def test_channel_typed_feed_resolves_the_feed_admission_selector():
     Channel = apps.get_model("messaging", "Channel")
 
@@ -323,7 +322,6 @@ def test_channel_typed_feed_resolves_the_feed_admission_selector():
 
 
 @pytest.mark.django_db(transaction=True)
-@pytest.mark.usefixtures("composed_tables")
 @pytest.mark.parametrize("status", [429, 503, None])
 @pytest.mark.parametrize("expired", [False, True])
 def test_preexpiry_refresh_failure_keeps_valid_access_token(status, expired):

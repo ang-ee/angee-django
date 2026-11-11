@@ -20,7 +20,7 @@ from tests.test_storage import PNG_BYTES, drive, image_drive  # noqa: F401 -- th
 
 pytestmark = [
     pytest.mark.django_db,
-    pytest.mark.usefixtures("composed_tables", "image_drive"),
+    pytest.mark.usefixtures("image_drive"),
 ]
 
 SENDER = "id display_name value party_link_confirmed avatar { id } party { id display_name display_avatar { id } }"

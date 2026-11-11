@@ -48,11 +48,11 @@ def _shared_reader_exists(row: Any) -> bool:
 
 
 def test_native_categories_and_units_use_authenticated_reads(
-    composed_tables: None,
+    db: None,
 ) -> None:
     """A signed-in user reads native catalogue rows without wildcard tuples."""
 
-    del composed_tables
+    del db
     category = _make_category(name="Native catalogue")
     unit = _make_uom(
         category=category,
@@ -73,10 +73,10 @@ def test_native_categories_and_units_use_authenticated_reads(
 
 
 @pytest.fixture()
-def units(composed_tables: None) -> SimpleNamespace:
+def units(db: None) -> SimpleNamespace:
     """Seed a weight, a count, and a volume category with a few units."""
 
-    del composed_tables
+    del db
     weight = _make_category(name="Weight")
     kilogram = _make_uom(
         category=weight,
@@ -198,10 +198,10 @@ def test_expression_conversion_rejects_cross_category_rows(units: SimpleNamespac
     assert converted is None
 
 
-def test_one_reference_per_category_is_rejected(composed_tables: None) -> None:
+def test_one_reference_per_category_is_rejected(db: None) -> None:
     """A second is_reference unit in the same category violates the constraint."""
 
-    del composed_tables
+    del db
     weight = _make_category(name="Weight")
     _make_uom(
         category=weight,
@@ -220,10 +220,10 @@ def test_one_reference_per_category_is_rejected(composed_tables: None) -> None:
         )
 
 
-def test_multiple_non_reference_units_coexist(composed_tables: None) -> None:
+def test_multiple_non_reference_units_coexist(db: None) -> None:
     """The partial constraint leaves non-reference units unconstrained."""
 
-    del composed_tables
+    del db
     weight = _make_category(name="Weight")
     gram = _make_uom(
         category=weight,
@@ -241,10 +241,10 @@ def test_multiple_non_reference_units_coexist(composed_tables: None) -> None:
     assert tonne.pk is not None
 
 
-def test_same_reference_flag_across_categories_is_allowed(composed_tables: None) -> None:
+def test_same_reference_flag_across_categories_is_allowed(db: None) -> None:
     """The constraint is per category — each category keeps its own reference."""
 
-    del composed_tables
+    del db
     weight = _make_category(name="Weight")
     volume = _make_category(name="Volume")
     kilogram = _make_uom(
@@ -266,10 +266,10 @@ def test_same_reference_flag_across_categories_is_allowed(composed_tables: None)
 
 
 @pytest.fixture()
-def temperatures(composed_tables: None) -> SimpleNamespace:
+def temperatures(db: None) -> SimpleNamespace:
     """Kelvin-referenced temperature units exercising the affine offset."""
 
-    del composed_tables
+    del db
     temperature = _make_category(name="Temperature")
     kelvin = _make_uom(
         category=temperature,
@@ -317,7 +317,7 @@ def test_multiplicative_units_keep_zero_offset_math(units: SimpleNamespace) -> N
     assert units.gram.convert(Decimal(500), units.kilogram) == Decimal("0.5")
 
 
-def test_reference_with_offset_is_rejected(composed_tables: None) -> None:
+def test_reference_with_offset_is_rejected(db: None) -> None:
     """A reference unit must be the identity map: ratio 1, offset 0."""
 
     temperature = _make_category(name="Temperature (constraint)")

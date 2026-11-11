@@ -22,7 +22,7 @@ from tests.conftest import make_integration
 from tests.test_messaging import _storage_drive
 from tests.test_nexus import _schema
 
-pytestmark = pytest.mark.usefixtures("composed_tables")
+pytestmark = pytest.mark.django_db
 User = get_user_model()
 T0 = datetime(2026, 1, 1, tzinfo=UTC)
 

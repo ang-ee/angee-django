@@ -44,7 +44,7 @@ def test_oidc_ambiguous_email_never_links_or_provisions(legacy_person_emails, li
 
 
 @pytest.mark.parametrize("verified", [True, False, None])
-def test_oidc_login_establishes_person_only_for_explicitly_verified_email(composed_tables, verified):
+def test_oidc_login_establishes_person_only_for_explicitly_verified_email(db, verified):
     oauth_client = _oauth_client(create_on_login=True, allowed_email_domains=["example.com"])
     if verified is not True:
         # Unverified emails cannot provision an identity. An already-linked

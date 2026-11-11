@@ -16,7 +16,7 @@ from tests.conftest import Vendor, make_integration
 from tests.messaging_campaign import grant
 from tests.test_messaging_graphql import _platform_admin, _schema
 
-pytestmark = pytest.mark.usefixtures("composed_tables")
+pytestmark = pytest.mark.django_db
 
 
 def test_unused_sender_order_does_not_prepare_identity_scopes() -> None:

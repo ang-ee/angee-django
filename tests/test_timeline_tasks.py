@@ -12,7 +12,7 @@ from tests.messaging_campaign import comment_record as comment_record  # noqa: F
 from tests.test_timeline import read_timeline, timeline_entries
 
 pytestmark = [
-    pytest.mark.django_db, pytest.mark.usefixtures("activity_catalog", "composed_tables"),
+    pytest.mark.django_db, pytest.mark.usefixtures("activity_catalog"),
 ]
 
 

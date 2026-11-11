@@ -108,7 +108,7 @@ def test_decision_resources_register_once_from_central_models() -> None:
     )
 
 
-def test_workflow_run_reads_through_the_version_workflow_relation(composed_tables: None) -> None:
+def test_workflow_run_reads_through_the_version_workflow_relation(db: None) -> None:
     """Forward FK paths inherit workflow access without copying its foreign key."""
 
     with system_context(reason="workflow forward relation fixture"):

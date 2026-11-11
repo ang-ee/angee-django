@@ -2101,7 +2101,7 @@ def _serve(monkeypatch: pytest.MonkeyPatch, query: type) -> str:
 
 
 def test_view_as_target_has_no_pinned_admitting_actor(
-    composed_tables: None,
+    db: None,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """The real endpoint through ActorMiddleware binds only the target authority."""
@@ -2136,7 +2136,7 @@ def test_view_as_target_has_no_pinned_admitting_actor(
 
 
 def test_view_as_unknown_operation_uses_strawberry_bad_request(
-    composed_tables: None,
+    db: None,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     admin = _platform_admin("preview-operation-admin")
@@ -2162,7 +2162,7 @@ def test_view_as_unknown_operation_uses_strawberry_bad_request(
     assert not hasattr(request, "view_as")
 
 
-def test_viewable_people_admission_is_batched_before_limit(composed_tables: None) -> None:
+def test_viewable_people_admission_is_batched_before_limit(db: None) -> None:
     admin = _platform_admin("picker-query-admin")
     User._base_manager.bulk_create([User(username=f"picker-person-{index:02}", password="!") for index in range(25)])
     for username, flags in (
@@ -2195,7 +2195,7 @@ def test_viewable_people_admission_is_batched_before_limit(composed_tables: None
 
 
 def test_view_as_denial_is_audited_and_missing_admission_fails_closed(
-    composed_tables: None,
+    db: None,
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
 ) -> None:

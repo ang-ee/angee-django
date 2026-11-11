@@ -202,7 +202,7 @@ def test_purging_a_survivor_without_evidence_releases_its_copy(channel):
     assert Thread._base_manager.get(pk=right.thread_id).merged_into_id is None
 
 
-def test_chatter_fold_keeps_physical_messages_and_current_record_attachment(composed_tables):
+def test_chatter_fold_keeps_physical_messages_and_current_record_attachment(db):
     with system_context(reason="retained chatter fold"):
         kept = ThreadedTicket.objects.create(title="Kept")
         old = ThreadedTicket.objects.create(title="Old")
@@ -233,7 +233,7 @@ def test_channel_thread_identity_accepts_both_native_foreign_key_forms(channel):
     assert repeated.channel_id == channel.pk
 
 
-def test_subscribe_reuses_effective_retained_follow_and_receipt(composed_tables):
+def test_subscribe_reuses_effective_retained_follow_and_receipt(db):
     with system_context(reason="retained follow preferences"):
         watcher = get_user_model().objects.create_user(username="retained-follow-watcher")
         old = ThreadedTicket.objects.create(title="Original followed record")
@@ -271,7 +271,7 @@ def test_subscribe_reuses_effective_retained_follow_and_receipt(composed_tables)
 @pytest.mark.parametrize("bulk", [False, True])
 @pytest.mark.parametrize("missing_survivor", [False, True])
 def test_retired_host_deletion_retains_follow_and_notification_bookkeeping(
-    composed_tables, bulk, missing_survivor,
+    db, bulk, missing_survivor,
 ):
     with system_context(reason="retired chatter host deletion"):
         watcher = get_user_model().objects.create_user(username="retained-deletion-watcher")

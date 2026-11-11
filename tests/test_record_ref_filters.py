@@ -24,7 +24,7 @@ pytestmark = pytest.mark.django_db
 
 
 @pytest.fixture
-def referenced_decisions(composed_tables):
+def referenced_decisions(db):
     """Admit decisions for two readable records with colliding numeric IDs."""
     owner, outsider = create_user("reference-owner"), create_user("reference-outsider")
     vault = vault_for(owner)
@@ -39,7 +39,7 @@ def referenced_decisions(composed_tables):
     return owner, outsider, records, decisions
 
 
-def test_related_reads_distinguish_system_bypass_from_missing_actor(composed_tables):
+def test_related_reads_distinguish_system_bypass_from_missing_actor():
     """Related projections and public-ID filters honor REBAC relation precedence."""
     owner = create_user("relation-scope-owner")
     outsider = create_user("relation-scope-outsider")
@@ -174,7 +174,7 @@ def test_reference_filter_declaration_rejects_claimed_decoder_names(name):
 
 @pytest.mark.django_db(transaction=True)
 @isolate_apps()
-def test_record_reference_guard_uses_the_declared_string_key_and_current_actor(composed_tables):
+def test_record_reference_guard_uses_the_declared_string_key_and_current_actor():
     """A string reference key compares typed target keys and rebinds read scope safely."""
     class TextReference(RecordRefMixin, models.Model):
         content_type = models.ForeignKey(ContentType, on_delete=models.CASCADE)

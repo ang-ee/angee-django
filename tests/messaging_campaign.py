@@ -30,7 +30,7 @@ def make_user(name):
 
 
 @pytest.fixture
-def audience_record(composed_tables, monkeypatch):
+def audience_record(db, monkeypatch):
     """Exercise declarations on existing project columns and tables.
 
     This test-owned donor names ``team`` and ``lead`` solely to exercise messaging's
@@ -76,7 +76,7 @@ def fanout(case, *, direct=False):
 
 
 @pytest.fixture
-def comment_record(composed_tables, monkeypatch):
+def comment_record(db, monkeypatch):
     """A real REBAC record with read-only commenters and separate writers."""
     monkeypatch.setattr(ChatterDoc, "thread_post_access", "read")
     with system_context(reason="test.messaging.campaign.comment"), mute_changes():

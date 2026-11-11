@@ -7,7 +7,7 @@ from angee.base.testing.queries import statement_startswith
 from angee.messaging.testing.models import Handle
 
 
-@pytest.mark.usefixtures("composed_tables")
+@pytest.mark.django_db
 @pytest.mark.parametrize("target_exists", [False, True])
 def test_handle_reidentify_rewrites_or_folds_canonical_identity(target_exists):
     with system_context(reason="test.parties.reidentify"):
@@ -26,7 +26,7 @@ def test_handle_reidentify_rewrites_or_folds_canonical_identity(target_exists):
         assert Handle.objects.reidentify(source, expected_value="old@example.com", value="else@example.com") is None
 
 
-@pytest.mark.usefixtures("composed_tables")
+@pytest.mark.django_db
 def test_handle_reidentify_recovers_a_value_owner_created_after_initial_lookup(monkeypatch):
     with system_context(reason="test.parties.reidentify_race"):
         source = Handle.objects.create(platform="email", value="old@example.com")
@@ -49,7 +49,7 @@ def test_handle_reidentify_cannot_elevate_an_ordinary_caller():
         Handle.objects.reidentify(handle, expected_value="old@example.com", value="new@example.com")
 
 
-@pytest.mark.usefixtures("composed_tables")
+@pytest.mark.django_db
 @pytest.mark.parametrize("source_name,target_name", [("", ""), ("Alias", ""), ("", "Kept"), ("Alias", "Kept")])
 def test_handle_reidentify_dry_run_uses_kept_display_carry_without_domain_writes(source_name, target_name):
     from django.apps import apps
@@ -89,7 +89,7 @@ def _preview_refusal(record):
     return "The alias is held by its addon guard."
 
 
-@pytest.mark.usefixtures("composed_tables")
+@pytest.mark.django_db
 @pytest.mark.parametrize("dry_run", [False, True])
 def test_handle_preview_and_fold_share_addon_refusals(settings, dry_run):
     from django.core.exceptions import ValidationError

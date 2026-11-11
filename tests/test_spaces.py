@@ -98,10 +98,10 @@ def _schema() -> Any:
     return GraphQLSchemas(addons).build("console")
 
 
-def test_group_create_ignores_roster_backings_unused_by_create(composed_tables: None) -> None:
+def test_group_create_ignores_roster_backings_unused_by_create(db: None) -> None:
     """The authenticated create arm needs none of the filtered reverse roster paths."""
 
-    del composed_tables
+    del db
     actor = create_user("spaces-unused-roster")
     result = execute_schema(
         _schema(),
@@ -115,11 +115,11 @@ def test_group_create_ignores_roster_backings_unused_by_create(composed_tables: 
 
 
 def test_group_console_insert_establishes_private_owner_access(
-    composed_tables: None,
+    db: None,
 ) -> None:
     """The new group's owner can read and write it; an outsider cannot read it."""
 
-    del composed_tables
+    del db
     creator = create_user("spaces-group-creator")
     outsider = create_user("spaces-group-outsider")
     schema = _schema()
@@ -161,11 +161,11 @@ def test_group_console_insert_establishes_private_owner_access(
 
 
 def test_membership_console_insert_inherits_group_owner_access(
-    composed_tables: None,
+    db: None,
 ) -> None:
     """A group's owner can create, read and write roster rows; an outsider cannot."""
 
-    del composed_tables
+    del db
     creator = create_user("spaces-membership-creator")
     outsider = create_user("spaces-membership-outsider")
     with system_context(reason="spaces membership GraphQL seed"):
@@ -211,10 +211,10 @@ def test_membership_console_insert_inherits_group_owner_access(
     assert updated == {"id": created["id"], "role": "MODERATOR"}
 
 
-def test_group_crud_slug_uniqueness_and_unscoped_hierarchy(composed_tables: None) -> None:
+def test_group_crud_slug_uniqueness_and_unscoped_hierarchy(db: None) -> None:
     """Groups support hierarchy and share ownership and audience with concrete children."""
 
-    del composed_tables
+    del db
     owner, person = _person_for("spaces-child-owner")
     with system_context(reason="spaces group crud"):
         queue = Queue.objects.create(name="Dispatch", key="DSP", created_by=owner)
@@ -248,10 +248,10 @@ def test_group_crud_slug_uniqueness_and_unscoped_hierarchy(composed_tables: None
         assert Group.objects.count() == 0
 
 
-def test_membership_crud_and_pair_uniqueness(composed_tables: None) -> None:
+def test_membership_crud_and_pair_uniqueness(db: None) -> None:
     """A roster has one mutable role-bearing row per group/party pair."""
 
-    del composed_tables
+    del db
     with system_context(reason="spaces membership crud"):
         group = Group.objects.create(name="Community", slug="community")
         party = Party.objects.create(display_name="Guest")
@@ -271,11 +271,11 @@ def test_membership_crud_and_pair_uniqueness(composed_tables: None) -> None:
 
 
 def test_membership_lifecycle_filters_live_roles(
-    composed_tables: None,
+    db: None,
 ) -> None:
     """Pending, dismissed and unrelated roles deny in direct and queryset checks."""
 
-    del composed_tables
+    del db
     user, person = _person_for("spaces-member")
     other_user, other_person = _person_for("spaces-other-member")
 
@@ -329,10 +329,10 @@ def test_membership_lifecycle_filters_live_roles(
         assert_roles(group, set())
 
 
-def test_membership_repoint_changes_the_live_holder(composed_tables: None) -> None:
+def test_membership_repoint_changes_the_live_holder(db: None) -> None:
     """Moving a confirmed roster row makes its new user's live role replace the old one."""
 
-    del composed_tables
+    del db
     old_user, old_person = _person_for("spaces-old-member")
     new_user, new_person = _person_for("spaces-new-member")
     with system_context(reason="spaces membership repoint"):
@@ -346,10 +346,10 @@ def test_membership_repoint_changes_the_live_holder(composed_tables: None) -> No
     assert _role_relations(group, new_user) == {"member"}
 
 
-def test_confidence_only_save_leaves_pending_membership_without_roles(composed_tables: None) -> None:
+def test_confidence_only_save_leaves_pending_membership_without_roles(db: None) -> None:
     """Changing confidence does not grant a pending member any roster role."""
 
-    del composed_tables
+    del db
     _user, person = _person_for("spaces-unchanged-member")
     with system_context(reason="spaces unrelated membership save"):
         group = Group.objects.create(name="Community", slug="community")
@@ -360,10 +360,10 @@ def test_confidence_only_save_leaves_pending_membership_without_roles(composed_t
         assert _role_relations(group, _user) == set()
 
 
-def test_person_user_change_changes_the_live_roster_holder(composed_tables: None) -> None:
+def test_person_user_change_changes_the_live_roster_holder(db: None) -> None:
     """Changing Person.user immediately changes who holds each confirmed roster role."""
 
-    del composed_tables
+    del db
     old_user, person = _person_for("spaces-person-old-user")
     new_user = create_user("spaces-person-new-user")
     with system_context(reason="spaces person user change"):
@@ -381,10 +381,10 @@ def test_person_user_change_changes_the_live_roster_holder(composed_tables: None
     assert _role_relations(group, new_user) == {"moderator"}
 
 
-def test_provisioned_seat_requires_system_context_and_is_idempotent(composed_tables: None) -> None:
+def test_provisioned_seat_requires_system_context_and_is_idempotent(db: None) -> None:
     """System provisioning confirms one attributed seat and repeats as a no-op."""
 
-    del composed_tables
+    del db
     holder, person = _person_for("spaces-provisioned-holder")
     with system_context(reason="spaces provisioned seat group"):
         group = Group.objects.create(name="Provisioned", slug="provisioned")
@@ -415,7 +415,7 @@ def test_provisioned_seat_requires_system_context_and_is_idempotent(composed_tab
     assert (created.created_by_id, created.updated_by_id, created.is_confirmed) == (holder.pk, holder.pk, True)
 
 
-def test_visibility_reads_persisted_facts_including_bulk_writes(composed_tables: None) -> None:
+def test_visibility_reads_persisted_facts_including_bulk_writes(db: None) -> None:
     """Dirty and deferred values do not replace the persisted visibility column."""
 
     reader = to_subject_ref(create_user("spaces-persisted-reader"))
@@ -448,10 +448,10 @@ def test_visibility_reads_persisted_facts_including_bulk_writes(composed_tables:
         assert _group_relationship_count(group) == _group_relationship_count(inserted) == 0
 
 
-def test_group_delete_removes_roster_rows(composed_tables: None) -> None:
+def test_group_delete_removes_roster_rows(db: None) -> None:
     """Deleting a public group removes its canonical roster rows."""
 
-    del composed_tables
+    del db
     user, person = _person_for("spaces-delete-member")
     with system_context(reason="spaces group delete"):
         group = Group.objects.create(
@@ -479,10 +479,10 @@ def test_group_delete_removes_roster_rows(composed_tables: None) -> None:
     ).exists()
 
 
-def test_spaces_thread_manager_selects_readable_group_bound_threads(composed_tables: None) -> None:
+def test_spaces_thread_manager_selects_readable_group_bound_threads(db: None) -> None:
     """``Thread.spaces`` keeps the actor scope and the caller's filters; ``objects`` stays the default manager."""
 
-    del composed_tables
+    del db
     member, person = _person_for("spaces-bound-member")
     with system_context(reason="spaces bound thread seed"):
         group = Group.objects.create(name="Bound", slug="bound")
@@ -503,10 +503,10 @@ def test_spaces_thread_manager_selects_readable_group_bound_threads(composed_tab
         assert list(Thread.spaces.filter(pk=twice.pk).bound_to_groups().values_list("pk", flat=True)) == [twice.pk]
 
 
-def test_narrow_space_thread_labels_have_constant_queries(composed_tables: None) -> None:
+def test_narrow_space_thread_labels_have_constant_queries(db: None) -> None:
     """A narrow space-thread page loads its label fields with the page, never per row."""
 
-    del composed_tables
+    del db
     member, person = _person_for("spaces-label-member")
     at = datetime(2026, 9, 1, tzinfo=UTC)
     with system_context(reason="spaces thread label seed"):
@@ -541,10 +541,10 @@ def test_narrow_space_thread_labels_have_constant_queries(composed_tables: None)
     assert counts[0] == counts[1], f"Narrow space-thread labels must not refetch deferred fields per row: {counts}"
 
 
-def test_team_member_clones_an_ownerless_template_vault(composed_tables: None) -> None:
+def test_team_member_clones_an_ownerless_template_vault(db: None) -> None:
     """A template vault reachable only through its team is cloned by a member, not by an outsider."""
 
-    del composed_tables
+    del db
     member, person = _person_for("spaces-template-member")
     outsider = create_user("spaces-template-outsider")
     with system_context(reason="spaces template vault"):

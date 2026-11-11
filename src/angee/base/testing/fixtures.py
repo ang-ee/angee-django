@@ -231,19 +231,3 @@ def restore_composed_permission_bindings(monkeypatch: pytest.MonkeyPatch) -> Ite
                 del config.__dict__[key]
     yield
     reset_backend()
-
-
-@pytest.fixture()
-def composed_tables(db: None) -> None:
-    """Compatibility alias of pytest-django's ``db`` kept for consumer suites; new tests request ``db``.
-
-    Every database test runs over the session's permission baseline in a transaction
-    rolled back at its end, so the REBAC schema and every row the baseline loads stay
-    in place. A test whose contract needs
-    real commits (other threads or connections, row locks, ``on_commit`` work run
-    by a real worker) declares ``django_db(transaction=True)``; its flush restores
-    the recorded baseline rows. Assert ``on_commit`` callbacks with
-    pytest-django's ``django_capture_on_commit_callbacks`` instead.
-    """
-
-    del db

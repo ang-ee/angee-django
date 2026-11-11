@@ -294,10 +294,10 @@ def real_network() -> Any:
 
 
 @pytest.fixture
-def replica(composed_tables: None) -> Iterator[Replica]:
+def replica(db: None) -> Iterator[Replica]:
     """Create the complete existing model graph, preserving real ingest/cascades."""
 
-    del composed_tables
+    del db
     with system_context(reason="test CardDAV replica"):
         directory = make_integration(
             "carddav-replica",

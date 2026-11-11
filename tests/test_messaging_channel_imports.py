@@ -14,10 +14,10 @@ from tests.conftest import Vendor
 
 
 @pytest.fixture
-def import_owner(composed_tables: None) -> Any:
+def import_owner(db: None) -> Any:
     """Seed the manual backend's vendor and one channel owner."""
 
-    del composed_tables
+    del db
     with system_context(reason="test.messaging.channel.import.owner"):
         Vendor.objects.create(slug="manual", display_name="Manual")
         return get_user_model().objects.create_user(username="channel-import-owner")

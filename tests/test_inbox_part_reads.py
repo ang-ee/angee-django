@@ -31,7 +31,7 @@ from angee.messaging.testing.models import Channel, Fragment, Message, Part, Thr
 from tests.chatterdemo.models import ChatterDoc
 from tests.conftest import create_platform_admin, create_user, make_integration
 
-pytestmark = pytest.mark.usefixtures("composed_tables")
+pytestmark = pytest.mark.django_db
 User = get_user_model()
 T0 = datetime(2026, 1, 1, tzinfo=UTC)
 

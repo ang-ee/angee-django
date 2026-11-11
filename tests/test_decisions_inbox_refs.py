@@ -24,7 +24,7 @@ from tests.mtidemo.models import MtiChild, MtiParent
     "concerns_label records { record_model record_id }",
     "records { record_model record_id } concerns_label",
 ])
-def test_concern_labels_batch_mixed_targets_without_exposing_revoked_records(composed_tables, fields):
+def test_concern_labels_batch_mixed_targets_without_exposing_revoked_records(db, fields):
     issuer = create_user("concern-label-issuer")
     reviewer = create_user("concern-label-reviewer")
     outsider = create_user("concern-label-outsider")
@@ -71,7 +71,7 @@ def test_concern_labels_batch_mixed_targets_without_exposing_revoked_records(com
         ("child", "title", True),
     ],
 )
-def test_proposals_use_the_concern_relations_canonical_identity_and_model(composed_tables, identity, field, valid):
+def test_proposals_use_the_concern_relations_canonical_identity_and_model(db, identity, field, valid):
     reviewer = create_user("canonical-proposal-reviewer")
     with system_context(reason="test canonical proposal"):
         child = MtiChild.objects.create(title="Shared record", detail="Concrete child")
@@ -98,7 +98,7 @@ def test_proposals_use_the_concern_relations_canonical_identity_and_model(compos
             DecisionRequest(**values)
 
 
-def test_mti_inbox_reference_resolves_the_readable_canonical_parent_label(composed_tables):
+def test_mti_inbox_reference_resolves_the_readable_canonical_parent_label(db):
     """A non-admin follows the returned base identity without exposing other rows."""
     issuer = create_user("reference-issuer")
     reviewer = create_user("reference-reviewer")

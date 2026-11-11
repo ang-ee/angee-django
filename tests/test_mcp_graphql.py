@@ -539,7 +539,7 @@ def test_mcp_reads_conceal_gated_fields_rows_totals_and_group_keys(
 
 @pytest.mark.django_db(transaction=True)
 @pytest.mark.parametrize("mutation", [False, True])
-def test_mcp_only_mutations_hold_an_outer_transaction(composed_tables, mutation):
+def test_mcp_only_mutations_hold_an_outer_transaction(mutation):
     seen = []
 
     def execute(document, **kwargs):
