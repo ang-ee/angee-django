@@ -94,13 +94,15 @@ def test_tracked_save_and_queryset_update_query_budgets(composed_tables: None) -
     history_table = Party.history.model._meta.db_table
     # The baseline probe (an instance save reads nothing before it writes; the row's
     # history may live on its MTI children), REBAC's schema-revision check, the
-    # UPDATE, then capture: one stored-state re-select and one history insert.
+    # UPDATE, then capture: one stored-state re-select and one history insert. Each
+    # MTI child's change feed then reads the saved row as its own kind.
     assert _data_statements(saved) == [
         f"SELECT {party_table}",
         "SELECT rebac_schemageneration",
         f"UPDATE {party_table}",
         f"SELECT {party_table}",
         f"INSERT {history_table}",
+        *(f"SELECT {apps.get_model('parties', name)._meta.db_table}" for name in ("Organization", "Person")),
     ]
     # Frozen keys (carrying the baseline test, so it costs no statement), REBAC's
     # schema-revision check, the UPDATE, one re-select and one history insert,

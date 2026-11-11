@@ -180,8 +180,9 @@ def test_publisher_parent_views_are_explicit(
                 else:
                     assert sent == []
                 sent.clear()
-                missing = Parent.objects.create(name="No child")
-                assert sent == []
+                with CaptureQueriesContext(connection) as captured:
+                    missing = Parent.objects.create(name="No child")
+                assert sent == [] and len(captured) == 1  # the insert: a parent-class creation has no child to read
                 children = [Child.objects.create(name=f"Batched {index}") for index in range(size)]
                 parents = [Parent.objects.get(pk=row.pk) for row in children] + [missing]
                 sent.clear()
