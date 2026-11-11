@@ -171,7 +171,7 @@ class ModelHistory(CaptureHistory):
 
         versions = []
         for table in self.carriers(model)[1:]:
-            rows = table.history.filter(**{table._meta.pk.attname: pk})
+            rows = get_history_manager_for_model(table).filter(**{table._meta.pk.attname: pk})
             if before is not None:
                 rows = rows.filter(history_date__lte=before).exclude(changeset_id=changeset.pk)
             if (version := rows.order_by("-history_date", "-history_id").first()) is not None:
