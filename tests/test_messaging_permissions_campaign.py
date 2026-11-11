@@ -1,14 +1,21 @@
-"""Ownership and dependent permissions, checked both as objects and SQL scopes."""
+"""The messaging decision table, sender envelopes and channel-owned thread identity."""
 
 import pytest
-from django.apps import apps
+from django.contrib.auth import get_user_model
+from django.contrib.auth.models import AnonymousUser
 from django.contrib.contenttypes.models import ContentType
-from django.core.exceptions import FieldDoesNotExist, ValidationError
+from django.core.exceptions import ValidationError
 from django.db import transaction
-from rebac import PermissionDenied, actor_context, system_context
-from rebac.backends import backend
-from rebac.evaluator import evaluator_scope
-from rebac.resources import model_resource_type
+from rebac import (
+    ObjectRef,
+    PermissionDenied,
+    RelationshipTuple,
+    SubjectRef,
+    actor_context,
+    system_context,
+    write_relationships,
+)
+from rebac.testing import assert_decisions
 
 from angee.base.models.identity import public_id_of
 from angee.graphql.testing.documents import execute_schema, result_data
@@ -29,7 +36,9 @@ from angee.messaging.testing.models import (
 )
 from angee.provenance import schema as provenance_schema
 from angee.tags.testing.models import Tag, TagAssignment
-from tests.conftest import Vendor, addon_schema
+from tests.chatterdemo.models import ChatterDoc
+from tests.conftest import Backend, Drive, File, Vendor, addon_schema, create_platform_admin
+from tests.decision_table import seat_cells
 from tests.messaging_campaign import grant, make_user
 
 
@@ -93,92 +102,179 @@ def test_message_reader_sees_the_sender_envelope_never_the_directory_handle(comp
     assert_access(message, reader, "read", False)
 
 
-def test_thread_transfer_requires_owner_and_clear_preserves_attribution(composed_tables):
-    owner, editor, successor = (make_user(name) for name in ("owner", "editor", "successor"))
-    with actor_context(owner):
-        thread = Thread.objects.create()
-    grant(thread, "editor", editor)
-    assert_access(thread, editor, "write", True)
-    assert_access(thread, editor, "transfer", False)
-    with pytest.raises(PermissionDenied):
-        thread.with_actor(editor).transfer_ownership(successor)
-    thread.with_actor(owner).transfer_ownership(successor)
-    assert thread.owner_id == successor.pk and thread.created_by_id == owner.pk
-    assert_access(thread, owner, "read", False)
-    assert_access(thread, successor, "transfer", True)
-    thread.with_actor(successor).transfer_ownership(None)
-    assert thread.owner_id is None and thread.created_by_id == owner.pk
-    assert_access(thread, successor, "read", False)
+def test_the_policy_decides_every_messaging_permission(composed_tables):
+    """One world, every messaging permission and extension arm with an allow and a deny, and its read scopes."""
 
-
-def test_owner_column_uses_transfer_gate_when_declared_on_the_base(composed_tables):
-    definition = backend().schema().get_definition("messaging/thread")
-    if "write__owner" not in {permission.name for permission in definition.permissions}:
-        pytest.skip("Merged messaging schema has no write__owner gate; owner sweep recorded in HANDOFF.md")
-    owner, editor, successor = (make_user(name) for name in ("column-owner", "column-editor", "column-next"))
-    with actor_context(owner):
-        thread = Thread.objects.create()
-    grant(thread, "editor", editor)
-    assert_access(thread, editor, "write__owner", False)
-    with actor_context(editor), pytest.raises(PermissionDenied):
-        thread = Thread.objects.get(pk=thread.pk)
-        thread.owner = successor
-        thread.save(update_fields=("owner",))
-
-
-@pytest.mark.parametrize("label", [
-    "thread", "message", "thread_attachment", "thread_follower", "thread_notification",
-    "part", "message_edge", "participant", "reaction", "message_star",
-])
-def test_dependents_inherit_parent_permissions_without_creator_access(composed_tables, label):
-    owner, poster, reader, author, recipient = (
-        make_user(name) for name in ("root-owner", "poster", "reader", "attributed-author", "recipient")
-    )
-    with system_context(reason="test.messaging.permission-tree"):
-        thread = Thread.objects.create(owner=owner, created_by=owner)
+    seats = {name: make_user(name) for name in (
+        "channel-reader", "replier", "annotator", "blind-annotator", "thread-owner", "thread-editor",
+        "thread-reader", "message-reader", "message-editor", "both-reader", "follower",
+        "recipient", "starrer", "author", "file-owner", "record-reader", "outsider",
+    )}
+    with system_context(reason="test.messaging.policy.service"):
+        seats["channel-owner"] = get_user_model().objects.create_user(username="policy-channel-owner", kind="service")
+    seats.update(admin=create_platform_admin("messaging-policy-admin"), anonymous=AnonymousUser())
+    author = seats["author"]
+    with system_context(reason="test.messaging.policy.world"):
+        vendor = Vendor.objects.create(slug="messaging-policy", display_name="Policy")
+        channel = Channel.objects.create(vendor=vendor, owner=seats["channel-owner"], backend_class="manual")
+        channel_thread = Thread.objects.create(channel=channel, created_by=author)
+        channel_message = Message.objects.create(channel=channel, thread=channel_thread, created_by=author)
+        trashed = Message.objects.create(channel=channel, thread=channel_thread, is_trashed=True)
+        thread = Thread.objects.create(owner=seats["thread-owner"], created_by=seats["thread-owner"])
         message = Message.objects.create(thread=thread, created_by=author)
-        other = Message.objects.create(thread=thread)
-        party = Party.objects.for_user(recipient)
-        handle = Handle.objects.create(platform="email", value="recipient@example.com")
-        attachment = ThreadAttachment.objects.create(
-            thread=thread, role="source", content_type=ContentType.objects.get_for_model(Thread), object_id=thread.pk,
+        handle = Handle.objects.create(platform="email", value="policy@example.test")
+        party = Party.objects.for_user(seats["follower"])
+        backend_row = Backend.objects.create(slug="messaging-policy", label="Policy", backend_class="local")
+        drive = Drive.objects.create(backend=backend_row, slug="messaging-policy", name="Policy")
+        source_file = File.objects.create(drive=drive, filename="s.txt", content_hash="a" * 64,
+                                          owner=seats["file-owner"], visibility="record")
+        part_file = File.objects.create(drive=drive, filename="p.txt", content_hash="b" * 64,
+                                        owner=seats["file-owner"], visibility="record")
+        source = ThreadAttachment.objects.create(
+            thread=thread, role="source", content_type=ContentType.objects.get_for_model(File),
+            object_id=source_file.pk,
         )
-        rows = {
-            "thread": thread,
-            "message": message,
-            "thread_attachment": attachment,
-            "thread_follower": ThreadFollower.objects.create(thread=thread, party=party, created_by=author),
-            "thread_notification": ThreadNotification.objects.create(
-                thread=thread, message=message, user=recipient, created_by=author,
-            ),
-            "part": Part.objects.create(message=message, position=0, created_by=author),
-            "message_edge": MessageEdge.objects.create(src=message, dst=other, kind="quote", created_by=author),
-            "participant": Participant.objects.create(thread=thread, message=message, handle=handle, created_by=author),
-            "reaction": Reaction.objects.create(message=message, handle=handle, reaction="ok", created_by=author),
-            "message_star": MessageStar.objects.create(message=message, user=recipient, created_by=author),
-        }
-    grant(thread, "editor", poster)
-    grant(thread, "reader", reader)
-    row = rows[label]
-    # As in a real request, share schema/evaluator metadata across this read-only
-    # matrix. All fixtures and grants are committed before the scope begins.
-    with evaluator_scope():
-        for actor in (owner, poster, reader):
-            assert_access(row, actor, "read", True)
-        for action in ("read", "write", "delete"):
-            assert_access(row, author, action, False)
-        recipient_only = label in {"thread_notification", "message_star"}
-        for actor in (owner, poster):
-            assert_access(row, actor, "write", not recipient_only)
-        assert_access(row, reader, "write", False)
-        assert_access(row, reader, "delete", False)
-        assert_access(row, owner, "delete", not recipient_only)
-        assert_access(row, poster, "delete", label in {
-            "thread_attachment", "thread_follower",
-        })
-    if label != "thread":
-        with pytest.raises(FieldDoesNotExist):
-            row._meta.get_field("owner")
+        follower = ThreadFollower.objects.create(thread=thread, party=party, created_by=author)
+        notification = ThreadNotification.objects.create(
+            thread=thread, message=message, user=seats["recipient"], created_by=author,
+        )
+        part = Part.objects.create(message=message, position=0, file=part_file, created_by=author)
+        edge = MessageEdge.objects.create(src=channel_message, dst=message, kind="quote", created_by=author)
+        membership = Participant.objects.create(thread=thread, handle=handle, created_by=author)
+        participant = Participant.objects.create(thread=thread, message=channel_message, handle=handle)
+        reaction = Reaction.objects.create(message=message, handle=handle, reaction="ok", created_by=author)
+        star = MessageStar.objects.create(message=message, user=seats["starrer"], created_by=author)
+        thread_tag, message_tag = (
+            TagAssignment.objects.create(
+                tag=Tag.objects.create(name=f"Policy {row._meta.model_name}"),
+                content_type=ContentType.objects.get_for_model(row), object_id=row.pk,
+            )
+            for row in (thread, message)
+        )
+        record = ChatterDoc.objects.create(title="Record")
+        chatter = ThreadAttachment.objects.ensure_for_record(record).thread
+        record_source = ThreadAttachment.objects.ensure_for_record(
+            ChatterDoc.objects.create(title="Source"), role="source",
+        ).thread
+    for row, relation, seat in (
+        (channel, "reader", "channel-reader"), (channel, "replier", "replier"), (channel, "annotator", "annotator"),
+        (channel, "reader", "annotator"), (channel, "annotator", "blind-annotator"),
+        (thread, "editor", "thread-editor"), (thread, "reader", "thread-reader"),
+        (message, "reader", "message-reader"), (message, "editor", "message-editor"),
+        (channel_message, "reader", "both-reader"), (message, "reader", "both-reader"),
+        (record, "reader", "record-reader"),
+    ):
+        grant(row, relation, seats[seat])
+    # Identity resolution runs as a provenance seed, never as a user.
+    seats["identity"] = SubjectRef(ObjectRef("provenance/seed", "messaging-policy"))
+    with system_context(reason="test.messaging.policy.identity"):
+        write_relationships([RelationshipTuple(
+            ObjectRef("provenance/role", "messaging_identity_source"), "member", seats["identity"],
+        )])
+
+    cells = seat_cells(
+        seats.__getitem__,
+        # messaging/channel, owned by a service account
+        (channel, "create", "admin", "channel-owner"),
+        (channel, "read", "channel-owner channel-reader replier admin", "outsider"),
+        (channel, "reply", "channel-owner replier", "channel-reader"),
+        (channel, "write", "channel-owner", "replier annotator"),
+        (channel, "annotate", "channel-owner annotator", "channel-reader"),
+        (channel, "delete", "channel-owner", "replier"),
+        (channel, "write__owner", "channel-owner", "replier"),
+        # messaging/thread, channel-bound and personal
+        (thread, "create", "outsider", "anonymous"),
+        (thread, "identity_source", "identity", "outsider"),
+        (channel_thread, "read_granted", "channel-owner channel-reader", "outsider"),
+        (thread, "read_granted", "thread-owner thread-editor thread-reader identity admin", "outsider author"),
+        (thread, "read_inbox", "thread-reader", "outsider"),
+        (thread, "read", "thread-reader", "outsider anonymous"),
+        (chatter, "read", "record-reader", "outsider"),
+        (chatter, "chatter_read", "record-reader", "outsider"),
+        (record_source, "read", "", "outsider"),
+        (chatter, "write", "", "record-reader"),
+        (channel_thread, "write", "channel-owner", "channel-reader"),
+        (thread, "write", "thread-owner thread-editor identity", "thread-reader"),
+        (channel_thread, "annotate_granted", "annotator blind-annotator", "channel-reader"),
+        (channel_thread, "annotate", "annotator", "blind-annotator"),
+        (thread, "share", "thread-owner thread-editor", "thread-reader"),
+        (thread, "delete", "thread-owner", "thread-editor"),
+        (channel_thread, "delete", "channel-owner", "channel-reader author"),
+        (thread, "transfer", "thread-owner admin", "thread-editor"),
+        (thread, "write__owner", "thread-owner", "thread-editor"),
+        # messaging/message, with a trashed channel message
+        (message, "create", "outsider", "anonymous"),
+        (message, "identity_source", "identity", "outsider"),
+        (trashed, "conceal", "outsider", "anonymous"),
+        (trashed, "withheld", "outsider", "anonymous"),
+        (message, "withheld", "", "outsider"),
+        (channel_message, "read_granted", "channel-reader", "outsider"),
+        (message, "read_granted", "message-reader", "thread-reader"),
+        (trashed, "withheld_keeper", "channel-owner identity", "channel-reader"),
+        (trashed, "read", "channel-owner admin", "channel-reader"),
+        (message, "read", "thread-reader message-reader", "outsider author"),
+        (message, "read_inbox", "thread-reader", "outsider"),
+        (channel_message, "send_held", "channel-owner", "replier"),
+        (message, "write", "thread-editor message-editor", "thread-reader author"),
+        (message, "annotate", "thread-editor", "thread-reader"),
+        (message, "delete", "thread-owner message-editor", "thread-reader"),
+        # dependents follow their parents, never their creator
+        (source, "target_write", "file-owner", "thread-owner"),
+        (source, "retains", "outsider", "anonymous"),
+        (source, "create", "file-owner", "thread-owner"),
+        (source, "read", "thread-reader", "outsider author"),
+        (source, "write", "thread-editor", "thread-reader"),
+        (source, "delete", "thread-editor file-owner", "thread-reader"),
+        (follower, "create", "outsider", "anonymous"),
+        (follower, "read", "follower thread-reader", "outsider author"),
+        (follower, "write", "follower thread-editor", "thread-reader"),
+        (follower, "delete", "follower thread-editor", "thread-reader"),
+        (notification, "read_inbox", "recipient", "thread-reader"),
+        (notification, "create", "outsider", "anonymous"),
+        (notification, "read", "recipient thread-reader", "outsider author"),
+        (notification, "write", "recipient", "thread-owner"),
+        (notification, "delete", "recipient", "thread-owner"),
+        (part, "create", "outsider", "anonymous"),
+        (part, "read_inbox", "thread-reader", "outsider"),
+        (part, "read", "thread-reader", "outsider author"),
+        (part, "write", "thread-editor", "thread-reader"),
+        (part, "delete", "thread-owner", "thread-editor"),
+        (edge, "create", "outsider", "anonymous"),
+        (edge, "read", "both-reader", "channel-owner thread-owner author"),
+        (edge, "write", "admin", "channel-owner thread-owner"),
+        (edge, "delete", "channel-owner thread-owner", "both-reader"),
+        (membership, "create", "outsider", "anonymous"),
+        (membership, "read", "thread-reader", "outsider"),
+        (membership, "write", "thread-editor", "thread-reader"),
+        (membership, "delete", "thread-owner", "thread-editor"),
+        (participant, "read", "channel-reader thread-reader", "outsider"),
+        (participant, "write", "channel-owner", "thread-editor"),
+        (participant, "delete", "channel-owner", "thread-owner"),
+        (reaction, "create", "outsider", "anonymous"),
+        (reaction, "read", "thread-reader", "outsider author"),
+        (reaction, "write", "thread-editor", "thread-reader"),
+        (reaction, "delete", "thread-owner", "thread-editor"),
+        (star, "create", "outsider", "anonymous"),
+        (star, "read", "starrer thread-reader", "outsider author"),
+        (star, "write", "starrer", "thread-owner"),
+        (star, "delete", "starrer", "thread-owner"),
+        # extension arms on parties, files and tags
+        (party, "read_granted", "thread-reader", "outsider"),
+        (part_file, "read", "thread-reader file-owner", "outsider"),
+        (thread_tag, "target_read", "thread-reader", "outsider"),
+        (thread_tag, "target_write", "thread-editor", "thread-reader"),
+        (message_tag, "target_read", "message-reader", "outsider"),
+        (message_tag, "target_write", "thread-editor", "message-reader"),
+    )
+    assert_decisions(
+        checks=cells,
+        accessible=(
+            (seats["channel-reader"], "read", Message, (channel_message,)),
+            (seats["thread-reader"], "read", Thread, (thread,)),
+            (seats["recipient"], "read_inbox", ThreadNotification, (notification,)),
+            (seats["author"], "read", Message, ()),
+        ),
+    )
 
 
 def test_channel_thread_is_ownerless_and_channel_transfer_moves_delete_access(composed_tables):
@@ -228,62 +324,3 @@ def test_channel_bound_thread_refuses_an_explicit_personal_owner(composed_tables
         Thread.objects.create(channel=channel, owner=owner)
 
 
-def test_cross_channel_quote_edge_reads_intersection_and_deletes_union(composed_tables):
-    owners = [make_user(f"endpoint-{index}") for index in range(2)]
-    with system_context(reason="test.messaging.cross-channel"):
-        vendor = Vendor.objects.create(slug="endpoints", display_name="Endpoints")
-        channels = [Channel.objects.create(vendor=vendor, owner=user, backend_class="manual") for user in owners]
-        messages = [Message.objects.create(channel=channel) for channel in channels]
-        edge = MessageEdge.objects.create(src=messages[0], dst=messages[1], kind="quote")
-    for owner in owners:
-        assert_access(edge, owner, "read", False)
-        assert_access(edge, owner, "write", False)
-        assert_access(edge, owner, "delete", True)
-    both = make_user("both-endpoints")
-    for message in messages:
-        grant(message, "reader", both)
-    assert_access(edge, both, "read", True)
-    assert_access(edge, both, "delete", False)
-
-
-def test_participant_mutation_follows_message_or_thread_membership_only(composed_tables):
-    thread_owner, message_owner, poster = (
-        make_user(name) for name in ("thread-owner", "message-owner", "thread-poster")
-    )
-    with system_context(reason="test.messaging.participants"):
-        thread = Thread.objects.create(owner=thread_owner)
-        other = Thread.objects.create(owner=message_owner)
-        message = Message.objects.create(thread=other)
-        handle = Handle.objects.create(platform="email", value="participant@example.com")
-        participant = Participant.objects.create(thread=thread, message=message, handle=handle)
-        membership = Participant.objects.create(thread=thread, handle=handle)
-        orphan = Participant.objects.create(handle=handle, created_by=thread_owner)
-    grant(thread, "editor", poster)
-    for actor in (thread_owner, poster):
-        assert_access(participant, actor, "read", True)
-        assert_access(participant, actor, "write", False)
-        assert_access(participant, actor, "delete", False)
-        assert_access(membership, actor, "write", True)
-        assert_access(membership, actor, "delete", actor == thread_owner)
-        for action in ("read", "write", "delete"):
-            assert_access(orphan, actor, action, False)
-    for action in ("read", "write", "delete"):
-        assert_access(participant, message_owner, action, True)
-
-
-def test_every_messaging_permission_compiles_without_enumeration(composed_tables,
-                                                              django_assert_num_queries):
-    reader = make_user("sql-reader")
-    models = (Thread, Message, ThreadAttachment, ThreadFollower, ThreadNotification,
-              Part, MessageEdge, Participant, Reaction, MessageStar)
-    # Generic record arms resolve Django content types during SQL rendering.
-    # Warm that native metadata cache as well as REBAC's schema before measuring.
-    ContentType.objects.get_for_models(*apps.get_models())
-    with actor_context(reader), evaluator_scope():
-        schema = backend().schema()
-        for model in models:
-            resource_type = model_resource_type(model)
-            definition = schema.get_definition(resource_type)
-            for permission in definition.permissions:
-                scoped = model.objects.with_actor(reader).with_action(permission.name).scoped()
-                assert list(scoped.values_list("pk", flat=True)) == []
