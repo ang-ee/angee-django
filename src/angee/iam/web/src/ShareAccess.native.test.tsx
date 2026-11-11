@@ -1,11 +1,11 @@
 // @vitest-environment happy-dom
 
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import type { ReactElement, ReactNode } from "react";
 import { expect, test } from "vitest";
 import type { DataResourceMetadata } from "@angee/metadata";
 import { RESOURCE_CONTAINERS, RecordChromeProvider, ResourceViewUtilities, containersFromChildren } from "@angee/ui";
-import { RuntimeFixture, storySchema, testDataResource, type GraphQLWireRequest } from "@angee/storybook/testing";
+import { RoutedRuntimeFixture, RuntimeFixture, storySchema, testDataResource, type GraphQLWireRequest } from "@angee/storybook/testing";
 
 import { ShareAccessDialog, ShareListChrome, ShareRecordChrome, useAccessRole } from "./ShareAccess";
 
@@ -16,8 +16,10 @@ const note = (grantable: DataResourceMetadata["grantable"] = [reader]) => testDa
 const user = testDataResource("iam.User", { recordRepresentation: "display_name" });
 
 /** The IAM access surface over the wire: readers load with the record, direct access when the panel opens. */
-function renderShare(content: ReactNode, { resource = note(), access = [] as readonly Record<string, unknown>[], containers }: {
+function renderShare(content: ReactNode, { resource = note(), access = [] as readonly Record<string, unknown>[], containers, routed = false }: {
   resource?: DataResourceMetadata; access?: readonly Record<string, unknown>[]; containers?: ReturnType<typeof containersFromChildren>;
+  /** Mount under the native router, for the add-person picker's route hooks. */
+  routed?: boolean;
 } = {}): GraphQLWireRequest[] {
   const requests: GraphQLWireRequest[] = [];
   const schemas = { console: { ...storySchema({
@@ -27,7 +29,10 @@ function renderShare(content: ReactNode, { resource = note(), access = [] as rea
     users: () => [],
     users_aggregate: () => ({ aggregate: { count: 0 } }),
   }, (request) => requests.push(request)).public!, metadata: { angee: { resources: [resource, user] } } } };
-  render(<RuntimeFixture activeSchema="console" schemas={schemas} runtime={containers ? { containers } : {}}>{content}</RuntimeFixture>);
+  const runtime = containers ? { containers } : {};
+  render(routed
+    ? <RoutedRuntimeFixture activeSchema="console" schemas={schemas} runtime={runtime} collectionPath="/notes">{content}</RoutedRuntimeFixture>
+    : <RuntimeFixture activeSchema="console" schemas={schemas} runtime={runtime}>{content}</RuntimeFixture>);
   return requests;
 }
 
@@ -102,9 +107,12 @@ test("a model-scoped role opens Share without direct grant relations", async () 
   const state = { role, people: [], add: async () => true, remove: async () => undefined };
   function ResponderRole(): null { useAccessRole(role.id, state); return null; }
   // IAM's manifest declares its access containers per model; a runtime resolves only declared addresses.
+  // ShareAccess keys a registered role by its container child's id, so the child carries the role's id.
   const containers = containersFromChildren([{ address: "iam#access-roles", models: true }, { address: "iam#access-visibility", models: true }],
-    { "notes.Note#access-roles": { "test.responder": { content: ResponderRole } } });
-  renderShare(<OnRecord record={{ title: "Welcome", permissions: [] }}><ShareRecordChrome /></OnRecord>, { resource: note([]), containers });
+    { "notes.Note#access-roles": { [role.id]: { content: ResponderRole } } });
+  renderShare(<OnRecord record={{ title: "Welcome", permissions: [] }}><ShareRecordChrome /></OnRecord>, { resource: note([]), containers, routed: true });
   fireEvent.click(await screen.findByRole("button", { name: "Share" }));
-  expect((await screen.findAllByText("Responder")).length).toBeGreaterThan(0);
+  // The offered role is the panel's add-person choice.
+  const add = await screen.findByRole("region", { name: "Add a person" });
+  expect(within(add).getByText("Responder")).toBeTruthy();
 });
