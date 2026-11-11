@@ -15,6 +15,7 @@ from datetime import timedelta
 from types import SimpleNamespace
 from typing import Any
 
+import httpx2
 import pytest
 from django.contrib.auth import get_user_model
 from django.core.exceptions import PermissionDenied, ValidationError
@@ -55,6 +56,7 @@ from angee.graphql.schema import SCHEMA_PART_KEYS, GraphQLSchemas
 from angee.graphql.testing.documents import execute_schema
 from angee.graphql.testing.documents import result_data as _data
 from angee.integrate.credentials import CredentialKind
+from angee.integrate.testing.http import mock_transport
 from angee.operator.daemon import OperatorDaemonConflict, OperatorDaemonNotFound, OperatorInstanceKind, WorkspaceStatus
 from tests.conftest import Credential, ExternalAccount, Integration, OAuthClient, SchemaAddon, Vendor, make_integration
 from tests.conftest import create_platform_admin as _platform_admin
@@ -2099,13 +2101,15 @@ def test_deprovision_agent_keeps_the_names_when_the_daemon_answers_a_plain_404(
     )
 
 
-def test_provision_agent_records_error_when_plan_resolution_fails(db: None, monkeypatch: Any) -> None:
+@pytest.mark.django_db(transaction=True)
+def test_provision_agent_records_error_when_plan_resolution_fails(monkeypatch: Any) -> None:
     """A plan-resolution failure records ERROR — the agent never strands in PROVISIONING.
 
     `_render_plan` reads the credential chain and agent inputs before the daemon render; a
     failure there (a missing/undecryptable credential, a bad MCP config) must route through
     the same failure handler as a daemon render failure, not flip the agent to PROVISIONING
-    and then raise an unhandled 500 that leaves it stuck.
+    and then raise an unhandled 500 that leaves it stuck. Provisioning runs in autocommit, so
+    the MCP bearer's refresh really reaches its token endpoint, which refuses the connection.
     """
 
     admin = _platform_admin("agt-planfail-admin")
@@ -2126,16 +2130,21 @@ def test_provision_agent_records_error_when_plan_resolution_fails(db: None, monk
         )
         agent.mcp_servers.add(server)
 
-    result = _data(
-        execute_schema(
-            _schema(),
-            "mutation($id: ID!){ provision_agent(id: $id){ ok message } }",
-            {"id": agent_id},
-            user=admin
-        )
-    )["provision_agent"]
+    def refuse(request: httpx2.Request) -> httpx2.Response:
+        raise httpx2.ConnectError("token endpoint unreachable", request=request)
 
-    assert result["ok"] is False and "Credential refresh requires autocommit" in result["message"]
+    with mock_transport(refuse) as requests:
+        result = _data(
+            execute_schema(
+                _schema(),
+                "mutation($id: ID!){ provision_agent(id: $id){ ok message } }",
+                {"id": agent_id},
+                user=admin
+            )
+        )["provision_agent"]
+
+    assert requests, "the refresh must reach the token endpoint"
+    assert result == {"ok": False, "message": "Provisioning failed: token_exchange_failed"}
     assert operator.calls == []  # the plan failed before any daemon call
     with system_context(reason="test.agents.planfail.verify"):
         agent.refresh_from_db()
@@ -2143,7 +2152,7 @@ def test_provision_agent_records_error_when_plan_resolution_fails(db: None, monk
         # — and no instance names recorded.
         assert (str(agent.runtime_status), str(agent.lifecycle)) == ("error", "draft")
         assert (agent.workspace, agent.service) == ("", "")
-        assert "Credential refresh requires autocommit" in agent.last_error
+        assert agent.last_error == "token_exchange_failed"
 
 
 def test_reprovision_agent_recreates_service_over_existing_workspace(db: None, monkeypatch: Any) -> None:
