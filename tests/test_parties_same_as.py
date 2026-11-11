@@ -1,4 +1,4 @@
-"""Party same_as detection."""
+"""Party same_as detection and the merge it leads to."""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ from typing import Any
 import pytest
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
-from rebac import system_context
+from rebac import actor_context, system_context
 
 import tests.test_parties_circles  # noqa: F401 -- register the fixture model graph before database setup
 from angee.messaging.testing.models import Handle, Party, Person
@@ -63,4 +63,31 @@ def test_merge_scalar_fields_admit_person_choices_only_between_people(composed_t
         assert set(party.merge_scalar_fields) < set(person.merge_scalar_fields)
         assert "birthday" in person.merge_scalar_fields
         with pytest.raises(ValidationError, match="Unsupported merge field"):
-            party.apply_merge_field_overrides(person, {"birthday": "2000-01-01"})
+            party.keep_merge_fields(person, {"birthday": "2000-01-01"})
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.parametrize(
+    ("field_overrides", "kept"),
+    [({}, ("Mergeprobe Gamma", "Gamma")), ({"display_name": "Mergeprobe Delta"}, ("Mergeprobe Delta", "Gamma"))],
+    ids=("survivor-values", "override"),
+)
+def test_a_merge_keeps_the_chosen_values_over_the_newer_statements_it_moves(
+    composed_tables: None, field_overrides: dict[str, str], kept: tuple[str, str]
+) -> None:
+    """The duplicate's newer statements move to the survivor; survivorship still keeps what the merge chose."""
+
+    del composed_tables
+    owner = get_user_model().objects.create_user(username="merge-values-owner")
+    with actor_context(owner):
+        gamma, delta = [
+            Person.objects.create(display_name=f"Mergeprobe {name}", given_name="Mergeprobe", family_name=name)
+            for name in ("Gamma", "Delta")
+        ]
+        Party.objects.get(pk=gamma.pk).merge(records=[delta.public_id], field_overrides=field_overrides)
+        survivor = Person.objects.get(pk=gamma.pk)
+        merged = (survivor.display_name, survivor.family_name)
+        for statements in survivor.statement_managers():
+            statements.resolve()
+        survivor.refresh_from_db()
+    assert merged == (survivor.display_name, survivor.family_name) == kept
