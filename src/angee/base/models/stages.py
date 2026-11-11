@@ -17,7 +17,6 @@ hook that stamps ``stage_entered_at`` and lets a consumer project its lifecycle.
 
 from __future__ import annotations
 
-import copy
 from collections.abc import Iterable, Mapping
 from typing import Any, ClassVar, Self, cast
 
@@ -250,15 +249,24 @@ class StagedModelMixin[StageT: Stage = Stage](models.Model):
         stage_id = getattr(self, f"{self.stage_field_name}_id", None)
         if stage_id is None:
             return
+        container_field = self._stage_container_field()
+        record, container_label = self._meta.verbose_name, container_field.verbose_name
         container = self.stage_container()
         if container is None:
-            raise ValidationError({self.stage_container_field_name: "A staged record requires its stage container."})
+            raise ValidationError({container_field.name: f"A staged {record} requires its {container_label}."})
         stage_model = self.stage_model()
         if stage_model.for_record(self).filter(pk=stage_id).exists():
             return
         if not stage_model.for_container(container).filter(pk=stage_id).exists():
-            raise ValidationError({self.stage_field_name: "Stage must belong to the record's container."})
-        raise ValidationError({self.stage_field_name: "Stage does not apply to this record."})
+            raise ValidationError({self.stage_field_name: f"Stage must belong to the {record}'s {container_label}."})
+        raise ValidationError({self.stage_field_name: f"Stage does not apply to this {record}."})
+
+    def writes_stage(self, update_fields: Iterable[str] | None) -> bool:
+        """Whether a save with ``update_fields`` writes the stage; a create or a full save always does."""
+
+        if self._state.adding or update_fields is None:
+            return True
+        return bool({self.stage_field_name, f"{self.stage_field_name}_id"} & set(update_fields))
 
     def stage_transition(
         self,
@@ -276,18 +284,20 @@ class StagedModelMixin[StageT: Stage = Stage](models.Model):
         marks it ``manual``.
         """
 
-        previous_id, _container_id = self._persisted_stage_binding(lock=lock)
-        target_id = target.pk if target is not None else getattr(self, f"{self.stage_field_name}_id")
+        stage_attname = f"{self.stage_field_name}_id"
+        persisted = self._persisted_row(lock=lock)
+        previous_id = getattr(persisted, stage_attname) if persisted is not None else None
+        target_id = target.pk if target is not None else getattr(self, stage_attname)
         return self._admit_stage_move(previous_id, target_id, manual=manual, admitted=admitted)
 
     def project_stage(self, previous: StageT | None, following: StageT | None) -> set[str]:
         """Write the companion facts a stage move implies and return the fields written.
 
-        The primitive stamps ``stage_entered_at`` when the stage changes and clears
-        it when the record leaves every stage.  A consumer extends this through
-        ``super()`` with its own projection (a code-owned lifecycle written through
-        ``StateTransitions.write_state``, timestamps, a cleared reason) and returns
-        the union; the save merges it into ``update_fields``.
+        The primitive stamps ``stage_entered_at`` when a save moves the stage and
+        clears it when the record leaves every stage.  A consumer extends this
+        through ``super()`` with its own projection (a code-owned lifecycle written
+        through ``StateTransitions.write_state``, timestamps, a cleared reason) and
+        returns the union; the save merges it into ``update_fields``.
         """
 
         previous_id = previous.pk if previous is not None else None
@@ -296,6 +306,17 @@ class StagedModelMixin[StageT: Stage = Stage](models.Model):
             return set()
         self.stage_entered_at = timezone.now() if following is not None else None
         return {"stage_entered_at"}
+
+    def validate_stored_row(self, persisted: Self | None, stored: Self) -> None:
+        """Validate the row this save stores, under the save's row lock; the default adds nothing.
+
+        ``persisted`` is the committed row read under the lock (``None`` on create).
+        ``stored`` is the row the save writes: ``self`` for a create or a full save,
+        otherwise a snapshot carrying the written fields from ``self`` and every
+        other field from ``persisted``.  A consumer checks its own same-row
+        invariants on ``stored`` so a partial save from a stale instance is judged
+        on what it writes; stage scope and applicability are already checked there.
+        """
 
     def clean(self) -> None:
         """Admit and project the pending stage move, run model cleaning, then enforce scope."""
@@ -309,9 +330,10 @@ class StagedModelMixin[StageT: Stage = Stage](models.Model):
         """Persist the record with its stage move admitted, scoped and projected in one transaction.
 
         An owning verb passes the system stage it admits as ``admitted_stage``; the
-        save must write exactly that stage.  A partial save stores the persisted
-        stage and container it omits, so admission, scope and projection judge
-        those stored values rather than a stale instance's.
+        save must write exactly that stage.  The committed row is read once under
+        the row lock; a partial save is judged on the row it stores (see
+        :meth:`validate_stored_row`), so admission, scope and applicability never
+        trust a stale instance's unwritten fields.
         """
 
         stage_attname = f"{self.stage_field_name}_id"
@@ -319,20 +341,20 @@ class StagedModelMixin[StageT: Stage = Stage](models.Model):
             admitted_stage.pk is None or getattr(self, stage_attname) != admitted_stage.pk
         ):
             raise ValidationError({self.stage_field_name: "Save must write the stage admitted by its owning verb."})
-        container_field = self._stage_container_field()
         update_fields = set(kwargs["update_fields"]) if kwargs.get("update_fields") is not None else None
-        written = None if self._state.adding else update_fields
-        stage_written = written is None or bool({self.stage_field_name, stage_attname} & written)
-        container_written = written is None or bool({container_field.name, container_field.attname} & written)
+        stage_written = self.writes_stage(update_fields)
         using = kwargs.get("using") or router.db_for_write(type(self), instance=self)
         with transaction.atomic(using=using):
-            previous_id, persisted_container_id = self._persisted_stage_binding(lock=True)
-            stage_id = getattr(self, stage_attname) if stage_written else previous_id
-            container_id = getattr(self, container_field.attname) if container_written else persisted_container_id
+            persisted = self._persisted_row(lock=True, using=using)
+            stored = self._stored_row(persisted, update_fields)
             previous, following = self._admit_stage_move(
-                previous_id, stage_id, manual=False, admitted=admitted_stage is not None
+                getattr(persisted, stage_attname) if persisted is not None else None,
+                getattr(stored, stage_attname),
+                manual=False,
+                admitted=admitted_stage is not None,
             )
-            self._stored_stage_record(stage_id, container_id).validate_stage_scope()
+            stored.validate_stage_scope()
+            self.validate_stored_row(persisted, stored)
             projected = self.project_stage(previous, following) if stage_written else set()
             if update_fields is not None:
                 update_fields.update(projected)
@@ -353,19 +375,41 @@ class StagedModelMixin[StageT: Stage = Stage](models.Model):
             ) from error
         return cast(models.ForeignKey, field)
 
-    def _persisted_stage_binding(self, *, lock: bool) -> tuple[Any, Any]:
-        """Return the stored stage and container ids, read under the row lock when ``lock`` is set."""
+    def _persisted_row(self, *, lock: bool, using: str | None = None) -> Self | None:
+        """Return the committed row, under the row lock when ``lock`` is set; ``None`` before the first save."""
 
         if self._state.adding:
-            return None, None
+            return None
         model = type(self)
-        rows = model._base_manager.filter(pk=self.pk)
+        rows = model._base_manager.db_manager(using).filter(pk=self.pk)
         if lock:
             rows = rows.select_for_update(of=row_lock_paths(model))
-        stage_id, container_id = rows.values_list(
-            f"{self.stage_field_name}_id", self._stage_container_field().attname
-        ).get()
-        return stage_id, container_id
+        return rows.first()
+
+    def _stored_row(self, persisted: Self | None, update_fields: set[str] | None) -> Self:
+        """Return the row a save writes: ``self``, or for a partial save a snapshot over ``persisted``.
+
+        The snapshot is native hydration (``from_db``), so guarded state fields load
+        without a transition; it reuses ``self``'s cached relations whose ids agree.
+        """
+
+        if persisted is None or update_fields is None:
+            return self
+        fields = self._meta.concrete_fields
+        written = {field.attname for field in fields if {field.name, field.attname} & update_fields}
+        stored = type(self).from_db(
+            persisted._state.db,
+            [field.attname for field in fields],
+            [getattr(self if field.attname in written else persisted, field.attname) for field in fields],
+        )
+        for field in fields:
+            if (
+                isinstance(field, models.ForeignKey)
+                and field.is_cached(self)
+                and self.__dict__.get(field.attname, models.DEFERRED) == getattr(stored, field.attname)
+            ):
+                field.set_cached_value(stored, field.get_cached_value(self))
+        return stored
 
     def _admit_stage_move(
         self, previous_id: Any, target_id: Any, *, manual: bool, admitted: bool
@@ -382,18 +426,3 @@ class StagedModelMixin[StageT: Stage = Stage](models.Model):
                 previous, following, manual=manual, admitted=admitted, adding=self._state.adding
             )
         return previous, following
-
-    def _stored_stage_record(self, stage_id: Any, container_id: Any) -> Self:
-        """Return this record as the save stores its stage binding; a stale instance answers through a copy."""
-
-        stage_attname = f"{self.stage_field_name}_id"
-        container_attname = self._stage_container_field().attname
-        loaded = self.__dict__
-        if loaded.get(stage_attname, models.DEFERRED) == stage_id and (
-            loaded.get(container_attname, models.DEFERRED) == container_id
-        ):
-            return self
-        stored = copy.copy(self)
-        setattr(stored, stage_attname, stage_id)
-        setattr(stored, container_attname, container_id)
-        return stored

@@ -89,15 +89,20 @@ describe("queue settings sections", () => {
 });
 
 describe("queue settings form declaration", () => {
-  test("titles the queue form, shows name, category and tone first, and keeps fold, rotting and the rule flags behind the menu with their help", () => {
+  test("titles the queue form, shows name, category and tone first, and keeps description, fold, rotting and the rule flags behind the menu with their help", () => {
     render(<Declaration />);
 
     expect(mocks.formProps?.resource).toBe("work.Queue");
     expect(mocks.formProps?.layout).toBeUndefined();
     expect(mocks.formProps?.linePrimaryFields).toEqual(["name", "category", "tone"]);
     const fields = mocks.formProps?.lineFields as readonly LineField[];
-    expect(fields.map((field) => field.name)).toEqual(["name", "category", "tone", "fold", "rotting_days", "rule_owned"]);
+    expect(fields.map((field) => field.name))
+      .toEqual(["name", "category", "tone", "description", "fold", "rotting_days", "rule_owned"]);
     const byName = new Map(fields.map((field) => [field.name, field]));
+    expect(byName.get("description")).toMatchObject({
+      label: "stage.description",
+      description: "stage.description.help",
+    });
     expect(byName.get("fold")).toMatchObject({ label: "stage.fold", description: "stage.fold.help" });
     expect(byName.get("rotting_days")).toMatchObject({
       label: "stage.rottingDays",

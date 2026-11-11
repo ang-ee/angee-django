@@ -15,6 +15,8 @@ export const enWorkMessages: Record<string, string> = {
   "queue.group.estimates": "Estimates",
   "queue.stages.title": "Stages",
   "stage.behaviour": "Rules",
+  "stage.description": "Description",
+  "stage.description.help": "What this stage requires before a task moves on.",
   "stage.fold": "Folded",
   "stage.fold.help": "Boards show this stage collapsed until someone expands it.",
   "stage.rottingDays": "Rotting after (days)",

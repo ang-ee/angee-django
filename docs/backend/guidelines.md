@@ -1248,15 +1248,20 @@ exception closes the rows as failed. Tests inherit a boundary from the root
   the board's default-collapsed `fold` hint (a lane source reads it as
   `foldField`; a board never writes it back) and `rotting_days`, the dwell after
   which a resting record needs attention, measured from the record's
-  `stage_entered_at`, which the mixin stamps on every stage change.
+  `stage_entered_at`, which the mixin stamps on every save that moves the stage.
+  A write that bypasses `save()` does not stamp it: a stage deleted under
+  `on_delete=SET_NULL` leaves the record's last stamp in place.
   *Applicability:* an override of `Stage.for_record` narrows a container's stages
   for one record; scope validation and `resolve_default_stage` both read it, and a
-  container default the record cannot hold falls back to its first applicable
-  stage. *Admission:* the mixin reads the persisted previous stage under the row
-  lock and asks `Stage.validate_transition(previous, following, *, manual, admitted,
-  adding)` for hand moves and every non-sudo write; a verb that owns a reserved
-  entry passes `save(admitted_stage=...)` and must write exactly that stage. A
-  partial save judges the stage and container it stores, not a stale instance's.
+  container default the record cannot hold falls back through
+  `Stage.resolve_default_fallback` over the applicable stages. *Admission:* the
+  mixin reads the committed row once under the row lock and asks
+  `Stage.validate_transition(previous, following, *, manual, admitted, adding)` for
+  hand moves and every non-sudo write; a verb that owns a reserved entry passes
+  `save(admitted_stage=...)` and must write exactly that stage. A partial save is
+  judged on the row it stores (written fields over the committed row), never on a
+  stale instance; a consumer checks its own same-row invariants there through
+  `validate_stored_row(persisted, stored)`.
   *Projection:* `project_stage(previous, following)` returns the fields a move
   writes and the save merges them into `update_fields`; a consumer extends it
   through `super()` to write its code-owned lifecycle through `StateTransitions`.

@@ -470,7 +470,7 @@ class Stage(RowLockMixin, StagePrimitive, AuditMixin, AngeeDataModel, concrete=T
 
         if previous is not None and following is not None and previous.pk == following.pk:
             return
-        if manual and following is not None and following.rule_owned:
+        if manual and following is not None and not following.ordinary_entry_available:
             raise ValidationError({"stage": "Hand verbs cannot enter a rule-owned stage."})
         if previous is not None and previous.exit_reserved:
             raise ValidationError({"stage": cls.EXIT_RESERVED_MESSAGE})
@@ -1226,7 +1226,7 @@ class TaskWork(StagedModelMixin[Stage], StateTransitionsMixin, Composable, exten
 
         self._validate_initial_status()
         update_fields = set(kwargs["update_fields"]) if kwargs.get("update_fields") is not None else None
-        stage_written = self._state.adding or update_fields is None or bool({"stage", "stage_id"} & update_fields)
+        stage_written = self.writes_stage(update_fields)
         using = kwargs.get("using") or router.db_for_write(type(self), instance=self)
         queue_field = type(self).queue.field
         previous_queue = queue_field.get_cached_value(self, default=None)
@@ -1287,7 +1287,9 @@ class TaskWork(StagedModelMixin[Stage], StateTransitionsMixin, Composable, exten
                 return self
             self.validate_action("complete")
             stage = self._stage_for_category("completed")
-            self.stage_transition(target=stage, manual=True, lock=True)
+            self.stage_model().validate_transition(
+                previous, stage, manual=True, admitted=False, adding=self._state.adding
+            )
             self.stage = stage
             self.save(update_fields=("stage", "updated_at"))
             self.post_completion(feedback)

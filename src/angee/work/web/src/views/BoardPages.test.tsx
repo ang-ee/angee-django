@@ -130,6 +130,7 @@ function expectBoardStageScope(
     field: "stage",
     rankField: "sort_order",
     rankInputField: "task_order",
+    foldField: "fold",
     filters: [
       { field: "queue", operator: "eq", value: "que_eng" },
       { field: "is_system", operator: "eq", value: false },

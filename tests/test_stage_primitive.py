@@ -8,6 +8,7 @@ from typing import Any, ClassVar
 import pytest
 from django.core.exceptions import ValidationError
 from django.db import models
+from rebac import system_context
 
 from angee.base.models.stages import Stage, StagedModelMixin
 from tests.tables import model_tables
@@ -116,7 +117,7 @@ def test_applicability_narrows_the_default_and_the_scope_check(pipeline: Any) ->
     assert bug.resolve_default_stage() == stages["Bugs first"]
 
     task.stage = stages["Bugs first"]
-    with pytest.raises(ValidationError, match="does not apply to this record"):
+    with pytest.raises(ValidationError, match="does not apply to this pipeline record"):
         task.validate_stage_scope()
     foreign = PipelineStage.objects.create(container=PipelineContainer.objects.create(), name="Elsewhere")
     task.stage = foreign
@@ -180,6 +181,28 @@ def test_a_partial_save_judges_the_stage_binding_it_stores(pipeline: Any) -> Non
     assert PipelineRecord.objects.get(pk=record.pk).stage_id == elsewhere.pk, "the stale container admits nothing"
 
 
+def test_a_partial_save_judges_applicability_on_the_row_it_stores(pipeline: Any) -> None:
+    container, stages = pipeline
+    record = PipelineRecord.objects.create(container=container, kind="task", stage=stages["New"])
+    stale = PipelineRecord.objects.get(pk=record.pk)
+    record.kind, record.stage = "bug", stages["Bugs first"]
+    record.save()
+    stale.stage = stages["Bugs first"]
+    stale.save(update_fields=("stage",))
+    stored = PipelineRecord.objects.get(pk=record.pk)
+    assert (stored.kind, stored.stage) == ("bug", stages["Bugs first"]), "the stored kind admits the stage"
+
+    record = PipelineRecord.objects.create(container=container, kind="bug", stage=stages["Bugs first"])
+    stale = PipelineRecord.objects.get(pk=record.pk)
+    record.kind, record.stage = "task", stages["New"]
+    record.save()
+    stale.stage = stages["Bugs first"]
+    with pytest.raises(ValidationError, match="does not apply"):
+        stale.save(update_fields=("stage",))
+    stored = PipelineRecord.objects.get(pk=record.pk)
+    assert (stored.kind, stored.stage) == ("task", stages["New"]), "a stale kind admits nothing"
+
+
 def test_the_stage_owner_admits_every_move_with_its_facts(pipeline: Any) -> None:
     container, stages = pipeline
     record = PipelineRecord.objects.create(container=container, stage=stages["New"])
@@ -203,6 +226,41 @@ def test_the_stage_owner_admits_every_move_with_its_facts(pipeline: Any) -> None
     record.refresh_from_db()
     assert record.stage == stages["Closed"]
     assert PipelineStage.admissions[-1]["admitted"] is True
+
+
+def test_a_trusted_system_save_skips_admission_but_a_hand_move_never_does(pipeline: Any) -> None:
+    container, stages = pipeline
+    record = PipelineRecord.objects.create(container=container, stage=stages["New"])
+    admitted = len(PipelineStage.admissions)
+    record.stage = stages["Closed"]
+    with system_context(reason="tests.stage_primitive.system_move"):
+        record.save()
+        assert len(PipelineStage.admissions) == admitted, "a sudo system write is trusted"
+        record.stage = stages["New"]
+        record.save()
+        record.stage = stages["Closed"]
+        with pytest.raises(ValidationError, match="Use close to enter Closed"):
+            record.stage_transition(manual=True)
+    assert PipelineRecord.objects.get(pk=record.pk).stage == stages["New"]
+
+
+def test_clean_admits_projects_and_scopes_the_pending_move(pipeline: Any) -> None:
+    container, stages = pipeline
+    record = PipelineRecord.objects.create(container=container, stage=stages["New"])
+    entered = record.stage_entered_at
+    record.stage = stages["Closed"]
+    with pytest.raises(ValidationError, match="Use close to enter Closed"):
+        record.clean()
+    assert record.stage_entered_at == entered, "a refused move projects nothing"
+
+    record.stage = stages["Doing"]
+    record.clean()
+    assert record.stage_entered_at is not None and record.stage_entered_at > entered, "clean projects the move"
+    assert PipelineRecord.objects.get(pk=record.pk).stage_entered_at == entered, "projection waits for the save"
+
+    record.stage = stages["Bugs first"]
+    with pytest.raises(ValidationError, match="does not apply to this pipeline record"):
+        record.clean()
 
 
 def test_provision_creates_once_and_keeps_existing_rows(pipeline_tables: None) -> None:

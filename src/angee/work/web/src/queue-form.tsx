@@ -72,7 +72,7 @@ export const QUEUE_FORM_SECTIONS: ContainerEntry<React.ReactNode> = {
   },
 };
 
-/** Stage columns shown at first; fold, rotting and the rule flags stay in the lines' header menu of visible fields. */
+/** Stage columns shown at first; description, fold, rotting and the rule flags stay in the lines' header menu of visible fields. */
 const STAGE_PRIMARY_FIELDS = ["name", "category", "tone"] as const;
 
 /**
@@ -101,6 +101,7 @@ export function useQueueFormDeclaration(props: Omit<FormProps, "resource" | "chi
       })),
     },
     { name: "tone", label: t("common.tone") },
+    { name: "description", label: t("stage.description"), description: t("stage.description.help") },
     { name: "fold", label: t("stage.fold"), description: t("stage.fold.help") },
     { name: "rotting_days", label: t("stage.rottingDays"), description: t("stage.rottingDays.help") },
     { name: "rule_owned", label: t("stage.ruleOwned"), description: t("stage.ruleOwned.help") },
