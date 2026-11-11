@@ -1529,7 +1529,33 @@ class Topic(ImmutableFieldsMixin, AuditMixin, AngeeDataModel, concrete=True):
         super().save(*args, **kwargs)
 
 
-class ProposalManager[T: Proposal](AngeeHistoryManager[T]):
+class _ProposalRoundFirstDeletes(models.QuerySet[Any]):
+    """Take the proposals' rounds before history locks the proposals, the order submission holds.
+
+    ``Proposal.lock_for_delete`` takes the round first on every delete; a queryset
+    delete's history capture would otherwise lock the proposal rows before it.
+    """
+
+    def delete(self) -> tuple[int, dict[str, int]]:
+        with transaction.atomic(using=self.db):
+            rounds = apps.get_model("proposals", "Round").system_queryset(lock=("self",))
+            list(rounds.filter(pk__in=self.order_by().values("round_id")).order_by("pk").only("pk"))
+            return super().delete()
+
+
+class ProposalQuerySet[T: Proposal](_ProposalRoundFirstDeletes, AngeeHistoryQuerySet[T]):
+    """Proposal collection writes under the round-first lock order."""
+
+
+class _ProposalBaseQuerySet(_ProposalRoundFirstDeletes, AngeeHistoryUnscopedQuerySet):
+    """Keep native unfiltered deletes under the round-first lock order."""
+
+
+_ProposalBaseManager = models.Manager.from_queryset(_ProposalBaseQuerySet)
+_ProposalManagerBase = AngeeHistoryManager.from_queryset(ProposalQuerySet)
+
+
+class ProposalManager[T: Proposal](_ProposalManagerBase[T]):
     """Own replay-safe message capture into Proposal and Answer rows."""
 
     CAPTURE_PARSER_VERSION = "proposals.capture.v1"
@@ -1873,6 +1899,7 @@ class Proposal(HistoryMixin, OptimisticLockMixin, ImmutableFieldsMixin, AuditMix
     capture_parser_version = models.CharField(max_length=64, blank=True, default="", editable=False)
 
     objects = ProposalManager()
+    _angee_base = _ProposalBaseManager()
 
     class Meta:
         """Django options for sealed response documents."""
