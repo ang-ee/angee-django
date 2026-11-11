@@ -34,6 +34,7 @@ import {
   type AngeeHasuraSchemaConfig,
 } from "@angee/refine";
 import type { IResourceItem } from "@refinedev/core";
+import { GraphQLError, Kind, parse, valueFromASTUntyped, type DocumentNode, type FieldNode, type OperationDefinitionNode } from "graphql";
 import { composeAddons } from "@angee/app";
 import { parseFlatSearch, stringifyFlatSearch } from "@angee/app/create-app";
 import { NuqsTestingAdapter } from "nuqs/adapters/testing";
@@ -49,6 +50,8 @@ import {
 } from "@tanstack/react-router";
 
 export { testDataResource, testQueryAxis, testQueryField, testResourceQuery } from "@angee/metadata/testing";
+/** A handler throws graphql's own error to answer its operation with a GraphQL error. */
+export { GraphQLError } from "graphql";
 
 /**
  * The one Storybook environment, shared by the global preview decorator and
@@ -95,20 +98,88 @@ export function storyAppearance(globals: Record<string, unknown>): NonNullable<R
   };
 }
 
-/** A JSON `Response` for a story fetch responder. */
-export function jsonResponse(data: unknown): Response {
+function jsonResponse(data: unknown): Response {
   return new Response(JSON.stringify(data), {
     headers: { "content-type": "application/json" },
   });
 }
 
+/** One GraphQL request as the wire fake parsed it. */
+export interface StoryRequest {
+  /** The operation's own name (`ResourceList`, an authored document's name), when it has one. */
+  operationName?: string;
+  /** The root fields the operation selects, by schema name rather than alias, in document order. */
+  fields: readonly string[];
+  query: string;
+  variables: Record<string, unknown>;
+}
+
 /**
- * Build the `public` schema config for a story from its model fetch responder,
- * answering the CSRF probe uniformly so the responder only describes its model
- * queries/mutations.
+ * Answer one root field (the operation Hasura and refine name: `notes`,
+ * `notes_by_pk`, `insert_notes_one`, an action mutation) from its arguments,
+ * resolved against the request's variables. Throw a `GraphQLError` to answer
+ * the request with that error.
+ */
+export type StoryOperation = (args: Record<string, unknown>, request: StoryRequest) => unknown;
+
+function unhandled(message: string): never {
+  // The transport reports a rejected fetch only as "Request failed."; name the gap here.
+  console.error(message);
+  throw new Error(message);
+}
+
+async function answerOperations(
+  operations: Readonly<Record<string, StoryOperation>>,
+  init: RequestInit | undefined,
+  onRequest: ((request: StoryRequest) => void) | undefined,
+): Promise<Response> {
+  const body = JSON.parse(String(init?.body ?? "{}")) as { query?: string; variables?: Record<string, unknown> | null; operationName?: string | null };
+  const query = body.query ?? "";
+  const variables = body.variables ?? {};
+  let document: DocumentNode;
+  try {
+    document = parse(query);
+  } catch (error) {
+    unhandled(`storySchema: the request is not a GraphQL document (${String(error)}).`);
+  }
+  const operation = document.definitions.find((definition): definition is OperationDefinitionNode =>
+    definition.kind === Kind.OPERATION_DEFINITION && (!body.operationName || definition.name?.value === body.operationName));
+  if (!operation) unhandled(`storySchema: the request names no operation it carries (${body.operationName ?? "anonymous"}).`);
+  const roots = operation.selectionSet.selections.filter((selection): selection is FieldNode => selection.kind === Kind.FIELD);
+  const request: StoryRequest = { operationName: operation.name?.value, fields: roots.map((field) => field.name.value), query, variables };
+  onRequest?.(request);
+  const label = request.operationName ?? request.fields.join(", ");
+  for (const definition of operation.variableDefinitions ?? []) {
+    const name = definition.variable.name.value;
+    if (definition.type.kind === Kind.NON_NULL_TYPE && !definition.defaultValue && variables[name] == null) {
+      unhandled(`storySchema: ${label} omits its required variable $${name}.`);
+    }
+  }
+  const missing = request.fields.filter((field) => !Object.hasOwn(operations, field));
+  if (missing.length) unhandled(`storySchema: no handler answers ${missing.join(", ")} (${label}).`);
+  try {
+    const data = await Promise.all(roots.map(async (field) => [
+      field.alias?.value ?? field.name.value,
+      await operations[field.name.value]!(Object.fromEntries((field.arguments ?? []).map((argument) =>
+        [argument.name.value, valueFromASTUntyped(argument.value, variables)])), request),
+    ] as const));
+    return jsonResponse({ data: Object.fromEntries(data) });
+  } catch (error) {
+    if (error instanceof GraphQLError) return jsonResponse({ data: null, errors: [error.toJSON()] });
+    throw error;
+  }
+}
+
+/**
+ * The GraphQL wire fake shared by stories and native tests: the `public`
+ * schema config whose transport parses each request and answers every root
+ * field from the operation handler named for it, answering the CSRF probe
+ * uniformly. A root field without a handler, or a required variable the
+ * request omits, fails loudly. `onRequest` observes each parsed request.
  */
 export function storySchema(
-  fetch: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>,
+  operations: Readonly<Record<string, StoryOperation>>,
+  onRequest?: (request: StoryRequest) => void,
 ): Record<string, StorySchemaConfig> {
   return {
     public: {
@@ -116,7 +187,7 @@ export function storySchema(
       fetch: (input, init) =>
         String(input).includes("/auth/csrf/")
           ? Promise.resolve(jsonResponse({ token: "storybook" }))
-          : fetch(input, init),
+          : answerOperations(operations, init, onRequest),
     },
   };
 }

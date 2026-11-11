@@ -1,9 +1,8 @@
 import { useMemo } from "react";
-import * as v from "valibot";
 import { operationDocuments } from "@angee/gql/console/actions";
 import { composeAddons } from "@angee/app";
-import { storyAppearance, type RuntimeFixtureProps, RoutedRuntimeFixture, jsonResponse, storySchema } from "@angee/storybook/testing";
-import { createRouteHref, defaultWidgets, JsonValueSchema } from "@angee/ui";
+import { storyAppearance, type RuntimeFixtureProps, RoutedRuntimeFixture, storySchema, type StoryRequest } from "@angee/storybook/testing";
+import { createRouteHref, defaultWidgets } from "@angee/ui";
 import { TriggerCondition } from "./TriggerCondition";
 import { TriggersList } from "./TriggersPage";
 import { TRIGGER_MODEL } from "./triggers";
@@ -16,8 +15,6 @@ export const Trigger = { render: (_args: unknown, { globals }: { globals: Record
 export const WorkflowTriggers = { render: (_args: unknown, { globals }: { globals: Record<string, unknown> }) => <TriggerStory appearance={storyAppearance(globals)} embedded /> };
 export const ReadOnly = { render: (_args: unknown, { globals }: { globals: Record<string, unknown> }) => <TriggerStory appearance={storyAppearance(globals)} canEdit={false} /> };
 
-const RequestSchema = v.object({ query: v.string(), variables: v.optional(v.record(v.string(), JsonValueSchema), {}) });
-export type TriggerRequest = v.InferOutput<typeof RequestSchema>;
 const documents = { console: operationDocuments };
 const runtime = {
   containers: composeAddons([{ id: addon.id, containers: {
@@ -44,32 +41,29 @@ const runtime = {
 
 /** Native form and actions over retained trigger rows, with generated mutation documents. */
 export function TriggerStory({ appearance, embedded = false, canEdit = true, onRequest }: {
-  appearance?: RuntimeFixtureProps["appearance"]; embedded?: boolean; canEdit?: boolean; onRequest?: (request: TriggerRequest) => void }) {
+  appearance?: RuntimeFixtureProps["appearance"]; embedded?: boolean; canEdit?: boolean; onRequest?: (request: StoryRequest) => void }) {
   const schemas = useMemo(() => {
     let current = { ...triggerFixture, can_edit: canEdit, enable_preview: canEdit ? triggerFixture.enable_preview : null };
-    const fixture = storySchema(async (_input, init) => {
-      const request = v.parse(RequestSchema, JSON.parse(String(init?.body ?? "{}")));
-      onRequest?.(request);
-      const { query } = request;
-      if (query.includes("impl_choices")) return jsonResponse({ data: { impl_choices: ["record_changed", "custom_changed", "message_ingested"].map((key) => ({ key, label: key, defaults: { source_model: key === "message_ingested" ? "messaging.Message" : "" }, config_schema: null })) } });
-      if (query.includes("revoke_workflow_trigger_grant(")) {
+    const result = (message: string) => ({ ok: true, message, id: current.id });
+    const fixture = storySchema({
+      impl_choices: () => ["record_changed", "custom_changed", "message_ingested"].map((key) => ({ key, label: key, defaults: { source_model: key === "message_ingested" ? "messaging.Message" : "" }, config_schema: null })),
+      revoke_workflow_trigger_grant: () => {
         current = { ...current, enabled: false, grants: [], disabled_reason: "The workflow principal's member grant was revoked; enable this trigger again." };
-        return jsonResponse({ data: { revoke_workflow_trigger_grant: { ok: true, message: current.disabled_reason, id: current.id } } });
-      }
-      const action = ["enable_workflow_trigger", "disable_workflow_trigger"].find((name) => query.includes(name + "("));
-      if (action) {
-        current = { ...current, enabled: action === "enable_workflow_trigger" };
-        return jsonResponse({ data: { [action]: { ok: true, message: current.enabled ? "Trigger enabled." : "Trigger disabled.", id: current.id } } });
-      }
-      if (query.includes("insert_trigger_one")) return jsonResponse({ data: { insert_trigger_one: current } });
-      if (query.includes("update_trigger_by_pk")) return jsonResponse({ data: { update_trigger_by_pk: current } });
-      if (query.includes("trigger_by_pk")) return jsonResponse({ data: { trigger_by_pk: current } });
-      if (query.includes("triggerevent")) return jsonResponse({ data: { triggerevent: [triggerEventFixture], triggerevent_aggregate: { aggregate: { count: 1 } } } });
-      if (query.includes("workflow_by_pk")) return jsonResponse({ data: { workflow_by_pk: current.workflow } });
-      if (query.includes("workflowrun_by_pk")) return jsonResponse({ data: { workflowrun_by_pk: triggerEventFixture.started_run } });
-      if (query.includes("notes_by_pk")) return jsonResponse({ data: { notes_by_pk: { id: "nte_7", display_name: "Review notes" } } });
-      return jsonResponse({ data: { trigger: [current], trigger_aggregate: { aggregate: { count: 1 } } } });
-    }).public!;
+        return result(current.disabled_reason);
+      },
+      enable_workflow_trigger: () => { current = { ...current, enabled: true }; return result("Trigger enabled."); },
+      disable_workflow_trigger: () => { current = { ...current, enabled: false }; return result("Trigger disabled."); },
+      insert_trigger_one: () => current,
+      update_trigger_by_pk: () => current,
+      trigger_by_pk: () => current,
+      trigger: () => [current],
+      trigger_aggregate: () => ({ aggregate: { count: 1 } }),
+      triggerevent: () => [triggerEventFixture],
+      triggerevent_aggregate: () => ({ aggregate: { count: 1 } }),
+      workflow_by_pk: () => current.workflow,
+      workflowrun_by_pk: () => triggerEventFixture.started_run,
+      notes_by_pk: () => ({ id: "nte_7", display_name: "Review notes" }),
+    }, onRequest).public!;
     return { public: fixture, console: { ...fixture, metadata: { angee: { resources: [
       triggerResourceFixture, triggerEventResourceFixture, workflowResourceFixture, runResourceFixture, userResourceFixture, triggerNoteResourceFixture, triggerMessageResourceFixture,
     ] } } } };

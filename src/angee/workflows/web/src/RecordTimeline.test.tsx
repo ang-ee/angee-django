@@ -2,7 +2,8 @@
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { beforeAll, expect, test, vi } from "vitest";
 import { decisionFixture } from "@angee/decisions/testing";
-import { TimelineStory, type TimelineRequest } from "./RecordTimeline.stories";
+import type { StoryRequest } from "@angee/storybook/testing";
+import { TimelineStory } from "./RecordTimeline.stories";
 import { timelineFixture } from "./timeline-testing";
 
 beforeAll(() => {
@@ -28,12 +29,12 @@ test.each([
 });
 
 test("answers inline with the observed revision and refreshes the stepper", async () => {
-  const requests: TimelineRequest[] = [];
+  const requests: StoryRequest[] = [];
   render(<TimelineStory onRequest={(request) => requests.push(request)} />);
   fireEvent.click(await screen.findByRole("radio", { name: /Use proposed name/ }));
   fireEvent.click(screen.getByRole("button", { name: "Confirm" }));
   await screen.findByText("Plan complete");
-  expect(requests.find(({ query }) => query.includes("decide("))?.variables).toMatchObject({
+  expect(requests.find(({ fields }) => fields.includes("decide"))?.variables).toMatchObject({
     id: "dcn_review", revision: 3, chosen: ["accept"],
   });
   expect(screen.queryByRole("radio")).toBeNull();
@@ -68,7 +69,7 @@ test("answered cards do not nest list items outside a list", async () => {
 });
 
 test("a retry with possible duplicate effects uses the shared acknowledgement form", async () => {
-  const requests: TimelineRequest[] = [];
+  const requests: StoryRequest[] = [];
   render(<TimelineStory state="error" duplicateRisk onRequest={(request) => requests.push(request)} />);
   const label = "Retry accepting a possible duplicate";
   fireEvent.click(await screen.findByRole("button", { name: label }));
@@ -76,30 +77,30 @@ test("a retry with possible duplicate effects uses the shared acknowledgement fo
   fireEvent.click(within(dialog).getByRole("button", { name: label }));
   const checkbox = within(dialog).getByRole("checkbox", { name: "I understand this retry may repeat an external effect." });
   await waitFor(() => expect(checkbox.getAttribute("aria-invalid")).toBe("true"));
-  expect(requests.some(({ query }) => query.includes("retry_step_accepting_duplicate("))).toBe(false);
+  expect(requests.some(({ fields }) => fields.includes("retry_step_accepting_duplicate"))).toBe(false);
   fireEvent.click(checkbox);
   fireEvent.click(within(dialog).getByRole("button", { name: label }));
   await screen.findByText("Waiting for decisions");
-  expect(requests.find(({ query }) => query.includes("retry_step_accepting_duplicate("))?.variables.id).toBe("wsr_review");
+  expect(requests.find(({ fields }) => fields.includes("retry_step_accepting_duplicate"))?.variables.id).toBe("wsr_review");
 });
 
 test("stop confirms through the shared action before withdrawing questions", async () => {
-  const requests: TimelineRequest[] = [];
+  const requests: StoryRequest[] = [];
   render(<TimelineStory onRequest={(request) => requests.push(request)} />);
   const card = await screen.findByRole("region", { name: "Confirm the name" });
   expect((within(card).getByRole("button", { name: "Stop and do it manually" }) as HTMLButtonElement).disabled).toBe(false);
   fireEvent.click(within(card).getByRole("button", { name: "Stop and do it manually" }));
   const dialog = await screen.findByRole("alertdialog");
-  expect(requests.some(({ query }) => query.includes("cancel_workflow_run("))).toBe(false);
+  expect(requests.some(({ fields }) => fields.includes("cancel_workflow_run"))).toBe(false);
   fireEvent.click(within(dialog).getByRole("button", { name: "Stop and do it manually" }));
   await screen.findByText("Withdrawn: stopped by River");
-  expect(requests.find(({ query }) => query.includes("cancel_workflow_run("))?.variables.id).toBe("wfr_review");
+  expect(requests.find(({ fields }) => fields.includes("cancel_workflow_run"))?.variables.id).toBe("wfr_review");
   expect(screen.queryByText("May also: Check a related record")).toBeNull();
   expect(screen.queryByRole("button", { name: "Stop and do it manually" })).toBeNull();
 });
 
 test("answering refreshes the concerned form without a socket", async () => {
-  const requests: TimelineRequest[] = [];
+  const requests: StoryRequest[] = [];
   render(<TimelineStory onRequest={(request) => requests.push(request)} />);
   fireEvent.click(await screen.findByRole("radio", { name: /Use proposed name/ }));
   fireEvent.click(screen.getByRole("button", { name: "Confirm" }));

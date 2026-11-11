@@ -2,7 +2,8 @@
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { beforeAll, expect, test, vi } from "vitest";
 
-import { RunStory, type RunRequest } from "./RunsPage.stories";
+import type { StoryRequest } from "@angee/storybook/testing";
+import { RunStory } from "./RunsPage.stories";
 import { runFixture, stepRunFixture } from "./testing";
 import { StepRuns } from "./StepRuns";
 
@@ -23,12 +24,12 @@ test("the routed run defaults to its filling graph beneath its sheet", async () 
 });
 
 test("node-scoped step evidence keeps the run filter and selects parent plus item rows", async () => {
-  const requests: RunRequest[] = [];
+  const requests: StoryRequest[] = [];
   render(<RunStory content={<StepRuns runId="wfr_review" nodeKeys={["inspect", "inspect.body"]} />}
     onRequest={(request) => requests.push(request)} />);
   await screen.findByRole("button", { name: "Open Inspect source" });
   // `_and` is commutative; the shared filter owner decides clause order.
-  const where = requests.find(({ query }) => /\bsteprun\s*\(/.test(query))?.variables.where as { _and: unknown[] };
+  const where = requests.find(({ fields }) => fields.includes("steprun"))?.variables.where as { _and: unknown[] };
   expect(where._and).toHaveLength(2);
   expect(where._and).toEqual(expect.arrayContaining([
     { run: { _eq: "wfr_review" } }, { node_key: { _in: ["inspect", "inspect.body"] } },
@@ -36,7 +37,7 @@ test("node-scoped step evidence keeps the run filter and selects parent plus ite
 });
 
 test("step checkpoint and linked decisions compose the existing form and list", async () => {
-  const requests: RunRequest[] = [];
+  const requests: StoryRequest[] = [];
   render(<RunStory steps={[stepRunFixture({ decision: { id: "dcn_review" } })]}
     onRequest={(request) => requests.push(request)} />);
   const step = await openStep();
@@ -44,7 +45,7 @@ test("step checkpoint and linked decisions compose the existing form and list", 
   await waitFor(() => expect(step.textContent).toContain("page-2"));
   fireEvent.click(within(step).getByRole("tab", { name: "Decisions" }));
   expect(await within(step).findByText("Review")).toBeTruthy();
-  expect(requests.find(({ query }) => query.includes("StepDecision"))?.variables.id).toBe("wsr_inspect");
+  expect(requests.find(({ operationName }) => operationName === "StepDecision")?.variables.id).toBe("wsr_inspect");
 });
 
 test("steps always offer their scoped Decisions tab", async () => {
@@ -101,7 +102,7 @@ test("populated run facts remain visible", async () => {
 });
 
 test("parent references and the child tab compose the existing scoped runs list", async () => {
-  const requests: RunRequest[] = [];
+  const requests: StoryRequest[] = [];
   render(<RunStory run={runFixture({ parent_step: { id: "wsr_parent", run: { id: "wfr_parent" } } })}
     children={[runFixture({ id: "wfr_child", origin: "WORKFLOW" })]}
     onRequest={(request) => requests.push(request)} />);
@@ -115,7 +116,7 @@ test("parent references and the child tab compose the existing scoped runs list"
 });
 
 test("retained evidence links readable records and marks redacted records", async () => {
-  const requests: RunRequest[] = [];
+  const requests: StoryRequest[] = [];
   render(<RunStory evidence={[
     { id: "wre_readable", record_model: "notes.Note", record_id: "nte_7" },
     { id: "wre_hidden", record_model: null, record_id: null },
@@ -126,7 +127,7 @@ test("retained evidence links readable records and marks redacted records", asyn
   expect((await within(records).findByRole("link", { name: "Review notes" })).getAttribute("href")).toBe("/notes/nte_7");
   expect(await within(records).findByText("Record unavailable")).toBeTruthy();
   // The header's related read also selects step records; the Records tab's list read pages them.
-  expect(requests.find(({ query, variables }) => query.includes("steprecord(") && variables.limit !== undefined)?.variables.where)
+  expect(requests.find(({ fields, variables }) => fields.includes("steprecord") && variables.limit !== undefined)?.variables.where)
     .toEqual({ _and: [{ run: { _eq: "wfr_review" } }] });
 });
 
@@ -139,17 +140,17 @@ test("a run waiter shows its target as a normal record reference", async () => {
 });
 
 test("a record waiter reads its watches on demand and follows the shared record route", async () => {
-  const requests: RunRequest[] = [];
+  const requests: StoryRequest[] = [];
   render(<RunStory run={runFixture({ status: "WAITING", can_cancel: true, can_reprocess: false, finished_at: null })}
     steps={[stepRunFixture({ status: "WAITING", outcome: "", waiting_kind: "RECORD", can_retry: false,
     watches: [{ id: "wsw_note", record_model: "notes.Note", record_id: "nte_7" }] })]}
     onRequest={(request) => requests.push(request)} />);
   const step = await openStep();
   const watches = await within(step).findByRole("tab", { name: "Watched records" });
-  expect(requests.some(({ query }) => query.includes("stepwatch"))).toBe(false);
+  expect(requests.some(({ fields }) => fields.includes("stepwatch"))).toBe(false);
   fireEvent.click(watches);
   expect((await within(step).findByRole("link", { name: "Review notes" })).getAttribute("href")).toBe("/notes/nte_7");
-  const watchRead = requests.find(({ query }) => /\bstepwatch\s*\(/.test(query));
+  const watchRead = requests.find(({ fields }) => fields.includes("stepwatch"));
   expect(watchRead?.variables.where).toEqual({ _and: [{ step_run: { _eq: "wsr_inspect" } }] });
   expect(watchRead?.query).toContain("record_model");
   expect(watchRead?.query).toContain("record_id");
@@ -162,42 +163,42 @@ test("trigger origin links to its retained admission event", async () => {
 });
 
 test("reprocess confirms then navigates to the returned replacement through the route owner", async () => {
-  const requests: RunRequest[] = [];
+  const requests: StoryRequest[] = [];
   render(<RunStory onRequest={(request) => requests.push(request)} />);
   const dialog = await action("Reprocess run");
   fireEvent.click(within(dialog).getByRole("button", { name: "Reprocess run" }));
-  await waitFor(() => expect(requests.filter(({ query }) => query.includes("mutation"))).toHaveLength(1));
+  await waitFor(() => expect(requests.filter(({ fields }) => fields.includes("reprocess_workflow_run"))).toHaveLength(1));
   expect(await screen.findByText("Run reprocessed.")).toBeTruthy();
-  await waitFor(() => expect(requests.some(({ query, variables }) => query.includes("workflowrun_by_pk") && variables.id === "wfr_replacement")).toBe(true));
+  await waitFor(() => expect(requests.some(({ fields, variables }) => fields.includes("workflowrun_by_pk") && variables.id === "wfr_replacement")).toBe(true));
   expect(await screen.findByRole("heading", { name: "Record review" })).toBeTruthy();
 });
 
 test("cancel reports the backend outcome through the shared action lifecycle", async () => {
-  const requests: RunRequest[] = [];
+  const requests: StoryRequest[] = [];
   render(<RunStory waiting onRequest={(request) => requests.push(request)} />);
   const label = "Stop and do it manually";
   const dialog = await action(label);
   expect(within(dialog).getByText("Request cancellation of this run.")).toBeTruthy();
-  expect(requests.some(({ query }) => query.includes("cancel_workflow_run("))).toBe(false);
+  expect(requests.some(({ fields }) => fields.includes("cancel_workflow_run"))).toBe(false);
   fireEvent.click(within(dialog).getByRole("button", { name: label }));
   expect(await screen.findByText("Open work canceled; the retained run is unchanged.")).toBeTruthy();
-  expect(requests.filter(({ query }) => query.includes("cancel_workflow_run(")).map(({ variables }) => variables.id)).toEqual(["wfr_review"]);
+  expect(requests.filter(({ fields }) => fields.includes("cancel_workflow_run")).map(({ variables }) => variables.id)).toEqual(["wfr_review"]);
 });
 
 test("step rows are paged in execution order without per-row detail queries", async () => {
-  const requests: RunRequest[] = [];
+  const requests: StoryRequest[] = [];
   const steps = Array.from({ length: 11 }, (_, index) => stepRunFixture({ id: `wsr_${index}`, node_key: `step-${index}`, rank: index }));
   render(<RunStory steps={steps} onRequest={(request) => requests.push(request)} />);
   fireEvent.click(await screen.findByRole("tab", { name: "Step runs" }));
   await screen.findByText("step-9");
   expect(screen.queryByText("step-10")).toBeNull();
-  expect(requests.some(({ query }) => query.includes("steprun_by_pk"))).toBe(false);
-  expect(requests.find(({ query, variables }) => /\bsteprun\s*\(/.test(query) && variables.limit !== undefined)?.variables).toMatchObject({
+  expect(requests.some(({ fields }) => fields.includes("steprun_by_pk"))).toBe(false);
+  expect(requests.find(({ fields, variables }) => fields.includes("steprun") && variables.limit !== undefined)?.variables).toMatchObject({
     where: { _and: [{ run: { _eq: "wfr_review" } }] }, limit: 10, offset: 0, order_by: { rank: "asc", map_index: "asc" },
   });
   fireEvent.click(screen.getByRole("button", { name: "Next page" }));
   await screen.findByText("step-10");
-  expect(requests.some(({ query }) => query.includes("steprun_by_pk"))).toBe(false);
+  expect(requests.some(({ fields }) => fields.includes("steprun_by_pk"))).toBe(false);
 });
 
 test("map facts distinguish ordinary steps, item zero, and empty map parents", async () => {
@@ -256,7 +257,7 @@ test("selected step opens in the shared drawer with attempts and records", async
 });
 
 test("run list filters status, workflow and origin through shared metadata", async () => {
-  const requests: RunRequest[] = [];
+  const requests: StoryRequest[] = [];
   render(<RunStory list onRequest={(request) => requests.push(request)} />);
   await screen.findByRole("button", { name: "Failed" });
   expect(requests.some(({ variables }) => JSON.stringify(variables.group_by) === '[{"field":"STATUS"}]')).toBe(true);
@@ -279,7 +280,7 @@ test("run list filters status, workflow and origin through shared metadata", asy
 });
 
 test("run list adds grouping axes and filters a group while retaining route filters", async () => {
-  const requests: RunRequest[] = [];
+  const requests: StoryRequest[] = [];
   const filter = { status: { exact: "failed" }, origin: { exact: "manual" } };
   render(<RunStory list initialEntry={`/workflows/runs?filter=${encodeURIComponent(JSON.stringify(filter))}`}
     onRequest={(request) => requests.push(request)} />);
@@ -328,7 +329,7 @@ test("waiting reason appears only on a waiting step and retry uses backend capab
 });
 
 test("duplicate retry requires a checked typed acknowledgement before any mutation", async () => {
-  const requests: RunRequest[] = [];
+  const requests: StoryRequest[] = [];
   render(<RunStory steps={[stepRunFixture({ requires_duplicate_acknowledgement: true })]} onRequest={(request) => requests.push(request)} />);
   const step = await openStep();
   const label = "Retry accepting a possible duplicate";
@@ -336,7 +337,7 @@ test("duplicate retry requires a checked typed acknowledgement before any mutati
   fireEvent.click(within(dialog).getByRole("button", { name: label }));
   const checkbox = within(dialog).getByRole("checkbox", { name: "I understand this retry may repeat an external effect." });
   await waitFor(() => expect(checkbox.getAttribute("aria-invalid")).toBe("true"));
-  expect(requests.some(({ query }) => query.includes("mutation"))).toBe(false);
+  expect(requests.some(({ fields }) => fields.includes("retry_step_accepting_duplicate"))).toBe(false);
   fireEvent.click(checkbox);
   fireEvent.click(within(dialog).getByRole("button", { name: label }));
   expect(await screen.findByText("Step retried with duplicate risk acknowledged.")).toBeTruthy();

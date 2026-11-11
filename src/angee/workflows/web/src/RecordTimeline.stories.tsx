@@ -1,10 +1,9 @@
 import { useMemo } from "react";
-import * as v from "valibot";
 import { operationDocuments } from "@angee/gql/console/actions";
 import { decisionLinkFixture, decisionRecordFixture, decisionResourceFixture, decisionUserFixture } from "@angee/decisions/testing";
-import { storyAppearance, type RuntimeFixtureProps, RoutedRuntimeFixture, jsonResponse, storySchema } from "@angee/storybook/testing";
+import { storyAppearance, type RuntimeFixtureProps, RoutedRuntimeFixture, storySchema, type StoryRequest } from "@angee/storybook/testing";
 import {
-  Button, ChatterProvider, FormView, RecordFieldMarksProvider, ScrollArea, createRouteHref, useChatter, JsonValueSchema,
+  Button, ChatterProvider, FormView, RecordFieldMarksProvider, ScrollArea, createRouteHref, useChatter,
 } from "@angee/ui";
 import { testDataResource, testQueryField, testResourceQuery } from "@angee/metadata/testing";
 import { RecordTimeline, type TimelineSelection } from "./RecordTimeline";
@@ -22,8 +21,6 @@ export const HeldByRun = { render: (_args: unknown, { globals }: { globals: Reco
 export const Stopped = { render: (_args: unknown, { globals }: { globals: Record<string, unknown> }) => <TimelineStory appearance={storyAppearance(globals)} state="stopped" /> };
 export const RecordSet = { render: (_args: unknown, { globals }: { globals: Record<string, unknown> }) => <TimelineStory appearance={storyAppearance(globals)} state="set" /> };
 
-const Request = v.object({ query: v.string(), variables: v.optional(v.record(v.string(), JsonValueSchema), {}) });
-export type TimelineRequest = v.InferOutput<typeof Request>;
 const resource = testDataResource("notes.Note", {
   ...decisionRecordFixture, fields: ["display_name", "body"].map((name) => ({ name, label: name === "display_name" ? "Name" : "Body", kind: "scalar", scalar: "String", readable: true, creatable: true, updatable: true, aggregatable: false, requiredOnCreate: false })),
   roots: { detail: "notes_by_pk", list: "notes" },
@@ -38,25 +35,25 @@ const runtime = {
 /** The real read and inline mutation owners over a neutral, disposable transport. */
 export function TimelineStory({ appearance, state = "decision", collapsed = false, duplicateRisk = false, data, onRequest }: {
   appearance?: RuntimeFixtureProps["appearance"];
-  state?: TimelineState; collapsed?: boolean; duplicateRisk?: boolean; onRequest?: (request: TimelineRequest) => void;
+  state?: TimelineState; collapsed?: boolean; duplicateRisk?: boolean; onRequest?: (request: StoryRequest) => void;
   data?: TimelineSelection;
 }) {
   const schemas = useMemo(() => {
     let current = data ?? timelineFixture(state);
     if (duplicateRisk) current.records[0]!.runs[0]!.graph_step_runs.find((step) => step.id === "wsr_review")!.requires_duplicate_acknowledgement = true;
-    const fixture = storySchema(async (_input, init) => {
-      const request = v.parse(Request, JSON.parse(String(init?.body ?? "{}"))); onRequest?.(request);
-      if (request.query.includes("decide(")) { current = timelineFixture("clean"); return jsonResponse({ data: { decide: { ok: true, id: "dcn_review", message: "Answer recorded.", validation_errors: {} } } }); }
-      if (request.query.includes("cancel_workflow_run(")) { current = timelineFixture("stopped"); return jsonResponse({ data: { cancel_workflow_run: { ok: true, id: "wfr_review", message: "Run stopped." } } }); }
-      if (request.query.includes("retry_step(") || request.query.includes("retry_step_accepting_duplicate(")) {
-        const action = request.query.includes("retry_step_accepting_duplicate(") ? "retry_step_accepting_duplicate" : "retry_step";
-        current = timelineFixture("decision");
-        return jsonResponse({ data: { [action]: { ok: true, id: "wsr_review", message: "Retry requested.", validation_errors: {} } } });
-      }
-      if (request.query.includes("record_timeline")) return jsonResponse({ data: { record_timeline: { ...current, has_runs: current.records.some((entry) => entry.runs.length > 0) } } });
-      if (request.query.includes("user_by_pk")) return jsonResponse({ data: { user_by_pk: { id: "usr_river", display_name: "River" } } });
-      return jsonResponse({ data: { notes_by_pk: { id: "nte_7", revision: 1, display_name: current.open_decision_count ? "Review notes" : "Reviewed notes", body: "A record to check.", permissions: ["write"] } } });
-    }).public!;
+    const retry = () => {
+      current = timelineFixture("decision");
+      return { ok: true, id: "wsr_review", message: "Retry requested.", validation_errors: {} };
+    };
+    const fixture = storySchema({
+      decide: () => { current = timelineFixture("clean"); return { ok: true, id: "dcn_review", message: "Answer recorded.", validation_errors: {} }; },
+      cancel_workflow_run: () => { current = timelineFixture("stopped"); return { ok: true, id: "wfr_review", message: "Run stopped." }; },
+      retry_step: retry,
+      retry_step_accepting_duplicate: retry,
+      record_timeline: () => ({ ...current, has_runs: current.records.some((entry) => entry.runs.length > 0) }),
+      user_by_pk: () => ({ id: "usr_river", display_name: "River" }),
+      notes_by_pk: () => ({ id: "nte_7", revision: 1, display_name: current.open_decision_count ? "Review notes" : "Reviewed notes", body: "A record to check.", permissions: ["write"] }),
+    }, onRequest).public!;
     return { public: fixture, console: { ...fixture, metadata: { angee: { resources: [resource, decisionResourceFixture, decisionLinkFixture, decisionUserFixture, runResourceFixture, stepRunResourceFixture, attemptResourceFixture, recordResourceFixture, watchResourceFixture] } } } };
   }, [state, duplicateRisk, data, onRequest]);
   return <RoutedRuntimeFixture appearance={appearance} activeSchema="console" schemas={schemas} initialEntry="/notes/nte_7" collectionPath="/notes" resourceLabel="Notes" runtime={runtime} operationDocuments={{ console: operationDocuments }}>

@@ -1,9 +1,9 @@
 import * as React from "react";
 import * as v from "valibot";
 import { Link } from "@tanstack/react-router";
-import { storyAppearance, type RuntimeFixtureProps, RoutedRuntimeFixture, jsonResponse, storySchema } from "@angee/storybook/testing";
+import { GraphQLError, storyAppearance, type RuntimeFixtureProps, RoutedRuntimeFixture, storySchema, type StoryRequest } from "@angee/storybook/testing";
 import { ChatterTabsTestHost, ShellPageTestProviders } from "@angee/app/testing";
-import { Button, JsonValueSchema, defaultWidgets, useChatter } from "@angee/ui";
+import { Button, defaultWidgets, useChatter } from "@angee/ui";
 import { WorkflowStudio } from "./WorkflowStudio";
 import { runSubjectFixture, workflowResourceFixture } from "./testing";
 
@@ -14,7 +14,6 @@ export const LocatedIssues = { render: (_args: unknown, { globals }: { globals: 
 export const UnrenderedIssues = { render: (_args: unknown, { globals }: { globals: Record<string, unknown> }) => <StudioStory appearance={storyAppearance(globals)} unrenderedIssues /> };
 export const ReadOnly = { render: (_args: unknown, { globals }: { globals: Record<string, unknown> }) => <StudioStory appearance={storyAppearance(globals)} readOnly /> };
 export const Retained = { render: (_args: unknown, { globals }: { globals: Record<string, unknown> }) => <StudioStory appearance={storyAppearance(globals)} retained /> };
-const Request = v.object({ query: v.string(), variables: v.optional(v.record(v.string(), JsonValueSchema), {}) });
 const configuration = { type: "object", properties: {
   target: { type: "string", label: "Target record", relation: { resource: "notes.Note" } },
   threshold: { type: "integer", label: "Threshold", defaultValue: 1 },
@@ -27,7 +26,7 @@ const choices = [
 export function StudioStory({ appearance, conflict = false, invalid = false, unrenderedIssues = false, failLatest = false, readOnly = false, outcomesGate, retained = false, linked = false,
   extended = false, saveInvalid = false, savedDiagnostics = false, outcomeIssue = false, badUnusedSchema = false, emptyLayout = false, onRequest }: {
   appearance?: RuntimeFixtureProps["appearance"];
-  conflict?: boolean; invalid?: boolean; unrenderedIssues?: boolean; failLatest?: boolean; readOnly?: boolean; retained?: boolean; linked?: boolean; outcomesGate?: () => Promise<void>; onRequest?: (request: v.InferOutput<typeof Request>) => void;
+  conflict?: boolean; invalid?: boolean; unrenderedIssues?: boolean; failLatest?: boolean; readOnly?: boolean; retained?: boolean; linked?: boolean; outcomesGate?: () => Promise<void>; onRequest?: (request: StoryRequest) => void;
   extended?: boolean; saveInvalid?: boolean; savedDiagnostics?: boolean; outcomeIssue?: boolean; badUnusedSchema?: boolean; emptyLayout?: boolean;
 }) {
   const schemas = React.useMemo(() => {
@@ -54,45 +53,45 @@ export function StudioStory({ appearance, conflict = false, invalid = false, unr
           ...(linked ? { next: { done: "second" } } : {}) },
       }, contributions: [{ addon: "tests.extcontrib", extends: "wfl_example", at: "after_entry", sequence: 20, nodes: ["contributed_review"] }] };
     };
-    const publicSchema = storySchema(async (_input, init) => {
-      const request = v.parse(Request, JSON.parse(String(init?.body ?? "{}")));
-      onRequest?.(request);
-      const { query, variables } = request;
-      if (query.includes("save_workflow_draft")) {
-        if (saveInvalid) return jsonResponse({ errors: [{ message: "Invalid draft.", extensions: { code: "VALIDATION",
-          validationErrors: { "nodes.entry.config.threshold": ["Threshold is too small."] }, formErrors: [] } }] });
+    const invalidDraft = (validationErrors: Record<string, string[]>) =>
+      new GraphQLError("Invalid draft.", { extensions: { code: "VALIDATION", validationErrors, formErrors: [] } });
+    const publicSchema = storySchema({
+      save_workflow_draft: (args) => {
+        if (saveInvalid) throw invalidDraft({ "nodes.entry.config.threshold": ["Threshold is too small."] });
         if (conflict && !refused) {
           refused = true; revision = 2;
-          return jsonResponse({ errors: [{ message: "Draft changed since it was loaded.", extensions: { code: "STALE_REVISION", current_revision: revision } }] });
+          throw new GraphQLError("Draft changed since it was loaded.", { extensions: { code: "STALE_REVISION", current_revision: revision } });
         }
-        revision++; draft = variables.draft; layout = variables.layout;
-        return jsonResponse({ data: { save_workflow_draft: { revision, diagnostics: savedDiagnostics ? [
+        revision++; draft = args.draft; layout = args.layout;
+        return { revision, diagnostics: savedDiagnostics ? [
           { node: "entry", path: ["nodes", "entry", "config", "threshold"], code: "config", message: "Threshold is too small." },
-        ] : [] } } });
-      }
-      if (query.includes("publish_workflow")) return invalid || unrenderedIssues
-        ? jsonResponse({ errors: [{ message: "Invalid draft.", extensions: { code: "VALIDATION", validationErrors: unrenderedIssues
+        ] : [] };
+      },
+      publish_workflow: () => {
+        if (invalid || unrenderedIssues) throw invalidDraft(unrenderedIssues
           ? { "nodes.entry.input": ["Missing binding."], "nodes.entry.config.unknown": ["Unknown config field."] }
-          : { "nodes.entry.config.threshold": ["Threshold is too small."] }, formErrors: [] } }] })
-        : jsonResponse({ data: { publish_workflow: { number: ++number, dependents: ["record_parent"], document: publishedDocument() } } });
-      if (query.includes("workflow_step_outcomes")) {
+          : { "nodes.entry.config.threshold": ["Threshold is too small."] });
+        return { number: ++number, dependents: ["record_parent"], document: publishedDocument() };
+      },
+      workflow_step_outcomes: async (args) => {
         await outcomesGate?.();
-        const entries = v.parse(v.array(v.object({ node: v.string() })), variables.configurations);
-        return jsonResponse({ data: { workflow_step_outcomes: entries.map((entry) => ({ node: entry.node, outcomes: { done: "Done", error: "Error" }, issues: outcomeIssue ? [
+        const entries = v.parse(v.array(v.object({ node: v.string() })), args.configurations);
+        return entries.map((entry) => ({ node: entry.node, outcomes: { done: "Done", error: "Error" }, issues: outcomeIssue ? [
           { node: entry.node, path: ["nodes", entry.node, "step"], code: "outcome", message: "This step's configured outcome is invalid." },
-        ] : [] })) } });
-      }
-      if (query.includes("workflow_step_choices") && failLatest && refused) return jsonResponse({ errors: [{ message: "Latest draft unavailable." }] });
-      if (query.includes("workflow_step_choices")) return jsonResponse({ data: {
-        workflow_by_pk: { id: "wfl_example", permissions: readOnly ? ["monitor"] : ["monitor", "write"], draft, draft_revision: revision, layout,
-          published: { number, document: publishedDocument() } }, workflow_step_choices: badUnusedSchema ? [...choices, {
-            ...choices[0], key: "bad_schema", label: "Bad form", config_schema: { type: "object", properties: { broken: { widget: "missing_widget" } } },
-          }] : choices,
-      } });
-      if (query.includes("notes_by_pk")) return jsonResponse({ data: { notes_by_pk: { id: "nte_7", display_name: "Selected record" } } });
-      if (query.includes("notes")) return jsonResponse({ data: { notes: [{ id: "nte_8", display_name: "Another record" }], notes_aggregate: { aggregate: { count: 1 } } } });
-      return jsonResponse({ data: {} });
-    }).public!;
+        ] : [] }));
+      },
+      workflow_by_pk: () => {
+        if (failLatest && refused) throw new GraphQLError("Latest draft unavailable.");
+        return { id: "wfl_example", permissions: readOnly ? ["monitor"] : ["monitor", "write"], draft, draft_revision: revision, layout,
+          published: { number, document: publishedDocument() } };
+      },
+      workflow_step_choices: () => badUnusedSchema ? [...choices, {
+        ...choices[0], key: "bad_schema", label: "Bad form", config_schema: { type: "object", properties: { broken: { widget: "missing_widget" } } },
+      }] : choices,
+      notes_by_pk: () => ({ id: "nte_7", display_name: "Selected record" }),
+      notes: () => [{ id: "nte_8", display_name: "Another record" }],
+      notes_aggregate: () => ({ aggregate: { count: 1 } }),
+    }, onRequest).public!;
     return { console: { ...publicSchema, metadata: { angee: { resources: [workflowResourceFixture, runSubjectFixture] } } } };
   }, [conflict, invalid, unrenderedIssues, failLatest, readOnly, outcomesGate, linked, extended, saveInvalid, savedDiagnostics, outcomeIssue, badUnusedSchema, emptyLayout, onRequest]);
   return <RoutedRuntimeFixture appearance={appearance} activeSchema="console" schemas={schemas} collectionPath="/studio">

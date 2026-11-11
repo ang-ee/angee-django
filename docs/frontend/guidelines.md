@@ -1901,7 +1901,12 @@ render(<AppRuntimeProvider runtime={{ containers }}><ResourceViewUtilities value
 A data-bound view story declares `parameters.angeeFixture` with its schemas,
 resources, runtime and operation documents; the preview mounts the shared
 [`RuntimeFixture`](../../packages/storybook/src/stories/runtime-fixtures.tsx).
-Transport fixtures use `storySchema(fetch)` and `jsonResponse`. A routed fixture
+Transport fixtures use the GraphQL wire fake `storySchema(operations, onRequest)`:
+it answers each root field of a request from the handler named for it, fails
+loudly on a field without a handler or a missing required variable, and reports
+each parsed request; a handler throws `GraphQLError` to answer an error. Native
+tests reuse the story's fixture and match requests by `fields` or
+`operationName`, never by query text. A routed fixture
 reused by tests sets `angeeOwnRuntime: true` and passes
 `appearance={storyAppearance(context.globals)}` into the same owner. Each story
 has one provider stack — appearance, data, toasts and modals.
