@@ -12,7 +12,6 @@ vi.mock("@angee/refine", async (importOriginal) => ({
     isFetching: state.fetching,
   }),
 }));
-vi.mock("./i18n", () => ({ usePartiesT: () => (key: string) => key }));
 vi.mock("./OrganizationForm", () => ({
   OrganizationForm: (props: { resource: string; id: string; readOnly?: boolean }) =>
     <div data-testid="organization-form">{props.resource}:{props.id}:{String(props.readOnly)}</div>,
@@ -43,7 +42,7 @@ test.each([
 test("does not invent a form for a missing or non-concrete Party", () => {
   state.kind = null;
   render(<PartyForm resource="parties.Party" id="party-1" readOnly />);
-  expect(screen.getByText("partyRedirect.unavailable")).toBeTruthy();
+  expect(screen.getByText("Party record unavailable")).toBeTruthy();
   expect(screen.queryByTestId("organization-form")).toBeNull();
   expect(screen.queryByTestId("person-form")).toBeNull();
 });
@@ -53,13 +52,13 @@ test("keeps the resolved concrete form mounted during a background refetch", () 
   state.fetching = true;
   render(<PartyForm resource="parties.Party" id="party-1" readOnly />);
   expect(screen.getByTestId("organization-form").textContent).toBe("parties.Organization:party-1:true");
-  expect(screen.queryByText("partyRedirect.loading")).toBeNull();
+  expect(screen.queryByText("Opening party…")).toBeNull();
 });
 
 test("shows the loading panel only on the first load, before a Party resolves", () => {
   state.kind = null;
   state.fetching = true;
   render(<PartyForm resource="parties.Party" id="party-1" readOnly />);
-  expect(screen.getAllByText("partyRedirect.loading").length).toBeGreaterThan(0);
+  expect(screen.getAllByText("Opening party…").length).toBeGreaterThan(0);
   expect(screen.queryByTestId("organization-form")).toBeNull();
 });

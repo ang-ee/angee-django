@@ -43,10 +43,6 @@ vi.mock("@angee/ui", async (importOriginal) => ({
   useSecretReveal: () => mocks.reveal,
 }));
 
-vi.mock("../i18n", () => ({
-  useIntegrateT: () => (key: string) => key,
-}));
-
 import { credentialCreateForm } from "./credential-form";
 import { IntegrateCreateCredential, IntegrateRevealCredential } from "./documents";
 
@@ -118,9 +114,9 @@ describe("credentialCreateForm", () => {
     // The one-time reveal goes through the shared secret-reveal owner.
     expect(mocks.reveal).toHaveBeenCalledOnce();
     expect(mocks.reveal).toHaveBeenCalledWith({
-      title: "credentials.reveal.title",
-      body: "credentials.reveal.body",
-      secrets: [{ name: "secret", label: "credentials.reveal.secretLabel", value: "test-secret" }],
+      title: "Credential secret",
+      body: "Copy it now — it is shown on request only and never kept in the form.",
+      secrets: [{ name: "secret", label: "Secret", value: "test-secret" }],
     });
     expect(refresh).not.toHaveBeenCalled();
   });

@@ -51,7 +51,6 @@ const dndMocks = vi.hoisted(() => {
 });
 
 vi.mock("@tanstack/react-router", () => ({ useNavigate: () => vi.fn() }));
-vi.mock("../../i18n", () => ({ useUiT: () => (key: string) => key }));
 vi.mock("@dnd-kit/core", () => ({
   DndContext: (props: {
     children: React.ReactNode;
@@ -265,7 +264,7 @@ describe("BoardView", () => {
   test.each([false, true])("lane quick-create allocates a numeric seed only without server intent: %s", (intent) => {
     const onCreateInLane = vi.fn();
     renderBoard({ rankField: "sort_order", rankInputField: intent ? "task_order" : undefined, onCreateInLane });
-    act(() => { screen.getByRole("button", { name: "board.addCard" }).click(); });
+    act(() => { screen.getByRole("button", { name: "Add card" }).click(); });
     expect(onCreateInLane).toHaveBeenCalledWith("data", intent ? undefined : 1024);
   });
 
@@ -315,7 +314,7 @@ describe("BoardView", () => {
       onCardMove: vi.fn(),
     });
 
-    expect(screen.getByRole("button", { name: "board.dragCard" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Move card" })).toBeTruthy();
     expect(dndMocks.setActivatorNodeRef).toHaveBeenCalled();
   });
 

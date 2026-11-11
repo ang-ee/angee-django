@@ -24,10 +24,6 @@ vi.mock("@angee/integrate", async (importOriginal) => ({
   },
 }));
 
-vi.mock("./i18n", () => ({
-  useMessagingT: () => (key: string) => key,
-}));
-
 vi.mock("./PairingDialog", () => ({
   ChannelPairingAction: (props: Record<string, unknown>) => (
     <span
@@ -137,13 +133,13 @@ describe("defineChannelBridgeAddon live bridges", () => {
     expect(other.menu.map((child) => child.id)).toEqual([INTEGRATION_DISCONNECT_ACTION_ID, "integrate.connection.test", INTEGRATION_RETRY_DISCOVERY_ACTION_ID]);
 
     render(childContent(own.menu, `${VENDOR}.disconnect`) as React.ReactElement);
-    expect(screen.getByRole("button", { name: "channel.pairing.disconnect" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Disconnect" })).toBeTruthy();
     expect(mocks.disconnect[0]).toMatchObject({
       field: "disconnect_channel",
       variant: "danger",
       confirm: {
-        title: "channel.pairing.disconnectConfirm.title",
-        body: "channel.pairing.disconnectConfirm.body",
+        title: "Disconnect this channel?",
+        body: "The live session stops and the account is released. Reusable pairing material is retained so you can reconnect without linking again.",
         danger: true,
       },
     });

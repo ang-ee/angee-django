@@ -44,7 +44,6 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock("./documents", () => ({ RecordAccessDocument: { kind: "access" }, RecordReadersDocument: { kind: "readers" } }));
-vi.mock("./i18n", () => ({ useIamT: () => (key: string) => key }));
 
 vi.mock("@angee/metadata", () => ({
   holdsPermission: (record: { permissions?: readonly string[] }, permission: string) => record.permissions?.includes(permission) ?? false,

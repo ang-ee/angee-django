@@ -14,10 +14,6 @@ import {
   type RegisteredFormProps,
 } from "@angee/ui";
 
-vi.mock("../i18n", () => ({
-  useTagsT: () => (key: string) => key,
-}));
-
 // The page is called as a plain function to read its declarations, so its container reads are stubbed per address.
 const contributed = vi.hoisted(() => ({ byAddress: {} as Record<string, readonly { content: unknown }[]> }));
 vi.mock("@angee/ui", async (importOriginal) => {

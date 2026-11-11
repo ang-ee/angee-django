@@ -20,10 +20,6 @@ vi.mock("@angee/ui", async (importOriginal) => ({
   useRuntimeAuth: () => ({ user: mocks.user }),
 }));
 
-vi.mock("../i18n", () => ({
-  useProposalsT: () => (key: string) => key,
-}));
-
 function listDeclaration(props: DrawerResourceListProps | undefined): ListProps | undefined {
   return pageChildren(props?.children)
     .map((child) => pageElementProps<ListProps>(child, "list"))
@@ -50,7 +46,7 @@ describe("ProposalReviewsPanel", () => {
     });
     const list = listDeclaration(props);
     expect(list).toMatchObject({
-      filterOptions: [{ id: "mine", label: "proposal.reviews.mine", filter: { reviewer: { exact: "usr_1" } } }],
+      filterOptions: [{ id: "mine", label: "Mine", filter: { reviewer: { exact: "usr_1" } } }],
       search: { shortcuts: [{ kind: "toggle", id: "mine" }] },
       chrome: { search: true },
     });

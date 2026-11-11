@@ -17,10 +17,6 @@ vi.mock("@angee/ui", async (importOriginal) => ({
   },
 }));
 
-vi.mock("./i18n", () => ({
-  usePartiesT: () => (key: string) => key,
-}));
-
 const outgoing = {
   id: "rel_1", party: { id: "party_7", display_name: "Maya" },
   kind: { name: "Mother", inverse_name: "Child" }, other_party: null, other_name: "Jane",
@@ -50,7 +46,7 @@ describe("PersonRelationshipsTab", () => {
       resource: "parties.Relationship",
       presentation: "embedded",
       baseFilter: { OR: [{ party: { exact: "party_7" } }, { other_party: { exact: "party_7" } }] },
-      emptyContent: "person.empty.relationships",
+      emptyContent: "No relationships recorded yet.",
     });
     expect(props.fields).toEqual(expect.arrayContaining(["party.id", "kind.inverse_name", "other_name"]));
     expect(props.columns.map((column) => column.field)).toEqual([
@@ -62,11 +58,11 @@ describe("PersonRelationshipsTab", () => {
     render(<PersonRelationshipsTab recordId="party_7" />);
     const [direction, kind, person] = capture.props[0]!.columns;
 
-    expect(cell(direction, outgoing)).toBe("relationship.direction.outgoing");
+    expect(cell(direction, outgoing)).toBe("Outgoing");
     expect(cell(kind, outgoing)).toBe("Mother");
     expect(cell(person, outgoing)).toBe("Jane");
 
-    expect(cell(direction, incoming)).toBe("relationship.direction.incoming");
+    expect(cell(direction, incoming)).toBe("Incoming");
     expect(cell(kind, incoming)).toBe("Child");
     expect(cell(person, incoming)).toBe("Bob");
 

@@ -38,10 +38,6 @@ vi.mock("@angee/ui", async (importOriginal) => {
   };
 });
 
-vi.mock("./i18n", () => ({
-  usePartiesT: () => (key: string) => key,
-}));
-
 import { PersonCirclesList } from "./CircleMembershipList";
 
 describe("CircleMembershipList", () => {
@@ -76,7 +72,7 @@ describe("CircleMembershipList", () => {
       icon: "trash",
     });
 
-    fireEvent.click(screen.getByRole("button", { name: "circle.membership.addCircle" }));
+    fireEvent.click(screen.getByRole("button", { name: "Add to circle" }));
     fireEvent.click(screen.getByRole("button", { name: "Submit membership" }));
     await waitFor(() =>
       expect(mocks.add).toHaveBeenCalledWith({
