@@ -143,7 +143,7 @@ for statements. `angee.provenance` owns capture, attribution and serving; an add
    (autouse `captured_changeset`); a test that exercises a production boundary is marked `entrypoint_boundaries` and opens
    `changeset(fresh=True)` itself (`pytestmark` in `tests/test_provenance_context.py`). Assert through `row.history.model.objects`,
    `Changeset.objects.touching(record)` and `instance.statements` (`tests/test_history.py`, `tests/test_statement_records.py`).
-   Statement sources need parties' install-tier `Rule` principals (`statement_sources` fixture).
+   Statement sources need the install-tier `Rule` principals, which `angee.provenance.testing.fixtures` loads into the session baseline.
    **Owner rule:** [source-addon test models](../../../../../docs/checks.md#source-addon-test-models).
 
 ## Do not

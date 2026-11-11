@@ -11,16 +11,15 @@ from angee.projects.testing.models import Project
 from tests.messaging_campaign import grant
 from tests.t3_campaign import campaign_access as campaign_access
 from tests.t3_campaign import campaign_user as campaign_user
-from tests.t3_campaign import messaging_access_schema as messaging_access_schema
 
 
-def test_every_adopter_declares_owner_and_transfer_gate(composed_permissions):
+def test_every_adopter_declares_owner_and_transfer_gate(composed_tables):
     """No composed adopter reports E022 or E027 on the merged schema; a failure names every offender.
 
     Composed adopters are the addons' models and the root conftest's compositions; a test
     module's own probe models install their own schema and are not adopters.
     """
-    del composed_permissions
+    del composed_tables
     composed = ("angee.", "tests.conftest")
     adopters = [
         model for model in apps.get_models() if issubclass(model, OwnerMixin) and model.__module__.startswith(composed)

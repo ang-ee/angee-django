@@ -28,7 +28,6 @@ from django.contrib.auth import BACKEND_SESSION_KEY, SESSION_KEY, get_user_model
 from django.contrib.auth.hashers import PBKDF2PasswordHasher
 from django.contrib.auth.models import AnonymousUser
 from django.core.exceptions import ValidationError
-from django.core.management import call_command
 from django.db import connection, transaction
 from django.test import RequestFactory
 from django.test.utils import CaptureQueriesContext, override_settings
@@ -840,6 +839,7 @@ def test_reveal_credential_returns_the_secret_and_is_admin_only(
     assert _execute(console_schema, reveal, {"id": credential_id}, user=plain).errors is not None
 
 
+@pytest.mark.django_db(transaction=True)
 def test_admin_refresh_of_a_revoked_credential_is_refused(
     iam_connection_tables: None,
     monkeypatch: pytest.MonkeyPatch,
@@ -1502,6 +1502,7 @@ def test_iam_schemas_expose_user_change_subscriptions(
     assert "userChanged: ChangeEvent!" in _sdl_block(console_sdl, "type Subscription")
 
 
+@pytest.mark.django_db(transaction=True)
 def test_public_user_change_subscription_only_yields_the_actor(
     iam_connection_tables: None,
     monkeypatch: pytest.MonkeyPatch,
@@ -1592,7 +1593,6 @@ def test_iam_group_hasura_resource_uses_public_identity_sqids() -> None:
     with system_context(reason="test.iam.group.resource"):
         group = iam_schema.Group.objects.create(name="Operators")
     group_id = group.sqid
-    call_command("rebac", "sync", verbosity=0)
     admin = _platform_admin("auth-catalogue-admin")
     console_schema = _schema("console")
 
@@ -1759,6 +1759,7 @@ def test_disconnect_account_docstring_names_check_disconnect_owner() -> None:
     assert "check_disconnect" in doc
 
 
+@pytest.mark.django_db(transaction=True)
 def test_disconnect_account_revokes_owner_so_oidc_login_is_blocked(
     iam_connection_tables: None,
     monkeypatch: pytest.MonkeyPatch,
@@ -1875,6 +1876,7 @@ def test_disconnect_account_blocks_last_oidc_sign_in_method_for_passwordless_use
         assert Credential.objects.filter(user=user, external_account=account).exists()
 
 
+@pytest.mark.django_db(transaction=True)
 @pytest.mark.skipif(connection.vendor != "postgresql", reason="Real PostgreSQL row locks are required.")
 @pytest.mark.parametrize("second_path", ("self_service", "administrator"))
 def test_competing_oidc_disconnects_keep_one_sign_in_method(
@@ -2020,17 +2022,16 @@ assert Credential.objects.count() == 1
 
 
 @pytest.fixture()
-def iam_connection_tables(transactional_db: Any) -> Iterator[None]:
-    """Sync connection policy and materialize test-only auth relations.
+def iam_connection_tables(db: Any) -> Iterator[None]:
+    """Materialize test-only auth relations.
 
     The migrated auth app cannot sync these test models natively. User deletion
     traverses their audit relations, including models registered by other tests.
     """
 
-    del transactional_db
+    del db
     auth_models = tuple(model for model in apps.get_app_config("auth").get_models() if model._meta.managed)
     with model_tables(auth_models):
-        call_command("rebac", "sync", verbosity=0)
         yield
 
 

@@ -1,4 +1,4 @@
-import type { Query, QueryClient, QueryKey } from "@tanstack/react-query";
+import { matchQuery, type Query, type QueryClient, type QueryKey } from "@tanstack/react-query";
 
 import { recordValue } from "./dialect/wire";
 
@@ -16,7 +16,7 @@ export function authoredQueryReadsAnyModel(
   return models.some((model) => typeof model === "string" && wanted.has(model));
 }
 
-/** Match one live row change, respecting an authored query's optional exact-record interests. */
+/** Match a direct live row change against exact-record or whole-model interests. */
 export function authoredQueryReadsChange(meta: unknown, model: string, id: string): boolean {
   if (!authoredQueryReadsAnyModel(meta, [model])) return false;
   const metadata = recordValue(meta);
@@ -28,19 +28,22 @@ export function authoredQueryReadsChange(meta: unknown, model: string, id: strin
   if (!Array.isArray(records)) return true;
   return records.some((value) => {
     const record = recordValue(value);
-    return record?.model === model && record?.id === id;
+    return record?.model === model && (record.id === undefined || record.id === id);
   });
 }
 
-/** Match one live change: an exact row with its related rows, or a whole model. */
-function authoredQueryReadsLiveChange(meta: unknown, change: LiveChange): boolean {
-  if (!change.id) return authoredQueryReadsAnyModel(meta, [change.model]);
-  return authoredQueryReadsChange(meta, change.model, change.id)
+/** Match a live change against exact-row or whole-model interests, including related rows. */
+export function queryReadsLiveChange(meta: unknown, change: LiveChange): boolean {
+  const relatedModels = recordValue(meta)?.angeeRelatedModels;
+  if (!change.id && !(Array.isArray(relatedModels) && relatedModels.includes(change.model))) {
+    return authoredQueryReadsAnyModel(meta, [change.model]);
+  }
+  return Boolean(change.id && authoredQueryReadsChange(meta, change.model, change.id))
     || authoredQueryReadsAnyModel(meta, [change.model]) && (change.relatedRecords ?? []).some((record) => {
       const records = recordValue(meta)?.angeeRecords;
       return Array.isArray(records) && records.some((value) => {
         const interest = recordValue(value);
-        return interest?.model === record.model && interest?.id === record.id;
+        return interest?.model === record.model && (interest.id === undefined || interest.id === record.id);
       });
     });
 }
@@ -112,10 +115,14 @@ const LIVE_MAX_WAIT_MS = 2000;
 export interface LiveDelivery<Change extends LiveChange> {
   queryKey: QueryKey;
   callback: (changes: readonly Change[]) => void;
+  /** Native lists can narrow related-model events to their own record model. */
+  matches?: (change: Change) => boolean;
 }
 
 export interface LiveInvalidation<Change extends LiveChange> {
   push: (change: Change, deliveries?: readonly LiveDelivery<Change>[]) => void;
+  /** An authored subscription invalidates only the read that registered it. */
+  pushQuery: (queryKey: QueryKey) => void;
   remove: (delivery: LiveDelivery<Change>) => void;
   clear: () => void;
 }
@@ -135,6 +142,7 @@ export function createLiveInvalidation<Change extends LiveChange = LiveChange>(
   queryClient?: Pick<QueryClient, "invalidateQueries" | "getQueryCache">,
 ): LiveInvalidation<Change> {
   let changes: Change[] = [];
+  let queryKeys: QueryKey[] = [];
   const deliveries = new Map<LiveDelivery<Change>, Change[]>();
   const awaited = new Set<string>();
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -154,12 +162,15 @@ export function createLiveInvalidation<Change extends LiveChange = LiveChange>(
 
   function flush(): void {
     const batch = changes;
+    const keys = queryKeys;
     const notifications = [...deliveries];
     changes = [];
+    queryKeys = [];
     deliveries.clear();
     timer = undefined;
     firstAt = undefined;
-    const reads = (query: Query) => batch.some((change) => authoredQueryReadsLiveChange(query.meta, change));
+    const reads = (query: Query) => keys.some((queryKey) => matchQuery({ queryKey, exact: true }, query))
+      || batch.some((change) => queryReadsLiveChange(query.meta, change));
     // Snapshot running reads before any callback starts a fresh read. Refine
     // invalidates resourceAll; its public key builder supplies that exact scope.
     const cache = queryClient?.getQueryCache();
@@ -187,6 +198,13 @@ export function createLiveInvalidation<Change extends LiveChange = LiveChange>(
     for (const [delivery, events] of notifications) delivery.callback(events);
   }
 
+  function schedule(): void {
+    const now = performance.now();
+    firstAt ??= now;
+    if (timer !== undefined) clearTimeout(timer);
+    timer = setTimeout(flush, Math.max(0, Math.min(LIVE_WINDOW_MS, firstAt + LIVE_MAX_WAIT_MS - now)));
+  }
+
   return {
     remove(delivery) {
       deliveries.delete(delivery);
@@ -194,23 +212,26 @@ export function createLiveInvalidation<Change extends LiveChange = LiveChange>(
     clear() {
       if (timer !== undefined) clearTimeout(timer);
       changes = [];
+      queryKeys = [];
       deliveries.clear();
       awaited.clear();
       timer = undefined;
       firstAt = undefined;
       stopUnusedListener();
     },
+    pushQuery(queryKey) {
+      queryKeys.push(queryKey);
+      schedule();
+    },
     push(change, consumers = []) {
       changes.push(change);
       for (const consumer of consumers) {
+        if (consumer.matches && !consumer.matches(change)) continue;
         const pending = deliveries.get(consumer) ?? [];
         pending.push(change);
         deliveries.set(consumer, pending);
       }
-      const now = performance.now();
-      firstAt ??= now;
-      if (timer !== undefined) clearTimeout(timer);
-      timer = setTimeout(flush, Math.max(0, Math.min(LIVE_WINDOW_MS, firstAt + LIVE_MAX_WAIT_MS - now)));
+      schedule();
     },
   };
 }

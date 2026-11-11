@@ -15,7 +15,7 @@ from angee.timeline import schema as timeline_schema
 from tests.conftest import addon_schema, create_user
 from tests.test_timeline import QUERY, read_timeline
 
-pytestmark = pytest.mark.usefixtures("composed_tables")
+pytestmark = [pytest.mark.usefixtures("composed_tables"), pytest.mark.django_db(transaction=True)]
 
 Project = apps.get_model("projects", "Project")
 Milestone = apps.get_model("projects", "Milestone")

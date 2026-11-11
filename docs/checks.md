@@ -83,7 +83,8 @@ also covers [review waiters](../tests/test_workflows_review.py), their
 [locking races](../tests/test_workflows_review_concurrency.py),
 [execution links](../tests/test_workflows_review_graphql.py), and
 [inbox predicates](../tests/test_decisions_inbox.py),
-[committed timeline waits and inherited record feeds](../tests/test_timeline_workflows.py), plus the
+[committed timeline waits and inherited timeline subscriptions](../tests/test_timeline_workflows.py),
+[timeline stream authorization](../tests/test_timeline_subscriptions.py), plus the
 [agent session loop](../tests/test_agent_sessions.py) and its
 [locking races](../tests/test_agent_sessions_concurrency.py), plus
 [connection discovery races](../tests/test_integrate_discovery_concurrency.py),
@@ -97,7 +98,9 @@ knowledge, [pgvector test-database readiness](../tests/test_postgresql_extension
 messaging with its [channel owner](../tests/test_messaging_channel_concurrency.py)
 and [webform submission](../tests/test_messaging_webform_submission.py) races,
 [portfolio report](../tests/test_portfolio_concurrency.py) locks, proposals,
-sequences, spaces, storage, the system queryset, work and task ordering locks,
+sequences, spaces, storage with its
+[window-aligned download URLs and expiry](../tests/test_storage_access_campaign.py),
+the system queryset, work and task ordering locks,
 integrate streams and workflow integrate steps, the
 [grouped rows](../tests/test_group_rows.py) partitions, the
 messaging inbox's [explorer](../tests/test_inbox_explorer.py),
@@ -159,8 +162,11 @@ Local pytest remains serial and keeps its normal ordering: `addopts` disables
 pytest-randomly and does not select workers. An explicit `-p randomly` re-enables
 the plugin; change `--randomly-seed` to reproduce or vary test order. Use `-n 0`
 or `-p no:xdist` for serial debugging. `--dist loadfile` keeps each test module on
-one worker. Pytest-django isolates worker databases; custom database and composed
-host fixtures must use process-local connections or pytest's worker-local
+one worker. Pytest-django isolates worker databases, suffixing the source host's
+stable `.test-db/` SQLite name per worker, so `--reuse-db` keeps them between runs
+and `--create-db` rebuilds them after a model change; concurrent runs need separate
+checkouts. Custom database and composed host fixtures must use process-local
+connections or pytest's worker-local
 `tmp_path`/`tmp_path_factory`, and restore registry changes after each test; the
 installed app registry is restored for every host loading the base fixtures (see
 [Source-addon Test Models](#source-addon-test-models)).
@@ -174,22 +180,28 @@ Share source-addon compositions through their owning test apps:
 package docstrings own the adoption contract. Other reusable concrete
 compositions, including [`decisions`](../src/angee/decisions/testing/models.py)
 and [`messaging`](../src/angee/messaging/testing/models.py), register once
-through imports in the root conftest before database setup. The framework-generic
-[`composed_tables`](../src/angee/base/testing/fixtures.py) fixture uses native transactional
-isolation and synchronizes REBAC after each flush; use the native `db` fixture
-when a test needs neither transaction behavior nor permission synchronization.
-Composed hosts also install their schema during native database setup. Register
+through imports in the root conftest before database setup. Tests roll back by
+default over a session baseline: the base plugin binds the installed addons' merged
+permission inputs (a composed host binds its generated ones), and its
+`django_db_setup` synchronizes REBAC once per worker; a host extends that fixture
+to load its own baseline rows. The framework-generic
+[`composed_tables`](../src/angee/base/testing/fixtures.py) fixture is a
+compatibility alias of the native `db` fixture, kept for consumer suites. Declare `django_db(transaction=True)` only when the
+contract needs real commits: other threads or connections, row locks, or
+`on_commit` work a real worker runs; its flush restores the baseline through
+`post_migrate`. Assert `on_commit` callbacks with pytest-django's
+`django_capture_on_commit_callbacks`. A test synchronizes REBAC itself only after
+binding its own schema; `composed_permissions` binds a test-owned copy of the merged
+inputs for a test that edits one on disk. Register
 `angee.base.testing.fixtures` through the root conftest's `pytest_plugins`; a runner
 that loads it explicitly must pass `-p django -p angee.base.testing.fixtures` in that
 order so pytest-django cannot shadow the shared `django_db_setup` override.
 Hosts installing provenance also register
-[`angee.provenance.testing.fixtures`](../src/angee/provenance/testing/fixtures.py)
-for test attribution; the generic framework plugin does not install that boundary.
-A test that reaches a statement source needs the install-tier `provenance.Rule`
-principals parties declares: list
-[`angee.parties.testing.fixtures`](../src/angee/parties/testing/fixtures.py) in
-`pytest_plugins` and request its `statement_sources` fixture (the framework's own
-hosts load them after every REBAC sync).
+[`angee.provenance.testing.fixtures`](../src/angee/provenance/testing/fixtures.py),
+after the base plugin: it adds test attribution and loads every installed addon's
+install-tier statement principals (`provenance.Rule` and `Seed` rows and their
+grants) into the session baseline. The parties plugin's `statement_sources` fixture
+remains only for consumers that still request it.
 
 Declare a test-local model under Django's `isolate_apps` when the code under test
 accepts a registry. When its owner reads the installed registry (content types, the
@@ -451,8 +463,9 @@ database, and these commands do not create one.
 [reusable checks](../.github/workflows/reusable-checks.yml) on pull requests and
 pushes to `main`. The current tiers are:
 
-- **Python quality:** Ruff over the source tree and mypy over addons,
-  using the locked framework environment.
+- **Python quality:** Ruff over the source tree, mypy over addons and
+  `lint-imports` over the declared import contracts, using the locked framework
+  environment.
 - **SQLite:** the full framework Python suite once, as six shards that
   pytest-split cuts into contiguous chunks of equal stored time from the
   committed [durations](../.test_durations), so each test file stays in one or two
@@ -460,10 +473,8 @@ pushes to `main`. The current tiers are:
   `-n auto --dist loadfile` with a 60-minute limit and prints its 25 slowest test
   durations, with migrations enabled and `DATABASE_URL` unset. Structural tests
   remain part of this suite. Per-file scheduling keeps a file on one worker, so the
-  heaviest files (the proposals access, owner-gate adopters and agents GraphQL
-  campaigns, about 700 stored seconds each) set a floor near 25 minutes on CI.
-  Their cost is per-test fixture setup, a `rebac sync` before every test; making
-  that setup cheaper is how the limit comes down.
+  heaviest files (the proposals access and agents GraphQL campaigns, about 700
+  stored seconds each) set a floor near 25 minutes on CI.
 - **PostgreSQL:** in six groups of its own beside the SQLite shards, assigned
   by pytest-split's `least_duration` algorithm over the
   [PostgreSQL timings](../.test_durations_postgres) and with the shards' 60-minute

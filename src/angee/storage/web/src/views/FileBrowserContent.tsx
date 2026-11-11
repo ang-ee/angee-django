@@ -22,6 +22,7 @@ export interface FileBrowserContentProps {
 
 const FILE_LIST_FIELDS = [
   "filename",
+  "content_hash",
   "is_trashed",
   "url",
   "drive",

@@ -23,17 +23,15 @@ from angee.messaging.testing.models import Channel, Message, Thread
 from angee.projects.testing.models import Project, ProjectBinding
 from tests.conftest import Backend, Drive, Folder, Vendor
 from tests.iam_models import Group
-from tests.test_project_access import project_access_schema as project_access_schema
 
 
 @pytest.fixture
-def composite_schema(project_access_schema: Any) -> None:
+def composite_schema(composed_tables: Any) -> None:
     """Synchronize the composed schema."""
 
-    del project_access_schema
+    del composed_tables
 
 
-@pytest.mark.django_db(transaction=True)
 def test_group_membership_reaches_and_revokes_project_resource_cascade(
     composite_schema: None,
 ) -> None:

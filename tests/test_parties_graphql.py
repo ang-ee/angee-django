@@ -632,6 +632,7 @@ def test_a_statement_read_under_system_context_answers_as_its_reader_and_remembe
         assert "_provenance_readable_statement" not in vars(elevated)
 
 
+@pytest.mark.django_db(transaction=True)
 @pytest.mark.parametrize("row_count", [2, 8])
 def test_statement_reference_reads_have_a_page_query_budget(
     composed_tables: None,
@@ -677,7 +678,6 @@ def test_party_statements_group_only_by_axes_the_party_reader_may_read() -> None
     assert "SUBJECT__DISPLAY_NAME" in sdl
 
 
-@pytest.mark.django_db(transaction=True)
 def test_merge_scalar_fields_follow_the_party_and_person_projections(composed_tables: None) -> None:
     """Each projection declares the merge scalars it carries; a person adds its own."""
 

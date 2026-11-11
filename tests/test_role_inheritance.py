@@ -4,19 +4,17 @@ from __future__ import annotations
 
 import pytest
 from django.contrib.auth import get_user_model
-from django.core.management import call_command
 from rebac import ObjectRef, RelationshipTuple, SubjectRef, system_context, to_subject_ref
 from rebac.backends import backend
 from rebac.relationships import delete_relationships, write_relationships
 from rebac.types import RelationshipFilter
 
 
-@pytest.mark.django_db(transaction=True)
+@pytest.mark.django_db
 @pytest.mark.parametrize("kind", ("person", "service"))
 def test_role_arrows_preserve_transitive_membership_and_revocation(kind: str) -> None:
     """Plain role subjects grant inherited reach without granting direct membership."""
 
-    call_command("rebac", "sync", verbosity=0)
     with system_context(reason="test role inheritance"):
         user = get_user_model().objects.create_user(username=f"role-{kind}", kind=kind)
         subject = to_subject_ref(user)

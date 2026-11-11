@@ -109,6 +109,7 @@ export const MessagePartFields = graphql(`
     file {
       id
       filename
+      content_hash
       title
       size_bytes
       url

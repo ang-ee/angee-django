@@ -14,7 +14,7 @@ from angee.workflows.testing.models import StepRecord, StepRun, WorkflowRun
 from tests.conftest import create_user
 from tests.workflow_steps import document
 
-pytestmark = [pytest.mark.django_db(transaction=True), pytest.mark.usefixtures("workflow_step_classes")]
+pytestmark = [pytest.mark.django_db, pytest.mark.usefixtures("workflow_step_classes")]
 
 
 def blocked_document(model_label: str, action: str = "post", *, step: str = "echo") -> dict:

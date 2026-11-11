@@ -61,7 +61,6 @@ def _user(username: str) -> Any:
     return User.objects.create_user(username=username, password="x")
 
 
-@pytest.mark.django_db(transaction=True)
 def test_manual_contact_is_unconfirmed_and_dismissed_link_stays_dismissed(
     composed_tables: None,
 ) -> None:
@@ -100,7 +99,6 @@ def test_manual_contact_is_unconfirmed_and_dismissed_link_stays_dismissed(
     assert not repeated.handle.party_link_confirmed
 
 
-@pytest.mark.django_db(transaction=True)
 def test_manual_contact_reuses_a_retained_alias_survivor(composed_tables: None) -> None:
     del composed_tables
     owner = _user("manual-contact-redirect-owner")
@@ -118,7 +116,6 @@ def test_manual_contact_reuses_a_retained_alias_survivor(composed_tables: None) 
         assert not Party.statements.filter(handle=alias).exists()
 
 
-@pytest.mark.django_db(transaction=True)
 def test_manual_contact_reuse_preserves_confirmed_owner_and_hides_foreign_handle(
     composed_tables: None,
 ) -> None:
@@ -198,7 +195,6 @@ def test_manual_contact_reuse_preserves_confirmed_owner_and_hides_foreign_handle
     assert not reader_proposed.is_dismissed
 
 
-@pytest.mark.django_db(transaction=True)
 def test_circle_subtree_and_ancestor_scopes(composed_tables: None) -> None:
     """Circle composes HierarchyMixin: subtree/ancestors read off the path index."""
 
@@ -217,7 +213,6 @@ def test_circle_subtree_and_ancestor_scopes(composed_tables: None) -> None:
         assert other.pk not in subtree
 
 
-@pytest.mark.django_db(transaction=True)
 def test_circle_reads_follow_the_queryset_actor_not_the_ambient_one(composed_tables: None) -> None:
     """Circle names, member counts and unassigned people read through one actor's memberships."""
 
@@ -245,7 +240,6 @@ def test_circle_reads_follow_the_queryset_actor_not_the_ambient_one(composed_tab
         assert Party.objects.filter(pk=loose.pk).unassigned().exists()
 
 
-@pytest.mark.django_db(transaction=True)
 def test_circle_tree_never_straddles_owners(composed_tables: None) -> None:
     """hierarchy_scope_fields=("owner",): a parent from another owner is rejected."""
 
@@ -258,7 +252,6 @@ def test_circle_tree_never_straddles_owners(composed_tables: None) -> None:
             Circle._base_manager.create(name="Nested", parent=theirs, created_by=mine.created_by)
 
 
-@pytest.mark.django_db(transaction=True)
 def test_circle_transfer_moves_a_lone_circle_and_never_splits_a_tree(composed_tables: None) -> None:
     """The owner scopes the tree: a transfer refuses a circle with a parent or children."""
 
@@ -283,7 +276,6 @@ def test_circle_transfer_moves_a_lone_circle_and_never_splits_a_tree(composed_ta
     assert rows[nested.pk].owner_id == recipient.pk
 
 
-@pytest.mark.django_db(transaction=True)
 def test_circle_membership_is_unique_per_pair(composed_tables: None) -> None:
     """One row per (circle, party): a re-suggestion updates, never duplicates."""
 
@@ -297,7 +289,6 @@ def test_circle_membership_is_unique_per_pair(composed_tables: None) -> None:
             CircleMember._base_manager.create(circle=circle, party=party, created_by=owner)
 
 
-@pytest.mark.django_db(transaction=True)
 @pytest.mark.parametrize("decision", ("confirm", "dismiss"))
 def test_circle_membership_decisions_preserve_confidence_and_update_timestamp(
     composed_tables: None, decision: str,
@@ -323,7 +314,6 @@ def test_circle_membership_decisions_preserve_confidence_and_update_timestamp(
     assert row.updated_at > previous
 
 
-@pytest.mark.django_db(transaction=True)
 def test_relationship_kind_renders_both_directions(composed_tables: None) -> None:
     """One kind row carries both readings via inverse_name; blank means symmetric."""
 
@@ -342,7 +332,6 @@ def test_relationship_kind_renders_both_directions(composed_tables: None) -> Non
     assert mother.label_for(outbound=False) == "Child"
 
 
-@pytest.mark.django_db(transaction=True)
 def test_relationship_edge_constraints(composed_tables: None) -> None:
     """A tracked edge is unique per (party, other, kind), never self-referential,
     and every edge names a counterparty (tracked or free-text)."""
@@ -362,7 +351,6 @@ def test_relationship_edge_constraints(composed_tables: None) -> None:
             Relationship._base_manager.create(party=maya, kind=kind, created_by=owner)
 
 
-@pytest.mark.django_db(transaction=True)
 def test_relationship_records_untracked_relatives(composed_tables: None) -> None:
     """A relative who is not a directory entry records as free text (health-gaps).
 
@@ -419,7 +407,6 @@ def _resolved_owner(handle: Any) -> Any:
     return handle.party_id
 
 
-@pytest.mark.django_db(transaction=True)
 @pytest.mark.parametrize("nameless", ["Unknown", "+1 415 555 2671"])
 def test_an_equal_tie_resolves_to_the_party_with_a_real_name(composed_tables: None, nameless: str) -> None:
     """A nameless duplicate card first in order loses an equal tie; a bare number is no name either."""
@@ -434,7 +421,6 @@ def test_an_equal_tie_resolves_to_the_party_with_a_real_name(composed_tables: No
         assert _resolved_owner(handle) == second.subject_id
 
 
-@pytest.mark.django_db(transaction=True)
 def test_a_real_name_never_outranks_a_confirmation_or_a_stronger_score(composed_tables: None) -> None:
     del composed_tables
     with system_context(reason="test real-name rank"):
@@ -450,7 +436,6 @@ def test_a_real_name_never_outranks_a_confirmation_or_a_stronger_score(composed_
         assert _resolved_owner(handle) == stronger.subject_id
 
 
-@pytest.mark.django_db(transaction=True)
 def test_an_all_nameless_tie_keeps_the_link_order(composed_tables: None) -> None:
     del composed_tables
     with system_context(reason="test nameless tie"):
@@ -460,7 +445,6 @@ def test_an_all_nameless_tie_keeps_the_link_order(composed_tables: None) -> None
         assert _resolved_owner(handle) == _in_link_order(links)[0].subject_id
 
 
-@pytest.mark.django_db(transaction=True)
 def test_moving_handle_statements_retains_each_partys_decisions_and_evidence(composed_tables: None) -> None:
     """A party stating both spellings keeps the stronger current; the weaker stays superseded with its evidence."""
 
@@ -504,7 +488,6 @@ def test_moving_handle_statements_retains_each_partys_decisions_and_evidence(com
     assert confirmed.handle_count == 1
 
 
-@pytest.mark.django_db(transaction=True)
 def test_moving_a_handles_only_statement_leaves_it_unowned(composed_tables: None) -> None:
     """Nothing is deleted, so the move itself re-resolves the handle it empties and recounts its owner."""
 
@@ -523,7 +506,6 @@ def test_moving_a_handles_only_statement_leaves_it_unowned(composed_tables: None
     assert (alias.party_id, phone.party_id, party.handle_count) == (None, party.pk, 1)
 
 
-@pytest.mark.django_db(transaction=True)
 def test_a_folded_statement_stays_inspectable_as_superseded(composed_tables: None) -> None:
     """A source stating both spellings keeps its stronger statement current; the weaker is retained, not deleted."""
 
@@ -545,7 +527,6 @@ def test_a_folded_statement_stays_inspectable_as_superseded(composed_tables: Non
         assert Party.statements.asserted().filter(pk=stronger.pk).exists()
 
 
-@pytest.mark.django_db(transaction=True)
 def test_a_moved_import_statement_stays_beside_the_directorys_and_the_directory_publishes(
     composed_tables: None, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -597,7 +578,6 @@ def _handle_merge_fixture(slug: str, digits: str) -> tuple[Any, Any, Any]:
     return owner, alias, phone
 
 
-@pytest.mark.django_db(transaction=True)
 def test_merging_a_handle_fills_only_what_the_kept_handle_lacks_and_moves_its_statements(
     composed_tables: None,
 ) -> None:
@@ -630,7 +610,6 @@ def test_merging_a_handle_fills_only_what_the_kept_handle_lacks_and_moves_its_st
     )
 
 
-@pytest.mark.django_db(transaction=True)
 def test_merging_a_handle_keeps_its_correspondence_and_collapses_facts_the_kept_handle_holds(
     composed_tables: None,
 ) -> None:
@@ -676,7 +655,6 @@ def test_merging_a_handle_keeps_its_correspondence_and_collapses_facts_the_kept_
     assert tags == ["VIP", "Work"]
 
 
-@pytest.mark.django_db(transaction=True)
 def test_folding_a_handle_redirects_ingestion_to_the_survivor(composed_tables: None) -> None:
     del composed_tables
     with system_context(reason="test handle merge vanished"):
@@ -693,7 +671,6 @@ def test_folding_a_handle_redirects_ingestion_to_the_survivor(composed_tables: N
     assert phone.party_id == party.pk
 
 
-@pytest.mark.django_db(transaction=True)
 def test_merging_handles_on_different_platforms_refuses(composed_tables: None) -> None:
     """Two platforms are two contact points, never one's spelling of the other."""
 
@@ -709,16 +686,6 @@ def test_merging_handles_on_different_platforms_refuses(composed_tables: None) -
     assert kept == {alias.pk, email.pk}
 
 
-@pytest.mark.django_db(transaction=True)
-def test_a_consumer_host_reaches_the_rule_sources_through_the_parties_test_plugin(statement_sources: None) -> None:
-    """A host without the framework's composed tables loads parties' install-tier principals from its plugin."""
-
-    del statement_sources
-    for key in ("normalized_twin", "email_domain", "display_name", "signature_phone", "source_sender"):
-        assert Party.objects.rule_source(key).key == f"parties.{key}"
-
-
-@pytest.mark.django_db(transaction=True)
 def test_a_confirmation_writes_only_the_decision_and_stays_asserted(composed_tables: None) -> None:
     """Confirming a rule's suggestion writes the person's preferred statement beside the untouched producer.
 
@@ -749,7 +716,6 @@ def test_a_confirmation_writes_only_the_decision_and_stays_asserted(composed_tab
         assert handle.party_id == party.pk
 
 
-@pytest.mark.django_db(transaction=True)
 def test_confirm_and_dismiss_drive_resolution(composed_tables: None) -> None:
     """Confirm outranks any score; dismiss is a durable anti-link that demotes and recounts."""
 
@@ -800,7 +766,6 @@ def test_confirm_and_dismiss_drive_resolution(composed_tables: None) -> None:
         assert list(Party.statements.to_review().values_list("pk", flat=True)) == [weak.pk]
 
 
-@pytest.mark.django_db(transaction=True)
 @pytest.mark.parametrize("model", [Party, Person])
 def test_person_for_user_is_the_one_person_per_user_owner(composed_tables: None, model: type[Any]) -> None:
     """The inherited manager always keys the Person.user O2O — never two rows."""
@@ -816,7 +781,6 @@ def test_person_for_user_is_the_one_person_per_user_owner(composed_tables: None,
     assert first.display_name
 
 
-@pytest.mark.django_db(transaction=True)
 def test_claim_control_writes_control_and_identity_facts(composed_tables: None) -> None:
     """Handle.claim_control sets the controller (control) and a normal person statement (identity)."""
 
@@ -847,7 +811,6 @@ def test_claim_control_writes_control_and_identity_facts(composed_tables: None) 
         assert Party.statements.filter(handle=handle, subject=person).count() == 1
 
 
-@pytest.mark.django_db(transaction=True)
 def test_claim_control_records_a_contested_identity_without_reassigning_control(composed_tables: None) -> None:
     """A second user's claim stays weak and unconfirmed; the first controller remains in control."""
 
@@ -883,7 +846,6 @@ def test_claim_control_records_a_contested_identity_without_reassigning_control(
     assert competing_link.source_kind == "person"
 
 
-@pytest.mark.django_db(transaction=True)
 def test_handle_persists_normalized_value_on_create_and_value_update(composed_tables: None) -> None:
     """Handle owns its indexed normalization, including Gmail local-part collapsing."""
 
@@ -905,7 +867,6 @@ def test_handle_persists_normalized_value_on_create_and_value_update(composed_ta
     assert handle.normalized_value == "alicesmith@googlemail.com"
 
 
-@pytest.mark.django_db(transaction=True)
 def test_suggest_for_exact_match_autolinks_at_full_confidence(composed_tables: None) -> None:
     """An exact normalized-value match to a resolved handle auto-links (gmail dot/plus)."""
 
@@ -927,7 +888,6 @@ def test_suggest_for_exact_match_autolinks_at_full_confidence(composed_tables: N
     assert link.confidence == 1.0
 
 
-@pytest.mark.django_db(transaction=True)
 def test_suggest_for_resolved_handle_returns_without_competing_links(composed_tables: None) -> None:
     """A resolved handle is final input to suggest_for, even when a twin disagrees."""
 
@@ -956,7 +916,6 @@ def test_suggest_for_resolved_handle_returns_without_competing_links(composed_ta
     assert result is None
 
 
-@pytest.mark.django_db(transaction=True)
 def test_suggest_for_keeps_dismissed_link_dismissed(composed_tables: None) -> None:
     """A repeated normalized-value suggestion never resurrects its durable anti-link."""
 
@@ -991,7 +950,6 @@ def test_suggest_for_keeps_dismissed_link_dismissed(composed_tables: None) -> No
     assert unknown.party_id is None
 
 
-@pytest.mark.django_db(transaction=True)
 def test_suggest_for_records_conflicting_normalized_twins(composed_tables: None) -> None:
     """Resolved normalized twins create one strong suggestion plus weak competing links."""
 
@@ -1030,7 +988,6 @@ def test_suggest_for_records_conflicting_normalized_twins(composed_tables: None)
     assert all(link.source_kind == "rule" for link in links)
 
 
-@pytest.mark.django_db(transaction=True)
 def test_suggest_for_org_domain_suggests_at_low_confidence(composed_tables: None) -> None:
     """An email whose domain matches Organization.domain suggests that org weakly."""
 
@@ -1048,7 +1005,6 @@ def test_suggest_for_org_domain_suggests_at_low_confidence(composed_tables: None
     assert link.source_kind == "rule"
 
 
-@pytest.mark.django_db(transaction=True)
 def test_suggest_for_stays_inside_the_parties_the_handle_creator_owns(composed_tables: None) -> None:
     """The partition follows party ownership, not who first recorded the party."""
 
@@ -1070,7 +1026,6 @@ def test_suggest_for_stays_inside_the_parties_the_handle_creator_owns(composed_t
     assert link is not None and link.subject_id == acme.pk
 
 
-@pytest.mark.django_db(transaction=True)
 def test_suggest_for_no_match_is_a_noop(composed_tables: None) -> None:
     """No twin and no org-domain match leaves the handle unresolved (the Salesforce policy)."""
 
@@ -1085,7 +1040,6 @@ def test_suggest_for_no_match_is_a_noop(composed_tables: None) -> None:
     assert handle.party_id is None
 
 
-@pytest.mark.django_db(transaction=True)
 def test_relationship_kind_end_legality_requires_org_counterparty(
     composed_tables: None,
     django_assert_num_queries: Any,
@@ -1130,7 +1084,6 @@ def test_relationship_kind_end_legality_requires_org_counterparty(
         relationship.save(update_fields=["notes"])
 
 
-@pytest.mark.django_db(transaction=True)
 def test_merged_into_flattens_transitively(composed_tables: None) -> None:
     """Party.merge atomically flattens chains; PartyQuerySet.canonical drops merged rows."""
 
@@ -1168,7 +1121,6 @@ def test_has_real_name_rejects_placeholder_and_letterless_names() -> None:
     assert not Party(display_name="   ").has_real_name
 
 
-@pytest.mark.django_db(transaction=True)
 def test_merge_rejects_reversal_and_database_rejects_self_merge(composed_tables: None) -> None:
     """The verb rejects A→B when B→A exists; the database is the direct-write floor."""
 
@@ -1309,7 +1261,6 @@ def test_a_merge_revert_restores_every_moved_kind(
     assert pointed_at() == {merged.pk}
 
 
-@pytest.mark.django_db(transaction=True)
 def test_ingest_contact_upserts_carddav_employment_in_place(composed_tables: None) -> None:
     """ORG/TITLE/ROLE map to one stable CardDAV edge while manual rows survive."""
 
@@ -1407,7 +1358,6 @@ def test_ingest_contact_upserts_carddav_employment_in_place(composed_tables: Non
     assert Relationship._base_manager.filter(pk=manual.pk).exists()
 
 
-@pytest.mark.django_db(transaction=True)
 def test_a_card_pass_keeps_its_addresses_local_facts(composed_tables: None) -> None:
     """A card address updates its matching row and keeps its coordinates and primary flag.
 
@@ -1456,7 +1406,6 @@ def test_a_card_pass_keeps_its_addresses_local_facts(composed_tables: None) -> N
     assert len(rows) == 4
 
 
-@pytest.mark.django_db(transaction=True)
 def test_ingest_contact_requires_employee_relationship_kind(composed_tables: None) -> None:
     """Employment sync fails clearly and atomically when its master kind is missing."""
 
@@ -1522,7 +1471,6 @@ def _system_of_record_statement(party: Any, source: Any, link: Any, **values: An
     )
 
 
-@pytest.mark.django_db(transaction=True)
 def test_an_authoritative_stream_outranks_a_persons_edit_but_never_a_decision(composed_tables: None) -> None:
     """Declaring or flipping ``SyncStream.authoritative`` re-derives the subjects; preferred stays on top (§11.2)."""
 
@@ -1557,7 +1505,6 @@ def test_an_authoritative_stream_outranks_a_persons_edit_but_never_a_decision(co
         assert SyncStream.objects.bump_generation(stream).authoritative is True
 
 
-@pytest.mark.django_db(transaction=True)
 def test_an_authoritative_stream_outranks_a_persons_later_edit(composed_tables: None) -> None:
     """Authority alone decides between the system of record and a person's normal stance, not row age.
 
@@ -1584,7 +1531,6 @@ def test_an_authoritative_stream_outranks_a_persons_later_edit(composed_tables: 
         assert Party.statements.model._base_manager.get(link=link).applied
 
 
-@pytest.mark.django_db(transaction=True)
 def test_handle_ownership_ranks_source_precedence_before_confidence_and_recency(composed_tables: None) -> None:
     """A person's older, weaker normal statement outranks a directory's newer full-confidence one."""
 
@@ -1615,7 +1561,6 @@ def test_handle_ownership_ranks_source_precedence_before_confidence_and_recency(
         assert handle.party_id == stronger.pk
 
 
-@pytest.mark.django_db(transaction=True)
 def test_dismissing_an_identity_value_clears_it_and_confirming_the_stance_restores_it(composed_tables: None) -> None:
     """A preferred no-value applies: the removal sticks; ``Statement.confirm`` re-applies the retained values."""
 

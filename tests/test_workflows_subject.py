@@ -31,7 +31,6 @@ from tests.workflow_steps import Echo, document
 pytestmark = pytest.mark.usefixtures("workflow_step_classes")
 
 
-@pytest.mark.django_db(transaction=True)
 def test_context_preserves_concrete_mti_subject(execution, register_step, monkeypatch):
     """A child subject retains its fields through scoped reads and locked writes."""
 
@@ -89,7 +88,6 @@ def test_context_preserves_concrete_mti_subject(execution, register_step, monkey
     ]
 
 
-@pytest.mark.django_db(transaction=True)
 def test_mti_subject_lookup_and_replay_share_canonical_identity(execution):
     """Parent and child lookup share stored identity without widening run visibility."""
     actor, _ = execution
@@ -120,7 +118,6 @@ def test_mti_subject_lookup_and_replay_share_canonical_identity(execution):
         WorkflowRun.objects.start(workflow, actor=actor, subject=parent, request_key="subject-replay")
 
 
-@pytest.mark.django_db(transaction=True)
 def test_undeclared_subject_uses_the_canonical_record_type(execution):
     """Without a concrete workflow contract the canonical record owns subject loading."""
     actor, _ = execution
@@ -139,7 +136,6 @@ def test_undeclared_subject_uses_the_canonical_record_type(execution):
         WorkflowRun.objects.reprocess(run, actor=actor)
 
 
-@pytest.mark.django_db(transaction=True)
 @pytest.mark.parametrize("ambient_system", [False, True])
 def test_subject_loading_requires_current_access_to_the_declared_child(execution, register_step, ambient_system):
     """Access to the canonical ancestor cannot substitute for the declared child's policy."""
@@ -178,7 +174,6 @@ def test_subject_loading_requires_current_access_to_the_declared_child(execution
             WorkflowRun.objects.reprocess(run, actor=actor)
 
 
-@pytest.mark.django_db(transaction=True)
 @pytest.mark.parametrize("ambient_system", [False, True])
 def test_start_requires_read_access_to_subject(execution, ambient_system):
     """Workflow start access never grants access to an independently protected subject."""
@@ -207,7 +202,6 @@ def test_start_requires_read_access_to_subject(execution, ambient_system):
     assert (evidence.record_model_label, evidence.record_public_id) == (subject._meta.label, subject.sqid)
 
 
-@pytest.mark.django_db(transaction=True)
 def test_entry_record_input_is_checked_deduplicated_and_retained(execution, register_step):
     """Only relation-marked values and the subject become canonical retained sources."""
     admin, _ = execution

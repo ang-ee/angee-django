@@ -3,7 +3,7 @@
 import { createUiTestProviders } from "@angee/ui/testing";
 import type { RefineTestDataProvider } from "@angee/refine/testing";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
-import { createMemoryHistory, createRootRoute, createRoute, createRouter, Outlet, RouterContextProvider, RouterProvider } from "@tanstack/react-router";
+import { createMemoryHistory, createRootRoute, createRoute, createRouter, Outlet, RouterProvider } from "@tanstack/react-router";
 import { ResourceQuery, type Row } from "@angee/metadata";
 import { OperationDocumentsProvider } from "@angee/refine";
 import { testDataResource, testResourceQuery, testQueryField, testQueryAxis } from "@angee/metadata/testing";
@@ -34,7 +34,7 @@ const fileResource = testDataResource("storage.File", {
   } }),
   typeNames: { filter: "files_bool_exp", order: "files_order_by" },
   recordRepresentation: "title", updateFields: ["title"], roots: { deletePreview: "delete_files_preview", aggregate: "files_aggregate" },
-  fields: ["title", "filename", "created_by_label", "upload_state", "visibility", "created_at", "updated_at"].map((name) => ({
+  fields: ["title", "filename", "content_hash", "created_by_label", "upload_state", "visibility", "created_at", "updated_at"].map((name) => ({
     name, kind: "scalar", scalar: "String", readable: true,
     aggregatable: false, creatable: false,
     updatable: name === "title", requiredOnCreate: false,
@@ -54,7 +54,7 @@ const resources = [fileResource, driveResource, folderResource];
 const scope = { filter: { drive: { exact: "drive-a" }, is_trashed: { exact: false } }, order: { updated_at: "DESC" as const }, page: 1, pageSize: 50 };
 const drive = { id: "drive-a", slug: "assets", name: "Assets" };
 function file(id: string, title: string) {
-  return { id, title, filename: `${title}.bin`, url: "", drive: drive.id, folder: null,
+  return { id, title, filename: `${title}.bin`, content_hash: "digest", url: "", drive: drive.id, folder: null,
     is_trashed: false, upload_state: "ready", visibility: "inherited", size_bytes: 1, mime_type: null,
     created_by_label: "", created_at: "2026-09-04T00:00:00Z", updated_at: "2026-09-05T00:00:00Z" };
 }
@@ -221,7 +221,7 @@ test("cold Files navigation preserves the real shell, tree, pager and the detail
 test("All files starts with server folder grouping and a clean URL; changing the folder scope changes its default", async () => {
   installTestLocalStorage();
   vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockReturnValue(new DOMRect(0, 0, 1024, 768));
-  const fields = { id: { scalar: "ID" }, title: { scalar: "String" }, filename: { scalar: "String" },
+  const fields = { id: { scalar: "ID" }, title: { scalar: "String" }, filename: { scalar: "String" }, content_hash: { scalar: "String" },
     created_by_label: { scalar: "String" }, upload_state: { scalar: "String" }, visibility: { scalar: "String" },
     updated_at: { scalar: "DateTime" }, size_bytes: { scalar: "Int" }, is_trashed: { scalar: "Boolean" },
     drive: { scalar: "ID" }, folder: { scalar: "ID" }, "mime_type.label": { scalar: "String" },
@@ -427,17 +427,18 @@ test("a directly shared file opens when no drive is visible", async () => {
 
 /** Mount a storage view outside the shell, acting through the given file verbs. */
 function renderView(view: ReactElement, rows: readonly Row[]) {
-  const router = createRouter({ routeTree: createRootRoute(), history: createMemoryHistory({ initialEntries: ["/storage"] }) });
+  const root = createRootRoute();
+  const page = createRoute({ getParentRoute: () => root, path: "/storage", component: () => view });
+  const router = createRouter({ routeTree: root.addChildren([page]), history: createMemoryHistory({ initialEntries: ["/storage"] }),
+    parseSearch: parseFlatSearch, stringifySearch: stringifyFlatSearch });
   render(<Provider resources={resources} dataProvider={{
     custom: vi.fn(async () => ({ data: { files_by_pk: rows[0] ?? null } })),
     getOne: vi.fn(async () => ({ data: rows[0] ?? null })),
     getList: vi.fn(async () => ({ data: [...rows], total: rows.length })),
   }} options={{ reactQuery: { clientConfig: { defaultOptions: { queries: { retry: false, gcTime: 0 } } } } }}>
-    <RouterContextProvider router={router}>
-      <AppRuntimeProvider runtime={{ icons: baseIcons, widgets: defaultWidgets, routeHref: createRouteHref(storage.routes ?? []) }}>
-        <ModalsHost><ToastProvider>{view}</ToastProvider></ModalsHost>
-      </AppRuntimeProvider>
-    </RouterContextProvider>
+    <AppRuntimeProvider runtime={{ icons: baseIcons, widgets: defaultWidgets, routeHref: createRouteHref(storage.routes ?? []) }}>
+      <ModalsHost><ToastProvider><RouterProvider router={router} /></ToastProvider></ModalsHost>
+    </AppRuntimeProvider>
   </Provider>);
 }
 

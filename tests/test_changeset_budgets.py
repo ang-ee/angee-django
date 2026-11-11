@@ -77,7 +77,6 @@ def test_close_writes_bookkeeping_only_and_export_records_the_hash(composed_tabl
     assert f'"{Party._meta.label_lower}":[' in document and '"hash"' not in document
 
 
-@pytest.mark.django_db(transaction=True)
 def test_tracked_save_and_queryset_update_query_budgets(composed_tables: None) -> None:
     """One re-select and one history insert per captured statement, plus the savepoint pair."""
 

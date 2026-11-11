@@ -11,7 +11,6 @@ from rebac import PermissionDenied, actor_context
 from angee.messaging.models import NotificationPolicy
 from angee.spaces.testing.models import Membership
 from tests.spaces_campaign_helpers import roster as roster
-from tests.test_spaces import spaces_tables as spaces_tables
 
 pytestmark = [
     pytest.mark.django_db(transaction=True),

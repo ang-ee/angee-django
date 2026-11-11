@@ -35,9 +35,9 @@ class RetainedEvidence(AppendOnlyModel, AuditMixin, models.Model):
         db_table = "test_append_only_evidence"
 
 
-def test_append_only_base_manager_and_instance_writes_are_guarded(transactional_db: Any) -> None:
+def test_append_only_base_manager_and_instance_writes_are_guarded(db: Any) -> None:
     """The declared base manager keeps ordinary writes closed."""
-    del transactional_db
+    del db
     with system_context(reason="test append-only base manager"):
         row = RetainedEvidence.objects.create(name="retained")
         assert isinstance(RetainedEvidence._base_manager.get_queryset(), AppendOnlyBaseQuerySet)

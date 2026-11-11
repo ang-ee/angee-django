@@ -95,7 +95,7 @@ class PlainGroupLabel(models.Model):
         app_label = "scopedemo"
 
 
-def test_plain_django_aggregate_source_retains_native_grouping(transactional_db):
+def test_plain_django_aggregate_source_retains_native_grouping(db):
     """Permission-naive resources use ordinary Django aggregates without a REBAC API."""
 
     with model_tables((PlainGroupLabel,)):
@@ -179,10 +179,10 @@ class GroupParentType(AngeeNode):
 
 
 @pytest.fixture
-def relation_grouping_case(transactional_db: None):
+def relation_grouping_case(db: None):
     """Build one schema and two actors over stable parent group identities."""
 
-    del transactional_db
+    del db
     reset_backend()
     active = backend()
     assert isinstance(active, LocalBackend)

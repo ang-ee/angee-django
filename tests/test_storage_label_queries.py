@@ -15,7 +15,6 @@ from tests.conftest import Drive, File, addon_schema, create_user
 from tests.test_storage import drive as drive
 
 
-@pytest.mark.django_db(transaction=True)
 @pytest.mark.parametrize("schema_name", ["public", "console"])
 def test_file_labels_fetch_title_and_filename_with_authorized_rows(drive: Any, schema_name: str) -> None:
     """Title and filename fallback stay batched without exposing another owner's file."""

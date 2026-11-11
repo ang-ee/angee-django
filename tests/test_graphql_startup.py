@@ -93,6 +93,7 @@ def test_graphql_startup_defers_schema_checks(cold_graphql_addon: Path) -> None:
 
         import strawberry
         from django.conf import settings
+        from angee.graphql.autoconfig import SETTINGS as GRAPHQL_SETTINGS
 
         builds = []
         original_init = strawberry.Schema.__init__
@@ -114,6 +115,8 @@ def test_graphql_startup_defers_schema_checks(cold_graphql_addon: Path) -> None:
             DATABASES={"default": {"ENGINE": "django.db.backends.sqlite3", "NAME": ":memory:"}},
             DEFAULT_AUTO_FIELD="django.db.models.BigAutoField",
             USE_TZ=True,
+            ANGEE_GRAPHQL_RESOURCE_FILTERS=GRAPHQL_SETTINGS["ANGEE_GRAPHQL_RESOURCE_FILTERS"],
+            ANGEE_GRAPHQL_RELATED_COUNTS=GRAPHQL_SETTINGS["ANGEE_GRAPHQL_RELATED_COUNTS"],
         )
 
         import django

@@ -16,11 +16,10 @@ from angee.work import schema as work_schema
 from angee.work.models import ProjectWork
 from tests.conftest import addon_schema
 from tests.test_productivity_write_behavior import Queue, Stage
-from tests.test_project_access import project_access_schema as project_access_schema
 
 
 @pytest.fixture
-def team_case(project_access_schema):
+def team_case(composed_tables):
     users = {}
     with system_context(reason="test.work.team.setup"):
         team = Group.objects.create(name="Roster", slug="roster", visibility="public")

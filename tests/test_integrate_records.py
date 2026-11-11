@@ -198,7 +198,6 @@ def test_baseline_completion_reads_deferred_identity(replica: Any) -> None:
 
 def test_baseline_completion_is_independent_of_actor_visibility(composed_tables: None) -> None:
     del composed_tables
-    call_command("rebac", "sync", verbosity=0)
     with system_context(reason="test baseline completion authorization"):
         bridge = make_integration("baseline-completion-rebac", model=Channel)
         other = get_user_model().objects.create_user(username="baseline-completion-other")
@@ -214,6 +213,7 @@ def test_baseline_completion_is_independent_of_actor_visibility(composed_tables:
         assert not deferred.has_completed_baseline()
 
 
+@pytest.mark.django_db(transaction=True)
 def test_keep_local_before_first_baseline_preserves_conflict(replica: Any, monkeypatch: pytest.MonkeyPatch) -> None:
     replica.direction = StreamDirection.BIDIRECTIONAL
     replica.save(update_fields=["direction"])
@@ -550,7 +550,6 @@ def test_stream_rejects_an_integration_without_a_concrete_bridge(composed_tables
 
 def test_stream_and_links_follow_the_integration_foreign_key_owner(composed_tables: None) -> None:
     del composed_tables
-    call_command("rebac", "sync", verbosity=0)
     with system_context(reason="test derived stream authorization"):
         bridge = make_integration("stream-rebac", model=Channel)
         owner = get_user_model().objects.get(pk=bridge.owner_id)

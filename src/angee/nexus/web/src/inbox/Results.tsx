@@ -92,6 +92,7 @@ function ResultRow({ row, navigation, inConversationGroup }: { row: InboxResultR
   const available = Boolean(row.file || row.fragment);
   const title = row.file ? row.part.name || row.file.filename : row.fragment ? t("inbox.sharedText") : row.part.name || t("inbox.file");
   const file = row.file?.url ? {
+    identity: { id: row.file.id, version: row.file.content_hash },
     url: row.file.url, name: title, mime: row.file.mime_type?.mime_type, size: row.file.size_bytes,
   } : undefined;
   const readSource = () => navigation.read(message.id, row.part!.id);

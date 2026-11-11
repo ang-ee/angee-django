@@ -12,7 +12,7 @@ import {
   type MetaQuery,
 } from "@refinedev/core";
 import { resourceMutationMeta, type ResourceMutationOperations, type ResourceMutationTarget } from "./operations";
-import type { QueryClient, QueryKey } from "@tanstack/react-query";
+import { hashKey, type QueryClient } from "@tanstack/react-query";
 import { ServerUnavailableError, type ServerConnection } from "./server-connection";
 import {
   graphQLWebSocketUrl,
@@ -27,6 +27,7 @@ import {
 import {
   catchUpAuthoredQueries,
   createLiveInvalidation,
+  queryReadsLiveChange,
   retainedAuthoredQueryHashes,
   type LiveChange,
   type LiveDelivery,
@@ -310,6 +311,7 @@ interface ChangeSubscription {
   dispose: () => void;
   start: () => void;
   consumers: Set<ChangeConsumer>;
+  dedicated: boolean;
 }
 
 export interface AngeeChangeLiveProvider extends LiveProvider {
@@ -327,7 +329,7 @@ export function createAngeeChangeLiveProvider(
   const resourcesByList = resourcesByListRoot(resources);
   const resourcesByModel = resourcesByModelLabel(resources);
   // graphql-ws does not dedup identical documents, so fan one upstream
-  // subscription per changes root out to every mounted consumer — resource hooks
+  // subscription per document and variables out to every mounted consumer — resource hooks
   // (useList/useOne, keyed by list root) and authored queries (keyed by model
   // label) alike — and tear the socket subscription down only when the last
   // consumer leaves.
@@ -350,31 +352,23 @@ export function createAngeeChangeLiveProvider(
     }
   }
 
-  // Attach one fan-in consumer to the shared upstream for `changesRoot`, opening
+  // Attach one fan-in consumer to the shared upstream for one request, opening
   // the socket subscription on the first consumer; the returned disposer removes
   // that consumer and closes the socket once the last one leaves.
-  function joinChangesRoot(
-    changesRoot: string,
-    resource: AngeeLiveResource,
-    channel: string,
-    callback: (event: LiveEvent) => void,
-    queryKey?: QueryKey,
+  function joinSubscription(
+    subscriptionKey: string,
+    resource: AngeeLiveResource | undefined,
+    consumer: ChangeConsumer,
+    request: { query: string; variables?: Record<string, unknown> } = { query: changeSubscriptionDocument(subscriptionKey) },
   ): () => void {
-    const entry = subscriptions.get(changesRoot) ?? {
+    const entry = subscriptions.get(subscriptionKey) ?? {
       dispose: noopSubscription,
       start: noopSubscription,
       consumers: new Set<ChangeConsumer>(),
+      dedicated: resource === undefined,
     };
-    const deliver = (changes: readonly ChangeEvent[]) => {
-      if (enabled && entry.consumers.has(consumer)) callback(changeEvent(changes, channel, resource));
-    };
-    // Direct subscriptions consume individual event data (e.g. preferences).
-    // Only resource-hook callbacks initiate Refine's automatic invalidation.
-    const consumer: ChangeConsumer = queryKey
-      ? { queryKey, callback: deliver }
-      : (change) => deliver([change]);
     entry.consumers.add(consumer);
-    if (!subscriptions.has(changesRoot)) {
+    if (!subscriptions.has(subscriptionKey)) {
       if (subscriptions.size === 0) {
         // Changes have no replay cursor. Catch-up is owed for retained reads
         // when subscriptions resume after a gap, not for a page's first socket
@@ -391,12 +385,17 @@ export function createAngeeChangeLiveProvider(
           const models = resources
             .filter((resource) => subscriptions.has(resource.roots.changes ?? ""))
             .map((resource) => resource.modelLabel);
+          for (const subscription of subscriptions.values()) {
+            if (subscription.dedicated) for (const consumer of subscription.consumers) {
+              if (typeof consumer !== "function") liveInvalidation.pushQuery(consumer.queryKey);
+            }
+          }
           if (options.queryClient) void catchUpAuthoredQueries(
             options.queryClient, models, wasRetry ? undefined : retainedAtStart, wasRetry,
           );
         });
       }
-      subscriptions.set(changesRoot, entry);
+      subscriptions.set(subscriptionKey, entry);
       entry.start = () => {
         if (startedSubscriptions === 0 && hasConnected && !catchUpAfterEnable && options.queryClient) {
           retainedBeforeIdleReopen = retainedAuthoredQueryHashes(
@@ -407,12 +406,19 @@ export function createAngeeChangeLiveProvider(
         // Ignore late deliveries from a disposed subscription, even after resume.
         let active = true;
         const dispose = client.subscribe(
-          { query: changeSubscriptionDocument(changesRoot) },
+          request,
           {
             next: (result) => {
               if (!active || !enabled) return;
+              if (!resource) {
+                if (result.errors?.length || !result.data) return;
+                for (const consumer of entry.consumers) {
+                  if (typeof consumer !== "function") liveInvalidation.pushQuery(consumer.queryKey);
+                }
+                return;
+              }
               // One upstream result is one change, however many consumers share it.
-              const change = liveChangeFromResult(result.data, changesRoot, resource);
+              const change = liveChangeFromResult(result.data, subscriptionKey, resource);
               const deliveries = [...entry.consumers].filter(
                 (consumer): consumer is LiveDelivery<ChangeEvent> => typeof consumer !== "function",
               );
@@ -425,13 +431,13 @@ export function createAngeeChangeLiveProvider(
               if (!active) return;
               console.error(
                 "Angee live subscription failed; the next subscriber will reconnect.",
-                { changesRoot, model: resource.modelLabel },
+                { subscription: subscriptionKey, model: resource?.modelLabel },
                 error,
               );
-              if (subscriptions.get(changesRoot) === entry) {
+              if (subscriptions.get(subscriptionKey) === entry) {
                 entry.dispose();
                 entry.consumers.clear();
-                subscriptions.delete(changesRoot);
+                subscriptions.delete(subscriptionKey);
                 stopUnusedConnectionListener();
               }
             },
@@ -455,9 +461,9 @@ export function createAngeeChangeLiveProvider(
     return () => {
       entry.consumers.delete(consumer);
       if (typeof consumer !== "function") liveInvalidation.remove(consumer);
-      if (entry.consumers.size === 0 && subscriptions.get(changesRoot) === entry) {
+      if (entry.consumers.size === 0 && subscriptions.get(subscriptionKey) === entry) {
         entry.dispose();
-        subscriptions.delete(changesRoot);
+        subscriptions.delete(subscriptionKey);
         stopUnusedConnectionListener();
       }
     };
@@ -476,20 +482,47 @@ export function createAngeeChangeLiveProvider(
       });
     },
     subscribe({ channel, callback, params, meta }) {
+      // Domain subscriptions share socket, fan-out and pause lifecycle, but
+      // invalidate native query keys instead of publishing model changes.
+      const query = meta?.gqlSubscription;
+      const queryKey = params?.queryKey;
+      if (typeof query === "string" && Array.isArray(queryKey)) {
+        const request = { query, variables: recordValue(meta?.gqlVariables) ?? {} };
+        return joinSubscription(hashKey([request]), undefined, { queryKey, callback: noopSubscription }, request);
+      }
       const targets = changeTargetsFromSubscribeParams(
         params,
         resourcesByList,
         resourcesByModel,
       );
       if (targets.length === 0) return noopSubscription;
+      const resource = typeof params?.resource === "string" ? resourcesByList.get(params.resource) : undefined;
+      const interest = resource ? {
+        angeeModels: targets.map((target) => target.resource.modelLabel),
+        angeeBroadModels: [resource.modelLabel],
+        angeeRelatedModels: targets.map((target) => target.resource.modelLabel).filter((model) => model !== resource.modelLabel),
+        angeeRecords: [{ model: resource.modelLabel }],
+      } : undefined;
+      // One mounted resource subscription has one delivery across all its roots,
+      // so its own and related changes share a single coalesced callback.
+      let active = true;
+      const consumer: ChangeConsumer | undefined = resource ? {
+        queryKey: keys().data(meta?.dataProviderName ?? resource.schemaName)
+          .resource(resource.identifier ?? resource.roots.list!).get(),
+        matches: (change) => queryReadsLiveChange(interest, change),
+        callback: (changes) => {
+          if (active && enabled) callback(changeEvent(changes, channel, resource));
+        },
+      } : undefined;
       const disposers = targets.map(({ resource, changesRoot }) =>
-        joinChangesRoot(changesRoot, resource, channel, callback,
-          typeof params?.resource === "string"
-            ? keys().data(meta?.dataProviderName ?? resource.schemaName)
-              .resource(resource.identifier ?? params.resource).get()
-            : undefined),
+        joinSubscription(changesRoot, resource, consumer ?? ((change) => {
+          if (active && enabled) callback(changeEvent([change], channel, resource));
+        })),
       );
-      return () => disposers.forEach((dispose) => dispose());
+      return () => {
+        active = false;
+        disposers.forEach((dispose) => dispose());
+      };
     },
     unsubscribe(subscription) {
       if (typeof subscription === "function") subscription();
@@ -580,17 +613,21 @@ function changeTargetsFromSubscribeParams(
   byModelLabel: ReadonlyMap<string, AngeeLiveResource>,
 ): ChangeTarget[] {
   const listRoot = typeof params?.resource === "string" ? params.resource : undefined;
-  const resources = listRoot
-    ? [byListRoot.get(listRoot)]
+  const listResource = listRoot ? byListRoot.get(listRoot) : undefined;
+  if (listRoot && !listResource) return [];
+  const resources = listResource
+    ? [listResource, ...(
+      params?.subscriptionType === "useList" ? modelLabelsFromSubscribeParams(params, "relatedModels") : []
+    ).map((label) => byModelLabel.get(label))]
     : modelLabelsFromSubscribeParams(params).map((label) => byModelLabel.get(label));
-  return resources.flatMap((resource) => {
+  return [...new Set(resources)].flatMap((resource) => {
     const changesRoot = resource?.roots.changes;
     return resource && changesRoot ? [{ resource, changesRoot }] : [];
   });
 }
 
-function modelLabelsFromSubscribeParams(params: LiveSubscribeParams): string[] {
-  const models = params?.models;
+function modelLabelsFromSubscribeParams(params: LiveSubscribeParams, key: "models" | "relatedModels" = "models"): string[] {
+  const models = params?.[key];
   return Array.isArray(models)
     ? models.filter((model): model is string => typeof model === "string")
     : [];
@@ -612,11 +649,12 @@ function changeEvent(
   channel: string,
   resource: AngeeLiveResource,
 ): LiveEvent {
+  const models = new Set(changes.map((change) => change.model));
   // No ids means model-wide to Refine consumers; a later row must not narrow it.
   const ids = changes.every((change) => change.id)
     ? [...new Set(changes.flatMap((change) => change.id ? [change.id] : []))]
     : undefined;
-  const id = ids?.length === 1 ? ids[0] : undefined;
+  const id = models.size === 1 && ids?.length === 1 ? ids[0] : undefined;
   const actions = new Set(changes.map((change) => change.action));
   const action = actions.size === 1 ? changes[0]?.action ?? "*" : "*";
   const relatedRecords = [...new Map(changes.flatMap((change) =>
@@ -628,10 +666,10 @@ function changeEvent(
     payload: {
       ...(ids ? { ids } : {}),
       ...(id ? { id } : {}),
-      model: changes[0]?.model ?? resource.modelLabel,
+      model: models.size === 1 ? changes[0]?.model ?? resource.modelLabel : undefined,
       action,
       changedFields: [...new Set(changes.flatMap((change) => change.changedFields))],
-      // Values from different records cannot describe a single row patch.
+      // Values from different records or models cannot describe a single row patch.
       changedValues: id || changes.length === 1
         ? changes.reduce<Record<string, unknown>>((values, change) => ({ ...values, ...change.changedValues }), {})
         : {},

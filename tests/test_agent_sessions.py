@@ -51,6 +51,7 @@ def session(composed_tables: None, capture_tasks: list[Any]) -> Iterator[AgentSe
         yield AgentSession.objects.start(agent, user=owner, context={"label": "Session context"})
 
 
+@pytest.mark.django_db(transaction=True)
 def test_turns_drain_in_order_one_per_task(
     session: AgentSession,
     runner: FakeRunner,
@@ -120,9 +121,10 @@ def test_post_refuses_non_object_context_before_insertion(
     session: AgentSession,
     capture_tasks: list[Any],
     context: Any,
+    django_capture_on_commit_callbacks: Any,
 ) -> None:
     capture_tasks.clear()
-    with pytest.raises(ValidationError) as refused:
+    with django_capture_on_commit_callbacks(execute=True), pytest.raises(ValidationError) as refused:
         session.post("Refused", context=context)
     assert refused.value.message_dict == {"context": ["Message context must be an object."]}
     assert not session.turns.exists()
@@ -131,6 +133,7 @@ def test_post_refuses_non_object_context_before_insertion(
     assert capture_tasks == []
 
 
+@pytest.mark.django_db(transaction=True)
 def test_post_during_execution_preserves_the_running_turn(session: AgentSession, runner: FakeRunner) -> None:
     first = session.post("First")
     posted: list[Any] = []
@@ -157,6 +160,7 @@ def test_post_during_execution_preserves_the_running_turn(session: AgentSession,
     assert runner.prompts == ["First", "Arrived while running"]
 
 
+@pytest.mark.django_db(transaction=True)
 def test_running_turn_is_never_reclaimed(session: AgentSession, runner: FakeRunner) -> None:
     first = session.post("First")
     second = session.post("Second")
@@ -187,6 +191,7 @@ def test_stale_turn_delete_refuses_a_claim_by_another_session_instance(session: 
     assert stale.status == TurnStatus.RUNNING
 
 
+@pytest.mark.django_db(transaction=True)
 def test_session_delete_refuses_a_hidden_turn_claimed_after_collection(session: AgentSession) -> None:
     """A collected pending turn may become active before the session delete guard runs."""
 
@@ -209,6 +214,7 @@ def test_session_delete_refuses_a_hidden_turn_claimed_after_collection(session: 
         assert AgentTurn.objects.filter(pk=pending.pk, status=TurnStatus.RUNNING).exists()
 
 
+@pytest.mark.django_db(transaction=True)
 def test_stop_idles_active_turn_and_dispatches_pending(
     session: AgentSession,
     runner: FakeRunner,
@@ -270,6 +276,7 @@ def test_stale_outcome_cannot_settle_a_later_running_turn(session: AgentSession)
     assert session.last_error == "" and session.usage == {}
 
 
+@pytest.mark.django_db(transaction=True)
 @pytest.mark.parametrize("close", [False, True])
 def test_stop_or_close_keeps_emitted_updates_and_ends_the_stream_at_its_next_flush(
     session: AgentSession,
@@ -305,6 +312,7 @@ def test_stop_or_close_keeps_emitted_updates_and_ends_the_stream_at_its_next_flu
     assert session.status == (SessionStatus.CLOSED if close else SessionStatus.IDLE)
 
 
+@pytest.mark.django_db(transaction=True)
 def test_close_cancels_open_turns_and_refuses_future_posts(
     session: AgentSession,
     runner: FakeRunner,
@@ -329,6 +337,7 @@ def test_close_cancels_open_turns_and_refuses_future_posts(
     assert runner.prompts == []
 
 
+@pytest.mark.django_db(transaction=True)
 @pytest.mark.parametrize(
     "error",
     [TimeoutError(), SoftTimeLimitExceeded(), RuntimeError("Provider unavailable"), asyncio.CancelledError()],
@@ -360,6 +369,7 @@ def test_runtime_failure_is_retained_and_session_remains_usable(
     assert runner.prompts == ["Fail once", "Try a new message"]
 
 
+@pytest.mark.django_db(transaction=True)
 def test_missing_model_is_a_failed_turn(session: AgentSession) -> None:
     turn = session.post("No configured model")
     run_session.run(session.pk)
@@ -371,6 +381,7 @@ def test_missing_model_is_a_failed_turn(session: AgentSession) -> None:
     assert session.post("Another message").status == TurnStatus.PENDING
 
 
+@pytest.mark.django_db(transaction=True)
 def test_missing_agent_principal_is_a_failed_turn(session: AgentSession, runner: FakeRunner) -> None:
     turn = session.post("No service user")
     with system_context(reason="test missing service principal"):
@@ -386,6 +397,7 @@ def test_missing_agent_principal_is_a_failed_turn(session: AgentSession, runner:
     assert runner.prompts == []
 
 
+@pytest.mark.django_db(transaction=True)
 def test_tool_approval_outcome_fails_readably(session: AgentSession, runner: FakeRunner) -> None:
     session.post("Before approval")
     run_session.run(session.pk)
@@ -437,6 +449,7 @@ def test_append_updates_publishes_and_keeps_the_final_stopped_batch(session: Age
             connect_publishers(AgentTurn)
 
 
+@pytest.mark.django_db(transaction=True)
 def test_broker_error_leaves_committed_turn_first_in_queue(session: AgentSession, runner: FakeRunner) -> None:
     with capture_task_sends(error=RuntimeError("Broker unavailable")):
         with pytest.raises(RuntimeError, match="Broker unavailable"):
@@ -562,6 +575,7 @@ def test_provisioning_refuses_an_unsaved_agent() -> None:
         provisioning.deprovision_agent(Agent(name="Unsaved agent"))
 
 
+@pytest.mark.django_db(transaction=True)
 def test_stream_updates_do_no_database_work_before_the_flush_interval(
     session: AgentSession,
     runner: FakeRunner,
@@ -587,6 +601,7 @@ def test_stream_updates_do_no_database_work_before_the_flush_interval(
     assert turn.updates == [_chunk(str(index)) for index in range(20)]
 
 
+@pytest.mark.django_db(transaction=True)
 def test_final_flush_uses_the_agent_principal(
     session: AgentSession,
     runner: FakeRunner,
@@ -631,6 +646,7 @@ def test_append_reads_only_lock_and_save_fields_without_system_audits(session: A
     assert turn.updates == [_chunk("First batch"), _chunk("Second batch")]
 
 
+@pytest.mark.django_db(transaction=True)
 def test_failed_runner_outcome_keeps_completed_replay_history(session: AgentSession, runner: FakeRunner) -> None:
     session.post("Complete first")
     run_session.run(session.pk)
@@ -647,6 +663,7 @@ def test_failed_runner_outcome_keeps_completed_replay_history(session: AgentSess
     assert session.replay_state == history
 
 
+@pytest.mark.django_db(transaction=True)
 @pytest.mark.parametrize("kind", ["failed", "needs_approval"])
 def test_failed_settlement_does_not_rewrite_replay_state(
     session: AgentSession,
@@ -674,6 +691,7 @@ def test_failed_settlement_does_not_rewrite_replay_state(
     assert session.replay_state == history
 
 
+@pytest.mark.django_db(transaction=True)
 def test_stray_delivery_preserves_the_last_failed_turn_error(session: AgentSession, runner: FakeRunner) -> None:
     session.post("Complete first")
     second = session.post("Fail second")
@@ -703,6 +721,7 @@ def test_claim_transition_only_accepts_pending_turns(session: AgentSession, awai
             turn.mark_running()
 
 
+@pytest.mark.django_db(transaction=True)
 @pytest.mark.parametrize("stop", [False, True])
 def test_stop_and_settle_keep_their_result_when_the_next_wakeup_fails(
     session: AgentSession,
@@ -729,6 +748,7 @@ def test_stop_and_settle_keep_their_result_when_the_next_wakeup_fails(
     assert runner.prompts == ["Pending turn"]
 
 
+@pytest.mark.django_db(transaction=True)
 def test_dropped_connection_before_final_flush_still_settles_the_turn(
     session: AgentSession,
     runner: FakeRunner,
@@ -751,6 +771,7 @@ def test_dropped_connection_before_final_flush_still_settles_the_turn(
     assert session.status == SessionStatus.IDLE
 
 
+@pytest.mark.django_db(transaction=True)
 @pytest.mark.parametrize(
     ("runtime_class", "runtime_status"),
     [("none", RuntimeStatus.RUNNING), ("pydantic", RuntimeStatus.STOPPED)],
@@ -793,6 +814,7 @@ def test_deprovision_closes_sessions_of_another_person(session: AgentSession) ->
     assert session.status == SessionStatus.CLOSED
 
 
+@pytest.mark.django_db(transaction=True)
 def test_session_execution_dispatch_carries_the_callers_delivery_bound(
     session: AgentSession,
     capture_tasks: list[Any],
@@ -828,6 +850,7 @@ def test_selected_session_close_keeps_sessions_outside_the_selection_open(sessio
     assert other.status == SessionStatus.IDLE
 
 
+@pytest.mark.django_db(transaction=True)
 def test_provider_exception_detail_is_logged_without_being_shown_to_readers(
     session: AgentSession,
     runner: FakeRunner,
@@ -851,6 +874,7 @@ def _delete_session_as(user: Any, session_id: int) -> None:
         AgentSession.objects.get(pk=session_id).delete()
 
 
+@pytest.mark.django_db(transaction=True)
 def test_delivery_after_session_deletion_is_a_quiet_noop(
     session: AgentSession,
     runner: FakeRunner,
@@ -868,6 +892,7 @@ def test_delivery_after_session_deletion_is_a_quiet_noop(
     assert not any(record.name == "angee.agents.sessions" for record in caplog.records)
 
 
+@pytest.mark.django_db(transaction=True)
 @pytest.mark.parametrize("delete_session", [False, True])
 def test_stop_then_delete_during_streaming_is_a_quiet_cancellation(
     session: AgentSession,
@@ -908,6 +933,7 @@ def test_stop_then_delete_during_streaming_is_a_quiet_cancellation(
         assert session.last_error == ""
 
 
+@pytest.mark.django_db(transaction=True)
 @pytest.mark.parametrize("delete_session", [False, True])
 def test_settlement_after_deletion_is_a_quiet_noop(
     session: AgentSession,
@@ -957,6 +983,7 @@ def test_executor_refuses_a_transaction_without_touching_caller_work(
     assert runner.prompts == []
 
 
+@pytest.mark.django_db(transaction=True)
 @pytest.mark.parametrize(
     ("error", "message"),
     [

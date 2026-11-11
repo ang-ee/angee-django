@@ -223,6 +223,7 @@ def test_retained_inference_admission_settles_without_reading_sources(evidence, 
     assert held.retained_inference_parts() == ()
 
 
+@pytest.mark.django_db(transaction=True)
 def test_carrier_storage_writes_and_reads_precede_the_lineage_transaction(evidence, monkeypatch):
     retain, _values = evidence
     ingest, read = FileManager.ingest_bytes, File.read_verified
@@ -378,6 +379,7 @@ def test_invalid_candidate_rolls_back_the_whole_evidence_family(evidence, invali
         assert model.objects.count() == 0
 
 
+@pytest.mark.django_db(transaction=True)
 def test_competing_revision_requests_allocate_exactly_one_successor(evidence):
     """Race native PostgreSQL locks; SQLite checks the same CAS serially."""
 
@@ -406,6 +408,7 @@ def test_competing_revision_requests_allocate_exactly_one_successor(evidence):
     assert list(Extraction.objects.order_by("revision").values_list("revision", flat=True)) == [1, 2]
 
 
+@pytest.mark.django_db(transaction=True)
 @pytest.mark.parametrize("change", ["carrier purge", "source edit"])
 def test_retention_waits_for_a_held_file_and_refuses_its_committed_change(evidence, change):
     """Retention locks its source and carrier files before rechecking them, so a held purge or edit wins."""

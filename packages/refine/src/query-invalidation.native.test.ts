@@ -6,6 +6,7 @@ import {
   authoredQueryReadsChange,
   createLiveInvalidation,
   invalidateAuthoredQueries,
+  queryReadsLiveChange,
 } from "./query-invalidation";
 
 afterEach(() => { vi.clearAllTimers(); vi.useRealTimers(); });
@@ -25,6 +26,20 @@ test("a related-only model with no target rows is fail-closed", () => {
     angeeModels: ["workflows.StepRun"],
     angeeRelatedModels: ["workflows.StepRun"],
   }, "workflows.StepRun", "wsr_unrelated")).toBe(false);
+});
+
+test("collection related interests require a matching target model, even for changes without an id", () => {
+  const meta = { angeeModels: ["notes.Note", "notes.Attachment"],
+    angeeRecords: [{ model: "notes.Note" }], angeeRelatedModels: ["notes.Attachment"] };
+  for (const id of ["attachment-1", undefined]) {
+    expect(queryReadsLiveChange(meta, { model: "notes.Attachment", id,
+      relatedRecords: [{ model: "notes.Note", id: "off-page" }] })).toBe(true);
+    expect(queryReadsLiveChange(meta, { model: "notes.Attachment", id,
+      relatedRecords: [{ model: "notes.Folder", id: "off-page" }] })).toBe(false);
+    expect(queryReadsLiveChange(meta, { model: "notes.Attachment", id })).toBe(false);
+    expect(queryReadsLiveChange(meta, { model: "notes.Unrelated", id,
+      relatedRecords: [{ model: "notes.Note", id: "off-page" }] })).toBe(false);
+  }
 });
 
 test("a related-only feed refreshes its record interest without subscribing to that record's model", async () => {
@@ -446,4 +461,26 @@ test("authored and resource reads share one burst and settle tracking without to
     running.resolve(1);
     stop.forEach((unsubscribe) => unsubscribe()); cache.clear();
   }
+});
+
+test("dedicated subscriptions let a slow rail finish then read once after the buffered event", async () => {
+  vi.useFakeTimers();
+  const cache = client();
+  const first = pending<number>();
+  let reads = 0;
+  const observer = new QueryObserver(cache, {
+    queryKey: ["timeline", "integration-1"],
+    queryFn: () => ++reads === 1 ? first.promise : Promise.resolve(reads),
+  });
+  const stop = observer.subscribe(() => undefined);
+  const live = createLiveInvalidation(cache);
+  try {
+    live.pushQuery(["timeline", "integration-1"]);
+    await vi.advanceTimersByTimeAsync(300);
+    expect(reads).toBe(1);
+    first.resolve(1);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(reads).toBe(2);
+    expect(observer.getCurrentResult().data).toBe(2);
+  } finally { live.clear(); stop(); cache.clear(); }
 });

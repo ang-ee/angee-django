@@ -2,7 +2,7 @@ import { parse } from "graphql";
 // @vitest-environment happy-dom
 
 import { Fragment, createElement, useEffect, useState, type ReactNode } from "react";
-import { cleanup, fireEvent, waitFor, within } from "@testing-library/react";
+import { fireEvent, waitFor, within } from "@testing-library/react";
 import { createAngeeHasuraDataProvider } from "@angee/refine";
 import { useBreadcrumb as useRefineBreadcrumb } from "@refinedev/core";
 import { useAuthoredQuery } from "@angee/refine";

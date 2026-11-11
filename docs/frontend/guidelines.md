@@ -1098,8 +1098,21 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
   continuous stream (a history backfill) cannot starve slow reads. Declare each
   read's `models` from the owners its resolver actually reads. Resource callbacks
   receive the burst's union of changed ids and related records; a model-wide
-  change keeps the whole burst model-wide. Stream foreign-system state (e.g. the operator
+  change keeps the whole burst model-wide.
+  Native `List`, `ListView` and `ResourceList` declarations whose columns or
+  filter membership depend on related rows declare `relatedModels`, an array of
+  canonical model labels (for example, `relatedModels={["workflows.StepRun"]}`).
+  A change on a declared model refreshes the list only when `related_records`
+  names a record of the list's model, including records outside the current page
+  that could enter its filter. Flat, client and grouped native lists compose the
+  same matcher and 300 ms quiet window / 2 s maximum wait; unmounting releases
+  their subscriptions. Authored collection sources declare interests on their
+  own queries through `models`, `records` and `relatedModels`; a `records` entry
+  without an `id` matches any record of that model.
+  Stream foreign-system state (e.g. the operator
   daemon's `onWorkspaceStatusChange`) over its own subscriptions.
+  Timeline's data owner registers its dedicated subscription with the authored
+  keyset feed; the same coalescer refreshes only that feed's native query key.
   A dashboard widget may explicitly declare interval refresh through its
   [refresh contract](../../packages/ui/src/dashboard/headless.ts). Its data
   adapter forwards that interval to native Query `refetchInterval`; Query owns
@@ -1801,7 +1814,7 @@ implements; [the kind contract](../../src/angee/timeline/kinds.py) owns its
 source models, source query, presentation and live attention predicate. The read
 combines owner querysets with SQL `UNION ALL`, applying the record's and each
 target owner's read policies before pagination. Published owner changes
-invalidate open record reads after commit:
+invalidate open timeline reads after commit through `timelineChanged(model, id)`:
 
 ```ts
 interface TimelineKindContent {

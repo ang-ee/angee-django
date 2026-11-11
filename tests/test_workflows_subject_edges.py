@@ -19,7 +19,7 @@ from tests.mtidemo.models import MtiChild, MtiParent
 from tests.test_workflows_children import child_graph as child_graph
 from tests.workflow_steps import document
 
-pytestmark = [pytest.mark.django_db(transaction=True), pytest.mark.usefixtures("workflow_step_classes")]
+pytestmark = [pytest.mark.django_db, pytest.mark.usefixtures("workflow_step_classes")]
 
 
 @pytest.fixture

@@ -42,7 +42,6 @@ from angee.spaces.testing.models import Group, Membership
 from tests.test_messaging import ThreadedTicket
 from tests.test_nexus import _schema as nexus_schema
 from tests.test_parties_graphql import parties_schema
-from tests.test_project_access import project_access_schema as project_access_schema
 
 PARTY_PRIVATE: dict[str, Any] = {
     "notes": "Private notes",
@@ -60,7 +59,7 @@ PERSON_SELECTION = f"{PARTY_SELECTION} nickname birthday anniversary"
 
 
 @pytest.fixture
-def follower_schema(project_access_schema: Any) -> Iterator[None]:
+def follower_schema(composed_tables: Any) -> Iterator[None]:
     """Reuse the real composed permission fragments, including messaging and spaces, with redacted reads."""
 
     with override_settings(REBAC_FIELD_READ_MODE="redact"):

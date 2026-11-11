@@ -66,6 +66,8 @@ from angee.messaging.testing.models import Channel, Message
 from tests.conftest import current_stream, make_integration
 from tests.stream_adapters import applied_history, failure_state
 
+pytestmark = pytest.mark.django_db(transaction=True)
+
 
 class AppliedRecord(models.Model):
     """Domain-owned idempotent sink independent of the record protocol tables."""
@@ -201,6 +203,7 @@ def _as_tuples(value: Any) -> Any:
     return value
 
 
+@pytest.mark.django_db
 @settings(max_examples=50, deadline=None)
 @given(
     values=st.tuples(_JSON, _JSON, _JSON), local=st.sampled_from(SIDES), remote=st.sampled_from(SIDES),

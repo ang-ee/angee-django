@@ -162,7 +162,6 @@ def test_skill_manifest_tolerates_missing_or_malformed_frontmatter() -> None:
 # --- skill discovery ----------------------------------------------------------
 
 
-@pytest.mark.django_db(transaction=True)
 def test_skill_source_refresh_materializes_and_prunes(composed_tables: None) -> None:
     """A skill source refresh walks the tree for ``SKILL.md`` and upserts/prunes rows."""
 
@@ -194,7 +193,6 @@ def test_skill_source_refresh_materializes_and_prunes(composed_tables: None) -> 
 # --- inference catalogue sync -------------------------------------------------
 
 
-@pytest.mark.django_db(transaction=True)
 def test_inference_provider_refresh_upserts_models(composed_tables: None) -> None:
     """Refreshing a provider upserts one ``InferenceModel`` per advertised spec."""
 
@@ -226,7 +224,6 @@ def test_inference_provider_refresh_upserts_models(composed_tables: None) -> Non
     assert models["claude-haiku-4-5"].display_name == "claude-haiku-4-5"
 
 
-@pytest.mark.django_db(transaction=True)
 def test_inference_provider_materializes_backend_defaults(composed_tables: None) -> None:
     """Provider backend defaults land on direct child-row creates."""
 
@@ -240,7 +237,6 @@ def test_inference_provider_materializes_backend_defaults(composed_tables: None)
     assert provider.name == "Anthropic"
 
 
-@pytest.mark.django_db(transaction=True)
 def test_manual_backend_advertises_no_models(composed_tables: None) -> None:
     """The built-in ``manual`` backend lists nothing — its catalogue is hand-curated."""
 
@@ -697,7 +693,6 @@ class _FakeOpenAIClient:
         self.instances.append(self)
 
 
-@pytest.mark.django_db(transaction=True)
 def test_anthropic_backend_refresh_syncs_native_and_broker_models(
     composed_tables: None,
     monkeypatch: Any,
@@ -736,7 +731,6 @@ def test_anthropic_backend_refresh_syncs_native_and_broker_models(
     assert models["claude-opus-4-8"].display_name == "Claude Opus 4.8"
 
 
-@pytest.mark.django_db(transaction=True)
 def test_anthropic_model_chat_uses_native_messages_and_strips_broker_prefix(composed_tables, inference_http):
     provider = _provider("anthropic-chat", backend_class="anthropic", name="Anthropic", material={"api_key": "api-key"})
     with system_context(reason="test anthropic chat"):
@@ -761,7 +755,6 @@ def test_anthropic_model_chat_uses_native_messages_and_strips_broker_prefix(comp
     assert all(client.is_closed() for client in clients)
 
 
-@pytest.mark.django_db(transaction=True)
 def test_anthropic_backend_uses_auth_token_for_oauth_credentials(composed_tables, inference_http):
     from angee.agents.runtimes import ANTHROPIC_OAUTH_SYSTEM_PREAMBLE
 
@@ -782,7 +775,6 @@ def test_anthropic_backend_uses_auth_token_for_oauth_credentials(composed_tables
     assert all(client.is_closed() for client in clients)
 
 
-@pytest.mark.django_db(transaction=True)
 def test_openai_backend_refresh_syncs_native_and_broker_models(
     composed_tables: None,
     monkeypatch: Any,
@@ -948,7 +940,6 @@ def test_ollama_discovery_uses_native_capabilities_without_name_guesses(
     assert all(("model_use" in spec.upsert_defaults()) is bool(expected_use) for spec in specs)
 
 
-@pytest.mark.django_db(transaction=True)
 def test_ollama_refresh_repairs_alias_uses_and_preserves_curated_defaults(
     composed_tables: None, monkeypatch: Any, settings: Any,
 ) -> None:
@@ -1011,7 +1002,6 @@ def test_ollama_refresh_repairs_alias_uses_and_preserves_curated_defaults(
     assert all(client.is_closed for client in clients)
 
 
-@pytest.mark.django_db(transaction=True)
 def test_openai_backend_rejects_oauth_credentials(
     composed_tables: None,
     monkeypatch: Any,
@@ -1036,7 +1026,6 @@ def test_openai_backend_rejects_oauth_credentials(
     assert _FakeOpenAIClient.instances == []
 
 
-@pytest.mark.django_db(transaction=True)
 def test_openai_model_chat_uses_native_messages_and_strips_broker_prefix(composed_tables, inference_http):
     provider = _provider("openai-chat", backend_class="openai", name="OpenAI", material={"api_key": "api-key"})
     with system_context(reason="test openai chat"):
@@ -1058,7 +1047,6 @@ def test_openai_model_chat_uses_native_messages_and_strips_broker_prefix(compose
     assert all(client.is_closed() for client in clients)
 
 
-@pytest.mark.django_db(transaction=True)
 def test_openai_backend_can_configure_max_completion_tokens(composed_tables, inference_http):
     provider = _provider(
         "openai-max-completion",
@@ -1076,7 +1064,6 @@ def test_openai_backend_can_configure_max_completion_tokens(composed_tables, inf
     assert all(client.is_closed() for client in clients)
 
 
-@pytest.mark.django_db(transaction=True)
 @pytest.mark.parametrize("base_url", ["", "http://ollama.internal:11434/v1", "https://models.example.invalid/ollama/v1"])
 def test_ollama_backend_translates_native_thinking_setting(composed_tables, inference_http, base_url):
     """Ollama maps deployment and analytical defaults onto its SDK request."""
@@ -1262,7 +1249,6 @@ def inference_http(monkeypatch, request):
     return requests, clients
 
 
-@pytest.mark.django_db(transaction=True)
 @pytest.mark.parametrize("inference_http", ["tool"], indirect=True)
 def test_direct_native_request_returns_tool_calls_without_executing_a_loop(composed_tables, inference_http):
     from pydantic_ai.messages import ToolCallPart
@@ -1295,7 +1281,6 @@ def test_direct_native_request_returns_tool_calls_without_executing_a_loop(compo
     assert all(client.is_closed() for client in clients)
 
 
-@pytest.mark.django_db(transaction=True)
 @pytest.mark.parametrize("backend_class", ["openai", "ollama"])
 @pytest.mark.parametrize("inference_http", ["structured"], indirect=True)
 def test_direct_inference_builds_one_structured_multimodal_envelope(
@@ -1345,7 +1330,6 @@ def test_direct_inference_builds_one_structured_multimodal_envelope(
     assert all(client.is_closed() for client in clients)
 
 
-@pytest.mark.django_db(transaction=True)
 @pytest.mark.parametrize("inference_http,retryable", [(429, True), (400, False)], indirect=["inference_http"])
 def test_native_provider_errors_preserve_retry_classification_and_close_clients(
     composed_tables, inference_http, retryable
@@ -1525,7 +1509,6 @@ def test_model_approval_distinguishes_malformed_policy_from_denial(settings, pol
         InferenceModel().require_approved("mapping")
 
 
-@pytest.mark.django_db(transaction=True)
 def test_model_requires_read_and_exact_approved_deployment(composed_tables, settings):
     provider = _provider("approved-ollama", backend_class="ollama")
     with system_context(reason="test.agents.authorization.seed"):
@@ -1542,7 +1525,6 @@ def test_model_requires_read_and_exact_approved_deployment(composed_tables, sett
         model.require_usable(provider.owner, "mapping", uses={InferenceModelUse.CHAT})
 
 
-@pytest.mark.django_db(transaction=True)
 def test_usable_models_filter_access_policy_capability_and_order_defaults(composed_tables, settings):
     provider = _provider("usable-ollama", backend_class="ollama")
     private = _provider("private-ollama", backend_class="ollama")
@@ -1622,7 +1604,6 @@ def test_ollama_discovers_decision_without_reclassifying_it_as_chat():
     assert InferenceModelUse.DECISION not in TEXT_INFERENCE_MODEL_USES | IMAGE_INFERENCE_MODEL_USES
 
 
-@pytest.mark.django_db(transaction=True)
 def test_model_decision_rechecks_actor_role_and_capability_before_transport(composed_tables, settings, monkeypatch):
     provider = _provider("decision-ollama", backend_class="ollama")
     with system_context(reason="test.agents.decision.seed"):

@@ -55,10 +55,10 @@ class DashboardResourceLedger(Resource):
 
 
 @pytest.fixture()
-def dashboard_tables(transactional_db: Any) -> Iterator[None]:
+def dashboard_tables(db: Any) -> Iterator[None]:
     """Load the production dashboard policy before creating dashboard rows."""
 
-    del transactional_db
+    del db
     reset_backend()
     active = backend()
     assert isinstance(active, LocalBackend)

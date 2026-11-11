@@ -36,7 +36,7 @@ const resource = testDataResource("messaging.Message", {
   typeNames: { filter: "MessageBoolExp", order: "MessageOrderBy" },
 });
 const { Provider, clearClients } = createUiTestProviders({
-  resources: [resource, testDataResource("messaging.Thread")], apiUrl: "test://messages",
+  resources: [resource, testDataResource("messaging.Thread"), testDataResource("messaging.Part")], apiUrl: "test://messages",
   queryClientConfig: { defaultOptions: { queries: { retry: false, staleTime: Infinity } } },
 });
 afterEach(() => { cleanup(); clearClients(); });

@@ -276,7 +276,6 @@ ignore_imports = ["angee.base.refs -> angee.base.models.identity"]
 [[tool.importlinter.contracts]]
 name = "Integrate does not import workflows"
 type = "forbidden"
-allow_indirect_imports = true
 source_modules = ["angee.integrate"]
 forbidden_modules = [
   "angee.workflows", "angee.workflows_agents", "angee.workflows_extraction", "angee.workflows_integrate",

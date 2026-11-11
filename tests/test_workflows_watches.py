@@ -18,7 +18,7 @@ from angee.workflows.testing.models import StepAttempt, StepRun, StepWatch, Work
 from tests.conftest import Vault, addon_schema, create_user, vault_for
 from tests.workflow_steps import Echo, document
 
-pytestmark = [pytest.mark.django_db(transaction=True), pytest.mark.usefixtures("workflow_step_classes")]
+pytestmark = [pytest.mark.django_db, pytest.mark.usefixtures("workflow_step_classes")]
 
 
 @pytest.fixture
@@ -54,6 +54,7 @@ class Watch(Echo):
         return ctx.wait(state={"observed": True})
 
 
+@pytest.mark.django_db(transaction=True)
 def test_saved_record_wakes_once_rearms_and_then_settles(watched_source, register_step):
     actor, sent, record = watched_source
     register_step(Watch)
@@ -83,6 +84,7 @@ def test_saved_record_wakes_once_rearms_and_then_settles(watched_source, registe
     assert not StepWatch.system_queryset().exists()
 
 
+@pytest.mark.django_db(transaction=True)
 def test_rolled_back_save_does_not_wake_and_tick_recovers_lost_delivery(watched_source, register_step):
     actor, sent, record = watched_source
     register_step(Watch)
@@ -102,6 +104,7 @@ def test_rolled_back_save_does_not_wake_and_tick_recovers_lost_delivery(watched_
     assert sum(name == "workflows.execute" for name, _ in sent) == 1
 
 
+@pytest.mark.django_db(transaction=True)
 @pytest.mark.parametrize("failure", [ValueError, ValidationError])
 def test_watch_capture_logs_enqueue_failure_without_rolling_back_the_source(
     watched_source, register_step, monkeypatch, caplog, failure,
@@ -180,6 +183,7 @@ def test_retention_cascades_watches_from_a_failed_runs_open_branch(watched_sourc
     assert not StepWatch.system_queryset().exists()
 
 
+@pytest.mark.django_db(transaction=True)
 @pytest.mark.parametrize("case", ["timeout", "empty", "io", "same_body_change"])
 def test_record_wait_admission_and_deadline_recovery(watched_source, register_step, case):
     actor, _sent, record = watched_source
@@ -241,7 +245,7 @@ def test_registration_requires_the_run_actors_read_permission(watched_source, re
 
 
 def test_watch_resources_follow_run_reads_and_record_reference_owner(
-    watched_source, register_step, composed_permissions,
+    watched_source, register_step, composed_tables,
 ):
     actor, _sent, record = watched_source
     register_step(Watch)

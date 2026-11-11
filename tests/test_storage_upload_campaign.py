@@ -35,8 +35,6 @@ from tests.mtidemo.models import MtiChild, MtiParent
 from tests.test_storage import PNG_BYTES, PNG_SHA256, _proxy_upload
 from tests.test_storage import drive as drive
 
-pytestmark = pytest.mark.django_db(transaction=True)
-
 
 @pytest.mark.parametrize("excess", [0, 1])
 def test_ingest_bytes_bounds_source_filename_and_keeps_extension(drive: Any, excess: int) -> None:
@@ -171,7 +169,7 @@ def test_ingest_losing_to_inherited_winner_returns_winner_and_purges_reservation
 
 @pytest.mark.parametrize("schema_name", ["public", "console"])
 def test_missing_unreadable_unknown_and_untyped_records_have_identical_in_band_denials(
-    drive: Any, composed_permissions: None, schema_name: str,
+    drive: Any, composed_tables: None, schema_name: str,
 ) -> None:
     other = create_user("private-record-owner")
     with system_context(reason="test.storage.denial.seed"):
@@ -206,7 +204,7 @@ def test_missing_unreadable_unknown_and_untyped_records_have_identical_in_band_d
 
 @pytest.mark.parametrize("record_kind", ["absent", "no_arm", "unwritable", "undeclared"])
 def test_refused_record_drafts_create_neither_file_nor_attachment(
-    drive: Any, composed_permissions: None, record_kind: str,
+    drive: Any, composed_tables: None, record_kind: str,
 ) -> None:
     record = None
     expected: type[exceptions.UploadError] = exceptions.UploadError
@@ -252,7 +250,7 @@ def test_target_disappearance_is_denied_but_unrelated_missing_objects_propagate(
 
 
 def test_dedup_attachment_rolls_back_when_restore_fails(
-    drive: Any, composed_permissions: None, monkeypatch: pytest.MonkeyPatch,
+    drive: Any, composed_tables: None, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     row = _proxy_upload(drive, PNG_BYTES)
     with actor_context(drive.alice):
@@ -274,7 +272,7 @@ def test_dedup_attachment_rolls_back_when_restore_fails(
 
 
 def test_prune_cascades_failed_and_abandoned_edges_without_deleting_surviving_bytes(
-    drive: Any, composed_permissions: None, tmp_path: Path, settings: Any,
+    drive: Any, composed_tables: None, tmp_path: Path, settings: Any,
 ) -> None:
     survivor = _proxy_upload(drive, PNG_BYTES)
     old = timezone.now() - timedelta(hours=settings.ANGEE_STORAGE_DRAFT_TTL_HOURS + 1)
@@ -296,8 +294,9 @@ def test_prune_cascades_failed_and_abandoned_edges_without_deleting_surviving_by
     assert (tmp_path / survivor.storage_path).read_bytes() == PNG_BYTES
 
 
+@pytest.mark.django_db(transaction=True)
 @pytest.mark.skipif(connection.vendor != "postgresql", reason="PostgreSQL canonical upload-target locking contract")
-def test_draft_locks_canonical_mti_target_before_inserting_file(drive: Any, composed_permissions: None) -> None:
+def test_draft_locks_canonical_mti_target_before_inserting_file(drive: Any, composed_tables: None) -> None:
     admin = create_platform_admin("target-lock-admin")
     with system_context(reason="test.storage.lock.seed"):
         child = MtiChild.objects.create(title="Target", detail="Child")
@@ -329,6 +328,7 @@ def test_draft_locks_canonical_mti_target_before_inserting_file(drive: Any, comp
     assert edge.object_id == child.pk
 
 
+@pytest.mark.django_db(transaction=True)
 @pytest.mark.skipif(connection.vendor != "postgresql", reason="PostgreSQL two-writer ingest collision contract")
 def test_two_ingest_writers_converge_without_losing_rows_or_objects(
     drive: Any, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,

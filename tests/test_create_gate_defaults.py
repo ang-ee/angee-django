@@ -21,7 +21,6 @@ from typing import Any
 import pytest
 import strawberry
 import strawberry_django
-from django.core.management import call_command
 from rebac import (
     RelationshipTuple,
     system_context,
@@ -100,7 +99,6 @@ def _grant(scope: Any, relation: str, user: Any) -> None:
 def test_single_membership_create_defaults_scope_and_passes_gate() -> None:
     """A sole member creates with no scope input; the gate sees the default."""
 
-    call_command("rebac", "sync", verbosity=0)
     member = create_user("scope-sole")
     with system_context(reason="test scope gate sole setup"):
         scope = Scope.objects.create(name="Sole Scope")
@@ -118,7 +116,6 @@ def test_single_membership_create_defaults_scope_and_passes_gate() -> None:
 def test_multi_membership_create_without_scope_raises_field_validation() -> None:
     """An ambiguous default fails loudly naming ``scope``, not as a REBAC denial."""
 
-    call_command("rebac", "sync", verbosity=0)
     member = create_user("scope-multi")
     with system_context(reason="test scope gate multi setup"):
         scope_a = Scope.objects.create(name="Scope A")
@@ -138,7 +135,6 @@ def test_multi_membership_create_without_scope_raises_field_validation() -> None
 def test_supplied_unreachable_scope_create_is_denied_by_the_gate() -> None:
     """A supplied scope the actor is not a member of is denied by the gate."""
 
-    call_command("rebac", "sync", verbosity=0)
     member = create_user("scope-cross")
     with system_context(reason="test scope gate cross setup"):
         home = Scope.objects.create(name="Home Scope")
@@ -161,7 +157,6 @@ def test_supplied_unreachable_scope_create_is_denied_by_the_gate() -> None:
 def test_supplied_member_scope_create_is_allowed() -> None:
     """An explicit scope the actor is a member of passes, resolving ambiguity."""
 
-    call_command("rebac", "sync", verbosity=0)
     member = create_user("scope-explicit")
     with system_context(reason="test scope gate explicit setup"):
         scope_a = Scope.objects.create(name="Scope A")

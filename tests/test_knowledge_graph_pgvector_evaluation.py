@@ -20,7 +20,10 @@ from tests.pgvector_fixtures import passage_records as passage_records
 from tests.pgvector_graph_fixtures import graph_page
 from tests.pgvector_graph_fixtures import graph_records as graph_records
 
-pytestmark = pytest.mark.skipif(connection.vendor != "postgresql", reason="Requires PostgreSQL graph retrieval")
+pytestmark = [
+    pytest.mark.skipif(connection.vendor != "postgresql", reason="Requires PostgreSQL graph retrieval"),
+    pytest.mark.django_db(transaction=True),
+]
 
 
 def test_metrics_deduplicate_pages_and_separate_recall_at_ten_from_reciprocal_rank():

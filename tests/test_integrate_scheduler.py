@@ -222,13 +222,12 @@ def test_enqueued_due_bridge_persists_success_telemetry(transactional_db: None) 
     assert integration.last_used_status == "ok"
 
 
-@pytest.mark.django_db(transaction=True)
 def test_paused_manual_sync_stays_one_shot_and_out_of_periodic_due_scan(
-    transactional_db: None,
+    db: None,
 ) -> None:
     """A paused bridge may sync explicitly without rearming periodic polling."""
 
-    del transactional_db
+    del db
     now = timezone.now()
     with system_context(reason="test paused one-shot bridge setup"):
         bridge = make_integration(
@@ -389,8 +388,7 @@ def test_bridge_sync_persists_its_progress_report(transactional_db: None) -> Non
     assert bridge.sync_progress["message"] == "Scanning vendor rows"
 
 
-@pytest.mark.django_db(transaction=True)
-def test_declined_sync_run_releases_its_queue_claim(transactional_db: None) -> None:
+def test_declined_sync_run_releases_its_queue_claim(db: None) -> None:
     """A run that cannot take the lock clears its own claim, so recovery stops.
 
     The stale-queue sweep exists to repair a *lost* enqueue and cannot tell one from
@@ -398,7 +396,7 @@ def test_declined_sync_run_releases_its_queue_claim(transactional_db: None) -> N
     forever — which is what a live session's permanently-held lock produced.
     """
 
-    del transactional_db
+    del db
     now = timezone.now()
     with system_context(reason="test integrate scheduler setup"):
         bridge = make_integration("declined-run", model=SchedulerBridge)
@@ -606,20 +604,18 @@ class SyncStageMachine(RuleBasedStateMachine):
             assert progress["queued_at"] == self.token.isoformat()
 
 
-@pytest.mark.django_db(transaction=True)
-def test_sync_stage_follows_its_oracle_in_any_interleaving(transactional_db: None) -> None:
+def test_sync_stage_follows_its_oracle_in_any_interleaving(db: None) -> None:
     """Admission, delivery, progress, settlement and pairing keep the sync stage's contract."""
 
-    del transactional_db
+    del db
     examples = settings(max_examples=25, stateful_step_count=20, deadline=None)
     run_state_machine_as_test(SyncStageMachine, settings=examples)
 
 
-@pytest.mark.django_db(transaction=True)
-def test_bridge_is_syncing_uses_live_lock_state(transactional_db: None) -> None:
+def test_bridge_is_syncing_uses_live_lock_state(db: None) -> None:
     """The live lock is separate from durable stage telemetry."""
 
-    del transactional_db
+    del db
     with system_context(reason="test integrate scheduler setup"):
         bridge = make_integration("live-lock", model=SchedulerBridge)
 
@@ -653,8 +649,7 @@ def _cross_process_locks() -> Iterator[None]:
         integrate_models.task_locks_are_cross_process = original
 
 
-@pytest.mark.django_db(transaction=True)
-def test_effective_sync_stage_reconciles_stale_records_against_the_lock(transactional_db: None) -> None:
+def test_effective_sync_stage_reconciles_stale_records_against_the_lock(db: None) -> None:
     """A live-ish persisted stage without the live lock reads as FAILED.
 
     The persisted ``sync_stage`` is a progress report a crashed worker leaves
@@ -666,7 +661,7 @@ def test_effective_sync_stage_reconciles_stale_records_against_the_lock(transact
     column is trusted as-is there.
     """
 
-    del transactional_db
+    del db
     with system_context(reason="test integrate scheduler setup"):
         bridge = make_integration("stale-stage", model=SchedulerBridge)
 
@@ -692,11 +687,10 @@ def test_effective_sync_stage_reconciles_stale_records_against_the_lock(transact
             assert bridge.effective_sync_stage == stage
 
 
-@pytest.mark.django_db(transaction=True)
-def test_run_bridge_sync_job_holds_the_live_lock(transactional_db: None) -> None:
+def test_run_bridge_sync_job_holds_the_live_lock(db: None) -> None:
     """The queued task runner owns the live lock while a bridge sync runs."""
 
-    del transactional_db
+    del db
     now = timezone.now()
     with system_context(reason="test integrate scheduler setup"):
         bridge = make_integration(
@@ -713,14 +707,13 @@ def test_run_bridge_sync_job_holds_the_live_lock(transactional_db: None) -> None
     assert bridge.sync_stage == Bridge.SyncStage.COMPLETED
 
 
-@pytest.mark.django_db(transaction=True)
 def test_request_sync_marks_queued_and_defers_task(
-    transactional_db: None,
+    db: None,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Queueing persists visible state before the worker picks up the task."""
 
-    del transactional_db
+    del db
     now = timezone.now()
     enqueued: list[tuple[str, dict[str, Any]]] = []
 
@@ -787,14 +780,13 @@ def test_declined_scheduled_admission_waits_for_the_next_interval(
     assert len(sent) == 1
 
 
-@pytest.mark.django_db(transaction=True)
 def test_request_sync_can_enqueue_duplicate_requests(
-    transactional_db: None,
+    db: None,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Task-level locks, not the broker, own duplicate execution exclusion."""
 
-    del transactional_db
+    del db
     now = timezone.now()
     enqueued: list[dict[str, Any]] = []
     monkeypatch.setattr(
@@ -813,14 +805,13 @@ def test_request_sync_can_enqueue_duplicate_requests(
     assert bridge.sync_progress == {"stage": Bridge.SyncStage.QUEUED, "queued_at": now.isoformat()}
 
 
-@pytest.mark.django_db(transaction=True)
 def test_stale_bridge_sync_task_payload_is_skipped(
-    transactional_db: None,
+    db: None,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A duplicate task that no longer matches queued state cannot sync again later."""
 
-    del transactional_db
+    del db
     first = timezone.now()
     second = first + timedelta(seconds=5)
     monkeypatch.setattr(
@@ -870,11 +861,10 @@ def test_request_sync_inside_outer_transaction_preserves_caller(
     assert bridge.sync_progress == {"stage": Bridge.SyncStage.QUEUED, "queued_at": now.isoformat()}
 
 
-@pytest.mark.django_db(transaction=True)
-def test_integrate_registry_discovers_bridges_in_deterministic_order(transactional_db: None) -> None:
+def test_integrate_registry_discovers_bridges_in_deterministic_order(db: None) -> None:
     """Registry helpers include the concrete fixture and sort by model label."""
 
-    del transactional_db
+    del db
 
     discovered_models = models_with(base=Bridge)
     bridge_labels = tuple(model._meta.label_lower for model in discovered_models)
@@ -971,7 +961,7 @@ def test_enqueue_due_bridges_resets_claim_when_dispatch_fails(
     assert bridge.sync_progress == {}
 
 
-@pytest.mark.django_db(transaction=True)
+@pytest.mark.django_db
 def test_enqueue_due_bridges_rejects_outer_transaction(monkeypatch: pytest.MonkeyPatch) -> None:
     """Reject an outer transaction before scanning or claiming any bridges."""
 

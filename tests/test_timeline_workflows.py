@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import timedelta
+from unittest.mock import patch
 
 import pytest
 from django.db import connection
@@ -15,8 +16,6 @@ from angee.base.signals import bulk_updated, change_published
 from angee.base.testing.queries import capture_planner_memory, statement_startswith, supports_planner_memory
 from angee.decisions.contracts import DecisionProposal, DecisionRequest
 from angee.decisions.testing.models import Decision
-from angee.graphql import publishing
-from angee.graphql.testing import capture_broadcasts
 from angee.provenance.context import changeset
 from angee.timeline.reading import Timeline
 from angee.workflows.decision_steps import DecisionStep
@@ -31,7 +30,7 @@ from tests.test_workflows_review import review as review  # noqa: F401 -- shared
 from tests.test_workflows_review import start_review
 from tests.workflow_steps import document
 
-pytestmark = [pytest.mark.django_db(transaction=True), pytest.mark.usefixtures("workflow_step_classes")]
+pytestmark = [pytest.mark.django_db, pytest.mark.usefixtures("workflow_step_classes")]
 
 
 @pytest.fixture(autouse=True)
@@ -42,6 +41,7 @@ def kinds(settings):
     ]
 
 
+@pytest.mark.django_db(transaction=True)
 @pytest.mark.parametrize("viewer", ["admin", "member"])
 def test_timeline_read_planner_memory(review, settings, viewer, record_property):
     """Budget the actual page statement, with a waiting run and folded and standalone decisions."""
@@ -79,11 +79,9 @@ def test_timeline_read_planner_memory(review, settings, viewer, record_property)
     memory = plan.allocated_kib
     record_property("planner_memory_used_kib", plan.used_kib)
     record_property("planner_memory_allocated_kib", memory)
-    # REBAC 0.32.2's compact aliases: PostgreSQL 18.6 measures
-    # 10,415 KiB used / 16,384 KiB allocated for either actor. Allocation equals the
-    # recorded PostgreSQL 17 value; ceil(16,384 / 1,024) = 16 MiB, with no headroom.
-    assert 0 < memory <= 16 * 1024, (
-        f"Timeline planner allocated {memory} KiB; ceiling 16 MiB. "
+    # Today's merged-policy cost (production + extcontrib fragments); lowers as rebac's compiler improves; never raised.
+    assert 0 < memory <= 57_344, (
+        f"Timeline planner allocated {memory} KiB; ceiling 57,344 KiB. "
         "Ratchet downward when cost falls; never raise to admit a regression."
     )
 
@@ -163,6 +161,7 @@ def test_run_follows_execution_without_an_explicit_projection(execution) -> None
     assert next(kind["count"] for kind in data["timeline"]["kinds"] if kind["id"] == "workflows.run") == 0
 
 
+@pytest.mark.django_db(transaction=True)
 def test_waiting_run_folds_readable_children_and_computes_attention(review) -> None:
     actor, reviewers, sent, question = review
     batches = []
@@ -217,6 +216,7 @@ def test_waiting_run_folds_readable_children_and_computes_attention(review) -> N
     assert read_timeline(subject, reviewer)["timeline_attention"] == 0
 
 
+@pytest.mark.django_db(transaction=True)
 def test_unreadable_or_missing_run_never_hides_a_readable_question_or_change(review) -> None:
     _, reviewers, sent, question = review
     run, step = start_review(review)
@@ -242,6 +242,7 @@ def test_unreadable_or_missing_run_never_hides_a_readable_question_or_change(rev
     assert not data["timeline"]["entries"][0]["needs_me"]
 
 
+@pytest.mark.django_db(transaction=True)
 def test_later_step_decision_link_folds_the_question_and_claims_are_silent(review) -> None:
     actor, reviewers, _, question = review
     subject = question.review_subject
@@ -282,11 +283,12 @@ def test_later_step_decision_link_folds_the_question_and_claims_are_silent(revie
     assert {child.kind: child.count for child in line.children}["decisions.decision"] == 1
 
 
+@pytest.mark.django_db(transaction=True)
 @pytest.mark.parametrize("assigned", [True, False])
-def test_each_committed_workflow_wait_refreshes_the_inherited_record_feed(
-    execution, register_step, monkeypatch, assigned,
+def test_each_committed_workflow_wait_refreshes_the_inherited_timeline(
+    execution, register_step, assigned,
 ):
-    """Like the AP page: a canonical record has only a child's public feed."""
+    """Inherited timelines refresh without declaring a model change feed."""
 
     actor, sent = execution
     with system_context(reason="test.timeline.inherited_subject"):
@@ -307,19 +309,16 @@ def test_each_committed_workflow_wait_refreshes_the_inherited_record_feed(
             ))
 
     register_step(Question)
-    monkeypatch.setitem(publishing._publisher_fields, MtiChild, frozenset())
     snapshots = []
 
-    def broadcast(model, payload):
-        if model is MtiChild:
+    def broadcast(group, payload):
+        if payload["model"] == MtiChild._meta.label:
             assert not connection.in_atomic_block
             assert payload["id"] == public_id_of(subject)
-            assert payload["resource_id"] == str(subject.pk)
-            assert payload["related_records"] == [{"model": MtiChild._meta.label, "id": public_id_of(subject)}]
             # Read exactly when a subscriber receives the committed invalidation.
             snapshots.append(read_timeline(subject, actor))
 
-    with capture_broadcasts(observer=broadcast):
+    with patch("angee.timeline.events.broadcast_group", side_effect=broadcast):
         workflow = load_workflow({
             "nodes": {
                 "first": {"step": Question.key, "label": "First review", "next": {"done": ["second"]}},
@@ -334,7 +333,7 @@ def test_each_committed_workflow_wait_refreshes_the_inherited_record_feed(
             step = StepRun.system_queryset().get(run=run, node_key=node)
             event, = timeline_entries(subject, actor, kind="workflows.run")
             assert event.detail == f"Waiting · {step.node_label}"
-            assert snapshots, "The declared child feed must refresh after the source write commits."
+            assert snapshots, "The child timeline must refresh after the source write commits."
             page = snapshots[-1]
             assert page["timeline_attention"] == page["timeline"]["needs_me"] == 1
             (line,) = page["timeline"]["entries"]

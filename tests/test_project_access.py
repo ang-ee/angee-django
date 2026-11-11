@@ -9,7 +9,6 @@ from unittest.mock import patch
 import pytest
 import strawberry_django
 from django.apps import apps
-from django.core.management import call_command
 from django.db import connection, transaction
 from django.test.utils import CaptureQueriesContext
 from graphql import GraphQLEnumType, GraphQLObjectType, get_named_type
@@ -24,8 +23,6 @@ from rebac import (
 )
 from rebac.models import active_relationship_model
 
-from angee.base.build import extension_source_map
-from angee.base.testing.permissions import emit_permissions, installed_field_owners
 from angee.graphql.capabilities import permissions_field
 from angee.graphql.data.hasura import hasura_model_resource
 from angee.graphql.node import AngeeNode
@@ -57,10 +54,9 @@ _TASK_PERMISSIONS_RESOURCE = hasura_model_resource(
 )
 
 
-def test_task_permissions_are_typed_actor_scoped_and_batched(project_access_schema: Any) -> None:
+def test_task_permissions_are_typed_actor_scoped_and_batched(composed_tables: Any) -> None:
     """Three permission answers remain one list projection at 1, 10 and 50 rows."""
 
-    call_command("rebac", "sync", verbosity=0)
     schema = GraphQLSchemas(
         [
             SchemaAddon({"public": {"query": (_TASK_PERMISSIONS_RESOURCE.query,)}}),
@@ -129,10 +125,9 @@ def test_project_and_messaging_schemas_declare_the_complete_cascade() -> None:
     assert "relation thread: messaging/thread // rebac:field=thread" in messaging
 
 
-def test_task_chatter_inherits_live_record_read(project_access_schema: Any) -> None:
+def test_task_chatter_inherits_live_record_read(composed_tables: Any) -> None:
     """The task's read gate grants chatter read and revokes it when narrowed."""
 
-    call_command("rebac", "sync", verbosity=0)
     user = apps.get_model("iam", "User").objects.create_user(username="task-chatter-reader")
     with system_context(reason="tests.projects.task_chatter"):
         project = Project.objects.create(title="Thread project")
@@ -149,31 +144,9 @@ def test_task_chatter_inherits_live_record_read(project_access_schema: Any) -> N
     assert not Thread.objects.with_actor(user).with_action("read").scoped().filter(pk=thread.pk).exists()
 
 
-@pytest.fixture
-def project_access_schema(tmp_path: Path, transactional_db: None) -> Any:
-    """Load composed permission extensions and restore app schema paths afterward."""
-
-    configs = list(apps.get_app_configs())
-    originals = {config: getattr(config, "rebac_schema", None) for config in configs}
-    sources = extension_source_map(configs, field_owners=installed_field_owners(configs))
-    runtime = tmp_path / "project-access-runtime"
-    emit_permissions(configs, runtime, sources=sources)
-    call_command("rebac", "sync", verbosity=0)
-    try:
-        yield
-    finally:
-        for config, original in originals.items():
-            if original is None:
-                if hasattr(config, "rebac_schema"):
-                    delattr(config, "rebac_schema")
-            else:
-                config.rebac_schema = original
-
-
-def test_bound_vault_requires_share_to_bind_another_project(project_access_schema: Any) -> None:
+def test_bound_vault_requires_share_to_bind_another_project(composed_tables: Any) -> None:
     """A source project writer cannot expose its vault to another project's readers."""
 
-    call_command("rebac", "sync", verbosity=0)
     manager = create_user("vault-project-manager")
     owner = create_user("vault-owner")
     writer = create_user("vault-project-writer")
@@ -210,13 +183,12 @@ def test_bound_vault_requires_share_to_bind_another_project(project_access_schem
     assert vault.with_actor(owner).has_access("share")
 
 
-@pytest.mark.django_db(transaction=True)
 def test_project_binding_grants_and_revokes_thread_message_access(
-    project_access_schema: Any,
+    composed_tables: Any,
 ) -> None:
     """A project editor writes a bound thread's message and loses access after unbind."""
 
-    del project_access_schema
+    del composed_tables
     user_model = apps.get_model("iam", "User")
     owner = user_model.objects.create_user(username="project-owner")
     editor = user_model.objects.create_user(username="project-editor", kind="service")
@@ -297,11 +269,10 @@ def test_project_binding_grants_and_revokes_thread_message_access(
     assert binding.pk is not None
 
 
-@pytest.mark.django_db(transaction=True)
-def test_binding_edits_and_deletes_require_authority(project_access_schema: Any) -> None:
+def test_binding_edits_and_deletes_require_authority(composed_tables: Any) -> None:
     """Binding persistence cannot move or revoke access around either side's policy owner."""
 
-    del project_access_schema
+    del composed_tables
     user_model = apps.get_model("iam", "User")
     owner = user_model.objects.create_user(username="binding-owner")
     outsider = user_model.objects.create_user(username="binding-outsider")
@@ -336,11 +307,10 @@ def test_binding_edits_and_deletes_require_authority(project_access_schema: Any)
         binding.with_actor(outsider).save()
 
 
-@pytest.mark.django_db(transaction=True)
-def test_project_drive_access_reaches_folders_and_files(project_access_schema: Any) -> None:
+def test_project_drive_access_reaches_folders_and_files(composed_tables: Any) -> None:
     """A drive binding supplies the native access chain for every contained row."""
 
-    del project_access_schema
+    del composed_tables
     user_model = apps.get_model("iam", "User")
     owner = user_model.objects.create_user(username="drive-project-owner")
     editor = user_model.objects.create_user(username="drive-project-editor")

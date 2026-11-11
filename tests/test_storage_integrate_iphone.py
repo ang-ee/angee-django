@@ -13,7 +13,6 @@ from typing import Any, cast
 import pytest
 from django.contrib.auth import get_user_model
 from django.core.exceptions import SuspiciousFileOperation
-from django.core.management import call_command
 from django.utils import timezone
 from rebac import system_context
 
@@ -41,12 +40,11 @@ storage_integrate_schema = importlib.import_module("angee.storage_integrate.sche
 
 
 @pytest.fixture()
-def iphone_tables(transactional_db: Any) -> Iterator[None]:
-    """Reset storage instances and synchronize permissions around each test."""
+def iphone_tables(db: Any) -> Iterator[None]:
+    """Reset storage instances around each test."""
 
-    del transactional_db
+    del db
     Backend._storage_cache.clear()
-    call_command("rebac", "sync", verbosity=0)
     try:
         yield
     finally:
@@ -140,7 +138,6 @@ def _console_schema() -> Any:
     return addon_schema({"console": parts}, "console")
 
 
-@pytest.mark.django_db(transaction=True)
 def test_browse_marks_only_manifest_roots_mountable(iphone_env: SimpleNamespace) -> None:
     """The shared local browser guides admins to a concrete device backup root."""
 
@@ -160,7 +157,6 @@ def test_browse_marks_only_manifest_roots_mountable(iphone_env: SimpleNamespace)
     assert entries["ordinary-folder"].blocked_reason == "Folder does not contain Manifest.db"
 
 
-@pytest.mark.django_db(transaction=True)
 def test_reference_mount_indexes_and_serves_bytes_across_threads(
     iphone_env: SimpleNamespace,
     queued_mounts: list[Mount],
@@ -223,7 +219,6 @@ def test_reference_mount_indexes_and_serves_bytes_across_threads(
         ).exists()
 
 
-@pytest.mark.django_db(transaction=True)
 def test_reference_open_entry_uses_the_iterated_blob_map_without_a_query(
     iphone_env: SimpleNamespace,
     queued_mounts: list[Mount],
@@ -251,7 +246,6 @@ def test_reference_open_entry_uses_the_iterated_blob_map_without_a_query(
     assert queries == []
 
 
-@pytest.mark.django_db(transaction=True)
 def test_copy_mount_ingests_bytes_with_logical_source_metadata(
     iphone_env: SimpleNamespace,
     queued_mounts: list[Mount],
@@ -280,7 +274,6 @@ def test_copy_mount_ingests_bytes_with_logical_source_metadata(
         assert stream.read() == CAMERA_BYTES
 
 
-@pytest.mark.django_db(transaction=True)
 def test_connect_iphone_backup_graphql_denies_non_admin(
     iphone_env: SimpleNamespace,
     queued_mounts: list[Mount],
