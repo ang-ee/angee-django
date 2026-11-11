@@ -19,7 +19,6 @@ from rebac import (
     to_subject_ref,
     write_relationships,
 )
-from rebac.roles import grant
 
 from angee.base.models.locks import StaleRevisionError
 from angee.graphql.schema import SCHEMA_PART_KEYS, GraphQLSchemas
@@ -111,17 +110,6 @@ def test_create_vault_requires_an_authenticated_actor(composed_tables: None) -> 
         Vault.objects.create_for(None, name="Nope")
 
 
-def test_vault_scope_hides_other_owners(composed_tables: None) -> None:
-    """Actor-scoped vault reads only return the actor's own grants."""
-
-    alice = create_user("alice")
-    bob = create_user("bob")
-    vault_for(alice, name="Research")
-
-    assert [vault.name for vault in Vault.objects.as_user(alice)] == ["Research"]
-    assert list(Vault.objects.as_user(bob)) == []
-
-
 def test_create_in_requires_vault_write(composed_tables: None) -> None:
     """Only actors who can write the vault may add pages to it."""
 
@@ -163,21 +151,6 @@ def test_create_in_reports_duplicate_title_as_validation(composed_tables: None, 
             Page.objects.create_in(vault, title="Existing", kind=kind)
 
 
-def test_page_inherits_vault_read(composed_tables: None) -> None:
-    """A vault viewer grant reaches every page through ``vault->read``."""
-
-    alice = create_user("alice")
-    bob = create_user("bob")
-    vault = vault_for(alice)
-    with actor_context(alice):
-        Page.objects.create_in(vault, title="Shared notes")
-
-    _grant(vault, "viewer", bob)
-
-    assert [row.title for row in Page.objects.as_user(bob)] == ["Shared notes"]
-    assert [row.name for row in Vault.objects.as_user(bob)] == ["Research"]
-
-
 def test_vault_viewer_share_is_managed_by_share_holders(composed_tables: None) -> None:
     """The vault's only grantable relation is ``viewer``, managed under ``share``."""
 
@@ -200,22 +173,6 @@ def test_vault_viewer_share_is_managed_by_share_holders(composed_tables: None) -
             vault.grant_record_access("editor", bob)
 
 
-def test_page_inherits_parent_read(composed_tables: None) -> None:
-    """A grant on a folder page cascades to its children via ``parent->read``."""
-
-    alice = create_user("alice")
-    bob = create_user("bob")
-    vault = vault_for(alice)
-    with actor_context(alice):
-        folder = Page.objects.create_in(vault, title="Projects", kind=Page.PageKind.FOLDER)
-        Page.objects.create_in(vault, parent=folder, title="Roadmap")
-        Page.objects.create_in(vault, title="Private")
-
-    _grant(folder, "viewer", bob)
-
-    assert {row.title for row in Page.objects.as_user(bob)} == {"Projects", "Roadmap"}
-
-
 def test_folder_delete_cascades_past_foreign_children(composed_tables: None) -> None:
     """Deleting a folder passes the gate on children other users created."""
 
@@ -233,40 +190,6 @@ def test_folder_delete_cascades_past_foreign_children(composed_tables: None) -> 
 
     with actor_context(alice):
         assert not Page.objects.as_user(alice).exists()
-
-
-def test_roles_grant_cross_vault_reach(composed_tables: None) -> None:
-    """The shipped knowledge roles cover every vault without per-row grants."""
-
-    alice = create_user("alice")
-    viewer = create_user("viewer")
-    editor = create_user("editor")
-    vault_admin = create_user("vault-admin")
-    knowledge_admin = create_user("knowledge-admin")
-    vault = vault_for(alice)
-    with actor_context(alice):
-        Page.objects.create_in(vault, title="Handbook")
-
-    grant(actor=viewer, role="knowledge/role:vault_viewer")
-    grant(actor=editor, role="knowledge/role:vault_editor")
-    grant(actor=vault_admin, role="knowledge/role:vault_admin")
-    grant(actor=knowledge_admin, role="knowledge/role:knowledge_admin")
-
-    assert [row.name for row in Vault.objects.as_user(viewer)] == ["Research"]
-    assert [row.title for row in Page.objects.as_user(viewer)] == ["Handbook"]
-    with actor_context(viewer), pytest.raises(PermissionDenied):
-        _rename(Vault.objects.as_user(viewer).get(), "Viewer rename")
-
-    with actor_context(editor):
-        _rename(Vault.objects.as_user(editor).get(), "Editor rename")
-    with actor_context(editor), pytest.raises(PermissionDenied):
-        Vault.objects.as_user(editor).get().delete()
-
-    assert [row.name for row in Vault.objects.as_user(knowledge_admin)] == ["Editor rename"]
-
-    with actor_context(vault_admin):
-        Vault.objects.as_user(vault_admin).get().delete()
-    assert list(Vault.objects.as_user(alice)) == []
 
 
 @pytest.mark.parametrize("worker", [False, True])

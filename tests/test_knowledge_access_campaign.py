@@ -1,19 +1,32 @@
 """Knowledge reads fail closed and authored actions retain replay semantics."""
 
 import pytest
+from django.contrib.auth.models import AnonymousUser
 from django.contrib.contenttypes.models import ContentType
 from django.db import connection
 from django.test.utils import CaptureQueriesContext
-from rebac import PermissionDenied, actor_context, system_context, to_subject_ref
-from rebac.models import active_relationship_model
+from rebac import (
+    ObjectRef,
+    PermissionDenied,
+    RelationshipTuple,
+    actor_context,
+    system_context,
+    to_subject_ref,
+    write_relationships,
+)
+from rebac.testing import assert_decisions
 
 from angee.base.testing.queries import statement_startswith
 from angee.graphql.access import ChangeReadGate
 from angee.graphql.events import ChangePayload
 from angee.graphql.testing.documents import execute_schema, result_data
 from angee.knowledge.schema import schemas
+from angee.messaging.testing.models import ThreadAttachment
+from angee.projects.testing.models import Project, Task
 from angee.provenance.context import changeset, changeset_model
+from angee.tags.testing.models import Tag, TagAssignment
 from tests.conftest import (
+    Link,
     MarkdownPage,
     Page,
     RecordBinding,
@@ -23,6 +36,7 @@ from tests.conftest import (
     create_user,
     vault_for,
 )
+from tests.decision_table import seat_cells
 from tests.extcontrib.models import Record
 from tests.knowledge_campaign import clone_template as clone_template
 from tests.test_knowledge import _grant
@@ -34,6 +48,109 @@ mutation Clone($template: ID!, $name: String!, $owned: Boolean!, $key: String) {
   }
 }
 """
+
+
+def test_the_policy_decides_every_knowledge_permission(composed_tables):
+    """One world, every knowledge permission and extension arm with an allow and a deny, and its read scopes."""
+
+    seats = {name: create_user(f"knowledge-policy-{name}") for name in (
+        "owner", "editor", "viewer", "page-viewer", "role-viewer", "role-editor", "vault-admin",
+        "knowledge-admin", "task-reader", "both", "outsider",
+    )}
+    seats.update(admin=create_platform_admin("knowledge-policy-admin"), anonymous=AnonymousUser())
+    owner = seats["owner"]
+    vault, trashed_vault = vault_for(owner, name="Policy"), vault_for(owner, name="Trashed")
+    with actor_context(owner):
+        page = Page.objects.create_in(vault, title="Folder", kind=Page.PageKind.FOLDER)
+        child = Page.objects.create_in(vault, title="Child", parent=page)
+        Page.objects.create_in(vault, title="Target")
+        MarkdownPage.objects.write_body(child, "see [[Target]]")
+        trashed_page = Page.objects.create_in(vault, title="Withdrawn")
+    with system_context(reason="test.knowledge.policy.world"):
+        markdown = MarkdownPage._base_manager.get(page_ptr=child)
+        link = Link._base_manager.get(source_page=child)
+        trashed_page.trash(reason="Withdrawn")
+        trashed_vault.trash(reason="Withdrawn")
+        project = Project.objects.create(title="Bound record")
+        task = Task.objects.create(project=project, title="Bound task", assignee=seats["both"])
+        binding = RecordBinding.objects.upsert(page=page, target=task)
+        chatter = ThreadAttachment.objects.ensure_for_record(page)
+        tag = TagAssignment.objects.create(
+            tag=Tag.objects.create(name="Policy"), content_type=ContentType.objects.get_for_model(Page),
+            object_id=page.pk,
+        )
+        for role in ("vault_viewer", "vault_editor", "vault_admin", "knowledge_admin"):
+            seat = {"vault_viewer": "role-viewer", "vault_editor": "role-editor"}.get(role, role.replace("_", "-"))
+            write_relationships([RelationshipTuple(ObjectRef("knowledge/role", role), "member",
+                                                   to_subject_ref(seats[seat]))])
+    for row, relation, seat in (
+        (vault, "editor", "editor"), (vault, "viewer", "viewer"), (trashed_vault, "viewer", "viewer"),
+        (trashed_vault, "editor", "editor"), (page, "viewer", "page-viewer"), (project, "reader", "task-reader"),
+        (vault, "viewer", "both"),
+    ):
+        _grant(row, relation, seats[seat])
+
+    roles = "role-viewer role-editor vault-admin knowledge-admin"
+    cells = seat_cells(
+        seats.__getitem__,
+        # knowledge/vault, live and trashed
+        (vault, "create", "outsider", "anonymous"),
+        (vault, "read_granted", f"owner editor viewer {roles} admin", "outsider anonymous"),
+        (vault, "write_granted", "owner editor role-editor vault-admin knowledge-admin admin", "viewer role-viewer"),
+        (vault, "delete", "owner vault-admin knowledge-admin admin", "editor role-editor"),
+        (vault, "read", "viewer", "outsider"),
+        (vault, "write", "editor", "viewer"),
+        (trashed_vault, "conceal", "outsider", "anonymous"),
+        (trashed_vault, "withheld", "outsider", "anonymous"),
+        (vault, "withheld", "", "outsider"),
+        (trashed_vault, "read", "owner", "viewer"),
+        (trashed_vault, "write", "owner", "editor"),
+        (vault, "read_as_subject", "viewer role-viewer", "outsider"),
+        (vault, "write_as_subject", "editor role-editor", "viewer"),
+        (vault, "transfer", "owner admin", "editor"),
+        (vault, "share", "owner admin", "editor"),
+        (vault, "write__owner", "owner", "editor"),
+        # knowledge/page: vault and parent grants, trash
+        (page, "read_granted", "viewer page-viewer", "outsider"),
+        (child, "read_granted", "page-viewer", "outsider"),
+        (page, "write_granted", "editor", "viewer page-viewer"),
+        (page, "create", "editor", "viewer"),
+        (page, "read", "viewer page-viewer", "outsider anonymous"),
+        (page, "write", "editor", "viewer"),
+        (trashed_page, "conceal", "outsider", "anonymous"),
+        (trashed_page, "withheld", "outsider", "anonymous"),
+        (page, "withheld", "", "outsider"),
+        (trashed_page, "read", "owner", "viewer"),
+        (trashed_page, "write", "owner", "editor"),
+        (page, "read_as_subject", "page-viewer", "outsider"),
+        (page, "write_as_subject", "editor", "viewer"),
+        (page, "delete", "owner", "editor"),
+        # knowledge/markdown_page and knowledge/link follow their page
+        (markdown, "read", "page-viewer", "outsider"),
+        *((markdown, action, "editor", "viewer") for action in ("create", "write", "delete")),
+        (link, "read", "page-viewer", "outsider"),
+        *((link, action, "editor", "viewer") for action in ("write", "delete")),
+        # knowledge/record_binding needs both ends
+        (binding, "target_read", "task-reader", "outsider"),
+        (binding, "target_write", "both", "task-reader"),
+        (binding, "read", "both", "task-reader viewer"),
+        (binding, "create", "admin", "both editor"),
+        (binding, "write", "", "admin"),
+        (binding, "delete", "admin", "both"),
+        # extension arms: page tags and page chatter
+        (tag, "target_read", "viewer", "outsider"),
+        (tag, "target_write", "editor", "viewer"),
+        (chatter, "target_write", "editor", "viewer"),
+        (chatter.thread, "chatter_read", "viewer", "outsider"),
+    )
+    assert_decisions(
+        checks=cells,
+        accessible=(
+            (seats["page-viewer"], "read", Page, (page, child)),
+            (seats["viewer"], "read", Vault, (vault,)),
+            (seats["outsider"], "read", Vault, ()),
+        ),
+    )
 
 
 def test_record_note_is_atomic_and_replays_the_original_binding(composed_tables, monkeypatch):
@@ -113,8 +230,9 @@ def test_record_pages_projection_respects_role_and_both_write_ends(composed_tabl
     assert owner_view["record_knowledge_bindings"][0]["page_can_write"] is True
 
 
-@pytest.mark.parametrize("seat", ["neither", "record", "knowledge", "both", "administrator"])
+@pytest.mark.parametrize("seat", ["both", "administrator"])
 def test_binding_without_record_owner_arm_is_absent_in_every_read_direction_and_event(composed_tables, seat):
+    """Even an actor who reads both ends, or an administrator, sees no binding to an unarmed record type."""
     # No record_binding fragment names this type; a fragment that does breaks the premise here.
     assert not RecordBinding.declares_target(Record)
     author = create_user("binding-author")
@@ -271,32 +389,17 @@ def test_page_can_write_tracks_vault_permission_for_non_author_viewer(clone_temp
     assert result_data(execute_schema(schema, query, variables, user=stranger))["pages_by_pk"] is None
 
 
-@pytest.mark.parametrize("unavailable", ["unshared", "deleted"])
-@pytest.mark.parametrize("owned", [True, False])
-def test_graphql_clone_replays_after_template_access_is_lost(clone_template, unavailable, owned):
+def test_graphql_clone_replays_after_template_access_is_lost(clone_template):
+    """The wire returns the original result once the template is gone; ownership and unsharing are proved
+    on the clone verb."""
+
     fixture = clone_template
     schema = addon_schema(schemas, "public")
-    variables = {"template": str(fixture.source.sqid), "name": "API clone", "owned": owned, "key": "api"}
+    variables = {"template": str(fixture.source.sqid), "name": "API clone", "owned": True, "key": "api"}
     first = result_data(execute_schema(schema, CLONE, variables, user=fixture.actor))["create_vault_from"]
     assert first["ok"] is True
-    if owned:
-        with actor_context(fixture.actor):
-            clone = changeset_model()._base_manager.get(
-                scope=f"knowledge.vault.clone:{fixture.actor.pk}", key="api",
-            ).created_row
-            clone.transfer_ownership(fixture.reader)
-        with actor_context(fixture.reader):
-            clone.as_user(fixture.reader).transfer_ownership(None)
     with actor_context(fixture.author):
-        if unavailable == "deleted":
-            fixture.source.delete()
-        else:
-            # The actor only read through viewer; ownership transfer of the template
-            # would leave that grant, so remove the actual sharing fact.
-            with system_context(reason="test.template.unshare"):
-                active_relationship_model().objects.filter(
-                    resource_type="knowledge/vault", resource_id=str(fixture.source.pk), relation="viewer",
-                ).delete()
+        fixture.source.delete()
     replay = result_data(execute_schema(schema, CLONE, variables, user=fixture.actor))["create_vault_from"]
     assert replay == first
     with system_context(reason="test.api.replay_count"):
