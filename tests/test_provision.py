@@ -18,8 +18,9 @@ from rebac import schema_changes
 from rebac.backends import reset_backend
 from rebac.checks import check_universal_admin_in_roles
 from rebac.errors import SchemaError
-from rebac.models import SchemaRelation
+from rebac.models import SchemaPermission, SchemaRelation
 
+from angee.base.permissions import bind_rebac_schema, declared_schema_path
 from angee.graphql.checks import check_graphql_schemas
 from angee.graphql.schema import GraphQLSchemas, SchemaParts
 from angee.graphql.sdl import SchemaIntegration
@@ -80,6 +81,38 @@ def test_provision_sync_replaces_invalid_historical_subject_sets_before_checks()
             provision.ProvisionContext("default", command.stdout, command.stderr),
         )
         provision.run_step(command, ["check"])
+
+
+@pytest.mark.django_db
+@schema_changes()
+def test_provision_applies_a_changed_permission_declaration_without_force(tmp_path: Path) -> None:
+    """A package declaration changed since the last sync reaches an existing database through provision.
+
+    Provision syncs without ``--force-overwrite``; a row nobody edited still takes the
+    package's new declaration, so deployments never keep the policy they first installed.
+    """
+
+    config = apps.get_app_config("extcontrib")
+    call_command("rebac", "sync", "--yes", verbosity=0)
+    stored = SchemaPermission.objects.get(definition__resource_type="extcontrib/record", name="read")
+    assert "writer" in stored.expression
+
+    bound = Path(getattr(config, "rebac_schema", None) or declared_schema_path(config))
+    declared = "permission read = reader + writer + admin->member"
+    assert declared in bound.read_text()
+    changed = tmp_path / "extcontrib.zed"
+    changed.write_text(bound.read_text().replace(declared, "permission read = reader + admin->member", 1))
+    bind_rebac_schema(config, changed)
+    reset_backend()
+
+    command = Command()
+    with override_settings(ANGEE_REBAC_FORCE_OVERWRITE=False):
+        apps.get_app_config("base").compose_provision(
+            provision.ProvisionContext("default", command.stdout, command.stderr),
+        )
+
+    stored.refresh_from_db()
+    assert "writer" not in stored.expression
 
 
 def test_failing_security_check_stops_provisioning_before_the_permission_sync(
