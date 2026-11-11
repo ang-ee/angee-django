@@ -11,12 +11,7 @@ def test_composed_examples(tmp_path: Path, subtests: pytest.Subtests) -> None:
     run_composed_tests(
         tmp_path, subtests, app=None,
         sqlite=(
-            "example.notes.tests.test_query_budgets",
-            "example.notes.tests.test_schema_metadata",
-            "example.notes.tests.test_seed_lorem_notes",
-            "example.notes.tests.test_versioning",
-            "example.notes.tests.test_word_count",
-            "example.notes.tests.test_workflow_steps",
+            "example.notes.tests",
             "angee.projects.tests.test_query_budgets",
             "tests.notes_ownership_cases",
             "tests.native_notes_owner_campaign.NotesOwnerCampaign",
