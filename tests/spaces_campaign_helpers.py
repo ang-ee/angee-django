@@ -13,7 +13,6 @@ from tests.test_spaces import _person_for, _schema
 ROLES = ("owner", "moderator", "member", "viewer")
 SEATS = (*ROLES, "pending", "dismissed", "outsider", "column_owner", "administrator")
 MANAGERS = {"owner", "column_owner", "administrator"}
-READERS = {*ROLES, "column_owner", "administrator"}
 
 
 @pytest.fixture
