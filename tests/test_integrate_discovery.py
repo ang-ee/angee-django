@@ -28,7 +28,6 @@ from angee.integrate.connect import complete_account_connect, complete_external_
 from angee.integrate.constants import DISCOVERY_ATTEMPT_LIMIT, DISCOVERY_TASK
 from angee.integrate.discovery import ConnectionDiscovery
 from angee.integrate.oauth import state
-from angee.integrate.oauth.client import OAuthClientProtocol
 from angee.integrate.oauth.errors import OAuthFlowError
 from angee.integrate.schema import (
     IntegrationActionMutation,
@@ -38,6 +37,7 @@ from angee.integrate.schema import (
 from angee.integrate.session_runner import run_bridge_session_job
 from angee.integrate.signals import discovery_finished
 from angee.integrate.streams import BridgeSyncError
+from angee.integrate.testing.http import mock_transport
 from angee.jobs.celery import app as celery_app
 from tests.conftest import Credential, create_platform_admin, make_addon, make_integration
 from tests.integrate_fixtures import CONNECTION_CLASSES, ConnectionBridge, LiveConnectionAdapter
@@ -173,9 +173,7 @@ def test_combined_patch_preserves_other_values_and_starts_discovery_once(bridge)
 
 
 @pytest.mark.parametrize(("derived", "disconnected"), [(False, False), (False, True), (True, False)])
-def test_oauth_completion_preserves_discovery_for_the_same_identity(
-    bridge, sent_tasks, monkeypatch, derived, disconnected,
-):
+def test_oauth_completion_preserves_discovery_for_the_same_identity(bridge, sent_tasks, derived, disconnected):
     with system_context(reason="test connect callback"):
         client = bridge.credential.oauth_client
         client.client_id = "application"
@@ -203,17 +201,11 @@ def test_oauth_completion_preserves_discovery_for_the_same_identity(
             client, "https://app.example/callback", user_id=str(bridge.owner.pk), flow=state.StateFlow.CONNECT,
             integration_id=bridge.sqid,
         )
-    original = OAuthClientProtocol.__init__
-
-    def with_transport(self, oauth_client):
-        original(self, oauth_client)
-        self._transport = httpx2.MockTransport(lambda request: httpx2.Response(
-            200, json={"sub": "connected-account"} if request.url.path == "/profile" else {"access_token": "rotated"},
-        ))
-
-    monkeypatch.setattr(OAuthClientProtocol, "__init__", with_transport)
     sent_tasks.clear()
-    with actor_context(bridge.owner):
+    provider = mock_transport(lambda request: httpx2.Response(
+        200, json={"sub": "connected-account"} if request.url.path == "/profile" else {"access_token": "rotated"},
+    ))
+    with provider, actor_context(bridge.owner):
         completed = complete_account_connect(
             client, code="code", state_token=token, redirect_uri="https://app.example/callback",
         )

@@ -3,7 +3,6 @@
 from datetime import timedelta
 from types import SimpleNamespace
 from unittest.mock import Mock
-from urllib.parse import parse_qs
 
 import httpx2
 import pytest
@@ -28,6 +27,7 @@ from angee.integrate.oauth.errors import OAuthFlowError
 from angee.integrate.oauth.providers import OAuthProviderType
 from angee.integrate.oauth.registrations import OAuthRegistrationExtension, operation_registration_slugs
 from angee.integrate.schema import IntegrationConnectionMixin, IntegrationOAuthMixin
+from angee.integrate.testing.http import mock_transport, request_fields
 from tests.conftest import Credential, ExternalAccount, Feed, OAuthClient, create_user, make_integration
 
 
@@ -39,7 +39,7 @@ def test_query_parameters_replace_existing_keys_and_preserve_unrelated_values():
 
 @pytest.mark.usefixtures("composed_tables")
 @pytest.mark.parametrize("refused", [False, True])
-def test_addon_refines_grant_through_authlib_before_identity_or_persistence(monkeypatch, refused):
+def test_addon_refines_grant_through_authlib_before_identity_or_persistence(refused):
     with override_settings(ANGEE_OAUTH_PROVIDER_TYPE_CLASSES={
         "generic_oauth2": "tests.integrate_fixtures.RefiningProvider",
     }), system_context(reason="test addon grant refinement"):
@@ -53,43 +53,33 @@ def test_addon_refines_grant_through_authlib_before_identity_or_persistence(monk
         token, _record = state.issue(
             client, "https://app.example/callback", user_id=str(user.pk), flow=state.StateFlow.CONNECT,
         )
-        requests = []
 
         def respond(request):
             if request.url.path == "/profile":
                 assert request.headers["Authorization"] == "Bearer refined"
                 assert request.url.params["proof"] == "refined"
                 return httpx2.Response(200, json={"sub": "external-user"})
-            grant = parse_qs(request.content.decode())
-            requests.append(grant)
-            if grant["grant_type"] == ["resource_grant"]:
+            if request_fields(request)["grant_type"] == "resource_grant":
                 if refused:
                     return httpx2.Response(400, json={"error": "invalid_grant"})
                 return httpx2.Response(200, json={"access_token": "refined", "expires_in": 7200, "private": "omit"})
             return httpx2.Response(200, json={"access_token": "short", "expires_in": 60})
 
-        original = OAuthClientProtocol.__init__
-
-        def with_transport(self, oauth_client):
-            original(self, oauth_client)
-            self._transport = httpx2.MockTransport(respond)
-
-        monkeypatch.setattr(OAuthClientProtocol, "__init__", with_transport)
-        if refused:
-            with pytest.raises(OAuthFlowError):
-                connect.complete_account_connect(
+        with mock_transport(respond) as requests:
+            if refused:
+                with pytest.raises(OAuthFlowError):
+                    connect.complete_account_connect(
+                        client, code="code", state_token=token, redirect_uri="https://app.example/callback",
+                    )
+                assert Credential.objects.count() == ExternalAccount.objects.count() == 0
+            else:
+                result = connect.complete_account_connect(
                     client, code="code", state_token=token, redirect_uri="https://app.example/callback",
                 )
-            assert Credential.objects.count() == ExternalAccount.objects.count() == 0
-        else:
-            result = connect.complete_account_connect(
-                client, code="code", state_token=token, redirect_uri="https://app.example/callback",
-            )
-            assert result.account.external_id == "external-user"
-            assert result.credential.reveal() == {"access_token": "refined", "expires_in": 7200}
-        assert requests[1] == {
-            "grant_type": ["resource_grant"], "short_token": ["short"],
-            "client_id": ["application"], "client_secret": ["fake"],
+                assert result.account.external_id == "external-user"
+                assert result.credential.reveal() == {"access_token": "refined", "expires_in": 7200}
+        assert request_fields(requests[1]) == {
+            "grant_type": "resource_grant", "short_token": "short", "client_id": "application", "client_secret": "fake",
         }
 
 
@@ -257,7 +247,7 @@ def test_material_and_client_changes_immediately_change_refreshability():
 @pytest.mark.usefixtures("composed_tables")
 @pytest.mark.parametrize("forced", [False, True])
 @pytest.mark.parametrize("not_sent", [False, True])
-def test_transport_failure_during_refresh_preserves_consent_health(monkeypatch, forced, not_sent):
+def test_transport_failure_during_refresh_preserves_consent_health(forced, not_sent):
     with system_context(reason="test transient refresh"):
         integration = make_integration(
             "temporary-refresh", kind="oauth", material={"access_token": "fake", "refresh_token": "fake-refresh"},
@@ -268,25 +258,21 @@ def test_transport_failure_during_refresh_preserves_consent_health(monkeypatch, 
         credential.oauth_client.save(update_fields=["token_endpoint", "client_secret"])
         credential.expires_at = timezone.now() - timedelta(minutes=1)
         credential.save(update_fields=["expires_at"])
-    original = OAuthClientProtocol.__init__
-    requests = []
 
     def refuse_transport(request):
-        requests.append(request)
         if not_sent:
             raise RequestNotSentError()
         raise httpx2.ConnectError("private transport diagnostic", request=request)
 
-    def with_transport(self, oauth_client):
-        original(self, oauth_client)
-        self._transport = httpx2.MockTransport(refuse_transport)
-
-    monkeypatch.setattr(OAuthClientProtocol, "__init__", with_transport)
-    with system_context(reason="test retryable refresh"), pytest.raises(OAuthFlowError) as raised:
+    with (
+        mock_transport(refuse_transport) as requests,
+        system_context(reason="test retryable refresh"),
+        pytest.raises(OAuthFlowError) as raised,
+    ):
         (credential.refresh_now if forced else credential.ensure_fresh)()
     credential.refresh_from_db()
     assert len(requests) == 1
-    assert parse_qs(requests[0].content.decode())["grant_type"] == ["refresh_token"]
+    assert request_fields(requests[0])["grant_type"] == "refresh_token"
     assert raised.value.code == "token_exchange_failed" and raised.value.http_status == 503
     assert raised.value.transient and credential.last_refresh_status == "ok"
     assert isinstance(raised.value.__cause__, RequestNotSentError if not_sent else httpx2.ConnectError)
@@ -340,21 +326,23 @@ def test_channel_typed_feed_resolves_the_feed_admission_selector():
 @pytest.mark.usefixtures("composed_tables")
 @pytest.mark.parametrize("status", [429, 503, None])
 @pytest.mark.parametrize("expired", [False, True])
-def test_preexpiry_refresh_failure_keeps_valid_access_token(monkeypatch, status, expired):
+def test_preexpiry_refresh_failure_keeps_valid_access_token(status, expired):
     with system_context(reason="test preexpiry refresh"):
         credential = make_integration(
             "preexpiry-refresh", kind="oauth", material={"access_token": "fake", "refresh_token": "fake-refresh"},
         ).credential
         credential.expires_at = timezone.now() + timedelta(minutes=-1 if expired else 2)
         credential.save(update_fields=["expires_at"])
+        credential.oauth_client.token_endpoint = "https://provider.example/token"
+        credential.oauth_client.token_request_format = "json"  # the JSON shim keeps the provider's status
+        credential.oauth_client.save(update_fields=["token_endpoint", "token_request_format"])
 
-    def refuse(self, **kwargs):
+    def refuse(request):
         if status is None:
             raise RequestNotSentError()
-        raise OAuthFlowError("token_exchange_failed", status)
+        return httpx2.Response(status, json={"error": "temporarily_unavailable"})
 
-    monkeypatch.setattr(OAuthClientProtocol, "refresh_token", refuse)
-    with system_context(reason="test use existing access token"):
+    with mock_transport(refuse), system_context(reason="test use existing access token"):
         if expired:
             with pytest.raises(IntegrationError):
                 credential.ensure_fresh()
@@ -387,17 +375,13 @@ def test_signing_secret_refuses_a_confidential_client_without_a_secret():
 
 @pytest.mark.parametrize("request_format", ["form", "json"])
 @pytest.mark.parametrize("provider_type, expected", [("generic_oauth2", True), ("anthropic", False)])
-def test_refresh_grant_parameters_are_selected_by_provider(monkeypatch, request_format, provider_type, expected):
+def test_refresh_grant_parameters_are_selected_by_provider(request_format, provider_type, expected):
     client = OAuthClient(slug="grant-policy", client_id="client", token_endpoint="https://provider.example/token",
                          token_request_format=request_format, provider_type=provider_type,
                          token_params={"expires_in": 3600, "audience": "inference"})
-    protocol = OAuthClientProtocol(client)
-    seen = {}
-    def exchange(endpoint, grant_type, grant, extra):
-        seen.update(extra)
-        return {"access_token": "accepted"}
-    monkeypatch.setattr(protocol, "_json_token_request", exchange)
-    monkeypatch.setattr(protocol, "_authlib_token_request", exchange)
-    assert protocol.exchange_grant("refresh_token", refresh_token="refresh") == {"access_token": "accepted"}
-    assert ("expires_in" in seen) is expected
-    assert seen["audience"] == "inference"
+    with mock_transport(lambda request: httpx2.Response(200, json={"access_token": "accepted"})) as requests:
+        tokens = OAuthClientProtocol(client).exchange_grant("refresh_token", refresh_token="refresh")
+    assert tokens["access_token"] == "accepted"
+    fields = request_fields(requests[0])
+    assert ("expires_in" in fields) is expected
+    assert fields["audience"] == "inference"
