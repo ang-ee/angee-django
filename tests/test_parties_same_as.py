@@ -69,11 +69,11 @@ def test_merge_scalar_fields_admit_person_choices_only_between_people(composed_t
     ids=("survivor-values", "override"),
 )
 def test_a_merge_keeps_the_chosen_values_over_the_newer_statements_it_moves(
-    composed_tables: None, field_overrides: dict[str, str], kept: tuple[str, str]
+    db: None, field_overrides: dict[str, str], kept: tuple[str, str]
 ) -> None:
     """The duplicate's newer statements move to the survivor; survivorship still keeps what the merge chose."""
 
-    del composed_tables
+    del db
     owner = get_user_model().objects.create_user(username="merge-values-owner")
     with actor_context(owner):
         gamma, delta = [

@@ -378,6 +378,17 @@ class ModelHistory(HistoricalRecords):
             # The baseline is not the native capture the following write still owes.
             group.seen.intersection_update(pending)
 
+    def record_baseline(self, instance: models.Model) -> None:
+        """Record the stored state of ``instance`` before a tracked touch when no version carries it yet.
+
+        An instance reads nothing before it is touched, so this probes its one
+        row (:meth:`recorded`); :meth:`record_baselines` owns the snapshot.
+        """
+
+        model = type(instance)._meta.concrete_model or type(instance)
+        if not model._base_manager.filter(self.recorded(model), pk=instance.pk).exists():
+            self.record_baselines(model, [instance.pk])
+
     def create_historical_record(self, instance: models.Model, history_type: str, using: str | None = None) -> None:
         """Keep native signals and M2M capture on the same stored-snapshot writer."""
 
@@ -531,11 +542,8 @@ class HistoryMixin(models.Model):
                 history = model_history(type(self))
                 if history is not None and history.capture_enabled:
                     current_changeset(required=True, record=True)
-                    model = type(self)._meta.concrete_model or type(self)
                     if not self._state.adding:
-                        recorded = model._base_manager.filter(history.recorded(model), pk=self.pk)
-                        if not recorded.exists():
-                            history.record_baselines(model, [self.pk])
+                        history.record_baseline(self)
             super().save_base(raw, force_insert, force_update, alias, update_fields)
 
     def delete(self, *args: Any, **kwargs: Any) -> tuple[int, dict[str, int]]:
