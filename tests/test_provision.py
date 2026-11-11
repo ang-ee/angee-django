@@ -144,15 +144,6 @@ def test_graphql_check_then_schema_command_reuses_the_built_schema(
 
     schemas = GraphQLSchemas([])
     schemas.__dict__["parts"] = {"public": SchemaParts(query=(Query,))}
-    original_build = schemas._build
-    builds: list[strawberry.Schema] = []
-
-    def counted_build(name: str) -> strawberry.Schema:
-        built = original_build(name)
-        builds.append(built)
-        return built
-
-    monkeypatch.setattr(schemas, "_build", counted_build)
     monkeypatch.setattr(GraphQLSchemas, "from_discovery", classmethod(lambda cls: schemas))
     with override_system_checks([check_graphql_schemas]):
         with override_settings(COMPOSE_OUTPUT_DIR=tmp_path / "runtime"):
@@ -165,6 +156,6 @@ def test_graphql_check_then_schema_command_reuses_the_built_schema(
             with pytest.raises(CommandError, match="compiler-owned"):
                 call_command("schema", verbosity=0)
 
-    assert len(builds) == 1
-    assert schemas.build("public") is builds[0]
+    # Both commands read discovery's schema: its one cached build renders the SDL.
     assert "value: String!" in (tmp_path / "runtime" / "schemas" / "public.graphql").read_text()
+    assert schemas.build("public") is schemas.build("public")

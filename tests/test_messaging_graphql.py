@@ -384,17 +384,16 @@ def test_transcript_parts_reuse_complete_prefetch_at_list_scale(
     schema = _schema()
     # Warm process-wide metadata caches, then measure fresh requests/querysets.
     _data(execute_schema(schema, query, {**variables, "limit": 1}, user=admin))
-    manager_type = type(messaging_models.Part.objects)
-    reading_order = manager_type.reading_order_for_message
+    reading_order = messaging_models.Part.objects.reading_order_for_message
     visited: list[str] = []
 
-    def read_prefetched(manager: Any, message: messaging_models.Message) -> list[messaging_models.Part]:
+    def read_prefetched(message: messaging_models.Message) -> list[messaging_models.Part]:
         with django_assert_num_queries(0):
-            parts = reading_order(manager, message)
+            parts = reading_order(message)
         visited.append(str(message.sqid))
         return parts
 
-    monkeypatch.setattr(manager_type, "reading_order_for_message", read_prefetched)
+    monkeypatch.setattr(messaging_models.Part.objects, "reading_order_for_message", read_prefetched)
     tables = [
         connection.ops.quote_name(model._meta.db_table)
         for model in (messaging_models.Part, messaging_models.Fragment, StorageFile, MimeType)

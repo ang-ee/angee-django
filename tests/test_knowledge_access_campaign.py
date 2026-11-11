@@ -158,17 +158,16 @@ def test_record_note_is_atomic_and_replays_the_original_binding(composed_tables,
     vault = vault_for(owner, name="Notes")
     target = vault_for(owner, name="Target")
     manager = RecordBinding.objects
-    upsert = type(manager).upsert
     with actor_context(owner):
         def fail_binding(*args, **kwargs):
             raise RuntimeError("Binding unavailable")
 
-        monkeypatch.setattr(type(manager), "upsert", fail_binding)
+        monkeypatch.setattr(manager, "upsert", fail_binding)
         with pytest.raises(RuntimeError, match="Binding unavailable"):
             manager.create_note(target=target, vault=vault, body="A note\nDetails", idempotency_key="post-note")
         assert not Page.objects.filter(vault=vault).exists()
         assert not changeset_model().objects.filter(key="post-note").exists()
-        monkeypatch.setattr(type(manager), "upsert", upsert)
+        monkeypatch.delattr(manager, "upsert")
         binding = manager.create_note(target=target, vault=vault, body="A note\nDetails", idempotency_key="post-note")
         replay = manager.create_note(target=target, vault=vault, body="A note\nDetails", idempotency_key="post-note")
         assert replay.pk == binding.pk
@@ -453,7 +452,6 @@ def test_record_note_and_binding_keep_locks_replay_and_rollback(
     vault = vault_for(owner, name="Notes")
     target = vault_for(owner, name="Target")
     manager = RecordBinding.objects.db_manager("default") if bound_manager else RecordBinding.objects
-    upsert = type(manager).upsert
     with actor_context(owner), changeset(fresh=True):
         with CaptureQueriesContext(connection) as queries:
             binding = manager.create_note(
@@ -474,11 +472,11 @@ def test_record_note_and_binding_keep_locks_replay_and_rollback(
         def fail_binding(*args, **kwargs):
             raise RuntimeError("Binding unavailable")
 
-        monkeypatch.setattr(type(manager), "upsert", fail_binding)
+        monkeypatch.setattr(manager, "upsert", fail_binding)
         with pytest.raises(RuntimeError, match="Binding unavailable"):
             manager.create_note(
                 target=target, vault=vault, body="Must roll back", idempotency_key="rollback",
             )
-        monkeypatch.setattr(type(manager), "upsert", upsert)
+        monkeypatch.delattr(manager, "upsert")
         assert Page.objects.filter(vault=vault).count() == 1
         assert not changeset_model().objects.filter(key="rollback").exists()

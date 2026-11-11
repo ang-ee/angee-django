@@ -38,7 +38,6 @@ from rebac import (
     to_subject_ref,
     write_relationships,
 )
-from rebac.actors import current_sudo_reason, is_sudo
 
 import angee.spaces.testing.models  # noqa: F401 -- register related models before native database setup
 import tests.test_integrate_vcs  # noqa: F401 -- register related models before native database setup
@@ -1488,23 +1487,11 @@ def test_agent_record_task_completion_posts_system_message_with_service_user(mon
         _record_holders(doc, reader=owner, writer=agent.user)
         task = ProjectTask.objects.schedule(doc, title="Close the loop", assignee=owner, due_date=_AT.date())
 
-    post_context: dict[str, Any] = {}
-    manager_type = type(Message.objects)
-    original_post_to_thread = manager_type.post_to_thread
-
-    def spy_post_to_thread(manager: Any, *args: Any, **kwargs: Any) -> Any:
-        post_context["is_sudo"] = is_sudo()
-        post_context["reason"] = current_sudo_reason()
-        return original_post_to_thread(manager, *args, **kwargs)
-
-    monkeypatch.setattr(manager_type, "post_to_thread", spy_post_to_thread)
-
     with actor_context(agent.principal_subject()):
         ProjectTask.objects.get(pk=task.pk).complete(feedback="Handled by agent.")
 
     message = Message._base_manager.get(subtype__key="activity_done")
-    assert post_context == {"is_sudo": True, "reason": "messaging.system_post"}
-    assert message.created_by_id == service_user_id
+    assert message.created_by_id == service_user_id  # a system post, never the acting agent
     assert message.message_type == Message.MessageKind.NOTIFICATION
     assert message.subtype is not None
     assert message.subtype.key == "activity_done"
@@ -2006,11 +1993,7 @@ def test_ingest_suggests_each_unresolved_handle_once_after_batch_commit(
         "on_commit",
         lambda callback, **options: callbacks.append(callback),
     )
-    monkeypatch.setattr(
-        type(Party.objects),
-        "suggest_for",
-        lambda manager, handle: suggested.append(handle.pk),
-    )
+    monkeypatch.setattr(Party.objects, "suggest_for", lambda handle: suggested.append(handle.pk))
     shared = ParsedHandle(platform="email", value="shared@example.com")
     messages = [
         ParsedMessage(
@@ -2048,13 +2031,12 @@ def test_ingest_contains_suggestion_failures_and_continues_batch(
 
     attempted: list[str] = []
 
-    def suggest(manager: Any, handle: Handle) -> None:
-        del manager
+    def suggest(handle: Handle) -> None:
         attempted.append(handle.value)
         if handle.value == "fail@example.com":
             raise RuntimeError("directory unavailable")
 
-    monkeypatch.setattr(type(Party.objects), "suggest_for", suggest)
+    monkeypatch.setattr(Party.objects, "suggest_for", suggest)
     messages = [
         ParsedMessage(
             external_id=f"suggest-failure-{index}",

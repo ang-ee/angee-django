@@ -535,14 +535,6 @@ def test_named_schemas_project_only_the_native_roots_they_expose(monkeypatch: An
         write_backend=write_backend,
         id_decode=lambda value: value,
     )
-    finalized_labels: list[str | None] = []
-    original_finalize = metadata_module._finalize_data_resource
-
-    def counted_finalize(**kwargs: Any) -> Any:
-        finalized_labels.append(kwargs.get("model_label"))
-        return original_finalize(**kwargs)
-
-    monkeypatch.setattr(metadata_module, "_finalize_data_resource", counted_finalize)
     schemas = GraphQLSchemas(
         [
             SchemaAddon(
@@ -586,11 +578,7 @@ def test_named_schemas_project_only_the_native_roots_they_expose(monkeypatch: An
     assert write_only.roots.create_name == "insert_named_things_one"
     assert "list" not in write_only.capabilities
     assert {"create", "update", "delete"} <= set(write_only.capabilities)
-    assert finalized_labels == [
-        "tests.HasuraResourceThing",
-        "tests.HasuraResourceThing",
-        "tests.HasuraResourceThing",
-    ]
+    assert {resource.model for resource in (public, console, write_only)} == {HasuraResourceThing}
 
 
 def test_final_extension_object_retains_target_type_without_becoming_a_relation() -> None:

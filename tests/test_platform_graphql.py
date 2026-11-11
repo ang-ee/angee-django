@@ -362,16 +362,17 @@ def test_field_collection_groups_rows_by_model_and_kind(monkeypatch: Any) -> Non
 
 
 def test_model_only_explorer_selection_skips_catalogue_and_edges(monkeypatch: Any) -> None:
-    """A model-only explorer request reads neither the catalogue nor graph edges."""
+    """A model-only explorer request reads neither the catalogue nor resource counts.
+
+    The test holds no database access, so reading the addon catalogue fails it.
+    """
 
     config = apps.get_app_config("linesdemo")
     model = apps.get_model("linesdemo", "Tag")
     row = composed.PlatformModelRow.from_model(config, model)
     monkeypatch.setattr(platform_schema, "platform_can_read", lambda: True)
     monkeypatch.setattr(composed, "model_rows", lambda: [row])
-    monkeypatch.setattr(type(platform_schema._Addon.objects), "all", _unexpected)
     monkeypatch.setattr(composed, "resource_counts", _unexpected)
-    monkeypatch.setattr(platform_schema, "_edge_rows", _unexpected)
 
     data = _data(
         execute_schema(

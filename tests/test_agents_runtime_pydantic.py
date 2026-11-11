@@ -94,7 +94,7 @@ def test_anthropic_model_keeps_override_and_oauth_beta_header(monkeypatch: Any) 
         clients.append(client)
         return client
 
-    monkeypatch.setattr(AnthropicInferenceBackend, "_async_client_class", lambda self: client_class)
+    monkeypatch.setattr(AnthropicInferenceBackend, "async_client_class", staticmethod(client_class))
     binding = AnthropicInferenceBackend(provider).model("claude-sonnet-4-6", credential=override)
     assert override.freshened == 1
     assert provider_credential.freshened == 0
@@ -146,7 +146,7 @@ def test_openai_model_keeps_per_agent_static_credential(monkeypatch: Any) -> Non
         clients.append(client)
         return client
 
-    monkeypatch.setattr(OpenAIInferenceBackend, "_async_client_class", lambda self: client_class)
+    monkeypatch.setattr(OpenAIInferenceBackend, "async_client_class", staticmethod(client_class))
     binding = OpenAIInferenceBackend(provider).model("gpt-4.1", credential=override)
     assert override.freshened == 1
     assert provider_credential.freshened == 0
@@ -172,7 +172,7 @@ def test_backend_binds_ollama_without_a_credential(monkeypatch: Any) -> None:
         clients.append(client)
         return client
 
-    monkeypatch.setattr(OllamaInferenceBackend, "_async_client_class", lambda self: client_class)
+    monkeypatch.setattr(OllamaInferenceBackend, "async_client_class", staticmethod(client_class))
     provider = SimpleNamespace(credential=None, base_url="", config={})
     provider.backend = OllamaInferenceBackend(provider)
 
@@ -575,7 +575,7 @@ def test_stream_cancellation_and_deadline_close_sdk_client(monkeypatch: Any, exp
             clients.append(client)
             return client
 
-        monkeypatch.setattr(OpenAIInferenceBackend, "_async_client_class", lambda self: client_class)
+        monkeypatch.setattr(OpenAIInferenceBackend, "async_client_class", staticmethod(client_class))
         provider = SimpleNamespace(
             credential=_Credential("test-key"), base_url="https://provider.invalid/v1", config={}
         )

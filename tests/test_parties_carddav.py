@@ -15,6 +15,7 @@ from rebac import system_context
 from angee.graphql.testing.documents import execute_schema
 from angee.integrate.errors import IntegrationError
 from angee.integrate.http import HttpClient
+from angee.integrate.testing.http import mock_transport
 from angee.messaging.testing.models import Directory, Handle, Party, Person
 from angee.parties import schema as parties_schema
 from angee.parties_integrate_carddav import apps as carddav_apps
@@ -100,31 +101,24 @@ def _backend_with_http(http: Any) -> CardDavDirectoryBackend:
     return backend
 
 
-def test_native_httpx2_multistatus_and_case_insensitive_redirect(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_native_httpx2_multistatus_and_case_insensitive_redirect() -> None:
     """DAV accepts native 207 after HttpClient follows a mixed-case Location header."""
 
-    calls: list[str] = []
-
     def respond(request: httpx2.Request) -> httpx2.Response:
-        calls.append(str(request.url))
-        if len(calls) == 1:
+        if request.url.path == "/root":
             return httpx2.Response(302, headers={"LoCaTiOn": "/addressbooks/"})
         return httpx2.Response(207, content=b"<d:multistatus xmlns:d='DAV:'/>")
 
-    monkeypatch.setattr(HttpClient, "transport_factory", staticmethod(lambda **_: httpx2.MockTransport(respond)))
-    response = _backend_with_http(HttpClient())._request("PROPFIND", "https://dav.example/root", "")
+    with mock_transport(respond) as requests:
+        response = _backend_with_http(HttpClient())._request("PROPFIND", "https://dav.example/root", "")
 
     assert response.status_code == 207
-    assert calls == ["https://dav.example/root", "https://dav.example/addressbooks/"]
+    assert [str(request.url) for request in requests] == ["https://dav.example/root", "https://dav.example/addressbooks/"]
 
 
-def test_http_refusal_is_an_integration_error_without_vendor_payloads(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(
-        HttpClient,
-        "transport_factory",
-        staticmethod(lambda **_: httpx2.MockTransport(lambda request: httpx2.Response(503, content=b"secret=private"))),
-    )
-    with pytest.raises(CardDavError) as refused:
+def test_http_refusal_is_an_integration_error_without_vendor_payloads() -> None:
+    refusal = mock_transport(lambda request: httpx2.Response(503, content=b"secret=private"))
+    with refusal, pytest.raises(CardDavError) as refused:
         _backend_with_http(HttpClient())._request("PROPFIND", "https://dav.example/books/", "")
     assert isinstance(refused.value, IntegrationError)
     assert refused.value.public_message == "CardDAV PROPFIND returned HTTP 503."
@@ -193,15 +187,14 @@ def test_connect_probe_success_commits_every_owned_row_atomically(
         del backend
         probe_atomic_states.append(connection.in_atomic_block)
 
-    manager_type = type(Handle.objects)
-    claim_control = manager_type.claim_control
+    claim_control = Handle.objects.claim_control
 
-    def atomic_claim_control(manager: Any, user: Any, **kwargs: Any) -> Any:
+    def atomic_claim_control(user: Any, **kwargs: Any) -> Any:
         write_atomic_states.append(connection.in_atomic_block)
-        return claim_control(manager, user, **kwargs)
+        return claim_control(user, **kwargs)
 
     monkeypatch.setattr(CardDavDirectoryBackend, "probe", accept_probe)
-    monkeypatch.setattr(manager_type, "claim_control", atomic_claim_control)
+    monkeypatch.setattr(Handle.objects, "claim_control", atomic_claim_control)
     admin = parties_graphql._platform_admin("carddav-probe-success-admin")
 
     result = _connect_carddav(admin)

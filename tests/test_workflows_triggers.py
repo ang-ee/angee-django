@@ -46,7 +46,7 @@ pytestmark = [pytest.mark.django_db, pytest.mark.usefixtures("workflow_step_clas
 def trigger_resource_schema(monkeypatch):
     """Bare tests install just their real, composed resource owner, restoring it afterward."""
     owner = GraphQLSchemas([make_addon(schemas=knowledge_schema.schemas)])
-    monkeypatch.setattr(GraphQLSchemas, "_discovered", owner)
+    monkeypatch.setattr(GraphQLSchemas, "from_discovery", classmethod(lambda cls: owner))
     yield owner
 
 
@@ -517,7 +517,7 @@ def test_watch_capture_failure_preserves_the_native_save(trigger_setup, monkeypa
     def fail(*args, **kwargs):
         raise IntegrityError("watch capture failed")
 
-    monkeypatch.setattr(type(StepWatch.objects), "record_change", fail)
+    monkeypatch.setattr(StepWatch.objects, "record_change", fail)
     with transaction.atomic(), actor_context(actor):
         record.name = "Retained despite capture failure"
         record.save()

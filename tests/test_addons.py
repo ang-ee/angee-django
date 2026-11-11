@@ -246,41 +246,28 @@ def resource_model(monkeypatch):
 
 
 def test_resource_counts_tolerate_uncreated_ledger(monkeypatch, resource_model) -> None:
+    """A missing ledger is never queried: this test holds no database access."""
+
     resource = resource_model
-    queryset_type = type(resource.objects.all())
-    queried = []
-
-    def unavailable(queryset):
-        queried.append(queryset.db)
-        raise AssertionError("a missing ledger must not be queried")
-
-    monkeypatch.setattr(queryset_type, "counts_by_addon", unavailable)
-    monkeypatch.setattr(
-        connections[resource.objects.db].introspection,
-        "table_names",
-        lambda: [],
-    )
+    monkeypatch.setattr(connections[resource.objects.db].introspection, "table_names", lambda: [])
 
     assert platform_models.composed.resource_counts() == {}
-    assert queried == []
 
 
-def test_resource_counts_propagate_database_failures(monkeypatch, resource_model) -> None:
+def test_resource_counts_propagate_database_failures(db, monkeypatch, resource_model) -> None:
     """An existing ledger's database failure aborts reconciliation instead of reporting zero."""
 
     resource = resource_model
 
-    def unavailable(queryset):
-        raise DatabaseError("ledger unavailable")
+    def unavailable(execute, sql, params, many, context):
+        if resource._meta.db_table in sql:
+            raise DatabaseError("ledger unavailable")
+        return execute(sql, params, many, context)
 
-    monkeypatch.setattr(type(resource.objects.all()), "counts_by_addon", unavailable)
-    monkeypatch.setattr(
-        connections[resource.objects.db].introspection,
-        "table_names",
-        lambda: [resource._meta.db_table],
-    )
+    connection = connections[resource.objects.db]
+    monkeypatch.setattr(connection.introspection, "table_names", lambda: [resource._meta.db_table])
 
-    with pytest.raises(DatabaseError, match="ledger unavailable"):
+    with connection.execute_wrapper(unavailable), pytest.raises(DatabaseError, match="ledger unavailable"):
         platform_models.composed.resource_counts()
 
 

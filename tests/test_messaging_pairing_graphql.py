@@ -101,11 +101,7 @@ def test_channel_pairing_bounds_arbitrary_backend_value_error(
     admin = _platform_admin("msg-pairing-error-admin")
     channel = _live_channel("msg-pairing-error")
     secret = "provider-secret-value"
-    monkeypatch.setattr(
-        type(channel),
-        "pairing",
-        lambda _channel: (_ for _ in ()).throw(ValueError(secret)),
-    )
+    monkeypatch.setattr(FakePairingBackend, "pairing", lambda backend: (_ for _ in ()).throw(ValueError(secret)))
 
     result = execute_schema(
         _schema(),

@@ -262,7 +262,7 @@ class CaptureCampaign(TransactionTestCase):
             with self.subTest(case=case), system_context(reason="tests.t3.domain_capture"):
                 if case == "factory_refusal":
                     with patch.object(
-                        type(users.objects), "create_person_as_system", side_effect=ValidationError("Refused")
+                        users.objects, "create_person_as_system", side_effect=ValidationError("Refused")
                     ):
                         (message,) = self.Message.objects.ingest([parsed], channel=channel)
                 else:

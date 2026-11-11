@@ -227,14 +227,14 @@ def test_a_live_sessions_reports_land_one_by_one_and_stop_between_chunks(monkeyp
     session = object.__new__(LiveChannelSession)
     session.bridge = SimpleNamespace(pk=1)
     session._still_wanted = lambda: wanted[0]
-    real_fill = type(Handle.objects).fill_avatar
+    real_fill = Handle.objects.fill_avatar
 
-    def fill(manager: Any, report: AvatarReport) -> bool:
+    def fill(report: AvatarReport) -> bool:
         if report.platform == "broken":
             raise RuntimeError("storage unavailable")
-        return real_fill(manager, report)
+        return real_fill(report)
 
-    monkeypatch.setattr(type(Handle.objects), "fill_avatar", fill)
+    monkeypatch.setattr(Handle.objects, "fill_avatar", fill)
     broken = AvatarReport(platform="broken", value="x", external_id="", avatar=PNG_BYTES)
 
     assert LiveChannelSession._fill_avatars(session, [broken, _report(PNG_BYTES)]) is True

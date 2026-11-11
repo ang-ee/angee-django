@@ -8,7 +8,7 @@ from typing import Any, cast
 import pytest
 from django.core.exceptions import ValidationError
 from rebac import PermissionDenied, SubjectRef, actor_context, system_context, to_subject_ref
-from rebac.resources import model_for_resource_type
+from rebac.resources import model_for_resource_type, model_resource_type
 from rebac.schema.parser import parse_zed
 
 from angee.agents.models import Agent as AbstractAgent
@@ -21,6 +21,7 @@ from angee.projects.models import Task
 from angee.projects.testing.models import Project
 from angee.storage.models import Drive
 from angee.workflows.models import Workflow
+from angee.workflows.testing.models import Workflow as ConcreteWorkflow
 from tests.conftest import create_user
 
 
@@ -196,24 +197,22 @@ def test_relation_options_require_authority_on_every_selected_record(monkeypatch
 
     target = SimpleNamespace(validate_record_access_target=lambda: None)
 
-    class ShareModel:
-        @classmethod
-        def get_rebac_grantable(cls) -> dict[str, str]:
-            return {"viewer": "share", "editor": "admin"}
-
     def authorize(_info: Any, _model: Any, target_id: str, permission: str) -> Any:
-        if target_id == "limited" and permission == "admin":
+        if target_id == "limited":
             raise ValidationError("denied")
         return target
 
-    monkeypatch.setattr(sharing, "_shareable_model", lambda _type: ShareModel)
     monkeypatch.setattr(sharing, "authorized_permission_target", authorize)
+    workflows = model_resource_type(ConcreteWorkflow)  # every relation is granted on ``write``
+    query = sharing.RecordAccessQuery()
 
-    options = sharing.RecordAccessQuery().record_access_options(None, "test/record", ["full", "limited"])
-
-    assert [(option.relation, option.permission) for option in options] == [("viewer", "share")]
+    assert [option.relation for option in query.record_access_options(None, workflows, ["full"])] == [
+        "editor", "viewer", "starter", "operator",
+    ]
+    with pytest.raises(ValidationError):  # no relation is authorized on every selected record
+        query.record_access_options(None, workflows, ["full", "limited"])
     with pytest.raises(ValueError, match="at least one"):
-        sharing.RecordAccessQuery().record_access_options(None, "test/record", [])
+        query.record_access_options(None, workflows, [])
 
 
 @pytest.mark.parametrize(

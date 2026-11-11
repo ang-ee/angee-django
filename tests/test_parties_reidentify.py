@@ -31,13 +31,12 @@ def test_handle_reidentify_recovers_a_value_owner_created_after_initial_lookup(m
     with system_context(reason="test.parties.reidentify_race"):
         source = Handle.objects.create(platform="email", value="old@example.com")
         target = Handle.objects.create(platform="email", value="new@example.com")
-        manager = type(Handle.objects)
-        find_identity = manager.find_identity
+        find_identity = Handle.objects.find_identity
         calls = []
-        def raced_lookup(self, **kwargs):
+        def raced_lookup(**kwargs):
             calls.append(kwargs)
-            return None if len(calls) == 1 else find_identity(self, **kwargs)
-        monkeypatch.setattr(manager, "find_identity", raced_lookup)
+            return None if len(calls) == 1 else find_identity(**kwargs)
+        monkeypatch.setattr(Handle.objects, "find_identity", raced_lookup)
         outcome = Handle.objects.reidentify(source, expected_value="old@example.com", value="new@example.com")
         assert outcome == (True, False)
         source.refresh_from_db()

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import io
+import tracemalloc
 import zipfile
 import zlib
 
@@ -65,11 +66,9 @@ def test_metadata_rejects_non_wheel_compression_methods():
 def test_forged_zip_size_cannot_trigger_unbounded_decompression(monkeypatch):
     files = wheel_files()
     metadata_name = next(name for name in files if name.endswith("/METADATA"))
-    payload = "x" * 262144
+    payload = "x" * (32 * 1024 * 1024)  # compresses to kilobytes; inflating it whole would allocate 32 MiB
     files[metadata_name] = payload
     original_inventory = zipfile.ZipFile.infolist
-    original_decompressor = zipfile._get_decompressor
-    lengths = []
     def inventory(archive):
         members = original_inventory(archive)
         for member in members:
@@ -77,18 +76,15 @@ def test_forged_zip_size_cannot_trigger_unbounded_decompression(monkeypatch):
                 member.file_size = 64
                 member.CRC = zlib.crc32(payload[:64].encode())
         return members
-    class Observe:
-        def __init__(self, native):
-            self.native = native
-        def decompress(self, data, max_length=0):
-            lengths.append(max_length)
-            return self.native.decompress(data, max_length)
-        def __getattr__(self, name):
-            return getattr(self.native, name)
     monkeypatch.setattr(zipfile.ZipFile, "infolist", inventory)
-    monkeypatch.setattr(zipfile, "_get_decompressor", lambda *args: Observe(original_decompressor(*args)))
-    assert wheels.wheel_metadata(archive_bytes(files))[metadata_name] == payload[:64]
-    assert lengths and 0 < max(lengths) <= 1024 * 1024 + 1
+    archive = archive_bytes(files)
+    tracemalloc.start()
+    try:
+        assert wheels.wheel_metadata(archive)[metadata_name] == payload[:64]
+        _current, peak = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+    assert peak < 4 * 1024 * 1024
 
 
 def local_source(root):

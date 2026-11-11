@@ -11,6 +11,7 @@ import base64
 import importlib
 import json
 from dataclasses import dataclass, field
+from datetime import timedelta
 from types import SimpleNamespace
 from typing import Any
 
@@ -21,6 +22,7 @@ from django.db import IntegrityError, connection, models, transaction
 from django.db.models.signals import pre_delete
 from django.test import RequestFactory, override_settings
 from django.test.utils import CaptureQueriesContext
+from django.utils import timezone
 from rebac import (
     RelationshipTuple,
     actor_context,
@@ -1950,13 +1952,15 @@ def test_provision_agent_reports_racing_deprovision_without_clobbering_state(
     agent = _provisionable_agent(admin, "Race", slug="agt-race-tpl")
     agent_id = _public_id(agent.sqid)
 
-    def render_after_racing_deprovision(*args: Any, **kwargs: Any) -> dict[str, str]:
-        del args, kwargs
-        with system_context(reason="test.agents.race.concurrent_deprovision"):
-            Agent.objects.filter(pk=agent.pk).update(lifecycle="deprovisioning")
-        return {"workspace": "ws-race", "service": "svc-race"}
+    class RacingOperator(_Operator):
+        """Teardown advances the row while the daemon renders the workspace."""
 
-    monkeypatch.setattr(agents_provisioning, "_render_agent", render_after_racing_deprovision)
+        def create_workspace(self, *, template: str, inputs: dict[str, str]) -> str:
+            with system_context(reason="test.agents.race.concurrent_deprovision"):
+                Agent.objects.filter(pk=agent.pk).update(lifecycle="deprovisioning")
+            return super().create_workspace(template=template, inputs=inputs)
+
+    RacingOperator().install(monkeypatch)
 
     result = _data(
         execute_schema(
@@ -2107,11 +2111,20 @@ def test_provision_agent_records_error_when_plan_resolution_fails(composed_table
     admin = _platform_admin("agt-planfail-admin")
     agent = _provisionable_agent(admin, "PlanFail", slug="agt-planfail-tpl")
     agent_id = _public_id(agent.sqid)
-
-    def _boom(_agent: Any) -> Any:
-        raise RuntimeError("credential is unreadable")
-
-    monkeypatch.setattr(agents_provisioning, "_render_plan", _boom)
+    operator = _Operator().install(monkeypatch)
+    with system_context(reason="test.agents.planfail.mcp_credential"):
+        # An MCP bearer that must refresh before it is synced, and whose refresh cannot run.
+        credential = make_integration(
+            "agt-planfail-mcp", kind=CredentialKind.OAUTH, material={"access_token": "a", "refresh_token": "r"},
+        ).credential
+        credential.oauth_client.supports_refresh = True
+        credential.oauth_client.save(update_fields=["supports_refresh"])
+        credential.expires_at = timezone.now() - timedelta(minutes=1)
+        credential.save(update_fields=["expires_at"])
+        server = MCPServer.objects.create(
+            name="notes", url="http://host.docker.internal:8101/mcp/notes/", credential=credential,
+        )
+        agent.mcp_servers.add(server)
 
     result = _data(
         execute_schema(
@@ -2122,14 +2135,15 @@ def test_provision_agent_records_error_when_plan_resolution_fails(composed_table
         )
     )["provision_agent"]
 
-    assert result["ok"] is False and "credential is unreadable" in result["message"]
+    assert result["ok"] is False and "Credential refresh requires autocommit" in result["message"]
+    assert operator.calls == []  # the plan failed before any daemon call
     with system_context(reason="test.agents.planfail.verify"):
         agent.refresh_from_db()
         # Run state ERROR with the lifecycle reset to DRAFT — not stranded in PROVISIONING
         # — and no instance names recorded.
         assert (str(agent.runtime_status), str(agent.lifecycle)) == ("error", "draft")
         assert (agent.workspace, agent.service) == ("", "")
-        assert "credential is unreadable" in agent.last_error
+        assert "Credential refresh requires autocommit" in agent.last_error
 
 
 def test_reprovision_agent_recreates_service_over_existing_workspace(composed_tables: None, monkeypatch: Any) -> None:

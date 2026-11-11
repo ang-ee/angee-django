@@ -20,7 +20,9 @@ from concurrent.futures import ThreadPoolExecutor
 from functools import partial
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
+import httpx2
 import pytest
 import strawberry
 from django.apps import apps
@@ -35,7 +37,6 @@ from rebac import actor_context, system_context, to_object_ref, to_subject_ref
 from rebac.backends import backend
 from rebac.middleware import ActorMiddleware
 from rebac.roles import grant as grant_role
-from strawberry.django.views import GraphQLView
 
 from angee.agents.testing.models import Agent
 from angee.base.identity import public_data_id_field
@@ -45,21 +46,20 @@ from angee.graphql import subscriptions
 from angee.graphql.data.metadata import readable_model_field_names
 from angee.graphql.data.resource_fields import resource_field_kind, resource_field_widget
 from angee.graphql.events import ChangePayload
-from angee.graphql.schema import AngeeSchema
+from angee.graphql.schema import GraphQLSchemas
 from angee.graphql.testing.documents import execute_schema, graphql_request
 from angee.graphql.testing.documents import result_data as _data
-from angee.graphql.view_as import ViewAsReadOnlyExtension
 from angee.graphql.views import graphql_endpoint
 from angee.integrate.credentials import CredentialKind
-from angee.integrate.oauth import discovery as oauth_discovery
 from angee.integrate.oauth import state
 from angee.integrate.oauth.client import OAuthClientProtocol
 from angee.integrate.oauth.errors import OAuthFlowError
+from angee.integrate.testing.http import mock_transport
 from tests import (
     test_agents_graphql,  # noqa: F401 -- register the concrete relation graph
     test_messaging,  # noqa: F401 -- register the concrete relation graph
 )
-from tests.conftest import Credential, ExternalAccount, OAuthClient, addon_schema
+from tests.conftest import Credential, ExternalAccount, OAuthClient, SchemaAddon, addon_schema
 from tests.conftest import create_platform_admin as _platform_admin
 from tests.iam_models import Group as IAMGroup
 from tests.lock_waits import submit, wait_for_lock
@@ -2056,7 +2056,6 @@ def test_discover_oauth_endpoints_is_admin_gated_and_validates_discovery_url(
 
 def test_discover_oauth_endpoints_persists_the_filled_endpoints(
     iam_connection_tables: None,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """The client row saves the endpoints discovery filled; the action only reports the issuer."""
 
@@ -2074,15 +2073,12 @@ def test_discover_oauth_endpoints_persists_the_filled_endpoints(
         "token_endpoint": "https://persisted.example/token",
     }
 
-    def fetch_document(url: str) -> dict[str, str]:
-        assert url == client.discovery_url
-        return document
-
-    monkeypatch.setattr(oauth_discovery, "oauth_get_json", fetch_document)
     discover = "mutation($id: ID!){ discover_oauth_endpoints(id: $id){ ok message } }"
 
-    result = _data(_execute(_schema("console"), discover, {"id": str(client.sqid)}, user=admin))
+    with mock_transport(lambda request: httpx2.Response(200, json=document)) as requests:
+        result = _data(_execute(_schema("console"), discover, {"id": str(client.sqid)}, user=admin))
 
+    assert [str(request.url) for request in requests] == [client.discovery_url]
     assert result["discover_oauth_endpoints"] == {
         "ok": True,
         "message": "Discovered endpoints for https://persisted.example.",
@@ -2093,6 +2089,15 @@ def test_discover_oauth_endpoints_persists_the_filled_endpoints(
         "https://persisted.example/authorize",
         "https://persisted.example/token",
     )
+
+
+def _serve(monkeypatch: pytest.MonkeyPatch, query: type) -> str:
+    """Serve ``query`` from discovery at an endpoint schema name only this test dispatches to."""
+
+    name = f"view-as-{uuid4().hex}"
+    discovered = GraphQLSchemas([SchemaAddon({name: {"query": (query,)}})])
+    monkeypatch.setattr(GraphQLSchemas, "from_discovery", classmethod(lambda cls: discovered))
+    return name
 
 
 def test_view_as_target_has_no_pinned_admitting_actor(
@@ -2116,17 +2121,16 @@ def test_view_as_target_has_no_pinned_admitting_actor(
             assert active.user.effective_actor() == (to_subject_ref(target), False)
             return active.user.has_access("write")
 
-    view = GraphQLView.as_view(schema=AngeeSchema(query=Query))
-    monkeypatch.setattr("angee.graphql.views._get_view", lambda schema_name: view)
+    name = _serve(monkeypatch, Query)
     request = RequestFactory().post(
         "/graphql/public/",
-        data={"query": "{ targetAuthority }"},
+        data={"query": "{ target_authority }"},
         content_type="application/json",
         HTTP_X_ANGEE_VIEW_AS=_user_public_id(target),
     )
     request.user = admin
-    response = ActorMiddleware(lambda active: graphql_endpoint(active, "public"))(request)
-    assert json.loads(response.content) == {"data": {"targetAuthority": False}}
+    response = ActorMiddleware(lambda active: graphql_endpoint(active, name))(request)
+    assert json.loads(response.content) == {"data": {"target_authority": False}}
     assert request.user is admin
     assert not hasattr(request, "view_as")
 
@@ -2144,9 +2148,7 @@ def test_view_as_unknown_operation_uses_strawberry_bad_request(
         def hello(self) -> str:
             return "hello"
 
-    schema = AngeeSchema(query=Query, extensions=[ViewAsReadOnlyExtension])
-    view = GraphQLView.as_view(schema=schema)
-    monkeypatch.setattr("angee.graphql.views._get_view", lambda schema_name: view)
+    name = _serve(monkeypatch, Query)  # discovery builds carry ViewAsReadOnlyExtension
     request = RequestFactory().post(
         "/graphql/public/",
         content_type="application/json",
@@ -2154,7 +2156,7 @@ def test_view_as_unknown_operation_uses_strawberry_bad_request(
         data={"query": "query Existing { hello }", "operationName": "Missing"},
     )
     request.user = admin
-    response = ActorMiddleware(lambda active: graphql_endpoint(active, "public"))(request)
+    response = ActorMiddleware(lambda active: graphql_endpoint(active, name))(request)
     assert response.status_code == 400
     assert request.user is admin
     assert not hasattr(request, "view_as")
@@ -2199,7 +2201,6 @@ def test_view_as_denial_is_audited_and_missing_admission_fails_closed(
 ) -> None:
     admin = _platform_admin("preview-denied-admin")
     monkeypatch.setattr(User._default_manager, "admit_view_as", AngeeManager().admit_view_as)
-    monkeypatch.setattr("angee.graphql.views._get_view", lambda schema_name: None)
     request = RequestFactory().post(
         "/graphql/public/",
         data={"query": "query Preview { __typename }", "operationName": "Preview"},

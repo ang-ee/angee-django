@@ -37,13 +37,13 @@ class CampaignIdentities(TransactionTestCase):
         prefix = hashlib.sha256(self.id().encode()).hexdigest()[:12]
         factory = get_user_model().objects.create_person_as_system
 
-        def person(_manager: Any, **kwargs: Any) -> Any:
+        def person(**kwargs: Any) -> Any:
             kwargs["username"] = f"{prefix}-{kwargs['username']}"
             kwargs["email"] = f"{kwargs['username']}@example.test"
             return factory(**kwargs)
 
         self.enterContext(patch.object(timezone, "now", return_value=datetime(2032, 3, 4, 12, tzinfo=UTC)))
-        with patch.object(type(get_user_model().objects), "create_person_as_system", person):
+        with patch.object(get_user_model().objects, "create_person_as_system", person):
             super().setUp()
         # User pickers must resolve named recipients before the action reaches its
         # proposal guard. This grants directory reads, never administrator reach.

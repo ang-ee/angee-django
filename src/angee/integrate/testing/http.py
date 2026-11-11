@@ -21,17 +21,19 @@ def mock_transport(handler: Callable[[httpx2.Request], httpx2.Response]) -> Iter
     ``httpx2.MockTransport`` replaces the network at ``HttpClient.transport_factory``,
     the one transport the integration backends and the OAuth client build, so URL
     gating, headers, redirects, byte caps and error mapping still run. ``handler``
-    raises an ``httpx2`` transport error to model an unreachable host.
+    raises an ``httpx2`` transport error to model an unreachable host. Each recorded
+    request carries the address policy its transport was built with in
+    ``request.extensions["allow_private"]``.
     """
 
     requests: list[httpx2.Request] = []
 
-    def answer(request: httpx2.Request) -> httpx2.Response:
-        requests.append(request)
-        return handler(request)
-
     def transport(*, allow_private: bool) -> httpx2.BaseTransport:
-        del allow_private
+        def answer(request: httpx2.Request) -> httpx2.Response:
+            request.extensions["allow_private"] = allow_private
+            requests.append(request)
+            return handler(request)
+
         return httpx2.MockTransport(answer)
 
     with patch.object(HttpClient, "transport_factory", staticmethod(transport)):

@@ -16,7 +16,7 @@ from angee.workflows.runner import runner
 from angee.workflows.steps import Step
 from angee.workflows.testing.drivers import decide, deliver_decision_wakes, load_workflow, run_until, start_run
 from angee.workflows.testing.models import StepAttempt, StepRecord, StepRun, Workflow, WorkflowRun
-from tests.conftest import create_platform_admin, create_user, vault_for
+from tests.conftest import Vault, create_platform_admin, create_user, vault_for
 from tests.mtidemo.models import MtiChild, MtiParent
 
 
@@ -456,7 +456,8 @@ def test_proposal_uses_prepared_subject_lock_and_rechecks_permission(review, mon
     actor, people, _, question = review
     _, step = start_review(review)
     decision = answer(questions(step)[0], people[0])
-    model = type(question.review_subject)
+    model = Vault  # the review subject's concrete model
+    assert isinstance(question.review_subject, model)
     original_lock = model.lock_subject
     original_access = model.has_access
     observed = []

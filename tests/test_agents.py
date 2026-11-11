@@ -439,7 +439,7 @@ def test_openai_compatible_endpoint_binds_owned_auth_sync_and_async(attached: bo
         captured.append(kwargs)
         return AsyncOpenAI(**kwargs)
 
-    monkeypatch.setattr(backend, "_async_client_class", lambda: async_client)
+    backend.async_client_class = async_client
 
     async def bind() -> None:
         async with backend.model("llama3.2:latest"):
@@ -1427,8 +1427,9 @@ def test_unknown_inference_settings_are_rejected_before_binding(monkeypatch):
 
 @pytest.mark.parametrize("timeout", [-1, float("nan"), float("inf"), "invalid"])
 def test_invalid_provider_timeout_is_configuration_error_before_sdk_client(timeout, monkeypatch):
-    backend = OllamaInferenceBackend(SimpleNamespace(credential=None, base_url="", config={"timeout_seconds": timeout}))
-    monkeypatch.setattr(backend, "_credential_auth", lambda **kwargs: pytest.fail("credential was refreshed"))
+    credential = SimpleNamespace(ensure_fresh=lambda: pytest.fail("credential was refreshed"))
+    provider = SimpleNamespace(credential=credential, base_url="", config={"timeout_seconds": timeout})
+    backend = OllamaInferenceBackend(provider)
     monkeypatch.setattr("openai.DefaultHttpxClient", lambda **kwargs: pytest.fail("provider client constructed"))
     with pytest.raises(ValueError, match="timeout") as error:
         backend._client_kwargs()

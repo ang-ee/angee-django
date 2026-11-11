@@ -12,6 +12,7 @@ from pathlib import Path
 from threading import Barrier
 from typing import Any
 from unittest.mock import patch
+from uuid import uuid4
 
 import pytest
 from django.contrib.auth import get_user_model
@@ -35,22 +36,32 @@ from rebac.actors import current_sudo_reason, to_subject_ref
 from rebac.errors import PermissionDenied
 from rebac.middleware import ActorMiddleware
 from rebac.roles import grant
-from strawberry.django.views import GraphQLView
 
 from angee.base.models.identity import public_id_of
 from angee.base.models.trash import ARCHIVE_FLAG_FIELD, ArchiveMixin, ArchiveQuerySet
 from angee.base.permissions import DirectRecordAccess
 from angee.graphql import records
 from angee.graphql.data.resource_fields import is_archive_field, is_trash_field
+from angee.graphql.schema import GraphQLSchemas
 from angee.graphql.testing.documents import execute_schema, result_data
 from angee.graphql.views import graphql_endpoint
 from angee.messaging.testing.models import Message, Part
 from angee.storage import exceptions
 from angee.storage import models as storage_models
-from angee.storage.models import FileManager, UploadState
+from angee.storage.models import FileManager, FileQuerySet, FolderQuerySet, UploadState
 from angee.storage.signals import file_finalized
 from angee.storage_integrate.backends import LocalFolderBackend
-from tests.conftest import Backend, Drive, File, FileAttachment, Folder, MimeType, addon_schema, create_platform_admin
+from tests.conftest import (
+    Backend,
+    Drive,
+    File,
+    FileAttachment,
+    Folder,
+    MimeType,
+    SchemaAddon,
+    addon_schema,
+    create_platform_admin,
+)
 from tests.mtidemo.models import MtiChild, MtiParent
 from tests.scopedemo.models import NativeAttachmentTarget
 
@@ -1417,23 +1428,23 @@ def test_backend_storage_cache_is_bounded(
 
     del db
 
-    monkeypatch.setattr(storage_models, "_STORAGE_CACHE_MAX_SIZE", 2)
+    bound = storage_models._STORAGE_CACHE_MAX_SIZE
     Backend._storage_cache.clear()
     with system_context(reason="test storage setup"):
-        backends = [
-            Backend._base_manager.create(
+        backends = Backend._base_manager.bulk_create(
+            Backend(
                 slug=f"bounded-{index}",
                 label=f"Bounded {index}",
                 backend_class="local",
                 backend_config={"root": str(tmp_path / str(index)), "base_url": "/media/"},
             )
-            for index in range(3)
-        ]
+            for index in range(bound + 1)
+        )
 
     for backend in backends:
         backend.storage
 
-    assert len(Backend._storage_cache) == 2
+    assert len(Backend._storage_cache) == bound
 
 
 def test_ingest_stream_dedup_does_not_consume_the_reader(drive: Any) -> None:
@@ -1740,7 +1751,7 @@ def test_file_purge_rereads_each_row_under_its_lock(drive: Any, monkeypatch: pyt
     """A row restored after the selection was listed no longer matches it and survives."""
 
     (row,) = _expired_trash(drive, b"restored")
-    queryset = type(File.objects.all())
+    queryset = FileQuerySet  # the storage owner's File queryset
     lock = queryset.lock_if_supported
 
     def restore_then_lock(self: Any, **kwargs: Any) -> Any:
@@ -1760,7 +1771,7 @@ def test_file_purge_against_a_concurrent_restore_skips_the_row(drive: Any, monke
     """Another connection restores the listed row before the purge locks it; the purge leaves it."""
 
     (row,) = _expired_trash(drive, b"contested")
-    queryset = type(File.objects.all())
+    queryset = FileQuerySet  # the storage owner's File queryset
     lock = queryset.lock_if_supported
 
     def restore() -> None:
@@ -1818,7 +1829,7 @@ def test_folder_prune_keeps_the_parent_of_a_trashed_file(drive: Any) -> None:
 def test_folder_prune_rechecks_an_empty_candidate_under_its_lock(drive: Any, monkeypatch: pytest.MonkeyPatch) -> None:
     """A file placed after the inventory keeps its folder: the locked recheck decides, not the snapshot."""
 
-    queryset = type(Folder.objects.all())
+    queryset = FolderQuerySet  # the storage owner's Folder queryset
     lock = queryset.lock_if_supported
 
     def file_arrives_then_lock(self: Any, **kwargs: Any) -> Any:
@@ -1841,7 +1852,7 @@ def test_folder_prune_against_a_concurrent_file_create_keeps_the_folder(
 ) -> None:
     """Another connection commits a file into the empty candidate before the prune locks it; the folder stays."""
 
-    queryset = type(Folder.objects.all())
+    queryset = FolderQuerySet  # the storage owner's Folder queryset
     lock = queryset.lock_if_supported
 
     def place(folder_id: str) -> None:
@@ -2063,8 +2074,9 @@ def test_storage_preview_does_not_mint_download_urls(
     settings.ROOT_URLCONF = "angee.storage.urls"
     row = _proxy_upload(drive, PNG_BYTES)
     admin = create_platform_admin("storage-preview-admin")
-    view = GraphQLView.as_view(schema=addon_schema(storage_schema.schemas, "public"))
-    monkeypatch.setattr("angee.graphql.views._get_view", lambda schema_name: view)
+    name = f"storage-preview-{uuid4().hex}"  # an endpoint schema only this test dispatches to
+    discovered = GraphQLSchemas([SchemaAddon({name: storage_schema.schemas["public"]})])
+    monkeypatch.setattr(GraphQLSchemas, "from_discovery", classmethod(lambda cls: discovered))
     payload = {
         "query": "query PreviewFile($id: String!) { files_by_pk(id: $id) { id url } }",
         "variables": {"id": str(row.sqid)},
@@ -2075,7 +2087,7 @@ def test_storage_preview_does_not_mint_download_urls(
     )
     request.user = admin
     with patch.object(File, "issue_download_token", autospec=True, side_effect=AssertionError("minted")) as mint:
-        response = ActorMiddleware(lambda active: graphql_endpoint(active, "public"))(request)
+        response = ActorMiddleware(lambda active: graphql_endpoint(active, name))(request)
         assert response.status_code == 200
         assert json.loads(response.content) == {"data": {"files_by_pk": {"id": str(row.sqid), "url": None}}}
         mint.assert_not_called()
@@ -2086,7 +2098,7 @@ def test_storage_preview_does_not_mint_download_urls(
     request = RequestFactory().post("/graphql/public/", data=payload, content_type="application/json")
     request.user = drive.alice
     with patch.object(File, "issue_download_token", autospec=True, side_effect=File.issue_download_token) as mint:
-        response = ActorMiddleware(lambda active: graphql_endpoint(active, "public"))(request)
+        response = ActorMiddleware(lambda active: graphql_endpoint(active, name))(request)
         assert response.status_code == 200
         data = json.loads(response.content)
         assert "errors" not in data

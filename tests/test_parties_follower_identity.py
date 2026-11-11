@@ -224,7 +224,7 @@ def test_follower_scopes_compile_without_enumeration_and_fetch_fifty_rows_at_fix
         local = backend()
         assert isinstance(local, LocalBackend)
         local.schema()
-        monkeypatch.setattr(type(local), "accessible", no_enumeration)
+        monkeypatch.setattr(LocalBackend, "accessible", no_enumeration)
         for model in (Party, Person, Tie):
             resource_type = model_resource_type(model)
             assert resource_type is not None

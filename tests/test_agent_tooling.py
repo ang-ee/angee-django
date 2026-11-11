@@ -12,7 +12,8 @@ from asgiref.sync import async_to_sync, sync_to_async
 from django.apps import apps
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ImproperlyConfigured
-from django.db import models, transaction
+from django.db import connection, models, transaction
+from django.test.utils import CaptureQueriesContext
 from fastmcp import Context, FastMCP
 from fastmcp.tools import Tool, ToolResult
 from mcp.types import ToolAnnotations
@@ -103,16 +104,9 @@ def _native_context() -> SimpleNamespace:
     return SimpleNamespace(max_retries=2)
 
 
-def test_grant_advertisement_shares_one_accessible_lookup(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Concurrent native/external advertisement consumes one cached ``accessible`` call."""
+def test_grant_advertisement_shares_one_accessible_lookup(db: None) -> None:
+    """Concurrent native/external advertisement consumes one cached ``accessible`` lookup."""
 
-    calls: list[SubjectRef] = []
-
-    def accessible(agent: SubjectRef) -> frozenset[str]:
-        calls.append(agent)
-        return frozenset({"mcp_one.read_sessions"})
-
-    monkeypatch.setattr(toolsets_module, "_accessible_tool_grant_ids", accessible)
     agent = SubjectRef.of("auth/user", "one")
     access = ToolGrantAccess(agent)
 
@@ -120,8 +114,12 @@ def test_grant_advertisement_shares_one_accessible_lookup(monkeypatch: pytest.Mo
         first, second = await asyncio.gather(access.granted_ids(), access.granted_ids())
         return first, second
 
-    assert async_to_sync(read_twice)() == (frozenset({"mcp_one.read_sessions"}),) * 2
-    assert calls == [agent]
+    async_to_sync(ToolGrantAccess(agent).granted_ids)()  # warm the per-process caches
+    with CaptureQueriesContext(connection) as single:
+        alone = async_to_sync(ToolGrantAccess(agent).granted_ids)()
+    with CaptureQueriesContext(connection) as shared:
+        assert async_to_sync(read_twice)() == (alone, alone)
+    assert len(shared) == len(single) > 0
 
 
 def test_native_tool_grants_run_as_agent_service_user_and_regate(
