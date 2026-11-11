@@ -1,20 +1,23 @@
-"""Project team access is derived from the real roster and guarded as sharing."""
+"""The work decision table, and project-team access derived from the live roster and guarded as sharing."""
+
+from datetime import date
 
 import pytest
 from django.apps import apps
 from django.contrib.auth import get_user_model
+from django.contrib.auth.models import AnonymousUser
 from rebac import PermissionDenied, actor_context, system_context
-from rebac.backends import backend
-from rebac.evaluator import evaluator_scope
+from rebac.testing import assert_decisions
 
 from angee.base.testing.permissions import installed_field_owners
 from angee.graphql.testing.documents import execute_schema
 from angee.messaging.testing.models import Person
-from angee.projects.testing.models import Project
+from angee.projects.testing.models import Cycle, Project, Task
 from angee.spaces.testing.models import Group, Membership
 from angee.work import schema as work_schema
 from angee.work.models import ProjectWork
-from tests.conftest import addon_schema
+from tests.conftest import addon_schema, create_platform_admin
+from tests.decision_table import seat_cells
 from tests.test_productivity_write_behavior import Queue, Stage
 
 
@@ -38,24 +41,6 @@ def team_case(composed_tables):
     with actor_context(author):
         project = Project.objects.create(title="Team project", team=team)
     return project, team, replacement, author, users
-
-
-def test_project_roster_access_matrix_does_not_carry_share_or_delete(team_case):
-    project, team, _, _, users = team_case
-    assert issubclass(Project, ProjectWork)
-    for role in ("owner", "moderator", "member", "viewer", "outsider"):
-        user = users[role]
-        project.with_actor(user)
-        with actor_context(user):
-            assert team.with_actor(user).has_access("read"), "Public team read must not become project read"
-            expected_read = role in {"owner", "moderator", "member"}
-            expected_write = role in {"owner", "moderator"}
-            assert project.has_access("read") is expected_read
-            assert project.has_access("write") is expected_write
-            assert project.has_access("share") is False
-            assert project.has_access("delete") is False
-            assert project.has_access("write__team") is False
-            assert Project.objects.filter(pk=project.pk).exists() is expected_read
 
 
 def test_project_roster_hides_seat_identity_without_membership_read(team_case):
@@ -144,17 +129,52 @@ def test_team_donor_owns_field_gate_and_native_nullable_relation():
         assert "team" in getattr(ProjectWork, declaration)
 
 
-def test_project_queue_and_stage_scopes_compile_without_enumerating_rows(team_case, django_assert_num_queries):
-    project, _, _, _, users = team_case
-    with system_context(reason="test.work.scope.queue"):
-        queue = Queue.objects.create(key="SCOPES", slug="scopes", name="Scopes")
-        Membership.objects.create(group=queue, party=Person.objects.for_user(users["member"]), is_confirmed=True)
-    stage = Stage._base_manager.get(pk=queue.default_stage_id)
-    with actor_context(users["member"]), evaluator_scope():
-        active = backend()
-        active.schema()
-        for row, action, allowed in ((project, "read", True), (project, "write", False),
-                                     (project, "write__team", False), (queue, "read", True),
-                                     (queue, "write", False), (stage, "read", True), (stage, "write", False)):
-            rows = type(row).objects.with_actor(users["member"]).with_action(action).scoped().filter(pk=row.pk)
-            assert list(rows.values_list("pk", flat=True)) == ([row.pk] if allowed else [])
+def test_the_policy_decides_every_work_permission(composed_tables):
+    """One queue world, every work permission and task extension arm with an allow and a deny."""
+
+    seats = {role: get_user_model().objects.create_user(username=f"work-policy-{role}", password=None)
+             for role in ("column-owner", "owner", "moderator", "member", "viewer", "outsider")}
+    seats.update(admin=create_platform_admin("work-policy-admin"), anonymous=AnonymousUser())
+    with system_context(reason="test.work.policy.world"):
+        queue = Queue.objects.create(name="Policy", key="POLICY", slug="policy", owner=seats["column-owner"])
+        for role in ("owner", "moderator", "member", "viewer"):
+            Membership.objects.create(
+                group=queue, party=Person.objects.for_user(seats[role]), role=role, is_confirmed=True,
+            )
+        stage = Stage._base_manager.get(pk=queue.default_stage_id)
+        cycle = Cycle.objects.create(queue=queue, number=1, starts_on=date(2026, 1, 1), ends_on=date(2026, 1, 7))
+        task = Task.objects.create(title="Queued", queue=queue)
+        unstaged = Task.objects.create(title="Unstaged", queue=queue)
+        Task._base_manager.filter(pk=unstaged.pk).update(stage=None)
+        trashed = Task.objects.create(title="Trashed", queue=queue)
+        trashed.trash(reason="Withdrawn")
+    cells = seat_cells(
+        seats.__getitem__,
+        # work/queue reads and writes through its group's roster
+        (queue, "create", "outsider", "anonymous"),
+        (queue, "read", "owner moderator member viewer", "outsider"),
+        (queue, "post", "member", "viewer"),
+        (queue, "write", "moderator", "member"),
+        (queue, "share", "owner", "moderator"),
+        (queue, "write__owner", "column-owner", "owner"),
+        (queue, "delete", "owner", "moderator"),
+        *((row, "read", "viewer", "outsider") for row in (stage, cycle)),
+        *((row, action, "moderator", "member") for row in (stage, cycle) for action in ("create", "write", "delete")),
+        # projects/task arms through an inherited, staged queue
+        (task, "read_granted", "member", "outsider"),
+        (task, "read", "member", "outsider"),
+        (unstaged, "read", "", "member"),
+        (task, "write_granted", "moderator", "member"),
+        (task, "share_granted", "moderator", "member"),
+        (task, "comment_granted", "member", "viewer"),
+        (task, "delete_granted", "moderator", "member"),
+        (task, "read_as_subject", "member", "outsider"),
+        (task, "write_as_subject", "moderator", "member"),
+        # a trashed queue task stays with its removal authority
+        (trashed, "read", "moderator admin", "member viewer"),
+        (trashed, "write", "moderator", "member"),
+    )
+    assert_decisions(
+        checks=cells,
+        accessible=((seats["member"], "read", Task, (task,)),),
+    )
