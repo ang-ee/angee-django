@@ -22,6 +22,7 @@ from tests.conftest import make_addon
 from tests.tables import model_tables
 
 from angee.base.models.base import AngeeModel
+from angee.base.testing.fixtures import prime_content_types
 from angee.base.testing.queries import statement_startswith
 from angee.resources.entries import EntryGraph, GrantGroup, GrantRow, LoadResult, ResourceEntry
 from angee.resources.exceptions import ResourceLoadError
@@ -2552,5 +2553,4 @@ def test_content_type_label_rows_hash_labels_not_ids(tmp_path: Path) -> None:
                 transaction.set_rollback(True)
     finally:
         # Later tests start from the session's warm content-type cache.
-        ContentType.objects.clear_cache()
-        ContentType.objects.get_for_models(*apps.get_models(), for_concrete_models=False)
+        prime_content_types()

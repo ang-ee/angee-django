@@ -1,5 +1,6 @@
 """Foundation registry and permission fixtures requiring pytest and pytest-django."""
 
+import gc
 import sys
 from collections.abc import Generator, Iterator
 from contextlib import contextmanager
@@ -104,6 +105,14 @@ def monkeypatch(installed_app_registry: None) -> Iterator[pytest.MonkeyPatch]:
 SESSION_BASELINE = pytest.StashKey[Rows]()
 
 
+def prime_content_types() -> None:
+    """Warm Django's content-type cache for every installed model, as every test starts with it."""
+
+    content_types = apps.get_model("contenttypes", "ContentType").objects
+    content_types.clear_cache()
+    content_types.get_for_models(*apps.get_models(), for_concrete_models=False)
+
+
 def database_rows(connection: BaseDatabaseWrapper) -> Rows:
     """Return each table a flush clears that holds rows, with an ``INSERT`` statement and its parameters."""
 
@@ -130,13 +139,16 @@ def pytest_fixture_setup(
     """Record the default database as each ``django_db_setup`` layer returns.
 
     The outermost layer returns last, so the record that stands is the whole session
-    baseline, including the rows a host's extension of the fixture loads.
+    baseline, including the rows a host's extension of the fixture loads. The objects
+    still alive by then are frozen, so later full collections scan only what tests allocate.
     """
 
     value = yield
     if fixturedef.argname == "django_db_setup":
         with request.getfixturevalue("django_db_blocker").unblock():
             request.config.stash[SESSION_BASELINE] = database_rows(connections[DEFAULT_DB_ALIAS])
+        gc.collect()
+        gc.freeze()
     return value
 
 
@@ -174,11 +186,6 @@ def django_db_setup(
     """
 
     last = [config for config in apps.get_app_configs() if config.models_module is not None][-1]
-
-    def prime_content_types() -> None:
-        content_types = apps.get_model("contenttypes", "ContentType").objects
-        content_types.clear_cache()
-        content_types.get_for_models(*apps.get_models(), for_concrete_models=False)
 
     def restore(*, using: str, **kwargs: Any) -> None:
         if using != DEFAULT_DB_ALIAS:
