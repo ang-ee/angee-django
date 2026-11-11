@@ -172,7 +172,7 @@ and a decision test answers through `decide` and resumes the step.
 
 - In a lane (jj workspace: no host, database or JS install): the focused pytest module, ruff and mypy on touched files,
   `tests/test_layering.py` — [Python and composition contracts](../../../../../docs/checks.md#python-and-composition-contracts).
-- Only on integrated `src`: the composed-host run of consumer tests (`tests/test_composed_note_workflow.py`), the stack
+- Only on integrated `src`: the composed-host run of consumer tests (`tests/test_composed_examples.py`), the stack
   resource load, permission sync and console SDL/codegen — [composition and schema](../../../../../docs/checks.md#composition-and-schema).
 - Loop: [slice](../../../../../.agents/skills/slice/SKILL.md#workflow). False greens: `run_until` returns a *waiting* run without
   failing, so assert `run.status`; `capture_tasks` proves a send was registered, not that a worker ran (`testing/__init__.py`).
@@ -196,6 +196,6 @@ and a decision test answers through `decide` and resumes the step.
 
 <!--
 Docs: docs/backend/guidelines.md #workflow-execution, #workflow-contracts, #rebac; docs/glossary.md #backend, #workflows, #decisions; docs/checks.md #choose-the-working-directory, #python-and-composition-contracts, #source-addon-test-models, #browser-verification, #what-ci-actually-runs; docs/composer.md #autoconfig.
-Code: src/angee/workflows/{README.md, steps.py, models.py, managers.py, resources.py, autoconfig.py, pyproject.toml, apps.py, context.py, decision_steps.py, subjects.py, triggers.py, definition.py, maps.py, awaits.py, testing/__init__.py, testing/drivers.py, testing/fixtures.py, testing/models.py}; src/angee/decisions/README.md; examples/src/example/notes/{pyproject.toml, autoconfig.py, steps.py, models.py, resources/demo/100_workflows.workflow.yaml, 110_workflows.trigger.yaml, tests/test_workflow_steps.py}; tests/workflow_steps.py; tests/test_workflows_testing.py; tests/test_composed_note_workflow.py; tests/settings.py.
+Code: src/angee/workflows/{README.md, steps.py, models.py, managers.py, resources.py, autoconfig.py, pyproject.toml, apps.py, context.py, decision_steps.py, subjects.py, triggers.py, definition.py, maps.py, awaits.py, testing/__init__.py, testing/drivers.py, testing/fixtures.py, testing/models.py}; src/angee/decisions/README.md; examples/src/example/notes/{pyproject.toml, autoconfig.py, steps.py, models.py, resources/demo/100_workflows.workflow.yaml, 110_workflows.trigger.yaml, tests/test_workflow_steps.py}; tests/workflow_steps.py; tests/test_workflows_testing.py; tests/test_composed_examples.py; tests/settings.py.
 Mismatches: none found for the cited surfaces; no doc lists the YAML node keys (step/next/input/config/body/results/when) — derived from the notes rows and Definition.
 -->

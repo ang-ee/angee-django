@@ -1,12 +1,10 @@
 """Record merges preserve task intent, moved evidence and one reversible boundary."""
 
-from pathlib import Path
 
 from django.apps import apps
 from django.core.exceptions import ValidationError
 from rebac import PermissionDenied, actor_context, system_context
 
-from tests.composed_host import run_composed_tests
 from tests.native_work import WorkCase
 
 
@@ -59,7 +57,3 @@ class RecordMergeTests(WorkCase):
         source.refresh_from_db()
         self.assertIsNone(source.merged_into_id)
         self.assertFalse(source.is_trashed)
-
-
-def test_work_record_merge(tmp_path: Path):
-    run_composed_tests(tmp_path, "tests.test_work_record_merge.RecordMergeTests", app="angee.intake")

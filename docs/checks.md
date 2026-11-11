@@ -89,41 +89,46 @@ also covers [review waiters](../tests/test_workflows_review.py), their
 [locking races](../tests/test_agent_sessions_concurrency.py), plus
 [connection discovery races](../tests/test_integrate_discovery_concurrency.py),
 [cross-addon reply and inbound joins](../tests/test_framework_integration.py),
-[delivery contracts](../tests/test_messaging_delivery.py) with PostgreSQL
-[sweep, claim-fence and held-action races](../tests/test_messaging_delivery_concurrency.py), and the
-[comment reply workflow and scheduling races](../tests/test_workflows_posts.py). The selection
+[delivery contracts with their sweep, claim-fence and held-action races and webform submission
+races](../tests/test_composed_messaging.py), and the
+[comment reply workflow and scheduling races](../tests/test_composed_workflows.py). The selection
 also runs every remaining PostgreSQL-only contract: row locks, hierarchy, IAM,
 [OIDC disconnect admission under the user lock](../tests/test_oidc.py),
 knowledge, [pgvector test-database readiness](../tests/test_postgresql_extensions.py),
-messaging with its [channel owner](../tests/test_messaging_channel_concurrency.py)
-and [webform submission](../tests/test_messaging_webform_submission.py) races,
+messaging with its [channel owner](../tests/test_messaging_channel_concurrency.py) races,
 [portfolio report](../tests/test_portfolio_concurrency.py) locks, proposals,
 sequences, spaces, storage with its
 [window-aligned download URLs and expiry](../tests/test_storage_access_campaign.py),
-the system queryset, work and task ordering locks,
-integrate streams and workflow integrate steps, the
+the system queryset, work and [task ordering](../tests/test_composed_work.py) locks,
+integrate streams, [scheduler row locks](../tests/test_integrate_scheduler.py) and workflow
+integrate steps, the
 [grouped rows](../tests/test_group_rows.py) partitions, the
 messaging inbox's [explorer](../tests/test_inbox_explorer.py),
 [thread and message reads](../tests/test_messaging_inbox_read.py) and
 [part reads](../tests/test_inbox_part_reads.py), the composed member
-[person/projects planner budgets](../tests/test_composed_query_budgets.py), and the composed
-[intake access decision](../tests/test_intake_access_decision.py). It also runs
+[person/projects planner budgets](../tests/test_composed_examples.py), and the composed
+[intake access decision](../tests/test_composed_intake.py). It also runs
 [task ordering](../tests/test_task_rank_allocation.py),
 [record tasks](../tests/test_projects_record_tasks.py), and
 [project access and projections](../tests/test_projects_access_projections.py).
-`test_connections.py` and `test_system_queryset.py` contribute only their
-PostgreSQL test nodes because each also has SQLite-only tests; the PostgreSQL
-branches in `test_extraction_models.py` and `test_knowledge_access_campaign.py`,
-and the [resource ledger's](../tests/test_resource_ledger.py) concurrent upsert,
-also run by node. Every other listed file runs whole, which keeps the SQLite
+`test_connections.py`, `test_system_queryset.py`, `test_integrate_scheduler.py` and
+`test_transitions.py` contribute only their PostgreSQL test nodes because each also has
+SQLite-only tests;
+the PostgreSQL branches in `test_extraction_models.py` and
+`test_knowledge_access_campaign.py`, the [resource ledger's](../tests/test_resource_ledger.py)
+concurrent upsert, and the composed profiles that carry PostgreSQL contracts also run by
+node. Every other listed file runs whole, which keeps the SQLite
 floor tests out of the PostgreSQL zero-skip gate. The six groups are assigned
 by pytest-split's `least_duration` algorithm over the
 [PostgreSQL timing map](../.test_durations_postgres); each runs with four xdist
 workers grouped by file, `--nomigrations`, a JUnit report, and a zero-skip
 gate. Pytest-django creates a separate PostgreSQL test database
-for each worker. The composed-host subprocess tests use Django's test runner to
-create separate worker-named secondary test databases; every caller bounds the
-subprocess with the one hang limit in [`composed_host.py`](../tests/composed_host.py). The full
+for each worker. Composed-host tests compose and boot one host per profile, run all
+of the profile's labels in it with Django's test runner on worker-named secondary
+test databases, and report each test as a pytest subtest named by its Django test id;
+[`run_composed_tests`](../tests/composed_host.py) owns that run and its one hang limit.
+A profile lists its SQLite and PostgreSQL labels separately, so the PostgreSQL lane runs
+only the composed PostgreSQL contracts and a skipped one fails its zero-skip gate. The full
 suite runs on SQLite with migrations enabled and `DATABASE_URL` unset; do not
 apply the PostgreSQL lane's settings to the full suite. PostgreSQL-only modules
 skip explicitly on SQLite. Report those skips separately from the PostgreSQL
@@ -252,15 +257,15 @@ that loses rows cannot pass. The
 [console document ceilings](../tests/native_graphql_document_budgets.py) pin the
 console app's inbox, transcript, person, projects and current-user reads for a
 platform admin and a member, each after one warm execution, in the
-[composed query-budget host](../tests/test_composed_query_budgets.py) on SQLite.
+[composed examples host](../tests/test_composed_examples.py) on SQLite.
 
 PostgreSQL 17 planner gates use the same shared query-support owner's
 `capture_planner_memory`, preserving SQL parameters for `EXPLAIN (MEMORY)` without
 `ANALYZE`. Timeline and inbox parts each budget a single planned statement. The
 member person/projects documents budget the sum of every SELECT's allocation,
 not peak resident memory; their total statement ceilings also count audit writes.
-The PostgreSQL CI selection runs the composed budget's `[postgresql]` node; its
-`[sqlite]` node retains the console document statement budgets.
+The examples profile runs the member planner gate on PostgreSQL and the console
+document statement budgets on SQLite.
 
 ### Owner Search
 
@@ -475,7 +480,9 @@ pushes to `main`. The current tiers are:
   durations, with migrations enabled and `DATABASE_URL` unset. Structural tests
   remain part of this suite. Per-file scheduling keeps a file on one worker, so the
   heaviest files (the proposals access and agents GraphQL campaigns, about 700
-  stored seconds each) set a floor near 25 minutes on CI.
+  stored seconds each) set a floor near 25 minutes on CI. The composed-host tests
+  run here too, one node per composed profile: each composes and boots once and
+  reports every test it ran as a subtest.
 - **PostgreSQL:** in six groups of its own beside the SQLite shards, assigned
   by pytest-split's `least_duration` algorithm over the
   [PostgreSQL timings](../.test_durations_postgres) and with the shards' 60-minute
@@ -492,7 +499,8 @@ pushes to `main`. The current tiers are:
 - **Packages:** framework package typecheck/test/build and export/distribution
   checks.
 - **Composed stack:** compose the host, check generated documents
-  and addon fragments, and run the bridges repository's pytest suite with its
+  and addon fragments, smoke the composed models, and run the bridges repository's
+  pytest suite with its
   native source-test settings and collection policy. Bridge tests use the
   composed stack's runtime dependencies plus the framework's locked check tools,
   as the consumer lane does. The tools export omits workspace members already
@@ -500,6 +508,12 @@ pushes to `main`. The current tiers are:
   `pyproject.toml`; native lockfiles own resolved versions. The suite's package
   metadata guard checks that the collection requirements match its workspace
   member distributions.
+  The composition smoke catches escapes the bare source host cannot compose. Before
+  provision, `makemigrations --check` proves the authored native history reproduces
+  the composed models and `schema --check` compares the SDL. After provision, the
+  first execution job runs the full `manage.py check --database default`, loads the
+  demo tier, and loads one row of every composed model with only its primary key and
+  saves it again (append-only models only load).
   Framework composed-host tests create their own temporary hosts in the SQLite
   suite; the stack job does not repeat that framework suite.
 

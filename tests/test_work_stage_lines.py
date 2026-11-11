@@ -1,13 +1,11 @@
 """A queue's stages are owned lines: saved with the queue, and system stages stay locked."""
 
-from pathlib import Path
 from types import SimpleNamespace
 
 from django.core.exceptions import ValidationError
 from rebac import actor_context, system_context
 
 from angee.graphql.testing.documents import graphql_request
-from tests.composed_host import run_composed_tests
 from tests.native_work import WorkCase
 
 _READ = """query Queue($id: String!) {
@@ -207,7 +205,3 @@ class StageLinesTests(WorkCase):
         widgets = {field.name: field.widget for field in resource.lines.fields}
         self.assertEqual(widgets["tone"], "tone")
         self.assertEqual(resource.roots.save_name, "work_queues_save")
-
-
-def test_work_stage_lines(tmp_path: Path):
-    run_composed_tests(tmp_path, "tests.test_work_stage_lines.StageLinesTests", app="angee.work")

@@ -1,6 +1,5 @@
 """The composed GraphQL surface for record tasks: schedule, list, complete and the catalog."""
 
-from pathlib import Path
 from types import SimpleNamespace
 
 from django.apps import apps
@@ -9,7 +8,6 @@ from django.test.utils import CaptureQueriesContext
 from rebac import actor_context, system_context
 
 from angee.graphql.testing.documents import graphql_request
-from tests.composed_host import run_composed_tests
 from tests.native_work import WorkCase
 
 LIST = """
@@ -28,10 +26,6 @@ SCHEDULE = """
       }) { ok message id }
     }
 """
-
-
-def test_record_task_graphql_surface(tmp_path: Path) -> None:
-    run_composed_tests(tmp_path, "tests.test_projects_record_tasks_graphql.RecordTaskGraphQLTests", app="angee.work")
 
 
 class RecordTaskGraphQLTests(WorkCase):

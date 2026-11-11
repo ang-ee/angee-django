@@ -14,7 +14,6 @@ from angee.graphql.data.hasura import _declared_aliases, _declared_filter_expres
 from angee.graphql.node import AngeeNode
 from angee.graphql.schema import GraphQLSchemas
 from angee.graphql.testing.documents import execute_schema, result_data
-from tests.composed_host import run_composed_tests
 from tests.conftest import create_user, make_addon
 from tests.scopedemo.models import Scope
 
@@ -303,11 +302,3 @@ def test_declared_expression_output_field_states_its_nullability(monkeypatch):
     for name, nullable in (("total", False), ("caller_total", False), ("partial", True), ("parent_name", True)):
         field = metadata.query.fields[name]
         assert (field.nullable, "isNull" in field.filter.operators) == (nullable, nullable), name
-
-
-def test_existing_addon_filter_declarations_still_compose(tmp_path):
-    """Build all current addon declarations together in the native isolated SQLite host."""
-    run_composed_tests(
-        tmp_path, "tests.native_intake_capture.HasuraFilterDeclarationTests",
-        app=("angee.intake", "angee.workflows"),
-    )
