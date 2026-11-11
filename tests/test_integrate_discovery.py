@@ -292,9 +292,14 @@ def test_retry_discovery_refuses_states_outside_its_admission(bridge, state):
         assert bridge.discovery_generation == generation
 
 
-def test_oauth_connect_admission_requires_the_owner_and_does_not_compete_with_retry(bridge, monkeypatch):
-    monkeypatch.setattr(type(bridge), "is_oauth_connectable", lambda row, **_kwargs: True)
+def test_oauth_connect_admission_requires_the_owner_and_does_not_compete_with_retry(bridge):
     with system_context(reason="test connect admission"):
+        client = bridge.credential.oauth_client
+        client.client_id, client.client_secret = "application", "fake-secret"
+        client.authorize_endpoint = "https://provider.example/auth"
+        client.token_endpoint = "https://provider.example/token"
+        client.save(update_fields=["client_id", "client_secret", "authorize_endpoint", "token_endpoint"])
+        assert bridge.is_oauth_connectable()  # a ready registration admits OAuth connect
         # A healthy attached grant uses discovery recovery, never new consent.
         bridge.config = {"discovery": "refusal"}
         bridge.save(update_fields=["config"])

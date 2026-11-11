@@ -130,8 +130,10 @@ source addon contributes one adapter class, its registry key and its tests. Refe
    (page rolls back) (`BridgeImpl.apply_record` in `src/angee/integrate/impl.py`). **Owner rule:** [Integration and worker contracts](../../../../../docs/backend/guidelines.md#integration-and-worker-contracts)
    "An integration failure reaches the operator only as an IntegrationError".
 
-7. **Test the bridge.** Transport and cursor logic against an in-memory client via the `client_class` seam
-   (`FakeIMAPClient` in `tests/test_messaging_imap.py`); the driver path with `make_integration(..., model=Channel,
+7. **Test the bridge.** Script the vendor, never patch the adapter: HTTP through `mock_transport`
+   (`src/angee/integrate/testing/http.py`), a protocol client through the owner's in-memory server behind the
+   `client_class` seam (`ImapServer` and `imap_server` in `src/angee/messaging_integrate_imap/testing/server.py`,
+   whose scripted events cover withheld answers, expunges and refusals); the driver path with `make_integration(..., model=Channel,
    backend_class="imap")` and `current_stream(bridge, "messages", partition)` (`tests/conftest.py`), then
    `open_stream`/`advance_stream` or `Channel.run_sync` onto real tables (the `tests/test_messaging_imap.py` module docstring).
    Generic contract tests use `MemoryAdapter`/`ReadKeysAdapter` (`tests/test_integrate_streams.py`) and the

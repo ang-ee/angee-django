@@ -8,7 +8,6 @@ every ID token is verified by PyJWT against the provider's published key.
 from __future__ import annotations
 
 import json
-import socket
 import threading
 import time
 from collections.abc import Iterator
@@ -44,7 +43,7 @@ from angee.iam_integrate_oidc.providers import GoogleType
 from angee.iam_integrate_oidc.testing.provider import KEY_ID, OidcProvider, signing_key
 from angee.integrate import schema as integrate_schema
 from angee.integrate.connect import complete_account_connect
-from angee.integrate.errors import IntegrationError
+from angee.integrate.errors import IntegrationError, RequestNotSentError
 from angee.integrate.http import HTTP_TIMEOUT_SECONDS
 from angee.integrate.models import AccountStatus, CredentialStatus
 from angee.integrate.net import AddressNotAllowedError
@@ -1719,18 +1718,12 @@ def test_oauth_completion_returns_typed_outage_for_refused_endpoint(flow_name: s
         user = get_user_model().objects.create_user(username="refused-provider-user")
         client = _oauth_client("refused-provider", token_request_format=request_format)
     request = graphql_request(AnonymousUser() if flow_name == "login" else user, session=True)
-    with socket.socket() as reserved:
-        reserved.bind(("127.0.0.1", 0))
-        client.token_endpoint = f"http://127.0.0.1:{reserved.getsockname()[1]}/token"
-        with system_context(reason="test refused provider endpoint"):
-            client.save(update_fields=["token_endpoint"])
-        token, _record, redirect = _bound_flow(
-            request, client, oauth_state.StateFlow(flow_name), user if flow_name != "login" else None,
-        )
-        mutation = {
-            "login": "login_complete", "link": "link_account_complete", "connect": "connect_account_complete",
-        }[flow_name]
-        result = _complete(_console_schema(), request, mutation, token, redirect, "error error_code")
+    token, _record, redirect = _bound_flow(
+        request, client, oauth_state.StateFlow(flow_name), user if flow_name != "login" else None,
+    )
+    mutation = {"login": "login_complete", "link": "link_account_complete", "connect": "connect_account_complete"}
+    with mock_transport(_refuse_dial):
+        result = _complete(_console_schema(), request, mutation[flow_name], token, redirect, "error error_code")
     expected_code = "provider_unavailable" if flow_name == "connect" else TOKEN_EXCHANGE_FAILED
     assert result == {"error": OAuthFlowError(expected_code, 503).public_message, "error_code": expected_code}
     with system_context(reason="test refused provider wrote no credential"):
@@ -1767,16 +1760,20 @@ def test_oidc_login_verifies_code_exchange_when_refinement_omits_id_token() -> N
         ]
 
 
+def _refuse_dial(request: httpx2.Request) -> httpx2.Response:
+    """Answer as ``PinnedTransport`` does when the provider refuses the connection."""
+
+    raise RequestNotSentError()
+
+
 @pytest.mark.parametrize("operation", ["revoke", "metadata"])
 def test_oauth_helpers_map_refused_endpoint_to_transient_flow_error(operation: str) -> None:
-    with socket.socket() as reserved:
-        reserved.bind(("127.0.0.1", 0))
-        endpoint = f"http://127.0.0.1:{reserved.getsockname()[1]}/oauth"
-        with pytest.raises(OAuthFlowError) as raised:
-            if operation == "revoke":
-                OAuthClientProtocol(_stub_oauth_client(revoke_endpoint=endpoint)).revoke_token("synthetic-token")
-            else:
-                oauth_discovery.discovery_document(endpoint)
+    endpoint = f"https://refused-{operation}.example/oauth"
+    with mock_transport(_refuse_dial), pytest.raises(OAuthFlowError) as raised:
+        if operation == "revoke":
+            OAuthClientProtocol(_stub_oauth_client(revoke_endpoint=endpoint)).revoke_token("synthetic-token")
+        else:
+            oauth_discovery.discovery_document(endpoint)
     assert raised.value.http_status == 503 and raised.value.transient
     assert raised.value.code == (TOKEN_EXCHANGE_FAILED if operation == "revoke" else DISCOVERY_FAILED)
 
