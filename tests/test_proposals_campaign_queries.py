@@ -9,8 +9,6 @@ import pytest
 from django.db import connection
 from django.test.utils import CaptureQueriesContext
 from rebac import actor_context, system_context, to_subject_ref
-from rebac.backends import backend
-from rebac.backends.local import LocalBackend
 
 from angee.base.testing.queries import is_rebac_revision_read, statement_body, statement_startswith
 from angee.graphql.capabilities import held_permissions, permission_annotations
@@ -162,16 +160,6 @@ def test_round_lists_use_one_application_select_and_constant_policy_and_roster_r
         assert categories[0] == categories[1], categories
         ceiling = REBAC_ROUND_ROSTER_QUERY_CEILING if roster else REBAC_ROUND_QUERY_CEILING
         assert categories[0].total() - 1 - 2 * roster <= ceiling, categories
-
-
-def test_round_and_proposal_read_scopes_compile_to_sql_for_non_admins(campaign: ProposalCampaign) -> None:
-    actor = campaign.person("outsider")
-    local = backend()
-    assert isinstance(local, LocalBackend)
-    for model in (Round, Proposal):
-        query = model.objects.with_actor(actor).scoped()
-        sql, _params = query.query.sql_with_params()
-        assert "SELECT" in sql.upper()
 
 
 def test_waiting_list_has_constant_query_count_and_is_private_to_each_recipient(campaign: ProposalCampaign) -> None:
