@@ -10,7 +10,7 @@ from django.apps import apps
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
 from django.core.management import call_command
-from django.test import TransactionTestCase, override_settings
+from django.test import TransactionTestCase
 from fastmcp.exceptions import ToolError
 from rebac import RelationshipTuple, actor_context, system_context, to_object_ref, to_subject_ref, write_relationships
 from rebac.backends import backend
@@ -163,7 +163,7 @@ class WorkCampaignTests(TransactionTestCase):
         self.assertEqual(link.target, source)
         self.assertFalse(self.Relation._base_manager.exists())
 
-    def test_task_permission_scopes_compile_to_one_query_in_both_storage_modes(self):
+    def test_task_permission_scopes_follow_queue_membership(self):
         task = self.task()
         with system_context(reason="test.work.scope.roster"):
             member = get_user_model().objects.create_user(username="work-member", password=None)
@@ -171,15 +171,11 @@ class WorkCampaignTests(TransactionTestCase):
             apps.get_model("spaces", "Membership").objects.create(
                 group=self.queue, party=person, role="member", is_confirmed=True,
             )
-        for mode in ("denormalized", "registry"):
-            with self.subTest(mode=mode), override_settings(REBAC_LOCAL_BACKEND_STORAGE=mode):
-                call_command("rebac", "sync", verbosity=0)
-                with actor_context(member), evaluator_scope():
-                    active = backend()
-                    active.schema()
-                    for action, allowed in (("read", True), ("write", False)):
-                        rows = self.Task.objects.with_actor(member).with_action(action).scoped().filter(pk=task.pk)
-                        self.assertEqual(list(rows.values_list("pk", flat=True)), [task.pk] if allowed else [])
+        with actor_context(member), evaluator_scope():
+            backend().schema()
+            for action, allowed in (("read", True), ("write", False)):
+                rows = self.Task.objects.with_actor(member).with_action(action).scoped().filter(pk=task.pk)
+                self.assertEqual(list(rows.values_list("pk", flat=True)), [task.pk] if allowed else [])
 
     def test_start_and_return_actions_enforce_task_write_and_return_errors(self):
         schema = GraphQLSchemas.from_discovery().build("public")

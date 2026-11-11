@@ -1,18 +1,16 @@
 // @vitest-environment happy-dom
 
 import * as React from "react";
-import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 import { getCoreRowModel, useReactTable, type Row as TableRowModel } from "@tanstack/react-table";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import type { Row } from "@angee/metadata";
-import { afterEach, expect, test, vi } from "vitest";
+import { expect, test, vi } from "vitest";
 
 import { GroupedListBody } from "./GroupedList";
 import { ResourceViewProvider, useResourceView } from "./resource-view-context";
 import { estimateGroupedItemSize, groupMeasuresFromColumns, RecordRow, type GroupedListItem } from "./resource-view-list-body";
 import type { ColumnDescriptor } from "../page";
-
-afterEach(cleanup);
 
 const defaultColumns: readonly ColumnDescriptor<Row>[] = [{ field: "title", header: "Title" }];
 

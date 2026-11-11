@@ -12,7 +12,6 @@ import {
 import { testDataResource } from "@angee/metadata/testing";
 import {
   act,
-  cleanup,
   fireEvent,
   render,
   screen,
@@ -28,7 +27,7 @@ import {
 import { useState, type ReactElement } from "react";
 import { useFormContext } from "react-hook-form";
 import { EditorView } from "@codemirror/view";
-import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
+import { beforeEach, describe, expect, test, vi } from "vitest";
 
 import { ModalsHost, ToastProvider } from "../../feedback";
 import { AppRuntimeProvider, type FormOverrideMap } from "../../runtime";
@@ -546,7 +545,6 @@ describe("ActionFormDialog", () => {
     });
   });
 
-  afterEach(() => cleanup());
   beforeEach(() => {
     vi.clearAllMocks();
     listOptions.length = 0;

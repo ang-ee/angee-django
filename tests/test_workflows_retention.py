@@ -20,7 +20,7 @@ from tests.test_workflows_review import answer, questions, start_review
 from tests.test_workflows_review import review as review
 from tests.workflow_steps import Value, document
 
-pytestmark = [pytest.mark.django_db(transaction=True), pytest.mark.usefixtures("workflow_step_classes")]
+pytestmark = [pytest.mark.django_db, pytest.mark.usefixtures("workflow_step_classes")]
 
 
 @pytest.fixture
@@ -61,6 +61,7 @@ def test_prune_removes_derived_from_rows_with_the_run(execution):
     assert not StepRecord.system_queryset().filter(run_id=run.pk).exists()
 
 
+@pytest.mark.django_db(transaction=True)
 def test_prune_deletes_owned_descendants_including_recent_grandchildren(child_graph, register_step):
     """One expired root owns the lifetime of its complete three-level tree."""
     actor, _, admitted, build = child_graph
@@ -164,6 +165,7 @@ def test_reprocess_cause_is_retained_until_its_replacement_is_pruned(execution):
     assert WorkflowRun.objects.prune() == 1
 
 
+@pytest.mark.django_db(transaction=True)
 def test_protected_attempt_rolls_back_the_whole_owned_tree_and_wait_links(child_graph, protected_execution):
     """A domain reference blocks deletion without losing a previously deleted child."""
     _, _, admitted, build = child_graph
@@ -224,6 +226,7 @@ def test_retention_setting_keeps_recent_terminal_runs(execution, settings):
     settings.ANGEE_WORKFLOW_RETENTION_DAYS = 90
     assert WorkflowRun.objects.prune() == 1
 
+@pytest.mark.django_db(transaction=True)
 def test_run_pruning_retains_decisions_and_releases_the_asking_link(review):
     _, people, sent, _ = review
     run, step = start_review(review)

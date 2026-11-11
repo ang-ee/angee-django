@@ -1,13 +1,11 @@
 // @vitest-environment happy-dom
 // @vitest-environment-options {"settings":{"navigation":{"disableMainFrameNavigation":true,"disableChildPageNavigation":true}}}
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
-import { afterEach, expect, test, vi } from "vitest";
+import { fireEvent, render, screen } from "@testing-library/react";
+import { expect, test, vi } from "vitest";
 
 import { InAppLinkProvider } from "../lib/in-app-link";
 import { ContextMenu } from "./context-menu";
 import { DropdownMenu } from "./dropdown-menu";
-
-afterEach(cleanup);
 
 test.each([DropdownMenu, ContextMenu])("shared menu links follow the owner and retain native modified activation", async (Menu) => {
   const navigate = vi.fn();

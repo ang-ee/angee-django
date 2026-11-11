@@ -1,12 +1,11 @@
 // @vitest-environment happy-dom
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
-import { afterEach, expect, test, vi } from "vitest";
+import { fireEvent, render, screen } from "@testing-library/react";
+import { expect, test, vi } from "vitest";
 import { PaneRow } from "../../../communication/pane-list";
 import { ResourceViewProvider, useResourceView } from "../resource-view-context";
 import { useRowsResourceViewSurface } from "../resource-view-surface";
 import { PaneListBody } from "./pane-list-body";
 
-afterEach(cleanup);
 const rows = [{ id: "a", title: "Ada", category: "People" }, { id: "b", title: "Grace", category: "People" }];
 const columns = [{ field: "title", header: "Name" }, { field: "category", header: "Category" }];
 

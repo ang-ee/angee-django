@@ -11,11 +11,8 @@ from rebac.types import RelationshipFilter
 
 from angee.storage.models import FileVisibility
 from tests.conftest import Drive, File, Folder, create_platform_admin, create_user
-from tests.storage_campaign import relationship_storage as relationship_storage
 from tests.test_storage import PNG_BYTES, PNG_SHA256, _proxy_upload
 from tests.test_storage import drive as drive
-
-pytestmark = pytest.mark.django_db(transaction=True)
 
 
 @pytest.mark.parametrize("kind", ["drive", "file"])

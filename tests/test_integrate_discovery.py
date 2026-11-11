@@ -42,7 +42,7 @@ from angee.jobs.celery import app as celery_app
 from tests.conftest import Credential, create_platform_admin, make_addon, make_integration
 from tests.integrate_fixtures import CONNECTION_CLASSES, ConnectionBridge, LiveConnectionAdapter
 
-pytestmark = pytest.mark.usefixtures("composed_tables")
+pytestmark = [pytest.mark.usefixtures("composed_tables"), pytest.mark.django_db(transaction=True)]
 
 
 @pytest.fixture(autouse=True)

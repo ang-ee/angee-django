@@ -1,5 +1,5 @@
 import type { MenuDeclarations } from "@angee/app";
-import { createNamespaceT } from "@angee/ui";
+import { createNamespaceT } from "@angee/ui/i18n";
 import type { I18nResources } from "@angee/refine";
 
 export function enOperatorBundleForMenu(

@@ -1,17 +1,15 @@
 // @vitest-environment happy-dom
 
-import { act, cleanup, render, waitFor } from "@testing-library/react";
+import { act, render, waitFor } from "@testing-library/react";
 import { createMemoryHistory, createRootRoute, createRoute, createRouter, RouterProvider } from "@tanstack/react-router";
 import { StrictMode, useState, type ReactElement } from "react";
-import { afterEach, expect, test } from "vitest";
+import { expect, test } from "vitest";
 import { ModelMetadataProvider, ResourceQuery, schemaFieldMetadataFromDataResources } from "@angee/metadata";
 import { testDataResource } from "@angee/metadata/testing";
 import { AppRuntimeProvider } from "../../runtime";
 import { routeSearchString } from "../../runtime/route-href";
 import type { ResourceViewPreset } from "./model/favorites";
 import { ResourceViewProvider, useResourceView, withResourceViewScope, type ResourceViewContextValue, type ResourceViewProviderProps } from "./resource-view-context";
-
-afterEach(cleanup);
 
 const preset: ResourceViewPreset = {
   id: "notes.open", label: "Open", resource: "notes.Note", fixedFilter: { status: { exact: "open" } },

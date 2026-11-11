@@ -1,11 +1,9 @@
 // @vitest-environment happy-dom
 
-import { cleanup, fireEvent, render, within } from "@testing-library/react";
-import { afterEach, expect, test } from "vitest";
+import { fireEvent, render, within } from "@testing-library/react";
+import { expect, test } from "vitest";
 
 import { ThemePreviewFrame } from "./preview";
-
-afterEach(cleanup);
 
 function renderPreview(variant: "full" | "card", colorScheme: "light" | "dark") {
   const title = `${variant} ${colorScheme} preview`;

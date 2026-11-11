@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 
-import { act, cleanup, render, screen } from "@testing-library/react";
-import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
+import { act, render, screen } from "@testing-library/react";
+import { beforeEach, describe, expect, test, vi } from "vitest";
 
 import { BoardView } from "./BoardView";
 import { DeclaredBoardCardBody } from "./board/cards";
@@ -92,7 +92,6 @@ beforeEach(() => {
   dndMocks.rectIntersection.mockReturnValue([]);
   dndMocks.setActivatorNodeRef.mockClear();
 });
-afterEach(() => cleanup());
 
 test("a declared board card omits empty details while retaining zero", () => {
   render(<DeclaredBoardCardBody columns={[

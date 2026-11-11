@@ -100,6 +100,7 @@ jobs:
         with:
           python-version: ${{ inputs.python-version }}
       - run: uv run --locked python -m ruff check . --no-cache
+      - run: uv run --locked lint-imports --no-cache
       - run: uv run --locked python -m mypy src
         env:
           PYTHONPATH: src

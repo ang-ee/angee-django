@@ -17,8 +17,6 @@ from angee.messaging.testing.models import Handle, Organization, Party
 from angee.parties.managers import PartyQuerySet
 from tests.tables import model_tables
 
-pytestmark = pytest.mark.django_db(transaction=True)
-
 
 @pytest.mark.parametrize("refresh", [False, True])
 def test_handle_upsert_bounds_source_display_text(composed_tables: None, refresh: bool) -> None:
@@ -170,6 +168,7 @@ def test_named_respects_the_legal_name_owners_read_scope(owner: Any) -> None:
     assert not Party.objects.with_actor(owner).named("Northstar Studio").exists()
 
 
+@pytest.mark.django_db(transaction=True)
 def test_named_excludes_archived_rows_in_an_archivable_composition(owner: Any) -> None:
     """An archive-aware party queryset composes its native archive predicate."""
 

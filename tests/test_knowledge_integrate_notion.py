@@ -21,6 +21,8 @@ from angee.knowledge_integrate_notion.backend import NotionBackend, NotionRespon
 from angee.knowledge_integrate_notion.schema import schemas
 from tests.conftest import Link, MarkdownPage, NotionConnection, Page, addon_schema, create_user, make_integration
 
+pytestmark = pytest.mark.django_db(transaction=True)
+
 
 def node(number, title, *, parent=None, source=False):
     identity = str(UUID(int=number))

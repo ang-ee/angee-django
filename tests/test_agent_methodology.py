@@ -9,7 +9,6 @@ from __future__ import annotations
 import json
 import re
 import runpy
-import shlex
 import shutil
 import subprocess
 import sys
@@ -80,20 +79,6 @@ def test_adapter_check_detects_drift_without_overwriting(tmp_path: Path) -> None
     assert target.read_text() == "# stale\n"
 
 
-def test_workspace_create_example_adds_a_jj_workspace_and_never_an_operator_worktree() -> None:
-    """The documented create command is a colocated jj workspace under the stack's workspaces."""
-    skill = (ROOT / ".agents/skills/angee-workspace/SKILL.md").read_text()
-    blocks = re.findall(r"```sh\n(.*?)\n```", skill, re.DOTALL)
-    assert not any("ws create" in block for block in blocks)
-    lines = [line for block in blocks for line in block.replace("\\\n", " ").splitlines()]
-    argv = shlex.split(next(line for line in lines if "workspace add" in line))
-    assert argv[:2] == ["jj", "-R"]
-    assert "--colocate" in argv
-    assert argv[argv.index("--name") + 1] == "<stack>--<name>"
-    assert argv[argv.index("-r") + 1] == "<parent-ref>"
-    assert argv[-1] == "$angee_root/workspaces/<name>/angee"
-
-
 SKILLS = sorted(
     [
         *(ROOT / ".agents/skills").glob("*/SKILL.md"),
@@ -120,38 +105,37 @@ def links(source: Path) -> list[str]:
     return [d for d in destinations if not urlsplit(d).scheme and not d.startswith("/")]
 
 
-@pytest.mark.parametrize("skill", SKILLS, ids=lambda path: path.parent.name)
-def test_skill_frontmatter_names_its_directory_and_stays_loadable(skill: Path) -> None:
-    fields, body = frontmatter(skill.read_text())
-    assert fields["name"] == skill.parent.name
-    assert SKILL_NAME.fullmatch(fields["name"])
-    assert 0 < len(fields["description"]) <= 1024
-    assert len(body.splitlines()) < 500
-
-
-@pytest.mark.parametrize("skill", SKILLS, ids=lambda path: path.parent.name)
-def test_skill_links_resolve_and_bundled_files_are_one_reference_level_deep(skill: Path) -> None:
-    """A skill links into itself only as ``references/<file>``; a reference file links outward only."""
+def skill_problems(skill: Path) -> list[str]:
+    """Loadability, link and invocation-policy problems of one skill and its bundled references."""
     directory = skill.parent.resolve()
+    fields, body = frontmatter(skill.read_text())
+    problems = []
+    if fields["name"] != skill.parent.name or not SKILL_NAME.fullmatch(fields["name"]):
+        problems.append(f"name {fields['name']!r}")
+    if not 0 < len(fields["description"]) <= 1024:
+        problems.append("description length")
+    if len(body.splitlines()) >= 500:
+        problems.append("body of 500 lines or more")
+    # A skill links into itself only as ``references/<file>``; a reference file links outward only.
     for source in (skill, *sorted(directory.glob("references/*.md"))):
         for destination in links(source):
             target = (source.parent / destination).resolve()
-            assert target.is_file(), f"{directory.name}: {source.name} -> {destination}"
-            if target.is_relative_to(directory):
-                assert source == skill, f"{directory.name}: {source.name} links back into the skill: {destination}"
-                assert target.relative_to(directory).parts[:-1] == ("references",), destination
+            if not target.is_file():
+                problems.append(f"{source.name} -> {destination}")
+            elif target.is_relative_to(directory) and (
+                source != skill or target.relative_to(directory).parts[:-1] != ("references",)
+            ):
+                problems.append(f"{source.name} links into the skill: {destination}")
+    # Only ``angee-design`` may be invoked implicitly; every other skill, addon-local guides included, is explicit.
+    allowed = yaml.safe_load((skill.parent / "agents/openai.yaml").read_text())["policy"]["allow_implicit_invocation"]
+    if allowed is not (skill.parent.name == "angee-design"):
+        problems.append(f"allow_implicit_invocation {allowed!r}")
+    return problems
 
 
-@pytest.mark.parametrize("skill", SKILLS, ids=lambda path: path.parent.name)
-def test_skill_declares_codex_invocation_policy(skill: Path) -> None:
-    """Only ``angee-design`` may be invoked implicitly.
-
-    Every other skill, including every addon-local guide, is explicit.
-    """
-    policy = yaml.safe_load((skill.parent / "agents/openai.yaml").read_text())["policy"]
-    allowed = policy["allow_implicit_invocation"]
-    assert isinstance(allowed, bool), skill.parent.name
-    assert allowed is (skill.parent.name == "angee-design"), skill.parent.name
+def test_skills_load_link_and_declare_their_invocation_policy() -> None:
+    problems = {skill.parent.name: found for skill in SKILLS if (found := skill_problems(skill))}
+    assert not problems
 
 
 def test_claude_code_loads_skills_through_the_shared_symlink() -> None:

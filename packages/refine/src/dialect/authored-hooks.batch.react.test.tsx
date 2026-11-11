@@ -1,9 +1,9 @@
 // @vitest-environment happy-dom
 
 import { parse } from "graphql";
-import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
+import { act, renderHook, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
+import { beforeEach, describe, expect, test, vi } from "vitest";
 import type { ReactNode } from "react";
 
 import { createLiveInvalidation, invalidateAuthoredQueries } from "../query-invalidation";
@@ -73,10 +73,6 @@ beforeEach(() => {
   batchMock.subscriptions = [];
   batchMock.activeSubscriptions = 0;
   batchMock.subscriptionTeardowns = 0;
-});
-
-afterEach(() => {
-  cleanup();
 });
 
 describe("useAuthoredQueryBatch", () => {

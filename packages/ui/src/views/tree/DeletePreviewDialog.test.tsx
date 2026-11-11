@@ -1,12 +1,10 @@
 // @vitest-environment happy-dom
 
 import type { DeletePreview } from "@angee/refine";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
-import { afterEach, expect, test, vi } from "vitest";
+import { fireEvent, render, screen } from "@testing-library/react";
+import { expect, test, vi } from "vitest";
 
 import { DeletePreviewDialog } from "./DeletePreviewDialog";
-
-afterEach(cleanup);
 
 const preview: DeletePreview = {
   totalDeletedCount: 1,

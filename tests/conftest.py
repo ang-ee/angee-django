@@ -114,21 +114,6 @@ def source_change_publishers() -> Iterator[None]:
 
 
 @pytest.fixture
-def composed_tables(composed_tables: None) -> None:
-    """The source host's composed tables also carry the declared statement principals.
-
-    Extends the ``angee.base.testing`` plugin fixture of the same name: after its REBAC
-    sync, the install-tier principals and grants that admission reads are loaded
-    (``angee.provenance.testing.load_statement_sources``), exactly as the composed
-    host does.
-    """
-
-    del composed_tables
-    load_statement_sources("parties")
-    load_statement_sources("messaging")
-
-
-@pytest.fixture
 def activity_catalog(composed_tables: None) -> None:
     """Load projects' completion subtype and declare the activity types record tasks use."""
 
@@ -672,7 +657,6 @@ from angee.nexus.testing import models as nexus_models  # noqa: E402, F401
 from angee.operator.testing import models as operator_models  # noqa: E402, F401
 from angee.portfolio.testing import models as portfolio_models  # noqa: E402, F401
 from angee.projects.testing import models as projects_models  # noqa: E402, F401
-from angee.provenance.testing import load_statement_sources  # noqa: E402
 from angee.resources.testing.models import Resource  # noqa: E402
 from angee.sequence.testing import models as sequence_models  # noqa: E402, F401
 from angee.tags.testing import models as tags_models  # noqa: E402, F401

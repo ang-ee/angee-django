@@ -947,9 +947,10 @@ data through REBAC, never a queryset bypass.
   API — `filter`/`exclude`/`get` kwargs, `Q` objects, and
   `values`/`values_list`/`order_by`/`annotate` field names — so query with the
   natural denormalized names; instance attributes (`row.subject_id`) are
-  portable too (the registry manager eager-joins them). Any read shape beyond
-  that API must be verified in both modes by parametrizing
-  `REBAC_LOCAL_BACKEND_STORAGE` over `registry` and `denormalized`.
+  portable too (the registry manager eager-joins them). The suite runs `registry`;
+  a read shape beyond that API is verified in both modes in the one cross-storage
+  module, [`tests/test_iam_permission_hub_graphql.py`](../../tests/test_iam_permission_hub_graphql.py),
+  by parametrizing `REBAC_LOCAL_BACKEND_STORAGE` over `registry` and `denormalized`.
 - Derive operator/edge token scope from `<ns>/role:<id>#effective_member` (folds
   in role-hierarchy `includes`), never `roles_of`/`roleRefs` (a direct-grants UX
   hint that under-grants).

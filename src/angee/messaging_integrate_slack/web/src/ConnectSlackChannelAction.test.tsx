@@ -1,8 +1,8 @@
 // @vitest-environment happy-dom
 
-import { cleanup, render, screen } from "@testing-library/react";
+import { render, screen } from "@testing-library/react";
 import * as React from "react";
-import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
+import { beforeEach, describe, expect, test, vi } from "vitest";
 
 const actionMocks = vi.hoisted(() => ({
   props: null as Record<string, unknown> | null,
@@ -18,8 +18,6 @@ vi.mock("@angee/messaging", () => ({
 import { ConnectSlackChannelAction } from "./ConnectSlackChannelAction";
 
 describe("ConnectSlackChannelAction", () => {
-  afterEach(cleanup);
-
   beforeEach(() => {
     actionMocks.props = null;
   });

@@ -42,7 +42,6 @@ from angee.spaces.testing.models import Group, Membership
 from tests.test_messaging import ThreadedTicket
 from tests.test_nexus import _schema as nexus_schema
 from tests.test_parties_graphql import parties_schema
-from tests.test_project_access import project_access_schema as project_access_schema
 
 PARTY_PRIVATE: dict[str, Any] = {
     "notes": "Private notes",
@@ -59,17 +58,12 @@ PARTY_SELECTION = "id display_name notes first_met_note handle_count"
 PERSON_SELECTION = f"{PARTY_SELECTION} nickname birthday anniversary"
 
 
-@pytest.fixture(params=("denormalized", "registry"))
-def follower_storage(request: pytest.FixtureRequest) -> Iterator[str]:
-    """Select the store before the shared composition synchronizes its schema."""
-
-    with override_settings(REBAC_LOCAL_BACKEND_STORAGE=request.param, REBAC_FIELD_READ_MODE="redact"):
-        yield request.param
-
-
 @pytest.fixture
-def follower_schema(follower_storage: str, project_access_schema: Any) -> None:
-    """Reuse the real composed permission fragments, including messaging and spaces."""
+def follower_schema(composed_tables: Any) -> Iterator[None]:
+    """Reuse the real composed permission fragments, including messaging and spaces, with redacted reads."""
+
+    with override_settings(REBAC_FIELD_READ_MODE="redact"):
+        yield
 
 
 @pytest.fixture(scope="module")

@@ -17,6 +17,7 @@ from tests.test_oidc import _oauth_client
 User = get_user_model()
 
 
+@pytest.mark.django_db(transaction=True)
 @pytest.mark.parametrize("link_on_email_match", [False, True])
 @pytest.mark.parametrize("create_on_login", [False, True])
 def test_oidc_ambiguous_email_never_links_or_provisions(legacy_person_emails, link_on_email_match, create_on_login):

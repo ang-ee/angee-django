@@ -23,7 +23,6 @@ from angee.timeline.kinds import timeline_kinds
 from tests.conftest import create_platform_admin
 from tests.test_timeline import timeline_entries
 
-pytestmark = pytest.mark.django_db(transaction=True)
 AT = datetime(2026, 10, 19, 12, tzinfo=UTC)
 
 
@@ -179,6 +178,7 @@ def test_nexus_ignores_unread_fields_before_target_discovery(correspondence) -> 
     targets.assert_not_called()
 
 
+@pytest.mark.django_db(transaction=True)
 @pytest.mark.parametrize("subtype", ["Person", "Organization"])
 def test_nexus_observes_party_descendants_and_merge_redirects(correspondence, subtype) -> None:  # noqa: ANN001
     data = correspondence
@@ -212,6 +212,7 @@ def test_nexus_observes_party_descendants_and_merge_redirects(correspondence, su
         assert timeline_entries(survivor, data.actor)
 
 
+@pytest.mark.django_db(transaction=True)
 def test_reassignment_invalidates_old_and_new_records_after_commit(correspondence):
     data = correspondence
     observed = []

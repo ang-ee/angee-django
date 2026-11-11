@@ -1,7 +1,7 @@
 """Foundation registry and permission fixtures requiring pytest and pytest-django."""
 
 import sys
-from collections.abc import Iterator
+from collections.abc import Generator, Iterator
 from contextlib import contextmanager
 from typing import Any
 
@@ -9,12 +9,18 @@ import pytest
 from django.apps import apps
 from django.conf import settings
 from django.core.management import call_command
+from django.db import DEFAULT_DB_ALIAS, connections, transaction
+from django.db.backends.base.base import BaseDatabaseWrapper
 from django.db.models.fields.related_descriptors import ReverseManyToOneDescriptor, ReverseOneToOneDescriptor
 from django.db.models.signals import post_migrate
 from pytest_django.plugin import DjangoDbBlocker
+from rebac.backends import reset_backend
 
 from angee.base.permissions import SCHEMA_BINDING
 from angee.base.testing.permissions import composed_permissions as composed_permissions
+from angee.base.testing.permissions import emit_permissions
+
+type Rows = tuple[tuple[str, str, list[tuple[Any, ...]]], ...]
 
 
 @contextmanager
@@ -95,40 +101,114 @@ def monkeypatch(installed_app_registry: None) -> Iterator[pytest.MonkeyPatch]:
         yield patch
 
 
+SESSION_BASELINE = pytest.StashKey[Rows]()
+
+
+def database_rows(connection: BaseDatabaseWrapper) -> Rows:
+    """Return each table a flush clears that holds rows, with an ``INSERT`` statement and its parameters."""
+
+    quote = connection.ops.quote_name
+    rows = []
+    with connection.cursor() as cursor:
+        for table in sorted(connection.introspection.django_table_names(only_existing=True, include_views=False)):
+            cursor.execute(f"SELECT * FROM {quote(table)}")
+            if values := cursor.fetchall():
+                columns = [column[0] for column in cursor.description]
+                rows.append((
+                    quote(table),
+                    f"INSERT INTO {quote(table)} ({', '.join(map(quote, columns))}) "
+                    f"VALUES ({', '.join(['%s'] * len(columns))})",
+                    values,
+                ))
+    return tuple(rows)
+
+
+@pytest.hookimpl(wrapper=True)
+def pytest_fixture_setup(
+    fixturedef: pytest.FixtureDef[Any], request: pytest.FixtureRequest,
+) -> Generator[None, Any, Any]:
+    """Record the default database as each ``django_db_setup`` layer returns.
+
+    The outermost layer returns last, so the record that stands is the whole session
+    baseline, including the rows a host's extension of the fixture loads.
+    """
+
+    value = yield
+    if fixturedef.argname == "django_db_setup":
+        with request.getfixturevalue("django_db_blocker").unblock():
+            request.config.stash[SESSION_BASELINE] = database_rows(connections[DEFAULT_DB_ALIAS])
+    return value
+
+
+@pytest.fixture(scope="session", autouse=True)
+def composed_permission_inputs(tmp_path_factory: pytest.TempPathFactory) -> None:
+    """Bind the installed addons' merged permission inputs for the whole session.
+
+    A composed host binds its generated inputs when it starts; a bare source host
+    gets the same composition here, before any test reads a declaration or the
+    database synchronizes it.
+    """
+
+    if getattr(settings, "COMPOSE_SNAPSHOT", None) is None:
+        emit_permissions(apps.get_app_configs(), tmp_path_factory.mktemp("permissions"))
+
+
 @pytest.fixture(scope="session")
 def django_db_setup(
     django_db_setup: None,
     django_db_blocker: DjangoDbBlocker,
+    composed_permission_inputs: None,
+    pytestconfig: pytest.Config,
 ) -> Iterator[None]:
-    """Install the host's permission schema and restore it after transaction flushes.
+    """Synchronize the session's permission baseline once and restore its rows after transactional flushes.
 
-    Native Django database setup owns table creation. A composed host gets the
-    current generated REBAC declarations, including on a reused test database.
-    Disposable test policy has no local overrides to preserve. Bare source-model
-    tests own their per-test schemas through ``composed_permissions`` instead.
+    Native Django database setup owns table creation. REBAC synchronizes the bound
+    inputs with a forced overwrite: a disposable or reused test database has no
+    local policy to preserve. A host extends this fixture to load its own baseline
+    rows; once its outermost layer returns, every row of the default database is the
+    recorded baseline. Tests roll back to it. A transactional test's flush empties
+    every table and re-sends ``post_migrate``, whose receivers write only tables the
+    baseline holds; at the last app's turn those tables are emptied again and refilled
+    with the recorded rows, keys included, and Django's content-type cache and REBAC's
+    process backend start again from them, so a flush recomputes nothing.
     """
 
-    if not getattr(settings, "COMPOSE_OUTPUT_DIR", None):
-        yield
-        return
+    last = [config for config in apps.get_app_configs() if config.models_module is not None][-1]
 
-    rebac_app = apps.get_app_config("rebac")
+    def prime_content_types() -> None:
+        content_types = apps.get_model("contenttypes", "ContentType").objects
+        content_types.clear_cache()
+        content_types.get_for_models(*apps.get_models(), for_concrete_models=False)
 
-    def sync_rebac_schema(**kwargs: Any) -> None:
+    def restore(*, using: str, **kwargs: Any) -> None:
+        if using != DEFAULT_DB_ALIAS:
+            return
+        connection, recorded = connections[using], pytestconfig.stash[SESSION_BASELINE]
+        with transaction.atomic(using=using), connection.cursor() as cursor:
+            for table, _, _ in recorded:
+                cursor.execute(f"DELETE FROM {table}")
+            for _, statement, values in recorded:
+                cursor.executemany(statement, values)
+        prime_content_types()
+        reset_backend()
+
+    with django_db_blocker.unblock():
         call_command("rebac", "sync", "--force-overwrite", "--yes", verbosity=0)
-
-    post_migrate.connect(sync_rebac_schema, sender=rebac_app, weak=False)
+        prime_content_types()
+    post_migrate.connect(restore, sender=last, weak=False)
     try:
-        with django_db_blocker.unblock():
-            sync_rebac_schema()
         yield
     finally:
-        post_migrate.disconnect(sync_rebac_schema, sender=rebac_app)
+        post_migrate.disconnect(restore, sender=last)
 
 
 @pytest.fixture(autouse=True)
-def restore_composed_permission_bindings(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Restore generated permission paths and source annotations after each test."""
+def restore_composed_permission_bindings(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+    """Restore generated permission paths, source annotations and REBAC's backend after each test.
+
+    A test may install its own schema on the process backend
+    (``rebac.testing.install_schema``); the next test reads the stored baseline again.
+    """
 
     for config in apps.get_app_configs():
         for key in ("rebac_schema", SCHEMA_BINDING):
@@ -136,16 +216,21 @@ def restore_composed_permission_bindings(monkeypatch: pytest.MonkeyPatch) -> Non
             monkeypatch.setitem(config.__dict__, key, config.__dict__.get(key))
             if not existed:
                 del config.__dict__[key]
+    yield
+    reset_backend()
 
 
 @pytest.fixture()
-def composed_tables(transactional_db: None) -> None:
-    """Use Django's test tables and synchronize their REBAC permissions.
+def composed_tables(db: None) -> None:
+    """Compatibility alias of pytest-django's ``db`` kept for consumer suites; new tests request ``db``.
 
-    ``transactional_db`` delegates table creation and per-test cleanup to
-    pytest-django and Django. Permission synchronization runs after native
-    database setup and after the previous test's flush.
+    Every database test runs over the session's permission baseline in a transaction
+    rolled back at its end, so the REBAC schema and every row the baseline loads stay
+    in place. A test whose contract needs
+    real commits (other threads or connections, row locks, ``on_commit`` work run
+    by a real worker) declares ``django_db(transaction=True)``; its flush restores
+    the recorded baseline rows. Assert ``on_commit`` callbacks with
+    pytest-django's ``django_capture_on_commit_callbacks`` instead.
     """
 
-    del transactional_db
-    call_command("rebac", "sync", verbosity=0)
+    del db

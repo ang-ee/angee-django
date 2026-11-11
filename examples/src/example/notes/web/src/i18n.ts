@@ -3,7 +3,7 @@
 // `i18n.notes`. Keys are dotted by surface. Metadata-driven field/column labels
 // live in the SDL, not here — only bespoke component copy is routed.
 
-import { createNamespaceT } from "@angee/ui";
+import { createNamespaceT } from "@angee/ui/i18n";
 
 export const enNotesMessages: Record<string, string> = {
   "empty.title": "No notes yet",

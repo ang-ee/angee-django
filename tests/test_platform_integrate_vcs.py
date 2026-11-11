@@ -20,6 +20,8 @@ from angee.platform_integrate_vcs import catalog
 from tests.conftest import Addon, Repository, Source, VcsBridge, catalogue_package, make_integration
 from tests.wheel_fixtures import write_wheel
 
+pytestmark = pytest.mark.django_db(transaction=True)
+
 
 class CatalogueBackend(VCSBackend):
     """Binary remote transport over test-authored, already built artifacts."""

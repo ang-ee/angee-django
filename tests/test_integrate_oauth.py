@@ -253,6 +253,7 @@ def test_material_and_client_changes_immediately_change_refreshability():
         assert not credential.refreshable and credential.is_reconnect_required
 
 
+@pytest.mark.django_db(transaction=True)
 @pytest.mark.usefixtures("composed_tables")
 @pytest.mark.parametrize("forced", [False, True])
 @pytest.mark.parametrize("not_sent", [False, True])
@@ -335,6 +336,7 @@ def test_channel_typed_feed_resolves_the_feed_admission_selector():
     }]}
 
 
+@pytest.mark.django_db(transaction=True)
 @pytest.mark.usefixtures("composed_tables")
 @pytest.mark.parametrize("status", [429, 503, None])
 @pytest.mark.parametrize("expired", [False, True])

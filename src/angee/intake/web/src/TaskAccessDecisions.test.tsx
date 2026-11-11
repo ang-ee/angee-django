@@ -1,11 +1,9 @@
 // @vitest-environment happy-dom
-import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen } from "@testing-library/react";
 import type { ReactNode } from "react";
-import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
+import { beforeEach, describe, expect, test, vi } from "vitest";
 
 import { TaskAccessDecisions, type CurrentAccessRow } from "./TaskAccessDecisions";
-
-afterEach(cleanup);
 
 const mocks = vi.hoisted(() => ({
   decide: vi.fn(), reset: vi.fn(),
@@ -35,10 +33,6 @@ vi.mock("@angee/ui", async () => {
     NavLink: ({ href, children }: { href: string; children: ReactNode }) =>
       React.createElement("a", { href }, children),
     avatarInitials: (name: string) => name.slice(0, 1),
-    createNamespaceT: (_namespace: string, messages: Record<string, string>) => () =>
-      (key: string, vars?: Record<string, string>) => (messages[key] ?? key).replace(
-        /{(\w+)}/g, (_match, name: string) => vars?.[name] ?? "",
-      ),
     useRouteHref: () => (route: string, values: { id: string }) => `/${route}/${values.id}`,
     useStatusTone: () => (value: string | null, override?: Record<string, string>) =>
       (value && override?.[value]) || (

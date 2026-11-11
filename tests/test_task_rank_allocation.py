@@ -15,7 +15,7 @@ from angee.base.testing.queries import statement_body, statement_startswith
 from angee.projects.testing.models import Project, Task
 
 
-@pytest.mark.django_db(transaction=True)
+@pytest.mark.django_db
 def test_task_ordering_allocation_retains_explicit_ranks() -> None:
     """An omitted rank appends once on save; explicit ranks survive repeated saves."""
 
@@ -46,7 +46,7 @@ def test_task_ordering_allocation_retains_explicit_ranks() -> None:
         assert task.sub_sort_order == 4096.0 + FractionalRankField.STEP
 
 
-@pytest.mark.django_db(transaction=True)
+@pytest.mark.django_db
 def test_nullable_ordering_context_update_keeps_fk_types() -> None:
     """A NULL destination writes native NULLs for both ordering foreign keys."""
 
@@ -59,7 +59,7 @@ def test_nullable_ordering_context_update_keeps_fk_types() -> None:
     assert task.parent_id is None
 
 
-@pytest.mark.django_db(transaction=True)
+@pytest.mark.django_db
 def test_deleting_project_clears_task_ordering_context() -> None:
     """Django's SET_NULL collector clears task projects through the ordering queryset."""
 
@@ -101,7 +101,7 @@ def test_reversed_rank_neighbors_are_invalid_instead_of_exhausted(previous, foll
     assert not isinstance(error.value, FractionalRankExhausted)
 
 
-@pytest.mark.django_db(transaction=True)
+@pytest.mark.django_db
 def test_rank_rebalance_preserves_order_with_an_exhausted_tail():
     with system_context(reason="tests.rank.rebalance"):
         first = Task.objects.create(title="First", sort_order=1.0)

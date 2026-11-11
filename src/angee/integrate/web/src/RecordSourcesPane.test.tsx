@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 
-import { cleanup, render, screen } from "@testing-library/react";
-import { afterEach, beforeEach, expect, test, vi } from "vitest";
+import { render, screen } from "@testing-library/react";
+import { beforeEach, expect, test, vi } from "vitest";
 
 import { MAX_PAGE_SIZE } from "@angee/refine";
 import { AppRuntimeProvider, CHATTER_CONTAINERS, RelatedCountProbe, RelatedPane, containersFromChildren, type ChatterViewContext } from "@angee/ui";
@@ -55,7 +55,6 @@ beforeEach(() => {
     isLoading: false,
   });
 });
-afterEach(cleanup);
 
 const containers = containersFromChildren(CHATTER_CONTAINERS, {
   "related#groups": { "integrate.sources": recordSourcesGroup },

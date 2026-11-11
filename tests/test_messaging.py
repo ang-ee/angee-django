@@ -167,7 +167,6 @@ def channel(composed_tables: None) -> Any:
     return make_integration("msgchan", model=Channel, backend_class="manual")
 
 
-@pytest.mark.django_db(transaction=True)
 def test_channel_source_kind_is_its_backends_declaration(channel: Any, monkeypatch: pytest.MonkeyPatch) -> None:
     """A channel is admitted as a statement source only as the kind its protocol declares."""
 
@@ -219,7 +218,6 @@ def _ingest(messages: list[ParsedMessage], *, channel: Any) -> int:
         return len(Message.objects.ingest(messages, channel=channel))
 
 
-@pytest.mark.django_db(transaction=True)
 def test_ingest_commits_each_message_and_does_not_lock_an_unchanged_observation(channel: Any) -> None:
     """A later bad envelope cannot roll back the previous message's committed work."""
 
@@ -247,7 +245,6 @@ def test_ingest_commits_each_message_and_does_not_lock_an_unchanged_observation(
     assert not any(statement_startswith(query["sql"].lstrip(), "UPDATE") for query in queries)
 
 
-@pytest.mark.django_db(transaction=True)
 def test_synced_own_message_edits_and_late_parent_land_and_emit(channel: Any) -> None:
     """Direction is provider evidence, not proof that messaging authored an envelope."""
 
@@ -295,7 +292,6 @@ def test_synced_own_message_edits_and_late_parent_land_and_emit(channel: Any) ->
         message_ingested.disconnect(observe)
 
 
-@pytest.mark.django_db(transaction=True)
 def test_identical_synced_own_reply_repairs_a_late_parent(channel: Any) -> None:
     own = replace(_parsed("own-late", in_reply_to="own-root", sent_at=_AT), direction="outbound")
     _ingest([own], channel=channel)
@@ -305,7 +301,6 @@ def test_identical_synced_own_reply_repairs_a_late_parent(channel: Any) -> None:
     assert row.parent_id == Message._base_manager.get(external_id="own-root").pk
 
 
-@pytest.mark.django_db(transaction=True)
 def test_ingest_bounds_neutral_part_fields_without_truncating_subject(channel: Any) -> None:
     """Every bridge shares the part limits while fragment-backed subjects stay whole."""
 
@@ -430,7 +425,6 @@ def test_derived_part_name_slugs_and_caps_the_content_id() -> None:
     assert len(_cid_slug("<" + "a" * 200 + ">")) == 80
 
 
-@pytest.mark.django_db(transaction=True)
 def test_threaded_model_resolves_one_chatter_thread(composed_tables: None) -> None:
     """A threaded model row owns one stable chatter thread attachment."""
 
@@ -453,7 +447,6 @@ def test_threaded_model_resolves_one_chatter_thread(composed_tables: None) -> No
     assert attachment.role == "chatter"
 
 
-@pytest.mark.django_db(transaction=True)
 def test_historical_ingest_binds_explicit_thread_and_heals_reply_order(channel: Any) -> None:
     """Source history retains dates/replies without emitting a live workflow event."""
     from angee.messaging.events import message_ingested
@@ -502,7 +495,6 @@ def test_historical_ingest_binds_explicit_thread_and_heals_reply_order(channel: 
         message_ingested.disconnect(capture)
 
 
-@pytest.mark.django_db(transaction=True)
 @pytest.mark.parametrize("changed_body", [False, True])
 def test_explicit_ingest_rejects_same_channel_message_reassignment(channel: Any, changed_body: bool) -> None:
     """Neither an identical replay nor a source edit can move record chatter."""
@@ -538,7 +530,6 @@ def test_explicit_ingest_rejects_same_channel_message_reassignment(channel: Any,
         assert other.message_count == 0
 
 
-@pytest.mark.django_db(transaction=True)
 def test_source_thread_correction_compares_locked_prior_and_keeps_native_counters(channel: Any) -> None:
     with system_context(reason="test source thread correction"):
         first, second, third = (
@@ -617,7 +608,6 @@ def test_source_thread_correction_race_has_one_compare_and_set_winner(channel: A
         assert Message.objects.filter(external_id="source-cas-race", channel=channel).count() == 1
 
 
-@pytest.mark.django_db(transaction=True)
 @pytest.mark.parametrize("historical", (False, True))
 def test_source_thread_correction_same_content_preserves_event_policy(channel: Any, historical: bool) -> None:
     with system_context(reason="source correction events"):
@@ -641,7 +631,6 @@ def test_source_thread_correction_same_content_preserves_event_policy(channel: A
         assert received == ([] if historical else [original.pk])
 
 
-@pytest.mark.django_db(transaction=True)
 def test_record_chatter_dedups_across_mti_levels(composed_tables: None) -> None:
     """A record and its REBAC-typed MTI ancestor share one canonical chatter edge.
 
@@ -670,7 +659,6 @@ def test_record_chatter_dedups_across_mti_levels(composed_tables: None) -> None:
     assert ThreadAttachment._base_manager.count() == 1
 
 
-@pytest.mark.django_db(transaction=True)
 def test_threaded_model_posts_internal_message(composed_tables: None) -> None:
     """Posting on a threaded model writes a message body and advances the thread."""
 
@@ -696,7 +684,6 @@ def test_threaded_model_posts_internal_message(composed_tables: None) -> None:
     assert part.fragment.text == "Please follow up with the customer."
 
 
-@pytest.mark.django_db(transaction=True)
 def test_threaded_model_logs_internal_note(composed_tables: None) -> None:
     """Logging a note writes an Odoo-style notification with the note subtype."""
 
@@ -715,7 +702,6 @@ def test_threaded_model_logs_internal_note(composed_tables: None) -> None:
     assert not ThreadFollower._base_manager.filter(party__person__user=user).exists()
 
 
-@pytest.mark.django_db(transaction=True)
 def test_threaded_model_posts_reply(composed_tables: None) -> None:
     """Posting a reply stores the parent message inside the same chatter thread."""
 
@@ -734,7 +720,6 @@ def test_threaded_model_posts_reply(composed_tables: None) -> None:
             ticket.message_post("Wrong parent.", parent=other_parent)
 
 
-@pytest.mark.django_db(transaction=True)
 def test_threaded_model_toggles_message_reaction(composed_tables: None) -> None:
     """Reacting to a chatter message uses a stable user handle and same-thread guard."""
 
@@ -780,7 +765,6 @@ def test_threaded_model_toggles_message_reaction(composed_tables: None) -> None:
             ticket.message_reaction(other_message, reaction="👍", user=user)
 
 
-@pytest.mark.django_db(transaction=True)
 def test_threaded_model_toggles_message_star(composed_tables: None) -> None:
     """Starring a chatter message is per-user and same-thread guarded."""
 
@@ -823,7 +807,6 @@ def test_threaded_model_toggles_message_star(composed_tables: None) -> None:
             ticket.message_set_starred(other_message, user=user)
 
 
-@pytest.mark.django_db(transaction=True)
 def test_threaded_model_unlinks_chatter_message(composed_tables: None) -> None:
     """Deleting a chatter message removes its owned rows and repairs thread counters."""
 
@@ -862,7 +845,6 @@ def test_threaded_model_unlinks_chatter_message(composed_tables: None) -> None:
             ticket.message_unlink(other_message)
 
 
-@pytest.mark.django_db(transaction=True)
 @pytest.mark.parametrize("delete_args", [(), ("default",)])
 @pytest.mark.usefixtures("activity_catalog")
 def test_threaded_record_delete_tears_down_chatter_graph(composed_tables: None, delete_args: tuple[str, ...]) -> None:
@@ -906,7 +888,6 @@ def test_threaded_record_delete_tears_down_chatter_graph(composed_tables: None, 
     assert Thread._base_manager.filter(pk=survivor_thread.pk).exists()
 
 
-@pytest.mark.django_db(transaction=True)
 @pytest.mark.usefixtures("activity_catalog")
 def test_record_authorized_delete_tears_down_private_chatter_graph(composed_tables: None) -> None:
     """Deleting a permitted parent record removes its private chatter implementation rows."""
@@ -948,7 +929,6 @@ def test_record_authorized_delete_tears_down_private_chatter_graph(composed_tabl
     assert not ThreadFollower._base_manager.filter(thread_id=thread_pk).exists()
 
 
-@pytest.mark.django_db(transaction=True)
 def test_record_denied_delete_does_not_teardown_private_chatter_graph(composed_tables: None) -> None:
     """A record actor without delete permission cannot trigger the elevated chatter cascade."""
 
@@ -984,7 +964,6 @@ def test_record_denied_delete_does_not_teardown_private_chatter_graph(composed_t
     assert Message._base_manager.filter(pk=message_pk).exists()
 
 
-@pytest.mark.django_db(transaction=True)
 @pytest.mark.usefixtures("activity_catalog")
 def test_threaded_record_bulk_delete_tears_down_chatter_graph(composed_tables: None) -> None:
     """A bulk ``QuerySet.delete()`` tears down the thread subtree too, not just the row (M1).
@@ -1022,7 +1001,6 @@ def test_threaded_record_bulk_delete_tears_down_chatter_graph(composed_tables: N
     assert Thread._base_manager.filter(pk=survivor_thread.pk).exists()
 
 
-@pytest.mark.django_db(transaction=True)
 def test_threaded_mti_child_delete_leaves_no_attachment_row(composed_tables: None) -> None:
     """Deleting a threaded MTI child collects its chatter attachment, leaving no orphan.
 
@@ -1048,7 +1026,6 @@ def test_threaded_mti_child_delete_leaves_no_attachment_row(composed_tables: Non
     assert not Thread._base_manager.filter(pk=thread_pk).exists()
 
 
-@pytest.mark.django_db(transaction=True)
 def test_threaded_model_create_autofollows_its_author_without_a_creation_message(composed_tables: None) -> None:
     """Creating a threaded row subscribes its creator; the creation is history, not a comment."""
 
@@ -1070,7 +1047,6 @@ def test_threaded_model_create_autofollows_its_author_without_a_creation_message
     assert not ThreadFollower.objects.unread_messages(thread, user=user).exists()
 
 
-@pytest.mark.django_db(transaction=True)
 def test_a_row_inserted_under_its_querysets_scope_owns_its_thread(composed_tables: None) -> None:
     """A queryset's pinned actor or system scope writes the row's chatter without an ambient scope.
 
@@ -1097,7 +1073,6 @@ def test_a_row_inserted_under_its_querysets_scope_owns_its_thread(composed_table
     assert threads["Elevated case"] is None
 
 
-@pytest.mark.django_db(transaction=True)
 def test_materialized_child_transition_keeps_native_history(composed_tables: None) -> None:
     """An MTI transition records the parent's changed state without a second message store."""
 
@@ -1112,7 +1087,6 @@ def test_materialized_child_transition_keeps_native_history(composed_tables: Non
         assert Message._base_manager.count() == before
 
 
-@pytest.mark.django_db(transaction=True)
 def test_threaded_model_subscribe_and_unsubscribe(composed_tables: None) -> None:
     """A threaded model row owns Odoo-style user followers."""
 
@@ -1145,7 +1119,6 @@ def test_threaded_model_subscribe_and_unsubscribe(composed_tables: None) -> None
         assert ticket.message_is_follower() is False
 
 
-@pytest.mark.django_db(transaction=True)
 def test_threaded_model_post_autofollows_author(composed_tables: None) -> None:
     """Posting a chatter comment subscribes the author for replies."""
 
@@ -1166,7 +1139,6 @@ def test_threaded_model_post_autofollows_author(composed_tables: None) -> None:
         assert ticket.message_is_follower() is True
 
 
-@pytest.mark.django_db(transaction=True)
 def test_threaded_model_updates_comment_content(composed_tables: None) -> None:
     """Editing a comment rewrites its body in place and appends an edit-history entry.
 
@@ -1210,7 +1182,6 @@ def test_threaded_model_updates_comment_content(composed_tables: None) -> None:
     assert thread.message_count == 1
 
 
-@pytest.mark.django_db(transaction=True)
 def test_threaded_model_rejects_system_message_updates(composed_tables: None) -> None:
     """System notifications are immutable chatter messages."""
 
@@ -1226,7 +1197,6 @@ def test_threaded_model_rejects_system_message_updates(composed_tables: None) ->
             ticket.message_update_content(message, body="Tampered")
 
 
-@pytest.mark.django_db(transaction=True)
 def test_threaded_model_post_notifies_matching_followers(composed_tables: None) -> None:
     """Posting fans out delivery rows to inbox and email followers matching the subtype.
 
@@ -1266,7 +1236,6 @@ def test_threaded_model_post_notifies_matching_followers(composed_tables: None) 
     assert ThreadFollower.objects.unread_count_for_record(ticket, user=inbox_watcher) == 1
 
 
-@pytest.mark.django_db(transaction=True)
 def test_threaded_model_mark_read_advances_receipt(composed_tables: None) -> None:
     """A follower owns read state through their positional receipt, not flag rows.
 
@@ -1298,7 +1267,6 @@ def test_threaded_model_mark_read_advances_receipt(composed_tables: None) -> Non
         assert ThreadFollower.objects.mark_read_for_record(ticket, user=watcher) == 0
 
 
-@pytest.mark.django_db(transaction=True)
 def test_threaded_model_marks_one_message_done(composed_tables: None) -> None:
     """Message done is positional: the receipt advances to that message, not a flag.
 
@@ -1346,7 +1314,6 @@ def test_threaded_model_marks_one_message_done(composed_tables: None) -> None:
         ticket.message_set_done(other_message, user=watcher)
 
 
-@pytest.mark.django_db(transaction=True)
 def test_unread_count_respects_default_subtype_subscription(composed_tables: None) -> None:
     """An empty subtype selection is the default subscription, not "everything".
 
@@ -1398,7 +1365,6 @@ def test_unread_count_respects_default_subtype_subscription(composed_tables: Non
     assert not messages.unread_for(default_watcher).exists()
 
 
-@pytest.mark.django_db(transaction=True)
 def test_threaded_model_post_notifies_direct_recipient_without_following(composed_tables: None) -> None:
     """Direct post recipients get notifications even when they are not followers."""
 
@@ -1419,7 +1385,6 @@ def test_threaded_model_post_notifies_direct_recipient_without_following(compose
     assert ThreadFollower._base_manager.filter(party__person__user=recipient).count() == 0
 
 
-@pytest.mark.django_db(transaction=True)
 def test_threaded_model_suggests_record_user_and_latest_direct_recipient(composed_tables: None) -> None:
     """Recipient suggestions merge declared record users and recent recipients."""
 
@@ -1449,7 +1414,6 @@ def test_threaded_model_suggests_record_user_and_latest_direct_recipient(compose
     ]
 
 
-@pytest.mark.django_db(transaction=True)
 def test_threaded_model_post_can_autofollow_direct_recipient(composed_tables: None) -> None:
     """A direct recipient can be subscribed after a post, like Odoo autofollow."""
 
@@ -1485,8 +1449,7 @@ def _record_holders(doc: Any, **holders: Any) -> None:
     ])
 
 
-@pytest.mark.django_db(transaction=True)
-@pytest.mark.usefixtures("composed_permissions", "activity_catalog")
+@pytest.mark.usefixtures("composed_tables", "activity_catalog")
 def test_record_task_completion_notifies_the_records_activity_followers() -> None:
     """Completing a record task delivers to the record's followers of that subtype."""
 
@@ -1509,8 +1472,7 @@ def test_record_task_completion_notifies_the_records_activity_followers() -> Non
     assert notification.message.subtype.key == "activity_done"
 
 
-@pytest.mark.django_db(transaction=True)
-@pytest.mark.usefixtures("composed_permissions", "activity_catalog")
+@pytest.mark.usefixtures("composed_tables", "activity_catalog")
 def test_agent_record_task_completion_posts_system_message_with_service_user(monkeypatch: pytest.MonkeyPatch) -> None:
     """An agent completing a record task posts the record's log as its service user."""
 
@@ -1551,7 +1513,6 @@ def test_agent_record_task_completion_posts_system_message_with_service_user(mon
     )
 
 
-@pytest.mark.django_db(transaction=True)
 def test_threaded_model_post_accepts_storage_attachments(composed_tables: None, tmp_path: Path) -> None:
     """Posting on a threaded model can attach existing storage files."""
 
@@ -1578,7 +1539,6 @@ def test_threaded_model_post_accepts_storage_attachments(composed_tables: None, 
     assert attachment_part.file.size_bytes == len(b"Attachment body")
 
 
-@pytest.mark.django_db(transaction=True)
 def test_unnamed_media_ingest_names_the_file_from_its_mime(composed_tables: None, tmp_path: Path) -> None:
     """A nameless part that is neither chat nor a Content-ID lands on the MIME fallback.
 
@@ -1615,7 +1575,6 @@ def test_unnamed_media_ingest_names_the_file_from_its_mime(composed_tables: None
     assert attachment_part.file.filename == "attachment.jpg"
 
 
-@pytest.mark.django_db(transaction=True)
 def test_nameless_chat_part_names_from_the_message_id(composed_tables: None, tmp_path: Path) -> None:
     """A chat message's nameless media takes the message id after the last ``/``."""
 
@@ -1648,7 +1607,6 @@ def test_nameless_chat_part_names_from_the_message_id(composed_tables: None, tmp
     assert attachment_part.file.filename == "3EB0STANZA.jpg"
 
 
-@pytest.mark.django_db(transaction=True)
 def test_nameless_email_inline_part_names_from_the_content_id(composed_tables: None, tmp_path: Path) -> None:
     """An email inline part with a Content-ID and no name takes ``inline-{cid-slug}{ext}``."""
 
@@ -1681,7 +1639,6 @@ def test_nameless_email_inline_part_names_from_the_content_id(composed_tables: N
     assert attachment_part.file.filename == "inline-hero7mail.example.com.png"
 
 
-@pytest.mark.django_db(transaction=True)
 def test_deduped_file_keeps_first_name_while_each_part_keeps_its_own(composed_tables: None, tmp_path: Path) -> None:
     """One content-addressed File keeps its first name; each nameless Part gets its own."""
 
@@ -1720,7 +1677,6 @@ def test_deduped_file_keeps_first_name_while_each_part_keeps_its_own(composed_ta
     assert second_part.name == "SECOND.jpg"
 
 
-@pytest.mark.django_db(transaction=True)
 def test_threaded_model_history_keeps_record_values(composed_tables: None) -> None:
     """The record's history preserves versions; comments carry authored discussion."""
 
@@ -1734,7 +1690,6 @@ def test_threaded_model_history_keeps_record_values(composed_tables: None) -> No
         assert Message._base_manager.count() == before
 
 
-@pytest.mark.django_db(transaction=True)
 def test_threaded_model_history_preserves_multiple_field_changes(composed_tables: None) -> None:
     with system_context(reason="record history fields"):
         ticket = ThreadedTicket.objects.create(title="Initial")
@@ -1747,7 +1702,6 @@ def test_threaded_model_history_preserves_multiple_field_changes(composed_tables
         assert Message._base_manager.count() == 0
 
 
-@pytest.mark.django_db(transaction=True)
 def test_threaded_model_history_uses_persisted_update_fields(composed_tables: None) -> None:
     with system_context(reason="record history persisted fields"):
         ticket = ThreadedTicket.objects.create(title="Unchanged")
@@ -1760,8 +1714,7 @@ def test_threaded_model_history_uses_persisted_update_fields(composed_tables: No
         assert Message._base_manager.count() == 0
 
 
-@pytest.mark.django_db(transaction=True)
-@pytest.mark.usefixtures("composed_permissions", "activity_catalog")
+@pytest.mark.usefixtures("composed_tables", "activity_catalog")
 def test_threaded_model_schedules_and_completes_a_record_task() -> None:
     """A threaded record carries record tasks; completing one logs it on the record."""
 
@@ -1833,7 +1786,6 @@ def test_ingest_autolinks_sender_from_resolved_normalized_twin(channel: Any) -> 
     assert not link.is_confirmed
 
 
-@pytest.mark.django_db(transaction=True)
 def test_ingest_leaves_unknown_first_contact_sender_unresolved(channel: Any) -> None:
     """A first-contact sender with no evidence remains an unresolved handle."""
 
@@ -1847,7 +1799,6 @@ def test_ingest_leaves_unknown_first_contact_sender_unresolved(channel: Any) -> 
     assert not Party.statements.sudo(reason="test.messaging.statement_observation").filter(handle=sender).exists()
 
 
-@pytest.mark.django_db(transaction=True)
 def test_claimed_sender_proposal_accumulates_evidence_without_demoting_confirmation(channel: Any) -> None:
     """Repeated source claims accumulate on the rule's statement; the person's confirmation stays authoritative."""
 
@@ -2011,7 +1962,6 @@ def test_ingest_suggests_sender_from_organization_domain(channel: Any) -> None:
     assert not link.is_confirmed
 
 
-@pytest.mark.django_db(transaction=True)
 def test_automated_senders_send_only_list_or_auto_submitted_mail(channel: Any) -> None:
     """A sender is automated only when every message it sent carries an automation header."""
 
@@ -2043,7 +1993,6 @@ def test_automated_senders_send_only_list_or_auto_submitted_mail(channel: Any) -
     assert automated == expected
 
 
-@pytest.mark.django_db(transaction=True)
 def test_ingest_suggests_each_unresolved_handle_once_after_batch_commit(
     channel: Any,
     monkeypatch: pytest.MonkeyPatch,
@@ -2125,7 +2074,6 @@ def test_ingest_contains_suggestion_failures_and_continues_batch(
     assert "Could not suggest a party for messaging handle" in caplog.text
 
 
-@pytest.mark.django_db(transaction=True)
 def test_ingest_dedup_is_channel_scoped(channel: Any) -> None:
     """Message identity is (channel, external_id): re-sync dedups, a second channel does not.
 
@@ -2154,7 +2102,6 @@ def test_ingest_dedup_is_channel_scoped(channel: Any) -> None:
     assert thread.message_count == 1
 
 
-@pytest.mark.django_db(transaction=True)
 def test_group_ingest_resolves_visibility_and_accumulates_unique_participants(channel: Any) -> None:
     """GROUP ingest keeps one thread while each message contributes its envelope."""
 
@@ -2281,7 +2228,6 @@ def test_parsed_message_sync_hash_follows_what_ingest_writes() -> None:
     assert digest != replace(parsed, in_reply_to="m0").sync_hash(channel_id=1, metadata={})
 
 
-@pytest.mark.django_db(transaction=True)
 def test_identical_resync_does_not_churn_message_or_parts(channel: Any) -> None:
     """A second identical ingest rewrites nothing — no re-save, stable Part PKs (M3).
 
@@ -2314,7 +2260,6 @@ def test_identical_resync_does_not_churn_message_or_parts(channel: Any) -> None:
     assert Thread._base_manager.get().message_count == 1
 
 
-@pytest.mark.django_db(transaction=True)
 def test_identical_resync_without_receipt_time_does_not_save_or_rebuild_parts(channel: Any, monkeypatch) -> None:
     received = replace(_parsed("m1", sent_at=_AT), received_at=_AT + timedelta(minutes=5))
     assert _ingest([received], channel=channel) == 1
@@ -2335,7 +2280,6 @@ def test_identical_resync_without_receipt_time_does_not_save_or_rebuild_parts(ch
     assert set(Part._base_manager.filter(message=message).values_list("pk", flat=True)) == part_pks
 
 
-@pytest.mark.django_db(transaction=True)
 def test_resync_without_receipt_time_keeps_the_known_one(channel: Any) -> None:
     received = replace(_parsed("m1", sent_at=_AT), received_at=_AT + timedelta(minutes=5))
     assert _ingest([received], channel=channel) == 1
@@ -2346,7 +2290,6 @@ def test_resync_without_receipt_time_keeps_the_known_one(channel: Any) -> None:
         assert message.body_text() == "Edited body"
 
 
-@pytest.mark.django_db(transaction=True)
 def test_counter_survives_null_sent_at(channel: Any) -> None:
     """A message with no sent_at bumps the count without crashing (the M1 bug).
 
@@ -2361,7 +2304,6 @@ def test_counter_survives_null_sent_at(channel: Any) -> None:
     assert thread.updated_at is not None  # auto_now owned it
 
 
-@pytest.mark.django_db(transaction=True)
 def test_last_message_at_is_monotonic(channel: Any) -> None:
     """Out-of-order ingest never regresses last_message_at."""
 
@@ -2374,7 +2316,6 @@ def test_last_message_at_is_monotonic(channel: Any) -> None:
     assert thread.last_message_at == later
 
 
-@pytest.mark.django_db(transaction=True)
 def test_null_bytes_are_stripped_on_write(channel: Any) -> None:
     """Null bytes are stripped before every write (Postgres rejects them).
 
@@ -2395,7 +2336,6 @@ def test_null_bytes_are_stripped_on_write(channel: Any) -> None:
     assert thread.title.text == "Hithere"
 
 
-@pytest.mark.django_db(transaction=True)
 def test_references_resolve_into_one_thread(channel: Any) -> None:
     """References win over subject: a reply with a different subject joins the root thread."""
 
@@ -2405,7 +2345,6 @@ def test_references_resolve_into_one_thread(channel: Any) -> None:
     assert Thread._base_manager.get().message_count == 2
 
 
-@pytest.mark.django_db(transaction=True)
 def test_resync_rethreads_and_reconciles_both_thread_counters(channel: Any) -> None:
     """Re-threading a message on re-sync moves its count off the old thread onto the new (H1).
 
@@ -2437,7 +2376,6 @@ def test_resync_rethreads_and_reconciles_both_thread_counters(channel: Any) -> N
     assert not Thread._base_manager.filter(pk=orphan_thread.pk).exists()
 
 
-@pytest.mark.django_db(transaction=True)
 def test_resync_rehomes_null_thread_message_and_bumps_winner(channel: Any) -> None:
     """A thread-less message re-homed on re-sync still bumps the winning thread (H1).
 
@@ -2470,7 +2408,6 @@ def test_resync_rehomes_null_thread_message_and_bumps_winner(channel: Any) -> No
     assert root_thread.last_message_at == b_sent
 
 
-@pytest.mark.django_db(transaction=True)
 def test_quote_edge_runs_from_earlier_to_later(channel: Any) -> None:
     """Two messages sharing a fragment get one quote edge, earlier → later."""
 
@@ -2488,7 +2425,6 @@ def test_quote_edge_runs_from_earlier_to_later(channel: Any) -> None:
     assert (edge.src_id, edge.dst_id) == (old.pk, new.pk)
 
 
-@pytest.mark.django_db(transaction=True)
 def test_shared_title_fragment_mints_no_quote_edges(channel: Any) -> None:
     """Messages sharing ONLY a title fragment get zero quote edges.
 
@@ -2512,7 +2448,6 @@ def test_shared_title_fragment_mints_no_quote_edges(channel: Any) -> None:
     assert MessageEdge._base_manager.filter(kind="quote").count() == 0
 
 
-@pytest.mark.django_db(transaction=True)
 def test_long_subject_lands_intact_and_groups_replies(channel: Any) -> None:
     """A 7,970-char subject lands intact and still groups its reply into one thread.
 
@@ -2540,7 +2475,6 @@ def test_long_subject_lands_intact_and_groups_replies(channel: Any) -> None:
     assert Thread._base_manager.count() == 1
 
 
-@pytest.mark.django_db(transaction=True)
 def test_second_title_part_is_rejected(channel: Any) -> None:
     """A message carries at most one TITLE part (the partial unique constraint)."""
 
@@ -2558,7 +2492,6 @@ def test_second_title_part_is_rejected(channel: Any) -> None:
             )
 
 
-@pytest.mark.django_db(transaction=True)
 def test_fragment_upsert_survives_oversized_text(channel: Any) -> None:
     """A text past the tsvector input bound still lands (vector prefix is bounded).
 
@@ -2577,7 +2510,6 @@ def test_fragment_upsert_survives_oversized_text(channel: Any) -> None:
     assert again.pk == fragment.pk
 
 
-@pytest.mark.django_db(transaction=True)
 def test_ingest_rejects_oversized_message_metadata(channel: Any) -> None:
     """Externally controlled metadata over 512 KiB is rejected before a message lands."""
 
@@ -2590,7 +2522,6 @@ def test_ingest_rejects_oversized_message_metadata(channel: Any) -> None:
     assert not Message._base_manager.filter(external_id="oversized-metadata").exists()
 
 
-@pytest.mark.django_db(transaction=True)
 def test_resync_with_changed_body_appends_edit_history(channel: Any) -> None:
     """A provider re-sync whose fragment set changed appends an edit-history entry.
 
@@ -2621,7 +2552,6 @@ def test_resync_with_changed_body_appends_edit_history(channel: Any) -> None:
     assert len(message.edit_history) == 1
 
 
-@pytest.mark.django_db(transaction=True)
 @pytest.mark.parametrize("equal_timestamps", [False, True])
 def test_read_receipts_anchor_unread_and_never_regress(composed_tables: None, equal_timestamps: bool) -> None:
     """Unread is everything past the receipt; the receipt only ever advances.
@@ -2696,7 +2626,6 @@ def _grant(record: Any, relation: str, user: Any) -> None:
     )
 
 
-@pytest.mark.django_db(transaction=True)
 def test_record_history_captures_write_without_post_access(composed_tables: None) -> None:
     """Record write and comment post are separate permissions, including capture."""
 
@@ -2714,7 +2643,6 @@ def test_record_history_captures_write_without_post_access(composed_tables: None
         assert Message._base_manager.count() == before
 
 
-@pytest.mark.django_db(transaction=True)
 def test_user_authored_post_still_denied_without_post_access(composed_tables: None) -> None:
     """User-authored chatter still rides the post gate for a no-post actor.
 
@@ -2773,7 +2701,6 @@ def _collecting_thread_broadcasts(
         yield sent
 
 
-@pytest.mark.django_db(transaction=True)
 def test_post_bumps_thread_through_an_instance_save(composed_tables: None) -> None:
     """A post advances the thread with an instance ``save``, so ``post_save`` fires once.
 
@@ -2809,7 +2736,6 @@ def test_post_bumps_thread_through_an_instance_save(composed_tables: None) -> No
     assert thread.last_message_at == message.sent_at
 
 
-@pytest.mark.django_db(transaction=True)
 def test_post_on_opted_in_host_emits_one_member_gated_thread_changed(
     composed_tables: None, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -2844,7 +2770,6 @@ def test_post_on_opted_in_host_emits_one_member_gated_thread_changed(
     assert ChangeReadGate(Thread, to_subject_ref(stranger)).filter(change) is None
 
 
-@pytest.mark.django_db(transaction=True)
 def test_record_chatter_host_stays_silent_on_a_post(composed_tables: None, monkeypatch: pytest.MonkeyPatch) -> None:
     """A non-opted threaded host streams nothing on a post — F-v isolation intact.
 
@@ -2865,7 +2790,6 @@ def test_record_chatter_host_stays_silent_on_a_post(composed_tables: None, monke
     assert [payload for model, payload in sent if model is Thread] == []
 
 
-@pytest.mark.django_db(transaction=True)
 def test_room_post_emits_no_message_changed(composed_tables: None, monkeypatch: pytest.MonkeyPatch) -> None:
     """A post on an opted-in room streams ``threadChanged`` only, never ``messageChanged``.
 
@@ -2890,7 +2814,6 @@ def test_room_post_emits_no_message_changed(composed_tables: None, monkeypatch: 
     assert [payload for model, payload in sent if model is Thread] != []
 
 
-@pytest.mark.django_db(transaction=True)
 def test_resubscribe_preserves_follower_policy(composed_tables: None) -> None:
     """A re-subscribe leaves an existing follower's create-time state untouched.
 
@@ -2921,7 +2844,6 @@ def test_resubscribe_preserves_follower_policy(composed_tables: None) -> None:
         assert changed.subtype_keys == ["comment"]
 
 
-@pytest.mark.django_db(transaction=True)
 def test_stale_broadcast_flag_heals_on_next_activity(composed_tables: None) -> None:
     """A record thread minted before its host opted in heals its broadcast flag on next post.
 
@@ -2946,7 +2868,6 @@ def test_stale_broadcast_flag_heals_on_next_activity(composed_tables: None) -> N
     assert thread.broadcasts_changes() is True
 
 
-@pytest.mark.django_db(transaction=True)
 def test_broadcasting_room_creator_socket_gated_by_membership(composed_tables: None) -> None:
     """Broadcasting threads release ownership but retain their creator attribution."""
 
@@ -2984,7 +2905,6 @@ def test_broadcasting_room_creator_socket_gated_by_membership(composed_tables: N
                 change_reader(user_id=-1)
 
 
-@pytest.mark.django_db(transaction=True)
 def test_first_post_autofollow_seeds_the_author_receipt(composed_tables: None) -> None:
     """An author's FIRST post on an unfollowed record is never unread for them.
 
@@ -3004,7 +2924,6 @@ def test_first_post_autofollow_seeds_the_author_receipt(composed_tables: None) -
         assert ThreadFollower.objects.unread_messages(message.thread, user=author).count() == 0
 
 
-@pytest.mark.django_db(transaction=True)
 def test_ingest_named_thread_converges_chat_messages(channel: Any) -> None:
     """A chat adapter's ParsedThread names the conversation — one thread per chat.
 
@@ -3041,7 +2960,6 @@ def test_ingest_named_thread_converges_chat_messages(channel: Any) -> None:
     assert room.title.text == "Weekend plans"
 
 
-@pytest.mark.django_db(transaction=True)
 def test_ingest_named_thread_fills_a_missing_title_but_never_renames(channel: Any) -> None:
     """A source may learn a chat's name after its first message (a group subject)."""
 
@@ -3066,7 +2984,6 @@ def test_ingest_named_thread_fills_a_missing_title_but_never_renames(channel: An
     assert room.title.text == "Climbing crew"
 
 
-@pytest.mark.django_db(transaction=True)
 def test_fill_chat_titles_names_only_this_channels_untitled_chats(channel: Any) -> None:
     other = make_integration("other-chats", model=Channel, backend_class="manual")
     _ingest(
@@ -3099,7 +3016,6 @@ def test_fill_chat_titles_names_only_this_channels_untitled_chats(channel: Any) 
     assert titles[f"{Thread.objects.chat_key_prefix(other)}g-1"] is None
 
 
-@pytest.mark.django_db(transaction=True)
 def test_name_untitled_names_only_the_selected_threads(channel: Any) -> None:
     """The queryset verb never titles a thread the caller's selection excludes."""
 
@@ -3117,7 +3033,6 @@ def test_name_untitled_names_only_the_selected_threads(channel: Any) -> None:
     assert excluded.title_id is None
 
 
-@pytest.mark.django_db(transaction=True)
 def test_ingest_named_thread_honors_visibility_hint(channel: Any) -> None:
     """A broadcast adapter names its feed public; the default stays private.
 
@@ -3143,7 +3058,6 @@ def test_ingest_named_thread_honors_visibility_hint(channel: Any) -> None:
     assert threads[f"chat:{channel.pk}:dm-1"].visibility == Thread.Visibility.PRIVATE
 
 
-@pytest.mark.django_db(transaction=True)
 def test_ingest_derives_message_kind_from_structure(channel: Any) -> None:
     """The ingest owner decides the functional kind from structural facts.
 
@@ -3176,7 +3090,6 @@ def test_ingest_derives_message_kind_from_structure(channel: Any) -> None:
     }
 
 
-@pytest.mark.django_db(transaction=True)
 def test_ingest_resolves_reply_parent(channel: Any) -> None:
     """``in_reply_to`` lands the single-parent pointer, for email and named chats.
 
@@ -3200,7 +3113,6 @@ def test_ingest_resolves_reply_parent(channel: Any) -> None:
     assert chat_reply.parent_id == Message._base_manager.get(external_id="chat-a").pk
 
 
-@pytest.mark.django_db(transaction=True)
 def test_ingest_reply_before_parent_heals_on_resync(channel: Any) -> None:
     """A reply that lands before its parent backfills on the no-op re-sync.
 
@@ -3221,7 +3133,6 @@ def test_ingest_reply_before_parent_heals_on_resync(channel: Any) -> None:
     assert row.edit_history == []
 
 
-@pytest.mark.django_db(transaction=True)
 def test_handle_upsert_resolves_external_id_before_value(composed_tables: None) -> None:
     """The source-stable external id wins over the human-readable value.
 
@@ -3254,7 +3165,6 @@ def test_handle_upsert_resolves_external_id_before_value(composed_tables: None) 
         assert Handle._base_manager.count() == 1
 
 
-@pytest.mark.django_db(transaction=True)
 def test_handle_upsert_converges_a_value_collision_across_external_ids(composed_tables: None) -> None:
     """A second source identity claiming an existing value converges, never crashes.
 
@@ -3289,7 +3199,6 @@ def test_handle_upsert_converges_a_value_collision_across_external_ids(composed_
     assert phone.display_name == "Ada Lovelace"
 
 
-@pytest.mark.django_db(transaction=True)
 def test_handle_upsert_converges_a_value_collision_on_the_external_id_refresh_path(
     composed_tables: None,
 ) -> None:
@@ -3338,7 +3247,6 @@ def test_handle_upsert_converges_a_value_collision_on_the_external_id_refresh_pa
     assert lid.external_id == "113352894324870@lid"
 
 
-@pytest.mark.django_db(transaction=True)
 def test_conversation_labels_name_untitled_threads_by_their_people(channel: Any) -> None:
     """Untitled chats read as who they are with; outbound senders are the account holder."""
 

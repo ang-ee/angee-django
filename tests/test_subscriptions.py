@@ -468,6 +468,7 @@ def test_ws_consumer_uses_rebac_channels_mixin() -> None:
     assert issubclass(AngeeGraphQLWSConsumer, RebacChannelsConsumerMixin)
 
 
+@pytest.mark.django_db(transaction=True)
 def test_ws_query_runs_inside_actor_context() -> None:
     """GraphQL-over-WebSocket queries install the connection actor."""
 
@@ -570,17 +571,18 @@ def test_ws_queries_refresh_identity_eligibility_and_timeline_admission(composed
             delete_relationship(membership)
 
     async def scenario() -> list[dict[str, object]]:
+        timeout = 10  # bounds a hang, not latency: a long-lived worker's full GC stops the loop over a second
         communicator = WebsocketCommunicator(
             AngeeGraphQLWSConsumer.as_asgi(schema=schema),
             "/graphql/public/",
             subprotocols=["graphql-transport-ws"],
         )
         communicator.scope["user"] = user
-        connected, _subprotocol = await communicator.connect()
+        connected, _subprotocol = await communicator.connect(timeout)
         assert connected
         try:
             await communicator.send_json_to({"type": "connection_init"})
-            assert await communicator.receive_json_from() == {"type": "connection_ack"}
+            assert await communicator.receive_json_from(timeout) == {"type": "connection_ack"}
             results = []
             for operation in ("before", "after"):
                 if operation == "after":
@@ -592,8 +594,8 @@ def test_ws_queries_refresh_identity_eligibility_and_timeline_admission(composed
                         target_label target_can_rename record_admitted
                     }"""},
                 })
-                results.append(await communicator.receive_json_from())
-                assert await communicator.receive_json_from() == {"id": operation, "type": "complete"}
+                results.append(await communicator.receive_json_from(timeout))
+                assert await communicator.receive_json_from(timeout) == {"id": operation, "type": "complete"}
             return results
         finally:
             await communicator.disconnect()

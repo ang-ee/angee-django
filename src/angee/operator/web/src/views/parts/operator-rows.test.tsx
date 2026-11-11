@@ -1,10 +1,10 @@
 // @vitest-environment happy-dom
 
-import { cleanup, render, renderHook, screen } from "@testing-library/react";
+import { render, renderHook, screen } from "@testing-library/react";
 import type { ReactElement } from "react";
 import {
   RouterProvider, createMemoryHistory, createRootRoute, createRoute, createRouter, } from "@tanstack/react-router";
-import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
+import { beforeEach, describe, expect, test, vi } from "vitest";
 import type { ListColumn } from "@angee/ui";
 
 import type { OperatorSnapshotResult } from "../../data/transport";
@@ -30,8 +30,6 @@ vi.mock("../../data/transport", async (importOriginal) => {
     },
   };
 });
-
-afterEach(() => cleanup());
 
 beforeEach(() => {
   transportMocks.sections = [];

@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 
-import { cleanup, render, screen } from "@testing-library/react";
-import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
+import { render, screen } from "@testing-library/react";
+import { beforeEach, describe, expect, test, vi } from "vitest";
 import { RouterContextProvider, createRootRoute, createRouter, createMemoryHistory } from "@tanstack/react-router";
 import { createRouteHref } from "@angee/ui/runtime";
 import {
@@ -114,10 +114,6 @@ beforeEach(() => {
   Object.assign(routerMocks.routeHref, { maybe: routeHref.maybe });
   sdkMocks.useAuthoredQuery.mockReset();
   sdkMocks.navigation = true;
-});
-
-afterEach(() => {
-  cleanup();
 });
 
 describe("AgentSessionsPage", () => {

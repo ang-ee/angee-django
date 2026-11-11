@@ -1,14 +1,13 @@
 // @vitest-environment happy-dom
 
 import {
-  cleanup,
   fireEvent,
   render,
   screen,
   waitFor,
 } from "@testing-library/react";
 import { AppRuntimeProvider } from "../runtime";
-import { afterEach, describe, expect, test, vi } from "vitest";
+import { describe, expect, test, vi } from "vitest";
 import type { ReactElement } from "react";
 
 import { baseIcons } from "../chrome/icon-registry";
@@ -16,10 +15,6 @@ import { ToastProvider, useToast } from "./Toast";
 import { useRefineNotificationProvider } from "./refine-notification";
 
 describe("ToastProvider", () => {
-  afterEach(() => {
-    cleanup();
-  });
-
   test("renders a toast fired from a component hook", async () => {
     render(
       <AppRuntimeProvider runtime={{ icons: baseIcons }}>

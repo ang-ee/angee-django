@@ -31,7 +31,7 @@ from tests.conftest import make_integration
 from tests.lock_waits import submit, wait_for_lock
 from tests.workflow_steps import Echo, document
 
-pytestmark = [pytest.mark.django_db(transaction=True), pytest.mark.usefixtures("workflow_step_classes")]
+pytestmark = [pytest.mark.django_db, pytest.mark.usefixtures("workflow_step_classes")]
 
 
 @pytest.fixture
@@ -67,6 +67,7 @@ def dispatch(bridge):
     return WorkflowRun.system_queryset().get(pk=bridge.sync_run_id)
 
 
+@pytest.mark.django_db(transaction=True)
 def test_scheduler_dispatches_once_and_request_replay_keeps_the_original_input(
     cycle_factory, execution, monkeypatch,
 ):
@@ -163,6 +164,7 @@ def test_delayed_delivery_reads_the_current_cycle_under_its_row_lock(cycle_facto
     assert bridge.sync_is_dispatched is not terminal
 
 
+@pytest.mark.django_db(transaction=True)
 @pytest.mark.skipif(connection.vendor != "postgresql", reason="Real PostgreSQL row locks are required.")
 def test_duplicate_delivery_cannot_clear_the_winners_queue_token(cycle_factory, monkeypatch):
     """The winner consumes its token under the row lock before a loser can clear it."""
@@ -205,6 +207,7 @@ def test_duplicate_delivery_cannot_clear_the_winners_queue_token(cycle_factory, 
     assert bridge.settle_dispatch(run.pk) is False
 
 
+@pytest.mark.django_db(transaction=True)
 def test_queued_sync_releases_its_row_transaction_before_the_sync_body(cycle_factory, monkeypatch):
     """The advisory lock spans sync work without carrying the queue row transaction."""
     _workflow, bridge = cycle_factory()
@@ -220,6 +223,7 @@ def test_queued_sync_releases_its_row_transaction_before_the_sync_body(cycle_fac
     assert observed == [False]
 
 
+@pytest.mark.django_db(transaction=True)
 def test_ui_cancel_settles_once_and_repeated_delivery_cannot_overwrite_it(cycle_factory, execution):
     _workflow, bridge = cycle_factory()
     run = dispatch(bridge)
@@ -247,6 +251,7 @@ def test_ui_cancel_settles_once_and_repeated_delivery_cannot_overwrite_it(cycle_
     assert not bridge.sync_is_dispatched
 
 
+@pytest.mark.django_db(transaction=True)
 @pytest.mark.parametrize("timeout", [False, True])
 def test_failure_and_worker_timeout_settle_the_bridge_as_failed(cycle_factory, register_step, timeout):
     class FailingCycle(Echo):
@@ -275,6 +280,7 @@ def test_failure_and_worker_timeout_settle_the_bridge_as_failed(cycle_factory, r
     assert attempt.result == ("timed_out" if timeout else "failed")
 
 
+@pytest.mark.django_db(transaction=True)
 def test_success_sums_stream_outputs_including_mapped_partitions(cycle_factory, register_step):
     class CountedStream(StreamStage):
         """Emit typed stream counts without introducing an external adapter here."""

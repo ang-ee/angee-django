@@ -7,14 +7,12 @@ from django.contrib.auth import get_user_model
 from rebac import system_context
 from rebac.models import Relationship, RelationshipRegistry
 
-from tests.test_messaging_access import messaging_access_schema as messaging_access_schema
-
 
 @pytest.fixture
-def campaign_access(messaging_access_schema, settings):
-    """Keep both native stores and explicit administrator arms under test."""
+def campaign_access(composed_tables, settings):
+    """Keep explicit administrator arms under test."""
     settings.REBAC_SUPERUSER_BYPASS = False
-    return messaging_access_schema
+    return composed_tables
 
 
 @pytest.fixture

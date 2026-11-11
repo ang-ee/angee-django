@@ -44,10 +44,10 @@ from tests.recordrefdemo.models import (
 
 
 @pytest.fixture()
-def record_ref_tables(transactional_db: Any) -> Any:
+def record_ref_tables(db: Any) -> Any:
     """Use the probe tables Django creates for the installed ``tests.recordrefdemo`` app."""
 
-    del transactional_db
+    del db
     yield
 
 
@@ -110,7 +110,7 @@ def test_record_ref_for_instance_projects_identity_and_rebac_type(record_ref_tab
 def test_record_ref_mixin_projects_default_target_fields_with_cached_contenttype(
     record_ref_tables: None,
 ) -> None:
-    """Target edges project reference facts without a second ContentType query."""
+    """A loaded edge projects reference facts from the cached content type, without a query."""
 
     del record_ref_tables
     with system_context(reason="record-ref typed target"):
@@ -121,22 +121,16 @@ def test_record_ref_mixin_projects_default_target_fields_with_cached_contenttype
     )
     edge = RecordRefTargetEdge.objects.get(pk=edge.pk)
 
-    ContentType.objects.clear_cache()
-    with CaptureQueriesContext(connection) as first_access:
+    with CaptureQueriesContext(connection) as access:
         record_ref = edge.record_ref
 
+    assert len(access) == 0
     assert record_ref == RecordRef(
         model_label="recordrefdemo.RecordRefTypedTarget",
         object_id=target.pk,
         public_id=target.public_id,
         resource_type="tests/record-ref-target",
     )
-    assert any("django_content_type" in query["sql"] for query in first_access.captured_queries)
-
-    with CaptureQueriesContext(connection) as second_access:
-        assert edge.record_ref == record_ref
-
-    assert len(second_access) == 0
     assert edge.record_model_label == "recordrefdemo.RecordRefTypedTarget"
     assert edge.record_public_id == target.public_id
 
@@ -388,10 +382,10 @@ def test_target_delete_nulls_declared_record_edges_from_a_queryset(
     assert (edge.content_type_id, edge.object_id) == (None, None)
 
 
-def test_declared_target_models_read_the_schema_target_relations(composed_permissions: None) -> None:
+def test_declared_target_models_read_the_schema_target_relations(composed_tables: None) -> None:
     """An edge's accepted target types are the schema's `target`-backed relations, by label."""
 
-    del composed_permissions
+    del composed_tables
     assert set(Link.declared_target_models()) == {"projects.project", "projects.task"}
     assert Link.declared_target_model("projects.Task") is Link._meta.apps.get_model("projects", "Task")
     with pytest.raises(ValidationError, match="Link may target only: project, task"):
@@ -399,10 +393,10 @@ def test_declared_target_models_read_the_schema_target_relations(composed_permis
     assert {"projects.task", "storage.drive", "mtidemo.mtiparent"} <= set(FileAttachment.declared_target_models())
 
 
-def test_record_edges_invert_the_declared_targets_into_resource_metadata(composed_permissions: None) -> None:
+def test_record_edges_invert_the_declared_targets_into_resource_metadata(composed_tables: None) -> None:
     """A type carries every edge accepting its canonical type; its resource lists them."""
 
-    del composed_permissions
+    del composed_tables
     index = record_edges_by_target()
     # A task is itself an edge: its subject may be another task.
     assert [edge._meta.label for edge in index[Task]] == [

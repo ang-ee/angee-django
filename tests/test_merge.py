@@ -48,7 +48,7 @@ from tests.mtidemo.models import MtiChild, MtiParent
 from tests.recordrefdemo.models import CustomColumnEdge, MergeReferenceNode, SelfLinkedNode, TagSlot
 from tests.workflow_steps import document
 
-pytestmark = pytest.mark.usefixtures("composed_permissions")
+pytestmark = pytest.mark.usefixtures("composed_tables")
 
 
 @pytest.fixture(autouse=True)
@@ -142,6 +142,7 @@ def test_a_retained_alias_protects_its_survivor_from_deletion() -> None:
     assert _tagged_parties(mobile) == sorted([ada.pk, bob.pk])
 
 
+@pytest.mark.django_db(transaction=True)
 def test_reverting_a_merge_restores_exact_assignment_identities_and_clears_the_alias() -> None:
     curator = _curator("merge-revert")
     mobile, mobil, _ada, _bob = _vocabulary(owner=curator)
@@ -159,6 +160,7 @@ def test_reverting_a_merge_restores_exact_assignment_identities_and_clears_the_a
     assert set(TagAssignment._base_manager.values_list("pk", "tag_id", "content_type_id", "object_id")) == before
 
 
+@pytest.mark.django_db(transaction=True)
 def test_a_second_merge_flattens_aliases_and_revert_restores_the_previous_survivor() -> None:
     curator = _curator("merge-flatten")
     mobile, mobil, ada, bob = _vocabulary(owner=curator)
@@ -179,6 +181,7 @@ def test_a_second_merge_flattens_aliases_and_revert_restores_the_previous_surviv
     assert _tagged_parties(phones) == []
 
 
+@pytest.mark.django_db(transaction=True)
 def test_a_later_survivor_write_refuses_merge_revert_before_edges_move() -> None:
     curator = _curator("merge-revert-later-write")
     mobile, mobil, ada, bob = _vocabulary(owner=curator)

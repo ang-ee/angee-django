@@ -99,12 +99,12 @@ INSTALLED_APPS = [
     "tests.recordrefdemo",
     "tests",
 ]
-# Checkout- and process-local so concurrent pytest runs never share one SQLite
-# file. Threads within a run still share its file-backed database. `.test-db/`
-# is purpose-named and gitignored.
+# Checkout-local and stable, so `--reuse-db` keeps it between runs; pytest-django
+# suffixes it per xdist worker. Threads within a run still share its file-backed
+# database. `.test-db/` is purpose-named and gitignored.
 _TEST_DB_DIR = Path(__file__).resolve().parent.parent / ".test-db"
 _TEST_DB_DIR.mkdir(parents=True, exist_ok=True)
-_TEST_DB_FILE = str(_TEST_DB_DIR / f"angee_pytest_{os.getpid()}.sqlite3")
+_TEST_DB_FILE = str(_TEST_DB_DIR / "angee_pytest.sqlite3")
 if database_url := os.environ.get("DATABASE_URL"):
     DATABASES = {"default": environ.Env.db_url_config(database_url)}
 else:

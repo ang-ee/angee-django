@@ -12,13 +12,13 @@ from django.apps import AppConfig, apps
 from django.contrib.auth.models import Group, Permission
 from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import ImproperlyConfigured
-from django.db import IntegrityError, connection, models
+from django.db import IntegrityError, connection, models, transaction
 from django.test.utils import CaptureQueriesContext
 from import_export.results import Result, RowResult
 from rebac import system_context
 from rebac.errors import MissingActorError
 from rebac.testing import install_schema
-from tests.conftest import addon_fixture_resources, make_addon  # noqa: F401 -- share fake-addon lifetime
+from tests.conftest import make_addon
 from tests.tables import model_tables
 
 from angee.base.models.base import AngeeModel
@@ -1954,7 +1954,6 @@ def test_grant_fixtures_load_and_are_idempotent(tmp_path: Path, monkeypatch: Any
     """
 
     from django.contrib.auth import get_user_model
-    from django.core.management import call_command
     from rebac import to_subject_ref
     from rebac.models import active_relationship_model
 
@@ -1981,8 +1980,7 @@ def test_grant_fixtures_load_and_are_idempotent(tmp_path: Path, monkeypatch: Any
 
     user_model = get_user_model()
     with model_tables((GrantLoadLedger,)):
-        # Grants are validated against the composed REBAC schema on write.
-        call_command("rebac", "sync", verbosity=0)
+        # Grants are validated on write against the session's composed REBAC schema.
         with system_context(reason="grant load setup"):
             alice = user_model.objects.create(username="grant-alice")
         with system_context(reason="test.resources.ledger_seed"):
@@ -2051,7 +2049,6 @@ def test_row_dependency_on_grant_is_applied_before_validation(tmp_path: Path) ->
     """Dependent rows and hooks see grants; failed imports and dry runs roll them back."""
 
     from django.core.exceptions import ValidationError
-    from django.core.management import call_command
     from rebac.models import active_relationship_model
 
     def grant_exists() -> bool:
@@ -2100,7 +2097,6 @@ def test_row_dependency_on_grant_is_applied_before_validation(tmp_path: Path) ->
         {"path": "grants.yaml", "kind": "grants"},
     )})
     with model_tables((GrantDependentRow, OrderedGrantLedger)):
-        call_command("rebac", "sync", verbosity=0)
         def load(*, dry_run=False):
             return OrderedGrantLedger.objects.load_addons(
                 (owner,), tiers=[Resource.Tier.DEMO], allow_non_dev=True, dry_run=dry_run,
@@ -2128,10 +2124,7 @@ def test_row_dependency_on_grant_is_applied_before_validation(tmp_path: Path) ->
         assert hooks == [True, True]
 
 
-@pytest.mark.parametrize("storage", ["denormalized", "registry"])
-def test_unchanged_grant_batches_use_one_native_key_read(
-    composed_tables: None, tmp_path: Path, settings: Any, storage: str,
-) -> None:
+def test_unchanged_grant_batches_use_one_native_key_read(composed_tables: None, tmp_path: Path) -> None:
     """Reloading many grants skips every tuple without per-row reads or writes."""
 
     from django.contrib.auth import get_user_model
@@ -2140,7 +2133,6 @@ def test_unchanged_grant_batches_use_one_native_key_read(
 
     from angee.base.identity import public_subject_ref
 
-    settings.REBAC_LOCAL_BACKEND_STORAGE = storage
     user = get_user_model().objects.create_user(username="grant-batch-reader")
     subject = to_subject_ref(user)
     entry = ResourceEntry.from_declaration(addon(tmp_path), "install", {"path": "grants.yaml", "kind": "grants"})
@@ -2174,7 +2166,6 @@ def test_grant_on_mti_child_lands_on_every_identity(tmp_path: Path) -> None:
     """
 
     from django.contrib.auth import get_user_model
-    from django.core.management import call_command
     from rebac import ObjectRef, to_object_ref, to_subject_ref
     from rebac.backends import backend
     from rebac.models import active_relationship_model
@@ -2193,8 +2184,7 @@ def test_grant_on_mti_child_lands_on_every_identity(tmp_path: Path) -> None:
     aliases = {"tests.resource_addon": "tests.resource_addon", "resource_addon": "tests.resource_addon"}
     user_model = get_user_model()
     with model_tables((MtiGrantLedger,)):
-        # Grants are checked against the composed REBAC schema on read; sync loads it.
-        call_command("rebac", "sync", verbosity=0)
+        # Grants are checked on read against the session's composed REBAC schema.
         with system_context(reason="mti grant setup"):
             child = MtiChild.objects.create(title="Acme", detail="org")
             plain = MtiParent.objects.create(title="Plain")
@@ -2282,7 +2272,7 @@ def test_grant_on_mti_child_lands_on_every_identity(tmp_path: Path) -> None:
     ],
     ids=["shared", "child-only", "different-subject", "field-backed", "const-backed"],
 )
-@pytest.mark.django_db(transaction=True)
+@pytest.mark.django_db
 def test_mti_grants_follow_ancestor_relation_contract(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, parent_relation: str, expected_parent: bool
 ) -> None:
@@ -2320,7 +2310,7 @@ def test_mti_grants_follow_ancestor_relation_contract(
     assert all(grant.subject == subject and grant.relation == "reviewer" for grant in tuples)
 
 
-@pytest.mark.django_db(transaction=True)
+@pytest.mark.django_db
 def test_invalid_explicit_mti_grant_still_fails_native_validation(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -2540,22 +2530,27 @@ def test_content_type_label_rows_hash_labels_not_ids(tmp_path: Path) -> None:
                 and any(table in query["sql"] for table in tables)
             ]
 
-            # A fresh database assigns the same label another content-type id.
-            previous_id = ContentType.objects.get_for_model(ContentTypeRow).pk
-            ledger.objects.filter(source_addon=owner.name).delete()
-            ContentTypeRow._default_manager.all().delete()
-            Permission.objects.filter(content_type_id=previous_id).delete()
-            # A content-type delete through the ORM collects every registered model
-            # relating to content types, including other modules' unmigrated test models.
-            with connection.cursor() as cursor:
-                cursor.execute(
-                    f"DELETE FROM {connection.ops.quote_name(ContentType._meta.db_table)} WHERE id = %s",
-                    [previous_id],
-                )
-            ContentType.objects.clear_cache()
-            ledger.objects.load_addons((owner,), tiers=[Resource.Tier.MASTER])
+            # A fresh database assigns the same label another content-type id; the
+            # savepoint gives the session's ids back.
+            with transaction.atomic():
+                previous_id = ContentType.objects.get_for_model(ContentTypeRow).pk
+                ledger.objects.filter(source_addon=owner.name).delete()
+                ContentTypeRow._default_manager.all().delete()
+                Permission.objects.filter(content_type_id=previous_id).delete()
+                # A content-type delete through the ORM collects every registered model
+                # relating to content types, including other modules' unmigrated test models.
+                with connection.cursor() as cursor:
+                    cursor.execute(
+                        f"DELETE FROM {connection.ops.quote_name(ContentType._meta.db_table)} WHERE id = %s",
+                        [previous_id],
+                    )
+                ContentType.objects.clear_cache()
+                ledger.objects.load_addons((owner,), tiers=[Resource.Tier.MASTER])
 
-            assert ContentTypeRow._default_manager.values_list("content_type", flat=True).get() != previous_id
-            assert ledger.objects.get(source_addon=owner.name, xref="row").content_hash == seeded_hash
+                assert ContentTypeRow._default_manager.values_list("content_type", flat=True).get() != previous_id
+                assert ledger.objects.get(source_addon=owner.name, xref="row").content_hash == seeded_hash
+                transaction.set_rollback(True)
     finally:
+        # Later tests start from the session's warm content-type cache.
         ContentType.objects.clear_cache()
+        ContentType.objects.get_for_models(*apps.get_models(), for_concrete_models=False)

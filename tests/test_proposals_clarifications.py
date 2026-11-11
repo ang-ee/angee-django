@@ -30,11 +30,9 @@ class ClarificationCase(TransactionTestCase):
     """Shared native proposal fixture; no hand-built donor or permission graph."""
 
     __test__ = False
-    storage = "registry"
 
     def setUp(self):
         settings = override_settings(
-            REBAC_LOCAL_BACKEND_STORAGE=self.storage,
             REBAC_STRICT_MODE=True,
             REBAC_SUPERUSER_BYPASS=False,
         )
@@ -250,19 +248,8 @@ class WithWorkTests(ClarificationProfileTests):
         self.assertIn("work", apps.app_configs)
 
 
-class DenormalizedProposalsOnlyTests(ProposalsOnlyTests):
-    storage = "denormalized"
-
-
-class DenormalizedWithWorkTests(WithWorkTests):
-    storage = "denormalized"
-
-
 @pytest.mark.parametrize("with_work", (False, True), ids=("proposals-only", "work-without-bridge"))
-@pytest.mark.parametrize("storage", ("registry", "denormalized"))
-def test_proposals_clarification_profiles(tmp_path: Path, with_work: bool, storage: str):
+def test_proposals_clarification_profiles(tmp_path: Path, with_work: bool):
     roots = ("angee.proposals", "angee.work") if with_work else ("angee.proposals",)
-    test_class = ("Denormalized" if storage == "denormalized" else "") + (
-        "WithWorkTests" if with_work else "ProposalsOnlyTests"
-    )
+    test_class = "WithWorkTests" if with_work else "ProposalsOnlyTests"
     run_composed_tests(tmp_path, f"tests.test_proposals_clarifications.{test_class}", app=roots)

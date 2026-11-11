@@ -11,7 +11,6 @@ from rebac import actor_context
 from angee.messaging.testing.models import ThreadNotification
 from tests.messaging_campaign import add_member, fanout
 from tests.messaging_campaign import audience_record as audience_record
-from tests.test_spaces import spaces_tables as spaces_tables
 
 pytestmark = [
     pytest.mark.django_db(transaction=True),

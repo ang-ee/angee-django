@@ -1,4 +1,4 @@
-import { createNamespaceT } from "@angee/ui";
+import { createNamespaceT } from "@angee/ui/i18n";
 
 // Only the keys the page and tag form resolve — the shell chrome labels live on
 // the manifest (index.tsx), and metadata-labelled columns/fields need none.

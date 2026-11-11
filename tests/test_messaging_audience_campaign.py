@@ -13,7 +13,6 @@ from angee.projects.testing.models import Project
 from angee.spaces.testing.models import Membership
 from tests.messaging_campaign import add_member, fanout, grant, make_user
 from tests.messaging_campaign import audience_record as audience_record
-from tests.test_spaces import spaces_tables as spaces_tables
 
 
 @pytest.mark.parametrize("source", ["follow", "team", "named", "direct"])

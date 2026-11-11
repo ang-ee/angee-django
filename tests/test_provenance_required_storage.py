@@ -6,7 +6,7 @@ from rebac.errors import MissingActorError
 
 from angee.provenance.context import ChangesetRequired, changeset, changeset_model_label, current_changeset
 
-pytestmark = [pytest.mark.entrypoint_boundaries, pytest.mark.django_db(transaction=True)]
+pytestmark = [pytest.mark.entrypoint_boundaries, pytest.mark.django_db]
 
 
 @pytest.mark.parametrize("opened", [False, True])

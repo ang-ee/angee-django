@@ -1,13 +1,11 @@
 // @vitest-environment happy-dom
 
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
-import { afterEach, describe, expect, test, vi } from "vitest";
+import { fireEvent, render, screen } from "@testing-library/react";
+import { describe, expect, test, vi } from "vitest";
 
 import { toneGlyph } from "../lib/tones";
 import { Tree, treeVariants, type TreeNode } from "./tree";
 import { InlineTextAction } from "./inline-text-action";
-
-afterEach(cleanup);
 
 const STARRED: readonly TreeNode[] = [
   { id: "a", label: "Starred", icon: "star", iconTone: "warning" },

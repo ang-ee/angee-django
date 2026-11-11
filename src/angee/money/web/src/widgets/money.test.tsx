@@ -1,8 +1,8 @@
 // @vitest-environment happy-dom
 
-import { cleanup, fireEvent, render } from "@testing-library/react";
+import { fireEvent, render } from "@testing-library/react";
 import { createElement } from "react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { formatMoney, moneyWidget } from "./money";
 
@@ -10,8 +10,6 @@ import { formatMoney, moneyWidget } from "./money";
 // CI, full ICU). The assertions lean on currency-driven facts — the symbol and
 // the minor-unit digit count come from the ISO code, not the locale — rather than
 // locale-driven grouping separators.
-
-afterEach(cleanup);
 
 describe("moneyWidget.read", () => {
   it("renders the amount with the row's sibling currency", () => {

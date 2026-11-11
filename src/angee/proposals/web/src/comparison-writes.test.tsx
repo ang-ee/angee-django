@@ -19,7 +19,6 @@ vi.mock("@refinedev/core", () => ({
   useUpdate: () => ({ mutateAsync: mocks.update, mutation: { isPending: false } }),
 }));
 vi.mock("@angee/ui", () => ({
-  createNamespaceT: () => () => (key: string) => key,
   useEnumOptions: () => ["ROUND", "RESPONDER", "SEALED"].map(value => ({ value, label: value })),
   canonicalOptionValue: (options: { value: string }[], value: string) => options.find(option => option.value.toLowerCase() === value.toLowerCase())?.value,
   optionToken: (value: unknown) => String(value ?? "").toLowerCase(),

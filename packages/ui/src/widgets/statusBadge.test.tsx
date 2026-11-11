@@ -1,16 +1,12 @@
 // @vitest-environment happy-dom
 
-import { cleanup, render, screen } from "@testing-library/react";
-import { afterEach, describe, expect, test } from "vitest";
+import { render, screen } from "@testing-library/react";
+import { describe, expect, test } from "vitest";
 
 import { StatusBadge, statusBadgeWidget } from "./statusBadge";
 import { AppRuntimeProvider } from "../runtime/runtime";
 
 describe("statusBadge widget tone", () => {
-  afterEach(() => {
-    cleanup();
-  });
-
   const Chip = statusBadgeWidget.read;
 
   test("keeps contributed vocabulary scoped to its app and honors field overrides", () => {
