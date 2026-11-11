@@ -810,7 +810,7 @@ class Round(
             proposal.save(update_fields=("retired_at", "retired_by", "updated_at"))
             task_model = apps.get_model("projects", "Task")
             clarification_tasks = task_model.objects.filter(clarification_round=self)
-            collections = [
+            collections: list[tuple[models.QuerySet[Any], bool]] = [
                 (type(self).system_queryset().filter(pk=self.pk), False),
                 (clarification_tasks, False),
                 *self._build_collections(),
