@@ -163,6 +163,7 @@ def test_registration_does_not_restore_unrelated_settings(settings, registration
             assert not hasattr(sys.modules[__name__], "TemporaryStep")
 
 
+@pytest.mark.django_db(transaction=True)
 def test_registered_local_step_runs_through_the_production_driver(execution, register_step):
     """A function-local step participates in normal definition validation and execution."""
 

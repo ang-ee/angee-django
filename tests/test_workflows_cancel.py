@@ -15,7 +15,7 @@ from angee.workflows.testing.models import StepRun, WorkflowRun
 from tests.conftest import create_user
 from tests.workflow_steps import Echo, document
 
-pytestmark = [pytest.mark.django_db(transaction=True), pytest.mark.usefixtures("workflow_step_classes")]
+pytestmark = [pytest.mark.django_db, pytest.mark.usefixtures("workflow_step_classes")]
 
 
 @pytest.fixture
@@ -33,6 +33,7 @@ def cancellations(sent):
     return [envelope["kwargs"] for name, envelope in sent if name == "workflows.cancel"]
 
 
+@pytest.mark.django_db(transaction=True)
 def test_deferred_cancellation_cleans_up_once_when_the_task_transitions(target, execution):
     actor, sent = execution
     observed = []
@@ -114,6 +115,7 @@ def test_undecorated_receiver_database_failure_cannot_block_the_terminal_write(t
     assert target.status == "canceled" and target.finished_at is not None
 
 
+@pytest.mark.django_db(transaction=True)
 def test_cancellation_waits_for_commit_and_duplicate_delivery_changes_nothing(target, execution):
     actor, sent = execution
     with transaction.atomic():
@@ -160,6 +162,7 @@ def test_cleanup_receiver_refuses_async_database_cleanup():
         isolated_run_cleanup(stopping)
 
 
+@pytest.mark.django_db(transaction=True)
 @pytest.mark.parametrize("body_rollback", [False, True])
 def test_context_cancellation_follows_the_body_transaction(target, execution, register_step, body_rollback):
     actor, sent = execution
@@ -183,6 +186,7 @@ def test_context_cancellation_follows_the_body_transaction(target, execution, re
     assert target.status == "running"
 
 
+@pytest.mark.django_db(transaction=True)
 def test_outer_rollback_discards_cancellation(target, execution):
     actor, sent = execution
     with transaction.atomic():
@@ -193,6 +197,7 @@ def test_outer_rollback_discards_cancellation(target, execution):
     assert target.status == "running"
 
 
+@pytest.mark.django_db(transaction=True)
 def test_cancellation_rechecks_the_original_requesters_permission(target, execution):
     actor, sent = execution
     viewer = create_user("cancel-viewer")
@@ -211,6 +216,7 @@ def test_cancellation_rechecks_the_original_requesters_permission(target, execut
     assert target.status == "running"
 
 
+@pytest.mark.django_db(transaction=True)
 def test_robust_delivery_failure_keeps_commit_and_later_callbacks(target, execution, monkeypatch, caplog):
     actor, _sent = execution
     observed = []

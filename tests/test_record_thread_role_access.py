@@ -1,6 +1,5 @@
 """Reading a record does not disclose an attached source conversation."""
 
-import pytest
 from rebac import actor_context, system_context
 
 from angee.graphql.testing.documents import execute_schema, result_data
@@ -9,10 +8,8 @@ from angee.projects.testing.models import Project, Task
 from tests.conftest import create_user
 from tests.test_messaging_graphql import _schema
 
-pytestmark = pytest.mark.django_db(transaction=True)
 
-
-def test_record_reader_needs_source_thread_read(composed_permissions: None) -> None:
+def test_record_reader_needs_source_thread_read(composed_tables: None) -> None:
     owner = create_user("source-owner")
     reader = create_user("source-record-reader")
     with actor_context(owner):

@@ -19,7 +19,7 @@ from angee.workflows.testing.drivers import load_workflow, observe
 from angee.workflows.testing.models import StepAttempt, StepRecord, StepRun, Workflow, WorkflowRun
 from tests.workflow_steps import Echo, document
 
-pytestmark = [pytest.mark.django_db(transaction=True), pytest.mark.usefixtures("workflow_step_classes")]
+pytestmark = [pytest.mark.django_db, pytest.mark.usefixtures("workflow_step_classes")]
 
 
 def retained_step(run, key="entry"):
@@ -47,6 +47,7 @@ def fork(sibling_step="echo"):
     }
 
 
+@pytest.mark.django_db(transaction=True)
 @pytest.mark.parametrize("mode", [StepMode.DATABASE, StepMode.IO])
 def test_active_settlement_data_error_closes_attempt_and_can_be_retried(execution, register_step, monkeypatch, mode):
     """A rejected result leaves durable failure evidence instead of an unrecoverable running row."""
@@ -86,6 +87,7 @@ def test_active_settlement_data_error_closes_attempt_and_can_be_retried(executio
     assert retained_step(run).output == {"value": 13}
 
 
+@pytest.mark.django_db(transaction=True)
 @pytest.mark.parametrize("mode", [StepMode.DATABASE, StepMode.IO])
 def test_output_nul_characters_are_removed_before_persistence(execution, register_step, mode):
     """A JSON-compatible body result cannot poison PostgreSQL jsonb with a NUL character."""
@@ -160,6 +162,7 @@ def test_database_settlement_operational_error_rolls_back_claim_for_redelivery(
     assert terminal_fields(run)["status"] == RunStatus.SUCCEEDED
 
 
+@pytest.mark.django_db(transaction=True)
 @pytest.mark.parametrize("failure", ["retryable", "operational"])
 @pytest.mark.parametrize("idempotent", [False, True])
 def test_effect_marker_controls_retryable_body_failures(execution, register_step, failure, idempotent):
@@ -205,6 +208,7 @@ def test_effect_marker_controls_retryable_body_failures(execution, register_step
     assert terminal_fields(run)["status"] == RunStatus.SUCCEEDED
 
 
+@pytest.mark.django_db(transaction=True)
 def test_retry_checks_earlier_effect_markers_after_an_unmarked_failed_attempt(execution, register_step):
     """An unmarked retry cannot erase the duplicate risk retained by an earlier attempt."""
     actor, _ = execution
@@ -235,6 +239,7 @@ def test_retry_checks_earlier_effect_markers_after_an_unmarked_failed_attempt(ex
     assert terminal_fields(run)["status"] == RunStatus.SUCCEEDED
 
 
+@pytest.mark.django_db(transaction=True)
 @pytest.mark.parametrize("continuation", ["wait", "next_page"])
 def test_effect_marker_history_survives_wait_but_ends_at_page_completion(execution, register_step, continuation):
     """Only a completed page clears the duplicate risk retained across attempts."""
@@ -278,6 +283,7 @@ def test_effect_marker_history_survives_wait_but_ends_at_page_completion(executi
     assert terminal_fields(run)["status"] == RunStatus.SUCCEEDED
 
 
+@pytest.mark.django_db(transaction=True)
 def test_expired_attempt_rejects_every_context_fence_before_reaping(execution, register_step):
     """A committed deadline supersedes every helper as well as the eventual settlement."""
     actor, _ = execution
@@ -309,6 +315,7 @@ def test_expired_attempt_rejects_every_context_fence_before_reaping(execution, r
     assert retained_step(run).output == {"error": "The attempt deadline expired."}
 
 
+@pytest.mark.django_db(transaction=True)
 def test_retry_names_other_unrouted_failures_without_reopening_the_run(execution, register_step):
     """Simultaneous IO failures require an explicit decision about every failed branch."""
     actor, _ = execution
@@ -352,6 +359,7 @@ def test_retry_of_a_deleted_run_has_a_defined_validation_error(execution):
         StepRun.objects.retry_step(step, actor=actor)
 
 
+@pytest.mark.django_db(transaction=True)
 @pytest.mark.parametrize("sibling_status", ["ready", "waiting", "running"])
 def test_cancel_abandoned_failed_run_closes_open_siblings_without_changing_terminal_fields(
     execution, register_step, sibling_status,
@@ -397,6 +405,7 @@ def test_cancel_abandoned_failed_run_closes_open_siblings_without_changing_termi
         assert StepAttempt.system_queryset().get(step_run=sibling).result == "superseded"
 
 
+@pytest.mark.django_db(transaction=True)
 @pytest.mark.parametrize("result", ["failed", "superseded", "succeeded"])
 def test_artifacts_commit_only_with_successful_attempt_evidence(execution, register_step, result):
     """IO-created evidence is staged until its own successful settlement commits."""
@@ -455,6 +464,7 @@ def test_reprocess_origin_is_present_at_its_first_change_publication(execution):
     ]
 
 
+@pytest.mark.django_db(transaction=True)
 def test_cancel_authorizes_once_before_acquiring_the_run_lock(execution, monkeypatch):
     """Cancellation cannot hold engine locks while it resolves requester authorization."""
     actor, _ = execution
@@ -481,6 +491,7 @@ def test_cancel_authorizes_once_before_acquiring_the_run_lock(execution, monkeyp
     assert terminal_fields(run)["status"] == RunStatus.CANCELED
 
 
+@pytest.mark.django_db(transaction=True)
 def test_heartbeat_preserves_the_absolute_worker_settlement_window(execution, register_step, settings):
     """Repeated lease extensions cannot consume the reserved time before the worker limit."""
     actor, _ = execution

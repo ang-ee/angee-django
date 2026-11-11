@@ -255,7 +255,6 @@ def test_relation_without_actor_scoping_is_a_contract_value_error():
         RecordActions(fields={"target": {"set": "unscoped"}}).resolve(UnscopedEdge(), context={"actor": None})
 
 
-@pytest.mark.django_db(transaction=True)
 def test_admission_publishes_once_with_its_concern_records(records, monkeypatch):
     events = []
     monkeypatch.setattr("angee.graphql.publishing._queue_transport", lambda model, payload: events.append(payload))

@@ -7,7 +7,7 @@ for both of its kinds. The structural test pins the owners whose schema modules
 import in the bare test runtime; the projects console nodes are pinned beside
 the work declarations they already need (``tests/test_work_task_access.py``).
 Every taggable type's relation comes from its owner's fragment, so the tests
-compose them (``composed_permissions``).
+run on the session's merged policy (``composed_tables``).
 """
 
 from __future__ import annotations
@@ -36,7 +36,7 @@ from tests.test_storage import drive as drive
 # the runtime models through Django's app registry.
 parties_schema = importlib.import_module("angee.parties.schema")
 
-pytestmark = [pytest.mark.django_db(transaction=True), pytest.mark.usefixtures("composed_permissions")]
+pytestmark = [pytest.mark.django_db, pytest.mark.usefixtures("composed_tables")]
 
 _PICKED_CONSOLE_NODES = (
     ("angee.messaging.schema", "ThreadType"),

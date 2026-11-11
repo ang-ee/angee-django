@@ -34,7 +34,6 @@ from tests.conftest import Page, addon_schema, create_platform_admin, vault_for
 from tests.test_iam_account_actions import _manager
 from tests.test_iam_graphql import _schema
 from tests.test_messaging import ThreadedTicket
-from tests.test_spaces import spaces_tables as spaces_tables
 
 User = get_user_model()
 knowledge_schema = importlib.import_module("angee.knowledge.schema")
@@ -131,8 +130,8 @@ def test_a_record_embeds_a_name_for_a_reader_who_manages_no_one(composed_tables:
     assert rows == [{"created_by": author.public_id, "created_by_label": "Grace Hopper"}]
 
 
-def test_pickers_offer_a_non_manager_their_colleagues(composed_permissions: None) -> None:
-    del composed_permissions
+def test_pickers_offer_a_non_manager_their_colleagues(composed_tables: None) -> None:
+    del composed_tables
     viewer = _person("picker-viewer", first_name="Viewer")
     follower = _person("picker-follower", first_name="Follower")
     former = _person("picker-former", first_name="Former")
@@ -155,10 +154,10 @@ def test_pickers_offer_a_non_manager_their_colleagues(composed_permissions: None
     assert [person.first_name for person in User.objects.visible_people(viewer, search="Follow")] == ["Follower"]
 
 
-def test_a_non_manager_reads_no_restricted_field_of_a_colleague_or_service_account(composed_permissions: None) -> None:
+def test_a_non_manager_reads_no_restricted_field_of_a_colleague_or_service_account(composed_tables: None) -> None:
     """Through every path a non-manager reaches people by, others' restricted fields read null."""
 
-    del composed_permissions
+    del composed_tables
     viewer = _person("leak-viewer", first_name="Viewer")
     colleague = _person("leak-colleague", first_name="Colleague")
     service = User.objects.create_user("workflow-leak", kind="service", first_name="Workflow")
@@ -186,8 +185,8 @@ def test_a_non_manager_reads_no_restricted_field_of_a_colleague_or_service_accou
 
 
 @pytest.mark.parametrize("manager", ["platform-admin", "directory-reader", "consumer-role"])
-def test_people_managers_list_every_account_and_filter_by_activity(spaces_tables: None, manager: str) -> None:
-    del spaces_tables
+def test_people_managers_list_every_account_and_filter_by_activity(composed_tables: None, manager: str) -> None:
+    del composed_tables
     if manager == "platform-admin":
         viewer = create_platform_admin("people-manager")
     elif manager == "directory-reader":
@@ -246,10 +245,10 @@ def test_the_directory_is_never_everyones(composed_tables: None) -> None:
     assert set(_offered(viewer)) == {"wildcard-viewer"}
 
 
-def test_disclosed_audiences_reach_only_the_accounts_their_sites_reach(composed_permissions: None) -> None:
+def test_disclosed_audiences_reach_only_the_accounts_their_sites_reach(composed_tables: None) -> None:
     """Who is active or staff is disclosed only within an actor's reach; outside it, protection holds."""
 
-    del composed_permissions
+    del composed_tables
     viewer = _person("audience-viewer")
     stranger = _person("audience-stranger")
     staff = _person("audience-staff", is_staff=True)

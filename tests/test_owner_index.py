@@ -16,8 +16,6 @@ import re
 from functools import cache
 from pathlib import Path
 
-import pytest
-
 ROOT = Path(__file__).resolve().parents[1]
 INDEX = ROOT / ".agents/skills/angee-design/references/owners.md"
 ADDONS = ROOT / "src/angee"
@@ -27,9 +25,9 @@ FOUNDATION_MODULES = sorted(
     for module in (ADDONS / "base" / area).glob("*.py")
     if module.name != "__init__.py"
 )
-SKILL_DOCUMENTS = sorted([*ROOT.glob(".agents/skills/**/*.md"), *ROOT.glob("src/angee/*/skills/**/*.md")])
 CITATION = re.compile(r"`(\w+)` ((?:src|packages|examples)/[\w./-]+\.\w+)")
 LOCATION = re.compile(r"(?<![\w/])((?:src|packages|examples)/[\w./-]+\.\w+)")
+SKILL_DOCUMENTS = sorted([*ROOT.glob(".agents/skills/**/*.md"), *ROOT.glob("src/angee/*/skills/**/*.md")])
 LINE_REFERENCE = re.compile(
     r"(?<![\w/.-])(?!(?:\.\./)*docs/)(?:[\w.{}*-]+/)*[\w.{}*-]*\w\.[a-z]+:\d+"  # path:line, path:line-line
     r"|\bREADME:\d+"  # a README line
@@ -92,39 +90,30 @@ def package_folders() -> list[str]:
     return sorted(package.parent.relative_to(ROOT).as_posix() for package in ADDONS.glob("*/pyproject.toml"))
 
 
-def test_every_owner_cell_cites_a_symbol() -> None:
+def test_every_owner_cell_cites_symbols_its_files_declare() -> None:
     cells = owner_cells()
     assert cells, "the index has no owner rows"
-    for cell in cells:
-        assert CITATION.search(cell), f"an Owner cell cites no `symbol` path: {cell}"
+    problems = [f"cites no `symbol` path: {cell}" for cell in cells if not CITATION.search(cell)]
+    problems += [f"missing {path}" for path in sorted({p for cell in cells for p in LOCATION.findall(cell)})
+                 if not (ROOT / path).is_file()]
+    problems += [f"{path} does not declare {symbol}" for symbol, path in citations()
+                 if (ROOT / path).is_file() and symbol not in declarations(ROOT / path)]
+    assert not problems, "\n".join(problems)
 
 
-@pytest.mark.parametrize("document", SKILL_DOCUMENTS, ids=lambda path: path.relative_to(ROOT).as_posix())
-def test_skills_cite_no_lines(document: Path) -> None:
+def test_every_foundation_class_and_package_has_an_owner_row() -> None:
+    """A public foundation ``models``/``fields`` class is cited at its module; each distribution has a row."""
+    cells, cited = owner_cells(), set(citations())
+    missing = [f"`{symbol}` {module}" for symbol, module in foundation_classes() if (symbol, module) not in cited]
+    missing += [folder for folder in package_folders() if not any(f"{folder}/" in cell for cell in cells)]
+    assert not missing, "no Owner cell cites:\n" + "\n".join(missing)
+
+
+def test_skills_cite_no_lines() -> None:
     """Skills cite a symbol, heading or file, so a moved line never stales them; ``docs/`` lines are exempt."""
-    lines = LINE_REFERENCE.findall(document.read_text())
-    assert not lines, f"cite a symbol or heading instead of {lines}"
-
-
-@pytest.mark.parametrize(("symbol", "path"), citations(), ids=lambda value: str(value))
-def test_cited_file_declares_the_symbol(symbol: str, path: str) -> None:
-    source = ROOT / path
-    assert source.is_file(), path
-    assert symbol in declarations(source), f"{path} does not declare {symbol}"
-
-
-@pytest.mark.parametrize("path", sorted({path for cell in owner_cells() for path in LOCATION.findall(cell)}))
-def test_every_cited_owner_path_exists(path: str) -> None:
-    assert (ROOT / path).is_file(), path
-
-
-@pytest.mark.parametrize(("symbol", "module"), foundation_classes(), ids=lambda value: value.rpartition("/")[2])
-def test_every_public_foundation_class_has_an_owner_row(symbol: str, module: str) -> None:
-    """A public class an ``angee.base.models``/``angee.base.fields`` module declares is cited at that module."""
-    assert (symbol, module) in set(citations()), f"no Owner cell cites `{symbol}` {module}"
-
-
-@pytest.mark.parametrize("folder", package_folders())
-def test_every_package_has_an_owner_row(folder: str) -> None:
-    """Each distribution has an owner definition within its source folder."""
-    assert any(f"{folder}/" in cell for cell in owner_cells()), f"no Owner cell cites {folder}"
+    cited = {
+        document.relative_to(ROOT).as_posix(): lines
+        for document in SKILL_DOCUMENTS
+        if (lines := LINE_REFERENCE.findall(document.read_text()))
+    }
+    assert not cited, f"cite a symbol or heading instead of {cited}"

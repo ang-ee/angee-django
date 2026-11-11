@@ -1245,7 +1245,7 @@ class Circle(HierarchyMixin, OwnerMixin, AngeeDataModel, concrete=True):
         return self.name
 
 
-class CircleMember(MembershipDecisionMixin, AuditMixin, AngeeDataModel, concrete=True):
+class CircleMember(MembershipDecisionMixin, AuditMixin, HistoryMixin, AngeeDataModel, concrete=True):
     """A party's reviewable membership of one circle.
 
     Membership is a plain decision row so a suggester (community detection, an

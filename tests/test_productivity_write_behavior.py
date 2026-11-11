@@ -10,7 +10,6 @@ from typing import Any
 import pytest
 import strawberry_django
 from django.core.exceptions import ValidationError
-from django.core.management import call_command
 from django.db import models
 from django.utils import timezone
 from rebac import system_context
@@ -165,7 +164,7 @@ class CreateStageType(AngeeNode):
 
 
 @pytest.fixture
-def productivity_tables(transactional_db: None) -> Iterator[None]:
+def productivity_tables(db: None) -> Iterator[None]:
     """Create native stage rows for behavior regressions."""
     test_models = (RoutingStageContainer, RoutingPipelineStage, RoutingStageRecord)
     with model_tables(test_models):
@@ -173,10 +172,9 @@ def productivity_tables(transactional_db: None) -> Iterator[None]:
 
 
 @pytest.fixture
-def productivity_create_case(transactional_db: None) -> Iterator[tuple[Any, Any, Queue]]:
+def productivity_create_case(db: None) -> Iterator[tuple[Any, Any, Queue]]:
     """Expose the production donors through real Hasura resources and local REBAC."""
-    del transactional_db
-    call_command("rebac", "sync", verbosity=0)
+    del db
     active = backend()
     assert isinstance(active, LocalBackend)
     extra = parse_zed("""
@@ -344,7 +342,7 @@ def test_stage_scope_rejects_foreign_container(productivity_tables: None) -> Non
         record.validate_stage_scope()
 
 
-@pytest.mark.django_db(transaction=True)
+@pytest.mark.django_db
 def test_bulk_snooze_wake_clears_only_the_selected_snoozes() -> None:
     """The work queryset wakes the rows its caller selected, through the composed task."""
 

@@ -1889,7 +1889,6 @@ def _imap_channel(**config: Any) -> Any:
     )
 
 
-@pytest.mark.django_db(transaction=True)
 @pytest.mark.parametrize("change", ["rotate", "repoint"])
 def test_extract_reloads_credential_between_pages(composed_tables: None, change: str) -> None:
     """A reused backend observes another worker's secret or credential-FK edit."""

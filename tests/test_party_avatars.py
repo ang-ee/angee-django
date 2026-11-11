@@ -28,7 +28,7 @@ from tests.test_storage import (  # noqa: F401 -- the image drive avatars land o
     image_drive,
 )
 
-pytestmark = [pytest.mark.django_db(transaction=True), pytest.mark.usefixtures("image_drive", "composed_permissions")]
+pytestmark = [pytest.mark.django_db, pytest.mark.usefixtures("image_drive", "composed_tables")]
 parties_schema = importlib.import_module("angee.parties.schema")
 
 GIF_BYTES = bytes.fromhex("47494638396101000100800000000000ffffff21f90401000000002c00000000010001000002024401003b")
@@ -164,6 +164,7 @@ def test_the_display_avatar_never_reaches_the_address_book() -> None:
         assert Party.objects.project_contact(person).photo is None
 
 
+@pytest.mark.django_db(transaction=True)
 def test_the_people_list_shows_avatars_with_nested_fields_in_a_bounded_number_of_queries() -> None:
     """Selecting a party's own avatar beside its display avatar, with nested fields, costs the same per page."""
 

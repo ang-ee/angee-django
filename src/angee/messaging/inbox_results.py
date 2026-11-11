@@ -131,10 +131,12 @@ class InboxResults:
             )
             kwargs.update(objects=accounts, scope_field=f"{prefix}channel_id", empty_label="No account")
         elif axis == "sender":
+            # A handle merge keeps messages on the handle they were sent from; they
+            # group under its survivor, the identity a reader resolves the redirect to.
             handles = self.inbox.handles
-            rows = rows.annotate(
+            rows = rows.alias(_sender=MergeableQuerySet.survivor_id(f"{prefix}sender__")).annotate(
                 _bucket=Case(
-                    When(**{f"{prefix}sender_id__in": Subquery(handles.values("pk"))}, then=F(f"{prefix}sender_id")),
+                    When(_sender__in=Subquery(handles.values("pk")), then=F("_sender")),
                     default=Value(None),
                     output_field=models.BigIntegerField(),
                 )
@@ -143,6 +145,7 @@ class InboxResults:
                 objects=handles, scope_field=f"{prefix}sender_id",
                 label_field="_sender_name", empty_label="Unknown sender",
             )
+            return InboxSenderGroups(rows, **kwargs)
         elif axis == "conversation":
             # A conversation groups under the readable survivor of its thread's
             # redirect: readers resolve a merged record to its canonical one. An
@@ -306,6 +309,21 @@ class InboxResults:
             totals["messages"],
             self.inbox.page_messages([part.message_id for part in sources.values()]),
         )
+
+
+class InboxSenderGroups(InboxGroups):
+    """Senders grouped under their merge survivor; a drill-down selects the group on the sender index."""
+
+    def bucket_rows(self, keys: Sequence[Any]) -> Any:
+        """Select each survivor's redirect group by ``sender_id``, never a scan of the bucket CASE."""
+
+        present = [key for key in keys if key is not None]
+        assert self.objects is not None
+        group = self.objects.model._base_manager.redirect_groups(present).values("pk")
+        predicate = Q(**{f"{self.scope_field}__in": Subquery(group)})
+        if len(present) < len(keys):
+            predicate |= Q(_bucket__isnull=True)
+        return self.rows.filter(predicate)
 
 
 class InboxConversationGroups(InboxGroups):

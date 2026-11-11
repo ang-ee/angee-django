@@ -13,7 +13,6 @@ import tests.test_parties_circles  # noqa: F401 -- register the fixture model gr
 from angee.messaging.testing.models import Address, Handle, Party
 
 
-@pytest.mark.django_db(transaction=True)
 def test_handle_upsert_collision_refreshes_existing_row(composed_tables: None, monkeypatch: pytest.MonkeyPatch) -> None:
     """Handle upsert collision refreshes existing row."""
     del composed_tables
@@ -31,7 +30,6 @@ def test_handle_upsert_collision_refreshes_existing_row(composed_tables: None, m
     assert source.value == "old@example.test"
 
 
-@pytest.mark.django_db(transaction=True)
 def test_stale_owner_repair_unowns_a_handle_a_suggestion_decided(composed_tables: None) -> None:
     """The explicit command re-resolves a stale owner once."""
     del composed_tables
@@ -55,7 +53,6 @@ def test_stale_owner_repair_unowns_a_handle_a_suggestion_decided(composed_tables
     assert party.handle_count == 0
 
 
-@pytest.mark.django_db(transaction=True)
 def test_primary_address_save_demotes_previous_primary(composed_tables: None, monkeypatch: pytest.MonkeyPatch) -> None:
     """Primary address save demotes previous primary."""
     del composed_tables

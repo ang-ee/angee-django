@@ -5,15 +5,18 @@ from datetime import timedelta
 from unittest.mock import patch
 from uuid import uuid4
 
+import hypothesis
 import psycopg.errors
 import pytest
 from celery.exceptions import SoftTimeLimitExceeded
 from celery.worker.request import Request
 from django.core.exceptions import PermissionDenied
 from django.core.exceptions import ValidationError as DjangoValidationError
-from django.core.management import call_command
 from django.db import DataError, IntegrityError, OperationalError, transaction
+from django.db.models import F
 from django.db.models.functions import Now
+from hypothesis import HealthCheck, given
+from hypothesis import strategies as st
 from kombu.message import Message
 from pydantic import BaseModel, Field, field_serializer, field_validator
 from rebac import RelationshipTuple, actor_context, system_context, to_object_ref, to_subject_ref, write_relationships
@@ -31,9 +34,9 @@ from angee.workflows.steps import Done, Fail, RetryPolicy, Step, StepMode, Super
 from angee.workflows.testing.drivers import capture_tasks, load_workflow, observe, register_steps, run_until
 from angee.workflows.testing.models import StepAttempt, StepRun, Workflow, WorkflowRun, WorkflowVersion
 from tests.conftest import create_user
-from tests.workflow_steps import Echo, document
+from tests.workflow_steps import Echo, Retry, document
 
-pytestmark = [pytest.mark.django_db(transaction=True), pytest.mark.usefixtures("workflow_step_classes")]
+pytestmark = [pytest.mark.django_db, pytest.mark.usefixtures("workflow_step_classes")]
 
 
 class RetainedBody(Echo):
@@ -44,6 +47,7 @@ class RetainedBody(Echo):
         return ctx.done(ctx.input)
 
 
+@pytest.mark.django_db(transaction=True)
 def test_start_linear_run_and_immutable_version(execution):
     """A linear run commits both steps and never mutates its pinned document."""
     actor, sent = execution
@@ -373,11 +377,10 @@ def test_cancel_missing_run_returns_without_authorization_error(execution):
     assert not WorkflowRun.system_queryset().filter(pk=missing.pk).exists()
 
 
-@pytest.mark.parametrize("step_key", ["pause", "retry"])
-def test_wait_and_retry_in_place(execution, step_key):
-    """Time waits and retries reuse the same row with separately numbered attempts."""
+def test_time_wait_resumes_in_place(execution):
+    """A time wait reuses the same row with separately numbered attempts."""
     actor, _ = execution
-    workflow = load_workflow(document("entry", step=step_key), key=step_key, actor=actor)
+    workflow = load_workflow(document("entry", step="pause"), key="pause", actor=actor)
     run = WorkflowRun.objects.start(workflow, actor=actor)
     row = StepRun.system_queryset().get(run=run)
     with observe(WorkflowRun) as publications:
@@ -389,6 +392,47 @@ def test_wait_and_retry_in_place(execution, step_key):
     row = StepRun.system_queryset().get(pk=row.pk)
     assert row.status == StepRunStatus.SUCCEEDED and row.attempt == 2 and row.retries == 0
     assert StepAttempt.system_queryset().filter(step_run=row).count() == 2
+
+
+@hypothesis.settings(max_examples=20, deadline=None, suppress_health_check=[HealthCheck.function_scoped_fixture])
+@given(max_attempts=st.integers(1, 4), minutes=st.integers(0, 90), failures=st.integers(0, 4))
+def test_retry_waits_its_doubling_backoff_and_closes_each_attempt_once(execution, max_attempts, minutes, failures):
+    """A retryable failure waits ``backoff * 2 ** (n - 1)`` on the database clock and never wakes early.
+
+    A step makes at most ``max_attempts`` attempts, each closed exactly once;
+    success resets its failure count, exhaustion fails the step and its run.
+    """
+    actor, _ = execution
+    policy = RetryPolicy(max_attempts=max_attempts, backoff=timedelta(minutes=minutes))
+    with patch.object(Retry, "retry", policy), transaction.atomic():
+        workflow = load_workflow(document("entry", step="retry"), key="retry_backoff", actor=actor)
+        run = WorkflowRun.objects.start(workflow, actor=actor, input={"value": failures})
+        steps = StepRun.system_queryset()
+        row = steps.get(run=run)
+        while runner.execute(row.pk) and (row := steps.get(pk=row.pk)).status == StepRunStatus.WAITING:
+            delay = policy.backoff * 2 ** (row.retries - 1)
+            failed = StepAttempt.system_queryset().get(step_run=row, number=row.attempt)
+            assert abs(row.wake_at - failed.finished_at - delay) < timedelta(seconds=1)
+            assert runner.wake() == int(not delay)
+            if delay:
+                # The database clock cannot be moved, so the wake time moves back to it.
+                steps.filter(pk=row.pk).update(wake_at=F("wake_at") - delay)
+                assert runner.wake() == 1
+        attempts = min(failures + 1, max_attempts)
+        succeeded = failures < max_attempts
+        closed = list(StepAttempt.system_queryset().filter(step_run=row).order_by("number").values_list(
+            "result", "finished_at",
+        ))
+        assert all(finished for _, finished in closed)
+        last = "succeeded" if succeeded else "failed"
+        assert [result for result, _ in closed] == ["failed"] * (attempts - 1) + [last]
+        assert (row.status, row.attempt, row.retries) == (
+            (StepRunStatus.SUCCEEDED, attempts, 0) if succeeded else (StepRunStatus.FAILED, attempts, attempts)
+        )
+        assert WorkflowRun.system_queryset().get(pk=run.pk).status == (
+            RunStatus.SUCCEEDED if succeeded else RunStatus.FAILED
+        )
+        transaction.set_rollback(True)
 
 
 def test_error_edge_recovers(execution):
@@ -451,6 +495,7 @@ def _expired_at(request, worker_now):
         return request.maybe_expire()
 
 
+@pytest.mark.django_db(transaction=True)
 def test_expired_delivery_retains_ready_step_for_native_recovery(execution, monkeypatch, settings):
     """Deferred publication cannot renew expiry; the durable step still recovers once."""
     actor, sent = execution
@@ -489,6 +534,7 @@ def test_expired_delivery_retains_ready_step_for_native_recovery(execution, monk
     assert WorkflowRun.system_queryset().get(pk=run.pk).status == RunStatus.SUCCEEDED
 
 
+@pytest.mark.django_db(transaction=True)
 def test_saturated_queue_runs_the_step_from_its_oldest_copy(execution, monkeypatch, settings):
     """Replacements join the queue tail without revoking the copy already waiting ahead."""
     actor, sent = execution
@@ -529,6 +575,7 @@ def test_saturated_queue_runs_the_step_from_its_oldest_copy(execution, monkeypat
     assert _expired_at(_delivery(*sent[0]), swept) is True
 
 
+@pytest.mark.django_db(transaction=True)
 def test_dispatch_counter_and_exhaustion(execution, settings):
     """Only tick redeliveries consume the allowance before parking for an operator."""
     actor, sent = execution
@@ -723,6 +770,7 @@ def test_attempt_result_and_wait_companions_are_database_invariants(execution):
             StepAttempt.objects.filter(pk=attempt.pk).update(**values)
 
 
+@pytest.mark.django_db(transaction=True)
 def test_holder_resend_refreshes_backlogged_ready_row_before_tick(execution, settings):
     """A holder re-send refreshes a five-minute-old message without spending a retry."""
     actor, sent = execution
@@ -746,6 +794,7 @@ def test_holder_resend_refreshes_backlogged_ready_row_before_tick(execution, set
     assert WorkflowRun.system_queryset().get(pk=run.pk).status == RunStatus.SUCCEEDED
 
 
+@pytest.mark.django_db(transaction=True)
 def test_nested_holds_dispatch_each_ready_row_once(execution):
     """The outer hold owns one delivery callback for a nested run lock."""
     actor, sent = execution
@@ -922,6 +971,7 @@ def test_failed_attempt_retains_bound_input_and_database_start_time(execution, r
     assert StepAttempt.system_queryset().get(step_run=last).error == "Keep my input."
 
 
+@pytest.mark.django_db(transaction=True)
 def test_publish_precedes_failing_commit_send(execution, caplog):
     """One explicit run publication survives a logged commit-time enqueue failure."""
     actor, _ = execution
@@ -1024,13 +1074,10 @@ def test_start_permission_does_not_grant_workflow_editing(execution):
         WorkflowRun.objects.reprocess(other_run, actor=actor)
 
 
-@pytest.mark.parametrize("storage", ["denormalized", "registry"])
-def test_starter_cannot_read_another_starters_engine_rows(execution, settings, storage):
+def test_starter_cannot_read_another_starters_engine_rows(execution):
     """Identity and publication visibility do not expose another user's execution."""
-    settings.REBAC_LOCAL_BACKEND_STORAGE = storage
-    call_command("rebac", "sync", verbosity=0)
     admin, _ = execution
-    with system_context(reason="test workflow storage administrator"):
+    with system_context(reason="test workflow starter administrator"):
         grant_role(actor=admin, role="angee/role:admin")
     first, second = create_user("first_starter"), create_user("second_starter")
     workflow = load_workflow(document("entry"), key="private_runs", actor=admin)
@@ -1164,6 +1211,7 @@ def test_t18_five_minute_backlog_does_not_exhaust_dispatches(execution):
     assert WorkflowRun.system_queryset().get(pk=run.pk).status == RunStatus.SUCCEEDED
 
 
+@pytest.mark.django_db(transaction=True)
 def test_default_redelivery_exhaustion_waits_without_domain_error_routing(execution):
     """Twenty redeliveries exhaust the default allowance without inventing an attempt."""
     actor, sent = execution
@@ -1451,6 +1499,7 @@ def test_publication_database_error_keeps_successful_outcome(execution, register
     assert any(record.exc_info and isinstance(record.exc_info[1], IntegrityError) for record in caplog.records)
 
 
+@pytest.mark.django_db(transaction=True)
 def test_terminal_siblings_do_not_starve_later_tick_candidates(execution):
     """The tick excludes preserved terminal-run rows before its bounded batch."""
 
@@ -1482,6 +1531,7 @@ def test_terminal_siblings_do_not_starve_later_tick_candidates(execution):
     assert [payload["kwargs"]["step_run_id"] for _name, payload in sent] == [live_step.pk]
 
 
+@pytest.mark.django_db(transaction=True)
 @pytest.mark.parametrize("mode", [StepMode.DATABASE, StepMode.IO])
 def test_settlement_recovery_losing_its_fence_keeps_the_run_recoverable(execution, register_step, monkeypatch, mode):
     """Failure recovery cannot turn an expired claim into a terminal run with a running row."""

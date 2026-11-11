@@ -16,7 +16,6 @@ from tests.conftest import Need, Page, RecordBinding, Vault
 from tests.messaging_campaign import grant
 from tests.t3_campaign import campaign_access as campaign_access
 from tests.t3_campaign import campaign_user as campaign_user
-from tests.t3_campaign import messaging_access_schema as messaging_access_schema
 from tests.t3_campaign import relationship_snapshot
 
 

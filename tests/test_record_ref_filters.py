@@ -20,7 +20,7 @@ from angee.knowledge import schema as knowledge_schema
 from tests.conftest import Page, SchemaAddon, addon_schema, create_user, vault_for
 from tests.tables import model_tables
 
-pytestmark = pytest.mark.django_db(transaction=True)
+pytestmark = pytest.mark.django_db
 
 
 @pytest.fixture
@@ -172,6 +172,7 @@ def test_reference_filter_declaration_rejects_claimed_decoder_names(name):
         )
 
 
+@pytest.mark.django_db(transaction=True)
 @isolate_apps()
 def test_record_reference_guard_uses_the_declared_string_key_and_current_actor(composed_tables):
     """A string reference key compares typed target keys and rebinds read scope safely."""

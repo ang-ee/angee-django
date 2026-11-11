@@ -16,7 +16,10 @@ from tests.pgvector_graph_fixtures import graph_page
 from tests.pgvector_graph_fixtures import graph_records as graph_records
 from tests.test_knowledge import _grant
 
-pytestmark = pytest.mark.skipif(connection.vendor != "postgresql", reason="Requires PostgreSQL phrase search")
+pytestmark = [
+    pytest.mark.skipif(connection.vendor != "postgresql", reason="Requires PostgreSQL phrase search"),
+    pytest.mark.django_db(transaction=True),
+]
 
 
 def test_local_mode_reaches_two_hops_without_query_time_inference(graph_records, monkeypatch, settings):

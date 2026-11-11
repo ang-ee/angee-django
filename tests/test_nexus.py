@@ -37,10 +37,10 @@ from angee.messaging.testing.models import (
 from angee.nexus.models import Cadence as AbstractCadence
 from angee.nexus.models import Tie as AbstractTie
 from angee.nexus.testing.models import Cadence, Tie
+from angee.provenance.querysets import model_history
 from tests import test_messaging_graphql
 from tests.conftest import SchemaAddon, assert_private_hasura_insert_access
 from tests.test_messaging import ThreadedTicket
-from tests.test_project_access import project_access_schema as project_access_schema
 
 nexus_schema = __import__("angee.nexus.schema", fromlist=["schemas"])
 User = get_user_model()
@@ -194,7 +194,6 @@ def test_fading_adapts_to_the_edge_rhythm() -> None:
     assert not Tie.check_fading(message_count=1, first_at=_T0, last_at=_T0, now=_T0 + timedelta(days=400))
 
 
-@pytest.mark.django_db(transaction=True)
 def test_tie_save_canonicalizes_the_pair_and_the_database_rejects_duplicates(composed_tables: None) -> None:
     """Save orders both ends while the unique constraint closes alternate write paths."""
 
@@ -209,7 +208,72 @@ def test_tie_save_canonicalizes_the_pair_and_the_database_rejects_duplicates(com
             Tie.objects.create(party_a=first, party_b=second)
 
 
-@pytest.mark.django_db(transaction=True)
+@pytest.mark.parametrize("shared_counterpart", [True, False], ids=["shared-counterpart", "pair-order"])
+def test_a_party_merge_leaves_ties_to_the_recompute(composed_tables: None, shared_counterpart: bool) -> None:
+    """Derived ties neither move nor keep history: merges they once refused succeed and recompute rebuilds them.
+
+    Moving ``(other, merged)`` onto an older survivor would flip the canonical pair
+    order; a survivor already tied to ``other`` would collide on the pair.
+    """
+
+    del composed_tables
+    owner = User.objects.create_user(username=f"tie-merge-{shared_counterpart}")
+    with system_context(reason="test nexus tie merge"):
+        kept, other, merged = (
+            Party._base_manager.create(display_name=name, created_by=owner) for name in ("Kept", "Other", "Merged")
+        )
+        Tie.objects.create(party_a=other, party_b=merged)
+        if shared_counterpart:
+            Tie.objects.create(party_a=kept, party_b=other)
+        before = set(Tie._base_manager.values_list("party_a_id", "party_b_id"))
+        message = _message(
+            sender=_handle(merged, "merged@example.com"),
+            thread=Thread._base_manager.create(platform="email"),
+            sent_at=_T0,
+            external_id="merged-to-other",
+        )
+        _address(message, _handle(other, "other@example.com"))
+
+    with actor_context(owner):
+        kept.with_actor(owner).merge(records=[merged.public_id])
+    assert set(Tie._base_manager.values_list("party_a_id", "party_b_id")) == before
+    assert model_history(Tie) is None and Tie not in {reference.model for reference in Party.moved_references()}
+    with system_context(reason="test nexus tie merge recompute"):
+        assert Tie.objects.recompute(now=_T0 + timedelta(days=1)) == 1
+    assert set(Tie._base_manager.values_list("party_a_id", "party_b_id")) == {(kept.pk, other.pk)}
+
+
+def test_a_handle_merge_keeps_correspondence_on_the_merged_handle_for_readers_to_resolve(
+    composed_tables: None,
+) -> None:
+    """A recipient row stays on the merged handle; ties and party correspondence read it as the survivor's."""
+
+    del composed_tables
+    owner = User.objects.create_user(username="handle-merge-reader")
+    with system_context(reason="test nexus handle merge"):
+        alice, bob = Party._base_manager.create(display_name="Alice", created_by=owner), _party("Bob")
+        old, new = (
+            Handle._base_manager.create(platform="email", value=value, created_by=owner)
+            for value in ("alice@old.example.com", "alice@example.com")
+        )
+        Party.objects.assert_handle(alice, new, asserted_by=owner)
+        message = _message(
+            sender=_handle(bob, "bob@example.com"),
+            thread=Thread._base_manager.create(platform="email"),
+            sent_at=_T0,
+            external_id="bob-to-old",
+        )
+        recipient = _address(message, old)
+
+    with actor_context(owner):
+        new.with_actor(owner).merge(records=[old.public_id])
+    with system_context(reason="test nexus handle merge readers"):
+        assert Participant._base_manager.get(pk=recipient.pk).handle_id == old.pk
+        assert list(Message.objects.involving_parties([alice]).values_list("pk", flat=True)) == [message.pk]
+        assert Tie.objects.recompute(now=_T0 + timedelta(days=1)) == 1
+        assert list(Tie._base_manager.values_list("party_a_id", "party_b_id")) == [tuple(sorted((alice.pk, bob.pk)))]
+
+
 def test_recompute_derives_addressed_reply_and_mention_edges_once(composed_tables: None) -> None:
     """The three deliberate sources converge without double-counting one message/pair."""
 
@@ -251,7 +315,6 @@ def test_recompute_derives_addressed_reply_and_mention_edges_once(composed_table
         assert (tie.a_to_b_count, tie.b_to_a_count) == ((1, 0) if alice.pk < bob.pk else (0, 1))
 
 
-@pytest.mark.django_db(transaction=True)
 def test_recompute_counts_to_and_cc_but_not_bcc_or_unresolved_handles(composed_tables: None) -> None:
     """Only resolved TO/CC envelope targets are deliberate addressed interactions."""
 
@@ -281,7 +344,6 @@ def test_recompute_counts_to_and_cc_but_not_bcc_or_unresolved_handles(composed_t
         }
 
 
-@pytest.mark.django_db(transaction=True)
 def test_thread_roster_only_group_with_ten_participants_produces_no_ties(composed_tables: None) -> None:
     """Thread roster co-membership never expands one group message into pair edges."""
 
@@ -298,7 +360,6 @@ def test_thread_roster_only_group_with_ten_participants_produces_no_ties(compose
         assert Tie._base_manager.count() == 0
 
 
-@pytest.mark.django_db(transaction=True)
 def test_recompute_excludes_record_chatter_and_public_threads(composed_tables: None) -> None:
     """Chatter and public posts stay outside private relationship gravity."""
 
@@ -331,7 +392,6 @@ def test_recompute_excludes_record_chatter_and_public_threads(composed_tables: N
         assert Tie._base_manager.count() == 0
 
 
-@pytest.mark.django_db(transaction=True)
 def test_recompute_deletes_stale_edges_and_refreshes_cadence(composed_tables: None) -> None:
     """Derived rows disappear with their evidence while the human cadence survives."""
 
@@ -360,7 +420,6 @@ def test_recompute_deletes_stale_edges_and_refreshes_cadence(composed_tables: No
         assert cadence.touch_due_at is None
 
 
-@pytest.mark.django_db(transaction=True)
 def test_cadence_stays_due_null_until_the_user_has_a_party_identity(composed_tables: None) -> None:
     """A cadence cannot infer a viewer edge before Person.user establishes identity."""
 
@@ -373,7 +432,6 @@ def test_cadence_stays_due_null_until_the_user_has_a_party_identity(composed_tab
         assert cadence.touch_due_at is None
 
 
-@pytest.mark.django_db(transaction=True)
 def test_tie_read_requires_access_to_both_parties(composed_tables: None) -> None:
     """One readable endpoint cannot leak the other endpoint's network."""
 
@@ -393,7 +451,6 @@ def test_tie_read_requires_access_to_both_parties(composed_tables: None) -> None
         assert Tie.objects.around_party(first).count() == 1
 
 
-@pytest.mark.django_db(transaction=True)
 def test_cadence_read_requires_owner_and_party_access(composed_tables: None) -> None:
     """Cadence visibility intersects its owning user with party read."""
 
@@ -442,7 +499,6 @@ def test_party_resource_metadata_projects_the_canonical_party_label() -> None:
     assert wire["parties.Person"]["canonicalLabel"] == "parties.Party"
 
 
-@pytest.mark.django_db(transaction=True)
 def test_cadence_orm_create_defaults_the_queryset_actor(composed_tables: None) -> None:
     """The save owner supplies user defaults for bound ORM insertion too."""
 
@@ -457,7 +513,6 @@ def test_cadence_orm_create_defaults_the_queryset_actor(composed_tables: None) -
     assert Cadence._base_manager.get(pk=cadence.pk).user_id == viewer.pk
 
 
-@pytest.mark.django_db(transaction=True)
 def test_cadence_clean_defaults_user_before_unique_validation(composed_tables: None) -> None:
     """Native full_clean includes the actor-derived user in its uniqueness check."""
 
@@ -475,7 +530,6 @@ def test_cadence_clean_defaults_user_before_unique_validation(composed_tables: N
         duplicate.full_clean()
 
 
-@pytest.mark.django_db(transaction=True)
 def test_cadence_clean_requires_an_actor_for_default_user(composed_tables: None) -> None:
     """A field allowed to defer its default still cannot validate without an actor."""
 
@@ -484,7 +538,6 @@ def test_cadence_clean_requires_an_actor_for_default_user(composed_tables: None)
     assert exc_info.value.message_dict["user"] == ["An authenticated user is required."]
 
 
-@pytest.mark.django_db(transaction=True)
 def test_cadence_create_binds_the_authenticated_user(composed_tables: None) -> None:
     """The CRUD surface accepts intent fields and owns the viewer relation server-side."""
 
@@ -515,7 +568,6 @@ def test_cadence_create_binds_the_authenticated_user(composed_tables: None) -> N
     assert cadence.party_id == party.pk
 
 
-@pytest.mark.django_db(transaction=True)
 def test_cadence_console_insert_establishes_private_creator_access(
     composed_tables: None,
 ) -> None:
@@ -563,7 +615,6 @@ def test_cadence_console_insert_establishes_private_creator_access(
     assert updated == {"id": created["id"], "cadence_days": 21}
 
 
-@pytest.mark.django_db(transaction=True)
 def test_party_fields_resolve_the_viewers_edge_and_cadence(composed_tables: None) -> None:
     """Party tie and cadence are selected through the signed-in Person identity."""
 
@@ -604,7 +655,6 @@ def test_party_fields_resolve_the_viewers_edge_and_cadence(composed_tables: None
     }
 
 
-@pytest.mark.django_db(transaction=True)
 def test_party_tie_is_null_without_a_viewer_party_identity(composed_tables: None) -> None:
     """A signed-in user without Person.user has no viewer-relative edge."""
 
@@ -625,14 +675,13 @@ def test_party_tie_is_null_without_a_viewer_party_identity(composed_tables: None
     assert payload == {"tie": None}
 
 
-@pytest.mark.django_db(transaction=True)
 @override_settings(REBAC_FIELD_READ_MODE="redact")
 def test_party_network_applies_pair_intersection_to_every_edge(
-    project_access_schema: Any,
+    composed_tables: Any,
 ) -> None:
     """The network requires private endpoints and omits redacted node counts."""
 
-    del project_access_schema
+    del composed_tables
     reader = User.objects.create_user(username="network-reader")
     identity_reader = User.objects.create_user(username="network-identity-reader")
     owner = User.objects.create_user(username="network-owner")
@@ -680,11 +729,10 @@ def test_party_network_applies_pair_intersection_to_every_edge(
     assert "handle_count" not in node["meta"]
 
 
-@pytest.mark.django_db(transaction=True)
-def test_party_graph_projects_visible_typed_relationships(project_access_schema: Any) -> None:
+def test_party_graph_projects_visible_typed_relationships(composed_tables: Any) -> None:
     """Tracked and free-text relationships render using the current statement model."""
 
-    del project_access_schema
+    del composed_tables
     reader = User.objects.create_user(username="graph-reader")
     owner = User.objects.create_user(username="graph-owner")
     with system_context(reason="test nexus relationship graph seed"):
@@ -731,11 +779,10 @@ def test_party_graph_projects_visible_typed_relationships(project_access_schema:
     assert graph["truncated"] is False
 
 
-@pytest.mark.django_db(transaction=True)
-def test_party_graph_identity_lens_uses_the_reader_statement_scope(project_access_schema: Any) -> None:
+def test_party_graph_identity_lens_uses_the_reader_statement_scope(composed_tables: Any) -> None:
     """The identity lens uses the shared statement owner with its reader gate."""
 
-    del project_access_schema
+    del composed_tables
     reader = User.objects.create_user(username="identity-lens-reader")
     with system_context(reason="test nexus identity lens seed"):
         root = Party._base_manager.create(display_name="Identity root", created_by=reader)

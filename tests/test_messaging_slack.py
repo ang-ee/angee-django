@@ -790,7 +790,6 @@ def _slack_channel(slug: str = "slack") -> Any:
     )
 
 
-@pytest.mark.django_db(transaction=True)
 @pytest.mark.parametrize("change", ["rotate", "repoint"])
 def test_extract_reloads_credential_and_reused_client_between_pages(composed_tables: None, change: str) -> None:
     """Secret rotation and credential replacement both update the retained client."""
@@ -896,7 +895,6 @@ def test_late_reply_below_history_watermark_lands_on_the_next_poll(
     assert IncrementalWebClient.reply_calls[-1]["oldest"] == "1784700001.000001"
 
 
-@pytest.mark.django_db(transaction=True)
 def test_non_rate_limit_api_error_uses_generic_sync_telemetry(
     composed_tables: None,
     monkeypatch: pytest.MonkeyPatch,

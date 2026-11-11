@@ -151,7 +151,7 @@ def test_enqueue_task_waits_for_outer_commit(monkeypatch: pytest.MonkeyPatch) ->
     send.assert_called_once_with("test.task", kwargs={"run_id": 1}, queue=None, expires=None)
 
 
-@pytest.mark.django_db(transaction=True)
+@pytest.mark.django_db
 def test_enqueue_task_discards_rolled_back_savepoint(monkeypatch: pytest.MonkeyPatch) -> None:
     """Rolling back the producer's savepoint discards its task submission."""
 

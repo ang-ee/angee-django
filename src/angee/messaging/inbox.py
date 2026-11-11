@@ -252,9 +252,13 @@ class MessageInbox:
         return rows
 
     def involving_handles(self, rows: Any, handles: Any) -> Any:
-        """Authorship or explicit message recipients; thread membership is insufficient."""
+        """Authorship or explicit message recipients; thread membership is insufficient.
 
-        ids = handles.order_by().values("pk")
+        A handle merge keeps messages and recipients on the retired handle, so each
+        handle selects its survivor's redirect group.
+        """
+
+        ids = handles.model._base_manager.redirect_groups(Subquery(handles.survivor_ids())).values("pk")
         recipients = self.participants.filter(handle_id__in=Subquery(ids), role__in=("to", "cc", "bcc"))
         # Keep the two indexed access paths separate. A correlated recipient
         # EXISTS inside an OR makes PostgreSQL estimate almost every message as

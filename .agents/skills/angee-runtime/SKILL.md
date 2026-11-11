@@ -29,7 +29,11 @@ an owner. Normal application data changes belong to their addon.
    Python importability. Serving consumes receipts; it does not rebuild them.
 2. On a stopped/new host, native uv installation precedes `manage.py compose`.
    On a running stack, use its operator dependency chain; never sync its live
-   venv. Packaging builds archives only. Commands and working directories live
+   venv. The stack root's lock records its path sources' dependency groups, so
+   any change to a source slot's `pyproject.toml` (dev groups included) needs a
+   native `uv lock` at the stack root before the next chained restart, or the
+   locked `py-sync` refuses and the held services stay down. Packaging builds
+   archives only. Commands and working directories live
    in [Checks](../../../docs/checks.md#composition-and-schema).
 3. Source participants remain abstract native Django models using `Composable`
    class keywords. Capability build integrations implement the compiler's public

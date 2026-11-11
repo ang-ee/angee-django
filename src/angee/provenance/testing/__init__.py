@@ -11,46 +11,49 @@ from django.core.management import call_command
 from django.test import override_settings
 
 
-def load_statement_sources(addon_label: str) -> None:
-    """Load one installed addon's declared statement principals and grants."""
+def load_statement_sources(*addon_labels: str) -> None:
+    """Load the install-tier statement principals, and their grants, of installed addons.
+
+    Without labels, every installed addon whose install tier declares a
+    ``provenance.Rule`` or ``Seed`` loads, as a composed host's install tier would.
+    Only the principals and the addon's grants load, never its other install rows;
+    an addon whose principals are already in the ledger is skipped.
+    """
 
     from rebac import backend, system_context
 
     from angee.resources.entries import ResourceEntry, resource_manifest_for
 
-    if addon_label not in django_apps.app_configs or "provenance" not in django_apps.app_configs:
+    if "provenance" not in django_apps.app_configs:
         return
-    if backend().schema().get_definition("provenance/role") is None:
-        call_command("rebac", "sync", verbosity=0)
-    addon = django_apps.get_app_config(addon_label)
     resources = django_apps.get_model("resources", "Resource")
     principal_models = [django_apps.get_model("provenance", name)._meta.label for name in ("Rule", "Seed")]
-    if resources._base_manager.filter(
-        source_addon=addon.name,
-        tier="install",
-        target_model__in=principal_models,
-    ).exists():
-        return
-    manifest = resource_manifest_for(addon)
-    excluded = [
-        ":".join(ResourceEntry.from_declaration(addon, "master", declaration).key) for declaration in manifest["master"]
-    ]
-    # Only the principals and their grants load: the addon's other install rows
-    # (and whatever other addons they depend on) are not statement sources.
     principal_labels = {label.lower() for label in principal_models}
-    for declaration in manifest["install"]:
-        entry = ResourceEntry.from_declaration(addon, "install", declaration)
-        if entry.kind != "grants" and (entry.model or entry.infer_model_label()).lower() not in principal_labels:
-            excluded.append(":".join(entry.key))
-    with (
-        system_context(reason=f"{addon_label}.testing.statement_sources"),
-        override_settings(
-            ANGEE_RESOURCE_EXCLUDED_ENTRIES=(
-                *settings.ANGEE_RESOURCE_EXCLUDED_ENTRIES,
-                *excluded,
+    addons = (
+        [django_apps.get_app_config(label) for label in addon_labels if label in django_apps.app_configs]
+        if addon_labels else django_apps.get_app_configs()
+    )
+    for addon in addons:
+        manifest = resource_manifest_for(addon)
+        install = [ResourceEntry.from_declaration(addon, "install", declaration) for declaration in manifest["install"]]
+        others = [
+            ":".join(entry.key) for entry in install
+            if entry.kind != "grants" and (entry.model or entry.infer_model_label()).lower() not in principal_labels
+        ]
+        if len(others) == sum(entry.kind != "grants" for entry in install) or resources._base_manager.filter(
+            source_addon=addon.name, tier="install", target_model__in=principal_models,
+        ).exists():
+            continue
+        if backend().schema().get_definition("provenance/role") is None:
+            call_command("rebac", "sync", verbosity=0)
+        excluded = [
+            ":".join(ResourceEntry.from_declaration(addon, "master", declaration).key)
+            for declaration in manifest["master"]
+        ]
+        with (
+            system_context(reason=f"{addon.label}.testing.statement_sources"),
+            override_settings(
+                ANGEE_RESOURCE_EXCLUDED_ENTRIES=(*settings.ANGEE_RESOURCE_EXCLUDED_ENTRIES, *excluded, *others),
             ),
-        ),
-    ):
-        for storage in ("denormalized", "registry"):
-            with override_settings(REBAC_LOCAL_BACKEND_STORAGE=storage):
-                resources.objects.load_addons((addon,), tiers=("install",))
+        ):
+            resources.objects.load_addons((addon,), tiers=("install",))

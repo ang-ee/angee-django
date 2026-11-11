@@ -49,6 +49,8 @@ from angee.graphql.publishing import connect_publishers, disconnect_publishers
 from tests.conftest import create_platform_admin
 from tests.test_agents import _provider
 
+pytestmark = pytest.mark.django_db(transaction=True)
+
 
 @pytest.fixture
 def chat(composed_tables: None, capture_tasks: list[Any], monkeypatch: pytest.MonkeyPatch) -> Iterator[Any]:

@@ -15,7 +15,10 @@ from tests.conftest import vault_for
 from tests.pgvector_fixtures import passage_records as passage_records
 from tests.pgvector_graph_fixtures import graph_records as graph_records
 
-pytestmark = pytest.mark.skipif(connection.vendor != "postgresql", reason="Requires PostgreSQL pg_trgm")
+pytestmark = [
+    pytest.mark.skipif(connection.vendor != "postgresql", reason="Requires PostgreSQL pg_trgm"),
+    pytest.mark.django_db(transaction=True),
+]
 
 
 def test_resolution_prefers_normalized_exact_then_same_kind_trigrams_in_one_vault(graph_records):

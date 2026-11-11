@@ -62,7 +62,6 @@ def _repo(full_name: str, *, private: bool = False) -> dict[str, Any]:
     }
 
 
-@pytest.mark.django_db(transaction=True)
 def test_headers_fetch_credential_and_oauth_client_in_one_query(
     composed_tables: None, django_assert_num_queries: Any
 ) -> None:

@@ -13,7 +13,6 @@ import httpx2
 import pytest
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
-from django.core.management import call_command
 from django.db import transaction
 from django.test.utils import isolate_apps
 from rebac import system_context
@@ -31,7 +30,7 @@ from tests.tables import model_tables
 
 
 @pytest.fixture
-def dispatch_bridge(transactional_db: None) -> Iterator[Bridge]:
+def dispatch_bridge(db: None) -> Iterator[Bridge]:
     """Persist an isolated bridge so inbound dispatch has a real lock identity."""
 
     with isolate_apps():
@@ -74,12 +73,10 @@ def dispatch_bridge(transactional_db: None) -> Iterator[Bridge]:
             yield bridge
 
 
-@pytest.mark.django_db(transaction=True)
-def test_webhook_subscription_owner_is_field_backed(transactional_db: None) -> None:
+def test_webhook_subscription_owner_is_field_backed(db: None) -> None:
     """WebhookSubscription owner access comes from the owner field and moves by transfer."""
 
-    del transactional_db
-    call_command("rebac", "sync", verbosity=0)
+    del db
     user = get_user_model().objects.create_user(username="webhook-owner", email="owner@example.com")
     other_user = get_user_model().objects.create_user(
         username="webhook-other",
@@ -103,7 +100,7 @@ def test_webhook_subscription_owner_is_field_backed(transactional_db: None) -> N
     assert WebhookSubscription.objects.with_actor(other_user).filter(pk=subscription.pk).exists()
 
 
-@pytest.mark.django_db(transaction=True)
+@pytest.mark.django_db
 @pytest.mark.parametrize(
     "url",
     [
@@ -126,7 +123,7 @@ def test_validate_public_url_rejects_unsafe_targets(url: str) -> None:
         validate_public_url(url)
 
 
-@pytest.mark.django_db(transaction=True)
+@pytest.mark.django_db
 def test_validate_public_url_accepts_public_dns(monkeypatch: pytest.MonkeyPatch) -> None:
     """A hostname resolving only to a public address is accepted."""
 
@@ -135,10 +132,9 @@ def test_validate_public_url_accepts_public_dns(monkeypatch: pytest.MonkeyPatch)
     validate_public_url("https://hooks.example.test/events")
 
 
-@pytest.mark.django_db(transaction=True)
+@pytest.mark.django_db
 @pytest.mark.parametrize("empty_answer", [False, True])
 def test_webhook_nonexistent_host_is_an_invalid_target(monkeypatch: pytest.MonkeyPatch, empty_answer: bool) -> None:
-    call_command("rebac", "sync", verbosity=0)
 
     def resolve(*args: Any, **kwargs: Any) -> list[Any]:
         if empty_answer:
@@ -175,15 +171,13 @@ def test_runtime_marker_is_per_class() -> None:
     assert RuntimeBridge.__dict__["runtime"] is True
 
 
-@pytest.mark.django_db(transaction=True)
 def test_deliver_event_signs_and_posts_only_matching_subscriptions(
-    transactional_db: None,
+    db: None,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Outbound delivery signs raw JSON and skips disabled or filtered subscriptions."""
 
-    del transactional_db
-    call_command("rebac", "sync", verbosity=0)
+    del db
     posts = _record_posts(monkeypatch, status=202)
 
     user = get_user_model().objects.create_user(username="webhook-delivery", email="delivery@example.com")
@@ -275,7 +269,6 @@ def test_enqueue_event_delivers_after_commit(
     """The manager-owned queue seam sends webhook fan-out after commit."""
 
     del transactional_db
-    call_command("rebac", "sync", verbosity=0)
     posts = _record_posts(monkeypatch, status=202)
 
     user = get_user_model().objects.create_user(username="webhook-queued", email="queued@example.com")
@@ -297,15 +290,13 @@ def test_enqueue_event_delivers_after_commit(
     assert [post["url"] for post in posts] == ["https://hooks-queued.example.test/events"]
 
 
-@pytest.mark.django_db(transaction=True)
 def test_deliver_event_prefilters_integration_scope_before_row_matching(
-    transactional_db: None,
+    db: None,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """The manager excludes integration-filter misses before calling row matchers."""
 
-    del transactional_db
-    call_command("rebac", "sync", verbosity=0)
+    del db
     _record_posts(monkeypatch, status=202)
 
     user = get_user_model().objects.create_user(username="webhook-prefilter", email="prefilter@example.com")
@@ -347,15 +338,13 @@ def test_deliver_event_prefilters_integration_scope_before_row_matching(
     assert wrong_account.pk not in checked
 
 
-@pytest.mark.django_db(transaction=True)
 def test_deliver_event_failure_increments_consecutive_failures(
-    transactional_db: None,
+    db: None,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A failed POST records telemetry and increments the failure counter."""
 
-    del transactional_db
-    call_command("rebac", "sync", verbosity=0)
+    del db
     posts = _record_posts(monkeypatch, post_error=ConnectionRefusedError("connection refused"))
 
     user = get_user_model().objects.create_user(username="webhook-failure", email="failure@example.com")
@@ -382,12 +371,10 @@ def test_deliver_event_failure_increments_consecutive_failures(
     assert subscription.last_error == "Webhook delivery failed."
 
 
-@pytest.mark.django_db(transaction=True)
-def test_record_delivery_failure_refreshes_incremented_counter(transactional_db: None) -> None:
+def test_record_delivery_failure_refreshes_incremented_counter(db: None) -> None:
     """Failure telemetry leaves the row instance with the database counter value."""
 
-    del transactional_db
-    call_command("rebac", "sync", verbosity=0)
+    del db
 
     user = get_user_model().objects.create_user(username="webhook-refresh", email="refresh@example.com")
     with system_context(reason="test webhook refresh setup"):
@@ -403,7 +390,6 @@ def test_record_delivery_failure_refreshes_incremented_counter(transactional_db:
     assert subscription.consecutive_failures == 5
 
 
-@pytest.mark.django_db(transaction=True)
 @pytest.mark.parametrize(
     "address",
     [
@@ -413,14 +399,13 @@ def test_record_delivery_failure_refreshes_incremented_counter(transactional_db:
     ],
 )
 def test_deliver_event_rejects_unsafe_resolved_target_without_connecting(
-    transactional_db: None,
+    db: None,
     monkeypatch: pytest.MonkeyPatch,
     address: str,
 ) -> None:
     """Unsafe DNS refuses before dialling and records the gate's invalid-target telemetry."""
 
-    del transactional_db
-    call_command("rebac", "sync", verbosity=0)
+    del db
     _resolve_to(monkeypatch, address)
     dial = Mock(side_effect=AssertionError("Unsafe webhook target must never be dialled."))
     monkeypatch.setattr(httpcore2.SyncBackend, "connect_tcp", dial)
@@ -450,15 +435,13 @@ def test_deliver_event_rejects_unsafe_resolved_target_without_connecting(
     dial.assert_not_called()
 
 
-@pytest.mark.django_db(transaction=True)
 def test_deliver_event_redirect_response_fails_without_following(
-    transactional_db: None,
+    db: None,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A 3xx delivery response is telemetry failure and never another request."""
 
-    del transactional_db
-    call_command("rebac", "sync", verbosity=0)
+    del db
     posts = _record_posts(monkeypatch, status=302)
 
     user = get_user_model().objects.create_user(username="webhook-redirect", email="redirect@example.com")

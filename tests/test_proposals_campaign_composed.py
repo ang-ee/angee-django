@@ -606,23 +606,15 @@ class ProposalCampaignCases(CampaignIdentities, ClarificationCase):
             self.assertFalse(messages.exists())
 
 
-class RegistryProposalCampaign(ProposalCampaignCases):
+class ProposalCampaign(ProposalCampaignCases):
     pass
 
 
-class DenormalizedProposalCampaign(ProposalCampaignCases):
-    storage = "denormalized"
-
-
-class RegistryWorkWithoutBridgeCampaign(ProposalCampaignCases):
+class WorkWithoutBridgeCampaign(ProposalCampaignCases):
     with_work = True
 
 
-class DenormalizedWorkWithoutBridgeCampaign(RegistryWorkWithoutBridgeCampaign):
-    storage = "denormalized"
-
-
-class RegistryBridgeCampaign(CampaignIdentities, ProposalsWorkTests):
+class BridgeCampaign(CampaignIdentities, ProposalsWorkTests):
     """Retain the existing full bridge cases and add deletion/rebinding regressions."""
 
     __test__ = False
@@ -661,28 +653,14 @@ class RegistryBridgeCampaign(CampaignIdentities, ProposalsWorkTests):
             self.as_user(published, self.member).message_post("Queue member response")
 
 
-class DenormalizedBridgeCampaign(RegistryBridgeCampaign):
-    storage = "denormalized"
-
-
 @pytest.mark.parametrize(
     "profile,case",
     (
-        (("angee.proposals",), "RegistryProposalCampaign"),
-        (("angee.proposals",), "DenormalizedProposalCampaign"),
-        (("angee.proposals", "angee.work"), "RegistryWorkWithoutBridgeCampaign"),
-        (("angee.proposals", "angee.work"), "DenormalizedWorkWithoutBridgeCampaign"),
-        (("angee.proposals_work",), "RegistryBridgeCampaign"),
-        (("angee.proposals_work",), "DenormalizedBridgeCampaign"),
+        (("angee.proposals",), "ProposalCampaign"),
+        (("angee.proposals", "angee.work"), "WorkWithoutBridgeCampaign"),
+        (("angee.proposals_work",), "BridgeCampaign"),
     ),
-    ids=(
-        "registry-proposals",
-        "denormalized-proposals",
-        "registry-work",
-        "denormalized-work",
-        "registry-bridge",
-        "denormalized-bridge",
-    ),
+    ids=("proposals", "work", "bridge"),
 )
 def test_proposal_campaign_on_composed_profiles(tmp_path: Path, profile: tuple[str, ...], case: str) -> None:
     """Exercise proposal behavior under each composed addon profile."""

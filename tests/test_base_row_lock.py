@@ -17,7 +17,6 @@ from tests.conftest import create_user
 from tests.linesdemo.models import Document, PinnedLine
 
 
-@pytest.mark.django_db(transaction=True)
 def test_collection_writes_cannot_mutate_or_create_system_rows(composed_tables: None) -> None:
     user = create_user("row-lock-writer")
     with system_context(reason="test.row_lock.seed"):
@@ -49,7 +48,6 @@ def test_row_lock_model_requires_collection_guard_on_default_and_base_managers()
     assert {"angee.E048", "angee.E049"} <= errors
 
 
-@pytest.mark.django_db(transaction=True)
 @pytest.mark.parametrize("positional", (False, True))
 def test_unfiltered_conflict_updates_cannot_mutate_system_rows(composed_tables: None, positional: bool) -> None:
     """The unfiltered writer checks native positional and keyword conflict flags."""
@@ -117,7 +115,6 @@ def test_collection_write_excludes_rows_entering_predicate_after_validation(
     assert entered.label == "Selected system"
 
 
-@pytest.mark.django_db(transaction=True)
 def test_named_system_scope_and_pinned_actor_keep_native_row_lock_precedence(composed_tables: None) -> None:
     """Ambient system work owns rows; a pinned user keeps the user invariant."""
 

@@ -30,14 +30,21 @@ from django.db import models
 from rebac import current_actor
 
 from angee.base.models.base import AngeeDataModel
+from angee.base.models.merge_references import MergePolicy
 from angee.base.permissions import actor_user_id
 from angee.nexus.managers import CadenceManager, TieManager
+from angee.provenance.contrib.angee.history import HistoryMixin, ModelHistory
 
 
 class Tie(AngeeDataModel, concrete=True):
-    """A fully derived interaction edge between two canonically ordered parties."""
+    """A fully derived interaction edge between two canonically ordered parties.
+
+    A party merge leaves its ties in place: :meth:`TieManager.recompute`
+    rebuilds the pairs from the moved handles and drops the retired ones.
+    """
 
     sqid_prefix = "tie_"
+    merge_policies = {"party_a": MergePolicy.KEEP, "party_b": MergePolicy.KEEP}
 
     party_a = models.ForeignKey(
         "parties.Party",
@@ -145,7 +152,7 @@ class Tie(AngeeDataModel, concrete=True):
         super().save(*args, **kwargs)
 
 
-class Cadence(AngeeDataModel, concrete=True):
+class Cadence(HistoryMixin, AngeeDataModel, concrete=True):
     """One user's human-authored stay-in-touch intent for one party."""
 
     sqid_prefix = "cad_"
@@ -163,6 +170,8 @@ class Cadence(AngeeDataModel, concrete=True):
     )
     cadence_days = models.PositiveIntegerField()
     touch_due_at = models.DateTimeField(null=True, blank=True, db_index=True, editable=False)
+
+    history = ModelHistory(inherit=True, excluded_fields=("touch_due_at",))
 
     objects = CadenceManager()
 
@@ -211,7 +220,8 @@ class Cadence(AngeeDataModel, concrete=True):
         if self.touch_due_at == touch_due_at:
             return
         self.touch_due_at = touch_due_at
-        super().save(update_fields=["touch_due_at", "updated_at"])
+        # The due date is derived and excluded from history: a refresh records no version.
+        self.save_without_historical_record(update_fields=["touch_due_at", "updated_at"])
 
     def _default_user(self) -> None:
         """Bind a blank user relation to the authenticated REBAC actor."""

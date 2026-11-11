@@ -18,12 +18,11 @@ import tests.scopedemo.models  # noqa: F401 -- register related models before na
 from angee.portfolio.testing.models import Initiative, InitiativeProject, Update
 from angee.projects.testing.models import Cycle, Project, ProjectBinding, Queue, Stage, Task, TaskRelation
 from tests.conftest import Backend, Drive, create_user
-from tests.test_project_access import project_access_schema as project_access_schema
 
 
 @pytest.fixture
-def deferred_save_rows(project_access_schema: Any) -> Iterator[dict[str, models.Model]]:
-    del project_access_schema
+def deferred_save_rows(composed_tables: Any) -> Iterator[dict[str, models.Model]]:
+    del composed_tables
     with system_context(reason="tests.productivity.deferred_save.setup"):
         queue = Queue.objects.create(key="DEFERRED", name="Deferred", slug="deferred")
         cycle = Cycle.objects.create(queue=queue, number=1, starts_on=date(2026, 1, 1), ends_on=date(2026, 1, 7))

@@ -26,7 +26,7 @@ from tests.test_workflows_triggers import capture
 from tests.test_workflows_triggers import trigger_resource_schema as trigger_resource_schema
 from tests.test_workflows_triggers import trigger_setup as trigger_setup
 
-pytestmark = [pytest.mark.django_db(transaction=True), pytest.mark.usefixtures("workflow_step_classes")]
+pytestmark = [pytest.mark.django_db, pytest.mark.usefixtures("workflow_step_classes")]
 
 
 def timeline(schema, actor, records):
@@ -120,6 +120,7 @@ def test_record_timeline_reads_its_runs_once_for_one_or_five_records(schema, rev
     assert costs[0] == costs[1], costs
 
 
+@pytest.mark.django_db(transaction=True)
 @pytest.mark.parametrize("operation,canceled", [("read", False), ("created", True), ("changed", True)])
 def test_deletion_only_enqueues_active_runs_that_modify_the_record(review, register_step, operation, canceled):
     actor, _, sent, question = review
@@ -313,6 +314,7 @@ def test_timeline_projects_run_subject_trigger_records_and_decision(schema, trig
     assert concern in concerns(WorkflowRun.system_queryset().get(pk=run.pk).with_actor(outsider))
 
 
+@pytest.mark.django_db(transaction=True)
 def test_symbolic_subject_actions_ask_hold_apply_and_record_both_directions(review, register_step, schema):
     actor, people, sent, question = review
     register_step(AskDecision)
@@ -413,6 +415,7 @@ def test_linear_plan_certain_join_and_optional_branches(review, register_step, s
     }
 
 
+@pytest.mark.django_db(transaction=True)
 @pytest.mark.parametrize("retired_actor", [False, True])
 def test_open_question_and_attempts_survive_retention_then_record_deletion_withdraws(review, settings, retired_actor):
     actor, _, sent, question = review

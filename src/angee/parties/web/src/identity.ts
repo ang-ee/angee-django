@@ -25,6 +25,17 @@ export interface SenderIdentity {
     /** The party's own avatar, else its strongest handle's (the server's display rule). */
     display_avatar?: { url?: string | null } | null;
   } | null;
+  /** The survivor a merged handle redirects to: it carries the party link, while the
+   *  message keeps the envelope of the handle it was actually sent from. */
+  merged_into?: SenderIdentity | null;
+}
+
+/** The handle that carries a sender's party identity: a merged handle's survivor, else
+ *  the handle itself. Read the party link here and the envelope on the sender. */
+export function resolvedSender<S extends { merged_into?: unknown }>(
+  sender: S | null | undefined,
+): S | NonNullable<S["merged_into"]> | null | undefined {
+  return (sender?.merged_into as NonNullable<S["merged_into"]> | null | undefined) ?? sender;
 }
 
 /** The one rule for a sender's shown name: the curated party name wins once the
@@ -35,7 +46,8 @@ export function senderDisplayName(
   sender: SenderIdentity | null | undefined,
   fallback = "",
 ): string {
-  const partyName = sender?.party_link_confirmed ? sender.party?.display_name : null;
+  const identity = resolvedSender(sender);
+  const partyName = identity?.party_link_confirmed ? identity.party?.display_name : null;
   return partyName || sender?.display_name || sender?.value || fallback;
 }
 
@@ -44,6 +56,7 @@ export function senderDisplayName(
  *  avatar the handle's own network shows, otherwise none (the caller's initials
  *  stand). Each is the server's actor-checked file URL, used as given. */
 export function senderAvatarUrl(sender: SenderIdentity | null | undefined): string | undefined {
-  const partyAvatar = sender?.party_link_confirmed ? sender.party?.display_avatar?.url : null;
+  const identity = resolvedSender(sender);
+  const partyAvatar = identity?.party_link_confirmed ? identity.party?.display_avatar?.url : null;
   return partyAvatar || sender?.avatar?.url || undefined;
 }

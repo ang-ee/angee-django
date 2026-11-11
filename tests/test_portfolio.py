@@ -25,7 +25,7 @@ class InitiativePlacementRow(AngeeDataModel):
         app_label = "portfolio"
 
 
-@pytest.mark.django_db(transaction=True)
+@pytest.mark.django_db
 @pytest.mark.parametrize("lock", [False, True])
 def test_placement_validates_current_ancestry_after_cached_initiative_moves(lock: bool) -> None:
     """A cached old path cannot admit a placement beneath the same project's ancestor."""

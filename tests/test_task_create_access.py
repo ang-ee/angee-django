@@ -10,7 +10,6 @@ import pytest
 import strawberry
 import strawberry_django
 from django.core.exceptions import ValidationError
-from django.core.management import call_command
 from django.db import connection, models
 from rebac import (
     PermissionDenied,
@@ -95,11 +94,10 @@ mutation CreateTask($project: ID!) {
 
 
 @pytest.fixture
-def task_create_case(transactional_db: None) -> Iterator[tuple[Scope, Any, Any]]:
+def task_create_case(db: None) -> Iterator[tuple[Scope, Any, Any]]:
     """Keep broad row creation permission distinct from the project's write policy."""
 
-    del transactional_db
-    call_command("rebac", "sync", verbosity=0)
+    del db
     active = backend()
     assert isinstance(active, LocalBackend)
     extra = parse_zed(

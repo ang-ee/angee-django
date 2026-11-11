@@ -78,7 +78,6 @@ def test_platform_admin_never_derives_from_django_superuser() -> None:
     assert is_platform_admin(user) is False
 
 
-@pytest.mark.django_db(transaction=True)
 def test_workflow_service_user_tracks_identity_and_deactivates_on_delete(composed_tables: None) -> None:
     """A workflow's non-login principal survives rename and retained attribution."""
     with system_context(reason="test.workflow.principal"):

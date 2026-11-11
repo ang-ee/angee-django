@@ -370,6 +370,7 @@ def test_retry_action_uses_run_permission_instead_of_engine_row_write(schema, ca
     assert WorkflowRun.system_queryset().get(pk=run.pk).status == RunStatus.RUNNING
 
 
+@pytest.mark.django_db(transaction=True)
 def test_duplicate_retry_action_records_requesting_operator(schema, callers, register_step):
     """Only explicit acknowledgment permits retry after an uncertain external effect."""
 

@@ -31,10 +31,6 @@ from angee.provenance import schema as provenance_schema
 from angee.tags.testing.models import Tag, TagAssignment
 from tests.conftest import Vendor, addon_schema
 from tests.messaging_campaign import grant, make_user
-from tests.test_messaging_access import messaging_access_schema as messaging_access_schema
-from tests.test_spaces import spaces_tables as spaces_tables
-
-pytestmark = pytest.mark.django_db(transaction=True)
 
 
 def assert_access(row, actor, action, allowed):
@@ -55,7 +51,7 @@ def _handle_history(actor, handle):
     return result_data(result)["history"]
 
 
-def test_message_reader_sees_the_sender_envelope_never_the_directory_handle(messaging_access_schema):
+def test_message_reader_sees_the_sender_envelope_never_the_directory_handle(composed_tables):
     owner, reader = (make_user(name) for name in ("sender-source-owner", "sender-source-reader"))
     with system_context(reason="source sender read fixtures"):
         party = Party.objects.create(display_name="Private sender Party", notes="Private", created_by=owner)
@@ -97,7 +93,7 @@ def test_message_reader_sees_the_sender_envelope_never_the_directory_handle(mess
     assert_access(message, reader, "read", False)
 
 
-def test_thread_transfer_requires_owner_and_clear_preserves_attribution(composed_tables, messaging_access_schema):
+def test_thread_transfer_requires_owner_and_clear_preserves_attribution(composed_tables):
     owner, editor, successor = (make_user(name) for name in ("owner", "editor", "successor"))
     with actor_context(owner):
         thread = Thread.objects.create()
@@ -115,7 +111,7 @@ def test_thread_transfer_requires_owner_and_clear_preserves_attribution(composed
     assert_access(thread, successor, "read", False)
 
 
-def test_owner_column_uses_transfer_gate_when_declared_on_the_base(composed_tables, messaging_access_schema):
+def test_owner_column_uses_transfer_gate_when_declared_on_the_base(composed_tables):
     definition = backend().schema().get_definition("messaging/thread")
     if "write__owner" not in {permission.name for permission in definition.permissions}:
         pytest.skip("Merged messaging schema has no write__owner gate; owner sweep recorded in HANDOFF.md")
@@ -134,7 +130,7 @@ def test_owner_column_uses_transfer_gate_when_declared_on_the_base(composed_tabl
     "thread", "message", "thread_attachment", "thread_follower", "thread_notification",
     "part", "message_edge", "participant", "reaction", "message_star",
 ])
-def test_dependents_inherit_parent_permissions_without_creator_access(messaging_access_schema, label):
+def test_dependents_inherit_parent_permissions_without_creator_access(composed_tables, label):
     owner, poster, reader, author, recipient = (
         make_user(name) for name in ("root-owner", "poster", "reader", "attributed-author", "recipient")
     )
@@ -185,7 +181,7 @@ def test_dependents_inherit_parent_permissions_without_creator_access(messaging_
             row._meta.get_field("owner")
 
 
-def test_channel_thread_is_ownerless_and_channel_transfer_moves_delete_access(composed_tables, messaging_access_schema):
+def test_channel_thread_is_ownerless_and_channel_transfer_moves_delete_access(composed_tables):
     owner, successor = make_user("channel-owner"), make_user("channel-successor")
     with system_context(reason="test.messaging.channel-thread"):
         vendor = Vendor.objects.create(slug="campaign", display_name="Campaign")
@@ -232,7 +228,7 @@ def test_channel_bound_thread_refuses_an_explicit_personal_owner(composed_tables
         Thread.objects.create(channel=channel, owner=owner)
 
 
-def test_cross_channel_quote_edge_reads_intersection_and_deletes_union(composed_tables, messaging_access_schema):
+def test_cross_channel_quote_edge_reads_intersection_and_deletes_union(composed_tables):
     owners = [make_user(f"endpoint-{index}") for index in range(2)]
     with system_context(reason="test.messaging.cross-channel"):
         vendor = Vendor.objects.create(slug="endpoints", display_name="Endpoints")
@@ -250,7 +246,7 @@ def test_cross_channel_quote_edge_reads_intersection_and_deletes_union(composed_
     assert_access(edge, both, "delete", False)
 
 
-def test_participant_mutation_follows_message_or_thread_membership_only(composed_tables, messaging_access_schema):
+def test_participant_mutation_follows_message_or_thread_membership_only(composed_tables):
     thread_owner, message_owner, poster = (
         make_user(name) for name in ("thread-owner", "message-owner", "thread-poster")
     )
@@ -275,7 +271,7 @@ def test_participant_mutation_follows_message_or_thread_membership_only(composed
         assert_access(participant, message_owner, action, True)
 
 
-def test_every_messaging_permission_compiles_without_enumeration(spaces_tables, messaging_access_schema,
+def test_every_messaging_permission_compiles_without_enumeration(composed_tables,
                                                               django_assert_num_queries):
     reader = make_user("sql-reader")
     models = (Thread, Message, ThreadAttachment, ThreadFollower, ThreadNotification,

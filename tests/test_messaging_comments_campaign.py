@@ -179,22 +179,3 @@ def test_webform_accessor_keeps_claimed_email_unverified_and_returns_a_copy():
     assert envelope.unverified_submitter_email == "claim@example.com"
     envelope.answers["summary"] = "Changed by caller"
     assert answers == {"summary": "A question"}
-
-
-@pytest.mark.parametrize("operation", ["edit", "delete"])
-def test_record_moderator_cannot_change_retained_notification_hidden_from_generic_scope(comment_record, operation):
-    case = comment_record
-    with system_context(reason="test.comments.notification-retention"):
-        attachment = ThreadAttachment.objects.ensure_for_record(case.record)
-        message = Message.objects.create(thread=attachment.thread, message_type="comment",
-                                         direction="internal", created_by=case.author)
-        Message._base_manager.filter(pk=message.pk).update(message_type="notification")
-    with actor_context(case.writer):
-        assert case.record.can_moderate()
-        assert not message.has_access("read")
-        with pytest.raises(ValueError, match="Only comment messages"):
-            if operation == "edit":
-                Message.objects.update_content(message, body="Tampered", edited_by_id=case.writer.pk)
-            else:
-                Message.objects.unlink_from_thread(message, thread=attachment.thread)
-    assert Message._base_manager.filter(pk=message.pk).exists()

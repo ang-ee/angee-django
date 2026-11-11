@@ -3,14 +3,11 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
 
 import pytest
 from django.apps import apps
 from django.contrib.auth.models import AnonymousUser
 from django.core.exceptions import ValidationError
-from django.core.management import call_command
-from django.test import override_settings
 from rebac import (
     PermissionDenied,
     RelationshipTuple,
@@ -23,8 +20,6 @@ from rebac import (
 from rebac.backends import backend
 from rebac.evaluator import evaluator_scope
 
-from angee.base.build import extension_source_map
-from angee.base.testing.permissions import emit_permissions, installed_field_owners
 from angee.messaging.testing.models import Channel, Message, Part, Thread, ThreadAttachment
 from angee.tags.testing.models import Tag, TagAssignment
 from tests.chatterdemo.models import ChatterDoc
@@ -32,10 +27,10 @@ from tests.conftest import File, Vendor
 from tests.test_messaging import _storage_drive
 
 
-def test_channel_annotator_tags_readable_conversations_only(messaging_access_schema: str) -> None:
+def test_channel_annotator_tags_readable_conversations_only(composed_tables: str) -> None:
     """Tag access requires read and never lends content or transport control."""
 
-    del messaging_access_schema
+    del composed_tables
     with system_context(reason="tests.messaging.annotation_setup"):
         users = apps.get_model("iam", "User").objects
         owner = users.create_user(username="annotation-owner")
@@ -94,29 +89,7 @@ def test_channel_annotator_tags_readable_conversations_only(messaging_access_sch
         TagAssignment.objects.attach("messaging/message", direct.sqid, [tag.sqid])
 
 
-@pytest.fixture(params=("denormalized", "registry"))
-def messaging_access_schema(request: pytest.FixtureRequest, tmp_path: Path, transactional_db: None) -> Any:
-    """Synchronize messaging's field-backed access chain in either local store."""
-
-    configs = list(apps.get_app_configs())
-    originals = {config: getattr(config, "rebac_schema", None) for config in configs}
-    sources = extension_source_map(configs, field_owners=installed_field_owners(configs))
-    runtime = tmp_path / "messaging-access-runtime"
-    emit_permissions(configs, runtime, sources=sources)
-    try:
-        with override_settings(REBAC_LOCAL_BACKEND_STORAGE=request.param):
-            call_command("rebac", "sync", verbosity=0)
-            yield request.param
-    finally:
-        for config, original in originals.items():
-            if original is None:
-                if hasattr(config, "rebac_schema"):
-                    delattr(config, "rebac_schema")
-            else:
-                config.rebac_schema = original
-
-
-def test_record_read_reaches_only_chatter_and_compiles_dependents(messaging_access_schema: str) -> None:
+def test_record_read_reaches_only_chatter_and_compiles_dependents(composed_tables: str) -> None:
     """Record readers inherit read alone, through the filtered chatter attachment."""
 
     with system_context(reason="tests.messaging.record_arm"):
@@ -165,14 +138,13 @@ def test_record_read_reaches_only_chatter_and_compiles_dependents(messaging_acce
         for name in ("ThreadFollower", "ThreadNotification", "Part", "Reaction"):
             model = apps.get_model("messaging", name)
             sql = model.objects.with_actor(reader).scoped().query.sql_with_params()[0]
-            assert "SELECT" in sql, (messaging_access_schema, name)
+            assert "SELECT" in sql, name
 
 
-@pytest.mark.django_db(transaction=True)
-def test_channel_owner_reaches_threads_and_messages(messaging_access_schema: str) -> None:
+def test_channel_owner_reaches_threads_and_messages(composed_tables: str) -> None:
     """Person and service owners inherit channel access through both message links."""
 
-    del messaging_access_schema
+    del composed_tables
     user_model = apps.get_model("iam", "User")
     person = user_model.objects.create_user(username="message-channel-person", kind="person")
     service = user_model.objects.create_user(username="message-channel-service", kind="service")
@@ -270,13 +242,12 @@ def test_channel_owner_reaches_threads_and_messages(messaging_access_schema: str
         assert type(row).objects.with_actor(outsider).with_action("delete").scoped().filter(pk=row.pk).exists()
 
 
-@pytest.mark.django_db(transaction=True)
 def test_channel_reader_reads_only_message_attachment_file_content(
-    messaging_access_schema: str, tmp_path: Path,
+    composed_tables: str, tmp_path: Path,
 ) -> None:
     """A channel reader reaches referenced bytes without a drive grant."""
 
-    del messaging_access_schema
+    del composed_tables
     user_model = apps.get_model("iam", "User")
     owner = user_model.objects.create_user(username="attachment-owner", kind="person")
     reader = user_model.objects.create_user(username="attachment-reader", kind="service")

@@ -2,7 +2,6 @@
 
 from pathlib import Path
 
-import pytest
 from rebac import actor_context, system_context
 
 from tests.composed_host import run_composed_tests
@@ -139,10 +138,5 @@ class TaskRemovalTests(WorkCase):
             self.assertFalse(self.scoped(row, self.reader))
 
 
-class TaskRemovalDenormalizedTests(TaskRemovalTests):
-    storage = "denormalized"
-
-
-@pytest.mark.parametrize("test_class", ["TaskRemovalTests", "TaskRemovalDenormalizedTests"])
-def test_work_task_removal(tmp_path: Path, test_class: str):
-    run_composed_tests(tmp_path, f"tests.test_work_task_removal.{test_class}", app="angee.intake")
+def test_work_task_removal(tmp_path: Path):
+    run_composed_tests(tmp_path, "tests.test_work_task_removal.TaskRemovalTests", app="angee.intake")

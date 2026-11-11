@@ -16,15 +16,8 @@ MANAGERS = {"owner", "column_owner", "administrator"}
 READERS = {*ROLES, "column_owner", "administrator"}
 
 
-@pytest.fixture(params=("denormalized", "registry"))
-def spaces_storage(request, settings, spaces_tables):
-    """Reuse spaces' composed schema and exercise each native relationship store."""
-    settings.REBAC_LOCAL_BACKEND_STORAGE = request.param
-    return request.param
-
-
 @pytest.fixture
-def roster(spaces_storage):
+def roster(composed_tables):
     """Keep column ownership, roster authority, and inactive seats independent."""
     actors = {}
     people = {}

@@ -1,11 +1,9 @@
-"""Opt-in pytest support: the statement principals parties declares.
+"""Opt-in pytest support kept for consumers that request ``statement_sources``.
 
 Admission is a schema fact fed by seeded install resources (``provenance.Rule``
-rows and their role grants); the runtime only reads them, and a stack loads them
-with its install tier. A test database starts without them, so a host whose tests
-reach a statement source loads them after its REBAC sync: the framework's source
-and composed hosts call :func:`load_statement_sources`; a consumer host lists this
-module in ``pytest_plugins`` and requests the ``statement_sources`` fixture.
+rows and their role grants). ``angee.provenance.testing.fixtures`` loads every
+installed addon's principals into the session baseline, so this fixture finds
+parties' already loaded; it remains until its consumers stop requesting it.
 """
 
 from __future__ import annotations

@@ -19,9 +19,7 @@ from angee.projects.testing.models import Task
 from tests.proposals_campaign import ProposalCampaign, as_actor
 from tests.proposals_campaign import campaign as campaign
 from tests.proposals_campaign import campaign_schema as campaign_schema
-from tests.proposals_campaign import campaign_store as campaign_store
 from tests.proposals_models import Proposal, Round
-from tests.test_project_access import project_access_schema as project_access_schema
 
 # django-zed-rebac owns these fixed policy reads. Application row
 # reads and roster expansion have separate exact guards below.
@@ -252,6 +250,7 @@ def test_single_assignee_stops_waiting_after_posting_and_other_threads_do_not_co
         assert as_actor(question, manager).clarification_waiting() == []
 
 
+@pytest.mark.django_db(transaction=True)
 @pytest.mark.skipif(connection.vendor != "postgresql", reason="Native PostgreSQL JSON aggregation is required.")
 def test_postgresql_waiting_projection_executes_with_empty_and_populated_recipients(campaign: ProposalCampaign) -> None:
     c = campaign

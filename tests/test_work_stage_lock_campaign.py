@@ -11,9 +11,10 @@ from tests.work_campaign import CreateTask, make_task
 from tests.work_campaign import productivity_create_case as productivity_create_case
 from tests.work_campaign import work_case as work_case
 
-pytestmark = pytest.mark.skipif(
-    connection.vendor != "postgresql", reason="PostgreSQL work stage row-lock contract",
-)
+pytestmark = [
+    pytest.mark.skipif(connection.vendor != "postgresql", reason="PostgreSQL work stage row-lock contract"),
+    pytest.mark.django_db(transaction=True),
+]
 
 
 def test_stage_save_holds_source_lock_until_the_write_finishes(work_case):

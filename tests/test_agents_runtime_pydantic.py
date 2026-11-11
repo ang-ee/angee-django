@@ -61,6 +61,8 @@ from angee.agents_runtime_pydantic.toolsets import _transport_for
 from angee.integrate.credentials import CredentialKind
 from tests.conftest import create_platform_admin
 
+pytestmark = pytest.mark.django_db(transaction=True)
+
 
 class _Credential:
     """Minimal credential double exercising the public SDK backend seam."""

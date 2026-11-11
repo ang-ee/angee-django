@@ -17,7 +17,7 @@ from tests.test_workflows_run_graph import graph_nodes
 
 
 @pytest.fixture
-def linked_decision(execution, register_step, composed_permissions):
+def linked_decision(execution, register_step, composed_tables):
     """Compose permission contributions and reach a real review's decision wait."""
 
     admin, _sent = execution

@@ -65,7 +65,6 @@ def _repo_names() -> set[str]:
         return set(Repository.objects.values_list("name", flat=True))
 
 
-@pytest.mark.django_db(transaction=True)
 def test_discover_repositories_reconciles_and_prunes(composed_tables: None) -> None:
     """discoverRepositories inventories every repo and prunes ones that vanished."""
 
@@ -82,7 +81,6 @@ def test_discover_repositories_reconciles_and_prunes(composed_tables: None) -> N
     assert _repo_names() == {"acme/widgets"}
 
 
-@pytest.mark.django_db(transaction=True)
 def test_import_repository_adds_one_without_pruning(composed_tables: None) -> None:
     """addRepository inventories the picked repo and leaves the others in place."""
 
@@ -95,7 +93,6 @@ def test_import_repository_adds_one_without_pruning(composed_tables: None) -> No
     assert _repo_names() == {"acme/widgets", "acme/gadgets"}
 
 
-@pytest.mark.django_db(transaction=True)
 def test_search_repositories_is_the_typeahead(composed_tables: None) -> None:
     """searchRepositories returns name-matching host candidates for the typeahead."""
 
@@ -104,7 +101,6 @@ def test_search_repositories_is_the_typeahead(composed_tables: None) -> None:
     assert [candidate.name for candidate in vcs.search_repositories("widget")] == ["acme/widgets"]
 
 
-@pytest.mark.django_db(transaction=True)
 def test_search_repositories_uses_backend_declared_scope_key(composed_tables: None) -> None:
     """The VCS bridge asks its backend which config key scopes repository search."""
 
@@ -124,7 +120,6 @@ def test_search_repositories_uses_backend_declared_scope_key(composed_tables: No
     assert [candidate.name for candidate in vcs.search_repositories("widget")] == ["other/widgets"]
 
 
-@pytest.mark.django_db(transaction=True)
 def test_source_refresh_materializes_templates(composed_tables: None) -> None:
     """A template source refresh walks the tree and upserts Template rows."""
 
@@ -141,7 +136,6 @@ def test_source_refresh_materializes_templates(composed_tables: None) -> None:
     assert (template.kind, template.name, template.path) == ("workspace", "Dev", "templates/dev")
 
 
-@pytest.mark.django_db(transaction=True)
 def test_failed_source_completion_rolls_back_template_reconciliation(
     composed_tables: None,
     monkeypatch: pytest.MonkeyPatch,
@@ -169,7 +163,6 @@ def test_failed_source_completion_rolls_back_template_reconciliation(
         assert Source.objects.get(pk=source.pk).last_synced_at is None
 
 
-@pytest.mark.django_db(transaction=True)
 def test_run_sync_refreshes_sources_and_records_lifecycle(composed_tables: None) -> None:
     """The Bridge sync owner refreshes sources and records lifecycle telemetry."""
 
@@ -193,7 +186,6 @@ def test_run_sync_refreshes_sources_and_records_lifecycle(composed_tables: None)
     assert vcs.next_sync_at == vcs.last_sync_completed_at + timedelta(seconds=vcs.poll_interval)
 
 
-@pytest.mark.django_db(transaction=True)
 def test_local_backend_materializes_templates_through_the_source_flow(composed_tables: None, tmp_path: Any) -> None:
     """A `local`-backed integration inventories a working tree into Template rows.
 
@@ -307,7 +299,6 @@ def test_materialized_marker_policy_preserves_path_boundaries_and_ignores_jj(tmp
         source_path(tmp_path, "../outside")
 
 
-@pytest.mark.django_db(transaction=True)
 def test_discovery_uses_one_resolved_revision_for_tree_and_blobs(composed_tables, monkeypatch):
     del composed_tables
     observed = []

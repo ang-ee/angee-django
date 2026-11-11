@@ -890,7 +890,7 @@ class FileSourceThreads(Composable, extends="storage.File"):
         abstract = True
 
 
-class ThreadFollower(AuditMixin, AngeeDataModel, concrete=True):
+class ThreadFollower(AuditMixin, HistoryMixin, AngeeDataModel, concrete=True):
     """A party's per-thread subscription row — subscription policy plus read receipt.
 
     The one row per ``(thread, party)``: it carries how the follower wants updates
@@ -902,10 +902,12 @@ class ThreadFollower(AuditMixin, AngeeDataModel, concrete=True):
     thread follow (a room membership without a host record).
     This cursor records progress through the record's messages; it does not
     acknowledge individual inbox items, which own ``ThreadNotification.read_at``.
+    History tracks the subscription, not the receipt: a read is not a version.
     """
 
     NotificationPolicy = NotificationPolicy
 
+    history = ModelHistory(inherit=True, excluded_fields=("last_read_message",))
     sqid_prefix = "tfl_"
     thread = models.ForeignKey(
         "messaging.Thread",
@@ -1111,7 +1113,12 @@ class Message(
     Moderation is trash (:class:`~angee.base.models.trash.TrashMixin`): a trashed
     message is withheld from every reader but channel managers and admins, and
     record chatter leaves it out of every read but its moderators' removed list.
+
+    A handle merge keeps a message on the handle it was sent from; readers
+    resolve ``sender`` through the handle's merge redirect.
     """
+
+    merge_policies = {"sender": MergePolicy.KEEP}
 
     _inbox_attachment: ThreadAttachment | None = None
     """Authorized notification context set by the notification read owner."""
@@ -2132,11 +2139,11 @@ class Participant(AuditMixin, AngeeDataModel, concrete=True):
     The raw to/cc/bcc stays in ``Message.metadata`` as the lossless source; this is
     its queryable projection, so the inbox can group/filter by participant.
     One row states one fact: a handle's role on a message, or, without a message,
-    in a thread. A merge moving a handle's rows onto one already stating the same
-    fact drops the moved copy (``merge_identity``).
+    in a thread. A handle merge keeps the row on the handle it names; readers
+    resolve ``handle`` through the handle's merge redirect.
     """
 
-    merge_identity = (("message", "handle", "role"), ("thread", "handle", "role"))
+    merge_policies = {"handle": MergePolicy.KEEP}
 
     class ParticipantRole(models.TextChoices):
         """The RFC-5322 envelope role of a participant."""
@@ -2197,7 +2204,7 @@ class Participant(AuditMixin, AngeeDataModel, concrete=True):
         return f"{self.handle_id} ({self.role})"
 
 
-class Reaction(AuditMixin, AngeeDataModel, concrete=True):
+class Reaction(AuditMixin, HistoryMixin, AngeeDataModel, concrete=True):
     """One attributed reaction to a message, keyed by the reactor's parties ``Handle``.
 
     This is the single per-actor reaction store: ``MessageManager.set_reaction``

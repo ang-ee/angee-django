@@ -161,10 +161,10 @@ def test_vault_owner_labels_batch_distinct_owners(composed_tables: None) -> None
     assert rows and all(row.username is None for row in rows)
 
 
-def test_user_display_labels_batches_and_primes_request_memo(transactional_db: Any) -> None:
+def test_user_display_labels_batches_and_primes_request_memo(db: Any) -> None:
     """The batch label owner resolves many user ids with one elevated read."""
 
-    del transactional_db
+    del db
     alice = create_user("batch-alice")
     bob = create_user("batch-bob")
     request = RequestFactory().get("/")

@@ -19,7 +19,6 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import pytest
-from django.core.management import call_command
 from django.db import connection
 from django.test.utils import CaptureQueriesContext
 from rebac import (
@@ -57,9 +56,8 @@ _AT = datetime(2026, 1, 1, 12, 0, tzinfo=timezone.utc)
 
 @pytest.fixture
 def posts_tables() -> Iterator[None]:
-    """Synchronize permissions and reset the feed backend after each test."""
+    """Reset the feed backend after each test."""
 
-    call_command("rebac", "sync", verbosity=0)
     try:
         yield
     finally:
@@ -78,7 +76,7 @@ def _feed(slug: str = "feed") -> Any:
     return make_integration(slug, model=Feed, backend_class="feed", feed_backend_class="stub")
 
 
-@pytest.mark.django_db(transaction=True)
+@pytest.mark.django_db
 def test_a_feed_is_an_import_statement_source(posts_tables: None) -> None:
     """What an import lands from a feed is the feed's assertion: its integration classifies as IMPORT."""
 
@@ -117,7 +115,7 @@ def _post(
     )
 
 
-@pytest.mark.django_db(transaction=True)
+@pytest.mark.django_db
 def test_feed_is_a_channel_with_one_concrete_bridge_kind(posts_tables: None) -> None:
     """The parent carries message access while Feed remains the sync capability."""
 
@@ -177,7 +175,7 @@ def test_due_feed_is_queued_once_as_feed(posts_tables: None, monkeypatch: pytest
     )
 
 
-@pytest.mark.django_db(transaction=True)
+@pytest.mark.django_db
 def test_integration_feed_children_prefetch_in_fixed_queries(posts_tables: None) -> None:
     """Adding Feed rows does not add a child lookup per Integration row."""
 
@@ -207,7 +205,7 @@ def test_integration_feed_children_prefetch_in_fixed_queries(posts_tables: None)
 # --- Quota ledger ---------------------------------------------------------------
 
 
-@pytest.mark.django_db(transaction=True)
+@pytest.mark.django_db
 def test_quota_consume_debits_the_budget(posts_tables: None) -> None:
     """consume() debits quota_used on the explicitly opened scope period."""
 
@@ -226,7 +224,7 @@ def test_quota_consume_debits_the_budget(posts_tables: None) -> None:
     assert ledger.last_updated == _AT
 
 
-@pytest.mark.django_db(transaction=True)
+@pytest.mark.django_db
 def test_quota_consume_refuses_when_exhausted_and_leaves_ledger_untouched(posts_tables: None) -> None:
     """A spend that would exceed the budget returns False without debiting."""
 
@@ -250,7 +248,7 @@ def test_quota_consume_refuses_when_exhausted_and_leaves_ledger_untouched(posts_
     assert exhausted == 10000
 
 
-@pytest.mark.django_db(transaction=True)
+@pytest.mark.django_db
 def test_quota_openers_converge_on_the_window_boundary(
     posts_tables: None,
 ) -> None:
@@ -282,7 +280,7 @@ def test_quota_openers_converge_on_the_window_boundary(
     assert Quota._base_manager.filter(integration=integration).count() == 1
 
 
-@pytest.mark.django_db(transaction=True)
+@pytest.mark.django_db
 def test_quota_consume_uses_the_backend_gated_lock_contract(
     posts_tables: None,
     monkeypatch: pytest.MonkeyPatch,
@@ -312,7 +310,7 @@ def test_quota_consume_uses_the_backend_gated_lock_contract(
     assert locked_pks == [ledger.pk]
 
 
-@pytest.mark.django_db(transaction=True)
+@pytest.mark.django_db
 def test_quota_read_derives_from_its_integration(posts_tables: None) -> None:
     """An integration owner reads its quota even when the system-created row has no creator."""
 
@@ -335,7 +333,7 @@ def test_quota_read_derives_from_its_integration(posts_tables: None) -> None:
 # --- Following edge -------------------------------------------------------------
 
 
-@pytest.mark.django_db(transaction=True)
+@pytest.mark.django_db
 def test_feed_follow_opens_the_edge_and_is_idempotent(posts_tables: None) -> None:
     """follow() opens one dated interval and re-following is a no-op on the same row."""
 
@@ -353,7 +351,7 @@ def test_feed_follow_opens_the_edge_and_is_idempotent(posts_tables: None) -> Non
     assert active == [first]
 
 
-@pytest.mark.django_db(transaction=True)
+@pytest.mark.django_db
 def test_merging_two_handles_that_follow_a_feed_keeps_one_follow_spanning_both(posts_tables: None) -> None:
     """The kept follow takes the earliest start and stays open while either was: one subscription, not two."""
 
@@ -375,7 +373,7 @@ def test_merging_two_handles_that_follow_a_feed_keeps_one_follow_spanning_both(p
     ]
 
 
-@pytest.mark.django_db(transaction=True)
+@pytest.mark.django_db
 def test_feed_unfollow_closes_the_interval_then_follow_reopens_it(posts_tables: None) -> None:
     """unfollow() closes the open interval (retained), and follow() reopens the row."""
 
@@ -435,7 +433,7 @@ def test_feed_sync_overlays_post_metrics_and_public_payload(posts_tables: None) 
     assert thread.subject_url == "https://youtu.be/p1"
 
 
-@pytest.mark.django_db(transaction=True)
+@pytest.mark.django_db
 def test_posts_land_is_the_shared_public_overlay_owner(posts_tables: None) -> None:
     """Archive clients can land the same public shape without a Feed backend."""
 
@@ -456,7 +454,7 @@ def test_posts_land_is_the_shared_public_overlay_owner(posts_tables: None) -> No
     assert message.is_original_post is True
 
 
-@pytest.mark.django_db(transaction=True)
+@pytest.mark.django_db
 def test_reply_counts_report_measured_posts_of_one_channel_and_omit_unmeasured_ones(posts_tables: None) -> None:
     """A measured zero is reported; a post without metrics and another channel's post are absent."""
 
@@ -482,7 +480,7 @@ def test_reply_counts_report_measured_posts_of_one_channel_and_omit_unmeasured_o
     assert counts == {"measured": 3, "zero": 0}
 
 
-@pytest.mark.django_db(transaction=True)
+@pytest.mark.django_db
 def test_provider_visibility_restores_only_provider_stamped_trash(posts_tables: None) -> None:
     """A provider unhide restores the trash it stamped, never an operator's later removal."""
 

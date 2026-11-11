@@ -96,6 +96,7 @@ def test_person_email_lookup_ignores_services_empty_keys_and_missing_accounts(db
         assert User.objects.person_for_email(email) is None
 
 
+@pytest.mark.django_db(transaction=True)
 def test_ambiguous_lookup_refuses_with_code_only_and_creation_does_not_add_a_third(legacy_person_emails, iam_admin):
     for username in ("legacy-a", "legacy-b"):
         User.objects.create_user(username, "ambiguous@example.com")

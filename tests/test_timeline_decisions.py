@@ -17,8 +17,6 @@ from angee.timeline.reading import Timeline
 from tests.conftest import create_platform_admin, create_user, vault_for
 from tests.test_timeline import read_timeline, timeline_entries
 
-pytestmark = pytest.mark.django_db(transaction=True)
-
 
 @pytest.fixture(autouse=True)
 def kinds(settings):
@@ -122,6 +120,7 @@ def test_unassigned_attention_uses_answer_permission_without_claiming_others_ass
     assert read_timeline(subject, reviewer)["timeline_attention"] == 1
 
 
+@pytest.mark.django_db(transaction=True)
 def test_subscribers_read_committed_sources_at_the_change_broadcast(people) -> None:
     subject = people[3]
     seen = []
@@ -146,7 +145,7 @@ def test_withdraw_publishes_the_owner_update_and_clears_attention(people) -> Non
 
 
 @pytest.mark.parametrize("both_records", [False, True])
-def test_merge_keeps_one_occurrence_on_the_survivor(composed_permissions, both_records) -> None:
+def test_merge_keeps_one_occurrence_on_the_survivor(composed_tables, both_records) -> None:
     requester = create_platform_admin("timeline-merge-owner")
     reviewer = create_user("timeline-merge-reviewer")
     with actor_context(requester):
@@ -171,6 +170,7 @@ def test_merge_keeps_one_occurrence_on_the_survivor(composed_permissions, both_r
     assert len(timeline_entries(survivor, reviewer)) == 1
 
 
+@pytest.mark.django_db(transaction=True)
 def test_rollback_discards_invalidations_and_source_rows(people):
     _, reviewer, _, subject = people
     with capture_broadcasts() as broadcasts, transaction.atomic():
@@ -187,7 +187,7 @@ def test_rollback_discards_invalidations_and_source_rows(people):
     assert timeline_entries(subject, reviewer)[0].detail == "Complete"
 
 
-def test_union_uses_one_global_order_and_cursor_across_kinds(people, settings, composed_permissions, activity_catalog):
+def test_union_uses_one_global_order_and_cursor_across_kinds(people, settings, composed_tables, activity_catalog):
     requester, reviewer, bystander, subject = people
     settings.ANGEE_TIMELINE_KINDS = [
         "angee.decisions.timeline.timeline_kinds", "angee.projects.timeline.timeline_kinds",

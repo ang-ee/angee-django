@@ -25,7 +25,7 @@ from tests.extcontrib.models import Record
 
 
 @pytest.fixture
-def concerned_question(composed_permissions):
+def concerned_question(composed_tables):
     admin = create_platform_admin("concern-admin")
     writer, reader, outsider = (create_user(name) for name in ("concern-writer", "concern-reader", "concern-outsider"))
     with actor_context(admin):
@@ -79,7 +79,7 @@ def test_read_and_can_act_follow_the_typed_concern(schema, concerned_question, v
         assert question.verdict == ["confirm"] and question.answered_by_id == actor.pk
 
 
-def test_decide_does_not_return_an_answer_to_an_actor_without_decision_read(schema, composed_permissions):
+def test_decide_does_not_return_an_answer_to_an_actor_without_decision_read(schema, composed_tables):
     actor = create_user("share-without-question-read")
     Need = apps.get_model("intake", "Need")
     with actor_context(actor):

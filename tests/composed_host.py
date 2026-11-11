@@ -502,8 +502,7 @@ def run(args: argparse.Namespace) -> None:
                                 # schema its flush emptied, so the principal bootstrap finds it synced
                                 # and only loads the Rule/Seed rows instead of syncing a second time.
                                 if isinstance(test, TransactionTestCase):
-                                    load_statement_sources("parties")
-                                    load_statement_sources("messaging")
+                                    load_statement_sources()
 
                             setattr(test, "setUp", set_up)
 

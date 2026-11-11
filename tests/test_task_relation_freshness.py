@@ -86,8 +86,8 @@ def test_inherited_constraints_are_local_to_concrete_tables(
 
 
 @pytest.fixture
-def task_relations(transactional_db: None) -> Iterator[Scope]:
-    del transactional_db
+def task_relations(db: None) -> Iterator[Scope]:
+    del db
     with system_context(reason="tests.task_relation_freshness.setup"):
         scope = Scope.objects.create(name="Task scope")
     yield scope

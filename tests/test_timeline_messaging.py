@@ -15,8 +15,6 @@ from tests.messaging_campaign import grant
 from tests.test_messaging_source_threads import sourced as sourced  # noqa: F401 -- fixture
 from tests.test_timeline import read_timeline, timeline_entries
 
-pytestmark = pytest.mark.django_db(transaction=True)
-
 
 @pytest.fixture(autouse=True)
 def kinds(settings):

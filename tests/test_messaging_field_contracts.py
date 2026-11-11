@@ -1,6 +1,5 @@
 """Messaging composes the canonical model-label field contract."""
 
-import pytest
 from rebac import system_context
 
 from angee.base.fields import ModelLabelField
@@ -8,7 +7,6 @@ from angee.messaging.managers import message_subtype_options
 from angee.messaging.testing.models import MessageSubtype
 
 
-@pytest.mark.django_db(transaction=True)
 def test_subtype_scope_boundary_cleanup_precedes_field_canonicalization(composed_tables: None) -> None:
     del composed_tables
     with system_context(reason="messaging field owner regression"):
@@ -18,7 +16,6 @@ def test_subtype_scope_boundary_cleanup_precedes_field_canonicalization(composed
         assert isinstance(MessageSubtype._meta.get_field("model_label"), ModelLabelField)
 
 
-@pytest.mark.django_db(transaction=True)
 def test_subtype_resolve_creates_once_and_keeps_the_first_declared_labels(composed_tables: None) -> None:
     """Built-in keys take their shipped labels; other keys their supplied or humanized ones, once."""
 

@@ -25,7 +25,6 @@ from tests.iam_campaign import Person
 from tests.iam_campaign import iam_admin as iam_admin
 from tests.iam_campaign import legacy_person_emails as legacy_person_emails
 from tests.test_iam_graphql import _schema
-from tests.test_spaces import spaces_tables as spaces_tables
 
 User = get_user_model()
 CREATE = """mutation($object: users_insert_input!) {
@@ -85,6 +84,7 @@ def test_graphql_duplicate_creation_returns_only_account_exists_code(iam_admin):
     assert not User._base_manager.filter(username="duplicate").exists()
 
 
+@pytest.mark.django_db(transaction=True)
 def test_ambiguous_email_refusal_crosses_graphql_with_only_its_wire_code(legacy_person_emails):
     for username in ("private-first", "private-second"):
         User.objects.create_user(username, "ambiguous@example.com")
@@ -164,7 +164,7 @@ def test_graphql_current_and_real_user_and_preview_list_follow_request_identity(
 
 
 @pytest.mark.parametrize("role,permitted", [("owner", True), ("moderator", True), ("member", False), ("viewer", False)])
-def test_const_manager_role_tracks_roster_create_and_issue_but_never_preview(spaces_tables, role, permitted):
+def test_const_manager_role_tracks_roster_create_and_issue_but_never_preview(composed_tables, role, permitted):
     actor = User.objects.create_user("roster-actor")
     target = User.objects.create_user("target")
     with system_context(reason="test.role.roster"):
