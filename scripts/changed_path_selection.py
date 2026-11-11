@@ -6,9 +6,11 @@ module, directly or through other modules, in grimp's import graph (the one
 ``lint-imports`` checks). A string in a test file naming a module or package (a
 composed-host label or app, a ``pytest_plugins`` entry, a patch target) counts as
 importing it and its submodules. A conftest loads for every test beneath it, like
-the installed apps, so importing a helper from it adds no edge. A changed input
-every test reads without importing it prints the configured ``testpaths`` instead:
-a full run. Other files, such as docs and web code, reach no Python test.
+the installed apps, so importing a helper from it adds no edge. A changed template
+reaches the test files that join a path onto the repository's ``templates``
+directory, which render or read it. A changed input every test reads without
+importing it prints the configured ``testpaths`` instead: a full run. Other files,
+such as docs and web code, reach no Python test.
 """
 
 from __future__ import annotations
@@ -29,6 +31,7 @@ FULL_RUN = (
     "*/resources/*.yaml", "*/resources/*.yml",
 )
 REFERENCE = re.compile(r"""["']((?:angee|example|tests)(?:\.\w+)+)""")
+TEMPLATE_READER = re.compile(r"""/\s*["']templates[/"']""")
 
 
 def module_name(path: str) -> str:
@@ -43,7 +46,8 @@ def reached(changed: list[str]) -> list[str]:
     """Return the test files the changed paths reach, or the ``testpaths`` for a full run."""
 
     pytest = tomllib.loads((ROOT / "pyproject.toml").read_text())["tool"]["pytest"]["ini_options"]
-    if any(fnmatch(path if "/" in glob else PurePath(path).name, glob) for glob in FULL_RUN for path in changed):
+    sources = [path for path in changed if not path.startswith("templates/")]
+    if any(fnmatch(path if "/" in glob else PurePath(path).name, glob) for glob in FULL_RUN for path in sources):
         return pytest["testpaths"]
     graph = grimp.build_graph("angee", "example", "tests", cache_dir=None, exclude_type_checking_imports=True)
     for module in [module for module in graph.modules if module.rpartition(".")[2] == "conftest"]:
@@ -54,15 +58,19 @@ def reached(changed: list[str]) -> list[str]:
         for pattern in pytest["python_files"]
         for path in sorted((ROOT / root).rglob(pattern))
     }
+    reach = set()
     for importer, path in tests.items():
-        for reference in REFERENCE.findall((ROOT / path).read_text()):
+        text = (ROOT / path).read_text()
+        if len(sources) < len(changed) and TEMPLATE_READER.search(text):
+            reach.add(importer)
+        for reference in REFERENCE.findall(text):
             while reference not in graph.modules and "." in reference:
                 reference = reference.rpartition(".")[0]
             if "." in reference:
                 for imported in {reference, *graph.find_descendants(reference)}:
                     graph.add_import(importer=importer, imported=imported)
-    modules = {module_name(path) for path in changed if path.endswith(".py")} & graph.modules
-    reach = modules.union(*(graph.find_downstream_modules(module) for module in modules))
+    modules = {module_name(path) for path in sources if path.endswith(".py")} & graph.modules
+    reach |= modules.union(*(graph.find_downstream_modules(module) for module in modules))
     return sorted(tests[module] for module in reach & tests.keys())
 
 

@@ -487,10 +487,11 @@ so whole suites report after a merge instead of gating it. The current tiers are
   files [`changed_path_selection.py`](../scripts/changed_path_selection.py) picks
   from the merge commit's diff against its base: changed test files and the test
   files that import a changed module through the import graph `lint-imports`
-  checks. A change to an input every test reads without importing it
+  checks; a change under `templates/` selects the template contract tests that
+  render or read them. A change to an input every test reads without importing it
   (dependencies, conftests and the shared test plugins, settings and autoconfig,
   `*.zed` schemas, resource YAML, the workflows, `scripts/`) selects the whole
-  suite; docs, web code and templates select no Python test. What the app
+  suite; docs and web code select no Python test. What the app
   registry, signals or composition connect without an import surfaces in the whole
   suite on `main`.
 - **PostgreSQL:** on `main` and releases, in six groups of its own beside the

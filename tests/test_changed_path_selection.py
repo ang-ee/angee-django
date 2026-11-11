@@ -26,6 +26,13 @@ def test_a_change_reaches_its_test_files_their_importers_and_composed_profiles()
     assert "tests/test_documentation_contracts.py" not in tests
 
 
+def test_a_template_reaches_the_tests_that_render_or_read_the_templates() -> None:
+    tests = reached("templates/projects/web/template/settings.py")
+
+    assert {"tests/test_stack_templates.py", "tests/test_addon_templates.py", "tests/test_host_build.py"} <= set(tests)
+    assert "tests" not in tests
+
+
 @pytest.mark.parametrize("changed", ["tests/conftest.py", "src/angee/storage/permissions.zed", "uv.lock"])
 def test_an_input_every_test_reads_selects_the_full_suite(changed: str) -> None:
     assert reached(changed) == ["tests", "src/angee/resources/tests"]
