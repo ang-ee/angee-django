@@ -101,7 +101,9 @@ test("a model-scoped role opens Share without direct grant relations", async () 
   const role = { id: "round.responder", label: "Responder", subjectResource: "iam.User", offered: true };
   const state = { role, people: [], add: async () => true, remove: async () => undefined };
   function ResponderRole(): null { useAccessRole(role.id, state); return null; }
-  const containers = containersFromChildren([], { "notes.Note#access-roles": { "test.responder": { content: ResponderRole } } });
+  // IAM's manifest declares its access containers per model; a runtime resolves only declared addresses.
+  const containers = containersFromChildren([{ address: "iam#access-roles", models: true }, { address: "iam#access-visibility", models: true }],
+    { "notes.Note#access-roles": { "test.responder": { content: ResponderRole } } });
   renderShare(<OnRecord record={{ title: "Welcome", permissions: [] }}><ShareRecordChrome /></OnRecord>, { resource: note([]), containers });
   fireEvent.click(await screen.findByRole("button", { name: "Share" }));
   expect((await screen.findAllByText("Responder")).length).toBeGreaterThan(0);
