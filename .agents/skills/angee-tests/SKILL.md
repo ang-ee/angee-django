@@ -105,7 +105,8 @@ Commands and roots are in [Python contracts](../../../docs/checks.md#python-and-
 ## Pitfalls
 
 - An abstract model imported while its app is absent keeps `app_label=None` for the whole process; the roster comment in `INSTALLED_APPS` of `tests/settings.py` exists for that reason.
-- Patch an inherited manager method on `type(manager)`, not the instance; `db_manager()` copies lose an instance patch ([environment and checks](references/environment.md)).
+- Script a boundary with its owner's fake, never patch internals: `mock_transport` and `request_fields` (`src/angee/integrate/testing/http.py`) for outbound HTTP, `OidcProvider` (`src/angee/iam_integrate_oidc/testing/provider.py`) for OAuth and OIDC, `ImapServer` and `imap_server` (`src/angee/messaging_integrate_imap/testing/server.py`) for IMAP, `connection.execute_wrapper` for a database failure. `tests/test_patch_targets.py` refuses patches of underscore names, of `type(<model, manager or queryset>)` and of the workflow runner ([environment and checks](references/environment.md)).
+- Under Python 3.14 a `functools.partial` stored as a class attribute binds as a method; wrap it in `staticmethod` (`serve` in `src/angee/messaging_integrate_imap/testing/server.py`).
 - Under a rolled-back test a changeset closes only when its `on_commit` callbacks run; a revert test captures them.
 - A Hypothesis property over database rows must vary what the database orders by: rows named or keyed in the generated order hide an order dependence behind an index.
 - A shared pytest plugin must defer model imports until the registry is populated (`installed_field_owners` in `src/angee/base/testing/permissions.py`).
