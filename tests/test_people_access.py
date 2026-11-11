@@ -108,13 +108,12 @@ def test_record_readers_accepts_a_role_only_model(
     assert resolver(object(), object(), "role/only", "record-1") == []
 
 
-@pytest.mark.django_db(transaction=True)
-def test_accountless_party_can_follow_without_read(messaging_access_schema: str) -> None:
+def test_accountless_party_can_follow_without_read(composed_tables: None) -> None:
     """An external delivery route is outside the person-account read rule."""
 
     from angee.messaging.testing.models import Party
 
-    del messaging_access_schema
+    del composed_tables
     with system_context(reason="tests.people.external_follow"):
         record = ChatterDoc.objects.create(title="External delivery")
         party = Party.objects.create(display_name="External")
@@ -122,14 +121,13 @@ def test_accountless_party_can_follow_without_read(messaging_access_schema: str)
         assert record.message_is_follower(party=party)
 
 
-@pytest.mark.django_db(transaction=True)
-def test_follow_requires_read_and_revoking_read_ends_follow(messaging_access_schema: str) -> None:
+def test_follow_requires_read_and_revoking_read_ends_follow(composed_tables: None) -> None:
     """Following is notification state; removing it leaves access untouched."""
 
     from django.apps import apps
     from rebac import backend
 
-    del messaging_access_schema
+    del composed_tables
     users = apps.get_model("iam", "User")
     with system_context(reason="tests.people.follow_read"):
         reader = users.objects.create_user(username="follow-reader", kind="person")
@@ -153,13 +151,12 @@ def test_follow_requires_read_and_revoking_read_ends_follow(messaging_access_sch
         assert not record.message_is_follower(user=reader)
 
 
-@pytest.mark.django_db(transaction=True)
-def test_direct_revoke_ends_unreadable_follow(messaging_access_schema: str) -> None:
+def test_direct_revoke_ends_unreadable_follow(composed_tables: None) -> None:
     """The record's revoke verb ends a follow in its own transaction."""
 
     from django.apps import apps
 
-    del messaging_access_schema
+    del composed_tables
     users = apps.get_model("iam", "User")
     with system_context(reason="tests.people.direct_revoke"):
         reader = users.objects.create_user(username="share-follow-reader", kind="person")
@@ -171,13 +168,12 @@ def test_direct_revoke_ends_unreadable_follow(messaging_access_schema: str) -> N
         assert not record.message_is_follower(user=reader)
 
 
-@pytest.mark.django_db(transaction=True)
-def test_post_skips_nonreader_recipient_autofollow(messaging_access_schema: str) -> None:
+def test_post_skips_nonreader_recipient_autofollow(composed_tables: None) -> None:
     """Direct delivery does not turn a nonreading person into a follower."""
 
     from django.apps import apps
 
-    del messaging_access_schema
+    del composed_tables
     users = apps.get_model("iam", "User")
     with system_context(reason="tests.people.autofollow_skip"):
         recipient = users.objects.create_user(username="unreadable-recipient", kind="person")

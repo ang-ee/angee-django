@@ -1,10 +1,7 @@
 // @vitest-environment happy-dom
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
-import { afterEach, beforeAll, expect, test } from "vitest";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { expect, test } from "vitest";
 import { TriggerStory, type TriggerRequest } from "./TriggersPage.stories";
-
-beforeAll(() => { Element.prototype.getAnimations ??= () => []; });
-afterEach(cleanup);
 
 test("enable and disable dispatch the displayed trigger through native actions", async () => {
   const requests: TriggerRequest[] = [];

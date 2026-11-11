@@ -28,8 +28,6 @@ from tests.test_workflows_review import review as review  # noqa: F401 -- real d
 from tests.test_workflows_review import start_review
 from tests.workflow_steps import document
 
-pytestmark = pytest.mark.django_db(transaction=True)
-
 
 def assert_occurs(kind, record, expected, actor):
     """A warm record predicate costs one SELECT, even under an unrelated actor."""
@@ -65,6 +63,7 @@ def assert_branch_omitted(kind, record, actor, source_model, monkeypatch):
         assert page.needs_me == timeline.attention() == 0
 
 
+@pytest.mark.django_db(transaction=True)
 @pytest.mark.usefixtures("workflow_step_classes")
 @pytest.mark.parametrize("kind, model_label", [
     (RunKind(), "workflows.WorkflowRun"), (DecisionKind(), "decisions.Decision"),
@@ -158,7 +157,7 @@ def test_closed_decisions_on_this_record_skip_act_scope(review, closed, membersh
     assert_attention_omitted(DecisionKind(), record, owner, monkeypatch)
 
 
-@pytest.mark.usefixtures("workflow_step_classes", "activity_catalog", "composed_permissions")
+@pytest.mark.usefixtures("workflow_step_classes", "activity_catalog", "composed_tables")
 def test_attention_population_writes_no_permission_audit_event(review, settings):
     """The page statement and standalone attention avoid audits, before payload hydration."""
     owner, reviewers, _, question = review
@@ -184,8 +183,9 @@ def test_attention_population_writes_no_permission_audit_event(review, settings)
     assert not any(statement_startswith(query["sql"], "INSERT ") for query in queries)
 
 
+@pytest.mark.django_db(transaction=True)
 @pytest.mark.usefixtures("activity_catalog")
-def test_unrelated_tasks_do_not_compile_a_branch(composed_permissions, monkeypatch):
+def test_unrelated_tasks_do_not_compile_a_branch(composed_tables, monkeypatch):
     owner = create_platform_admin("task-occurrence-owner")
     present = vault_for(owner)
     absent = vault_for(create_user("task-occurrence-other"))
@@ -198,7 +198,8 @@ def test_unrelated_tasks_do_not_compile_a_branch(composed_permissions, monkeypat
     assert_branch_omitted(kind, absent, owner, task, monkeypatch)
 
 
-def test_history_probe_requires_closed_membership_on_this_record(composed_permissions, settings, monkeypatch):
+@pytest.mark.django_db(transaction=True)
+def test_history_probe_requires_closed_membership_on_this_record(composed_tables, settings, monkeypatch):
     owner = create_platform_admin("history-occurrence-owner")
     with changeset(fresh=True):
         present = vault_for(owner)
@@ -217,6 +218,7 @@ def test_history_probe_requires_closed_membership_on_this_record(composed_permis
         assert timeline.page().entries == [] and timeline.attention() == 0
 
 
+@pytest.mark.django_db(transaction=True)
 def test_correspondence_probe_matches_parties_and_confirmed_subtrees(correspondence, monkeypatch):
     data = correspondence
     kind = CorrespondenceKind()

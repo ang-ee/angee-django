@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
-import { afterEach, describe, expect, test, vi } from "vitest";
+import { fireEvent, render, screen } from "@testing-library/react";
+import { describe, expect, test, vi } from "vitest";
 
 import { UploadDropTarget } from "./upload-drop-target";
 import { AppRuntimeProvider } from "../runtime";
@@ -24,9 +24,6 @@ describe("UploadDropTarget", () => {
     expect(target.hasAttribute("data-file-drop-disabled")).toBe(true);
     fireEvent.drop(target, { dataTransfer: fileTransfer([new File(["text"], "file.txt")]) });
     expect(onFiles).not.toHaveBeenCalled();
-  });
-  afterEach(() => {
-    cleanup();
   });
 
   test("shows the overlay while files hover and emits dropped files", () => {

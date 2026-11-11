@@ -1,9 +1,9 @@
 // @vitest-environment happy-dom
 
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import { formatDayLabel } from "@angee/ui";
 import { StrictMode } from "react";
-import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
+import { beforeEach, describe, expect, test, vi } from "vitest";
 
 import { ThreadTranscript } from "./ThreadTranscript";
 import type { ThreadTranscriptRow } from "./documents";
@@ -72,6 +72,7 @@ function message(overrides: Partial<ThreadTranscriptRow> = {}): ThreadTranscript
       party_link_confirmed: false,
       party: null,
       avatar: null,
+      merged_into: null,
     },
     parts: [{ role: "BODY", fragment: { text: "Hi there" }, file: null }],
     reaction_groups: [],
@@ -101,8 +102,6 @@ beforeEach(() => {
     };
   });
 });
-
-afterEach(cleanup);
 
 describe("ThreadTranscript", () => {
   test("shows the reply author and opens the quoted parent through the host", () => {
@@ -156,7 +155,7 @@ describe("ThreadTranscript", () => {
   test("renders inbound, outbound, and internal turns with their distinct treatments", () => {
     mocks.transcriptRows = [
       message({ id: "in", direction: "INBOUND", parts: [{ role: "BODY", fragment: { text: "Inbound hello" }, file: null }] as never }),
-      message({ id: "out", direction: "OUTBOUND", sender: { id: "hnd_2", display_name: "Support", value: "us@example.com", party_link_confirmed: false, party: null, avatar: null }, parts: [{ role: "BODY", fragment: { text: "Outbound reply" }, file: null }] as never }),
+      message({ id: "out", direction: "OUTBOUND", sender: { id: "hnd_2", display_name: "Support", value: "us@example.com", party_link_confirmed: false, party: null, avatar: null, merged_into: null }, parts: [{ role: "BODY", fragment: { text: "Outbound reply" }, file: null }] as never }),
       message({ id: "note", direction: "INTERNAL", parts: [{ role: "BODY", fragment: { text: "Internal jotting" }, file: null }] as never }),
     ];
     mocks.total = mocks.transcriptRows.length;
@@ -179,6 +178,7 @@ describe("ThreadTranscript", () => {
           value: "ada@example.com",
           party_link_confirmed: false,
           party: { display_name: "Ada Curated" },
+          merged_into: null,
         } as never,
       }),
     ];
@@ -199,6 +199,7 @@ describe("ThreadTranscript", () => {
           value: "ada@example.com",
           party_link_confirmed: true,
           party: { display_name: "Ada Curated" },
+          merged_into: null,
         } as never,
       }),
     ];

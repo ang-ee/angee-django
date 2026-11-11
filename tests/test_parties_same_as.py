@@ -25,7 +25,6 @@ def _same_as_pair(owner: Any) -> set[Any]:
     return {left.pk, right.pk}
 
 
-@pytest.mark.django_db(transaction=True)
 def test_same_as_pairs_scope_handles_to_the_pinned_actor(composed_tables: None) -> None:
     """A queryset pinned to an actor finds that actor's same_as pairs without an ambient actor."""
 
@@ -38,7 +37,6 @@ def test_same_as_pairs_scope_handles_to_the_pinned_actor(composed_tables: None) 
     assert [{candidate.left.pk, candidate.right.pk} for candidate in candidates] == [pair]
 
 
-@pytest.mark.django_db(transaction=True)
 def test_same_as_pairs_run_under_system_context_without_an_actor(composed_tables: None) -> None:
     """A system scan with no actor at all still finds the pair."""
 
@@ -51,7 +49,6 @@ def test_same_as_pairs_run_under_system_context_without_an_actor(composed_tables
     assert [{candidate.left.pk, candidate.right.pk} for candidate in candidates] == [pair]
 
 
-@pytest.mark.django_db(transaction=True)
 def test_merge_scalar_fields_admit_person_choices_only_between_people(composed_tables: None) -> None:
     """Merge validation and its GraphQL metadata share the row's declared scalar choices."""
 
@@ -66,18 +63,17 @@ def test_merge_scalar_fields_admit_person_choices_only_between_people(composed_t
             party.keep_merge_fields(person, {"birthday": "2000-01-01"})
 
 
-@pytest.mark.django_db(transaction=True)
 @pytest.mark.parametrize(
     ("field_overrides", "kept"),
     [({}, ("Mergeprobe Gamma", "Gamma")), ({"display_name": "Mergeprobe Delta"}, ("Mergeprobe Delta", "Gamma"))],
     ids=("survivor-values", "override"),
 )
 def test_a_merge_keeps_the_chosen_values_over_the_newer_statements_it_moves(
-    composed_tables: None, field_overrides: dict[str, str], kept: tuple[str, str]
+    db: None, field_overrides: dict[str, str], kept: tuple[str, str]
 ) -> None:
     """The duplicate's newer statements move to the survivor; survivorship still keeps what the merge chose."""
 
-    del composed_tables
+    del db
     owner = get_user_model().objects.create_user(username="merge-values-owner")
     with actor_context(owner):
         gamma, delta = [

@@ -30,7 +30,7 @@ def make_user(name):
 
 
 @pytest.fixture
-def audience_record(spaces_tables, monkeypatch):
+def audience_record(composed_tables, monkeypatch):
     """Exercise declarations on existing project columns and tables.
 
     This test-owned donor names ``team`` and ``lead`` solely to exercise messaging's

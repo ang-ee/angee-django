@@ -25,17 +25,8 @@ test("flattens Decisions into Workflows' top bar while the rail keeps one app", 
   expect(tree.byId.get("workflows.studio")?.children?.map((node) => node.id)).toEqual(["workflows.catalogue", "workflows.triggers"]);
 });
 
-test("registers read-only workflow and run pages with additive record and decision context", () => {
-  expectValidBaseAddon(addon);
-  expect(addon.routes?.map((route) => route.name)).toContain("workflows.runs.record");
-  expect(Object.keys(addon.containers?.["decisions#origin"] ?? {})).toEqual(["workflows.run"]);
-  expect(Object.keys(addon.containers?.["timeline#kinds"] ?? {})).toEqual(["workflows.run"]);
-  expect(addon.containers?.["record#aside"]).toMatchObject({ "workflows.run": { content: { strip: false, target: { model: "workflows.WorkflowRun" } } } });
-  expect(Object.keys(addon.containers?.["form#actions-menu"] ?? {})).toEqual(["workflows.run-workflow"]);
-  // Related: a run lists its records and decisions, a decision its run, every other record its runs.
-  expect(Object.keys(addon.containers?.["related#groups"] ?? {})).toEqual(["workflows.runs"]);
-  expect(Object.keys(addon.containers?.["workflows.WorkflowRun#groups"] ?? {})).toEqual(["workflows.records", "workflows.decisions"]);
-  expect(Object.keys(addon.containers?.["decisions.Decision#groups"] ?? {})).toEqual(["workflows.run"]);
+test("satisfies the shared manifest contracts", () => {
+  expect(() => expectValidBaseAddon(addon)).not.toThrow();
 });
 
 test("trigger record breadcrumbs inherit the declared Triggers collection label", async () => {

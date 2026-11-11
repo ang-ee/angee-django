@@ -18,12 +18,11 @@ from django.db.models.fields import NOT_PROVIDED
 from import_export.results import RowResult
 from rebac import system_context
 from tests.chatterdemo.models import TrackedRecordChild
-from tests.conftest import (  # noqa: F401 -- share fake-addon lifetime
+from tests.conftest import (
     Repository,
     Source,
     Template,
     VcsBridge,
-    addon_fixture_resources,
     make_integration,
 )
 

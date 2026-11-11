@@ -309,11 +309,15 @@ class NeedManager[NeedT: Need](_NeedManagerBase[NeedT]):
 
     @staticmethod
     def _resolved_sender_party_id(message: Message) -> Any | None:
-        """Resolve the sender through parties' matching owner and return its party id."""
+        """Resolve the sender through parties' matching owner and return its party id.
+
+        A merged sender handle resolves through its redirect to the survivor.
+        """
 
         sender = message.sender
         if sender is None:
             return None
+        sender = sender.canonical()
         if sender.party_id is None:
             party_model = apps.get_model("parties", "Party")
             party_model.objects.suggest_for(sender)

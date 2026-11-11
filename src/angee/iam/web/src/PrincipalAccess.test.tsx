@@ -1,8 +1,8 @@
 // @vitest-environment happy-dom
 
-import { cleanup, render, renderHook, screen } from "@testing-library/react";
+import { render, renderHook, screen } from "@testing-library/react";
 import type { ReactNode } from "react";
-import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
+import { beforeEach, describe, expect, test, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   listProps: [] as Record<string, unknown>[],
@@ -69,10 +69,6 @@ vi.mock("@angee/ui", () => {
   return {
     Code: ({ children }: { children?: ReactNode }) => <code>{children}</code>,
     SectionHeading: ({ label, count }: { label: ReactNode; count?: number }) => <h3>{label} {count}</h3>,
-    createNamespaceT: (
-      _namespace: string,
-      fallback: Record<string, string>,
-    ) => () => (key: string) => fallback[key] ?? key,
     InlineEmpty: ({ label }: { label: ReactNode }) => <div>{label}</div>,
     RowsListView: (props: Record<string, unknown>) => {
       mocks.listProps.push(props);
@@ -96,7 +92,6 @@ describe("principal access tab", () => {
     mocks.queryVariables = undefined;
     mocks.record = { assignment_subject: "auth/user:usr_alice" };
   });
-  afterEach(cleanup);
 
   test("offers the shared record tab", () => {
     expect(renderHook(() => usePrincipalAccessRecordTab()).result.current?.id).toBe("access");

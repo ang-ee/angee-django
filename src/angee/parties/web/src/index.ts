@@ -104,7 +104,7 @@ const parties = defineBaseAddon({
     "parties.directories#toolbar": {},
   },
 });
-export { senderAvatarUrl, senderDisplayName, type SenderIdentity } from "./identity";
+export { resolvedSender, senderAvatarUrl, senderDisplayName, type SenderIdentity } from "./identity";
 export { addressFields, PartyAddresses } from "./PartyAddresses";
 export { useOrganizationFields } from "./OrganizationForm";
 export {

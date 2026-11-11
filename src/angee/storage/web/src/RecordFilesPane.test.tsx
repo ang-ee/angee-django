@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { afterEach, beforeEach, expect, test, vi } from "vitest";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { beforeEach, expect, test, vi } from "vitest";
 
 const sdk = vi.hoisted(() => ({ query: vi.fn(), upload: vi.fn(), navigate: vi.fn(), mounted: vi.fn(), preview: { viewAs: null as string | null, pending: false } }));
 
@@ -66,7 +66,6 @@ beforeEach(() => {
   sdk.navigate.mockReset();
   sdk.mounted.mockReset();
 });
-afterEach(cleanup);
 
 test("the group counts its declared related count and each row links to its file page", () => {
   render(<FilesGroup />);

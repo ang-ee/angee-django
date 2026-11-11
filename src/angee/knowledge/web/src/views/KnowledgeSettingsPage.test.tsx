@@ -1,11 +1,11 @@
 // @vitest-environment happy-dom
 
-import { cleanup, render } from "@testing-library/react";
+import { render } from "@testing-library/react";
 import type { ReactNode } from "react";
 import type { ActionDescriptor } from "@angee/ui";
 import type { AuthoredMutationOptions } from "@angee/refine";
 import type { DocumentType } from "@angee/gql/console";
-import { afterEach, beforeEach, expect, test, vi } from "vitest";
+import { beforeEach, expect, test, vi } from "vitest";
 
 import { KnowledgeCreateVaultFrom } from "../data/documents";
 
@@ -55,8 +55,6 @@ beforeEach(() => {
   mocks.canonicalize.mockReset().mockReturnValue(["knowledge.vault", "knowledge.page", "knowledge.markdownpage"]);
   mocks.invalidates.mockReset().mockReturnValue([]);
 });
-
-afterEach(cleanup);
 
 async function submit(name = "Copy", template = "vlt_template") {
   if (!mocks.submit) throw new Error("Clone action was not registered");

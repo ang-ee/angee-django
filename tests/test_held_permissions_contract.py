@@ -2,14 +2,11 @@
 
 from __future__ import annotations
 
-import pytest
 from rebac import actor_context, system_context
 
 from angee.graphql.capabilities import held_permissions, permission_expression
 from tests.conftest import create_user
 from tests.scopedemo.models import ProposalTarget
-
-pytestmark = pytest.mark.django_db(transaction=True)
 
 NAMES = ("create", "read", "write")
 

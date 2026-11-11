@@ -11,7 +11,7 @@ import {
   createRoute,
   createRouter,
 } from "@tanstack/react-router";
-import { afterEach, describe, expect, test, vi } from "vitest";
+import { describe, expect, test, vi } from "vitest";
 
 import { baseIcons } from "../chrome/icon-registry";
 import {
@@ -29,8 +29,6 @@ import {
 import { Chatter, useChatterPresentation } from "./Chatter";
 import { CHATTER_CONTAINERS } from "./chatter-containers";
 import { ChatterProvider, useChatter, useChatterContent, type ChatterContent } from "./chatter-context";
-
-afterEach(() => cleanup());
 
 const NOTE_RECORD: ChatterRoute = { name: "notes.record", path: "/records/$id", viewType: "notes/note", modelLabel: "notes.Note", recordParam: "id" };
 const NOTE_LIST: ChatterRoute = { name: "notes.all", path: "/records", viewType: "notes/note", modelLabel: "notes.Note" };

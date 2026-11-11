@@ -1,14 +1,13 @@
 // @vitest-environment happy-dom
 
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
-import { afterEach, expect, test, vi } from "vitest";
+import { fireEvent, render, screen } from "@testing-library/react";
+import { expect, test, vi } from "vitest";
 import { useState } from "react";
 
 import { createUiTestProviders } from "../testing";
 import { SchemaPathPicker, type SchemaPath, type SchemaPathSchema } from "./SchemaPathPicker";
 
 const { Provider } = createUiTestProviders();
-afterEach(cleanup);
 
 const schema: SchemaPathSchema = {
   type: "object",

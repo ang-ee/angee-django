@@ -27,6 +27,7 @@ from angee.base.models.hierarchy import HierarchyMixin
 from angee.base.models.ownership import OwnerMixin
 from angee.messaging.models import AudienceMember, NotificationPolicy, ThreadAudienceMixin
 from angee.parties.mixins import MembershipDecisionMixin
+from angee.provenance.contrib.angee.history import HistoryMixin
 from angee.spaces.managers import GroupManager, MembershipManager, ThreadSpaceManager
 
 
@@ -120,7 +121,7 @@ class Group(ThreadAudienceMixin, HierarchyMixin, OwnerMixin, AngeeDataModel, con
         return candidate
 
 
-class Membership(MembershipDecisionMixin, AuditMixin, AngeeDataModel, concrete=True):
+class Membership(MembershipDecisionMixin, AuditMixin, HistoryMixin, AngeeDataModel, concrete=True):
     """One party's role-bearing roster row in a shared group.
 
     Confirmation resolves live through the canonical ``Person.user`` identity

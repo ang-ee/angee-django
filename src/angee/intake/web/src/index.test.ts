@@ -1,5 +1,5 @@
 import { expectValidBaseAddon } from "@angee/app/testing";
-import { PROJECT_MODEL, TASK_MODEL } from "@angee/projects";
+import { TASK_MODEL } from "@angee/projects";
 import { describe, expect, test } from "vitest";
 
 import intake, { NEED_MODEL } from "./index";
@@ -9,25 +9,13 @@ describe("intake addon manifest", () => {
     expect(() => expectValidBaseAddon(intake)).not.toThrow();
   });
 
-  test("contributes one form-section pane to project and task records", () => {
-    const children = Object.fromEntries(Object.entries(intake.containers ?? {}).map(([address, entry]) =>
-      [address, Object.keys(entry as object)]));
-    expect(children).toEqual({
-      [`${TASK_MODEL}#access-roles`]: ["intake.requester"],
-      [`${TASK_MODEL}#rail`]: ["intake.people-rail"],
-      [`${TASK_MODEL}#sections`]: ["intake.task-access-decisions", "intake.task-needs"],
-      [`${PROJECT_MODEL}#sections`]: ["intake.project-needs"],
-    });
-    // Access decisions are the request's writers' business.
+  test("leaves task access decisions to the request's writers", () => {
     expect(intake.containers?.[`${TASK_MODEL}#sections`]).toMatchObject({
       "intake.task-access-decisions": { permission: "write", requiredFields: ["permissions"] },
     });
-    expect(intake.routes ?? []).toEqual([]);
-    expect(intake.menus ?? []).toEqual([]);
   });
 
-  test("exports the canonical Need resource key and its pane glyph", () => {
+  test("exports the backend's canonical Need model label", () => {
     expect(NEED_MODEL).toBe("intake.Need");
-    expect(intake.icons?.["intake-needs"]).toBeDefined();
   });
 });

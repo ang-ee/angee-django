@@ -15,9 +15,10 @@ from tests.pgvector_fixtures import NativeEmbeddingBackend
 from tests.pgvector_fixtures import passage_records as passage_records
 from tests.test_knowledge_plugin import _merged_schemas
 
-pytestmark = pytest.mark.skipif(
-    connection.vendor != "postgresql", reason="Requires PostgreSQL pgvector and full-text search"
-)
+pytestmark = [
+    pytest.mark.skipif(connection.vendor != "postgresql", reason="Requires PostgreSQL pgvector and full-text search"),
+    pytest.mark.django_db(transaction=True),
+]
 
 
 def _indexed_page(records, *, title, body, vector, vault=None, model=None):

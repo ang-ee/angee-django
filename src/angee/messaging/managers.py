@@ -1417,7 +1417,7 @@ class ThreadAttachmentManager[ThreadAttachmentT: ThreadAttachment](AngeeHistoryM
                 ).delete()
 
 
-class ThreadFollowerQuerySet[ThreadFollowerT: ThreadFollower](AngeeQuerySet[ThreadFollowerT]):
+class ThreadFollowerQuerySet[ThreadFollowerT: ThreadFollower](AngeeHistoryQuerySet[ThreadFollowerT]):
     """Chainable read scopes for record chatter followers."""
 
     @staticmethod
@@ -1458,7 +1458,7 @@ class ThreadFollowerQuerySet[ThreadFollowerT: ThreadFollower](AngeeQuerySet[Thre
         return self.effective_for_thread(attachment.thread)
 
 
-_ThreadFollowerManagerBase = AngeeManager.from_queryset(ThreadFollowerQuerySet)
+_ThreadFollowerManagerBase = AngeeHistoryManager.from_queryset(ThreadFollowerQuerySet)
 
 
 _NEEDACTION = ReaderMemo("_messaging_needaction")
@@ -1740,14 +1740,17 @@ class ThreadFollowerManager[ThreadFollowerT: ThreadFollower](_ThreadFollowerMana
                 if created:
                     self._seed_receipt(follower, attachment.thread, history_before=history_before)
                 else:
-                    updates: dict[str, Any] = {"attachment": attachment}
+                    updates: dict[str, Any] = {"attachment_id": attachment.pk}
                     if notification_policy is not None:
                         updates["notification_policy"] = notification_policy
                     if subtype_keys is not None:
                         updates["subtype_keys"] = list(subtype_keys)
-                    for field, value in updates.items():
-                        setattr(follower, field, value)
-                    follower.save(update_fields=(*updates, "updated_at"))
+                    # Each post re-subscribes its followers; only a changed follow is a write (and a version).
+                    changed = [name for name, value in updates.items() if getattr(follower, name) != value]
+                    for name in changed:
+                        setattr(follower, name, updates[name])
+                    if changed:
+                        follower.save(update_fields=(*changed, "updated_at"))
             return follower
 
     def _seed_receipt(self, follower: Any, thread: Any, *, history_before: Any | None) -> None:
@@ -1765,7 +1768,8 @@ class ThreadFollowerManager[ThreadFollowerT: ThreadFollower](_ThreadFollowerMana
         if latest is None:
             return
         follower.last_read_message = latest
-        follower.save(update_fields=("last_read_message", "updated_at"))
+        # History tracks the follow, not the receipt: a read records no version.
+        follower.save_without_historical_record(update_fields=("last_read_message", "updated_at"))
 
     def mark_read_up_to(
         self,
@@ -1822,7 +1826,7 @@ class ThreadFollowerManager[ThreadFollowerT: ThreadFollower](_ThreadFollowerMana
             if current is not None and current.chronological_key >= target_key:
                 return 0
             follower.last_read_message = target
-            follower.save(update_fields=("last_read_message", "updated_at"))
+            follower.save_without_historical_record(update_fields=("last_read_message", "updated_at"))
         return 1
 
     def unread_messages(self, thread: Any, *, party: Any = None, user: Any = None, user_id: Any = None) -> Any:
@@ -2033,9 +2037,9 @@ class ThreadNotificationManager[ThreadNotificationT: ThreadNotification](
             )
         thread_model = apps.get_model("messaging", "Thread")
         threads = thread_model.objects.system_context(reason="messaging.notification.redirect_groups")
-        redirect_groups: models.QuerySet[Thread] = threads.none()
-        for survivor_id in {edge.thread.merged_into_id for edge in attachments if edge.thread.merged_into_id}:
-            redirect_groups |= threads.redirect_group(thread_model(pk=survivor_id))
+        redirect_groups = threads.redirect_groups(
+            {edge.thread.merged_into_id for edge in attachments if edge.thread.merged_into_id}
+        )
         redirects = {
             edge.thread_id: edge
             for edge in apps.get_model("messaging", "ThreadAttachment")._base_manager.filter(
@@ -2387,7 +2391,7 @@ class MessageStarManager[MessageStarT: MessageStar](AngeeManager[MessageStarT]):
         return int(deleted)
 
 
-class ReactionManager[ReactionT: Reaction](AngeeManager[ReactionT]):
+class ReactionManager[ReactionT: Reaction](AngeeHistoryManager[ReactionT]):
     """Owns the attributed-reaction write — the row shape for a (message, handle, reaction).
 
     ``MessageManager.set_reaction`` is the user-keyed chatter toggle; this is the
@@ -2398,26 +2402,36 @@ class ReactionManager[ReactionT: Reaction](AngeeManager[ReactionT]):
     """
 
     def attribute(self, reactions: Any, *, created_by_id: Any = None) -> int:
-        """Land attributed reactions in one insert; return how many rows were built.
+        """Land attributed reactions in one insert; return how many rows were new.
 
         ``reactions`` is an iterable of ``(message, handle, reaction)`` triples. One
-        ``bulk_create`` inserts the batch, idempotent on the partial unique
-        ``(message, handle, reaction)`` constraint via ``ignore_conflicts`` — so a
-        re-sync re-landing the same reactions is a no-op — and every row carries the
-        cleaned reaction content and the ``created_by`` attribution.
+        ``bulk_create`` inserts the triples the partial unique ``(message, handle,
+        reaction)`` constraint does not already hold — so a re-sync re-landing the
+        same reactions is a no-op — and every row carries the cleaned reaction
+        content and the ``created_by`` attribution. Reactions keep history, whose
+        capture needs every inserted row's key, so conflicts are skipped up front;
+        the messages' row locks, taken in key order, serialize concurrent landings.
         """
 
-        rows = [
-            self.model(
-                message_id=message.pk,
-                handle_id=handle.pk,
-                reaction=self.model.clean_reaction(reaction),
-                created_by_id=created_by_id,
+        triples = {
+            (message.pk, handle.pk, self.model.clean_reaction(reaction)) for message, handle, reaction in reactions
+        }
+        message_ids = sorted({message_id for message_id, _, _ in triples})
+        if not message_ids:
+            return 0
+        message_model = self.model._meta.get_field("message").related_model
+        with transaction.atomic():
+            list(message_model._base_manager.filter(pk__in=message_ids).order_by("pk").only("pk").lock_if_supported(no_key=True))
+            held = set(
+                self.model._base_manager.filter(message_id__in=message_ids)
+                .values_list("message_id", "handle_id", "reaction")
             )
-            for message, handle, reaction in reactions
-        ]
-        if rows:
-            self.bulk_create(rows, ignore_conflicts=True)
+            rows = [
+                self.model(message_id=message_id, handle_id=handle_id, reaction=reaction, created_by_id=created_by_id)
+                for message_id, handle_id, reaction in sorted(triples - held)
+            ]
+            if rows:
+                self.bulk_create(rows)
         return len(rows)
 
 
@@ -2573,7 +2587,8 @@ class MessageQuerySet[MessageT: Message](MergeableQuerySet[MessageT], TrashQuery
         ``Precedence: bulk``, ``list`` or ``junk`` (:data:`AUTOMATED_MAIL_HEADERS`).
         Such an address speaks for a list or a system, and its display name names
         whoever triggered the mail. A person who sends the odd vacation auto-reply
-        still writes the rest by hand.
+        still writes the rest by hand. A merged handle's messages count for its
+        survivor.
         """
 
         part_model = apps.get_model("messaging", "Part")
@@ -2584,12 +2599,12 @@ class MessageQuerySet[MessageT: Message](MergeableQuerySet[MessageT], TrashQuery
         )
         return (
             self.filter(sender__isnull=False)
-            .annotate(_automated=models.Exists(automated))
+            .annotate(_automated=models.Exists(automated), _sender=MergeableQuerySet.survivor_id("sender__"))
             .order_by()
-            .values("sender_id")
+            .values("_sender")
             .annotate(_sent=models.Count("pk"), _automated_sent=models.Count("pk", filter=models.Q(_automated=True)))
             .filter(_automated_sent=models.F("_sent"))
-            .values_list("sender_id", flat=True)
+            .values_list("_sender", flat=True)
         )
 
     def searching(self, term: str) -> Self:
@@ -2695,8 +2710,13 @@ class MessageQuerySet[MessageT: Message](MergeableQuerySet[MessageT], TrashQuery
     def involving_parties_filter(
         parties: Any, *, handles: models.QuerySet, participants: models.QuerySet,
     ) -> models.Q:
-        """Participant membership within the caller's authorized or structural populations."""
-        handle_ids = handles.filter(party__in=parties).order_by().values("pk")
+        """Participant membership within the caller's authorized or structural populations.
+
+        A handle merge keeps participants on the retired handle, so each matching
+        handle selects its redirect group.
+        """
+        survivors = handles.filter(party__in=parties, merged_into__isnull=True).order_by().values("pk")
+        handle_ids = handles.model._base_manager.redirect_groups(models.Subquery(survivors)).values("pk")
         message_ids = participants.filter(
             handle_id__in=models.Subquery(handle_ids), message_id__isnull=False,
         ).order_by().values("message_id")
@@ -4505,14 +4525,13 @@ class PartQuerySet[PartT: Part](AngeeQuerySet[PartT]):
 
         rows = (
             self.filter(role=self.model.PartRole.SIGNATURE, fragment__isnull=False, message__sender__isnull=False)
-            .order_by("fragment__hash", "message__sender_id")
-            .values_list(
-                "fragment_id",
-                "fragment__hash",
-                "message__sender_id",
-                "message__sender__party_id",
-                "message__created_by_id",
+            # A merged handle signs as its survivor, as if the merge had moved its messages.
+            .annotate(
+                _sender=MergeableQuerySet.survivor_id("message__sender__"),
+                _party=MergeableQuerySet.survivor_field("message__sender__", "party_id"),
             )
+            .order_by("fragment__hash", "_sender")
+            .values_list("fragment_id", "fragment__hash", "_sender", "_party", "message__created_by_id")
             .distinct()
         )
         fragment_model = self.model.fragment.field.related_model

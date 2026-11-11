@@ -1,12 +1,10 @@
 // @vitest-environment happy-dom
 
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
-import { afterEach, expect, test, vi } from "vitest";
+import { fireEvent, render, screen } from "@testing-library/react";
+import { expect, test, vi } from "vitest";
 
 import { AppRuntimeProvider, createAngeeI18nInstance } from "../../runtime";
 import { SaveDiscardActions } from "./SaveDiscardActions";
-
-afterEach(cleanup);
 
 test.each([
   { isDirty: false, alwaysShowSave: false, labels: [] },

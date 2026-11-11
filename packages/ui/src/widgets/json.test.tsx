@@ -1,14 +1,12 @@
 // @vitest-environment happy-dom
 
-import { cleanup, render, screen } from "@testing-library/react";
-import { afterEach, describe, expect, test, vi } from "vitest";
+import { render, screen } from "@testing-library/react";
+import { describe, expect, test, vi } from "vitest";
 
 import { jsonWidget } from "./json";
 import { jsonObjectFromUnknown, jsonValueFromUnknown } from "./json-value";
 
 describe("json widget", () => {
-  afterEach(cleanup);
-
   test("read renders an object as a tree of keys and values", () => {
     const Read = jsonWidget.read;
     render(<Read value={{ github_org: "acme", retries: 7 }} />);

@@ -45,6 +45,7 @@ locked dependencies from `pyproject.toml`/`uv.lock`:
 | Python/addon/template handoff: full SQLite suite; required for shared foundation/composition changes | `env -u DATABASE_URL uv run --locked python -m pytest -q -n auto --dist loadfile --durations=25` |
 | Randomized parallel isolation proof | `uv run --locked python -m pytest -q -n auto --dist loadfile -p randomly --randomly-seed=137 --durations=25` |
 | Python lint | `uv run --locked python -m ruff check . --no-cache` |
+| Python import boundaries | `uv run --locked lint-imports` |
 | Python types | `PYTHONPATH=src uv run --locked python -m mypy src` |
 | Dead-code review | `uv run --locked python -m vulture` |
 
@@ -64,8 +65,10 @@ retirement policy and the native drop guard. Previously shipped transition sourc
 are historical upgrade assets only; retire them after the supported upgrade cutoff
 and preserve Python imports still required by retained migration history.
 
-[`tests/test_layering.py`](../tests/test_layering.py) guards framework import
-boundaries and optional state-field declarations. The
+Framework import boundaries are `[tool.importlinter]` contracts in
+[`pyproject.toml`](../pyproject.toml), checked by `lint-imports`.
+[`tests/test_layering.py`](../tests/test_layering.py) guards the runtime import
+closures a static graph cannot see and optional state-field declarations. The
 [Database routing rule](backend/guidelines.md#rules) is a system check: base's
 `angee.E050` refuses any `DATABASE_ROUTERS`
 ([`tests/test_base_checks.py`](../tests/test_base_checks.py)).
@@ -159,8 +162,11 @@ Local pytest remains serial and keeps its normal ordering: `addopts` disables
 pytest-randomly and does not select workers. An explicit `-p randomly` re-enables
 the plugin; change `--randomly-seed` to reproduce or vary test order. Use `-n 0`
 or `-p no:xdist` for serial debugging. `--dist loadfile` keeps each test module on
-one worker. Pytest-django isolates worker databases; custom database and composed
-host fixtures must use process-local connections or pytest's worker-local
+one worker. Pytest-django isolates worker databases, suffixing the source host's
+stable `.test-db/` SQLite name per worker, so `--reuse-db` keeps them between runs
+and `--create-db` rebuilds them after a model change; concurrent runs need separate
+checkouts. Custom database and composed host fixtures must use process-local
+connections or pytest's worker-local
 `tmp_path`/`tmp_path_factory`, and restore registry changes after each test; the
 installed app registry is restored for every host loading the base fixtures (see
 [Source-addon Test Models](#source-addon-test-models)).
@@ -174,22 +180,29 @@ Share source-addon compositions through their owning test apps:
 package docstrings own the adoption contract. Other reusable concrete
 compositions, including [`decisions`](../src/angee/decisions/testing/models.py)
 and [`messaging`](../src/angee/messaging/testing/models.py), register once
-through imports in the root conftest before database setup. The framework-generic
-[`composed_tables`](../src/angee/base/testing/fixtures.py) fixture uses native transactional
-isolation and synchronizes REBAC after each flush; use the native `db` fixture
-when a test needs neither transaction behavior nor permission synchronization.
-Composed hosts also install their schema during native database setup. Register
+through imports in the root conftest before database setup. Tests roll back by
+default over a session baseline: the base plugin binds the installed addons' merged
+permission inputs (a composed host binds its generated ones), and its
+`django_db_setup` synchronizes REBAC once per worker; a host extends that fixture
+to load its own baseline rows, and the plugin records every row once the outermost
+extension returns. The framework-generic
+[`composed_tables`](../src/angee/base/testing/fixtures.py) fixture is a
+compatibility alias of the native `db` fixture, kept for consumer suites. Declare `django_db(transaction=True)` only when the
+contract needs real commits: other threads or connections, row locks, or
+`on_commit` work a real worker runs; its flush restores the recorded baseline
+rows, keys included, instead of recomputing them. Assert `on_commit` callbacks with pytest-django's
+`django_capture_on_commit_callbacks`. A test synchronizes REBAC itself only after
+binding its own schema; `composed_permissions` binds a test-owned copy of the merged
+inputs for a test that edits one on disk. Register
 `angee.base.testing.fixtures` through the root conftest's `pytest_plugins`; a runner
 that loads it explicitly must pass `-p django -p angee.base.testing.fixtures` in that
 order so pytest-django cannot shadow the shared `django_db_setup` override.
 Hosts installing provenance also register
-[`angee.provenance.testing.fixtures`](../src/angee/provenance/testing/fixtures.py)
-for test attribution; the generic framework plugin does not install that boundary.
-A test that reaches a statement source needs the install-tier `provenance.Rule`
-principals parties declares: list
-[`angee.parties.testing.fixtures`](../src/angee/parties/testing/fixtures.py) in
-`pytest_plugins` and request its `statement_sources` fixture (the framework's own
-hosts load them after every REBAC sync).
+[`angee.provenance.testing.fixtures`](../src/angee/provenance/testing/fixtures.py),
+after the base plugin: it adds test attribution and loads every installed addon's
+install-tier statement principals (`provenance.Rule` and `Seed` rows and their
+grants) into the session baseline. The parties plugin's `statement_sources` fixture
+remains only for consumers that still request it.
 
 Declare a test-local model under Django's `isolate_apps` when the code under test
 accepts a registry. When its owner reads the installed registry (content types, the
@@ -228,13 +241,14 @@ host under pytest and the composed console schema under Django's test runner:
 ```python
 read = measure_graphql_document(schema, document, variables, actor=member)
 assert read.data["projects_aggregate"]["aggregate"]["count"] == 3
-read.assert_ceiling(statements=10, sql_kb=247)
+read.assert_ceiling(statements=10)
 ```
 
-A ceiling is the measured cost: statements exact, SQL text rounded up to the next KB
-of 1,024 bytes. A change that lowers a cost lowers its ceiling in the same change; a
-rise is a regression to fix, never a reason to raise the ceiling. Assert the rows a
-read returns beside its ceiling, so a read that loses rows cannot pass. The
+A ceiling is the measured statement count; generated SQL text has no size budget,
+and its shape is asserted with the classifiers above. A change that lowers a cost
+lowers its ceiling in the same change; a rise is a regression to fix, never a reason
+to raise the ceiling. Assert the rows a read returns beside its ceiling, so a read
+that loses rows cannot pass. The
 [console document ceilings](../tests/native_graphql_document_budgets.py) pin the
 console app's inbox, transcript, person, projects and current-user reads for a
 platform admin and a member, each after one warm execution, in the
@@ -246,7 +260,7 @@ PostgreSQL 17 planner gates use the same shared query-support owner's
 member person/projects documents budget the sum of every SELECT's allocation,
 not peak resident memory; their total statement ceilings also count audit writes.
 The PostgreSQL CI selection runs the composed budget's `[postgresql]` node; its
-`[sqlite]` node retains the complete console document text/statement budgets.
+`[sqlite]` node retains the console document statement budgets.
 
 ### Owner Search
 
@@ -401,9 +415,8 @@ measurements.
 After changing export annotations, story owners or token CSS, regenerate with
 `pnpm --config.verify-deps-before-run=false --filter @angee/storybook --fail-if-no-match run catalog:generate`
 from the stack root.
-The UI catalog test exercises the generator's drift-check CLI; Storybook's
-`catalog:check` also verifies specimen reachability, guideline story links and
-the token deletion findings.
+Storybook's `catalog:check` verifies catalog and token-name drift, specimen
+reachability, guideline story links and the token deletion findings.
 
 For page or addon changes, run a primitive-drift scan and explain every hit
 outside `@angee/ui`. A hit is not automatically wrong, but it must either compose
@@ -451,8 +464,9 @@ database, and these commands do not create one.
 [reusable checks](../.github/workflows/reusable-checks.yml) on pull requests and
 pushes to `main`. The current tiers are:
 
-- **Python quality:** Ruff over the source tree and mypy over addons,
-  using the locked framework environment.
+- **Python quality:** Ruff over the source tree, mypy over addons and
+  `lint-imports` over the declared import contracts, using the locked framework
+  environment.
 - **SQLite:** the full framework Python suite once, as six shards that
   pytest-split cuts into contiguous chunks of equal stored time from the
   committed [durations](../.test_durations), so each test file stays in one or two
@@ -460,10 +474,8 @@ pushes to `main`. The current tiers are:
   `-n auto --dist loadfile` with a 60-minute limit and prints its 25 slowest test
   durations, with migrations enabled and `DATABASE_URL` unset. Structural tests
   remain part of this suite. Per-file scheduling keeps a file on one worker, so the
-  heaviest files (the proposals access, owner-gate adopters and agents GraphQL
-  campaigns, about 700 stored seconds each) set a floor near 25 minutes on CI.
-  Their cost is per-test fixture setup, a `rebac sync` before every test; making
-  that setup cheaper is how the limit comes down.
+  heaviest files (the proposals access and agents GraphQL campaigns, about 700
+  stored seconds each) set a floor near 25 minutes on CI.
 - **PostgreSQL:** in six groups of its own beside the SQLite shards, assigned
   by pytest-split's `least_duration` algorithm over the
   [PostgreSQL timings](../.test_durations_postgres) and with the shards' 60-minute

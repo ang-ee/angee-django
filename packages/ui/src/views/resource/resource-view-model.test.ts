@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 
 import { createElement, type ReactNode } from "react";
-import { act, cleanup, renderHook } from "@testing-library/react";
+import { act, renderHook } from "@testing-library/react";
 import { ResourceViewProvider, useResourceView } from "./resource-view-context";
 import { useResourceSearch } from "./search/use-resource-search";
 import { searchFixture } from "./search/search-fixture.test-support";
@@ -9,7 +9,7 @@ import { favoriteFromResourceView } from "./model/favorites";
 import { useResourceViewQueryFacts } from "./surface/table-state";
 import { initialResourceSorting } from "./resource-view-codecs";
 import type { ResourceViewFilter, ResourceViewInitialState } from "./resource-view-model";
-import { afterEach, describe, expect, test } from "vitest";
+import { describe, expect, test } from "vitest";
 
 import {
   createResourceViewState,
@@ -409,8 +409,6 @@ describe("resource-view model", () => {
   });
 });
 
-
-afterEach(cleanup);
 
 function viewWrapper(initialState: ResourceViewInitialState = {}) {
   return ({ children }: { children: ReactNode }) => createElement(ResourceViewProvider, { scope: "local", initialState, children });

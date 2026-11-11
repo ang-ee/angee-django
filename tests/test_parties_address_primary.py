@@ -8,7 +8,6 @@ from rebac import PermissionDenied, actor_context, system_context
 from angee.messaging.testing.models import Address, Party
 
 
-@pytest.mark.django_db(transaction=True)
 @pytest.mark.usefixtures("composed_tables")
 def test_primary_selection_is_atomic_scoped_and_obeys_update_fields() -> None:
     owner = get_user_model().objects.create_user(username="address-owner")

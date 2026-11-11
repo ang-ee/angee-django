@@ -5,7 +5,7 @@ import { createMemoryHistory, createRootRoute, createRoute, createRouter, Outlet
 import { AppRuntimeProvider, baseIcons, defaultWidgets, ModalsHost, ToastProvider } from "@angee/ui";
 import { createRouteHref, routeSearchString } from "@angee/ui/runtime";
 import { createUiTestProviders } from "@angee/ui/testing";
-import { afterEach, beforeAll, expect, test, vi } from "vitest";
+import { afterEach, expect, test, vi } from "vitest";
 
 import { InboxPage } from "./InboxPage";
 import decisions from "./index";
@@ -15,7 +15,6 @@ const { Provider, clearClients } = createUiTestProviders({
   apiUrl: "test://decisions-inbox",
   queryClientConfig: { defaultOptions: { queries: { retry: false, staleTime: Infinity } } },
 });
-beforeAll(() => { Element.prototype.getAnimations ??= () => []; });
 afterEach(() => { cleanup(); clearClients(); });
 
 function fixture(initialEntry = "/decisions", authenticated = true) {

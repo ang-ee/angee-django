@@ -1,11 +1,9 @@
 // @vitest-environment happy-dom
 
-import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
-import { afterEach, expect, test, vi } from "vitest";
+import { fireEvent, render, screen, within } from "@testing-library/react";
+import { expect, test, vi } from "vitest";
 
 import { ComparisonRows } from "./ComparisonRows";
-
-afterEach(cleanup);
 
 test("renders labeled before/after rows and associated evidence details", () => {
   render(<ComparisonRows

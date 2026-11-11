@@ -1,15 +1,13 @@
 // @vitest-environment happy-dom
 
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import * as React from "react";
-import { afterEach, describe, expect, test, vi } from "vitest";
+import { describe, expect, test, vi } from "vitest";
 
 import { DialogForm } from "../fragments/DialogForm";
 import { Dialog } from "../ui/dialog";
 import { AppRuntimeProvider, createAngeeI18nInstance } from "../runtime";
 import { ActionMenu, ActionTrigger } from "./ActionMenu";
-
-afterEach(cleanup);
 
 describe("ActionMenu", () => {
   test("accepts end alignment and an accessible icon-only trigger", async () => {

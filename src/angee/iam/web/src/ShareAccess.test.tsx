@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { beforeEach, describe, expect, test, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   models: new Map<string, unknown>(),
@@ -131,8 +131,6 @@ describe("shared record access chrome", () => {
     mocks.roleEntries = [];
     mocks.visibilityEntries = [];
   });
-
-  afterEach(cleanup);
 
   test("delegates the default Share trigger and loads access on demand", () => {
     render(<ShareRecordChrome />);

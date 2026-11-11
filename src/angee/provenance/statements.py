@@ -910,15 +910,26 @@ class StatementsMixin(PersistenceMixin, HistoryDocumentMixin):
     def statement_managers(self) -> Iterable[Any]:
         """Yield each MTI owner's bound table once, including parent declarations.
 
-        A parent declaration's subject is the ancestor row reached through Django's
-        parent links, which build it from this row's loaded fields without a query.
+        A parent declaration's subject is the ancestor row built by Django's
+        ``from_db`` from this row's primary key and loaded fields, deferring what
+        this row deferred, so binding it reads nothing.
         """
 
+        deferred = self.get_deferred_fields()
         for model in self.statement_models():
             subject_model = model.statement_subject_model
             subject: Any = self
-            while (concrete := subject._meta.concrete_model) is not subject_model:
-                subject = getattr(subject, concrete._meta.get_ancestor_link(subject_model).name)
+            if self._meta.concrete_model is not subject_model:
+                fields = [
+                    field
+                    for field in subject_model._meta.concrete_fields
+                    if field.primary_key or field.attname not in deferred
+                ]
+                subject = subject_model.from_db(
+                    self._state.db,
+                    [field.attname for field in fields],
+                    [self.pk if field.primary_key else getattr(self, field.attname) for field in fields],
+                )
             if subject is not self and (actor := instance_actor(self)) is not None:
                 if not isinstance(subject, RebacMixin):
                     raise ImproperlyConfigured("Statement subjects require REBAC actor binding.")

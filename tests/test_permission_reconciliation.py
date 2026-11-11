@@ -56,26 +56,6 @@ definition iam/company {
 """
 
 
-def _managed(package: str, resource_type: str):
-    """Create a SchemaDefinition with a PackageManagedRecord owning it, as sync would."""
-
-    from django.contrib.contenttypes.models import ContentType
-    from django.utils import timezone
-    from rebac.models import PackageManagedRecord, SchemaDefinition
-
-    definition = SchemaDefinition.objects.create(resource_type=resource_type)
-    PackageManagedRecord.objects.create(
-        package=package,
-        external_id=f"definition:{resource_type}",
-        schema_revision=1,
-        target_ct=ContentType.objects.get_for_model(SchemaDefinition),
-        target_pk=definition.pk,
-        content_hash="x",
-        last_synced_at=timezone.now(),
-    )
-    return definition
-
-
 def _managed_relation_for_definition(
     package: str,
     definition,
@@ -195,13 +175,8 @@ def test_reconcile_prunes_old_iam_company_rows_after_schema_removal(
     assert SchemaDefinition.objects.filter(resource_type="auth/user").exists()
 
 
-@pytest.mark.parametrize("storage_mode", ("denormalized", "registry"))
 @schema_changes()
-def test_reconcile_directly_purges_stale_relations_from_active_store(
-    db,
-    settings,
-    storage_mode: str,
-) -> None:
+def test_reconcile_directly_purges_stale_relations_from_active_store(db) -> None:
     """A renamed field-backed relation cannot block direct stale-tuple cleanup."""
 
     from django.apps import apps
@@ -212,10 +187,8 @@ def test_reconcile_directly_purges_stale_relations_from_active_store(
         active_relationship_model,
     )
 
-
-    settings.REBAC_LOCAL_BACKEND_STORAGE = storage_mode
     package = apps.get_app_config("nexus").name
-    definition = _managed(package, "nexus/tie")
+    definition = SchemaDefinition.objects.get(resource_type="nexus/tie")
     stale_backed = _managed_relation_for_definition(
         package,
         definition,
@@ -229,13 +202,7 @@ def test_reconcile_directly_purges_stale_relations_from_active_store(
         "legacy_reader",
         backing=None,
     )
-    kept = _managed_relation_for_definition(
-        package,
-        definition,
-        "party_a",
-        backing=backing_to_dict(FieldBinding(path="party_a")),
-        subject_type="parties/party",
-    )
+    kept = definition.relations.get(name="party_a")
 
     relationship_model = active_relationship_model()
     stale_tuple = relationship_model.objects.create(

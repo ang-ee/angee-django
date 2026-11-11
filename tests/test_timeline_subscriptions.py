@@ -33,7 +33,7 @@ from tests.conftest import SchemaAddon, create_user, vault_for
 pytestmark = pytest.mark.django_db(transaction=True)
 
 
-def test_timeline_publisher_never_emits_record_updates_and_discards_rollbacks(composed_permissions):
+def test_timeline_publisher_never_emits_record_updates_and_discards_rollbacks(composed_tables):
     record = vault_for(create_user("timeline-publisher"))
     with capture_broadcasts() as records, patch("angee.timeline.events.broadcast_group") as timelines:
         with transaction.atomic():
@@ -52,7 +52,7 @@ def test_timeline_publisher_never_emits_record_updates_and_discards_rollbacks(co
 
 @pytest.mark.parametrize("admitted", [False, True])
 def test_timeline_subscription_authorizes_admission_and_each_delivery(
-    composed_permissions, monkeypatch, tmp_path, admitted,
+    composed_tables, monkeypatch, tmp_path, admitted,
 ):
     owner, reader = create_user("timeline-stream-owner"), create_user("timeline-stream-reader")
     record = vault_for(owner)
@@ -84,27 +84,28 @@ def test_timeline_subscription_authorizes_admission_and_each_delivery(
         broadcast_timeline_changes([record])
 
     async def scenario():
+        timeout = 10  # bounds a hang, not latency: a long-lived worker's full GC stops the loop over a second
         client = WebsocketCommunicator(
             AngeeGraphQLWSConsumer.as_asgi(schema=schemas.build("console")),
             "/graphql/console/", subprotocols=["graphql-transport-ws"],
         )
         client.scope["user"] = reader
-        assert (await client.connect())[0]
+        assert (await client.connect(timeout))[0]
         try:
             await client.send_json_to({"type": "connection_init"})
-            assert await client.receive_json_from() == {"type": "connection_ack"}
+            assert await client.receive_json_from(timeout) == {"type": "connection_ack"}
             await client.send_json_to({"id": "timeline", "type": "subscribe", "payload": {
                 "query": "subscription($model: String!, $id: ID!) { timelineChanged(model: $model, id: $id) }",
                 "variables": {"model": record._meta.label, "id": public_id_of(record)},
             }})
             if admitted:
-                await asyncio.wait_for(joined.wait(), timeout=3)
+                await asyncio.wait_for(joined.wait(), timeout)
                 await sync_to_async(publish)()
-                assert await client.receive_json_from() == {
+                assert await client.receive_json_from(timeout) == {
                     "id": "timeline", "type": "next", "payload": {"data": {"timelineChanged": True}},
                 }
                 await sync_to_async(publish)(revoke=True)
-            assert await client.receive_json_from() == {"id": "timeline", "type": "complete"}
+            assert await client.receive_json_from(timeout) == {"id": "timeline", "type": "complete"}
             assert not layer.groups
         finally:
             await client.disconnect()

@@ -24,9 +24,9 @@ from tests.chatterdemo.models import ChatterDoc
 from tests.messaging_campaign import grant
 from tests.t3_campaign import campaign_access as campaign_access
 from tests.t3_campaign import campaign_user as campaign_user
-from tests.t3_campaign import messaging_access_schema as messaging_access_schema
 
 
+@pytest.mark.django_db(transaction=True)
 @pytest.mark.parametrize("size", (100, 1500))
 def test_fanout_chunks_account_read_gates_and_delivers_exactly_the_readable_half(
     campaign_access,
@@ -57,8 +57,8 @@ def test_fanout_chunks_account_read_gates_and_delivers_exactly_the_readable_half
     statements = [statement_body(q["sql"]) for q in gate_queries]
     chunks = [sql for sql in statements if statement_startswith(sql, "SELECT") and "EXISTS(" in sql]
     # Native check_bulk_permissions decides 50 items per batch: statements per batch, not per user.
-    # 0.31 (2 -> 2 or 3) splits a batch's bounds at its statement-size budget; registry items compile wider.
-    per_batch = 3 if campaign_access == "registry" else 2
+    # 0.31 (2 -> 3) splits a batch's bounds at its statement-size budget; registry items compile wider.
+    per_batch = 3
     batches = size // 50
     assert len(chunks) == per_batch * batches
     # 0.31 (1 per batch -> 0): actor memberships are predicates of the bound statements, never a separate read.

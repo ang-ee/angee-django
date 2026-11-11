@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
-import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
+import { fireEvent, render, screen } from "@testing-library/react";
+import { beforeEach, describe, expect, test, vi } from "vitest";
 import { InAppLinkProvider } from "@angee/ui";
 import { createRouteHref } from "@angee/ui/runtime";
 
@@ -53,8 +53,6 @@ beforeEach(() => {
   platformMocks.usePlatformAddon.mockReset();
   platformMocks.usePlatformModel.mockReset();
 });
-
-afterEach(() => cleanup());
 
 describe("platform detail surfaces", () => {
   test("AddonDetail preserves loading and not-found states", () => {

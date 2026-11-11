@@ -49,7 +49,6 @@ CHATTER = {
 }
 
 
-@pytest.mark.django_db(transaction=True)
 def test_rows_post_comments_replies_and_notes_as_their_author(
     composed_tables: None, tmp_path: Path,
 ) -> None:
@@ -81,7 +80,6 @@ def test_rows_post_comments_replies_and_notes_as_their_author(
         assert Message.objects.filter(thread=thread, created_by=author).count() == 3
 
 
-@pytest.mark.django_db(transaction=True)
 def test_a_changed_chatter_row_is_refused_rather_than_reposted(composed_tables: None, tmp_path: Path) -> None:
     del composed_tables
     files = dict(CHATTER)
@@ -101,7 +99,6 @@ def test_a_changed_chatter_row_is_refused_rather_than_reposted(composed_tables: 
         assert question.preview == "Which day does it break?"
 
 
-@pytest.mark.django_db(transaction=True)
 def test_the_record_owner_refuses_an_author_without_post_access(composed_tables: None, tmp_path: Path) -> None:
     del composed_tables
     addon = _addon(tmp_path, {

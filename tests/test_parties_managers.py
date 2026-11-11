@@ -17,8 +17,6 @@ from angee.messaging.testing.models import Handle, Organization, Party
 from angee.parties.managers import PartyQuerySet
 from tests.tables import model_tables
 
-pytestmark = pytest.mark.django_db(transaction=True)
-
 
 @pytest.mark.parametrize("refresh", [False, True])
 def test_handle_upsert_bounds_source_display_text(composed_tables: None, refresh: bool) -> None:
@@ -170,6 +168,7 @@ def test_named_respects_the_legal_name_owners_read_scope(owner: Any) -> None:
     assert not Party.objects.with_actor(owner).named("Northstar Studio").exists()
 
 
+@pytest.mark.django_db(transaction=True)
 def test_named_excludes_archived_rows_in_an_archivable_composition(owner: Any) -> None:
     """An archive-aware party queryset composes its native archive predicate."""
 
@@ -251,20 +250,26 @@ def test_confirmed_preserves_actor_scope(owner: Any) -> None:
     assert not Handle.objects.with_actor(owner).confirmed("email", handle.value).exists()
 
 
-def test_child_reaches_parent_statements_through_its_parent_link(owner: Any) -> None:
-    """An MTI child's parent-declared statements bind the loaded ancestor row without a query."""
+@pytest.mark.parametrize("deferred", [False, True], ids=["loaded", "deferred-parent-fields"])
+def test_child_binds_parent_statements_without_a_query(owner: Any, deferred: bool) -> None:
+    """An MTI child's parent-declared statements bind the ancestor row without a query.
+
+    A GraphQL read defers parent columns it does not select; the ancestor still
+    binds by the child's primary key, so provenance reads cost only their own query.
+    """
 
     with system_context(reason="test parent statements of a child"):
         organization = Organization.objects.create(
             display_name="Upcast Studio", legal_name="Upcast Legal", created_by=owner
         )
         organization.with_actor(owner).confirm(aspect="identity", values={"display_name": "Upcast Studio"})
-    reader = Organization.objects.with_actor(owner).get(pk=organization.pk)
+    rows = Organization.objects.with_actor(owner)
+    reader = (rows.only("pk", "legal_name") if deferred else rows).get(pk=organization.pk)
 
     with CaptureQueriesContext(connection) as captured:
         subjects = [manager.instance for manager in reader.statement_managers()]
     assert captured.captured_queries == []
-    assert [type(subject) for subject in subjects][0] is Party
+    assert type(subjects[0]) is Party
     assert all(subject.pk == organization.pk for subject in subjects)
     with system_context(reason="test parent provenance of a child"):
         assert list(reader.provenance("display_name").values_list("display_name", flat=True)) == ["Upcast Studio"]

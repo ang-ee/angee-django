@@ -1,8 +1,8 @@
 // @vitest-environment happy-dom
 
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import type { ReactNode } from "react";
-import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
+import { beforeEach, describe, expect, test, vi } from "vitest";
 import { createRouteHref } from "@angee/ui/runtime";
 
 const platformMocks = vi.hoisted(() => ({
@@ -54,8 +54,6 @@ beforeEach(() => {
     isFetching: false, error: null,
   });
 });
-
-afterEach(() => cleanup());
 
 function lastSearch(): Record<string, unknown> {
   const call = platformMocks.navigate.mock.lastCall?.[0] as {

@@ -106,6 +106,7 @@ def test_upsert_refuses_a_row_bound_to_another_model_before_writing() -> None:
     )
 
 
+@pytest.mark.django_db(transaction=True)
 @pytest.mark.usefixtures("composed_tables")
 @pytest.mark.skipif(connection.vendor != "postgresql", reason="PostgreSQL resource ledger row-lock contract")
 def test_concurrent_upserts_converge_on_one_row_and_refuse_another_model() -> None:

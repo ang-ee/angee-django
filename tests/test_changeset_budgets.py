@@ -40,14 +40,17 @@ def _touching(captured: CaptureQueriesContext, model: Any) -> list[str]:
 
 
 def _data_statements(captured: CaptureQueriesContext) -> list[str]:
-    """Each statement's verb and first table, without transaction control."""
+    """Each statement's verb and outermost table, without transaction control or subqueries."""
 
     statements = []
     for query in captured:
         sql = statement_body(query["sql"])
         if statement_startswith(sql, ("BEGIN", "COMMIT", "SAVEPOINT", "RELEASE")):
             continue
-        table = re.search(r'(?:FROM|INTO|UPDATE)\s+"([^"]+)"', sql)
+        outer = sql
+        while (inner := re.sub(r"\([^()]*\)", "", outer)) != outer:
+            outer = inner
+        table = re.search(r'(?:FROM|INTO|UPDATE)\s+"([^"]+)"', outer)
         statements.append(f"{sql.split(' ', 1)[0]} {table.group(1) if table else '?'}")
     return statements
 
@@ -74,7 +77,6 @@ def test_close_writes_bookkeeping_only_and_export_records_the_hash(composed_tabl
     assert f'"{Party._meta.label_lower}":[' in document and '"hash"' not in document
 
 
-@pytest.mark.django_db(transaction=True)
 def test_tracked_save_and_queryset_update_query_budgets(composed_tables: None) -> None:
     """One re-select and one history insert per captured statement, plus the savepoint pair."""
 
@@ -90,16 +92,19 @@ def test_tracked_save_and_queryset_update_query_budgets(composed_tables: None) -
     assert not _touching(saved, _changeset_model()) and not _touching(updated, _changeset_model())
     party_table = Party._meta.db_table
     history_table = Party.history.model._meta.db_table
-    # REBAC's schema-revision check, the UPDATE, then capture: one stored-state
-    # re-select and one history insert.
+    # The baseline probe (an instance save reads nothing before it writes; the row's
+    # history may live on its MTI children), REBAC's schema-revision check, the
+    # UPDATE, then capture: one stored-state re-select and one history insert.
     assert _data_statements(saved) == [
+        f"SELECT {party_table}",
         "SELECT rebac_schemageneration",
         f"UPDATE {party_table}",
         f"SELECT {party_table}",
         f"INSERT {history_table}",
     ]
-    # Frozen keys, REBAC's schema-revision check, the UPDATE, one re-select and
-    # one history insert, then one key probe per tracked MTI child table.
+    # Frozen keys (carrying the baseline test, so it costs no statement), REBAC's
+    # schema-revision check, the UPDATE, one re-select and one history insert,
+    # then one key probe per tracked MTI child table.
     assert _data_statements(updated) == [
         f"SELECT {party_table}",
         "SELECT rebac_schemageneration",

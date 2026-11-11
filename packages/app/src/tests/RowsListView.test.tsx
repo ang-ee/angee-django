@@ -1,7 +1,6 @@
 // @vitest-environment happy-dom
 
 import {
-  cleanup,
   fireEvent,
   render,
   screen,
@@ -16,14 +15,12 @@ import {
 } from "@tanstack/react-router";
 import { ResourceQuery } from "@angee/metadata";
 import type { ReactElement } from "react";
-import { afterEach, describe, expect, test, vi } from "vitest";
+import { describe, expect, test, vi } from "vitest";
 
 import { parseFlatSearch, stringifyFlatSearch } from "../create-app";
 import { ResourceViewProvider } from "@angee/ui/views/resource-view-context";
 import { RowsListView } from "@angee/ui/views/RowsListView";
 import type { ListColumn } from "@angee/ui/views/resource-view-list-body";
-
-afterEach(() => cleanup());
 
 interface Item extends Record<string, unknown> {
   id: string;

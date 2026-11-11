@@ -5,11 +5,13 @@ import { createMemoryHistory, createRootRoute, createRoute, createRouter, Router
 import { ResourceQuery, type DataResourceFieldMetadata } from "@angee/metadata";
 import { testDataResource } from "@angee/metadata/testing";
 import { OperationDocumentsProvider } from "@angee/refine";
+import type { RefineTestDataProvider } from "@angee/refine/testing";
 import { ActionSelectionLimit, AppRuntimeProvider, ModalsHost, ToastProvider, ResourceViewProvider } from "@angee/ui";
 import { createUiTestProviders } from "@angee/ui/testing";
 import type { ReactElement } from "react";
 import { afterEach, expect, test, vi } from "vitest";
 
+import { messageForm } from "./MessageForm";
 import { HeldDraftActions, MessagesPage, type MessageListRow } from "./MessagesPage";
 
 const query = ResourceQuery.forRows({ fields: {
@@ -34,7 +36,7 @@ const resource = testDataResource("messaging.Message", {
   typeNames: { filter: "MessageBoolExp", order: "MessageOrderBy" },
 });
 const { Provider, clearClients } = createUiTestProviders({
-  resources: [resource, testDataResource("messaging.Thread")], apiUrl: "test://messages",
+  resources: [resource, testDataResource("messaging.Thread"), testDataResource("messaging.Part")], apiUrl: "test://messages",
   queryClientConfig: { defaultOptions: { queries: { retry: false, staleTime: Infinity } } },
 });
 afterEach(() => { cleanup(); clearClients(); });
@@ -45,6 +47,7 @@ afterEach(() => { cleanup(); clearClients(); });
 const FIRST_ROWS_TIMEOUT = 5000;
 
 const HELD = { is_held: true } as const;
+const SENDER = { display_name: "Billing Desk", value: "billing@example.test" };
 
 function rowCheckbox(title: string): HTMLElement {
   return within(screen.getByText(title).closest("tr")!).getByRole("checkbox", { name: "Select row" });
@@ -57,7 +60,7 @@ function checked(element: HTMLElement): boolean {
 function dataProvider({ count = 2, limit = 100, fail = false, transportFailure = false, limitFailure = false, limitPending = false } = {}) {
   const rows: MessageListRow[] = Array.from({ length: count }, (_, index) => ({
     id: String(index + 1), title: `Message ${index + 1}`, preview: "A held reply",
-    created_at: "2026-10-01T00:00:00Z", channel: { id: "channel", display_name: "Discussion" },
+    created_at: "2026-10-01T00:00:00Z", channel: { id: "channel", display_name: "Discussion" }, sender: SENDER,
     revision: index + 3, permissions: ["read", "delete", "send_held"],
   }));
   const custom = vi.fn(async ({ meta }: { meta?: Record<string, unknown> }) => {
@@ -89,12 +92,12 @@ function dataProvider({ count = 2, limit = 100, fail = false, transportFailure =
 }
 
 /** Mount a component as the /messages route renders it: no ambient view above it. */
-function mount(component: () => ReactElement, provider: ReturnType<typeof dataProvider>) {
+function mount(component: () => ReactElement, provider: RefineTestDataProvider) {
   const root = createRootRoute();
   const route = createRoute({ getParentRoute: () => root, path: "/messages", validateSearch: (search) => search, component });
   const record = createRoute({ getParentRoute: () => route, path: "$id", component: () => null });
   const router = createRouter({ routeTree: root.addChildren([route.addChildren([record])]), history: createMemoryHistory({ initialEntries: ["/messages"] }) });
-  render(<Provider dataProvider={{ getList: provider.getList, custom: provider.custom }}><AppRuntimeProvider runtime={{}}>
+  render(<Provider dataProvider={provider}><AppRuntimeProvider runtime={{}}>
     <OperationDocumentsProvider documents={{ console: { groups: { "messaging.Message":
       "query MessageGroups { messages_groups { key { channel_id channel_name } aggregate { count } } totalCount }",
     } } }}><ModalsHost><ToastProvider><RouterProvider router={router} /></ToastProvider></ModalsHost></OperationDocumentsProvider>
@@ -105,7 +108,7 @@ function mount(component: () => ReactElement, provider: ReturnType<typeof dataPr
 /** The messages route, whose ResourceList owns the one view the page and its held verbs read. */
 async function fixture({ held = false, ...data }: { held?: boolean } & Parameters<typeof dataProvider>[0] = {}) {
   const provider = dataProvider(data);
-  const router = mount(MessagesPage, provider);
+  const router = mount(MessagesPage, { getList: provider.getList, custom: provider.custom });
   await screen.findByText("Message 1", {}, { timeout: FIRST_ROWS_TIMEOUT });
   /** Edit the route's filter, which the view reads from the URL as JSON text. */
   const showFilter = async (filter: object): Promise<void> => {
@@ -121,6 +124,12 @@ test("the ordinary grouped route retains selection and the shared delete action"
   fireEvent.click(screen.getAllByRole("checkbox", { name: "Select row" })[0]!);
   expect(await screen.findByRole("button", { name: /Delete/ })).toBeTruthy();
   expect(screen.queryByRole("button", { name: "Send now" })).toBeNull();
+});
+
+test("each message row reads like an email: sender, subject, preview and channel", async () => {
+  await fixture();
+  const row = within(screen.getByText("Message 1").closest("tr")!);
+  for (const text of ["Billing Desk", "A held reply", "Discussion"]) expect(row.getByText(text)).toBeTruthy();
 });
 
 test("route edits and browser back clear selection while preserving grouping", async () => {
@@ -219,7 +228,7 @@ test("an unavailable selected row explains both disabled verbs without a loaded-
   const f = dataProvider();
   mount(() => <ResourceViewProvider resource="messaging.Message" scope="local">
     <HeldDraftActions ids={new Set(["unloaded"])} rows={[]} />
-  </ResourceViewProvider>, f);
+  </ResourceViewProvider>, { getList: f.getList, custom: f.custom });
   const reason = await screen.findByText("Select readable held drafts with permission to send or discard them.");
   for (const name of ["Send now", "Discard"]) {
     const button = screen.getByRole("button", { name });
@@ -252,4 +261,33 @@ test("while the action limit loads both verbs are busy, with no reason copy", as
     expect(button.getAttribute("aria-describedby")).toBeNull();
   }
   expect(f.mutations()).toHaveLength(0);
+});
+
+test("a Message record reads like an email, previews an attachment beside the body and stars it for its reader", async () => {
+  const message = {
+    id: "msg-1", platform: null, thread: null, parent: null, channel: { id: "channel", display_name: "AP mailbox" },
+    title: "Invoice 42", preview: "Please find the invoice attached.", starred: false, sender: SENDER,
+    sent_at: "2026-10-01T09:00:00Z", created_at: "2026-10-01T09:00:01Z",
+    participants: [{ id: "ptp-2", role: "TO", handle: { display_name: "Accounts", value: "ap@example.test" } }],
+    parts: [
+      { id: "part-body", fragment: { text: "The complete retained message body." } },
+      { id: "part-file", name: "invoice.pdf", type: "application/pdf", file: { filename: "invoice.pdf", url: "/files/invoice.pdf" } },
+    ],
+  };
+  const custom = vi.fn(async ({ meta }: { meta?: Record<string, unknown> }) => meta?.gqlMutation
+    ? { data: { set_inbox_message_starred: { id: message.id, starred: true } } }
+    : { data: { messages: [message] } });
+  mount(() => <messageForm.Component resource="messaging.Message" id="msg-1" readOnly />, {
+    getOne: vi.fn(async () => ({ data: { id: message.id, title: message.title } })), custom,
+  });
+  expect(await screen.findByText("The complete retained message body.")).toBeTruthy();
+  for (const text of ["Billing Desk", "billing@example.test", "To Accounts"]) expect(screen.getByText(text)).toBeTruthy();
+  expect(screen.queryByRole("complementary", { name: "Attachment preview" })).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: "invoice.pdf" }));
+  expect(await screen.findByRole("complementary", { name: "Attachment preview" })).toBeTruthy();
+  fireEvent.click(screen.getByRole("button", { name: "Close preview" }));
+  await waitFor(() => expect(screen.queryByRole("complementary", { name: "Attachment preview" })).toBeNull());
+  fireEvent.click(screen.getByRole("button", { name: "Star message" }));
+  await waitFor(() => expect(custom.mock.calls.find(([request]) => request.meta?.gqlMutation)?.[0].meta?.gqlVariables)
+    .toEqual({ id: message.id, starred: true }));
 });

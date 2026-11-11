@@ -177,7 +177,6 @@ def test_max_input_tokens_preserves_unknown_budget(embedding, monkeypatch):
     embedding.native.max_input_tokens.assert_not_awaited()
 
 
-@pytest.mark.django_db(transaction=True)
 def test_embed_persists_first_use_dimensions_without_losing_live_capabilities(embedding, composed_tables):
     model = embedding.model
     model.provider = make_integration("embedding", model=InferenceProvider, backend_class="manual")
@@ -190,7 +189,6 @@ def test_embed_persists_first_use_dimensions_without_losing_live_capabilities(em
     assert model.capabilities == {"newer": "metadata", "embedding_dimensions": 3}
 
 
-@pytest.mark.django_db(transaction=True)
 def test_embed_stale_first_use_refuses_a_different_recorded_dimension(embedding, composed_tables):
     model = embedding.model
     model.provider = make_integration("embedding-drift", model=InferenceProvider, backend_class="manual")

@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 
-import { cleanup, render, screen } from "@testing-library/react";
-import { afterEach, describe, expect, test, vi } from "vitest";
+import { render, screen } from "@testing-library/react";
+import { describe, expect, test, vi } from "vitest";
 
 vi.mock("./i18n", () => ({ usePartiesT: () => (key: string) => key }));
 
@@ -10,8 +10,6 @@ import {
   partyAddressText,
   partyContactValues,
 } from "./PartyContactSummary";
-
-afterEach(cleanup);
 
 describe("PartyContactSummary", () => {
   const party = {

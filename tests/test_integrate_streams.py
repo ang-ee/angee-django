@@ -21,8 +21,11 @@ from django.db import (
     transaction,
 )
 from django.utils import timezone
+from hypothesis import example, given, settings
+from hypothesis import strategies as st
 from rebac import system_context
 
+from angee.base.serialization import canonical_json
 from angee.integrate import streams as stream_driver
 from angee.integrate.errors import IntegrationError
 from angee.integrate.impl import AdapterContractError, BridgeImpl
@@ -40,6 +43,7 @@ from angee.integrate.states import (
 from angee.integrate.streams import (
     ApplyResult,
     BridgeSyncError,
+    ChangeKind,
     CursorInvalid,
     LocalChange,
     PartitionFailure,
@@ -49,6 +53,7 @@ from angee.integrate.streams import (
     WriteBackResult,
     advance_stream,
     begin_stream_cycle,
+    classify_change,
     open_stream,
     push_stream,
     reconcile_stream,
@@ -60,6 +65,8 @@ from angee.messaging.backends import ChannelBackend, ParsedMessage, ParsedPart
 from angee.messaging.testing.models import Channel, Message
 from tests.conftest import current_stream, make_integration
 from tests.stream_adapters import applied_history, failure_state
+
+pytestmark = pytest.mark.django_db(transaction=True)
 
 
 class AppliedRecord(models.Model):
@@ -175,6 +182,64 @@ def finish_sweep(stream: SyncStream, adapter: MemoryAdapter, *, page_bound: int 
         if not stream.reconcile_state:
             return changed
     raise AssertionError("The bounded sweep did not finish.")
+
+
+_JSON = st.recursive(
+    st.none() | st.booleans() | st.integers(-2, 2) | st.text("ab", max_size=2),
+    lambda values: st.lists(values, max_size=3) | st.dictionaries(st.text("ab", max_size=2), values, max_size=3),
+    max_leaves=6,
+)
+
+
+SIDES = ("base", "edit", "other")
+
+
+def _as_tuples(value: Any) -> Any:
+    """Spell every array of a JSON value as a tuple, as a Python projection may."""
+    if isinstance(value, dict):
+        return {key: _as_tuples(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return tuple(_as_tuples(item) for item in value)
+    return value
+
+
+@pytest.mark.django_db
+@settings(max_examples=50, deadline=None)
+@given(
+    values=st.tuples(_JSON, _JSON, _JSON), local=st.sampled_from(SIDES), remote=st.sampled_from(SIDES),
+    tombstone=st.booleans(), mapping_changed=st.booleans(),
+)
+@example(values=([1], [2], [3]), local="edit", remote="edit", tombstone=False, mapping_changed=False)  # same edit
+@example(values=([1], [2], [3]), local="edit", remote="edit", tombstone=False, mapping_changed=True)  # remapped
+@example(values=([1], [2], None), local="edit", remote="other", tombstone=True, mapping_changed=False)  # deleted
+@example(values=([1], [2], [3]), local="edit", remote="other", tombstone=False, mapping_changed=False)  # diverged
+@example(values=([1], [2], [3]), local="edit", remote="base", tombstone=False, mapping_changed=False)  # local only
+@example(values=([1], [2], [3]), local="base", remote="base", tombstone=False, mapping_changed=True)  # remap only
+@example(values=([1], [2], [3]), local="base", remote="base", tombstone=True, mapping_changed=False)  # known delete
+def test_classify_change_decides_by_which_side_moved_from_the_base(
+    values: tuple[Any, Any, Any], local: str, remote: str, tombstone: bool, mapping_changed: bool
+) -> None:
+    """A side moved when its canonical JSON differs from the base, however a projection spells it.
+
+    A mapping change is a remote move, so it never leaves a record unchanged. A
+    local edit beside a tombstone or a mapping change always needs a choice, even
+    when the values agree; the same plain edit on both sides applies. A tombstone
+    the base already holds, with no local edit, changes nothing.
+    """
+    side = dict(zip(SIDES, values))
+    spelled = {name: canonical_json(value) for name, value in side.items()}
+    flags = {"tombstone": tombstone, "mapping_changed": mapping_changed}
+    kind = classify_change(base=side["base"], local=side[local], remote=side[remote], **flags)
+    local_moved, remote_moved = (spelled[name] != spelled["base"] for name in (local, remote))
+    if not local_moved:
+        expected = ChangeKind.APPLY if remote_moved or mapping_changed else ChangeKind.UNCHANGED
+    elif tombstone or mapping_changed or remote_moved and spelled[local] != spelled[remote]:
+        expected = ChangeKind.CONFLICT
+    else:
+        expected = ChangeKind.APPLY if remote_moved else ChangeKind.WRITE_BACK
+    assert kind is expected
+    respelled = {"local": _as_tuples(side[local]), "remote": _as_tuples(side[remote])}
+    assert classify_change(base=side["base"], **respelled, **flags) is kind
 
 
 @pytest.mark.parametrize(

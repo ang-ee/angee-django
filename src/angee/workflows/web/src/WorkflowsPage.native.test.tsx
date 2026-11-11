@@ -1,15 +1,13 @@
 // @vitest-environment happy-dom
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { afterEach, beforeAll, expect, test, vi } from "vitest";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { beforeAll, expect, test, vi } from "vitest";
 
 import { CatalogueStory } from "./WorkflowsPage.stories";
 
 beforeAll(() => {
-  Element.prototype.getAnimations ??= () => [];
   class ResizeObserverStub { observe(): void {} unobserve(): void {} disconnect(): void {} }
   vi.stubGlobal("ResizeObserver", ResizeObserverStub);
 });
-afterEach(cleanup);
 
 test("opens a workflow from the catalogue with its retained versions and recent runs", async () => {
   render(<CatalogueStory list />);
