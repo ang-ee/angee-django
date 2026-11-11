@@ -1,15 +1,11 @@
 // @vitest-environment happy-dom
 
-import { cleanup, render, screen } from "@testing-library/react";
-import { afterEach, describe, expect, test } from "vitest";
+import { render, screen } from "@testing-library/react";
+import { describe, expect, test } from "vitest";
 
 import { defaultWidgets } from "./index";
 
 describe("booleanBadge widget", () => {
-  afterEach(() => {
-    cleanup();
-  });
-
   test("renders true and false labels as badges", () => {
     const Chip = defaultWidgets.booleanBadge.read;
 

@@ -34,10 +34,10 @@ from tests.stream_adapters import applied_history, failure_state
 
 
 @pytest.fixture
-def replica(composed_tables: None) -> Iterator[Any]:
+def replica(db: None) -> Iterator[Any]:
     """A replica partition with an explicit engine actor for assertions."""
 
-    del composed_tables
+    del db
     with system_context(reason="test record protocol"):
         bridge = make_integration("record-protocol", model=Channel)
         yield current_stream(bridge, "contacts", "book", kind=StreamKind.RECORD_REPLICA)
@@ -196,9 +196,8 @@ def test_baseline_completion_reads_deferred_identity(replica: Any) -> None:
     assert replica.has_completed_baseline()
 
 
-def test_baseline_completion_is_independent_of_actor_visibility(composed_tables: None) -> None:
-    del composed_tables
-    call_command("rebac", "sync", verbosity=0)
+def test_baseline_completion_is_independent_of_actor_visibility(db: None) -> None:
+    del db
     with system_context(reason="test baseline completion authorization"):
         bridge = make_integration("baseline-completion-rebac", model=Channel)
         other = get_user_model().objects.create_user(username="baseline-completion-other")
@@ -214,6 +213,7 @@ def test_baseline_completion_is_independent_of_actor_visibility(composed_tables:
         assert not deferred.has_completed_baseline()
 
 
+@pytest.mark.django_db(transaction=True)
 def test_keep_local_before_first_baseline_preserves_conflict(replica: Any, monkeypatch: pytest.MonkeyPatch) -> None:
     replica.direction = StreamDirection.BIDIRECTIONAL
     replica.save(update_fields=["direction"])
@@ -491,8 +491,8 @@ def test_quarantine_survives_observation_and_absence_until_last_resolution(repli
     assert link.status == LinkStatus.OBSERVED
 
 
-def test_event_feeds_reject_record_links(composed_tables: None) -> None:
-    del composed_tables
+def test_event_feeds_reject_record_links(db: None) -> None:
+    del db
     with system_context(reason="test event feed identity"):
         bridge = make_integration("event-protocol", model=Channel)
         stream = current_stream(bridge, "messages", "inbox")
@@ -501,8 +501,8 @@ def test_event_feeds_reject_record_links(composed_tables: None) -> None:
         assert not RecordLink.objects.exists()
 
 
-def test_current_partition_query_returns_latest_generation_only(composed_tables: None) -> None:
-    del composed_tables
+def test_current_partition_query_returns_latest_generation_only(db: None) -> None:
+    del db
     with system_context(reason="test current stream selection"):
         bridge = make_integration("partition-protocol", model=Channel)
         old = current_stream(bridge, "messages", "inbox", cursor={"uid": 1})
@@ -520,8 +520,8 @@ def test_current_partition_query_returns_latest_generation_only(composed_tables:
         assert other.pk not in every_key
 
 
-def test_stream_uses_a_protected_integration_foreign_key(composed_tables: None) -> None:
-    del composed_tables
+def test_stream_uses_a_protected_integration_foreign_key(db: None) -> None:
+    del db
     with system_context(reason="test stream bridge identity"):
         bridge = make_integration("stream-identity", model=Channel)
         stream = current_stream(bridge, "messages")
@@ -539,8 +539,8 @@ def test_stream_uses_a_protected_integration_foreign_key(composed_tables: None) 
             bridge.delete()
 
 
-def test_stream_rejects_an_integration_without_a_concrete_bridge(composed_tables: None) -> None:
-    del composed_tables
+def test_stream_rejects_an_integration_without_a_concrete_bridge(db: None) -> None:
+    del db
     with system_context(reason="test stream requires a bridge"):
         integration = make_integration("stream-no-bridge")
         with pytest.raises(ValidationError, match="concrete Integration child"):
@@ -548,9 +548,8 @@ def test_stream_rejects_an_integration_without_a_concrete_bridge(composed_tables
         assert not SyncStream.objects.exists()
 
 
-def test_stream_and_links_follow_the_integration_foreign_key_owner(composed_tables: None) -> None:
-    del composed_tables
-    call_command("rebac", "sync", verbosity=0)
+def test_stream_and_links_follow_the_integration_foreign_key_owner(db: None) -> None:
+    del db
     with system_context(reason="test derived stream authorization"):
         bridge = make_integration("stream-rebac", model=Channel)
         owner = get_user_model().objects.get(pk=bridge.owner_id)

@@ -20,6 +20,8 @@ from angee.platform_integrate_vcs import catalog
 from tests.conftest import Addon, Repository, Source, VcsBridge, catalogue_package, make_integration
 from tests.wheel_fixtures import write_wheel
 
+pytestmark = pytest.mark.django_db(transaction=True)
+
 
 class CatalogueBackend(VCSBackend):
     """Binary remote transport over test-authored, already built artifacts."""
@@ -51,7 +53,7 @@ class CatalogueBackend(VCSBackend):
 
 
 @pytest.fixture
-def catalog_source(composed_tables, tmp_path, settings):
+def catalog_source(db, tmp_path, settings):
     settings.ANGEE_VCS_BACKEND_CLASSES = {
         **settings.ANGEE_VCS_BACKEND_CLASSES, "local": "tests.test_platform_integrate_vcs.CatalogueBackend",
     }
@@ -254,7 +256,7 @@ def test_catalogue_never_imports_build_or_addon_code(catalog_source, monkeypatch
     assert "catalog_remote.base" not in sys.modules
 
 
-def test_catalogue_distribution_uniqueness_remains_database_enforced(composed_tables):
+def test_catalogue_distribution_uniqueness_remains_database_enforced():
     with system_context(reason="tests.catalogue.uniqueness"):
         Addon.objects.create(name="example.foo_bar", distribution="example-foo-bar")
         with pytest.raises(IntegrityError), transaction.atomic():

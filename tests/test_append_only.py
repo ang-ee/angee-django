@@ -35,9 +35,9 @@ class RetainedEvidence(AppendOnlyModel, AuditMixin, models.Model):
         db_table = "test_append_only_evidence"
 
 
-def test_append_only_base_manager_and_instance_writes_are_guarded(transactional_db: Any) -> None:
+def test_append_only_base_manager_and_instance_writes_are_guarded(db: Any) -> None:
     """The declared base manager keeps ordinary writes closed."""
-    del transactional_db
+    del db
     with system_context(reason="test append-only base manager"):
         row = RetainedEvidence.objects.create(name="retained")
         assert isinstance(RetainedEvidence._base_manager.get_queryset(), AppendOnlyBaseQuerySet)
@@ -64,12 +64,12 @@ def test_audit_foreign_keys_declare_serializable_materialized_nullification() ->
 
 
 def test_append_only_rejects_collection_mutation_and_collector_nullifies_audit_fks(
-    composed_tables: None,
+    db: None,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """The audit FK policy bypasses a queryset whose update path stays closed."""
 
-    del composed_tables
+    del db
     with pytest.raises(ValidationError, match="contenttypes.ContentType rows cannot be edited"):
         AppendOnlyQuerySet(model=ContentType).update(created_by=None)
     actor = create_user("append-only-auditor")

@@ -30,7 +30,7 @@ def choices(model, actor):
     ("integrate_vcs.VcsBridge", "github"),
     ("messaging.Channel", "slack"),
 ])
-def test_relation_defaults_use_public_ids_for_every_impl_consumer(composed_tables, model, key):
+def test_relation_defaults_use_public_ids_for_every_impl_consumer(db, model, key):
     admin = create_platform_admin(f"impl-default-{key}")
     with system_context(reason="test implementation default catalogue"):
         vendor = Vendor.objects.create(slug=key, display_name=key.title())
@@ -45,7 +45,7 @@ def test_relation_defaults_use_public_ids_for_every_impl_consumer(composed_table
 
 @pytest.mark.parametrize("target_exists,readable", [(False, True), (True, False), (True, True)])
 def test_relation_default_metadata_omits_missing_and_unreadable_targets(
-    composed_tables, settings, monkeypatch, target_exists, readable,
+    db, settings, monkeypatch, target_exists, readable,
 ):
     settings.ANGEE_VCS_BACKEND_CLASSES = {"github": f"{__name__}.ScopedDefaultBackend"}
     actor = create_platform_admin("impl-default-admin") if readable else create_user("impl-default-reader")

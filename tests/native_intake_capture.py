@@ -14,7 +14,7 @@ from django.contrib.auth.models import AnonymousUser
 from django.core.exceptions import ValidationError
 from django.core.management import call_command
 from django.db import connection, connections, models, transaction
-from django.test import TransactionTestCase, override_settings
+from django.test import TransactionTestCase
 from django.test.utils import CaptureQueriesContext
 from graphql import GraphQLInputObjectType, get_named_type, parse, validate
 from rebac import PermissionDenied, actor_context, system_context
@@ -1137,11 +1137,6 @@ class NeedResetAccessTests(IntakeAccessCase):
         self.assertFalse(need.task.with_actor(to_subject_ref(self.reader)).has_access("comment"))
         with self.assertRaises(StaleRevisionError):
             owner_need.reset_access(confirmed=True, expected_revision=revision)
-
-
-@override_settings(REBAC_LOCAL_BACKEND_STORAGE="denormalized")
-class DenormalizedNeedResetAccessTests(NeedResetAccessTests):
-    pass
 
 
 class DecisionRecordTests(IntakeAccessCase):

@@ -69,20 +69,12 @@ def as_actor(row: Any, actor: Any) -> Any:
     return type(row)._base_manager.get(pk=row.pk).with_actor(actor)
 
 
-@pytest.fixture(params=("denormalized", "registry"))
-def campaign_store(request: pytest.FixtureRequest) -> Any:
-    """Select the relationship store before the existing schema fixture syncs it."""
-    with override_settings(
-        REBAC_LOCAL_BACKEND_STORAGE=request.param,
-        REBAC_STRICT_MODE=True,
-        REBAC_SUPERUSER_BYPASS=False,
-    ):
-        yield request.param
-
-
 @pytest.fixture
-def campaign_schema(campaign_store: str, project_access_schema: Any) -> None:
-    del campaign_store, project_access_schema
+def campaign_schema(db: Any) -> Any:
+    """Run the campaign in strict mode without the superuser bypass."""
+    del db
+    with override_settings(REBAC_STRICT_MODE=True, REBAC_SUPERUSER_BYPASS=False):
+        yield
 
 
 class ProposalCampaign:

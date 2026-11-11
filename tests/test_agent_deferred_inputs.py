@@ -11,7 +11,7 @@ from angee.agents_integrate_anthropic.backend import AnthropicInferenceBackend
 from tests.test_agents import InferenceModel, _provider
 
 
-def test_deployment_identity_refreshes_deferred_handle(composed_tables: None, monkeypatch):
+def test_deployment_identity_refreshes_deferred_handle(db: None, monkeypatch):
     provider = _provider("deferred-identity", backend_class="ollama")
     with system_context(reason="test.agents.identity"):
         model = InferenceModel.objects.create(provider=provider, name="catalogue", config={"provider_model": "native"})
@@ -23,7 +23,7 @@ def test_deployment_identity_refreshes_deferred_handle(composed_tables: None, mo
 
 
 @pytest.mark.parametrize("has_model", [False, True])
-def test_agent_error_classifier_loads_nullable_deferred_model(composed_tables: None, monkeypatch, has_model):
+def test_agent_error_classifier_loads_nullable_deferred_model(db: None, monkeypatch, has_model):
     """Agent error classifier loads nullable deferred model."""
     provider = _provider("deferred-error", backend_class="anthropic")
     with system_context(reason="test.agents.error.seed"):
@@ -42,7 +42,7 @@ def test_agent_error_classifier_loads_nullable_deferred_model(composed_tables: N
 
 
 @pytest.mark.parametrize("error,transient", [(TimeoutError(), True), (ValueError("timeout"), False)])
-def test_inference_model_classifies_through_a_deferred_provider(composed_tables: None, error, transient):
+def test_inference_model_classifies_through_a_deferred_provider(db: None, error, transient):
     """Consumers can classify failures without reading provider infrastructure."""
 
     provider = _provider("model-error", backend_class="anthropic")
@@ -55,7 +55,7 @@ def test_inference_model_classifies_through_a_deferred_provider(composed_tables:
 
 @pytest.mark.parametrize("has_credential", [False, True])
 def test_provision_inputs_and_readiness_load_uncached_relations(
-    composed_tables: None, monkeypatch: pytest.MonkeyPatch, has_credential: bool
+    db: None, monkeypatch: pytest.MonkeyPatch, has_credential: bool
 ) -> None:
     """Provision inputs and readiness load uncached relations."""
     provider = _provider("routed-inputs", backend_class="ollama")

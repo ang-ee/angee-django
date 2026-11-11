@@ -1,17 +1,14 @@
 // @vitest-environment happy-dom
 import * as React from "react";
 import {
-  cleanup,
   fireEvent,
   render,
   screen,
   waitFor,
 } from "@testing-library/react";
-import { afterEach, expect, test } from "vitest";
+import { expect, test } from "vitest";
 
 import { comboboxWidget } from "./combobox";
-
-afterEach(cleanup);
 
 test("retains a selected option from a non-option initial value", async () => {
   const Edit = comboboxWidget.edit!;

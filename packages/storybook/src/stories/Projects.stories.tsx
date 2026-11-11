@@ -14,7 +14,7 @@ import {
 } from "@angee/ui";
 import { useState, type ReactElement } from "react";
 
-import { jsonResponse, storySchema } from "./runtime-fixtures";
+import { storySchema } from "./runtime-fixtures";
 
 interface TaskRow extends Row {
   id: string;
@@ -326,34 +326,24 @@ function TaskBoardFixture(): ReactElement {
 
 function createProjectSchemas() {
   let tasks = initialTasks.map((task) => ({ ...task }));
-  const schemas = storySchema(async (_input, init) => {
-    const request = requestPayload(init);
-    const values = recordValue(request.variables.data)
-      ?? recordValue(request.variables.values)
-      ?? recordValue(request.variables.input)
-      ?? {};
-    if (request.query.includes("update_project_tasks_by_pk")) {
-      const id = stringValue(request.variables.id)
-        ?? stringValue(recordValue(request.variables.pk_columns)?.id);
-      tasks = tasks.map((task) => task.id === id ? taskWithValues(task, values) : task);
-    }
-    const detailId = stringValue(request.variables.id);
-    const detailTask = tasks.find((task) => task.id === detailId) ?? tasks[0];
-    return jsonResponse({
-      data: {
-        projects: [project],
-        projects_aggregate: { aggregate: { count: 1 } },
-        projects_by_pk: project,
-        update_projects_by_pk: project,
-        project_tasks: tasks,
-        project_tasks_aggregate: { aggregate: { count: tasks.length } },
-        project_tasks_by_pk: detailTask,
-        insert_project_tasks_one: detailTask,
-        update_project_tasks_by_pk: detailTask,
-        users,
-        users_aggregate: { aggregate: { count: users.length } },
-      },
-    });
+  const values = (args: Record<string, unknown>) => recordValue(args.object) ?? recordValue(args._set) ?? {};
+  const detail = (args: Record<string, unknown>) => tasks.find((task) => task.id === stringValue(args.id)) ?? tasks[0];
+  const schemas = storySchema({
+    projects: () => [project],
+    projects_aggregate: () => ({ aggregate: { count: 1 } }),
+    projects_by_pk: () => project,
+    update_projects_by_pk: () => project,
+    project_tasks: () => tasks,
+    project_tasks_aggregate: () => ({ aggregate: { count: tasks.length } }),
+    project_tasks_by_pk: detail,
+    insert_project_tasks_one: detail,
+    update_project_tasks_by_pk: (args) => {
+      const id = stringValue(recordValue(args.pk_columns)?.id);
+      tasks = tasks.map((task) => task.id === id ? taskWithValues(task, values(args)) : task);
+      return tasks.find((task) => task.id === id);
+    },
+    users: () => users,
+    users_aggregate: () => ({ aggregate: { count: users.length } }),
   });
   schemas.public = { ...schemas.public!, metadata };
   return schemas;
@@ -375,18 +365,6 @@ function taskWithValues(task: TaskRow, values: Record<string, unknown>): TaskRow
     ...(typeof values.sub_sort_order === "number"
       ? { sub_sort_order: values.sub_sort_order }
       : {}),
-  };
-}
-
-function requestPayload(init?: RequestInit): {
-  query: string;
-  variables: Record<string, unknown>;
-} {
-  if (typeof init?.body !== "string") return { query: "", variables: {} };
-  const parsed = recordValue(JSON.parse(init.body));
-  return {
-    query: typeof parsed?.query === "string" ? parsed.query : "",
-    variables: recordValue(parsed?.variables) ?? {},
   };
 }
 

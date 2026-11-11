@@ -15,7 +15,7 @@ from angee.iam.autoconfig import bootstrap_admin_settings
 from angee.iam.management.commands import bootstrap_admin
 
 
-def test_bootstrap_admin_creates_platform_admin(composed_tables) -> None:
+def test_bootstrap_admin_creates_platform_admin(db) -> None:
     """The manager itself creates a loginable account and its role membership."""
 
     user, created = get_user_model().objects.ensure_bootstrap_admin(
@@ -31,7 +31,7 @@ def test_bootstrap_admin_creates_platform_admin(composed_tables) -> None:
 
 
 @pytest.mark.parametrize("existing_password", ["kept-secret", None])
-def test_bootstrap_admin_promotes_existing_user_without_resetting_password(composed_tables, existing_password) -> None:
+def test_bootstrap_admin_promotes_existing_user_without_resetting_password(db, existing_password) -> None:
     """The command promotes an account and only fills an unusable password."""
 
     User = get_user_model()
@@ -52,7 +52,7 @@ def test_bootstrap_admin_promotes_existing_user_without_resetting_password(compo
 
 
 @pytest.mark.parametrize("existing", [False, True])
-def test_bootstrap_admin_membership_failure_rolls_back_account_changes(composed_tables, monkeypatch, existing) -> None:
+def test_bootstrap_admin_membership_failure_rolls_back_account_changes(db, monkeypatch, existing) -> None:
     """A failed role grant cannot leave a newly created or promoted admin behind."""
 
     User = get_user_model()
@@ -73,7 +73,7 @@ def test_bootstrap_admin_membership_failure_rolls_back_account_changes(composed_
         assert not User._base_manager.filter(username="rollback").exists()
 
 
-def test_bootstrap_admin_requires_password_for_new_user(composed_tables, monkeypatch) -> None:
+def test_bootstrap_admin_requires_password_for_new_user(db, monkeypatch) -> None:
     """A manager refusal becomes a command error without creating an account."""
 
     monkeypatch.setattr(

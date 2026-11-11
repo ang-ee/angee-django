@@ -51,7 +51,7 @@ from angee.base.hooks import resolve_hooks
 from angee.base.managers import MergeableUnscopedManager
 from angee.base.models.base import AngeeModel
 from angee.base.models.identity import instances_from_public_ids
-from angee.base.models.merge_references import MergePolicy, named_in_relationships, references
+from angee.base.models.merge_references import MergePolicy, Reference, named_in_relationships, references
 from angee.base.models.trash import TrashMixin
 from angee.base.permissions import instance_actor
 from angee.base.signals import pre_merge
@@ -253,10 +253,7 @@ class MergeableMixin(AngeeModel):
             pre_merge.send(sender=model, survivor=survivor, join=join, contexts=contexts)
             self.validate_merge(merged)
             self.merge_fields(merged, **options)
-            moving = [
-                reference for reference in references(cast(Any, model))
-                if self.merge_moves_references and reference.policy == MergePolicy.MOVE
-            ]
+            moving = model.moved_references()
             with system_context(reason=MERGE_REASON):
                 # Redirects are identity, even when a container keeps its members.
                 # Tracked updates make flattening reversible with this same merge.
@@ -274,6 +271,19 @@ class MergeableMixin(AngeeModel):
                             reference.move(pointing, survivor=survivor)
             for record in merged:
                 self.retire_merged(record)
+
+    @classmethod
+    def moved_references(cls) -> tuple[Reference, ...]:
+        """Return the references a fold of this model re-points at the survivor.
+
+        The one list the fold moves and the history contract checks
+        (``angee.E051``): every ``MOVE`` reference, unless the model keeps
+        references on the retired record (:attr:`merge_moves_references`).
+        """
+
+        if not cls.merge_moves_references:
+            return ()
+        return tuple(reference for reference in references(cast(Any, cls)) if reference.policy == MergePolicy.MOVE)
 
     @classmethod
     def lock_merge_records(cls, records: Sequence[Self]) -> None:

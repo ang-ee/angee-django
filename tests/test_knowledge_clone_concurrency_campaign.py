@@ -11,21 +11,24 @@ from angee.provenance.context import changeset_model
 from tests.conftest import MarkdownPage, Page, Vault
 from tests.knowledge_campaign import clone_template as clone_template
 
-pytestmark = pytest.mark.skipif(connection.vendor != "postgresql", reason="PostgreSQL clone two-writer contract")
+pytestmark = [
+    pytest.mark.skipif(connection.vendor != "postgresql", reason="PostgreSQL clone two-writer contract"),
+    pytest.mark.django_db(transaction=True),
+]
 
 
 def test_two_same_key_claims_commit_one_complete_clone(clone_template, monkeypatch):
     fixture = clone_template
     ready = Barrier(2)
-    manager_class = type(changeset_model().objects)
-    claim = manager_class.claim
+    changesets = changeset_model().objects
+    claim = changesets.claim
 
-    def synchronized_claim(manager, scope, key, *, fingerprint):
+    def synchronized_claim(scope, key, *, fingerprint):
         if key == "race":
             ready.wait(timeout=10)
-        return claim(manager, scope, key, fingerprint=fingerprint)
+        return claim(scope, key, fingerprint=fingerprint)
 
-    monkeypatch.setattr(manager_class, "claim", synchronized_claim)
+    monkeypatch.setattr(changesets, "claim", synchronized_claim)
 
     def clone():
         close_old_connections()

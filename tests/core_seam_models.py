@@ -118,7 +118,7 @@ def subject_tables(ownership_tables):
 
 
 @pytest.fixture
-def constrained_vault_tables(composed_tables):
+def constrained_vault_tables(db):
     active = backend()
     extra = parse_zed("""
         definition scopedemo/constrained_vault_child {

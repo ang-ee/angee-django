@@ -1,12 +1,10 @@
 // @vitest-environment happy-dom
 
-import { act, cleanup, fireEvent, render, renderHook, screen } from "@testing-library/react";
+import { act, fireEvent, render, renderHook, screen } from "@testing-library/react";
 import { startTransition, Suspense, useEffect, useState } from "react";
-import { afterEach, expect, test, vi } from "vitest";
+import { expect, test, vi } from "vitest";
 
 import { useValueStable } from "./use-value-stable";
-
-afterEach(cleanup);
 
 test("retains equal nested JSON values across object key order and replaces changed array order", () => {
   const first = { filter: { title: "alpha", states: ["open", "done"] } };

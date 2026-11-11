@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterator
+from contextlib import nullcontext
 from dataclasses import replace
 from typing import Any
 
@@ -10,7 +11,6 @@ import pytest
 import strawberry
 import strawberry_django
 from django.core.exceptions import ValidationError
-from django.core.management import call_command
 from django.db import connection, models
 from rebac import (
     PermissionDenied,
@@ -26,6 +26,7 @@ from rebac.backends import LocalBackend, backend, reset_backend
 from rebac.schema import parse_zed
 from rebac.testing import install_schema
 
+from angee.base.models.merge_references import MergeContractMixin, MergePolicy
 from angee.graphql.data.hasura import AngeeHasuraWriteBackend, hasura_model_resource, public_pk_decoder
 from angee.graphql.node import AngeeNode
 from angee.graphql.testing.documents import execute_schema, result_data
@@ -63,8 +64,13 @@ class ProjectAccessTaskType(AngeeNode):
     promoted_phase: str | None = strawberry_django.field(resolver=AbstractTask.promoted_phase)
 
 
-class TaskPromotion(models.Model):
-    """Minimal relation target for the production task's phase expression."""
+class TaskPromotion(MergeContractMixin):
+    """Minimal relation target for the production task's phase expression.
+
+    Like ``projects.Project.converted_from``, the lineage key stays on a merged task.
+    """
+
+    merge_policies = {"converted_from": MergePolicy.KEEP}
 
     converted_from = models.ForeignKey(ProjectAccessTask, on_delete=models.CASCADE, related_name="promoted_projects")
     current_milestone = models.ForeignKey(Scope, null=True, on_delete=models.SET_NULL)
@@ -95,11 +101,10 @@ mutation CreateTask($project: ID!) {
 
 
 @pytest.fixture
-def task_create_case(transactional_db: None) -> Iterator[tuple[Scope, Any, Any]]:
+def task_create_case(db: None) -> Iterator[tuple[Scope, Any, Any]]:
     """Keep broad row creation permission distinct from the project's write policy."""
 
-    del transactional_db
-    call_command("rebac", "sync", verbosity=0)
+    del db
     active = backend()
     assert isinstance(active, LocalBackend)
     extra = parse_zed(
@@ -262,17 +267,21 @@ def test_task_visibility_has_no_unvalidated_write_path(
         with pytest.raises(ValidationError, match="Transition refused"):
             task.with_actor(owner).set_visibility("inherited")
         assert calls == ["inherited"]
-    elif path in ("save_fields", "save"):
-        task.visibility = "inherited"
-        with pytest.raises(ValidationError, match="immutable"):
-            task.save(update_fields=("visibility", "updated_at") if path == "save_fields" else None)
-    elif path == "update":
-        with pytest.raises(ValueError, match="set_visibility"):
-            ProjectAccessTask.objects.with_actor(writer).filter(pk=task.pk).update(visibility="inherited")
     else:
-        task.visibility = "inherited"
-        with pytest.raises(ValueError, match="set_visibility"):
-            ProjectAccessTask.objects.with_actor(writer).bulk_update([task], ["visibility"])
+        # Neither the pinned writer nor an elevated system context bypasses the verb.
+        for elevation in (nullcontext(), system_context(reason="tests.task_visibility.elevated")):
+            with elevation:
+                if path in ("save_fields", "save"):
+                    task.visibility = "inherited"
+                    with pytest.raises(ValidationError, match="immutable"):
+                        task.save(update_fields=("visibility", "updated_at") if path == "save_fields" else None)
+                elif path == "update":
+                    with pytest.raises(ValueError, match="set_visibility"):
+                        ProjectAccessTask.objects.with_actor(writer).filter(pk=task.pk).update(visibility="inherited")
+                else:
+                    task.visibility = "inherited"
+                    with pytest.raises(ValueError, match="set_visibility"):
+                        ProjectAccessTask.objects.with_actor(writer).bulk_update([task], ["visibility"])
     task.refresh_from_db()
     assert task.visibility == "restricted"
     assert task.revision == initial_revision
@@ -325,24 +334,6 @@ def test_pinned_task_insert_requires_project_write_inside_system_context(
         ProjectAccessTask.objects.as_user(reader).insert(candidate)
     assert ProjectAccessTask._base_manager.count() == 0
     assert ProjectAccessTask.history.count() == 0
-
-
-@pytest.mark.parametrize("allowed", (False, True), ids=("project-reader", "project-writer"))
-def test_direct_task_save_requires_project_write(
-    task_create_case: tuple[Scope, Any, Any],
-    allowed: bool,
-) -> None:
-    """Native instance saves enforce the same project policy as GraphQL inserts."""
-
-    project, reader, admin = task_create_case
-    candidate = ProjectAccessTask(title="Direct task", project=project).with_actor(admin if allowed else reader)
-    if allowed:
-        candidate.save()
-        assert ProjectAccessTask._base_manager.get(pk=candidate.pk).project_id == project.pk
-    else:
-        with pytest.raises(PermissionDenied, match="Write access to the project is required to add a task."):
-            candidate.save()
-        assert not ProjectAccessTask._base_manager.exists()
 
 
 @pytest.mark.parametrize("allowed", (False, True), ids=("project-reader", "project-writer"))

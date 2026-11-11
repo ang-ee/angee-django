@@ -10,7 +10,7 @@ from tests.test_knowledge import _grant
 
 
 @pytest.fixture
-def clone_template(composed_tables):
+def clone_template(db):
     author = create_user("template-author")
     actor = create_user("clone-creator")
     reader = create_user("template-reader")

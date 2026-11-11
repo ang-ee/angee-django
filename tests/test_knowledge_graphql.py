@@ -22,7 +22,7 @@ from tests.test_knowledge import _grant
 knowledge_schema = importlib.import_module("angee.knowledge.schema")
 
 
-def test_navigation_roots_ancestors_and_wikilinks_follow_page_access(composed_tables: None) -> None:
+def test_navigation_roots_ancestors_and_wikilinks_follow_page_access(db: None) -> None:
     owner, reader = create_user("navigation-owner"), create_user("navigation-reader")
     vault = vault_for(owner)
     with actor_context(owner):
@@ -47,7 +47,7 @@ def test_navigation_roots_ancestors_and_wikilinks_follow_page_access(composed_ta
     assert detail["ancestors"] == [{"id": str(parent.sqid), "title": "Private parent", "has_children": True}]
 
 
-def test_navigation_relations_batch_narrow_lists_without_disclosing_hidden_pages(composed_tables: None) -> None:
+def test_navigation_relations_batch_narrow_lists_without_disclosing_hidden_pages(db: None) -> None:
     """Ancestor selections and link targets stay scoped at constant query count."""
 
     owner, reader = create_user("batch-navigation-owner"), create_user("batch-navigation-reader")
@@ -95,7 +95,7 @@ def test_navigation_relations_batch_narrow_lists_without_disclosing_hidden_pages
     assert counts[1] == counts[0], counts
 
 
-def test_ancestor_prefetch_preserves_the_supplied_actor_and_deferred_model_fields(composed_tables: None) -> None:
+def test_ancestor_prefetch_preserves_the_supplied_actor_and_deferred_model_fields(db: None) -> None:
     """Sharing one ancestor must retain its queryset authority on each result."""
 
     owner, reader = create_user("ancestor-owner"), create_user("ancestor-reader")
@@ -120,7 +120,7 @@ def test_ancestor_prefetch_preserves_the_supplied_actor_and_deferred_model_field
             assert ancestor.actor() == to_subject_ref(reader)
 
 
-def test_nested_ancestor_selections_batch_shared_paths_and_aliases(composed_tables: None) -> None:
+def test_nested_ancestor_selections_batch_shared_paths_and_aliases(db: None) -> None:
     """Every selected ancestor depth retains its optimizer hints across aliases."""
 
     owner, reader = create_user("nested-ancestor-owner"), create_user("nested-ancestor-reader")
@@ -188,7 +188,7 @@ def test_page_resource_emits_nested_word_count_subtitle_fact() -> None:
     assert wire["subtitle"]["wordCount"] == "markdown.word_count"
 
 
-def test_create_vault_and_page_flow(composed_tables: None) -> None:
+def test_create_vault_and_page_flow(db: None) -> None:
     """Vault insertion and concrete page creation use Knowledge-owned factories."""
 
     alice = create_user("alice")
@@ -230,7 +230,7 @@ def test_create_vault_and_page_flow(composed_tables: None) -> None:
     assert page["parent"] is None
 
 
-def test_anonymous_create_vault_is_denied_with_a_code(composed_tables: None) -> None:
+def test_anonymous_create_vault_is_denied_with_a_code(db: None) -> None:
     """Anonymous mutation calls surface the standard permission code."""
 
     result = execute_schema(
@@ -242,7 +242,7 @@ def test_anonymous_create_vault_is_denied_with_a_code(composed_tables: None) -> 
     assert result.errors[0].extensions["code"] == "PERMISSION_DENIED"
 
 
-def test_generated_vault_idempotency_replays_through_its_factory(composed_tables: None) -> None:
+def test_generated_vault_idempotency_replays_through_its_factory(db: None) -> None:
     """The custom factory retains shared replay and typed conflict projection."""
 
     actor = create_user("vault-replay")
@@ -267,7 +267,7 @@ def test_generated_vault_idempotency_replays_through_its_factory(composed_tables
         assert vault.owner_id == vault.created_by_id == actor.pk
 
 
-def test_pages_query_is_actor_scoped_and_vault_filtered(composed_tables: None) -> None:
+def test_pages_query_is_actor_scoped_and_vault_filtered(db: None) -> None:
     """The pages connection narrows to the actor's scope and one vault."""
 
     alice = create_user("alice")
@@ -298,7 +298,7 @@ def test_pages_query_is_actor_scoped_and_vault_filtered(composed_tables: None) -
     assert [row["title"] for row in filtered] == ["Reading list"]
 
 
-def test_detail_query_resolves_raw_sqid(composed_tables: None) -> None:
+def test_detail_query_resolves_raw_sqid(db: None) -> None:
     """Typed detail fields refetch a public object by raw sqid."""
 
     alice = create_user("alice")
@@ -325,7 +325,7 @@ def test_detail_query_resolves_raw_sqid(composed_tables: None) -> None:
     assert data["vaults_by_pk"] == {"id": str(vault.sqid), "name": "Node vault", "permissions": ["delete", "write"]}
 
 
-def test_update_page_body_round_trip_and_stale_guard(composed_tables: None) -> None:
+def test_update_page_body_round_trip_and_stale_guard(db: None) -> None:
     """Body writes return the sidecar facts and reject stale hashes."""
 
     alice = create_user("alice")
@@ -389,7 +389,7 @@ def test_update_page_body_round_trip_and_stale_guard(composed_tables: None) -> N
 
 
 @pytest.mark.parametrize("failure", ["stale_title", "invalid_title"])
-def test_update_page_body_keeps_title_conflicts_and_validation_in_band(composed_tables: None, failure: str) -> None:
+def test_update_page_body_keeps_title_conflicts_and_validation_in_band(db: None, failure: str) -> None:
     alice = create_user("knowledge-title-guard")
     vault = vault_for(alice)
     with actor_context(alice):
@@ -417,7 +417,7 @@ def test_update_page_body_keeps_title_conflicts_and_validation_in_band(composed_
         assert stored.title == ("Concurrent title" if failure == "stale_title" else "Original")
 
 
-def test_update_page_body_reports_unsupported_kind(composed_tables: None) -> None:
+def test_update_page_body_reports_unsupported_kind(db: None) -> None:
     """Bodyless kinds surface a typed error code, not a server fault."""
 
     alice = create_user("alice")
@@ -441,7 +441,7 @@ def test_update_page_body_reports_unsupported_kind(composed_tables: None) -> Non
     assert payload["error_code"] == "UNSUPPORTED_KIND"
 
 
-def test_markdown_outline_field_lists_headings(composed_tables: None) -> None:
+def test_markdown_outline_field_lists_headings(db: None) -> None:
     """The markdown sidecar exposes its body's ATX heading outline."""
 
     alice = create_user("alice")
@@ -470,7 +470,7 @@ def test_markdown_outline_field_lists_headings(composed_tables: None) -> None:
     ]
 
 
-def test_patch_page_section_round_trip_and_guards(composed_tables: None) -> None:
+def test_patch_page_section_round_trip_and_guards(db: None) -> None:
     """Section patch splices the body, honours CAS, and fails fast on a miss."""
 
     alice = create_user("alice")
@@ -538,7 +538,7 @@ def test_patch_page_section_round_trip_and_guards(composed_tables: None) -> None
     assert missing["error_code"] == "SECTION_NOT_FOUND"
 
 
-def test_search_pages_matches_title_and_body_actor_scoped(composed_tables: None) -> None:
+def test_search_pages_matches_title_and_body_actor_scoped(db: None) -> None:
     """search_pages spans title + body and only returns actor-visible pages."""
 
     alice = create_user("alice")
@@ -581,7 +581,7 @@ def test_search_pages_matches_title_and_body_actor_scoped(composed_tables: None)
 
 @pytest.mark.parametrize("passages", [False, True])
 def test_search_projection_batches_relations_and_preserves_backend_rank_and_access(
-    composed_tables: None, monkeypatch: pytest.MonkeyPatch, passages: bool,
+    db: None, monkeypatch: pytest.MonkeyPatch, passages: bool,
 ) -> None:
     """Ranked materialized search results receive every selected Page hint in bulk."""
 
@@ -622,7 +622,7 @@ def test_search_projection_batches_relations_and_preserves_backend_rank_and_acce
     assert counts[1] == counts[0], counts
 
 
-def test_page_backlinks_list_resolved_sources(composed_tables: None) -> None:
+def test_page_backlinks_list_resolved_sources(db: None) -> None:
     """The page detail surface exposes resolved incoming wikilinks."""
 
     alice = create_user("alice")
@@ -651,7 +651,7 @@ def test_page_backlinks_list_resolved_sources(composed_tables: None) -> None:
     assert not links.filter(display_text="elsewhere").backlinks_to(target).exists()
 
 
-def test_crud_update_is_row_scoped(composed_tables: None) -> None:
+def test_crud_update_is_row_scoped(db: None) -> None:
     """The generated update mutation denies actors outside the row scope."""
 
     alice = create_user("alice")
@@ -686,7 +686,7 @@ def test_crud_update_is_row_scoped(composed_tables: None) -> None:
     assert renamed["name"] == "Lab notes"
 
 
-def test_delete_vault_previews_blast_radius(composed_tables: None) -> None:
+def test_delete_vault_previews_blast_radius(db: None) -> None:
     """Vault deletion previews the cascade before a confirmed delete."""
 
     alice = create_user("alice")
@@ -733,7 +733,7 @@ def test_delete_vault_previews_blast_radius(composed_tables: None) -> None:
 @pytest.mark.parametrize("resource", ["vault", "page"])
 @pytest.mark.parametrize("confirm", [False, True])
 def test_knowledge_delete_preview_requires_delete_permission(
-    composed_tables: None, resource: str, confirm: bool,
+    db: None, resource: str, confirm: bool,
 ) -> None:
     """Readers cannot inspect deletion counts through either authored endpoint."""
 
@@ -763,7 +763,7 @@ def test_knowledge_delete_preview_requires_delete_permission(
     assert type(target).objects.as_user(owner).filter(pk=target.pk).exists()
 
 
-def test_schema_exposes_subscriptions(composed_tables: None) -> None:
+def test_schema_exposes_subscriptions(db: None) -> None:
     """The SDL carries console change subscriptions."""
 
     public_sdl = _schema("public").as_str()
@@ -810,7 +810,7 @@ def test_markdown_sidecar_preserves_its_native_relation() -> None:
     assert resource.query.fields["markdown"].relation.model == "knowledge.MarkdownPage"
 
 
-def test_declared_vault_identity_ignores_same_named_vaults_and_rechecks_access(composed_tables: None) -> None:
+def test_declared_vault_identity_ignores_same_named_vaults_and_rechecks_access(db: None) -> None:
     alice, bob, outsider = create_user("xref-alice"), create_user("xref-bob"), create_user("xref-outsider")
     intended = vault_for(alice, name="Shared label")
     other = vault_for(bob, name="Shared label")
@@ -831,7 +831,7 @@ def test_declared_vault_identity_ignores_same_named_vaults_and_rechecks_access(c
     assert execute_schema(_schema("console"), query, user=alice).errors
 
 
-def test_markdown_relations_batch_selected_bodies_for_a_non_admin_reader(composed_tables: None) -> None:
+def test_markdown_relations_batch_selected_bodies_for_a_non_admin_reader(db: None) -> None:
     owner, reader = create_user("body-batch-owner"), create_user("body-batch-reader")
     vault = vault_for(owner)
     with actor_context(owner):

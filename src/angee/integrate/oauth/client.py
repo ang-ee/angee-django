@@ -33,7 +33,7 @@ from authlib.integrations.httpx_client import OAuth2Client
 from authlib.oauth2.rfc6749.parameters import prepare_grant_uri
 
 from angee.integrate.errors import IntegrationError, RequestNotSentError
-from angee.integrate.http import HTTP_TIMEOUT_SECONDS, HttpClient, PinnedTransport
+from angee.integrate.http import HTTP_TIMEOUT_SECONDS, HttpClient
 from angee.integrate.oauth.errors import (
     CLIENT_NOT_CONFIGURED,
     MISSING_ENDPOINT,
@@ -71,18 +71,14 @@ _GRANT_URI_ARGUMENTS = frozenset({"uri", "client_id", "response_type", "redirect
 """``prepare_grant_uri``'s own arguments, which a provider's authorize extras never replace."""
 
 
-def oauth_get_json(
-    url: str, *, headers: dict[str, str] | None = None, transport: httpx2.BaseTransport | None = None,
-) -> Any:
+def oauth_get_json(url: str, *, headers: dict[str, str] | None = None) -> Any:
     """GET OAuth JSON with honest headers and support for configured private identity providers.
 
     The shared HTTP client owns transport and decoding. Discovery and userinfo
     retain their distinct failure policies at their callers.
     """
 
-    return HttpClient().get_json(
-        url, headers={**OUTBOUND_HEADERS, **(headers or {})}, allow_private=True, transport=transport,
-    )
+    return HttpClient().get_json(url, headers={**OUTBOUND_HEADERS, **(headers or {})}, allow_private=True)
 
 
 class OAuthClientProtocol:
@@ -92,9 +88,6 @@ class OAuthClientProtocol:
         """Bind the protocol to one OAuth client registration row."""
 
         self.oauth_client = oauth_client
-        # Test seam: an injected httpx2 transport (e.g. ``httpx2.MockTransport``) used
-        # by the per-row session and the JSON shim. ``None`` dials for real.
-        self._transport: httpx2.BaseTransport | None = None
         self._token_response_claims: dict[str, Any] = {}
 
     @property
@@ -187,7 +180,6 @@ class OAuthClientProtocol:
             claims = oauth_get_json(
                 with_query(userinfo_endpoint, params or {}),
                 headers={"Authorization": f"Bearer {access_token}"},
-                transport=self._transport,
             )
             return claims if isinstance(claims, dict) else {}
         except Exception:
@@ -342,7 +334,7 @@ class OAuthClientProtocol:
             client_secret=secret or None,
             token_endpoint_auth_method="client_secret_post" if secret else "none",
             headers=dict(OUTBOUND_HEADERS),
-            **_outbound_kwargs(self._transport),
+            **_outbound_kwargs(),
         )
 
     def _client_secret(self) -> str:
@@ -380,7 +372,7 @@ class OAuthClientProtocol:
     def _http_client(self) -> httpx2.Client:
         """Return a plain httpx2 client carrying the outbound headers (JSON-shim transport)."""
 
-        return httpx2.Client(headers=dict(OUTBOUND_HEADERS), **_outbound_kwargs(self._transport))
+        return httpx2.Client(headers=dict(OUTBOUND_HEADERS), **_outbound_kwargs())
 
     def _log_token_failure(self, status: object, body: Any) -> None:
         """Log bounded token-request metadata without provider-controlled values."""
@@ -444,21 +436,21 @@ class OAuthClientProtocol:
         return value
 
 
-def _outbound_kwargs(transport: httpx2.BaseTransport | None) -> dict[str, Any]:
+def _outbound_kwargs() -> dict[str, Any]:
     """Shared outbound httpx2 client policy: a request timeout and the transport.
 
-    A test injects an ``httpx2.MockTransport``; a real call rides the integrate
-    addon's SSRF-pinned ``PinnedTransport``, so OAuth, discovery, and userinfo get
-    the same address pinning and system-store TLS as every other outbound call.
-    Authlib's ``OAuth2Client`` is an ``httpx2.Client``, so the transport must be an
-    httpx2 transport too.
+    The transport is ``HttpClient.transport_factory``'s, the SSRF-pinned
+    ``PinnedTransport`` unless a test substitutes the network there, so OAuth,
+    discovery, and userinfo get the same address pinning and system-store TLS as
+    every other outbound call. Authlib's ``OAuth2Client`` is an ``httpx2.Client``,
+    so the transport must be an httpx2 transport too.
     ``allow_private=True`` permits operator-configured self-hosted IDPs on private
     networks while still rejecting cloud metadata and the other SSRF escapes.
     """
 
     return {
         "timeout": HTTP_TIMEOUT_SECONDS,
-        "transport": transport if transport is not None else PinnedTransport(allow_private=True),
+        "transport": HttpClient.transport_factory(allow_private=True),
     }
 
 

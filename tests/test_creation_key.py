@@ -14,7 +14,7 @@ from angee.provenance.context import changeset, changeset_model_label, current_c
 from angee.provenance.contrib.angee.exceptions import CreationKeyConflict
 from angee.provenance.contrib.angee.serialization import creation_fingerprint
 
-pytestmark = pytest.mark.django_db(transaction=True)
+pytestmark = pytest.mark.django_db
 
 
 def _model() -> Any:
@@ -75,6 +75,7 @@ def test_claim_validates_its_complete_identity(scope: str, key: str, fingerprint
         _claim(scope, key, fingerprint)
 
 
+@pytest.mark.django_db(transaction=True)
 def test_claim_requires_an_outer_transaction_and_precedes_boundary_writes() -> None:
     with changeset(fresh=True):
         with pytest.raises(RuntimeError, match="transaction.atomic"):

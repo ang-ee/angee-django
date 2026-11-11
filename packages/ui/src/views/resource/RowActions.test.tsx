@@ -1,10 +1,10 @@
 // @vitest-environment happy-dom
 
-import { cleanup, fireEvent, render, renderHook, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, renderHook, screen, waitFor } from "@testing-library/react";
 import * as React from "react";
 import { AppRuntimeProvider } from "../../runtime";
 import type { TypedDocumentNode } from "@angee/refine";
-import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
+import { beforeEach, describe, expect, test, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   confirm: vi.fn(),
@@ -333,8 +333,6 @@ describe("declared row actions", () => {
     await waitFor(() => expect((buttons[0] as HTMLButtonElement).disabled).toBe(false));
   });
 });
-
-afterEach(() => cleanup());
 
 function defaultAction(
   succeeded?: (result: RemoveResult | undefined) => boolean,

@@ -578,6 +578,7 @@ def test_graph_prefetches_real_decision_and_child_relations(schema, review, chil
     assert all(run["display_name"] for run in (*awaited, *children))
 
 
+@pytest.mark.django_db(transaction=True)
 def test_drill_in_decision_steps_read_their_decisions_once(schema, review):
     """Asked decisions join the step batch; their card details stay with the decisions owner."""
     actor, people, sent, question = review

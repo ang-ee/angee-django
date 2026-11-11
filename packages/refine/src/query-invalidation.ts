@@ -16,7 +16,7 @@ export function authoredQueryReadsAnyModel(
   return models.some((model) => typeof model === "string" && wanted.has(model));
 }
 
-/** Match one live row change, respecting an authored query's optional exact-record interests. */
+/** Match a direct live row change against exact-record or whole-model interests. */
 export function authoredQueryReadsChange(meta: unknown, model: string, id: string): boolean {
   if (!authoredQueryReadsAnyModel(meta, [model])) return false;
   const metadata = recordValue(meta);
@@ -28,19 +28,22 @@ export function authoredQueryReadsChange(meta: unknown, model: string, id: strin
   if (!Array.isArray(records)) return true;
   return records.some((value) => {
     const record = recordValue(value);
-    return record?.model === model && record?.id === id;
+    return record?.model === model && (record.id === undefined || record.id === id);
   });
 }
 
-/** Match one live change: an exact row with its related rows, or a whole model. */
-function authoredQueryReadsLiveChange(meta: unknown, change: LiveChange): boolean {
-  if (!change.id) return authoredQueryReadsAnyModel(meta, [change.model]);
-  return authoredQueryReadsChange(meta, change.model, change.id)
+/** Match a live change against exact-row or whole-model interests, including related rows. */
+export function queryReadsLiveChange(meta: unknown, change: LiveChange): boolean {
+  const relatedModels = recordValue(meta)?.angeeRelatedModels;
+  if (!change.id && !(Array.isArray(relatedModels) && relatedModels.includes(change.model))) {
+    return authoredQueryReadsAnyModel(meta, [change.model]);
+  }
+  return Boolean(change.id && authoredQueryReadsChange(meta, change.model, change.id))
     || authoredQueryReadsAnyModel(meta, [change.model]) && (change.relatedRecords ?? []).some((record) => {
       const records = recordValue(meta)?.angeeRecords;
       return Array.isArray(records) && records.some((value) => {
         const interest = recordValue(value);
-        return interest?.model === record.model && interest?.id === record.id;
+        return interest?.model === record.model && (interest.id === undefined || interest.id === record.id);
       });
     });
 }
@@ -112,6 +115,8 @@ const LIVE_MAX_WAIT_MS = 2000;
 export interface LiveDelivery<Change extends LiveChange> {
   queryKey: QueryKey;
   callback: (changes: readonly Change[]) => void;
+  /** Native lists can narrow related-model events to their own record model. */
+  matches?: (change: Change) => boolean;
 }
 
 export interface LiveInvalidation<Change extends LiveChange> {
@@ -165,7 +170,7 @@ export function createLiveInvalidation<Change extends LiveChange = LiveChange>(
     timer = undefined;
     firstAt = undefined;
     const reads = (query: Query) => keys.some((queryKey) => matchQuery({ queryKey, exact: true }, query))
-      || batch.some((change) => authoredQueryReadsLiveChange(query.meta, change));
+      || batch.some((change) => queryReadsLiveChange(query.meta, change));
     // Snapshot running reads before any callback starts a fresh read. Refine
     // invalidates resourceAll; its public key builder supplies that exact scope.
     const cache = queryClient?.getQueryCache();
@@ -221,6 +226,7 @@ export function createLiveInvalidation<Change extends LiveChange = LiveChange>(
     push(change, consumers = []) {
       changes.push(change);
       for (const consumer of consumers) {
+        if (consumer.matches && !consumer.matches(change)) continue;
         const pending = deliveries.get(consumer) ?? [];
         pending.push(change);
         deliveries.set(consumer, pending);

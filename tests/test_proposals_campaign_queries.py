@@ -9,8 +9,6 @@ import pytest
 from django.db import connection
 from django.test.utils import CaptureQueriesContext
 from rebac import actor_context, system_context, to_subject_ref
-from rebac.backends import backend
-from rebac.backends.local import LocalBackend
 
 from angee.base.testing.queries import is_rebac_revision_read, statement_body, statement_startswith
 from angee.graphql.capabilities import held_permissions, permission_annotations
@@ -19,9 +17,7 @@ from angee.projects.testing.models import Task
 from tests.proposals_campaign import ProposalCampaign, as_actor
 from tests.proposals_campaign import campaign as campaign
 from tests.proposals_campaign import campaign_schema as campaign_schema
-from tests.proposals_campaign import campaign_store as campaign_store
 from tests.proposals_models import Proposal, Round
-from tests.test_project_access import project_access_schema as project_access_schema
 
 # django-zed-rebac owns these fixed policy reads. Application row
 # reads and roster expansion have separate exact guards below.
@@ -166,16 +162,6 @@ def test_round_lists_use_one_application_select_and_constant_policy_and_roster_r
         assert categories[0].total() - 1 - 2 * roster <= ceiling, categories
 
 
-def test_round_and_proposal_read_scopes_compile_to_sql_for_non_admins(campaign: ProposalCampaign) -> None:
-    actor = campaign.person("outsider")
-    local = backend()
-    assert isinstance(local, LocalBackend)
-    for model in (Round, Proposal):
-        query = model.objects.with_actor(actor).scoped()
-        sql, _params = query.query.sql_with_params()
-        assert "SELECT" in sql.upper()
-
-
 def test_waiting_list_has_constant_query_count_and_is_private_to_each_recipient(campaign: ProposalCampaign) -> None:
     c = campaign
     # Django probes SQLite JSON support on first use; that connection setup is
@@ -252,6 +238,7 @@ def test_single_assignee_stops_waiting_after_posting_and_other_threads_do_not_co
         assert as_actor(question, manager).clarification_waiting() == []
 
 
+@pytest.mark.django_db(transaction=True)
 @pytest.mark.skipif(connection.vendor != "postgresql", reason="Native PostgreSQL JSON aggregation is required.")
 def test_postgresql_waiting_projection_executes_with_empty_and_populated_recipients(campaign: ProposalCampaign) -> None:
     c = campaign

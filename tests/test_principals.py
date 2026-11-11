@@ -17,7 +17,7 @@ from angee.base.permissions import actor_user_id, user_subject_ref
 User = get_user_model()
 
 
-def test_agent_principal_subject_is_its_service_user(composed_tables: None) -> None:
+def test_agent_principal_subject_is_its_service_user(db: None) -> None:
     """An agent acts as its linked non-login user, not as its owner."""
 
     owner = User.objects.create_user(username="principal-owner", email="principal@example.com")
@@ -35,7 +35,7 @@ def test_agent_principal_subject_is_its_service_user(composed_tables: None) -> N
 
 
 def test_actor_user_id_rejects_an_invalid_canonical_pk_without_query(
-    composed_tables: None,
+    db: None,
 ) -> None:
     """Malformed user subjects cannot become attribution foreign keys."""
 
@@ -67,7 +67,7 @@ def test_user_subject_ref_is_query_free_and_inverts_actor_user_id(settings: Any)
         user_subject_ref()
 
 
-def test_agent_create_materializes_service_user(composed_tables: None) -> None:
+def test_agent_create_materializes_service_user(db: None) -> None:
     """Agent rows own a linked non-login service user for FK attribution."""
 
     owner = User.objects.create_user(username="principal-owner-create", email="principal-create@example.com")
@@ -85,7 +85,7 @@ def test_agent_create_materializes_service_user(composed_tables: None) -> None:
     assert not service_user.has_usable_password()
 
 
-def test_agent_rename_resyncs_service_user_label(composed_tables: None) -> None:
+def test_agent_rename_resyncs_service_user_label(db: None) -> None:
     """Renaming an agent keeps its service user's display name in sync."""
 
     owner = User.objects.create_user(username="principal-owner-rename", email="principal-rename@example.com")
@@ -101,7 +101,7 @@ def test_agent_rename_resyncs_service_user_label(composed_tables: None) -> None:
 
 
 def test_agent_full_save_without_name_change_does_not_touch_service_user(
-    composed_tables: None, monkeypatch: pytest.MonkeyPatch,
+    db: None, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A no-op agent save must not query or update the service-user row."""
 
@@ -123,7 +123,7 @@ def test_agent_full_save_without_name_change_does_not_touch_service_user(
 
 
 def test_agent_create_rolls_back_when_service_user_sync_fails(
-    composed_tables: None,
+    db: None,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Agent creation and service-user sync commit or roll back together."""
@@ -144,7 +144,7 @@ def test_agent_create_rolls_back_when_service_user_sync_fails(
 
 
 def test_agent_deprovision_keeps_service_user_active_and_rename_preserves_it(
-    composed_tables: None,
+    db: None,
 ) -> None:
     """Deprovision is reversible; it does not own the service-user active flag."""
 
@@ -167,7 +167,7 @@ def test_agent_deprovision_keeps_service_user_active_and_rename_preserves_it(
     assert service_user.is_active is True
 
 
-def test_agent_instance_delete_deactivates_service_user(composed_tables: None) -> None:
+def test_agent_instance_delete_deactivates_service_user(db: None) -> None:
     """Deleting an agent deactivates its service principal."""
 
     owner = User.objects.create_user(username="principal-owner-delete", email="principal-delete@example.com")
@@ -180,7 +180,7 @@ def test_agent_instance_delete_deactivates_service_user(composed_tables: None) -
         assert User.objects.get(pk=user_id).is_active is False
 
 
-def test_agent_owner_delete_clears_ownership_and_keeps_the_service_user(composed_tables: None) -> None:
+def test_agent_owner_delete_clears_ownership_and_keeps_the_service_user(db: None) -> None:
     """Deleting the owner clears it and leaves the agent and its active principal to administrators."""
 
     owner = User.objects.create_user(username="principal-owner-cleared", email="principal-cleared@example.com")
@@ -195,7 +195,7 @@ def test_agent_owner_delete_clears_ownership_and_keeps_the_service_user(composed
         assert User.objects.get(pk=user_id).is_active is True
 
 
-def test_agent_bulk_delete_deactivates_service_user(composed_tables: None) -> None:
+def test_agent_bulk_delete_deactivates_service_user(db: None) -> None:
     """Bulk queryset deletes still deactivate service users through post_delete."""
 
     owner = User.objects.create_user(username="principal-owner-bulk", email="principal-bulk@example.com")
@@ -208,7 +208,7 @@ def test_agent_bulk_delete_deactivates_service_user(composed_tables: None) -> No
         assert User.objects.get(pk=user_id).is_active is False
 
 
-def test_service_user_sync_adopts_and_relabels_its_stable_username(composed_tables: None) -> None:
+def test_service_user_sync_adopts_and_relabels_its_stable_username(db: None) -> None:
     """A saved row without a link adopts the user its stable username names, relabelled as a service."""
 
     owner = User.objects.create_user(username="principal-owner-adopt", email="principal-adopt@example.com")
@@ -230,7 +230,7 @@ def test_service_user_sync_adopts_and_relabels_its_stable_username(composed_tabl
     assert not adopted.has_usable_password()
 
 
-def test_service_user_deactivation_refuses_a_person_account(composed_tables: None) -> None:
+def test_service_user_deactivation_refuses_a_person_account(db: None) -> None:
     """Only a service principal is deactivated by the deletion of its owner."""
 
     person = User.objects.create_user(username="principal-person", email="principal-person@example.com")

@@ -1,8 +1,8 @@
 // @vitest-environment happy-dom
 
 import * as React from "react";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { afterEach, beforeAll, describe, expect, test, vi } from "vitest";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { beforeAll, describe, expect, test, vi } from "vitest";
 
 import { GraphView } from "./GraphView";
 import { createUiTestProviders } from "../testing";
@@ -19,10 +19,6 @@ beforeAll(() => {
     configurable: true,
     value: ResizeObserverStub,
   });
-});
-
-afterEach(() => {
-  cleanup();
 });
 
 describe("GraphView interactions", () => {

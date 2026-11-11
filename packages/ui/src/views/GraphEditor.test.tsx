@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
-import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
-import { afterEach, describe, expect, test, vi } from "vitest";
+import { act, fireEvent, render, screen, within } from "@testing-library/react";
+import { describe, expect, test, vi } from "vitest";
 import { createUiTestProviders } from "../testing";
 import { GraphEditor, type GraphEditorProps } from "./GraphEditor";
 import type { GraphViewProps } from "./GraphView";
@@ -11,7 +11,6 @@ vi.mock("./GraphView", async (importOriginal) => {
   return { ...actual, GraphView: (props: GraphViewProps) => { flow.props = props; return <div data-testid="canvas"><div data-graph-node-id="a" tabIndex={0}>Canvas node</div></div>; } };
 });
 const { Provider } = createUiTestProviders();
-afterEach(cleanup);
 const nodes = [
   { id: "a", kind: "node", title: "Alpha", ariaLabel: "Alpha", ports: [{ id: "one", label: "First" }, { id: "two", label: "Second" }] },
   { id: "b", kind: "node", title: "Beta", ariaLabel: "Beta", ports: [{ id: "next", label: "Next" }] },

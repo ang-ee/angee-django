@@ -23,18 +23,16 @@ from tests.chatterdemo.models import ChatterDoc, TrackedRecordParent
 from tests.conftest import create_user, vault_for
 from tests.test_messaging_graphql import _schema
 
-pytestmark = pytest.mark.django_db(transaction=True)
-
 
 def _grant(resource: Any, relation: str, user: Any) -> None:
     write_relationships([RelationshipTuple(to_object_ref(resource), relation, to_subject_ref(user))])
 
 
 @pytest.fixture
-def sourced(composed_permissions: None) -> dict[str, Any]:
+def sourced(db: None) -> dict[str, Any]:
     """A task owner, a task reader who also reads the conversation, and the conversation."""
 
-    del composed_permissions
+    del db
     owner, reader, outsider = (create_user(name) for name in ("source-owner", "source-reader", "source-outsider"))
     with actor_context(owner):
         project = Project.objects.create(title="Sourced")

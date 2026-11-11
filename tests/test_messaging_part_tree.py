@@ -18,10 +18,10 @@ from tests.test_messaging import _storage_drive
 
 
 @pytest.fixture
-def part_tree(composed_tables: None) -> tuple[Message, dict[str, Part]]:
+def part_tree(db: None) -> tuple[Message, dict[str, Part]]:
     """Persist mixed, alternative, related and forwarded MIME branches."""
 
-    del composed_tables
+    del db
     with system_context(reason="messaging part tree setup"), mute_changes():
         message = Message.objects.create(platform="email")
         parts: dict[str, Part] = {}
@@ -51,7 +51,6 @@ def part_tree(composed_tables: None) -> tuple[Message, dict[str, Part]]:
     return message, parts
 
 
-@pytest.mark.django_db(transaction=True)
 @pytest.mark.parametrize("prefetched", [False, True])
 def test_part_navigation_and_mime_predicates(part_tree: tuple[Message, dict[str, Part]], prefetched: bool) -> None:
     """Navigation returns rows; MIME and text selection remain caller predicates."""
@@ -95,7 +94,6 @@ def test_part_navigation_and_mime_predicates(part_tree: tuple[Message, dict[str,
     assert len(queries) == (0 if prefetched else 9)
 
 
-@pytest.mark.django_db(transaction=True)
 def test_part_boundaries_are_included_and_prune_only_their_direction(
     part_tree: tuple[Message, dict[str, Part]],
 ) -> None:
@@ -134,7 +132,6 @@ def test_part_boundaries_are_included_and_prune_only_their_direction(
     ]
 
 
-@pytest.mark.django_db(transaction=True)
 def test_part_queries_never_follow_cross_message_parent_edges(
     part_tree: tuple[Message, dict[str, Part]],
 ) -> None:
@@ -158,14 +155,13 @@ def test_part_queries_never_follow_cross_message_parent_edges(
     assert len(ordered) == len(parts)
 
 
-@pytest.mark.django_db(transaction=True)
 @pytest.mark.parametrize("prefetched", [False, True])
 def test_part_ties_cycles_and_orphan_components_have_deterministic_order(
-    composed_tables: None, prefetched: bool
+    db: None, prefetched: bool
 ) -> None:
     """Sibling sqids break ties, and rootless cycles remain finite and visible."""
 
-    del composed_tables
+    del db
     with system_context(reason="messaging cyclic part setup"), mute_changes():
         message = Message.objects.create(platform="email")
         root = Part.objects.create(message=message, position=9)
@@ -196,11 +192,10 @@ def test_part_ties_cycles_and_orphan_components_have_deterministic_order(
     assert Part.objects.descendants_for_message(message, alone.pk) == []
 
 
-@pytest.mark.django_db(transaction=True)
-def test_empty_message_and_missing_parent_in_native_prefetch(composed_tables: None) -> None:
+def test_empty_message_and_missing_parent_in_native_prefetch(db: None) -> None:
     """Empty forests and incomplete native prefetches do not invent ancestors."""
 
-    del composed_tables
+    del db
     with system_context(reason="messaging incomplete part setup"), mute_changes():
         message = Message.objects.create(platform="email")
         assert Part.objects.reading_order_for_message(message) == []
@@ -221,7 +216,6 @@ def test_empty_message_and_missing_parent_in_native_prefetch(composed_tables: No
     assert len(queries) == 0
 
 
-@pytest.mark.django_db(transaction=True)
 def test_part_database_load_eagerly_fetches_content_without_creating_a_cache(
     part_tree: tuple[Message, dict[str, Part]], tmp_path: Path
 ) -> None:
@@ -244,7 +238,6 @@ def test_part_database_load_eagerly_fetches_content_without_creating_a_cache(
     assert "parts" not in getattr(message, "_prefetched_objects_cache", {})
 
 
-@pytest.mark.django_db(transaction=True)
 @pytest.mark.parametrize(
     "cache_state",
     ["complete", "deferred_parent", "uncached_fragment"],
@@ -280,7 +273,6 @@ def test_prefetched_tree_reloads_incomplete_fields_and_content(
     assert len(queries) == (0 if cache_state == "complete" else 1)
 
 
-@pytest.mark.django_db(transaction=True)
 def test_attach_file_appends_one_part_per_file_and_returns_it_again(
     part_tree: tuple[Message, dict[str, Part]], tmp_path: Path
 ) -> None:

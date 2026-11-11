@@ -206,7 +206,7 @@ def test_console_resource_metadata_declares_thread_and_channel_surfaces() -> Non
     )
 
 
-def test_message_by_pk_serves_title_beside_a_parts_selection(composed_tables: None) -> None:
+def test_message_by_pk_serves_title_beside_a_parts_selection(db: None) -> None:
     """`title` and a `parts` selection coexist on the optimizer path.
 
     Regression: a prefetch hint on the `title` field collided with the
@@ -258,7 +258,7 @@ def test_message_by_pk_serves_title_beside_a_parts_selection(composed_tables: No
     ]
 
 
-def test_message_parts_projection_returns_depth_first_order(composed_tables: None) -> None:
+def test_message_parts_projection_returns_depth_first_order(db: None) -> None:
     """Message projections flatten the part tree in MIME reading order."""
 
     admin = _platform_admin("msg-parts-order-admin")
@@ -317,7 +317,7 @@ def test_message_parts_projection_returns_depth_first_order(composed_tables: Non
     [("messages", (1, 1, 1, 1)), ("record_thread", (1, 1, 1, 0))],
 )
 def test_transcript_parts_reuse_complete_prefetch_at_list_scale(
-    composed_tables: None,
+    db: None,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     django_assert_num_queries: Any,
@@ -384,17 +384,16 @@ def test_transcript_parts_reuse_complete_prefetch_at_list_scale(
     schema = _schema()
     # Warm process-wide metadata caches, then measure fresh requests/querysets.
     _data(execute_schema(schema, query, {**variables, "limit": 1}, user=admin))
-    manager_type = type(messaging_models.Part.objects)
-    reading_order = manager_type.reading_order_for_message
+    reading_order = messaging_models.Part.objects.reading_order_for_message
     visited: list[str] = []
 
-    def read_prefetched(manager: Any, message: messaging_models.Message) -> list[messaging_models.Part]:
+    def read_prefetched(message: messaging_models.Message) -> list[messaging_models.Part]:
         with django_assert_num_queries(0):
-            parts = reading_order(manager, message)
+            parts = reading_order(message)
         visited.append(str(message.sqid))
         return parts
 
-    monkeypatch.setattr(manager_type, "reading_order_for_message", read_prefetched)
+    monkeypatch.setattr(messaging_models.Part.objects, "reading_order_for_message", read_prefetched)
     tables = [
         connection.ops.quote_name(model._meta.db_table)
         for model in (messaging_models.Part, messaging_models.Fragment, StorageFile, MimeType)
@@ -419,7 +418,7 @@ def test_transcript_parts_reuse_complete_prefetch_at_list_scale(
     assert counts[0] == counts[1], f"{surface} transcript SQL grew at 3/6 messages: {counts}"
 
 
-def test_inbox_labels_coexist_with_guarded_relation_selections(composed_tables: None) -> None:
+def test_inbox_labels_coexist_with_guarded_relation_selections(db: None) -> None:
     """Board relation identities and inbox labels use the same authorized rows."""
 
     admin = _platform_admin("msg-board-label-admin")
@@ -465,7 +464,7 @@ def test_inbox_labels_coexist_with_guarded_relation_selections(composed_tables: 
         assert hidden == [{"id": message.sqid, "thread_title": "", "channel_vendor_name": ""}]
 
 
-def test_message_sender_and_participant_expose_resolved_party(composed_tables: None) -> None:
+def test_message_sender_and_participant_expose_resolved_party(db: None) -> None:
     """Message and participant handles expose the curated party identity."""
 
     admin = _platform_admin("msg-party-handle-admin")
@@ -526,7 +525,7 @@ def test_message_sender_and_participant_expose_resolved_party(composed_tables: N
     }
 
 
-def test_inbox_sender_redacts_party_without_party_read(composed_tables: None) -> None:
+def test_inbox_sender_redacts_party_without_party_read(db: None) -> None:
     """A message reader sees the envelope handle while its unreadable party is null."""
 
     owner = User.objects.create_user(username="msg-party-owner", email="msg-party-owner@example.com")
@@ -573,7 +572,7 @@ def test_inbox_sender_redacts_party_without_party_read(composed_tables: None) ->
 
 
 def test_handle_party_redacts_mixed_visibility_without_permission_error(
-    composed_tables: None,
+    db: None,
 ) -> None:
     """A handle list keeps readable parties and nulls unreadable parties."""
 
@@ -635,7 +634,7 @@ def test_handle_party_redacts_mixed_visibility_without_permission_error(
 
 
 def test_handle_party_batches_one_related_model_query(
-    composed_tables: None,
+    db: None,
 ) -> None:
     """A multi-handle list fetches all readable parties in one SQL query."""
 
@@ -687,7 +686,7 @@ def test_handle_party_batches_one_related_model_query(
 
 
 def test_handle_party_regates_sudo_loaded_parent(
-    composed_tables: None,
+    db: None,
 ) -> None:
     """An elevated parent FK cache never bypasses the request actor's party read."""
 
@@ -729,7 +728,7 @@ def test_handle_party_regates_sudo_loaded_parent(
 
 
 def test_record_thread_sender_projection_omits_party_for_non_admin_reader(
-    composed_tables: None,
+    db: None,
 ) -> None:
     """Record chatter narrows sender identity instead of exposing sudo-loaded parties."""
 
@@ -797,7 +796,7 @@ def test_record_thread_sender_projection_omits_party_for_non_admin_reader(
 
 
 def test_parts_resource_lists_a_message_parts_with_fragment_connectivity(
-    composed_tables: None,
+    db: None,
 ) -> None:
     """The `parts` root serves the structural data view: rows filtered to one
     message, each carrying its fragment's identity and dedup connectivity."""
@@ -833,7 +832,7 @@ def test_parts_resource_lists_a_message_parts_with_fragment_connectivity(
     assert payload[0]["fragment"]["message_count"] == 2
 
 
-def test_parts_group_counts_for_one_message_seek_only_its_parts(composed_tables: None) -> None:
+def test_parts_group_counts_for_one_message_seek_only_its_parts(db: None) -> None:
     """The message Parts tab's group counts read one message's parts by key index.
 
     Its ``message`` filter compares a permission-redacted alias; it must also
@@ -890,7 +889,7 @@ def test_messaging_schema_does_not_expose_optional_imap_connect() -> None:
     assert "connect_imap_channel" not in _schema().as_str()
 
 
-def test_message_state_is_read_only_while_thread_visibility_remains_writable(composed_tables: None) -> None:
+def test_message_state_is_read_only_while_thread_visibility_remains_writable(db: None) -> None:
     """Message state is verb-owned; thread visibility retains its native update."""
 
     admin = _platform_admin("msg-hasura-admin")
@@ -973,7 +972,7 @@ def test_message_state_is_read_only_while_thread_visibility_remains_writable(com
 
 
 def test_message_channel_group_key_drills_down_with_public_id(
-    composed_tables: None,
+    db: None,
 ) -> None:
     """A relation group bucket key can be fed back into the public relation filter."""
 
@@ -1041,7 +1040,7 @@ def test_message_channel_group_key_drills_down_with_public_id(
     assert drilled == [{"id": message.sqid, "preview": "Channel grouped message"}]
 
 
-def test_record_chatter_query_and_post(composed_tables: None) -> None:
+def test_record_chatter_query_and_post(db: None) -> None:
     """The custom record chatter fields resolve and post through the threaded model mixin."""
 
     admin = _platform_admin("msg-chatter-admin")
@@ -1140,7 +1139,7 @@ def test_record_chatter_query_and_post(composed_tables: None) -> None:
     assert after["is_following"] is True
 
 
-def test_record_chatter_post_note(composed_tables: None) -> None:
+def test_record_chatter_post_note(db: None) -> None:
     """The record chatter API logs internal notes without auto-following the author."""
 
     admin = _platform_admin("msg-note-admin")
@@ -1198,7 +1197,7 @@ def test_record_chatter_post_note(composed_tables: None) -> None:
     }
 
 
-def test_record_chatter_post_reply(composed_tables: None) -> None:
+def test_record_chatter_post_reply(db: None) -> None:
     """The record chatter API stores replies against their parent message."""
 
     admin = _platform_admin("msg-reply-admin")
@@ -1277,7 +1276,7 @@ def test_record_chatter_post_reply(composed_tables: None) -> None:
     ]
 
 
-def test_record_chatter_toggles_message_reaction(composed_tables: None) -> None:
+def test_record_chatter_toggles_message_reaction(db: None) -> None:
     """The record chatter API exposes Odoo-style grouped message reactions."""
 
     admin = _platform_admin("msg-react-admin")
@@ -1454,7 +1453,7 @@ def test_record_chatter_toggles_message_reaction(composed_tables: None) -> None:
     ]
 
 
-def test_record_chatter_toggles_message_starred(composed_tables: None) -> None:
+def test_record_chatter_toggles_message_starred(db: None) -> None:
     """The record chatter API exposes Odoo-style current-user message stars."""
 
     admin = _platform_admin("msg-star-admin")
@@ -1582,7 +1581,7 @@ def test_record_chatter_toggles_message_starred(composed_tables: None) -> None:
     assert not messaging_models.MessageStar._base_manager.filter(message=message, user=admin).exists()
 
 
-def test_record_chatter_update_message(composed_tables: None) -> None:
+def test_record_chatter_update_message(db: None) -> None:
     """The record chatter API edits comment content without duplicating history."""
 
     admin = _platform_admin("msg-edit-admin")
@@ -1665,7 +1664,7 @@ def test_record_chatter_update_message(composed_tables: None) -> None:
     ]
 
 
-def test_record_chatter_deletes_message(composed_tables: None) -> None:
+def test_record_chatter_deletes_message(db: None) -> None:
     """The record chatter API unlinks a message through the record-owned guard."""
 
     admin = _platform_admin("msg-delete-admin")
@@ -1757,7 +1756,7 @@ def test_record_chatter_deletes_message(composed_tables: None) -> None:
     assert first_exists is False
 
 
-def test_record_chatter_update_rejects_retained_notification(composed_tables: None) -> None:
+def test_record_chatter_update_rejects_retained_notification(db: None) -> None:
     """The GraphQL edit mutation keeps retained notifications immutable."""
 
     admin = _platform_admin("msg-edit-guard-admin")
@@ -1795,7 +1794,7 @@ def test_record_chatter_update_rejects_retained_notification(composed_tables: No
     assert payload["message"] is None
 
 
-def test_record_chatter_returns_retained_notification_body(composed_tables: None) -> None:
+def test_record_chatter_returns_retained_notification_body(db: None) -> None:
     admin = _platform_admin("msg-retained-admin")
     with system_context(reason="retained notification read"):
         ticket = messaging_models.ThreadedTicket.objects.create(title="Case")
@@ -1812,7 +1811,7 @@ def test_record_chatter_returns_retained_notification_body(composed_tables: None
     ]
 
 
-def test_record_chatter_searches_comments_and_retained_notification_bodies(composed_tables: None) -> None:
+def test_record_chatter_searches_comments_and_retained_notification_bodies(db: None) -> None:
     """The record chatter API searches comment and retained notification bodies."""
 
     admin = _platform_admin("msg-search-admin")
@@ -1858,7 +1857,7 @@ def test_record_chatter_searches_comments_and_retained_notification_bodies(compo
     assert tracking_result["messages"][0]["parts"][0]["fragment"]["text"] == "Stage: New → Won"
 
 
-def test_record_chatter_fetches_message_windows(composed_tables: None) -> None:
+def test_record_chatter_fetches_message_windows(db: None) -> None:
     """The record chatter API supports Odoo-style before/after/around windows."""
 
     admin = _platform_admin("msg-window-admin")
@@ -1955,7 +1954,7 @@ def test_record_chatter_fetches_message_windows(composed_tables: None) -> None:
     ]
 
 
-def test_record_chatter_orders_interleaved_backfilled_email(composed_tables: None) -> None:
+def test_record_chatter_orders_interleaved_backfilled_email(db: None) -> None:
     """A late-synced email (older send time, newer row) windows by send time, not pk."""
 
     admin = _platform_admin("msg-backfill-admin")
@@ -2011,7 +2010,7 @@ def test_record_chatter_orders_interleaved_backfilled_email(composed_tables: Non
     assert previews(limit=2, before=messages[2].sqid) == ["Message 2", "Backfilled email"]
 
 
-def test_record_thread_projects_edit_and_delete_capability(composed_tables: None) -> None:
+def test_record_thread_projects_edit_and_delete_capability(db: None) -> None:
     """can_edit/can_delete mirror the update/delete mutation authorization."""
 
     admin = _platform_admin("msg-capability-admin")
@@ -2050,7 +2049,7 @@ def test_record_thread_projects_edit_and_delete_capability(composed_tables: None
     assert capabilities["NOTIFICATION"] == (False, False)
 
 
-def test_record_message_capabilities_have_constant_query_count(composed_tables: None, record_property) -> None:
+def test_record_message_capabilities_have_constant_query_count(db: None, record_property) -> None:
     """Both capability fields use the fetched kind without per-message reads."""
 
     admin = _platform_admin("msg-capability-budget-admin")
@@ -2096,7 +2095,7 @@ def test_record_message_capabilities_have_constant_query_count(composed_tables: 
     assert counts[0] == counts[1], counts
 
 
-def test_record_chatter_notifications_can_be_marked_read(composed_tables: None) -> None:
+def test_record_chatter_notifications_can_be_marked_read(db: None) -> None:
     """The record chatter API exposes current-user receipt-derived unread state.
 
     Unread counts derive from the follower's positional receipt; an inbox follower
@@ -2193,7 +2192,7 @@ def test_record_chatter_notifications_can_be_marked_read(composed_tables: None) 
         assert follower.last_read_message_id == latest.pk
 
 
-def test_record_chatter_marks_one_message_done(composed_tables: None) -> None:
+def test_record_chatter_marks_one_message_done(db: None) -> None:
     """The record chatter API clears needaction positionally, up to one message.
 
     Done advances the follower's receipt to the target message, so the earlier
@@ -2303,7 +2302,7 @@ def test_record_chatter_marks_one_message_done(composed_tables: None) -> None:
     }
 
 
-def test_record_chatter_post_notifies_direct_recipient(composed_tables: None) -> None:
+def test_record_chatter_post_notifies_direct_recipient(db: None) -> None:
     """The record post mutation accepts explicit user recipients.
 
     A direct recipient gets a delivery-ledger row even without following; unread
@@ -2396,7 +2395,7 @@ def test_record_chatter_post_notifies_direct_recipient(composed_tables: None) ->
     }
 
 
-def test_record_thread_returns_suggested_recipients(composed_tables: None) -> None:
+def test_record_thread_returns_suggested_recipients(db: None) -> None:
     """The record thread query exposes Odoo-style composer recipient suggestions."""
 
     poster = _platform_admin("msg-suggest-poster")
@@ -2465,7 +2464,7 @@ def test_record_thread_returns_suggested_recipients(composed_tables: None) -> No
     }
 
 
-def test_suggested_recipients_withhold_restricted_fields_from_a_non_manager(composed_tables: None) -> None:
+def test_suggested_recipients_withhold_restricted_fields_from_a_non_manager(db: None) -> None:
     """A suggestion is read as the viewer reads it: its name, never its sign-in name or email."""
 
     poster = User.objects.create_user(username="msg-suggest-plain-poster")
@@ -2500,7 +2499,7 @@ def test_suggested_recipients_withhold_restricted_fields_from_a_non_manager(comp
     ]
 
 
-def test_record_chatter_post_with_attachment(composed_tables: None, tmp_path: Path) -> None:
+def test_record_chatter_post_with_attachment(db: None, tmp_path: Path) -> None:
     """Posting a record chatter message can attach readable storage files."""
 
     admin = _platform_admin("msg-attachment-admin")
@@ -2570,7 +2569,7 @@ def test_record_chatter_post_with_attachment(composed_tables: None, tmp_path: Pa
 
 
 @pytest.mark.usefixtures("activity_catalog")
-def test_record_chatter_follow_toggle(composed_tables: None) -> None:
+def test_record_chatter_follow_toggle() -> None:
     """The custom record follower mutation mirrors Odoo's follow/unfollow contract."""
 
     admin = _platform_admin("msg-follow-admin")
@@ -2868,7 +2867,7 @@ def _grant(resource: Any, relation: str, user: Any) -> None:
     )
 
 
-def test_generic_thread_and_message_lists_exclude_record_chatter(composed_tables: None) -> None:
+def test_generic_thread_and_message_lists_exclude_record_chatter(db: None) -> None:
     """The generic threads/messages resources exclude record-attached chatter.
 
     F-v part 2: the owner-scoped ``threads``/``messages`` auto-CRUD resources are the
@@ -2929,7 +2928,7 @@ def test_generic_thread_and_message_lists_exclude_record_chatter(composed_tables
     assert by_pk["messages_by_pk"] is None
 
 
-def test_generic_delete_excludes_record_thread_from_its_creator(composed_tables: None) -> None:
+def test_generic_delete_excludes_record_thread_from_its_creator(db: None) -> None:
     """A record thread is off the generic delete surface, even for its own creator.
 
     F-v part 2, write side: record chatter is reachable only through
@@ -2974,7 +2973,7 @@ def test_generic_delete_excludes_record_thread_from_its_creator(composed_tables:
         assert not messaging_models.Thread._base_manager.filter(sqid=inbox_thread.sqid).exists()
 
 
-def test_record_chatter_rows_opt_out_of_change_broadcasts(composed_tables: None) -> None:
+def test_record_chatter_rows_opt_out_of_change_broadcasts(db: None) -> None:
     """Record chatter rows never broadcast on the generic ``changes`` subscription.
 
     F-v part 2, subscription side: a record-attached thread/message returns
@@ -3003,7 +3002,7 @@ def test_record_chatter_rows_opt_out_of_change_broadcasts(composed_tables: None)
         assert orphan.broadcasts_changes() is True
 
 
-def test_message_whose_thread_was_deleted_in_the_same_cascade_does_not_broadcast(composed_tables: None) -> None:
+def test_message_whose_thread_was_deleted_in_the_same_cascade_does_not_broadcast(db: None) -> None:
     """Deleting a chattered record tears its thread down before the messages' delete
     publication runs; asking whether such a message broadcasts must answer (not raise),
     and a missing thread is no evidence of a generic one."""
@@ -3022,7 +3021,7 @@ def test_message_whose_thread_was_deleted_in_the_same_cascade_does_not_broadcast
         assert torn_down.broadcasts_changes() is False
 
 
-def test_teardown_for_channel_purges_messages_threads_and_cascade(composed_tables: None) -> None:
+def test_teardown_for_channel_purges_messages_threads_and_cascade(db: None) -> None:
     """``teardown_for_channel`` deletes a channel's threads/messages and their subtrees.
 
     A channel delete is a purge: the channel's threads and messages FK the shared
@@ -3056,7 +3055,7 @@ def test_teardown_for_channel_purges_messages_threads_and_cascade(composed_table
     assert Channel._base_manager.filter(pk=channel.pk).exists()
 
 
-def test_channel_purge_spares_the_same_message_in_another_channel(composed_tables: None) -> None:
+def test_channel_purge_spares_the_same_message_in_another_channel(db: None) -> None:
     """Purging channel A deletes only A's rows; the same message via channel B survives.
 
     The "same" logical message that also arrived through another channel is a separate
@@ -3107,7 +3106,7 @@ def test_channel_purge_spares_the_same_message_in_another_channel(composed_table
     assert part_b.fragment_id == fragment.pk
 
 
-def test_delete_channel_preview_counts_purge_as_deleted(composed_tables: None) -> None:
+def test_delete_channel_preview_counts_purge_as_deleted(db: None) -> None:
     """The channel delete preview forecasts threads/messages as deleted, then purges.
 
     The preview counts the channel + its Integration parent + the thread/message totals
@@ -3172,7 +3171,7 @@ def test_delete_channel_preview_counts_purge_as_deleted(composed_tables: None) -
     assert not messaging_models.Thread._base_manager.filter(channel_id=channel.pk).exists()
 
 
-def test_delete_channel_denied_for_non_admin_reader(composed_tables: None) -> None:
+def test_delete_channel_denied_for_non_admin_reader(db: None) -> None:
     """A non-admin who cannot write the channel cannot purge it; nothing is deleted."""
 
     admin = _platform_admin("chan-deny-admin")
@@ -3205,7 +3204,7 @@ def test_delete_channel_denied_for_non_admin_reader(composed_tables: None) -> No
     assert messaging_models.Thread._base_manager.filter(channel_id=channel.pk).count() == 1
 
 
-def test_delete_channel_preview_total_matches_real_deleted_rows(composed_tables: None) -> None:
+def test_delete_channel_preview_total_matches_real_deleted_rows(db: None) -> None:
     """The preview total equals the rows a purge really deletes — cascade children included.
 
     Fix 2: the inventory (:meth:`ChannelManager.inventory`) counts the channel's
@@ -3274,7 +3273,7 @@ def test_delete_channel_preview_total_matches_real_deleted_rows(composed_tables:
     assert str(messaging_models.Reaction._meta.verbose_name_plural) in labels
 
 
-def test_channel_teardown_mutes_per_row_change_broadcasts(composed_tables: None) -> None:
+def test_channel_teardown_mutes_per_row_change_broadcasts(db: None) -> None:
     """``teardown_for_channel`` fires no per-row Message/Thread change broadcast.
 
     Fix 1 (the broadcast storm): each channel Message/Thread declares ``changes()``, so a
@@ -3333,7 +3332,7 @@ def test_channel_teardown_mutes_per_row_change_broadcasts(composed_tables: None)
     assert not messaging_models.Thread._base_manager.filter(pk=thread.pk).exists()
 
 
-def test_from_counts_ignores_target_type_to_avoid_double_counting_root(composed_tables: None) -> None:
+def test_from_counts_ignores_target_type_to_avoid_double_counting_root(db: None) -> None:
     """``from_counts`` counts the root once even if the caller also passes ``type(target)``.
 
     Fix 4: the root already contributes +1 for its own model (and its MTI parent), so a

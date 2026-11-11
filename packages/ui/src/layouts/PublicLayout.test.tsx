@@ -1,13 +1,12 @@
 // @vitest-environment happy-dom
 
-import { cleanup, render, screen } from "@testing-library/react";
-import { afterEach, describe, expect, test, vi } from "vitest";
+import { render, screen } from "@testing-library/react";
+import { describe, expect, test, vi } from "vitest";
 
 import { AppRuntimeProvider, type AppRuntime } from "../runtime";
 import { PublicLayout, type PublicLayoutProps } from "./PublicLayout";
 
 vi.mock("../theme/logo", () => ({ ThemeLogo: () => <svg data-testid="theme-mark" /> }));
-afterEach(cleanup);
 
 const branded: Partial<AppRuntime> = {
   brand: { name: "Notebook", mark: "notebook-mark" },

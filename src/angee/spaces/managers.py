@@ -16,6 +16,8 @@ from angee.base.managers import AngeeManager
 from angee.base.models.hierarchy import HierarchyQuerySet
 from angee.base.querysets import AngeeQuerySet
 from angee.messaging.managers import ThreadManager, ThreadQuerySet
+from angee.provenance.contrib.angee.managers import AngeeHistoryManager
+from angee.provenance.contrib.angee.querysets import AngeeHistoryQuerySet
 
 if TYPE_CHECKING:
     from django_stubs_ext import WithAnnotations
@@ -39,7 +41,7 @@ class _MembershipCanRead(TypedDict):
     can_read: bool
 
 
-class MembershipQuerySet[MembershipT: Membership](AngeeQuerySet[MembershipT]):
+class MembershipQuerySet[MembershipT: Membership](AngeeHistoryQuerySet[MembershipT]):
     """Canonical roster selections shared by admission and the team audience."""
 
     def confirmed(self) -> Self:
@@ -60,7 +62,7 @@ class MembershipQuerySet[MembershipT: Membership](AngeeQuerySet[MembershipT]):
         return self.annotate(can_read=permission_expression(self.model, "read", actor=actor))
 
 
-_MembershipManagerBase = AngeeManager.from_queryset(MembershipQuerySet)
+_MembershipManagerBase = AngeeHistoryManager.from_queryset(MembershipQuerySet)
 
 
 class MembershipManager[MembershipT: Membership](_MembershipManagerBase[MembershipT]):

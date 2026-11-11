@@ -50,7 +50,7 @@ from angee.provenance.statements import (
 from tests.conftest import Page, addon_schema, create_user, current_stream, make_integration, vault_for
 from tests.core_persistence import OwnedRow
 
-pytestmark = pytest.mark.usefixtures("composed_tables")
+pytestmark = pytest.mark.django_db(transaction=True)
 
 Party = apps.get_model("parties", "Party")
 Handle = apps.get_model("parties", "Handle")
@@ -140,7 +140,7 @@ def test_history_lists_a_records_changesets_newest_first_with_their_field_deltas
     assert _changes(draft)["vault"][1] == public_id_of(_vault)
 
 
-@pytest.mark.usefixtures("activity_catalog", "composed_permissions")
+@pytest.mark.usefixtures("activity_catalog")
 def test_history_keeps_foreign_keys_to_named_fields_as_stored_values() -> None:
     owner = create_user("history-named-reference")
     vault = vault_for(owner)

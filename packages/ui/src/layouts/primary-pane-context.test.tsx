@@ -1,15 +1,13 @@
 // @vitest-environment happy-dom
 
-import { cleanup, render, screen } from "@testing-library/react";
-import { afterEach, describe, expect, test } from "vitest";
+import { render, screen } from "@testing-library/react";
+import { describe, expect, test } from "vitest";
 import { useEffect, useRef, type ReactElement, type ReactNode } from "react";
 
 import {
   PrimaryPaneProvider,
   usePrimaryPaneContent,
 } from "./primary-pane-context";
-
-afterEach(() => cleanup());
 
 describe("PrimaryPaneProvider", () => {
   test("does not republish when the same owner sends the same node", () => {

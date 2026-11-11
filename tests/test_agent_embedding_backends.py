@@ -58,7 +58,7 @@ def test_sdk_binding_shares_native_model_lifetime(monkeypatch, embedding, fails)
             return TestEmbeddingModel(dimensions=3)
 
     backend = Backend(SimpleNamespace(config={}))
-    monkeypatch.setattr(backend, "_async_client_class", lambda: Client)
+    backend.async_client_class = Client
     bind = backend.embedding_model if embedding else backend.model
     binding = bind("test/native", credential="owned credential")
     assert events == [("credential", "owned credential")]

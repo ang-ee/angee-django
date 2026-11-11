@@ -1,11 +1,8 @@
 """Task removal uses shared trash while workflow stage remains a separate fact."""
 
-from pathlib import Path
 
-import pytest
 from rebac import actor_context, system_context
 
-from tests.composed_host import run_composed_tests
 from tests.native_work import WorkCase
 
 REMOVE = """mutation($task: ID!, $revision: Int!, $reason: String!) {
@@ -137,12 +134,3 @@ class TaskRemovalTests(WorkCase):
         self.assertEqual(hidden, {"error_code": "NOT_FOUND", "messages": []})
         for row in (question, answer, question.thread):
             self.assertFalse(self.scoped(row, self.reader))
-
-
-class TaskRemovalDenormalizedTests(TaskRemovalTests):
-    storage = "denormalized"
-
-
-@pytest.mark.parametrize("test_class", ["TaskRemovalTests", "TaskRemovalDenormalizedTests"])
-def test_work_task_removal(tmp_path: Path, test_class: str):
-    run_composed_tests(tmp_path, f"tests.test_work_task_removal.{test_class}", app="angee.intake")

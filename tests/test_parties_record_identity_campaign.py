@@ -6,6 +6,7 @@ from django.db import connection
 from django.test.utils import CaptureQueriesContext
 from rebac import actor_context, system_context
 from rebac.backends import backend
+from rebac.backends.local import LocalBackend
 
 from angee.base.testing.queries import statement_startswith
 from angee.graphql.testing.documents import execute_schema, result_data
@@ -15,7 +16,6 @@ from tests.chatterdemo.models import ChatterDoc
 from tests.messaging_campaign import grant
 from tests.t3_campaign import campaign_access as campaign_access
 from tests.t3_campaign import campaign_user as campaign_user
-from tests.t3_campaign import messaging_access_schema as messaging_access_schema
 from tests.t3_campaign import relationship_snapshot
 from tests.test_parties_follower_identity import identity_graphql as identity_graphql
 
@@ -54,8 +54,8 @@ def test_record_arm_exposes_accountless_follower_identity_and_no_private_fields(
 
 def test_record_follower_sql_is_bounded_and_unfollow_revokes_parent_and_child(record_identity, monkeypatch):
     record, person, _, reader, _ = record_identity
-    local = backend()
-    monkeypatch.setattr(type(local), "accessible", lambda *args, **kwargs: pytest.fail("Enumerated identity IDs"))
+    assert isinstance(backend(), LocalBackend)
+    monkeypatch.setattr(LocalBackend, "accessible", lambda *args, **kwargs: pytest.fail("Enumerated identity IDs"))
     for model in (Party, Person):
         query = model.objects.with_actor(reader).scoped().filter(pk=person.pk)
         # Compile once first: Django resolves content types while compiling, and

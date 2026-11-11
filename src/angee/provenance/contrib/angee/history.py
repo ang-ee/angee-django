@@ -30,12 +30,13 @@ from simple_history.manager import HistoryManager
 from simple_history.utils import get_history_manager_for_model
 
 from angee.base.lineage import concrete_child_models, concrete_lineage
+from angee.base.models.locks import ImmutableFieldsMixin
 from angee.base.models.merge_references import MergeContractMixin
 from angee.base.models.persistence import PersistenceMixin
 from angee.base.models.trash import TrashMixin
 from angee.base.permissions import candidate_relationships
 from angee.provenance.contrib.angee.managers import AngeeHistoryManager, AngeeHistoryUnscopedManager
-from angee.provenance.history import UNLOADED
+from angee.provenance.history import BASELINE_REASON, UNLOADED
 from angee.provenance.history import HistoryMixin as CaptureHistoryMixin
 from angee.provenance.history import ModelHistory as CaptureHistory
 from angee.provenance.querysets import model_history
@@ -119,8 +120,12 @@ class ModelHistory(CaptureHistory):
     def changeset_states(self, model: Any, changeset: Any) -> Iterable[tuple[Any, Any, Any]]:
         """Yield first, last and pre-boundary versions; sequence IDs break date ties.
 
-        A later write, including an unattributed one, refuses the whole revert.
-        The caller holds the operational row locks throughout restoration.
+        A later write, including an unattributed one, refuses the whole revert. A
+        baseline is the state before the write that recorded it, never a later
+        write. The pre-boundary state is the latest earlier version in the table
+        or a tracked MTI descendant's history, whose versions carry the inherited
+        columns (a ``Person`` created through its child records its ``Party``
+        state there). The caller holds the operational row locks throughout restoration.
         """
 
         history = model.history
@@ -131,10 +136,12 @@ class ModelHistory(CaptureHistory):
             seen.add(pk)
             versions = list(grouped)
             first, last = versions[0], versions[-1]
-            timeline = history.filter(**{key: pk})
+            timeline = history.filter(**{key: pk}).exclude(history_change_reason=BASELINE_REASON)
             if timeline.filter(history_id__gt=last.history_id).exists():
                 raise ValidationError(f"{model._meta.label} {pk}: a later write prevents revert.")
-            previous = timeline.filter(history_id__lt=first.history_id).order_by("-history_id").first()
+            own = history.filter(**{key: pk}, history_id__lt=first.history_id).order_by("-history_id").first()
+            carried = self.carried_version(model, pk, before=first.history_date, changeset=changeset)
+            previous = max((v for v in (own, carried) if v is not None), key=lambda v: v.history_date, default=None)
             if previous is None and first.history_type != "+":
                 raise ValidationError(f"{model._meta.label} {pk}: the pre-boundary state is unavailable.")
             yield first, last, previous
@@ -147,12 +154,29 @@ class ModelHistory(CaptureHistory):
             pk = model._meta.pk.to_python(origin.object_id)
             if pk not in seen and model._base_manager.filter(pk=pk).exists():
                 timeline = history.filter(**{key: pk})
-                boundary = timeline.order_by("-history_id").first()
+                boundary = timeline.order_by("-history_id").first() or self.carried_version(model, pk)
                 if boundary is None:
                     raise ValidationError(f"{model._meta.label} {pk}: the pre-boundary state is unavailable.")
-                if timeline.filter(history_date__gt=changeset.recorded_at).exists():
+                later = timeline.filter(history_date__gt=changeset.recorded_at)
+                if later.exclude(history_change_reason=BASELINE_REASON).exists():
                     raise ValidationError(f"{model._meta.label} {pk}: a later write prevents revert.")
                 yield boundary, boundary, boundary
+
+    def carried_version(self, model: Any, pk: Any, *, before: Any = None, changeset: Any = None) -> Any:
+        """Return the latest version of ``pk`` in a tracked MTI descendant's history, which carries ``model``'s columns.
+
+        ``before`` bounds it to versions dated no later (the state before a
+        boundary), excluding ``changeset``'s own.
+        """
+
+        versions = []
+        for table in self.carriers(model)[1:]:
+            rows = get_history_manager_for_model(table).filter(**{table._meta.pk.attname: pk})
+            if before is not None:
+                rows = rows.filter(history_date__lte=before).exclude(changeset_id=changeset.pk)
+            if (version := rows.order_by("-history_date", "-history_id").first()) is not None:
+                versions.append(version)
+        return max(versions, key=lambda version: version.history_date, default=None)
 
     def redacted(
         self,
@@ -249,20 +273,27 @@ class ModelHistory(CaptureHistory):
             return False
 
     def authorize_revert(self, first: Any, last: Any, previous: Any, actor: Any) -> None:
-        """Admit both the current row and the snapshot's proposed relationships."""
+        """Admit both the current row and the snapshot's proposed relationships.
+
+        A denial names no row: a changeset may have touched rows the actor cannot read.
+        """
 
         snapshot = previous or last
         target = snapshot.history_object
         action = target.history_revert_permission
+        denied = PermissionDenied(f"Reverting needs {action} on every row this change touched, and one is not yours.")
         stored = type(target)._base_manager.filter(pk=target.pk).first()
         if stored is not None:
-            stored.require_access(action, actor=actor)
+            try:
+                stored.require_access(action, actor=actor)
+            except PermissionDenied:
+                raise denied from None
             if action == "write":
                 # Existing records may be writable through stored grants which
                 # an id-less proposed-relationship check cannot reproduce.
                 return
         if not self.snapshot_allows(snapshot, action, actor=actor):
-            raise PermissionDenied(f"{target._meta.label} {target.pk}: restoration requires {action} on its snapshot.")
+            raise denied
 
     def revert_order(self, first: Any, last: Any, previous: Any) -> tuple[Any, ...]:
         """Restore parents first; remove creations after reference replay, children first."""
@@ -314,10 +345,13 @@ class ModelHistory(CaptureHistory):
             if isinstance(row, TrashMixin) and "is_trashed" in changed:
                 row.revert_removal(previous)
                 changed.difference_update(row.TRASH_FIELDS)
-            for name in changed:
-                field = model._meta.get_field(name)
-                setattr(row, field.attname, getattr(previous, field.attname))
+            attnames = [model._meta.get_field(name).attname for name in changed]
+            for attname in attnames:
+                setattr(row, attname, getattr(previous, attname))
             if changed:
+                if isinstance(row, ImmutableFieldsMixin):
+                    # Replay restores the exact predecessor, write-once identities a merge moved included.
+                    row.allow_immutable_save(*attnames)
                 row.save(update_fields=sorted(changed))
         return row.revert_subjects()
 

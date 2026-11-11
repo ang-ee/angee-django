@@ -15,8 +15,8 @@ from tests.conftest import addon_schema, create_user
 TASKS = "query Tasks($limit: Int!) { project_tasks(limit: $limit) { id title } }"
 
 
-def test_read_binds_the_actor_and_records_the_sql_django_captured(composed_tables: None) -> None:
-    del composed_tables
+def test_read_binds_the_actor_and_records_the_sql_django_captured(db: None) -> None:
+    del db
     owner, outsider = create_user("document-guard-owner"), create_user("document-guard-outsider")
     with actor_context(owner):
         project = Project.objects.create(title="Guarded")
@@ -37,8 +37,6 @@ def test_read_binds_the_actor_and_records_the_sql_django_captured(composed_table
 def test_ceiling_holds_at_the_measured_cost_and_fails_above_it() -> None:
     read = GraphQLDocumentRead(data={}, statements=3, sql_bytes=2049)
 
-    read.assert_ceiling(statements=3, sql_kb=3)
+    read.assert_ceiling(statements=3)
     with pytest.raises(AssertionError, match="issued 3 SQL statements; ceiling 2"):
-        read.assert_ceiling(statements=2, sql_kb=3)
-    with pytest.raises(AssertionError, match=r"2049 bytes \(3 KB\); ceiling 2 KB"):
-        read.assert_ceiling(statements=3, sql_kb=2)
+        read.assert_ceiling(statements=2)

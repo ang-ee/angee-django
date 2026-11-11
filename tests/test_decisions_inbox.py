@@ -13,7 +13,7 @@ from tests.conftest import addon_schema, create_user, vault_for
 
 
 @pytest.fixture
-def inbox(composed_tables):
+def inbox(db):
     requester, reviewer, outsider = (
         create_user(name) for name in ("inbox-requester", "inbox-reviewer", "inbox-outsider")
     )

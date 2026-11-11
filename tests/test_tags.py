@@ -4,7 +4,7 @@ The vocabulary is an admin-curated surface, so tag rows are created under
 ``system_context``; the scope reads run under ``actor_context`` after
 ``rebac sync`` loads the schema. A tag assignment is authorized by the record it
 tags: each taggable type's app declares its relation on ``tags/tag_assignment``
-from its ``permissions.extends.zed``, which ``composed_permissions`` merges.
+from its ``permissions.extends.zed``, which the session's permission baseline merges.
 ``parties.Party`` stands in for a taggable record and ``knowledge.Vault`` for a
 type no relation names.
 """
@@ -36,6 +36,7 @@ from rebac.models import active_relationship_model
 from rebac.roles import grant as grant_role
 
 from angee.base.models.identity import public_id_for
+from angee.base.permissions import bind_rebac_schema
 from angee.graphql.testing.documents import execute_schema, result_data
 from angee.messaging.testing.models import Handle, Message, Party, Person, Thread
 from angee.projects.testing.models import Project, Task
@@ -59,10 +60,10 @@ def _shared_reader_exists(tag: Any) -> bool:
     ).exists()
 
 
-def test_tag_a_party_through_a_generic_assignment(composed_tables: None) -> None:
+def test_tag_a_party_through_a_generic_assignment(db: None) -> None:
     """The polymorphic edge resolves back to the exact party and tag."""
 
-    del composed_tables
+    del db
     with system_context(reason="tags test setup"):
         party = Party.objects.create(display_name="Acme Corp")
         tag = Tag.objects.create(name="VIP")
@@ -76,10 +77,10 @@ def test_tag_a_party_through_a_generic_assignment(composed_tables: None) -> None
     assert assignment.tag == tag
 
 
-def test_a_partys_tags_resolve_by_content_type_and_object_id(composed_tables: None) -> None:
+def test_a_partys_tags_resolve_by_content_type_and_object_id(db: None) -> None:
     """The reverse query (content_type, object_id) returns the party's tags."""
 
-    del composed_tables
+    del db
     with system_context(reason="tags test setup"):
         party = Party.objects.create(display_name="Beta LLC")
         tag_one = Tag.objects.create(name="Prospect")
@@ -95,10 +96,10 @@ def test_a_partys_tags_resolve_by_content_type_and_object_id(composed_tables: No
     assert tagged == {tag_one.pk, tag_two.pk}
 
 
-def test_the_same_tag_attaches_once_per_target(composed_tables: None) -> None:
+def test_the_same_tag_attaches_once_per_target(db: None) -> None:
     """``unique(tag, content_type, object_id)`` rejects a duplicate edge."""
 
-    del composed_tables
+    del db
     with system_context(reason="tags test setup"):
         party = Party.objects.create(display_name="Gamma Inc")
         tag = Tag.objects.create(name="Partner")
@@ -116,10 +117,10 @@ def _assert_authenticated_reads(tag: Any) -> None:
     assert not _shared_reader_exists(tag)
 
 
-def test_base_tag_is_always_shared_and_declares_no_policy_fields(composed_tables: None) -> None:
+def test_base_tag_is_always_shared_and_declares_no_policy_fields(db: None) -> None:
     """The vocabulary uses authenticated membership without a row-level policy."""
 
-    del composed_tables
+    del db
     # Audit stamps and the merge redirect are identity, not a row-level policy.
     tag_relation_fields = {
         field.name for field in Tag._meta.fields
@@ -131,10 +132,10 @@ def test_base_tag_is_always_shared_and_declares_no_policy_fields(composed_tables
     _assert_authenticated_reads(tag)
 
 
-def test_attention_category_is_one_tag_owned_resource_flag(composed_tables: None) -> None:
+def test_attention_category_is_one_tag_owned_resource_flag(db: None) -> None:
     """The console writes and reads the category bit the unified attention column selects."""
 
-    del composed_tables
+    del db
     admin = create_platform_admin("tags-attention-admin")
     schema = addon_schema(tags_schema.schemas, "console")
     data = result_data(execute_schema(schema, """
@@ -145,10 +146,10 @@ def test_attention_category_is_one_tag_owned_resource_flag(composed_tables: None
     assert rows == [{"name": "Urgent", "attention": True}]
 
 
-def test_consumer_marker_does_not_control_authenticated_reads(composed_tables: None) -> None:
+def test_consumer_marker_does_not_control_authenticated_reads(db: None) -> None:
     """An ordinary consumer marker does not restrict shared vocabulary."""
 
-    del composed_tables
+    del db
     with system_context(reason="tags marker setup"):
         shared = Tag.objects.create(name="Everyone", shared_marker=True)
         scoped = Tag.objects.create(name="Local", shared_marker=False)
@@ -156,10 +157,10 @@ def test_consumer_marker_does_not_control_authenticated_reads(composed_tables: N
     _assert_authenticated_reads(scoped)
 
 
-def test_deleting_a_tag_removes_the_row_without_wildcard_tuples(composed_tables: None) -> None:
+def test_deleting_a_tag_removes_the_row_without_wildcard_tuples(db: None) -> None:
     """Shared vocabulary has no per-row grant to reconcile on deletion."""
 
-    del composed_tables
+    del db
     with system_context(reason="tags delete setup"):
         tag = Tag.objects.create(name="Temporary")
     _assert_authenticated_reads(tag)
@@ -178,10 +179,10 @@ def test_deleting_a_tag_removes_the_row_without_wildcard_tuples(composed_tables:
     )
 
 
-def test_flipping_consumer_marker_keeps_authenticated_reads(composed_tables: None) -> None:
+def test_flipping_consumer_marker_keeps_authenticated_reads(db: None) -> None:
     """Partial and full saves leave authenticated visibility unchanged."""
 
-    del composed_tables
+    del db
     with system_context(reason="tags marker setup"):
         tag = Tag.objects.create(name="Local", shared_marker=False)
     for update_fields in ({"shared_marker"}, None):
@@ -192,10 +193,10 @@ def test_flipping_consumer_marker_keeps_authenticated_reads(composed_tables: Non
             _assert_authenticated_reads(tag)
 
 
-def test_authenticated_reads_ignore_consumer_marker(composed_tables: None) -> None:
+def test_authenticated_reads_ignore_consumer_marker(db: None) -> None:
     """A signed-in user reads both marker states; anonymous reads neither."""
 
-    del composed_tables
+    del db
     reader = create_user("tags-scope-reader")
     with system_context(reason="tags test actor scope setup"):
         shared = Tag.objects.create(name="Everyone", shared_marker=True)
@@ -206,10 +207,10 @@ def test_authenticated_reads_ignore_consumer_marker(composed_tables: None) -> No
         assert not Tag.objects.exists()
 
 
-def test_deferred_marker_stays_deferred_on_load(composed_tables: None) -> None:
+def test_deferred_marker_stays_deferred_on_load(db: None) -> None:
     """Loading shared vocabulary preserves Django's deferred-field behavior."""
 
-    del composed_tables
+    del db
     with system_context(reason="tags test deferred marker setup"):
         tag = Tag.objects.create(name="Deferred", shared_marker=False)
         with CaptureQueriesContext(connection) as ctx:
@@ -218,10 +219,10 @@ def test_deferred_marker_stays_deferred_on_load(composed_tables: None) -> None:
     assert loaded.get_deferred_fields() == {"shared_marker"}
 
 
-def test_deferred_marker_save_preserves_authenticated_reads(composed_tables: None) -> None:
+def test_deferred_marker_save_preserves_authenticated_reads(db: None) -> None:
     """Saving a deferred row needs no grant synchronization."""
 
-    del composed_tables
+    del db
     with system_context(reason="tags test deferred marker save"):
         tag = Tag.objects.create(name="Deferred", shared_marker=True)
         loaded = Tag.objects.defer("shared_marker").get(pk=tag.pk)
@@ -230,10 +231,10 @@ def test_deferred_marker_save_preserves_authenticated_reads(composed_tables: Non
     _assert_authenticated_reads(tag)
 
 
-def test_unrelated_save_keeps_authenticated_reads_without_tuples(composed_tables: None) -> None:
+def test_unrelated_save_keeps_authenticated_reads_without_tuples(db: None) -> None:
     """A full save does not materialize authenticated membership."""
 
-    del composed_tables
+    del db
     with system_context(reason="tags test complete save"):
         tag = Tag.objects.create(name="Stable", shared_marker=True)
         loaded = Tag.objects.get(pk=tag.pk)
@@ -242,10 +243,10 @@ def test_unrelated_save_keeps_authenticated_reads_without_tuples(composed_tables
     _assert_authenticated_reads(tag)
 
 
-def test_targeted_content_save_needs_no_reader_reconciliation(composed_tables: None) -> None:
+def test_targeted_content_save_needs_no_reader_reconciliation(db: None) -> None:
     """A targeted save avoids tuple reads and writes."""
 
-    del composed_tables
+    del db
     with system_context(reason="tags test targeted content save"):
         tag = Tag.objects.create(name="Stable", shared_marker=True)
         tag.name = "Renamed"
@@ -259,10 +260,10 @@ def test_targeted_content_save_needs_no_reader_reconciliation(composed_tables: N
     ]
 
 
-def test_marker_bulk_writes_need_no_reader_reconciliation(composed_tables: None) -> None:
+def test_marker_bulk_writes_need_no_reader_reconciliation(db: None) -> None:
     """Bulk edits and inserts preserve authenticated reads without wildcard grants."""
 
-    del composed_tables
+    del db
     with system_context(reason="tags bulk marker writes"):
         tag = Tag.objects.create(name="Stable", shared_marker=True)
         assert Tag.objects.filter(pk=tag.pk).update(shared_marker=False) == 1
@@ -282,10 +283,10 @@ def test_marker_bulk_writes_need_no_reader_reconciliation(composed_tables: None)
 
 
 @pytest.fixture()
-def party_edge(composed_permissions: None) -> SimpleNamespace:
+def party_edge(db: None) -> SimpleNamespace:
     """Seed a shared tag, a party its owner writes, and an outsider, with every taggable type declared."""
 
-    del composed_permissions
+    del db
     owner = create_user("tags-party-owner")
     outsider = create_user("tags-outsider")
     with system_context(reason="tags test setup"):
@@ -402,9 +403,10 @@ def test_a_tag_reader_who_cannot_read_the_record_sees_none_of_its_edges(party_ed
 
 
 @pytest.fixture()
-def curated_vocabulary(party_edge: SimpleNamespace) -> SimpleNamespace:
+def curated_vocabulary(party_edge: SimpleNamespace, composed_permissions: None) -> SimpleNamespace:
     """Narrow tag reads to tag administrators, so a record's reader can lack its tag's read."""
 
+    del composed_permissions
     schema = Path(apps.get_app_config("tags").rebac_schema)
     source = schema.read_text(encoding="utf-8")
     shared = "permission read = ((authenticated + admin->member) + manager->effective_member)"
@@ -587,16 +589,18 @@ def _tag_errors(errors: list[Any]) -> list[Any]:
     ]
 
 
-def test_the_check_accepts_matching_taggable_models_and_relations(composed_permissions: None) -> None:
+def test_the_check_accepts_matching_taggable_models_and_relations(db: None) -> None:
     """Every model composing TaggedModel has its relation, and every relation its model."""
 
-    del composed_permissions
+    del db
     assert set(TagAssignment.declared_target_models().values()) == _taggable_test_models()
     assert _tag_errors(TagAssignment.check()) == []
 
 
 def test_the_check_reports_a_taggable_model_without_a_relation() -> None:
     """Without their owners' fragments, the base schema names no taggable type."""
+
+    bind_rebac_schema(apps.get_app_config("tags"), None)
 
     def forbid_query(*args: Any, **kwargs: Any) -> None:
         raise AssertionError("Django model checks must read schema declarations without SQL")

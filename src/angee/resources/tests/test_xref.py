@@ -12,9 +12,6 @@ from tests.conftest import (
     make_addon,
     vault_for,
 )
-from tests.conftest import (
-    addon_fixture_resources as addon_fixture_resources,
-)
 
 from angee.base.models.identity import public_id_of
 from angee.resources.exceptions import ResourceLoadError
@@ -23,7 +20,7 @@ from angee.resources.testing.models import Resource
 from angee.spaces.testing.models import Group
 
 
-@pytest.mark.usefixtures("composed_tables")
+@pytest.mark.django_db
 @pytest.mark.parametrize("existing_target", ["ledger", "adopted"])
 def test_load_xref_authorizes_before_moving_existing_ownership(tmp_path, monkeypatch, existing_target):
     """Neither ledger reuse nor first adoption can grant its caller write access."""
@@ -87,7 +84,7 @@ def test_load_xref_authorizes_before_moving_existing_ownership(tmp_path, monkeyp
         apps.clear_cache()
 
 
-@pytest.mark.usefixtures("composed_tables")
+@pytest.mark.django_db
 def test_load_xref_requires_vault_create_access_for_new_pages(tmp_path, monkeypatch):
     """Imported attribution cannot bypass the parent-owned page create policy."""
     caller = create_user("resource-new-caller")
@@ -125,7 +122,7 @@ def test_load_xref_requires_vault_create_access_for_new_pages(tmp_path, monkeypa
         apps.clear_cache()
 
 
-@pytest.mark.usefixtures("composed_tables")
+@pytest.mark.django_db
 def test_load_xref_rejects_wrong_model_from_adapter_before_authorization(tmp_path, monkeypatch):
     """An adapter cannot redirect authorization or import to an unrelated row."""
 

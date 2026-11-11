@@ -67,7 +67,7 @@ _BRIDGE_SYNCED = str(EventKind.BRIDGE_SYNCED)
 
 
 def test_integration_node_resolves_nested_relations(
-    composed_tables: None,
+    db: None,
 ) -> None:
     """An integration's nested vendor/credential/owner/account relations resolve for an admin."""
 
@@ -116,7 +116,7 @@ def test_integration_node_resolves_nested_relations(
     ],
 )
 def test_integration_branding_does_not_grant_vendor_read(
-    composed_tables: None,
+    db: None,
     vendor_name: str,
     operator_name: str,
     label: str,
@@ -156,10 +156,10 @@ def test_integration_branding_does_not_grant_vendor_read(
     assert result["integrations_by_pk"] == {"display_name": label}
 
 
-def test_sync_identity_labels_are_batched_for_narrow_selections(composed_tables: None) -> None:
+def test_sync_identity_labels_are_batched_for_narrow_selections(db: None) -> None:
     """Stream and replica labels use their own identity without deferred-row queries."""
 
-    del composed_tables
+    del db
     admin = _platform_admin("sync-label-admin")
     bridge = make_integration("sync-label", model=Channel)
     schema = _schema()
@@ -192,10 +192,10 @@ def test_sync_identity_labels_are_batched_for_narrow_selections(composed_tables:
     assert len(many) <= len(one) + 1
 
 
-def test_sync_stream_filter_and_batched_integration_projection(composed_tables: None) -> None:
+def test_sync_stream_filter_and_batched_integration_projection(db: None) -> None:
     """The owner foreign key filters by public id and batches its projection."""
 
-    del composed_tables
+    del db
     admin = _platform_admin("stream-relation-admin")
     bridge = make_integration("stream-relation", model=Channel)
     other = make_integration("stream-relation-other", model=Channel)
@@ -234,14 +234,14 @@ def test_sync_stream_filter_and_batched_integration_projection(composed_tables: 
     ],
 )
 def test_sync_data_views_filter_by_bridge_and_scope_all_read_roots(
-    composed_tables: None,
+    db: None,
     root: str,
     bridge_filter: str,
     group_field: str,
 ) -> None:
     """Rows, aggregates and facet/group buckets preserve the Integration owner scope."""
 
-    del composed_tables
+    del db
     bridge = make_integration("stream-data-owner", model=Channel)
     other = make_integration("stream-data-other", model=Channel)
     with system_context(reason="test sync data-view graph"):
@@ -287,10 +287,10 @@ def test_sync_data_views_filter_by_bridge_and_scope_all_read_roots(
     )
 
 
-def test_sync_counts_are_native_annotations_without_row_growth_queries(composed_tables: None) -> None:
+def test_sync_counts_are_native_annotations_without_row_growth_queries(db: None) -> None:
     """Narrow simultaneous count selections neither multiply joins nor fetch per row."""
 
-    del composed_tables
+    del db
     bridge = make_integration("stream-counts", model=Channel)
     with system_context(reason="test stream count fixtures"):
         owner = bridge.owner
@@ -324,10 +324,10 @@ def test_sync_counts_are_native_annotations_without_row_growth_queries(composed_
     assert many == [*initial, *[{"open_failure_count": 0, "link_count": 0}] * 5]
 
 
-def test_integration_stream_count_is_inherited_by_bridge_projection(composed_tables: None) -> None:
+def test_integration_stream_count_is_inherited_by_bridge_projection(db: None) -> None:
     """Saved-record tab visibility reads the same count on a parent and its child."""
 
-    del composed_tables
+    del db
     admin = _platform_admin("stream-tab-count-admin")
     bridge = make_integration("stream-tab-count", model=VcsBridge)
     empty = make_integration("stream-tab-empty", model=VcsBridge)
@@ -342,10 +342,10 @@ def test_integration_stream_count_is_inherited_by_bridge_projection(composed_tab
         assert {row["id"]: row["stream_count"] for row in rows[root]} == expected
 
 
-def test_record_link_target_uses_shared_public_reference(composed_tables: None) -> None:
+def test_record_link_target_uses_shared_public_reference(db: None) -> None:
     """The target projection carries resource identity and a public id, never a raw PK."""
 
-    del composed_tables
+    del db
     bridge = make_integration("link-target", model=Channel)
     with system_context(reason="test record link target"):
         owner = bridge.owner
@@ -359,10 +359,10 @@ def test_record_link_target_uses_shared_public_reference(composed_tables: None) 
     }
 
 
-def test_record_sources_filter_by_readable_target_and_project_connector_url(composed_tables: None) -> None:
+def test_record_sources_filter_by_readable_target_and_project_connector_url(db: None) -> None:
     """The Sources pane gets retained identities without a target-read oracle."""
 
-    del composed_tables
+    del db
     bridge = make_integration("record-sources", model=Channel)
     outsider_bridge = make_integration("record-sources-outsider", model=Channel)
     with system_context(reason="test record sources"):
@@ -386,10 +386,10 @@ def test_record_sources_filter_by_readable_target_and_project_connector_url(comp
     assert _data(execute_schema(_schema(), query, variables, user=outsider_bridge.owner))["record_links"] == []
 
 
-def test_record_sources_count_aggregates_the_rows_readable_target_filter(composed_tables: None) -> None:
+def test_record_sources_count_aggregates_the_rows_readable_target_filter(db: None) -> None:
     """The Sources badge's count-only aggregate answers exactly the rows its pane would read."""
 
-    del composed_tables
+    del db
     bridge = make_integration("record-sources-count", model=Channel)
     outsider_bridge = make_integration("record-sources-count-outsider", model=Channel)
     with system_context(reason="test record sources count"):
@@ -422,7 +422,7 @@ def test_record_sources_count_aggregates_the_rows_readable_target_filter(compose
     ],
 )
 def test_sync_actions_dispatch_managers_and_refuse_non_admins(
-    composed_tables: None,
+    db: None,
     monkeypatch: pytest.MonkeyPatch,
     mutation: str,
     model: Any,
@@ -430,7 +430,7 @@ def test_sync_actions_dispatch_managers_and_refuse_non_admins(
 ) -> None:
     """Even the integration owner needs the admin role; admitted writes use manager verbs."""
 
-    del composed_tables
+    del db
     bridge = make_integration("sync-action", model=Channel)
     admin = _platform_admin("sync-action-admin")
     outsider = User.objects.create_user(username="sync-action-outsider")
@@ -510,7 +510,7 @@ def test_sync_data_view_metadata_exposes_read_only_group_and_facet_contract() ->
 
 
 def test_integration_capabilities_are_native_creatable_children(
-    composed_tables: None,
+    db: None,
 ) -> None:
     """Runtime capabilities expose only installed children with a real create ingress."""
 
@@ -530,7 +530,7 @@ def test_integration_capabilities_are_native_creatable_children(
 
 
 def test_integration_concrete_target_keeps_parent_only_rows_unavailable(
-    composed_tables: None,
+    db: None,
 ) -> None:
     """Parent-only legacy rows remain visible without a guessed child target."""
 
@@ -554,7 +554,7 @@ def test_integration_concrete_target_keeps_parent_only_rows_unavailable(
 
 
 def test_concrete_target_fails_closed_for_unexposed_and_ambiguous_children(
-    composed_tables: None,
+    db: None,
 ) -> None:
     """Real hidden and sibling child rows never disclose an arbitrary target."""
 
@@ -577,7 +577,7 @@ def test_concrete_target_fails_closed_for_unexposed_and_ambiguous_children(
 
 
 def test_concrete_target_list_query_cost_is_bounded_by_child_types(
-    composed_tables: None,
+    db: None,
 ) -> None:
     """Adding parent rows does not add one concrete-child query per row."""
 
@@ -602,7 +602,7 @@ def test_concrete_target_list_query_cost_is_bounded_by_child_types(
 
 
 def test_integration_groups_aggregate_runs_with_rebac_scope(
-    composed_tables: None,
+    db: None,
 ) -> None:
     """The integration aggregate root executes through the Angee aggregate queryset seam."""
 
@@ -797,7 +797,7 @@ def test_resource_metadata_names_the_impl_columns_it_projects() -> None:
 
 
 def test_graphql_oauth_client_create_materializes_omitted_impl_defaults(
-    composed_tables: None,
+    db: None,
 ) -> None:
     """Preparation preserves omitted fields until the provider seeds its defaults."""
 
@@ -827,7 +827,7 @@ def test_graphql_oauth_client_create_materializes_omitted_impl_defaults(
     ]
 
 
-def test_impl_choices_are_admin_only(composed_tables: None) -> None:
+def test_impl_choices_are_admin_only(db: None) -> None:
     """Impl choice metadata is console data, so it is platform-admin gated."""
 
     console_schema = _schema()
@@ -897,7 +897,7 @@ def test_impl_choices_are_admin_only(composed_tables: None) -> None:
     }
 
 
-def test_vcs_bridge_child_creation_creates_parent_identity(composed_tables: None) -> None:
+def test_vcs_bridge_child_creation_creates_parent_identity(db: None) -> None:
     """Creating an MTI child creates the Integration parent identity row."""
 
     user = User.objects.create_user(username="impl-factory-owner", email="impl-factory@example.com")
@@ -936,7 +936,7 @@ def test_vcs_bridge_child_creation_creates_parent_identity(composed_tables: None
 
 
 def test_vcs_bridge_create_maps_typed_config_errors_to_nested_field(
-    composed_tables: None,
+    db: None,
 ) -> None:
     """Concrete GraphQL creation enforces backend config at the model save boundary."""
 
@@ -965,7 +965,7 @@ def test_vcs_bridge_create_maps_typed_config_errors_to_nested_field(
     }
 
 
-def test_integration_concrete_type_records_child_model(composed_tables: None) -> None:
+def test_integration_concrete_type_records_child_model(db: None) -> None:
     """A child save records the stable content type used by grouping."""
 
     bridge = make_integration("kind-backfill", backend_class="stub", model=VcsBridge)
@@ -979,7 +979,7 @@ def test_integration_concrete_type_records_child_model(composed_tables: None) ->
 
 
 def test_integration_update_delete_are_admin_only(
-    composed_tables: None,
+    db: None,
 ) -> None:
     """Updating then deleting an integration is platform-admin gated."""
 
@@ -1024,7 +1024,7 @@ def test_integration_update_delete_are_admin_only(
 
 
 def test_attach_integration_credential_targets_owned_concrete_child(
-    composed_tables: None,
+    db: None,
 ) -> None:
     """Credential-first ingress preserves the concrete identity and rejects another owner."""
 
@@ -1063,7 +1063,7 @@ def test_attach_integration_credential_targets_owned_concrete_child(
 
 
 def test_connect_integration_reuses_live_oauth_for_explicit_concrete_child(
-    composed_tables: None,
+    db: None,
 ) -> None:
     """OAuth ingress carries the authorized child resource and public id through attach."""
 
@@ -1102,7 +1102,7 @@ def test_connect_integration_reuses_live_oauth_for_explicit_concrete_child(
         assert persisted.credential_id == credential.pk
 
 
-def test_connection_admissions_project_ownership_without_loading_credentials(composed_tables: None) -> None:
+def test_connection_admissions_project_ownership_without_loading_credentials(db: None) -> None:
     bridge = make_integration(
         "connect-admissions",
         kind=CredentialKind.OAUTH,
@@ -1136,7 +1136,7 @@ def test_connection_admissions_project_ownership_without_loading_credentials(com
 
 
 def test_integration_lifecycle_action_mutations_pause_connect_and_disconnect(
-    composed_tables: None,
+    db: None,
 ) -> None:
     """Admin action mutations move Integration lifecycle through guarded transitions."""
 
@@ -1197,7 +1197,7 @@ def test_integration_lifecycle_action_mutations_pause_connect_and_disconnect(
 
 
 def test_webhook_crud_secret_write_only(
-    composed_tables: None,
+    db: None,
 ) -> None:
     """The webhook secret is a write-only input absent from the output type; delete is admin gated."""
 
@@ -1297,7 +1297,7 @@ def test_webhook_crud_secret_write_only(
 
 
 def test_integration_action_mutations_are_admin_only(
-    composed_tables: None,
+    db: None,
 ) -> None:
     """sync/test/rotate action mutations are platform-admin gated."""
 
@@ -1325,7 +1325,7 @@ def test_integration_action_mutations_are_admin_only(
 
 
 def test_test_connection_probes_the_credential_of_a_parent_integration(
-    composed_tables: None,
+    db: None,
 ) -> None:
     """A parent-only integration proves its credential; a detached one says so in band."""
 
@@ -1354,7 +1354,7 @@ def test_test_connection_probes_the_credential_of_a_parent_integration(
     ],
 )
 def test_test_connection_reads_the_concrete_provider_without_syncing_models(
-    composed_tables: None,
+    db: None,
     monkeypatch: Any,
     backend_class: str,
     base_url: str,
@@ -1403,7 +1403,7 @@ def test_test_connection_reads_the_concrete_provider_without_syncing_models(
 
 @pytest.mark.parametrize("failure", [401, 503, "connection"])
 def test_test_connection_bounds_provider_transport_failures(
-    composed_tables: None, monkeypatch: Any, failure: int | str,
+    db: None, monkeypatch: Any, failure: int | str,
 ) -> None:
     """A real SDK failure is unsuccessful and never puts vendor diagnostics in the payload."""
 
@@ -1435,7 +1435,7 @@ def test_test_connection_bounds_provider_transport_failures(
     [("openai", "Connection test failed."), ("manual", "Manual inference has no connection to test.")],
 )
 def test_test_connection_does_not_claim_unsupported_provider_connectivity(
-    composed_tables: None, monkeypatch: Any, backend_class: str, expected_message: str,
+    db: None, monkeypatch: Any, backend_class: str, expected_message: str,
 ) -> None:
     """Hosted OpenAI still requires owned auth; manual's local empty list is no handshake."""
 
@@ -1454,7 +1454,7 @@ def test_test_connection_does_not_claim_unsupported_provider_connectivity(
 
 
 def test_sync_integration_runs_for_an_admin(
-    composed_tables: None,
+    db: None,
 ) -> None:
     """An admin can queue an integration sync; with no bridges it is a no-op."""
 
@@ -1475,7 +1475,7 @@ def test_sync_integration_runs_for_an_admin(
 
 
 def test_sync_integration_queues_bridge_for_an_admin(
-    composed_tables: None,
+    db: None,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A manual integration sync records queued state and defers bridge work."""
@@ -1533,7 +1533,7 @@ def test_sync_integration_queues_bridge_for_an_admin(
 
 
 def test_rotate_webhook_secret_changes_the_stored_secret(
-    composed_tables: None,
+    db: None,
 ) -> None:
     """Rotation returns a fresh secret once and persists it write-only."""
 
@@ -1565,7 +1565,7 @@ def test_rotate_webhook_secret_changes_the_stored_secret(
 
 
 def test_test_webhook_delivery_records_failure_status(
-    composed_tables: None,
+    db: None,
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
@@ -1609,7 +1609,7 @@ def test_test_webhook_delivery_records_failure_status(
 
 
 def test_update_vcs_bridge_lifecycle_accepts_the_lowercase_value(
-    composed_tables: None,
+    db: None,
 ) -> None:
     """A VCS bridge lifecycle patch accepts the lowercase model value and reads back the enum."""
 
@@ -1634,7 +1634,7 @@ def test_update_vcs_bridge_lifecycle_accepts_the_lowercase_value(
         assert str(bridge.lifecycle) == "disconnected"
 
 
-def test_update_vcs_bridge_transfers_its_owner_and_keeps_the_patched_values(composed_tables: None) -> None:
+def test_update_vcs_bridge_transfers_its_owner_and_keeps_the_patched_values(db: None) -> None:
     """An authored owner patch runs the transfer verb before the caller saves its other values."""
 
     admin = _platform_admin("owner-patch-admin")
@@ -1661,7 +1661,7 @@ def test_update_vcs_bridge_transfers_its_owner_and_keeps_the_patched_values(comp
     assert (bridge.owner_id, bridge.display_name) == (successor.pk, "Handed over")
 
 
-def test_update_vcs_bridge_lifecycle_only_emits_one_state_save(composed_tables: None) -> None:
+def test_update_vcs_bridge_lifecycle_only_emits_one_state_save(db: None) -> None:
     """A guarded lifecycle patch saves in the transition hook, not again in the caller."""
 
     console_schema = _schema()
@@ -1697,7 +1697,7 @@ def test_update_vcs_bridge_lifecycle_only_emits_one_state_save(composed_tables: 
 
 
 def test_update_vcs_bridge_lifecycle_accepts_the_graphql_enum_name(
-    composed_tables: None,
+    db: None,
 ) -> None:
     """A lifecycle patch can echo the read-side GraphQL enum name back to the server."""
 
@@ -1722,7 +1722,7 @@ def test_update_vcs_bridge_lifecycle_accepts_the_graphql_enum_name(
         assert str(bridge.lifecycle) == "paused"
 
 
-def test_native_vcs_writes_remain_admin_only_for_owner(composed_tables: None) -> None:
+def test_native_vcs_writes_remain_admin_only_for_owner(db: None) -> None:
     """Capability ownership cannot bypass the console's admin create/update policy."""
 
     bridge = make_integration("native-vcs-owner", backend_class="stub", model=VcsBridge)
@@ -1758,7 +1758,7 @@ def test_native_vcs_writes_remain_admin_only_for_owner(composed_tables: None) ->
 
 
 def test_create_vcs_bridge_creates_child_row(
-    composed_tables: None,
+    db: None,
 ) -> None:
     """VCS bridge create writes the child row directly."""
 
@@ -1803,7 +1803,7 @@ def test_create_vcs_bridge_creates_child_row(
 
 @pytest.mark.parametrize("name, expected_name", [("Renamed", "Renamed"), (None, "")])
 def test_update_vcs_bridge_merges_typed_config(
-    composed_tables: None,
+    db: None,
     name: str | None,
     expected_name: str,
 ) -> None:
@@ -1836,7 +1836,7 @@ def test_update_vcs_bridge_merges_typed_config(
         assert bridge.config == expected
 
 
-def test_update_vcs_bridge_rejects_unknown_config_key_after_merge(composed_tables: None) -> None:
+def test_update_vcs_bridge_rejects_unknown_config_key_after_merge(db: None) -> None:
     """Patch merging still runs the typed config's unknown-key validation on save."""
 
     bridge = make_integration(
@@ -1869,7 +1869,7 @@ def test_update_vcs_bridge_rejects_unknown_config_key_after_merge(composed_table
 
 
 def test_update_vcs_bridge_rejects_backend_switch(
-    composed_tables: None,
+    db: None,
 ) -> None:
     """A saved child cannot reinterpret its private config under another backend."""
 
@@ -1900,7 +1900,7 @@ def test_update_vcs_bridge_rejects_backend_switch(
 
 
 def test_model_save_rejects_backend_switch_and_scopes_partial_config_validation(
-    composed_tables: None,
+    db: None,
 ) -> None:
     """The model boundary guards direct writers without blocking unrelated legacy-row updates."""
 
@@ -1957,7 +1957,7 @@ def test_model_save_rejects_backend_switch_and_scopes_partial_config_validation(
             refreshed.save()
 
 
-def test_non_create_only_impl_field_remains_editable(composed_tables: None) -> None:
+def test_non_create_only_impl_field_remains_editable(db: None) -> None:
     """The integration invariant does not freeze unrelated implementation selectors."""
 
     provider_field = OAuthClient._meta.get_field("provider_type")
@@ -1975,7 +1975,7 @@ def test_non_create_only_impl_field_remains_editable(composed_tables: None) -> N
 
 
 def test_update_vcs_bridge_rejects_unknown_backend_class(
-    composed_tables: None,
+    db: None,
 ) -> None:
     """VCS backend updates validate through the VCS backend registry."""
 
@@ -2005,7 +2005,7 @@ def test_update_vcs_bridge_rejects_unknown_backend_class(
 
 
 def test_update_vcs_bridge_rejects_parent_impl_class(
-    composed_tables: None,
+    db: None,
 ) -> None:
     """The VCS patch exposes backend_class, not the parent impl_class."""
 
@@ -2062,7 +2062,7 @@ def _sdl_block(sdl: str, header: str) -> str:
 
 @pytest.mark.parametrize("keep", ["remote", "local"])
 def test_conflict_action_forwards_explicit_choice_to_owner(
-    composed_tables: None,
+    db: None,
     monkeypatch: pytest.MonkeyPatch,
     keep: str,
 ) -> None:
@@ -2109,7 +2109,7 @@ def test_conflict_action_forwards_explicit_choice_to_owner(
     assert len(calls) == 1
 
 
-def test_owner_credential_patch_refuses_foreign_credentials_as_not_found(composed_tables: None) -> None:
+def test_owner_credential_patch_refuses_foreign_credentials_as_not_found(db: None) -> None:
     integration = make_integration("credential-patch-owner")
     foreign = make_integration("credential-patch-foreign").credential
     with system_context(reason="test own replacement credential"):
@@ -2142,7 +2142,7 @@ def test_owner_credential_patch_refuses_foreign_credentials_as_not_found(compose
         assert integration.credential_id == own.pk
 
 
-def test_parent_typed_integration_uses_the_concrete_selector_for_admissions(composed_tables: None) -> None:
+def test_parent_typed_integration_uses_the_concrete_selector_for_admissions(db: None) -> None:
     bridge = make_integration("parent-admission", model=VcsBridge, backend_class="stub")
     with system_context(reason="test parent admission needs consent"):
         VcsBridge.objects.filter(pk=bridge.pk).update(credential=None, lifecycle="disconnected")
@@ -2159,7 +2159,7 @@ def test_parent_typed_integration_uses_the_concrete_selector_for_admissions(comp
 
 
 @pytest.mark.parametrize("actor_kind", ["owner", "admin"])
-def test_connection_admission_query_count_does_not_grow_with_rows(composed_tables: None, actor_kind: str) -> None:
+def test_connection_admission_query_count_does_not_grow_with_rows(db: None, actor_kind: str) -> None:
     first = make_integration("batched-admission-0", model=VcsBridge, backend_class="stub", lifecycle="paused")
     actor = first.owner if actor_kind == "owner" else _platform_admin("batched-admission-admin")
     schema = _schema()
@@ -2184,7 +2184,7 @@ def test_connection_admission_query_count_does_not_grow_with_rows(composed_table
 
 
 def test_connect_completion_returns_account_switch_as_a_typed_result(
-    composed_tables: None,
+    db: None,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     integration = make_integration("account-switch-result")
@@ -2226,7 +2226,7 @@ def test_connect_completion_returns_account_switch_as_a_typed_result(
     ],
 )
 def test_credential_creation_reports_field_errors_and_accepts_corrected_retry(
-    composed_tables: None,
+    db: None,
     invalid: dict[str, str],
     field: str,
 ) -> None:

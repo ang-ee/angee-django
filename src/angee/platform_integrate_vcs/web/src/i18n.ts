@@ -1,4 +1,4 @@
-import { createNamespaceT } from "@angee/ui";
+import { createNamespaceT } from "@angee/ui/i18n";
 
 export const enPlatformIntegrateVcsMessages: Record<string, string> = {
   "apps.actionFailed": "The action could not be completed.",

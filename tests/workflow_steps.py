@@ -55,14 +55,14 @@ class Pause(Step[Value, Value, None]):
 
 
 class Retry(Step[Value, Value, None]):
-    """Fail transiently once, then complete in the same step row."""
+    """Fail transiently for as many attempts as the input value, then complete in the same step row."""
 
     key = "retry"
     retry = RetryPolicy(max_attempts=2, backoff=timedelta())
 
     def run(self, ctx):
         """Exercise attempt counters independently of dispatches."""
-        if ctx.attempt.number == 1:
+        if ctx.attempt.number <= ctx.input.value:
             raise Retryable("Try again.")
         return ctx.done(ctx.input)
 

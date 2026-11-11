@@ -15,7 +15,6 @@ from django.core.exceptions import FieldDoesNotExist, PermissionDenied, Validati
 from django.db import close_old_connections, connection, connections, transaction
 from django.db.models import CharField
 from django.db.models.deletion import PROTECT
-from django.test import override_settings
 from rebac import actor_context, generic_target, system_context
 
 from angee.base.fields.state import StateField
@@ -27,7 +26,7 @@ from angee.extraction.contracts import (
     Result,
     Source,
 )
-from angee.extraction.managers import ExtractionManager, StaleExtraction
+from angee.extraction.managers import StaleExtraction
 from angee.extraction.profiles import EvidenceLayout, ExtractionProfile
 from angee.provenance.evidence import FactAuthority
 from angee.storage.models import File as AbstractFile
@@ -85,7 +84,7 @@ SCHEMA = {
 
 @pytest.fixture
 def evidence(drive, monkeypatch):
-    """Retain real storage-backed evidence with a registry-selected profile."""
+    """Retain real storage-backed evidence."""
 
     monkeypatch.setattr(File, "rebac_grantable", AbstractFile.rebac_grantable)
     content = b"Note\nFirst line\nSecond line"
@@ -224,6 +223,7 @@ def test_retained_inference_admission_settles_without_reading_sources(evidence, 
     assert held.retained_inference_parts() == ()
 
 
+@pytest.mark.django_db(transaction=True)
 def test_carrier_storage_writes_and_reads_precede_the_lineage_transaction(evidence, monkeypatch):
     retain, _values = evidence
     ingest, read = FileManager.ingest_bytes, File.read_verified
@@ -246,37 +246,23 @@ def test_carrier_storage_writes_and_reads_precede_the_lineage_transaction(eviden
     assert row.parts.count() == 1
 
 
-def test_failed_allocation_discards_only_the_carrier_it_created(evidence, monkeypatch):
+def test_failed_allocation_discards_only_the_carrier_it_created(evidence):
     retain, _values = evidence
     with system_context(reason="test extraction carrier inventory"):
         before = set(File.objects.values_list("pk", flat=True))
 
-    def refuse(*args, **kwargs):
-        raise ValidationError("allocation refused")
-
-    monkeypatch.setattr(ExtractionManager, "_retain_prepared", refuse)
-    with pytest.raises(ValidationError, match="allocation refused"):
-        retain()
+    with pytest.raises(ValidationError, match="does not match its retained schema"):
+        retain(schema={**SCHEMA, "required": [*SCHEMA.get("required", ()), "absent"]})
     with system_context(reason="test extraction carrier cleanup"):
         assert set(File.objects.values_list("pk", flat=True)) == before
 
 
-def test_failed_allocation_keeps_a_carrier_a_retained_revision_holds(evidence, monkeypatch):
+def test_a_carrier_a_retained_revision_holds_is_never_purged(evidence):
     retain, _values = evidence
-    allocate = ExtractionManager._retain_prepared
-    retained = []
-
-    def allocate_then_refuse(self, *args, **kwargs):
-        retained.append(allocate(self, *args, **kwargs))
-        raise ValidationError("the caller refused after allocation")
-
-    monkeypatch.setattr(ExtractionManager, "_retain_prepared", allocate_then_refuse)
-    with pytest.raises(ValidationError, match="refused after allocation"):
-        retain()
     with system_context(reason="test extraction held carrier"):
-        carrier = retained[0].parts.get().carrier_file
-        assert File.objects.filter(pk=carrier.pk).exists()
+        carrier = retain().parts.get().carrier_file
         assert not carrier.purge_if_unretained()
+        assert File.objects.filter(pk=carrier.pk).exists()
 
 
 def test_allocation_rechecks_the_source_identity_after_carrier_preparation(evidence, monkeypatch):
@@ -379,6 +365,7 @@ def test_invalid_candidate_rolls_back_the_whole_evidence_family(evidence, invali
         assert model.objects.count() == 0
 
 
+@pytest.mark.django_db(transaction=True)
 def test_competing_revision_requests_allocate_exactly_one_successor(evidence):
     """Race native PostgreSQL locks; SQLite checks the same CAS serially."""
 
@@ -407,6 +394,7 @@ def test_competing_revision_requests_allocate_exactly_one_successor(evidence):
     assert list(Extraction.objects.order_by("revision").values_list("revision", flat=True)) == [1, 2]
 
 
+@pytest.mark.django_db(transaction=True)
 @pytest.mark.parametrize("change", ["carrier purge", "source edit"])
 def test_retention_waits_for_a_held_file_and_refuses_its_committed_change(evidence, change):
     """Retention locks its source and carrier files before rechecking them, so a held purge or edit wins."""
@@ -608,7 +596,6 @@ def test_read_only_target_access_cannot_retain_or_advance_lineage(evidence, exis
         assert ExtractionLineage.objects.get(pk=base.lineage_id).head_id == base.pk
 
 
-@override_settings(REBAC_LOCAL_BACKEND_STORAGE="registry")
 def test_actor_scoped_carrier_reads_do_not_join_guarded_sources_around_an_elevated_base_copy(evidence):
     """The reader's carrier and page reads stay in its scope; retaining over its base copies the base as system work."""
     retain, values = evidence

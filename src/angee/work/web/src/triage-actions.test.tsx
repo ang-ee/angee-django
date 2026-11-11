@@ -27,10 +27,6 @@ vi.mock("./context", () => ({
   useTaskContext: () => ({ data: null }),
 }));
 
-vi.mock("./i18n", () => ({
-  useWorkT: () => (key: string) => key,
-}));
-
 vi.mock("./task-work", () => ({
   isTaskInTriage: () => true,
 }));

@@ -1,23 +1,18 @@
 // @vitest-environment happy-dom
 
 import {
-  cleanup,
   fireEvent,
   render,
   screen,
   waitFor,
 } from "@testing-library/react";
-import { afterEach, describe, expect, test } from "vitest";
+import { describe, expect, test } from "vitest";
 import type { ReactElement } from "react";
 import { useState } from "react";
 
 import { ModalsHost, useConfirm, usePrompt } from "./ModalsHost";
 
 describe("ModalsHost", () => {
-  afterEach(() => {
-    cleanup();
-  });
-
   test("captures prompt input values before React clears the event target", async () => {
     render(
       <ModalsHost>

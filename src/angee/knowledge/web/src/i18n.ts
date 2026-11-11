@@ -2,7 +2,7 @@
 // active translations; these are the defaults used when a key is missing.
 // Components resolve them through `useKnowledgeT()` (below).
 
-import { createNamespaceT } from "@angee/ui";
+import { createNamespaceT } from "@angee/ui/i18n";
 
 export const enKnowledgeMessages: Record<string, string> = {
   "record.loading": "Loading bound pages",

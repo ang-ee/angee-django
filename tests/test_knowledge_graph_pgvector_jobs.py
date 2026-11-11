@@ -18,7 +18,10 @@ from angee.knowledge_graph_pgvector.testing.models import Passage, PassageEmbedd
 from tests.conftest import MarkdownPage, Page, Vault
 from tests.pgvector_fixtures import passage_records as passage_records
 
-pytestmark = pytest.mark.skipif(connection.vendor != "postgresql", reason="Requires PostgreSQL index failure state")
+pytestmark = [
+    pytest.mark.skipif(connection.vendor != "postgresql", reason="Requires PostgreSQL index failure state"),
+    pytest.mark.django_db(transaction=True),
+]
 
 
 def test_save_dispatch_waits_for_commit_and_raw_saves_do_not_enqueue(passage_records, monkeypatch):

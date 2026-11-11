@@ -89,13 +89,15 @@ postgres = ["psycopg[binary,pool]>=3.2"]
 dev = [
     "angee-base[testing]==3.0.0",
     "daphne>=4.0",
-    "django-zed-rebac[caveats]>=0.32.2,<0.33",
+    "django-zed-rebac[caveats]>=0.34.1,<0.35",
     "faker>=30.0",
+    "hypothesis>=6.100",
+    "import-linter>=2.1",
     "psycopg[binary,pool]>=3.2",
     "angee-django-stubs[compatible-mypy]==6.1.2.post3",
     "angee-mypy==2.1.0",
     "angee-server[profiling]==3.0.0",
-    "pytest>=8.0",
+    "pytest>=9",
     "pytest-django>=4.8",
     "pytest-randomly>=3.16",
     "pytest-xdist>=3.6",
@@ -233,6 +235,99 @@ exclude = [
 
 [tool.ruff.lint]
 select = ["E", "F", "I"]
+
+# Import boundaries, checked by `lint-imports`. Imports inside functions and
+# TYPE_CHECKING blocks count; `ignore_imports` names each admitted importer.
+[tool.importlinter]
+root_packages = ["angee", "django_compose", "rebac"]
+include_external_packages = true
+
+[[tool.importlinter.contracts]]
+name = "Base serving entrypoints stay vendor-free"
+type = "forbidden"
+as_packages = false
+source_modules = ["angee.base", "angee.base.conf", "angee.base.addons", "angee.server"]
+forbidden_modules = [
+  "anthropic", "anymail", "authlib", "axes", "channels_redis", "croniter", "cryptg", "dateutil", "discord",
+  "fastmcp", "httpcore", "httpcore2", "httpx", "httpx2", "imapclient", "import_export", "jwt", "magic",
+  "mailparser_reply", "markdown_it", "mcp", "neonize", "openai", "phonenumbers", "pydantic", "pydantic_ai",
+  "qrcode", "ruamel", "slack_sdk", "strawberry", "strawberry_django", "strawberry_django_aggregates",
+  "strawberry_django_hasura", "tablib", "telethon", "vobject",
+]
+
+[[tool.importlinter.contracts]]
+name = "GraphQL wire contracts stay projection-free"
+type = "forbidden"
+as_packages = false
+source_modules = ["angee.graphql", "angee.graphql.data", "angee.graphql.data.contracts"]
+forbidden_modules = [
+  "angee.graphql.data.metadata", "angee.graphql.data.resource_fields", "angee.graphql.data.hasura",
+  "angee.money", "angee.money.**", "strawberry",
+]
+
+[[tool.importlinter.contracts]]
+name = "Record pointers reach only the identity model contract"
+type = "forbidden"
+as_packages = false
+source_modules = ["angee.base", "angee.base.refs", "angee.base.models", "angee.base.models.identity"]
+forbidden_modules = ["angee.base.models.**"]
+ignore_imports = ["angee.base.refs -> angee.base.models.identity"]
+
+[[tool.importlinter.contracts]]
+name = "Integrate does not import workflows"
+type = "forbidden"
+source_modules = ["angee.integrate"]
+forbidden_modules = [
+  "angee.workflows", "angee.workflows_agents", "angee.workflows_extraction", "angee.workflows_integrate",
+  "angee.workflows_messaging", "angee.workflows_parties", "angee.workflows_posts",
+]
+
+[[tool.importlinter.contracts]]
+name = "Serving modules never import build owners"
+type = "forbidden"
+as_packages = false
+allow_indirect_imports = true
+source_modules = ["angee.**"]
+forbidden_modules = [
+  "angee.*.build", "angee.base.typing", "angee.provenance.typing",
+  "django_compose.build", "django_compose.model_composition", "django_compose.rendering",
+]
+ignore_imports = [
+  "angee.*.build -> django_compose.**",
+  "angee.base.testing.permissions -> angee.base.build",
+  "angee.base.testing.permissions -> django_compose.**",
+  "angee.graphql.sdl -> django_compose.model_composition",  # TYPE_CHECKING only
+]
+
+[[tool.importlinter.contracts]]
+name = "Foundation stays below every capability addon"
+type = "forbidden"
+allow_indirect_imports = true
+source_modules = ["angee.base"]
+forbidden_modules = ["angee.*"]
+
+[[tool.importlinter.contracts]]
+name = "Production sources do not import test support"
+type = "forbidden"
+as_packages = false
+allow_indirect_imports = true
+source_modules = ["angee.**"]
+forbidden_modules = ["tests", "angee.*.testing", "angee.*.testing.**"]
+ignore_imports = [
+  "angee.*.tests.** -> angee.*.testing.**",
+  "angee.*.tests.** -> tests",
+  "angee.*.testing -> angee.*.testing.**",
+  "angee.*.testing.** -> angee.*.testing",
+  "angee.*.testing.** -> angee.*.testing.**",
+]
+
+[[tool.importlinter.contracts]]
+name = "Addon app configs do not subclass the foundation config"
+type = "forbidden"
+as_packages = false
+allow_indirect_imports = true
+source_modules = ["angee.*.apps"]
+forbidden_modules = ["angee.base.apps"]
 
 [tool.mypy]
 plugins = ["angee.base.typing", "angee.provenance.typing"]

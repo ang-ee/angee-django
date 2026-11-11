@@ -6,6 +6,7 @@ import {
   authoredQueryReadsChange,
   createLiveInvalidation,
   invalidateAuthoredQueries,
+  queryReadsLiveChange,
 } from "./query-invalidation";
 
 afterEach(() => { vi.clearAllTimers(); vi.useRealTimers(); });
@@ -25,6 +26,20 @@ test("a related-only model with no target rows is fail-closed", () => {
     angeeModels: ["workflows.StepRun"],
     angeeRelatedModels: ["workflows.StepRun"],
   }, "workflows.StepRun", "wsr_unrelated")).toBe(false);
+});
+
+test("collection related interests require a matching target model, even for changes without an id", () => {
+  const meta = { angeeModels: ["notes.Note", "notes.Attachment"],
+    angeeRecords: [{ model: "notes.Note" }], angeeRelatedModels: ["notes.Attachment"] };
+  for (const id of ["attachment-1", undefined]) {
+    expect(queryReadsLiveChange(meta, { model: "notes.Attachment", id,
+      relatedRecords: [{ model: "notes.Note", id: "off-page" }] })).toBe(true);
+    expect(queryReadsLiveChange(meta, { model: "notes.Attachment", id,
+      relatedRecords: [{ model: "notes.Folder", id: "off-page" }] })).toBe(false);
+    expect(queryReadsLiveChange(meta, { model: "notes.Attachment", id })).toBe(false);
+    expect(queryReadsLiveChange(meta, { model: "notes.Unrelated", id,
+      relatedRecords: [{ model: "notes.Note", id: "off-page" }] })).toBe(false);
+  }
 });
 
 test("a related-only feed refreshes its record interest without subscribing to that record's model", async () => {

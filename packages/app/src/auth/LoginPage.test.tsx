@@ -1,8 +1,8 @@
 // @vitest-environment happy-dom
 
-import { cleanup, render, screen } from "@testing-library/react";
+import { render, screen } from "@testing-library/react";
 import { createElement, type ReactNode } from "react";
-import { afterEach, describe, expect, test, vi } from "vitest";
+import { describe, expect, test, vi } from "vitest";
 import { AppRuntimeProvider, containersFromChildren, type AppRuntime } from "@angee/ui/runtime";
 
 import { LOGIN_CONTAINERS, LoginPage } from "./LoginPage";
@@ -28,8 +28,6 @@ vi.mock("../providers/auth", () => ({
     login: vi.fn(async () => ({ ok: true })),
   }),
 }));
-
-afterEach(cleanup);
 
 function wrapperFor(runtime: Partial<AppRuntime>) {
   return ({ children }: { children: ReactNode }) =>

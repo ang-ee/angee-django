@@ -1,7 +1,7 @@
 // Authorization schema for the storage addon.
 // @rebac_package: storage
 // @rebac_package_version: 0.1.0
-// @rebac_schema_revision: 11
+// @rebac_schema_revision: 12
 
 // Roles-as-namespace anchor, mirroring operator/role: `includes` lets one
 // storage role imply another, and resources gate on `effective_member` so
@@ -84,6 +84,11 @@ definition storage/folder {
 // No `create`
 // permission: rows enter through File.objects.draft, which gates on drive
 // write itself.
+//
+// Fragments union their arms into `read_granted`, `write_granted` and
+// `share_granted`; `read`, `write` and `share` are derived here alone and sealed
+// (`storage.E001`). A trashed file is withheld from everyone who cannot delete
+// it; deleters keep all three to list, restore and manage it.
 definition storage/file {
     relation drive:  storage/drive // rebac:field=drive
     relation folder: storage/folder // rebac:field=folder
@@ -92,10 +97,18 @@ definition storage/file {
     relation owner:  auth/user // rebac:field=owner
     relation viewer: auth/user | auth/group#member | auth/user:*
     relation admin:  angee/role // rebac:const=admin
+    relation trashed: storage/file // rebac:const={"target_id":"trashed","filters":{"is_trashed":true}}
 
-    permission read   = inherited_drive->read + inherited_folder->read + owner + viewer + admin->member
-    permission write  = inherited_drive->write + inherited_folder->write + owner + admin->member
-    permission share  = inherited_drive->share + owner + admin->member
+    // The trashed sentinel needs no target row because this permission is
+    // authenticated. Arrow-only through `trashed`; never check it directly.
+    permission conceal = authenticated
+    permission withheld = trashed->conceal
+    permission read_granted = inherited_drive->read + inherited_folder->read + owner + viewer + admin->member
+    permission write_granted = inherited_drive->write + inherited_folder->write + owner + admin->member
+    permission share_granted = inherited_drive->share + owner + admin->member
+    permission read   = (read_granted - withheld) + delete
+    permission write  = (write_granted - withheld) + delete
+    permission share  = (share_granted - withheld) + delete
     permission transfer = owner + admin->member
     permission write__owner = transfer
     permission delete = owner + inherited_drive->write + admin->member

@@ -1,9 +1,9 @@
 // @vitest-environment happy-dom
 
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import type { TypedDocumentNode } from "@angee/refine";
 import * as React from "react";
-import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
+import { beforeEach, describe, expect, test, vi } from "vitest";
 
 const actionMocks = vi.hoisted(() => ({
   authoredConnect: vi.fn(async (values: unknown) => values),
@@ -53,15 +53,6 @@ vi.mock("./usePairingConnect", () => ({
   }),
 }));
 
-vi.mock("./i18n", () => ({
-  useMessagingT: () => (key: string) => {
-    if (key === "channel.connect.submit") return "Connect";
-    if (key === "channel.connect.submitting") return "Connecting…";
-    if (key === "channel.demo.error") return "Could not connect demo.";
-    return key;
-  },
-}));
-
 import { mutationDialogValueCodecs } from "@angee/ui";
 import { ConnectChannelAction } from "./ConnectChannelAction";
 
@@ -76,8 +67,6 @@ const parseValues = (values: Readonly<Record<string, unknown>>): Variables => ({
 });
 
 describe("ConnectChannelAction", () => {
-  afterEach(cleanup);
-
   beforeEach(() => {
     actionMocks.authoredConnect.mockClear();
     actionMocks.pairingConnect.mockClear();
@@ -105,8 +94,9 @@ describe("ConnectChannelAction", () => {
       description: "channel.demo.description",
       submitLabel: "Connect",
       submittingLabel: "Connecting…",
-      errorFallback: "Could not connect demo.",
     });
+    // A vendor without its own `<prefix>.error` message leaves the dialog's generic fallback.
+    expect(actionMocks.dialogProps?.errorFallback).toBeUndefined();
     expect(actionMocks.dialogProps).not.toHaveProperty("cancelLabel");
 
     fireEvent.submit(screen.getByRole("form", { name: "channel.demo.title" }));

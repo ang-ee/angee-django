@@ -4,13 +4,11 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 from dataclasses import replace
-from pathlib import Path
 from typing import Any
 
 import pytest
 import strawberry_django
 from django.core.exceptions import ValidationError
-from django.core.management import call_command
 from django.db import models
 from django.utils import timezone
 from rebac import system_context
@@ -37,19 +35,8 @@ from angee.projects.models import Task as AbstractTask
 from angee.projects.testing.models import Queue, Stage, Task
 from angee.work.models import TaskWork
 from tests import test_sequence  # noqa: F401 -- register Queue's sequence target before database setup
-from tests.composed_host import run_composed_tests
 from tests.conftest import SchemaAddon, create_platform_admin, create_user, standalone_relation
 from tests.tables import model_tables
-
-
-def test_composed_projects_schema_with_work(tmp_path: Path) -> None:
-    """Work's sortable relation path and phase mapping must survive schema import."""
-    run_composed_tests(tmp_path, "tests.test_work_task_access.SchemaImportTests", app="angee.work")
-
-
-def test_duplicate_merge_uses_live_link_backing(tmp_path: Path) -> None:
-    """Merged links follow their new target without writing relationship rows."""
-    run_composed_tests(tmp_path, "tests.test_work_task_access.DuplicateLinkTests", app="angee.work")
 
 
 class RoutingStageContainer(models.Model):
@@ -165,7 +152,7 @@ class CreateStageType(AngeeNode):
 
 
 @pytest.fixture
-def productivity_tables(transactional_db: None) -> Iterator[None]:
+def productivity_tables(db: None) -> Iterator[None]:
     """Create native stage rows for behavior regressions."""
     test_models = (RoutingStageContainer, RoutingPipelineStage, RoutingStageRecord)
     with model_tables(test_models):
@@ -173,10 +160,9 @@ def productivity_tables(transactional_db: None) -> Iterator[None]:
 
 
 @pytest.fixture
-def productivity_create_case(transactional_db: None) -> Iterator[tuple[Any, Any, Queue]]:
+def productivity_create_case(db: None) -> Iterator[tuple[Any, Any, Queue]]:
     """Expose the production donors through real Hasura resources and local REBAC."""
-    del transactional_db
-    call_command("rebac", "sync", verbosity=0)
+    del db
     active = backend()
     assert isinstance(active, LocalBackend)
     extra = parse_zed("""
@@ -344,7 +330,7 @@ def test_stage_scope_rejects_foreign_container(productivity_tables: None) -> Non
         record.validate_stage_scope()
 
 
-@pytest.mark.django_db(transaction=True)
+@pytest.mark.django_db
 def test_bulk_snooze_wake_clears_only_the_selected_snoozes() -> None:
     """The work queryset wakes the rows its caller selected, through the composed task."""
 

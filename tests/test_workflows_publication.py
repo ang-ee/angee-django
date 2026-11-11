@@ -13,7 +13,7 @@ from angee.workflows.testing.drivers import load_workflow
 from angee.workflows.testing.models import Workflow, WorkflowRun, WorkflowVersion
 from tests.workflow_steps import Echo, Value, document
 
-pytestmark = [pytest.mark.django_db(transaction=True), pytest.mark.usefixtures("workflow_step_classes")]
+pytestmark = [pytest.mark.django_db, pytest.mark.usefixtures("workflow_step_classes")]
 
 
 class RevisedInput(BaseModel):

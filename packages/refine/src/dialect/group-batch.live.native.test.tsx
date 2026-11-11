@@ -34,14 +34,15 @@ function fixture(custom = vi.fn(async () => response(1))) {
   const client = createClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } });
   const sinks: { next: (value: unknown) => void }[] = [];
   const disposers: ReturnType<typeof vi.fn>[] = [];
-  const subscribe = vi.fn((_request: unknown, sink: { next: (value: unknown) => void }) => {
+  const subscribe = vi.fn((_request: { query: string }, sink: { next: (value: unknown) => void }) => {
     sinks.push(sink);
     const dispose = vi.fn();
     disposers.push(dispose);
     return dispose;
   });
   const liveProvider = createAngeeChangeLiveProvider({ subscribe, on: vi.fn(() => () => undefined) } as never,
-    [{ schemaName: "console", modelLabel: "messaging.Message", roots: { list: "messages", changes: "messageChanged" } }],
+    [{ schemaName: "console", modelLabel: "messaging.Message", roots: { list: "messages", changes: "messageChanged" } },
+      { schemaName: "console", modelLabel: "messaging.Part", roots: { changes: "partChanged" } }],
     { queryClient: client });
   const provider = { custom };
   const onError = vi.fn(async () => ({}));
@@ -55,8 +56,31 @@ function fixture(custom = vi.fn(async () => response(1))) {
   const change = () => sinks.at(-1)!.next({ data: { messageChanged: {
     model: "messaging.Message", id: "message-a", action: "create",
   } } });
-  return { wrapper, client, custom, subscribe, disposers, change, onError, notify };
+  const relatedChange = (model: string) => {
+    const index = subscribe.mock.calls.findIndex(([request]) => request.query.includes("angee_partChanged"));
+    sinks[index]!.next({ data: { partChanged: {
+      model: "messaging.Part", id: "part-1", relatedRecords: [{ model, id: "off-page" }], action: "create",
+    } } });
+  };
+  return { wrapper, client, custom, subscribe, disposers, change, relatedChange, onError, notify };
 }
+
+test("grouped lists refresh buckets for related off-page records without needing a leaf subscription", async () => {
+  const f = fixture();
+  const { result, unmount } = renderHook(() => useAngeeGroupByBatch(TARGET, SCOPES,
+    { document: DOCUMENT, relatedModels: ["messaging.Part"] }), { wrapper: f.wrapper });
+  await waitFor(() => expect(result.current.get("channels")?.totalCount).toBe(1));
+  expect(f.subscribe).toHaveBeenCalledTimes(2);
+  vi.useFakeTimers();
+  f.custom.mockResolvedValue(response(2));
+  await act(async () => { f.relatedChange("messaging.Channel"); await vi.advanceTimersByTimeAsync(300); });
+  expect(f.custom).toHaveBeenCalledTimes(1);
+  await act(async () => { f.relatedChange("messaging.Message"); await vi.advanceTimersByTimeAsync(301); });
+  expect(f.custom).toHaveBeenCalledTimes(2);
+  expect(result.current.get("channels")?.totalCount).toBe(2);
+  unmount();
+  for (const dispose of f.disposers) expect(dispose).toHaveBeenCalledTimes(1);
+});
 
 test("group-only views refresh lanes and counts through native live model invalidation without leaf queries", async () => {
   const f = fixture();

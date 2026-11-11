@@ -1,11 +1,9 @@
 """Collect integration joins in native composed SQLite and PostgreSQL hosts."""
-from django.db import connection
-
 from angee.base.testing.packages import write_addon_distribution
 from tests.composed_host import run_composed_tests
 
 
-def test_framework_integration(tmp_path):
+def test_framework_integration(tmp_path, subtests):
     addon = tmp_path / "addons" / "example" / "memory_test"
     addon.mkdir(parents=True)
     (addon / "__init__.py").write_text("")
@@ -20,6 +18,6 @@ def test_framework_integration(tmp_path):
         '  permission target_read = contact->read\n'
         '  permission target_write = contact->write\n}\n'
     )
-    run_composed_tests(tmp_path, "tests.native_framework_integration",
-                       app="example.memory_test", addon_dirs=(tmp_path / "addons",),
-                       test_postgresql=connection.vendor == "postgresql")
+    labels = ("tests.native_framework_integration",)
+    run_composed_tests(tmp_path, subtests, app="example.memory_test", sqlite=labels, postgresql=labels,
+                       addon_dirs=(tmp_path / "addons",))

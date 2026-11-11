@@ -2,7 +2,7 @@
 
 import pytest
 from django.contrib.contenttypes.models import ContentType
-from django.db import connection
+from django.db import connection, connections
 from django.db.models.signals import post_save
 from rebac import actor_context, to_subject_ref
 
@@ -48,7 +48,10 @@ def test_clone_native_batch_delivers_all_receivers_triggers_and_new_watches(
             assert not TriggerEvent.system_queryset().filter(trigger=trigger).exists()
             StepWatch.objects.register(step, created_batch, actor=actor)
             if parameter_budget is not None:
-                monkeypatch.setattr(type(connection.features), "max_query_params", parameter_budget)
+                # The driver declares a smaller parameter limit: swap in its feature set.
+                wrapper = connections["default"]
+                declared = type("BudgetedFeatures", (wrapper.features_class,), {"max_query_params": parameter_budget})
+                monkeypatch.setattr(wrapper, "features", declared(wrapper))
                 budget_active = True
 
     def enforce_budget(execute, sql, params, many, context):

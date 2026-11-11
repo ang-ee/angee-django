@@ -3,7 +3,10 @@
 ``angee.base.signals`` observes owner writes. This adapter projects each
 observation of a declared feed (a model with a ``changes`` subscription) into a
 :class:`ChangePayload` and queues its channel-layer delivery on commit, after
-local observers queued theirs.
+local observers queued theirs. A model's feed is its own or, for an MTI child
+without one, its nearest ancestor's (:func:`change_feed`): the child's rows share
+that ancestor's primary key and public id, so its writes publish there as rows
+of the ancestor, and resource metadata points the child's reads at that feed.
 """
 
 from __future__ import annotations
@@ -20,6 +23,7 @@ from django.conf import settings
 from django.core.exceptions import ImproperlyConfigured
 from django.db import models, transaction
 
+from angee.base.lineage import concrete_lineage, nearest_lineage_model
 from angee.base.signals import ModelChange, change_observed, connect_observers, disconnect_observers
 from angee.graphql.events import ChangePayload, ReadableFields
 from angee.graphql.mixins import ChangeBroadcastMixin
@@ -35,6 +39,21 @@ def change_group(model: type[models.Model]) -> str:
     """Return the channel-layer group name for ``model`` changes."""
 
     return f"angee.changes.{model._meta.app_label}.{model._meta.model_name}"
+
+
+def change_feed(model: type[models.Model]) -> type[models.Model] | None:
+    """Return the declared feed carrying ``model``'s rows: its own, else its nearest MTI ancestor's."""
+
+    return nearest_lineage_model(model, _publisher_fields)
+
+
+def _inheriting_children(model: type[models.Model]) -> tuple[type[models.Model], ...]:
+    """Return the MTI descendants of ``model`` whose writes publish on its feed."""
+
+    return tuple(
+        child for child in concrete_lineage(model)
+        if child is not model and issubclass(child, model) and change_feed(child) is model
+    )
 
 
 def connect_change_publishers(metadata: Mapping[str, list[str]] | None = None) -> tuple[type[models.Model], ...]:
@@ -78,7 +97,8 @@ def connect_publishers(
 ) -> None:
     """Declare ``model`` a transport feed, upgrading any local-only observation.
 
-    Writes through an MTI parent class are observed as writes of this feed's rows.
+    Writes through an MTI parent class are observed as writes of this feed's rows,
+    and so are writes through an MTI child without a feed of its own.
     The adapter projects feeds after every local observer of a write has run.
     """
 
@@ -86,6 +106,8 @@ def connect_publishers(
     _publisher_fields[model] = readable_fields if callable(readable_fields) else frozenset(readable_fields)
     change_observed.connect(_on_change_observed, weak=False, dispatch_uid="angee.graphql.changes")
     connect_observers(model, include_parents=include_parents)
+    for child in _inheriting_children(model):
+        connect_observers(child)
 
 
 def disconnect_publishers(model: type[models.Model]) -> bool:
@@ -95,7 +117,10 @@ def disconnect_publishers(model: type[models.Model]) -> bool:
     feed restores prior state through this seam.
     """
 
+    children = _inheriting_children(model) if model in _publisher_fields else ()
     _publisher_fields.pop(model, None)
+    for child in children:
+        disconnect_observers(child)
     return disconnect_observers(model)
 
 
@@ -131,14 +156,16 @@ def validate_channel_layer() -> None:
 
 
 def _on_change_observed(sender: type[models.Model], *, payload: ModelChange, **kwargs: Any) -> None:
-    """Project one observed write of a declared feed and queue its delivery on commit.
+    """Project one observed write onto its feed and queue its delivery on commit.
 
-    The row's broadcast policy (:class:`ChangeBroadcastMixin`) is read while the
-    row is live, so a delete keeps the same boundary.
+    A write through an MTI child without a feed of its own publishes as a row of
+    the ancestor's feed. Its delete is left to the ancestor row, which Django
+    deletes with it. The row's broadcast policy (:class:`ChangeBroadcastMixin`) is
+    read while the row is live, so a delete keeps the same boundary.
     """
 
-    fields = _publisher_fields.get(sender)
-    if fields is None or not payload.broadcasts:
+    feed = change_feed(sender)
+    if feed is None or not payload.broadcasts or (feed is not sender and payload.action == "delete"):
         return
     instance = payload.instance
     if isinstance(instance, ChangeBroadcastMixin) and not instance.broadcasts_changes():
@@ -147,10 +174,13 @@ def _on_change_observed(sender: type[models.Model], *, payload: ModelChange, **k
         instance,
         action=payload.action,
         update_fields=payload.changed_fields,
-        readable_fields=fields,
+        readable_fields=_publisher_fields[feed],
         field_values=payload.changed_values,
     )
-    _queue_transport(sender, replace(projected, id=payload.id, occurrence_id=payload.occurrence_id))
+    _queue_transport(
+        feed,
+        replace(projected, model=feed._meta.label, id=payload.id, occurrence_id=payload.occurrence_id),
+    )
 
 
 def _queue_transport(model: type[models.Model], payload: ChangePayload) -> None:

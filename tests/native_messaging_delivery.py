@@ -1233,8 +1233,7 @@ class FeedDeliveryContracts(DeliveryFixtures):
                 provider.consume_quota(1)
             quota_manager = apps.get_model("posts", "Quota").objects
             original_open = quota_manager.open_period
-            with patch.object(type(quota_manager), "open_period", autospec=True,
-                              side_effect=lambda manager, **kwargs: original_open(**kwargs)) as opened:
+            with patch.object(quota_manager, "open_period", side_effect=original_open) as opened:
                 self.assertTrue(self.run_delivery(row)["delivered"])
             self.assertEqual(opened.call_count, 1)
             period = quota_manager.get(scope=provider.quota_scope())

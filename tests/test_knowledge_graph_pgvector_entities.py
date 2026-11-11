@@ -117,7 +117,7 @@ def test_extraction_selection_requires_writer_model_access_approval_and_chat_use
         records.vault.clean()
 
 
-def test_graph_opt_in_defaults_and_vocabulary_validation(composed_tables):
+def test_graph_opt_in_defaults_and_vocabulary_validation(db):
     vault = Vault(name="Default")
     assert vault.extraction_model_id is None
     assert vault.graph_entity_kinds == ["concept", "event", "organization", "person", "place"]

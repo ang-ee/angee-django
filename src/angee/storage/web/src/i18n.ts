@@ -2,7 +2,7 @@
 // active translations; these are the defaults used when a key is missing.
 // Components resolve them through `useStorageT()` (below).
 
-import { createNamespaceT } from "@angee/ui";
+import { createNamespaceT } from "@angee/ui/i18n";
 
 export const enStorageMessages: Record<string, string> = {
   "record.loading": "Loading attached files",

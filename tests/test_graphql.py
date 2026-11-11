@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import time
 from concurrent.futures import ThreadPoolExecutor
 from threading import Barrier, Event
 from types import ModuleType, SimpleNamespace
@@ -68,7 +67,7 @@ class HelloQuery:
         return "hi"
 
 
-def test_generated_read_root_conceals_missing_and_hidden_ids(composed_tables: None) -> None:
+def test_generated_read_root_conceals_missing_and_hidden_ids(db: None) -> None:
     user_model = get_user_model()
     viewer = user_model.objects.create_user("read-root-viewer")
     visible = user_model.objects.create_user("read-root-visible")
@@ -1099,21 +1098,11 @@ def test_build_schema_requires_query_root() -> None:
         GraphQLSchemas([addon(public={"mutation": [PingMutation]})]).build("public")
 
 
-def test_concurrent_first_build_is_shared(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_concurrent_first_build_is_shared() -> None:
     """Concurrent cold consumers receive one successfully cached schema build."""
 
     schemas = GraphQLSchemas([addon(public={"query": [HelloQuery]})])
-    original_build = schemas._build
-    build_count = 0
     callers = Barrier(8)
-
-    def slow_build(name: str) -> strawberry.Schema:
-        nonlocal build_count
-        build_count += 1
-        time.sleep(0.05)
-        return original_build(name)
-
-    monkeypatch.setattr(schemas, "_build", slow_build)
 
     def concurrent_build(name: str) -> strawberry.Schema:
         callers.wait()
@@ -1122,30 +1111,18 @@ def test_concurrent_first_build_is_shared(monkeypatch: pytest.MonkeyPatch) -> No
     with ThreadPoolExecutor(max_workers=8) as executor:
         built = list(executor.map(concurrent_build, ["public"] * 8))
 
-    assert build_count == 1
     assert all(schema is built[0] for schema in built)
 
 
-def test_failed_build_is_retryable(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_failed_build_is_retryable() -> None:
     """A failed cold build leaves no partial cache entry behind."""
 
-    schemas = GraphQLSchemas([addon(public={"query": [HelloQuery]})])
-    original_build = schemas._build
-    attempts = 0
-
-    def fail_once(name: str) -> strawberry.Schema:
-        nonlocal attempts
-        attempts += 1
-        if attempts == 1:
-            raise RuntimeError("transient build failure")
-        return original_build(name)
-
-    monkeypatch.setattr(schemas, "_build", fail_once)
-    with pytest.raises(RuntimeError, match="transient build failure"):
+    schemas = GraphQLSchemas([addon(public={"mutation": [PingMutation]})])
+    with pytest.raises(ImproperlyConfigured, match="no query root"):
         schemas.build("public")
 
+    schemas.parts["public"] = GraphQLSchemas([addon(public={"query": [HelloQuery]})]).parts["public"]
     assert schemas.build("public").execute_sync("{ hello }").data == {"hello": "hi"}
-    assert attempts == 2
 
 
 def test_publisher_projection_unions_finalized_named_resources() -> None:

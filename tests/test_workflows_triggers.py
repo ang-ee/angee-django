@@ -39,14 +39,14 @@ from tests.mtidemo.models import MtiParent, TypedCaptureChild, UntypedCapturePar
 from tests.test_workflows_watches import Watch, record_deliveries, start_watcher
 from tests.workflow_steps import Value, document
 
-pytestmark = [pytest.mark.django_db(transaction=True), pytest.mark.usefixtures("workflow_step_classes")]
+pytestmark = [pytest.mark.django_db, pytest.mark.usefixtures("workflow_step_classes")]
 
 
 @pytest.fixture
 def trigger_resource_schema(monkeypatch):
     """Bare tests install just their real, composed resource owner, restoring it afterward."""
     owner = GraphQLSchemas([make_addon(schemas=knowledge_schema.schemas)])
-    monkeypatch.setattr(GraphQLSchemas, "_discovered", owner)
+    monkeypatch.setattr(GraphQLSchemas, "from_discovery", classmethod(lambda cls: owner))
     yield owner
 
 
@@ -517,7 +517,7 @@ def test_watch_capture_failure_preserves_the_native_save(trigger_setup, monkeypa
     def fail(*args, **kwargs):
         raise IntegrityError("watch capture failed")
 
-    monkeypatch.setattr(type(StepWatch.objects), "record_change", fail)
+    monkeypatch.setattr(StepWatch.objects, "record_change", fail)
     with transaction.atomic(), actor_context(actor):
         record.name = "Retained despite capture failure"
         record.save()
@@ -613,6 +613,7 @@ def register_other_changed(settings, monkeypatch):
     monkeypatch.setattr(source_field, "choices_enum", impl_choices_enum(triggers.TriggerSource))
 
 
+@pytest.mark.django_db(transaction=True)
 def test_refined_source_shares_the_one_capture_of_its_bases_event(
     execution, trigger_setup, register_step, settings, monkeypatch,
 ):
@@ -890,6 +891,7 @@ def test_trigger_hook_contributions_are_source_scoped_and_conflicts_fail():
         Trigger._trigger_hooks(Conflict(), "trigger_input")
 
 
+@pytest.mark.django_db(transaction=True)
 @pytest.mark.skipif(connection.vendor != "postgresql", reason="Requires native PostgreSQL table lock modes.")
 def test_source_capture_locks_untyped_concrete_ancestors(monkeypatch):
     """Selecting only the child's PK must not silently drop its parent's OF lock."""

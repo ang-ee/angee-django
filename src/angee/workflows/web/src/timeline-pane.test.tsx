@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
-import { cleanup, renderHook } from "@testing-library/react";
-import { afterEach, beforeEach, expect, test, vi } from "vitest";
+import { renderHook } from "@testing-library/react";
+import { beforeEach, expect, test, vi } from "vitest";
 import { useRecordTimelineAttention } from "./timeline-pane";
 
 const owner = vi.hoisted(() => ({
@@ -19,7 +19,6 @@ beforeEach(() => {
   owner.query.mockImplementation(() => ({ data: { record_timeline: { has_runs: true, open_decision_count: owner.count,
     records: [{ record_model: record.model, record_id: record.id, decisions: owner.ids.map((id) => ({ id, is_open: true, proposal: {} })) }] } } }));
 });
-afterEach(cleanup);
 
 test("attention forces only a newly opened id on the same record, including a constant-count replacement", () => {
   const hook = renderHook(() => useRecordTimelineAttention(record));

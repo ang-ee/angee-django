@@ -250,7 +250,7 @@ def test_empty_idempotency_key_fails_before_a_clone_is_written(clone_template):
         assert not Vault.objects.filter(name="Empty key").exists()
 
 
-def test_clone_query_growth_is_bounded_for_five_and_sixty_pages(composed_tables, record_property):
+def test_clone_query_growth_is_bounded_for_five_and_sixty_pages(db, record_property):
     """Cloning issues one child insert and its native history capture per markdown page.
 
     Django's ``bulk_create`` refuses multi-table children, so each markdown body is its
@@ -283,7 +283,7 @@ def test_clone_query_growth_is_bounded_for_five_and_sixty_pages(composed_tables,
     assert counts[1] - counts[0] <= 6, counts
 
 
-def test_clone_page_tree_queries_do_not_grow_with_depth(composed_tables, record_property):
+def test_clone_page_tree_queries_do_not_grow_with_depth(db, record_property):
     """The same page rows cost the same in a shallow tree and a deep chain."""
 
     actor = create_user("tree-depth-owner")

@@ -14,7 +14,7 @@ from rebac.resources import model_for_resource_type, model_resource_type
 from strawberry_django_hasura import HasuraResource
 
 from angee.base.fields import ImplClassField
-from angee.base.lineage import concrete_child_models
+from angee.base.lineage import concrete_child_models, nearest_lineage_model
 from angee.base.models.base import AngeeModel
 from angee.base.models.merge import MergeableMixin
 from angee.base.models.refs import RecordRefMixin, record_edges_by_target
@@ -298,10 +298,12 @@ def finalize_data_resources(
         )
         finalized.append(metadata)
     resources_by_model = {item.model: item for item in finalized if item.model is not None}
+    feeds = {model: item.roots.changes_name for model, item in resources_by_model.items() if item.roots.changes_name}
     edges_by_target = record_edges_by_target(definition_for=declared_rebac_definition)
     return tuple(
         dataclasses.replace(
             item,
+            roots=_change_feed_roots(item, feeds),
             grantable=_grantable_relations(item.model, resources_by_model),
             concrete_kinds=_concrete_kinds(item.model, resources_by_model),
             record_edges=_record_edges(item.model, edges_by_target),
@@ -708,6 +710,22 @@ def _mutation_arguments(
         for name, argument in mutation.fields[root].args.items()
         if name in declared
     )
+
+
+def _change_feed_roots(
+    item: data_contract.DataResourceMetadata,
+    feeds: Mapping[type[models.Model], str],
+) -> data_contract.DataResourceRoots:
+    """Point a resource without a change feed of its own at its nearest MTI ancestor's.
+
+    The child's rows share that ancestor's primary key and public id, and its
+    writes publish there as the ancestor's rows (``angee.graphql.publishing``).
+    """
+
+    if item.model is None or item.roots.changes_name is not None:
+        return item.roots
+    feed = nearest_lineage_model(item.model, feeds)
+    return item.roots if feed is None else dataclasses.replace(item.roots, changes_name=feeds[feed])
 
 
 def _concrete_kinds(

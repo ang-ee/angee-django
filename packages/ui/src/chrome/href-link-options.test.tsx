@@ -1,12 +1,10 @@
 // @vitest-environment happy-dom
 import { useState } from "react";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { Link, RouterProvider, createMemoryHistory, createRootRoute, createRoute, createRouter } from "@tanstack/react-router";
-import { afterEach, expect, test, vi } from "vitest";
+import { expect, test, vi } from "vitest";
 
 import { useHrefLinkOptions } from "./href-link-options";
-
-afterEach(cleanup);
 
 test("chrome href conversion uses the host search parser, route validation, matching and hash", async () => {
   const parseSearch = vi.fn((search: string) => Object.fromEntries(new URLSearchParams(search)));

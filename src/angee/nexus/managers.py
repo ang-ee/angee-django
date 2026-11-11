@@ -13,8 +13,9 @@ from django.utils import timezone
 from rebac import current_actor
 
 from angee.base.managers import AngeeManager
-from angee.base.querysets import AngeeQuerySet
+from angee.base.querysets import AngeeQuerySet, MergeableQuerySet
 from angee.messaging.managers import MessageQuerySet
+from angee.provenance.contrib.angee.managers import AngeeHistoryManager
 
 if TYPE_CHECKING:
     from angee.nexus.models import Cadence, Tie
@@ -623,106 +624,73 @@ class TieManager[TieT: Tie](_TieManagerBase[TieT]):
         return len(live_pairs)
 
     def _derivation_rows(self, party_ids: set[Any] | None) -> tuple[Any, Any, Any]:
-        """Return one projected queryset for each deliberate-interaction source."""
+        """Return one projected queryset for each deliberate-interaction source.
+
+        Each endpoint is the party of its handle read through the handle's merge
+        redirect: a merged handle keeps its messages and recipients.
+        """
 
         participant_model = apps.get_model("messaging", "Participant")
         message_model = apps.get_model("messaging", "Message")
         edge_model = apps.get_model("messaging", "MessageEdge")
+        public = apps.get_model("messaging", "Thread").Modality.PUBLIC_THREAD
         published = message_model.objects.sudo(reason="nexus.interaction.evidence").published().values("pk")
-        interaction_at = MessageQuerySet.chronological_time("message__")
-        addressed = (
+
+        def pairs(rows: Any, source: str, target: str) -> Any:
+            """Rows whose two endpoint handles resolve to distinct parties, selected parties first."""
+
+            rows = rows.annotate(
+                _source=MergeableQuerySet.survivor_field(source, "party_id"),
+                _target=MergeableQuerySet.survivor_field(target, "party_id"),
+            ).filter(_source__isnull=False, _target__isnull=False).exclude(_source=models.F("_target"))
+            if party_ids is not None:
+                rows = rows.filter(models.Q(_source__in=party_ids) | models.Q(_target__in=party_ids))
+            return rows
+
+        addressed = pairs(
             participant_model._base_manager.filter(
                 message_id__in=published,
                 role__in=(
                     participant_model.ParticipantRole.TO,
                     participant_model.ParticipantRole.CC,
                 ),
-                handle__party__isnull=False,
-                message__sender__party__isnull=False,
                 message__thread__attachments__isnull=True,
-            )
-            .exclude(
-                message__thread__modality=apps.get_model("messaging", "Thread").Modality.PUBLIC_THREAD,
-            )
-            .exclude(
-                handle__party_id=models.F("message__sender__party_id"),
-            )
+            ).exclude(message__thread__modality=public),
+            "message__sender__",
+            "handle__",
         )
-        if party_ids is not None:
-            addressed = addressed.filter(
-                models.Q(message__sender__party_id__in=party_ids) | models.Q(handle__party_id__in=party_ids)
-            )
-        addressed_rows = addressed.annotate(interaction_at=interaction_at).values_list(
-            "message_id",
-            "message__thread_id",
-            "message__sender__party_id",
-            "handle__party_id",
-            "message__platform",
-            "interaction_at",
+        addressed_rows = addressed.annotate(interaction_at=MessageQuerySet.chronological_time("message__")).values_list(
+            "message_id", "message__thread_id", "_source", "_target", "message__platform", "interaction_at",
         )
-
-        reply_at = MessageQuerySet.chronological_time()
-        replies = (
+        replies = pairs(
             message_model._base_manager.filter(
                 pk__in=published,
                 parent_id__in=published,
-                sender__party__isnull=False,
-                parent__sender__party__isnull=False,
                 thread__attachments__isnull=True,
-            )
-            .exclude(
-                thread__modality=apps.get_model("messaging", "Thread").Modality.PUBLIC_THREAD,
-            )
-            .exclude(
-                sender__party_id=models.F("parent__sender__party_id"),
-            )
+            ).exclude(thread__modality=public),
+            "sender__",
+            "parent__sender__",
         )
-        if party_ids is not None:
-            replies = replies.filter(
-                models.Q(sender__party_id__in=party_ids) | models.Q(parent__sender__party_id__in=party_ids)
-            )
-        reply_rows = replies.annotate(interaction_at=reply_at).values_list(
-            "pk",
-            "thread_id",
-            "sender__party_id",
-            "parent__sender__party_id",
-            "platform",
-            "interaction_at",
+        reply_rows = replies.annotate(interaction_at=MessageQuerySet.chronological_time()).values_list(
+            "pk", "thread_id", "_source", "_target", "platform", "interaction_at",
         )
-
-        mention_at = MessageQuerySet.chronological_time("src__")
-        mentions = (
+        mentions = pairs(
             edge_model._base_manager.filter(
                 src_id__in=published,
                 dst_id__in=published,
                 kind=edge_model.EdgeKind.MENTION,
-                src__sender__party__isnull=False,
-                dst__sender__party__isnull=False,
                 src__thread__attachments__isnull=True,
-            )
-            .exclude(
-                src__thread__modality=apps.get_model("messaging", "Thread").Modality.PUBLIC_THREAD,
-            )
-            .exclude(
-                src__sender__party_id=models.F("dst__sender__party_id"),
-            )
+            ).exclude(src__thread__modality=public),
+            "src__sender__",
+            "dst__sender__",
         )
-        if party_ids is not None:
-            mentions = mentions.filter(
-                models.Q(src__sender__party_id__in=party_ids) | models.Q(dst__sender__party_id__in=party_ids)
-            )
-        mention_rows = mentions.annotate(interaction_at=mention_at).values_list(
-            "src_id",
-            "src__thread_id",
-            "src__sender__party_id",
-            "dst__sender__party_id",
-            "src__platform",
-            "interaction_at",
+        mention_rows = mentions.annotate(interaction_at=MessageQuerySet.chronological_time("src__")).values_list(
+            "src_id", "src__thread_id", "_source", "_target", "src__platform", "interaction_at",
         )
         return addressed_rows, reply_rows, mention_rows
 
 
-class CadenceManager[CadenceT: Cadence](AngeeManager[CadenceT]):
+class CadenceManager[CadenceT: Cadence](AngeeHistoryManager[CadenceT]):
     """Own derived due-date refreshes for the human cadence collection."""
 
     def refresh_touch_due(self) -> None:

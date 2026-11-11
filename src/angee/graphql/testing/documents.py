@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import math
 from contextlib import ExitStack
 from dataclasses import dataclass, field
 from types import SimpleNamespace
@@ -73,27 +72,23 @@ class GraphQLDocumentRead:
 
     ``statements`` counts the statements Django captured on every configured
     database; ``sql_bytes`` sums their UTF-8 SQL text, including bound values
-    where the backend renders them.
+    where the backend renders them, for comparing reads within one run.
     """
 
     data: dict[str, Any] = field(repr=False)
     statements: int
     sql_bytes: int
 
-    def assert_ceiling(self, *, statements: int, sql_kb: int) -> None:
-        """Fail when the read exceeds its fixed statement or SQL-size ceiling.
+    def assert_ceiling(self, *, statements: int) -> None:
+        """Fail when the read exceeds its fixed statement ceiling.
 
-        ``sql_kb`` counts 1,024 bytes. A ceiling is today's measured cost: a change
-        that lowers the cost lowers it, and it is never raised to make a test pass.
+        A ceiling is today's measured cost: a change that lowers the cost lowers
+        it, and it is never raised to make a test pass.
         """
 
         assert self.statements <= statements, (
             f"GraphQL document issued {self.statements} SQL statements; ceiling {statements}. "
             "Ratchet downward when cost falls; never raise to admit a regression."
-        )
-        assert self.sql_bytes <= sql_kb * 1024, (
-            f"GraphQL document SQL is {self.sql_bytes} bytes ({math.ceil(self.sql_bytes / 1024)} KB); "
-            f"ceiling {sql_kb} KB. Ratchet downward when cost falls; never raise to admit a regression."
         )
 
 

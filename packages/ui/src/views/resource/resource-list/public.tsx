@@ -133,6 +133,7 @@ export interface ResourceListProps<TRow extends Row = Row> {
   /** List options forwarded to `ListView`. */
   presentation?: ListViewProps<TRow>["presentation"];
   chrome?: ListViewProps<TRow>["chrome"];
+  relatedModels?: ListViewProps<TRow>["relatedModels"];
   baseFilter?: ListViewProps<TRow>["baseFilter"];
   /** Initial editable filter for a new view; route state and saved views remain authoritative thereafter. */
   defaultFilter?: ResourceViewFilter;
@@ -156,7 +157,7 @@ export interface ResourceListProps<TRow extends Row = Row> {
   laneSource?: BoardLaneSource;
   boardCard?: BoardCardSpec;
   fields?: ListViewProps<TRow>["fields"];
-  /** List component used for the collection surface. Defaults to the lean flat list. */
+  /** List component used for the collection surface. Defaults to `ListView`. */
   list?: ListComponent<TRow>;
   /** Form options forwarded to `FormView`. */
   returning?: FormViewProps["returning"];

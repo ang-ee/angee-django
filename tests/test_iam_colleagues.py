@@ -10,7 +10,6 @@ import pytest
 from django.apps import apps
 from django.contrib.auth import get_user_model
 from django.contrib.auth.models import AnonymousUser
-from django.core.management import call_command
 from rebac import (
     ObjectRef,
     RelationshipTuple,
@@ -91,11 +90,10 @@ def _grant_directory(subject: Any) -> None:
     )
 
 
-@pytest.mark.django_db(transaction=True)
-def test_directory_reader_lists_the_active_human_directory(composed_tables: None) -> None:
+def test_directory_reader_lists_the_active_human_directory(db: None) -> None:
     """A reader of the whole directory picks among active people, never service users."""
 
-    del composed_tables
+    del db
     actor = User.objects.create_user(username="actor", email="actor@example.com")
     User.objects.create_user(username="peer", email="peer@example.com")
     User.objects.create_user(
@@ -116,11 +114,10 @@ def test_directory_reader_lists_the_active_human_directory(composed_tables: None
     assert {row["username"] for row in rows} == {"actor", "peer"}
 
 
-@pytest.mark.django_db(transaction=True)
-def test_user_scopes_keep_the_selected_queryset(composed_tables: None) -> None:
+def test_user_scopes_keep_the_selected_queryset(db: None) -> None:
     """Directory, colleague and preview scopes chain onto a selected user queryset."""
 
-    del composed_tables
+    del db
     actor = User.objects.create_user(username="actor", email="actor@example.com")
     peer = User.objects.create_user(username="peer", email="peer@example.com")
     User.objects.create_user(username="other", email="other@example.com")
@@ -133,11 +130,10 @@ def test_user_scopes_keep_the_selected_queryset(composed_tables: None) -> None:
     assert actor.pk not in set(selected.view_as_queryset(actor).values_list("pk", flat=True))
 
 
-@pytest.mark.django_db(transaction=True)
-def test_account_directory_readers_are_offered_their_named_accounts(composed_tables: None) -> None:
+def test_account_directory_readers_are_offered_their_named_accounts(db: None) -> None:
     """Without the whole directory, a member is offered themselves and the accounts named to them."""
 
-    del composed_tables
+    del db
     actor = User.objects.create_user(username="actor", email="actor@example.com")
     granted = User.objects.create_user(username="granted", email="granted@example.com")
     hidden = User.objects.create_user(username="hidden", email="hidden@example.com")
@@ -149,11 +145,10 @@ def test_account_directory_readers_are_offered_their_named_accounts(composed_tab
     assert hidden.username not in {row["username"] for row in rows}
 
 
-@pytest.mark.django_db(transaction=True)
-def test_search_ordering_and_limit_are_user_collection_mechanics(composed_tables: None) -> None:
+def test_search_ordering_and_limit_are_user_collection_mechanics(db: None) -> None:
     """Search, deterministic ordering, and caps layer over actor-scoped rows."""
 
-    del composed_tables
+    del db
     actor = User.objects.create_user(username="search-actor", email="sa@example.com")
     User.objects.create_user(
         username="grace",
@@ -186,10 +181,10 @@ class IamDemoResourceLedger(Resource):
 
 
 @pytest.fixture
-def iam_demo_resource_ledger(transactional_db: Any) -> Iterator[None]:
+def iam_demo_resource_ledger(db: Any) -> Iterator[None]:
     """Create the resource ledger table used by IAM demo load tests."""
 
-    del transactional_db
+    del db
     with model_tables((IamDemoResourceLedger,)):
         yield
 
@@ -197,7 +192,6 @@ def iam_demo_resource_ledger(transactional_db: Any) -> Iterator[None]:
 def _load_iam_demo_resources() -> None:
     """Load IAM's real demo resource tier through the resource manager."""
 
-    call_command("rebac", "sync", verbosity=0)
     IamDemoResourceLedger.objects.load_addons(
         (apps.get_app_config("iam"),),
         tiers=[Resource.Tier.DEMO],
@@ -236,11 +230,10 @@ def test_iam_demo_directory_includes_user_created_after_resource_load(iam_demo_r
     assert [row["username"] for row in _colleagues(created_later)] == ["charlie"]
 
 
-@pytest.mark.django_db(transaction=True)
-def test_anonymous_actor_is_denied(composed_tables: None) -> None:
+def test_anonymous_actor_is_denied(db: None) -> None:
     """``colleagues`` requires a signed-in actor."""
 
-    del composed_tables
+    del db
     result = execute_schema(
         _console_schema(),
         _COLLEAGUES,

@@ -151,8 +151,16 @@ def test_import_verdict_precedes_exact_lock_publication_and_real_sync(
         if audit_refuses:
             raise subprocess.CalledProcessError(1, arguments)
 
-    monkeypatch.setattr(preflight, "_uv", uv)
-    monkeypatch.setattr(preflight.subprocess, "run", audit)
+    def run(arguments: list[str], **kwargs: Any) -> Any:
+        """The process boundary: ``uv`` invocations and the interpreter's migration audit."""
+
+        if arguments[0] != "uv":
+            return audit(arguments, **kwargs)
+        assert arguments[1] == "--project"
+        output = uv(Path(arguments[2]), Path(kwargs["env"]["UV_PROJECT_ENVIRONMENT"]), *arguments[3:])
+        return subprocess.CompletedProcess(arguments, 0, stdout=output, stderr="")
+
+    monkeypatch.setattr(preflight.subprocess, "run", run)
     if audit_refuses:
         with pytest.raises(subprocess.CalledProcessError):
             preflight.change_dependencies(tmp_path, "remove", "retired", no_editable=True)

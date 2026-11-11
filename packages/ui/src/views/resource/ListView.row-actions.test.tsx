@@ -2,7 +2,6 @@
 
 import {
   act,
-  cleanup,
   fireEvent,
   render,
   screen,
@@ -16,7 +15,7 @@ import {
 } from "@angee/metadata";
 import type { TypedDocumentNode } from "@angee/refine";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
+import { beforeEach, describe, expect, test, vi } from "vitest";
 
 import { ModalsHost, ToastProvider } from "../../feedback";
 import { defineRowAction } from "./RowActions";
@@ -122,8 +121,6 @@ describe("ListView row actions", () => {
     harness.refetch.mockReset();
     harness.setFilters.mockReset();
   });
-
-  afterEach(() => cleanup());
 
   test("owns confirm, double-click gating, mutation toast, and loaded table alignment", async () => {
     renderList();

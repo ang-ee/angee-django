@@ -5,13 +5,16 @@ from types import SimpleNamespace
 
 import pytest
 from django.core.exceptions import ImproperlyConfigured, ValidationError
+from django.db import connection
+from hypothesis import given, settings
+from hypothesis import strategies as st
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from angee.base.implementations import ImplBase
 from angee.base.validators import validator
 from angee.workflows.bindings import SourceBinding
 from angee.workflows.definition import Definition
-from angee.workflows.states import ERROR_OUTCOME, WaitingKind
+from angee.workflows.states import ERROR_OUTCOME, StepRunStatus, WaitingKind
 from angee.workflows.steps import Step, Wait, resolve_step
 from angee.workflows.testing.models import Workflow
 
@@ -92,20 +95,61 @@ def graph(nodes, results=None):
     )
 
 
-def planned(definition, rows):
-    """Expose planner output without coupling assertions to its carrier."""
-    return [(item.node_key, item.status) for item in definition.ready_nodes(rows)]
+ROUTED_OUTCOMES = ("done", "alternate", ERROR_OUTCOME)
 
 
-def test_linear_entry_and_next_node():
-    """Linear entry and next node."""
-    definition = graph({"start": {"next": {"done": "finish"}}, "finish": {}})
-    assert definition.issues() == []
-    assert definition.entry == "start"
-    assert planned(definition, []) == [("start", "ready")]
-    assert planned(definition, [row("start", "running")]) == []
-    assert planned(definition, [row("start")]) == [("finish", "ready")]
-    assert planned(definition, [row("start"), row("finish", "ready")]) == []
+@st.composite
+def routed_graphs(draw):
+    """A single-entry graph authored in a drawn order, its routes by target and each node's outcome."""
+    keys = [f"n{index}" for index in range(draw(st.integers(2, 7)))]
+    incoming = {key: {} for key in keys}
+    routes = {key: {} for key in keys}
+    for index, target in enumerate(keys[1:], start=1):
+        edges = st.tuples(st.sampled_from(keys[:index]), st.sampled_from(ROUTED_OUTCOMES))
+        for source, outcome in draw(st.lists(edges, min_size=1, max_size=3, unique=True)):
+            incoming[target].setdefault(source, set()).add(outcome)
+            routes[source].setdefault(outcome, []).append(target)
+    nodes = {
+        key: {
+            "join": draw(st.sampled_from(("any", "all"))),
+            "next": {outcome: draw(st.permutations(routes[key][outcome]))
+                     for outcome in draw(st.permutations(sorted(routes[key])))},
+        }
+        for key in draw(st.permutations(keys))
+    }
+    return graph(nodes), incoming, {key: draw(st.sampled_from(ROUTED_OUTCOMES)) for key in keys}
+
+
+@settings(deadline=None)
+@given(case=routed_graphs(), data=st.data())
+def test_planner_settles_every_node_once_in_any_authored_or_settlement_order(case, data):
+    """Each node is planned once, after every source settled, as a one-pass reading of its routes says.
+
+    A node runs when any (or, joined ``all``, every) source took a route to it;
+    otherwise it is skipped, and the skip reaches its successors. A failure routes
+    only through ``error``. The result is independent of the authored order of
+    nodes, ports and fan-out, and of the order ready nodes settle in. Planning ends
+    only when nothing is ready, so a run never ends with a node unplanned.
+    """
+    definition, incoming, outcomes = case
+    rows = {}
+    while True:
+        for item in definition.ready_nodes(rows.values()):
+            assert item.node_key not in rows
+            assert all(rows[source].status in StepRunStatus.terminal_values() for source in incoming[item.node_key])
+            rows[item.node_key] = row(item.node_key, item.status, "")
+        ready = sorted(key for key, value in rows.items() if value.status == StepRunStatus.READY)
+        if not ready:
+            break
+        key = data.draw(st.sampled_from(ready))
+        rows[key] = row(key, "failed" if outcomes[key] == ERROR_OUTCOME else "succeeded", outcomes[key])
+    expected = {}
+    for key, sources in incoming.items():
+        live = [expected[source] != "skipped" and outcomes[source] in routed for source, routed in sources.items()]
+        join = all if definition.nodes[key].join == "all" else any
+        ran = not live or join(live)
+        expected[key] = ("failed" if outcomes[key] == ERROR_OUTCOME else "succeeded") if ran else "skipped"
+    assert {key: value.status for key, value in rows.items()} == expected
 
 
 def test_topology_retains_removed_steps_and_unfrozen_outcome_keys():
@@ -160,77 +204,6 @@ def test_map_without_a_label_freezes_its_key_based_title():
     definition = graph({"review_items": {"step": "map", "body": {"step": "echo"}}})
     assert definition.node_label("review_items") == "Review items"
     assert definition.published_document()["nodes"]["review_items"]["label"] == "Review items"
-
-
-def test_branching_creates_live_and_skipped_rows():
-    """Branching creates live and skipped rows."""
-    definition = graph({"choose": {"next": {"done": "left", "alternate": "right"}}, "left": {}, "right": {}})
-    assert planned(definition, [row("choose")]) == [("left", "ready"), ("right", "skipped")]
-
-
-def test_fanout_creates_both_branches():
-    """Fanout creates both branches."""
-    definition = graph({"start": {"next": {"done": ["left", "right"]}}, "left": {}, "right": {}})
-    assert planned(definition, [row("start")]) == [("left", "ready"), ("right", "ready")]
-
-
-@pytest.mark.parametrize("join,status", [("any", "ready"), ("all", "skipped")])
-def test_join_waits_for_every_source_and_counts_live_sources(join, status):
-    """Join waits for every source and counts live sources."""
-    definition = graph(
-        {
-            "start": {"next": {"done": ["left", "right"]}},
-            "left": {"next": {"done": "finish"}},
-            "right": {"next": {"done": "finish"}},
-            "finish": {"join": join},
-        }
-    )
-    assert planned(definition, [row("start"), row("left"), row("right", "running")]) == []
-    assert planned(definition, [row("start"), row("left"), row("right", "skipped")]) == [("finish", status)]
-    assert planned(definition, [row("start"), row("left"), row("right")]) == [("finish", "ready")]
-
-
-def test_all_join_groups_alternative_edges_from_one_source():
-    """All join groups alternative edges from one source."""
-    definition = graph({"start": {"next": {"done": "finish", "alternate": "finish"}}, "finish": {"join": "all"}})
-    assert planned(definition, [row("start")]) == [("finish", "ready")]
-
-
-def test_skip_propagation_in_one_plan_does_not_lose_join():
-    """Skip propagation in one plan does not lose join."""
-    definition = graph(
-        {
-            "start": {"next": {"done": "live", "alternate": "dead"}},
-            "live": {"next": {"done": "finish"}},
-            "dead": {"next": {"done": "later"}},
-            "later": {"next": {"done": "finish"}},
-            "finish": {},
-        }
-    )
-    assert planned(definition, [row("start"), row("live")]) == [
-        ("dead", "skipped"),
-        ("later", "skipped"),
-        ("finish", "ready"),
-    ]
-
-
-def test_unrouted_outcome_ends_branch_and_propagates_skips():
-    """Unrouted outcome ends branch and propagates skips."""
-    definition = graph({"start": {"next": {"done": "later"}}, "later": {"next": {"done": "finish"}}, "finish": {}})
-    assert planned(definition, [row("start", outcome="alternate")]) == [("later", "skipped"), ("finish", "skipped")]
-
-
-@pytest.mark.parametrize("routed,status", [(True, "ready"), (False, "skipped")])
-def test_failed_step_routes_only_error_edge(routed, status):
-    """Failed step routes only error edge."""
-    definition = graph(
-        {
-            "start": {"next": {"error" if routed else "done": "recover"}},
-            "recover": {"input": {"value": {"value": 0}}},
-        }
-    )
-    assert definition.issues() == []
-    assert planned(definition, [row("start", "failed", "error")]) == [("recover", status)]
 
 
 @pytest.mark.parametrize("key", ["Upper", "has-dash", "has.dot", "a" * 64, "1first", ""])
@@ -319,7 +292,6 @@ def test_publish_checks_step_subject_against_workflow_identity(register_step):
         assert any(issue.code == "subject" and not issue.blocks_draft for issue in issues)
 
 
-@pytest.mark.django_db(transaction=True)
 def test_publish_canonicalizes_mixed_case_step_subject(execution, register_step):
     """A declared model name publishes against the same canonical workflow subject."""
     actor, _ = execution
@@ -1306,23 +1278,24 @@ def test_draft_save_applies_definition_rekey_and_layout_validation(execution):
     assert Workflow.system_queryset().get(pk=workflow.pk).draft_revision == saved.revision
 
 
-def test_draft_acknowledges_its_own_revision_when_another_writer_advances(execution, monkeypatch):
+def test_draft_acknowledges_its_own_revision_when_another_writer_advances(execution):
     from angee.workflows.testing.drivers import load_workflow
 
     actor, _ = execution
     workflow = load_workflow({"nodes": {"entry": {"step": "echo"}}}, actor=actor)
-    queryset_type = type(Workflow.objects.get_queryset())
-    original = queryset_type.update
+    advanced = []
 
-    def update(queryset, **values):
-        changed = original(queryset, **values)
-        if "draft" in values and changed:
-            original(Workflow.system_queryset().filter(pk=workflow.pk), draft_revision=workflow.draft_revision + 2)
+    def another_writer(execute, sql, params, many, context):
+        changed = execute(sql, params, many, context)
+        if not advanced and sql.startswith("UPDATE") and Workflow._meta.db_table in sql and '"draft"' in sql:
+            advanced.append(True)  # another writer commits right after this draft write
+            Workflow.system_queryset().filter(pk=workflow.pk).update(draft_revision=workflow.draft_revision + 2)
         return changed
 
-    monkeypatch.setattr(queryset_type, "update", update)
-    saved = Workflow.objects.save_draft(
-        workflow, draft={"nodes": {"entry": {"step": "echo"}}}, expected_revision=workflow.draft_revision, actor=actor
-    )
+    with connection.execute_wrapper(another_writer):
+        saved = Workflow.objects.save_draft(
+            workflow, draft={"nodes": {"entry": {"step": "echo"}}}, expected_revision=workflow.draft_revision,
+            actor=actor,
+        )
     assert saved.revision == workflow.draft_revision + 1
     assert Workflow.system_queryset().get(pk=workflow.pk).draft_revision == saved.revision + 1

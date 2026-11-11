@@ -13,8 +13,8 @@ settings and serving code must not depend on this test support.
 
 Pytest suites opt into ``angee.workflows.testing.fixtures`` alongside
 ``angee.base.testing.fixtures``. ``capture_tasks`` captures task sends; ``execution``
-also supplies an acting administrator. ``composed_permissions`` lives in core
-``angee.base.testing.fixtures`` and composes installed permission contributions.
+also supplies an acting administrator. A test requesting ``db`` runs over the
+session's composed permissions, which ``angee.base.testing.fixtures`` synchronizes once.
 ``observe(model)`` collects committed change publications in a scoped context.
 Models declare ``RecordChangedOptIn`` and ``record_changed_grant_targets``;
 Django app population binds their native save receiver, including test models.

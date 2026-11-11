@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 
-import { cleanup, render, screen } from "@testing-library/react";
-import { afterEach, describe, expect, test } from "vitest";
+import { render, screen } from "@testing-library/react";
+import { describe, expect, test } from "vitest";
 
 import { AppRuntimeProvider } from "../runtime/runtime";
 import { defaultWidgets } from "./index";
@@ -16,8 +16,6 @@ const OPTIONS = [
 ];
 
 describe("tone widget", () => {
-  afterEach(cleanup);
-
   const Chip = toneWidget.read;
 
   test("renders each tone in its own colour instead of one status colour", () => {

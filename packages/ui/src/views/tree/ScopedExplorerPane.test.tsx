@@ -1,16 +1,14 @@
 // @vitest-environment happy-dom
 
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import type { ReactNode } from "react";
-import { afterEach, expect, test, vi } from "vitest";
+import { expect, test, vi } from "vitest";
 
 vi.mock("../../layouts/primary-pane-context", () => ({
   PrimaryPanePublisher: ({ node }: { node: ReactNode }) => node,
 }));
 
 import { ScopedExplorerPane } from "./ScopedExplorerPane";
-
-afterEach(cleanup);
 
 const emptyExplorer = {
   roots: [],

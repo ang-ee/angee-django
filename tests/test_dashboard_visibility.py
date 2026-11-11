@@ -3,12 +3,13 @@
 import pytest
 from django.apps import apps
 from django.core.exceptions import ValidationError
-from rebac import anonymous_actor
+from rebac import system_context
 
 from angee.dashboards.models import canonical_dashboard_snapshot, widget_visibility_answers
 from angee.projects.testing import (
     models as projects_models,  # noqa: F401 -- registers the concrete work.Queue and projects.Task
 )
+from tests.conftest import create_user
 
 
 @pytest.mark.parametrize("key", ["slug", "queue.slug"])
@@ -19,38 +20,23 @@ def test_direct_or_dotted_undeclared_scope_is_rejected(key):
         widget_visibility_answers([{"resource": resource, "key": key, "value": "incoming"}], actor=None)
 
 
-@pytest.mark.usefixtures("composed_permissions")
-def test_declared_related_scope_resolves_real_queue_field(monkeypatch):
+@pytest.mark.django_db
+def test_declared_related_scope_resolves_real_queue_field():
+    """``queue__slug`` reads the real Queue rows, scoped to the asking actor."""
+
     assert apps.get_model("projects.Task") is projects_models.Task
     assert apps.get_model("work.Queue") is projects_models.Queue
-    seen = []
+    owner, outsider = create_user("visibility-queue-owner"), create_user("visibility-outsider")
+    with system_context(reason="test dashboard visibility queue"):
+        projects_models.Queue.objects.create(name="Incoming", slug="incoming", key="INC", owner=owner)
+    rule = [{"resource": "projects.Task", "key": "queue__slug", "value": "incoming"}]
 
-    queryset_class = type(projects_models.Queue._default_manager.get_queryset())
-    native_with_actor = queryset_class.with_actor
-
-    def readable(queryset, actor):
-        seen.append((queryset.model, actor))
-        return native_with_actor(queryset, actor)
-
-    def slugs(queryset, key, flat):
-        assert (key, flat) == ("slug", True)
-        assert queryset.model is projects_models.Queue
-        assert any(
-            lookup.lookup_name == "in" and lookup.lhs.target.name == "slug" and lookup.rhs == ["incoming"]
-            for lookup in queryset.query.where.children
-        )
-        return ["incoming"]
-
-    monkeypatch.setattr(queryset_class, "with_actor", readable)
-    monkeypatch.setattr(queryset_class, "values_list", slugs)
-    actor = anonymous_actor()
-    assert widget_visibility_answers(
-        [{"resource": "projects.Task", "key": "queue__slug", "value": "incoming"}], actor
-    ) == [True]
-    assert seen == [(projects_models.Queue, actor)]
+    assert widget_visibility_answers(rule, owner) == [True]
+    assert widget_visibility_answers(rule, outsider) == [False]
+    assert widget_visibility_answers([{**rule[0], "value": "absent"}], owner) == [False]
 
 
-@pytest.mark.usefixtures("composed_permissions")
+@pytest.mark.django_db
 def test_declared_task_queue_scope_validates_in_a_widget_snapshot():
     snapshot = canonical_dashboard_snapshot({
         "schemaVersion": 1,

@@ -12,7 +12,7 @@ from angee.provenance.context import changeset, changeset_model_label, current_c
 from angee.provenance.contrib.angee.context import merge_context
 from tests.core_persistence import OwnedRow
 
-pytestmark = [pytest.mark.entrypoint_boundaries, pytest.mark.django_db(transaction=True)]
+pytestmark = [pytest.mark.entrypoint_boundaries, pytest.mark.django_db]
 
 
 def survivor() -> OwnedRow:
@@ -22,6 +22,7 @@ def survivor() -> OwnedRow:
         return OwnedRow.objects.create(title="survivor")
 
 
+@pytest.mark.django_db(transaction=True)
 @pytest.mark.parametrize("join", [False, True])
 def test_merge_context_preserves_existing_boundary_or_opens_a_fresh_one(join: bool) -> None:
     record = survivor()
@@ -45,6 +46,7 @@ def test_merge_context_preserves_existing_boundary_or_opens_a_fresh_one(join: bo
         assert stored.origin == record
 
 
+@pytest.mark.django_db(transaction=True)
 def test_merge_context_opens_fresh_attribution_when_no_boundary_exists() -> None:
     record = survivor()
     assert current_changeset() is None
@@ -55,6 +57,7 @@ def test_merge_context_opens_fresh_attribution_when_no_boundary_exists() -> None
     assert (stored.activity, stored.outcome, stored.touched) == ("merge", "success", [record._meta.label_lower])
 
 
+@pytest.mark.django_db(transaction=True)
 def test_failed_merge_context_keeps_failure_and_does_not_mark_an_unchanged_survivor() -> None:
     record = survivor()
     selected: Any = None

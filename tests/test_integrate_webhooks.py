@@ -13,7 +13,6 @@ import httpx2
 import pytest
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
-from django.core.management import call_command
 from django.db import transaction
 from django.test.utils import isolate_apps
 from rebac import system_context
@@ -21,6 +20,7 @@ from rebac import system_context
 from angee.integrate.events import EventKind
 from angee.integrate.models import Bridge
 from angee.integrate.net import validate_public_url
+from angee.integrate.testing.http import mock_transport
 from angee.integrate.testing.integration import Integration
 from angee.integrate.webhooks import SIGNATURE_HEADER, WebhookDeliveryError
 from tests.conftest import (
@@ -31,7 +31,7 @@ from tests.tables import model_tables
 
 
 @pytest.fixture
-def dispatch_bridge(transactional_db: None) -> Iterator[Bridge]:
+def dispatch_bridge(db: None) -> Iterator[Bridge]:
     """Persist an isolated bridge so inbound dispatch has a real lock identity."""
 
     with isolate_apps():
@@ -74,12 +74,10 @@ def dispatch_bridge(transactional_db: None) -> Iterator[Bridge]:
             yield bridge
 
 
-@pytest.mark.django_db(transaction=True)
-def test_webhook_subscription_owner_is_field_backed(transactional_db: None) -> None:
+def test_webhook_subscription_owner_is_field_backed(db: None) -> None:
     """WebhookSubscription owner access comes from the owner field and moves by transfer."""
 
-    del transactional_db
-    call_command("rebac", "sync", verbosity=0)
+    del db
     user = get_user_model().objects.create_user(username="webhook-owner", email="owner@example.com")
     other_user = get_user_model().objects.create_user(
         username="webhook-other",
@@ -103,7 +101,7 @@ def test_webhook_subscription_owner_is_field_backed(transactional_db: None) -> N
     assert WebhookSubscription.objects.with_actor(other_user).filter(pk=subscription.pk).exists()
 
 
-@pytest.mark.django_db(transaction=True)
+@pytest.mark.django_db
 @pytest.mark.parametrize(
     "url",
     [
@@ -126,7 +124,7 @@ def test_validate_public_url_rejects_unsafe_targets(url: str) -> None:
         validate_public_url(url)
 
 
-@pytest.mark.django_db(transaction=True)
+@pytest.mark.django_db
 def test_validate_public_url_accepts_public_dns(monkeypatch: pytest.MonkeyPatch) -> None:
     """A hostname resolving only to a public address is accepted."""
 
@@ -135,10 +133,9 @@ def test_validate_public_url_accepts_public_dns(monkeypatch: pytest.MonkeyPatch)
     validate_public_url("https://hooks.example.test/events")
 
 
-@pytest.mark.django_db(transaction=True)
+@pytest.mark.django_db
 @pytest.mark.parametrize("empty_answer", [False, True])
 def test_webhook_nonexistent_host_is_an_invalid_target(monkeypatch: pytest.MonkeyPatch, empty_answer: bool) -> None:
-    call_command("rebac", "sync", verbosity=0)
 
     def resolve(*args: Any, **kwargs: Any) -> list[Any]:
         if empty_answer:
@@ -175,16 +172,10 @@ def test_runtime_marker_is_per_class() -> None:
     assert RuntimeBridge.__dict__["runtime"] is True
 
 
-@pytest.mark.django_db(transaction=True)
-def test_deliver_event_signs_and_posts_only_matching_subscriptions(
-    transactional_db: None,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def test_deliver_event_signs_and_posts_only_matching_subscriptions(db: None, posts: list[httpx2.Request]) -> None:
     """Outbound delivery signs raw JSON and skips disabled or filtered subscriptions."""
 
-    del transactional_db
-    call_command("rebac", "sync", verbosity=0)
-    posts = _record_posts(monkeypatch, status=202)
+    del db
 
     user = get_user_model().objects.create_user(username="webhook-delivery", email="delivery@example.com")
     conn = make_integration("delivery-account")
@@ -244,12 +235,12 @@ def test_deliver_event_signs_and_posts_only_matching_subscriptions(
     )
 
     assert result == {"delivered": 2, "errors": 0}
-    assert [post["url"] for post in posts] == [
+    assert [str(post.url) for post in posts] == [
         "https://hooks-a.example.test/events",
         "https://hooks-all.example.test/events",
     ]
-    assert {post["body"] for post in posts} == {body}
-    assert {post["headers"][SIGNATURE_HEADER] for post in posts} == {
+    assert {post.content for post in posts} == {body}
+    assert {post.headers[SIGNATURE_HEADER] for post in posts} == {
         _signature("first-secret", body),
         _signature("all-secret", body),
     }
@@ -268,15 +259,10 @@ def test_deliver_event_signs_and_posts_only_matching_subscriptions(
 
 
 @pytest.mark.django_db(transaction=True)
-def test_enqueue_event_delivers_after_commit(
-    transactional_db: None,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def test_enqueue_event_delivers_after_commit(transactional_db: None, posts: list[httpx2.Request]) -> None:
     """The manager-owned queue seam sends webhook fan-out after commit."""
 
     del transactional_db
-    call_command("rebac", "sync", verbosity=0)
-    posts = _record_posts(monkeypatch, status=202)
 
     user = get_user_model().objects.create_user(username="webhook-queued", email="queued@example.com")
     with system_context(reason="test webhook queued setup"):
@@ -294,19 +280,17 @@ def test_enqueue_event_delivers_after_commit(
         )
         assert posts == []
 
-    assert [post["url"] for post in posts] == ["https://hooks-queued.example.test/events"]
+    assert [str(post.url) for post in posts] == ["https://hooks-queued.example.test/events"]
 
 
-@pytest.mark.django_db(transaction=True)
 def test_deliver_event_prefilters_integration_scope_before_row_matching(
-    transactional_db: None,
+    db: None,
+    posts: list[httpx2.Request],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """The manager excludes integration-filter misses before calling row matchers."""
 
-    del transactional_db
-    call_command("rebac", "sync", verbosity=0)
-    _record_posts(monkeypatch, status=202)
+    del db, posts
 
     user = get_user_model().objects.create_user(username="webhook-prefilter", email="prefilter@example.com")
     conn = make_integration("prefilter-account")
@@ -347,16 +331,13 @@ def test_deliver_event_prefilters_integration_scope_before_row_matching(
     assert wrong_account.pk not in checked
 
 
-@pytest.mark.django_db(transaction=True)
-def test_deliver_event_failure_increments_consecutive_failures(
-    transactional_db: None,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def test_deliver_event_failure_increments_consecutive_failures(db: None) -> None:
     """A failed POST records telemetry and increments the failure counter."""
 
-    del transactional_db
-    call_command("rebac", "sync", verbosity=0)
-    posts = _record_posts(monkeypatch, post_error=ConnectionRefusedError("connection refused"))
+    del db
+
+    def refuse(request: httpx2.Request) -> httpx2.Response:
+        raise ConnectionRefusedError("connection refused")
 
     user = get_user_model().objects.create_user(username="webhook-failure", email="failure@example.com")
     with system_context(reason="test webhook failure setup"):
@@ -368,10 +349,8 @@ def test_deliver_event_failure_increments_consecutive_failures(
             consecutive_failures=4,
         )
 
-    result = WebhookSubscription.objects.deliver_event(
-        kind=EventKind.BRIDGE_ERRORED,
-        payload={"bridge": "br_1"},
-    )
+    with mock_transport(refuse) as posts:
+        result = WebhookSubscription.objects.deliver_event(kind=EventKind.BRIDGE_ERRORED, payload={"bridge": "br_1"})
 
     subscription.refresh_from_db()
     assert result == {"delivered": 0, "errors": 1}
@@ -382,12 +361,10 @@ def test_deliver_event_failure_increments_consecutive_failures(
     assert subscription.last_error == "Webhook delivery failed."
 
 
-@pytest.mark.django_db(transaction=True)
-def test_record_delivery_failure_refreshes_incremented_counter(transactional_db: None) -> None:
+def test_record_delivery_failure_refreshes_incremented_counter(db: None) -> None:
     """Failure telemetry leaves the row instance with the database counter value."""
 
-    del transactional_db
-    call_command("rebac", "sync", verbosity=0)
+    del db
 
     user = get_user_model().objects.create_user(username="webhook-refresh", email="refresh@example.com")
     with system_context(reason="test webhook refresh setup"):
@@ -403,7 +380,6 @@ def test_record_delivery_failure_refreshes_incremented_counter(transactional_db:
     assert subscription.consecutive_failures == 5
 
 
-@pytest.mark.django_db(transaction=True)
 @pytest.mark.parametrize(
     "address",
     [
@@ -413,14 +389,13 @@ def test_record_delivery_failure_refreshes_incremented_counter(transactional_db:
     ],
 )
 def test_deliver_event_rejects_unsafe_resolved_target_without_connecting(
-    transactional_db: None,
+    db: None,
     monkeypatch: pytest.MonkeyPatch,
     address: str,
 ) -> None:
     """Unsafe DNS refuses before dialling and records the gate's invalid-target telemetry."""
 
-    del transactional_db
-    call_command("rebac", "sync", verbosity=0)
+    del db
     _resolve_to(monkeypatch, address)
     dial = Mock(side_effect=AssertionError("Unsafe webhook target must never be dialled."))
     monkeypatch.setattr(httpcore2.SyncBackend, "connect_tcp", dial)
@@ -450,16 +425,10 @@ def test_deliver_event_rejects_unsafe_resolved_target_without_connecting(
     dial.assert_not_called()
 
 
-@pytest.mark.django_db(transaction=True)
-def test_deliver_event_redirect_response_fails_without_following(
-    transactional_db: None,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def test_deliver_event_redirect_response_fails_without_following(db: None) -> None:
     """A 3xx delivery response is telemetry failure and never another request."""
 
-    del transactional_db
-    call_command("rebac", "sync", verbosity=0)
-    posts = _record_posts(monkeypatch, status=302)
+    del db
 
     user = get_user_model().objects.create_user(username="webhook-redirect", email="redirect@example.com")
     with system_context(reason="test webhook redirect setup"):
@@ -471,15 +440,14 @@ def test_deliver_event_redirect_response_fails_without_following(
             consecutive_failures=2,
         )
 
-    result = WebhookSubscription.objects.deliver_event(
-        kind=EventKind.BRIDGE_ERRORED,
-        payload={"bridge": "br_1"},
-    )
+    redirect = httpx2.Response(302, headers={"Location": "https://elsewhere.example.test/events"})
+    with mock_transport(lambda request: redirect) as posts:
+        result = WebhookSubscription.objects.deliver_event(kind=EventKind.BRIDGE_ERRORED, payload={"bridge": "br_1"})
 
     subscription.refresh_from_db()
     assert result == {"delivered": 0, "errors": 1}
     assert len(posts) == 1
-    assert posts[0]["url"] == "https://hooks-redirect.example.test/events"
+    assert str(posts[0].url) == "https://hooks-redirect.example.test/events"
     assert subscription.consecutive_failures == 3
     assert subscription.last_delivery_status == "302"
     assert subscription.last_error == "Webhook returned HTTP 302."
@@ -531,37 +499,16 @@ def test_dispatch_inbound_does_not_handle_when_verify_raises(dispatch_bridge: Br
     assert bridge.calls == [("verify", payload)]
 
 
-def _record_posts(
-    monkeypatch: pytest.MonkeyPatch,
-    *,
-    status: int = 202,
-    post_error: Exception | None = None,
-) -> list[dict[str, Any]]:
-    """Record posts through the shared ``HttpClient`` (the seam webhook delivery uses).
+@pytest.fixture
+def posts() -> Iterator[list[httpx2.Request]]:
+    """Accept every outbound POST with 202 at integrate's transport seam; yield the requests sent.
 
     Pinning itself is covered by ``tests/test_integrate_http.py``; here we only need
-    to observe the URL, body, and signature delivery sends, and replay a status or a
-    transport error.
+    to observe the URL, body, and signature delivery sends.
     """
 
-    posts: list[dict[str, Any]] = []
-
-    def fake_post(
-        self: Any,
-        url: str,
-        *,
-        body: bytes | None = None,
-        headers: dict[str, str] | None = None,
-        **kwargs: Any,
-    ) -> httpx2.Response:
-        del kwargs
-        posts.append({"url": url, "body": body, "headers": headers or {}})
-        if post_error is not None:
-            raise post_error
-        return httpx2.Response(status, content=b"", headers={})
-
-    monkeypatch.setattr("angee.integrate.http.HttpClient.post", fake_post)
-    return posts
+    with mock_transport(lambda request: httpx2.Response(202)) as requests:
+        yield requests
 
 
 def _resolve_to(monkeypatch: pytest.MonkeyPatch, address: str) -> None:

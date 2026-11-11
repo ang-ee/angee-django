@@ -21,6 +21,7 @@ from angee.graphql.node import AngeeNode
 from angee.graphql.publishing import connect_publishers, disconnect_publishers
 from angee.graphql.schema import SchemaParts
 from angee.graphql.testing.documents import execute_schema, result_data
+from angee.graphql.testing.publishing import capture_broadcasts
 from angee.workflows.decision_steps import apply_proposals
 from tests.conftest import addon_schema, create_platform_admin, create_user, vault_for
 from tests.linesdemo.models import Document, DocumentLine, Tag
@@ -33,7 +34,7 @@ def linked_tags(line):
 
 
 @pytest.fixture
-def many_to_many(composed_tables, monkeypatch):
+def many_to_many(db, monkeypatch):
     actor = create_platform_admin("relation-answerer")
     with system_context(reason="test.decision_many_to_many"):
         document = Document.objects.create(title="Document")
@@ -117,24 +118,14 @@ def test_many_to_many_set_and_choose_require_string_lists(many_to_many, value):
 
 
 @pytest.mark.parametrize("choose", [False, True])
-def test_many_to_many_refuses_an_unreadable_related_id(many_to_many, monkeypatch, choose):
+def test_many_to_many_refuses_an_unreadable_related_id(many_to_many, choose):
     actor, line, tags = many_to_many
-    querysets = type(Tag.objects.get_queryset())
-    original = querysets.with_actor
-    actors = []
-
-    def scoped(queryset, answering):
-        if queryset.model is Tag:
-            actors.append(answering)
-            return original(queryset, answering).exclude(pk=tags[-1].pk)
-        return original(queryset, answering)
-
-    monkeypatch.setattr(querysets, "with_actor", scoped)
     identities = [tags[1].public_id, tags[-1].public_id]
+    with system_context(reason="test.decision_many_to_many.absent"):
+        tags[-1].delete()  # an absent id meets the same refusal as an unreadable one
     actions = RecordActions(fields={"tags": {"choose": {}} if choose else {"set": identities}})
     with pytest.raises(ValueError, match="absent or unreadable"):
         actions.resolve(line, context={"actor": actor}, values={"tags": identities} if choose else None)
-    assert actors == [actor]
     assert linked_tags(line) == [tags[0]]
 
 
@@ -174,7 +165,7 @@ def test_many_to_many_is_not_written_when_scalar_full_clean_fails(many_to_many):
 
 
 @pytest.fixture
-def records(composed_tables):
+def records(db):
     issuer = create_platform_admin("concerns-issuer")
     reviewer = create_user("concerns-reviewer")
     outsider = create_user("concerns-outsider")
@@ -229,7 +220,7 @@ def test_empty_concerns_are_rejected(records):
         admit(records, [])
 
 
-def test_change_concerns_deduplicate_before_querying_child_models(composed_tables):
+def test_change_concerns_deduplicate_before_querying_child_models(db):
     from angee.base.refs import RecordRef, record_view_refs
     from tests.mtidemo.models import MtiChild, MtiParent
 
@@ -255,21 +246,19 @@ def test_relation_without_actor_scoping_is_a_contract_value_error():
         RecordActions(fields={"target": {"set": "unscoped"}}).resolve(UnscopedEdge(), context={"actor": None})
 
 
-@pytest.mark.django_db(transaction=True)
-def test_admission_publishes_once_with_its_concern_records(records, monkeypatch):
-    events = []
-    monkeypatch.setattr("angee.graphql.publishing._queue_transport", lambda model, payload: events.append(payload))
+def test_admission_publishes_once_with_its_concern_records(records, django_capture_on_commit_callbacks):
     already_wired = disconnect_publishers(Decision)
     connect_publishers(Decision)
     try:
-        decision = admit(records, records[3][:2])
+        with capture_broadcasts() as events, django_capture_on_commit_callbacks(execute=True):
+            decision = admit(records, records[3][:2])
     finally:
         disconnect_publishers(Decision)
         if already_wired:
             connect_publishers(Decision)
     assert len(events) == 1
-    assert events[0].id == decision.sqid
-    assert {(ref.model, ref.id) for ref in events[0].related_records} == {
+    assert events[0]["id"] == decision.sqid
+    assert {(ref["model"], ref["id"]) for ref in events[0]["related_records"]} == {
         (record._meta.label, record.sqid) for record in records[3][:2]
     }
 
@@ -430,7 +419,7 @@ def test_attention_is_actor_scoped_for_unrelated_resources_and_open_record_read(
     assert not any('decisions_decision' in item["sql"].lower() for item in captured)
 
 
-@pytest.mark.usefixtures("composed_tables")
+@pytest.mark.django_db
 def test_attention_resolves_on_a_mutation_payload_the_optimizer_never_annotated():
     """A created row's payload reads its contributed badge once instead of erroring."""
 

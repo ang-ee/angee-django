@@ -1,10 +1,7 @@
 // @vitest-environment happy-dom
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
-import { afterEach, beforeAll, expect, test } from "vitest";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { expect, test } from "vitest";
 import { DecisionStory } from "./InboxPage.stories";
-
-beforeAll(() => { Element.prototype.getAnimations ??= () => []; });
-afterEach(cleanup);
 
 test("the inbox card links concerned records and lists proposed field and record actions", async () => {
   render(<DecisionStory />);

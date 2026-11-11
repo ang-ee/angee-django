@@ -9,6 +9,7 @@ from typing import Any
 from django.db import models
 
 from angee.provenance.context import ChangesetContext, changeset, current_changeset
+from angee.provenance.querysets import model_history
 
 SERVER_COMMANDS = frozenset({"celery", "runserver", "serve", "test"})
 """Commands whose units of work own their boundaries instead of the process.
@@ -35,7 +36,12 @@ def management_context(
 
 @contextmanager
 def merge_context(survivor: models.Model, *, join: bool = False) -> Iterator[None]:
-    """Preserve a whole fold's attribution, including an unchanged survivor."""
+    """Preserve a whole fold's attribution, including an unchanged survivor.
+
+    A merge's own boundary is its survivor even when the fold changes none of its
+    columns, so a survivor with no history yet gets its baseline first: the revert
+    reads the boundary from it (``ModelHistory.changeset_states``).
+    """
 
     context = current_changeset() if join else None
     with changeset(
@@ -43,6 +49,8 @@ def merge_context(survivor: models.Model, *, join: bool = False) -> Iterator[Non
         activity="merge" if context is None else None,
         origin=survivor if context is None else None,
     ):
+        if context is None and (history := model_history(type(survivor))) is not None and history.capture_enabled:
+            history.record_baseline(survivor)
         yield
         if (context := current_changeset(required=True, record=True)) is not None:
             context.touched.append(type(survivor)._meta.label_lower)

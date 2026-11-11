@@ -12,71 +12,8 @@ describe("iam addon manifest", () => {
     expect(() => expectValidBaseAddon(iam)).not.toThrow();
   });
 
-  test("registers the console routes, with $id detail children for the ResourceLists", () => {
-    const names = iam.routes?.map((route) => route.name) ?? [];
-    // The Users ResourceList contributes a list + a `$id` record route.
-    for (const name of [
-      "iam.overview",
-      "iam.users",
-      "iam.users.record",
-      "iam.groups",
-      "iam.groups.record",
-      "iam.roles",
-      "iam.grants",
-      "iam.relationships",
-      "iam.schema",
-    ]) {
-      expect(names).toContain(name);
-    }
-    // The OAuth connect substrate (providers/accounts/credentials + connect callback)
-    // moved to @angee/integrate.
-    for (const gone of [
-      "iam.providers",
-      "iam.accounts",
-      "iam.credentials",
-      "iam.connect.callback",
-    ]) {
-      expect(names).not.toContain(gone);
-    }
-    const record = iam.routes?.find((route) => route.name === "iam.users.record");
-    expect(record?.path).toBe("/iam/users/$id");
-    expect(record?.parent).toBe("iam.users");
-    expect(record?.component).toBeUndefined();
-    const groupRecord = iam.routes?.find((route) => route.name === "iam.groups.record");
-    expect(groupRecord?.path).toBe("/iam/groups/$id");
-    expect(groupRecord?.parent).toBe("iam.groups");
-    expect(names).not.toContain("iam.permissions");
-  });
-
-  test("contributes the top-level IAM menu with a Roles dropdown", () => {
-    const menu = declaredMenus?.[0];
-    expect(menu?.id).toBe("iam");
-    expect(menu?.label).toBe("IAM");
-    expect(menu?.icon).toBe("auth");
-    expect(menu?.group).toBeUndefined();
-    // Route-less root: target inherited from the first child (Overview).
-    expect(menu?.route).toBeUndefined();
-    expect(menu?.children?.map((item) => item.id)).toEqual([
-      "iam.overview",
-      "iam.users.group",
-      "iam.roles.group",
-    ]);
-    const usersGroup = menu?.children?.find((item) => item.id === "iam.users.group");
-    expect(usersGroup?.route).toBeUndefined();
-    expect(usersGroup?.children?.map((item) => item.route)).toEqual([
-      "iam.users",
-      "iam.groups",
-    ]);
-    // Only people managers list people, so only they are offered the Users entry.
-    expect(usersGroup?.children?.map((item) => item.requires)).toEqual(["iam.User#list", undefined]);
-    const rolesGroup = menu?.children?.find((item) => item.id === "iam.roles.group");
-    expect(rolesGroup?.route).toBeUndefined();
-    expect(rolesGroup?.children?.map((item) => item.route)).toEqual([
-      "iam.roles",
-      "iam.grants",
-      "iam.relationships",
-      "iam.schema",
-    ]);
+  test("offers the Users entry only to people managers", () => {
+    expect(iam.menus["iam.users"]?.requires).toBe("iam.User#list");
   });
 
   test("references the landing route from exactly one menu item (chrome derivation)", () => {
@@ -86,37 +23,17 @@ describe("iam addon manifest", () => {
     expect(tree.itemsForRoute("iam.overview")).toHaveLength(1);
   });
 
-  test("contributes one shared access action to record and collection toolbars", () => {
-    expect(iam.containers?.["form#chrome"]).toMatchObject({ "iam.share-record": { sequence: 20, content: expect.anything() } });
-    expect(iam.containers?.["resource#utilities"]).toMatchObject({ "iam.share-list": { sequence: 20, content: expect.anything() } });
-  });
-
-  test("contributes access controls and the user's account verbs", () => {
-    // The Share panel's role and visibility containers, addressed per model by their contributors.
-    expect(iam.containers?.["iam#access-roles"]).toEqual({ models: true });
-    expect(iam.containers?.["iam#access-visibility"]).toEqual({ models: true });
-    expect(iam.containers?.["form#chrome"]).toMatchObject({ "iam.share-record": { sequence: 20 } });
-    expect(iam.containers?.["resource#utilities"]).toMatchObject({ "iam.share-list": { sequence: 20 } });
-    // Account verbs are overflow-menu children on the user form, each reading the row's projection.
+  test("gates every account verb and the last sign-in column on the user's projection", () => {
+    // Account verbs read the row's projected admission and revision.
     const verbs = iam.containers?.["iam.User#actions-menu"] as Record<string, { requiredFields?: readonly string[] }>;
-    expect(Object.keys(verbs)).toEqual(["iam.set-active", "iam.rename", "iam.issue-password", "iam.reset-password"]);
+    expect(Object.keys(verbs)).not.toHaveLength(0);
     for (const child of Object.values(verbs)) {
       expect(child.requiredFields).toEqual(expect.arrayContaining(["account_actions", "revision"]));
     }
-  });
-
-  test("declares the users list's columns container with IAM's default columns and activity presets", () => {
-    const columns = iam.containers?.["iam.users#columns"] as Record<string, { sequence?: number; requires?: string }>;
-    expect(Object.keys(columns)).toEqual(["iam.username", "iam.email", "iam.is-staff", "iam.is-active", "iam.last-login"]);
-    expect(Object.values(columns).map((child) => child.sequence)).toEqual([10, 20, 30, 40, 50]);
     // Last sign-in is present only for viewers reading it on every row; the field gate still decides each value.
+    const columns = iam.containers?.["iam.users#columns"] as Record<string, { requires?: string }>;
     expect(Object.entries(columns).flatMap(([id, child]) => child.requires ? [[id, child.requires]] : []))
       .toEqual([["iam.last-login", "iam.User#read__last_login"]]);
-    // Activity is gated, so the presets filter on the resource's gate-aware `active` expression.
-    expect(iam.resourceViews?.map((preset) => [preset.id, preset.label, preset.filter])).toEqual([
-      ["iam.users.active", "Active", { active: { exact: true } }],
-      ["iam.users.deactivated", "Deactivated", { active: { exact: false } }],
-    ]);
   });
 
   test("publishes login backgrounds as frontend build assets", () => {

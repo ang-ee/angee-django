@@ -13,14 +13,12 @@ from angee.projects.testing.models import Link, Project, ProjectBinding, Task
 from tests.conftest import Backend, Drive, Folder, Vendor, create_user, vault_for
 from tests.test_knowledge import _grant
 
-pytestmark = pytest.mark.django_db(transaction=True)
-
 
 @pytest.fixture
-def task_project(composed_permissions: None) -> tuple[Any, Any, Any, Any]:
+def task_project(db: None) -> tuple[Any, Any, Any, Any]:
     """An owner's project and task, a project reader and an outsider."""
 
-    del composed_permissions
+    del db
     owner, reader, outsider = (create_user(name) for name in ("edge-owner", "edge-reader", "edge-outsider"))
     with actor_context(owner):
         project = Project.objects.create(title="Edges")
@@ -70,10 +68,10 @@ def test_link_refuses_undeclared_and_untyped_targets(task_project: Any) -> None:
 
 
 @pytest.fixture
-def bindable(composed_permissions: None) -> dict[str, Any]:
+def bindable(db: None) -> dict[str, Any]:
     """A project owner with a drive and a vault, plus a writer who cannot share."""
 
-    del composed_permissions
+    del db
     names = ("bind-owner", "bind-writer", "bind-reader", "bind-outsider")
     owner, writer, reader, outsider = (create_user(name) for name in names)
     with system_context(reason="test.bindings.seed"):

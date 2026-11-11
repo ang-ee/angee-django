@@ -14,8 +14,10 @@ def model_tables(test_models: tuple[type[models.Model], ...]) -> Iterator[None]:
     isolated registry probes, unmanaged models, and migrated or uninstalled app labels
     also fall outside syncdb. These tests cannot share one installed composition
     because they exercise alternate or deliberately incomplete model contracts.
-    Static models in installed, unmigrated apps use ``transactional_db`` directly.
-    Django owns their creation and flush; this helper never clears existing tables.
+    SQLite's schema editor refuses to run inside the rollback transaction, so a
+    test using this helper declares ``django_db(transaction=True)``. Static models
+    in installed, unmigrated apps need no helper: Django's test database setup
+    creates them. This helper never clears existing tables.
     """
 
     existing = set(connection.introspection.table_names())

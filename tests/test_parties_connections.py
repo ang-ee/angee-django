@@ -1,6 +1,5 @@
 """Social connection imports land through the party and relationship managers."""
 
-import pytest
 from django.contrib.auth import get_user_model
 from rebac import system_context
 
@@ -14,11 +13,10 @@ from angee.provenance.statements import SourceKind
 from tests.conftest import current_stream, make_integration
 
 
-@pytest.mark.django_db(transaction=True)
-def test_connection_replay_keeps_one_person_and_its_source_relationships(composed_tables, monkeypatch):
+def test_connection_replay_keeps_one_person_and_its_source_relationships(db, monkeypatch):
     """A replayed export record lands on the same Person, link and edges."""
 
-    del composed_tables
+    del db
     monkeypatch.setattr(ManualChannelBackend, "source_kind", SourceKind.IMPORT)
     with system_context(reason="parties.connection.replay"):
         user = get_user_model().objects.create_user(username="connection-owner")

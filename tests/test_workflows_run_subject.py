@@ -14,7 +14,7 @@ from angee.workflows.testing.drivers import load_workflow, run_until
 from angee.workflows.testing.models import RunSubjectRecord, StepRecord, StepRun, WorkflowRun
 from tests.workflow_steps import Echo, document
 
-pytestmark = [pytest.mark.django_db(transaction=True), pytest.mark.usefixtures("workflow_step_classes")]
+pytestmark = [pytest.mark.django_db, pytest.mark.usefixtures("workflow_step_classes")]
 
 
 @pytest.fixture
@@ -69,13 +69,15 @@ def test_request_replay_admits_once_and_settlement_reads_terminal_output(executi
     assert subject.settlements == [{"run": run.pk, "status": RunStatus.SUCCEEDED, "output": {"value": 4}}]
 
 
-def test_admission_refusal_rolls_back_run_evidence_and_dispatch(execution, subject):
+def test_admission_refusal_rolls_back_run_evidence_and_dispatch(
+    execution, subject, django_capture_on_commit_callbacks,
+):
     actor, sent = execution
     workflow = workflow_for(actor)
     RunSubjectRecord.system_queryset().filter(pk=subject.pk).update(refuse_admission=True)
     sent.clear()
 
-    with pytest.raises(ValidationError, match="refuses admission"):
+    with django_capture_on_commit_callbacks(execute=True), pytest.raises(ValidationError, match="refuses admission"):
         WorkflowRun.objects.start(workflow, actor=actor, subject=subject)
 
     assert not WorkflowRun.system_queryset().exists()
@@ -124,6 +126,7 @@ def test_retry_readmits_and_refusal_keeps_run_and_step_failed(execution, subject
     assert subject.settlements == [{"run": run.pk, "status": RunStatus.FAILED, "output": {}}] * 2
 
 
+@pytest.mark.django_db(transaction=True)
 def test_deleted_subject_stops_its_run(execution, subject):
     actor, sent = execution
     run = WorkflowRun.objects.start(workflow_for(actor), actor=actor, subject=subject)

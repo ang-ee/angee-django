@@ -4,7 +4,6 @@ import tomllib
 from datetime import timedelta
 from pathlib import Path
 
-import pytest
 from django.apps import apps
 from django.core.exceptions import ValidationError
 from django.db.models.deletion import ProtectedError
@@ -20,7 +19,6 @@ from rebac import (
     write_relationships,
 )
 
-from tests.composed_host import run_composed_tests
 from tests.test_proposals_clarifications import ClarificationCase
 
 
@@ -306,10 +304,6 @@ class ProposalsWorkTests(ClarificationCase):
             self.assertEqual(saved.title, "Deferred rename")
 
 
-class DenormalizedProposalsWorkTests(ProposalsWorkTests):
-    storage = "denormalized"
-
-
 def test_proposals_work_manifest():
     addon = Path(__file__).resolve().parents[1] / "src/angee/proposals_work"
     manifest = tomllib.loads((addon / "pyproject.toml").read_text())
@@ -321,8 +315,3 @@ def test_proposals_work_manifest():
     proposals = tomllib.loads((addon.parent / "proposals/pyproject.toml").read_text())
     assert "angee-work" not in {Requirement(value).name for value in proposals["project"]["dependencies"]}
     assert "work." not in (addon.parent / "proposals/models.py").read_text()
-
-
-@pytest.mark.parametrize("test_class", ("ProposalsWorkTests", "DenormalizedProposalsWorkTests"))
-def test_proposals_work_composition(tmp_path: Path, test_class: str):
-    run_composed_tests(tmp_path, f"tests.test_proposals_work.{test_class}", app="angee.proposals_work")

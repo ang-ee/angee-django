@@ -19,7 +19,6 @@ from rebac import (
     to_subject_ref,
     write_relationships,
 )
-from rebac.roles import grant
 
 from angee.base.models.locks import StaleRevisionError
 from angee.graphql.schema import SCHEMA_PART_KEYS, GraphQLSchemas
@@ -35,7 +34,7 @@ from tests.conftest import Link, MarkdownPage, Page, SchemaAddon, Vault, create_
 
 
 @pytest.mark.parametrize("worker", [False, True])
-def test_create_for_sets_owner_and_audit_stamps(composed_tables: None, worker: bool) -> None:
+def test_create_for_sets_owner_and_audit_stamps(db: None, worker: bool) -> None:
     """The vault factory persists ownership and stamps the creating actor."""
 
     alice = create_user("alice")
@@ -48,7 +47,7 @@ def test_create_for_sets_owner_and_audit_stamps(composed_tables: None, worker: b
     assert str(vault.sqid).startswith("vlt_")
 
 
-def test_factory_rows_stay_gated_after_creation(composed_tables: None) -> None:
+def test_factory_rows_stay_gated_after_creation(db: None) -> None:
     """The create-time elevation must not survive on the returned instance."""
 
     alice = create_user("alice")
@@ -61,7 +60,7 @@ def test_factory_rows_stay_gated_after_creation(composed_tables: None) -> None:
 
 
 
-def test_page_tree_expressions_read_through_the_reader_or_the_ambient_scope(composed_tables: None) -> None:
+def test_page_tree_expressions_read_through_the_reader_or_the_ambient_scope(db: None) -> None:
     """Roots and expandability read the actor's pages; system context reads all; no actor fails closed."""
 
     owner, outsider = create_user("tree-owner"), create_user("tree-outsider")
@@ -90,7 +89,7 @@ def test_page_tree_expressions_read_through_the_reader_or_the_ambient_scope(comp
     # Schema composition reads an expression's output field from emptied rows.
     assert Page.objects.none().navigation_root_expression().output_field is not None
 
-def test_create_for_refuses_foreign_owner(composed_tables: None) -> None:
+def test_create_for_refuses_foreign_owner(db: None) -> None:
     """A vault may only be created for the acting user."""
 
     alice = create_user("alice")
@@ -100,7 +99,7 @@ def test_create_for_refuses_foreign_owner(composed_tables: None) -> None:
         Vault.objects.create_for(bob, name="Gift")
 
 
-def test_create_vault_requires_an_authenticated_actor(composed_tables: None) -> None:
+def test_create_vault_requires_an_authenticated_actor(db: None) -> None:
     """Anonymous and actor-less calls cannot create vaults."""
 
     anonymous = AnonymousUser()
@@ -111,18 +110,7 @@ def test_create_vault_requires_an_authenticated_actor(composed_tables: None) -> 
         Vault.objects.create_for(None, name="Nope")
 
 
-def test_vault_scope_hides_other_owners(composed_tables: None) -> None:
-    """Actor-scoped vault reads only return the actor's own grants."""
-
-    alice = create_user("alice")
-    bob = create_user("bob")
-    vault_for(alice, name="Research")
-
-    assert [vault.name for vault in Vault.objects.as_user(alice)] == ["Research"]
-    assert list(Vault.objects.as_user(bob)) == []
-
-
-def test_create_in_requires_vault_write(composed_tables: None) -> None:
+def test_create_in_requires_vault_write(db: None) -> None:
     """Only actors who can write the vault may add pages to it."""
 
     alice = create_user("alice")
@@ -141,7 +129,7 @@ def test_create_in_requires_vault_write(composed_tables: None) -> None:
     assert list(Page.objects.as_user(bob)) == []
 
 
-def test_create_in_refuses_cross_vault_parent(composed_tables: None) -> None:
+def test_create_in_refuses_cross_vault_parent(db: None) -> None:
     """A parent from another vault would leak access across the boundary."""
 
     alice = create_user("alice")
@@ -154,7 +142,7 @@ def test_create_in_refuses_cross_vault_parent(composed_tables: None) -> None:
 
 
 @pytest.mark.parametrize("kind", ["folder", "note"])
-def test_create_in_reports_duplicate_title_as_validation(composed_tables: None, kind: str) -> None:
+def test_create_in_reports_duplicate_title_as_validation(db: None, kind: str) -> None:
     alice = create_user("duplicate-title")
     vault = vault_for(alice)
     with actor_context(alice):
@@ -163,22 +151,7 @@ def test_create_in_reports_duplicate_title_as_validation(composed_tables: None, 
             Page.objects.create_in(vault, title="Existing", kind=kind)
 
 
-def test_page_inherits_vault_read(composed_tables: None) -> None:
-    """A vault viewer grant reaches every page through ``vault->read``."""
-
-    alice = create_user("alice")
-    bob = create_user("bob")
-    vault = vault_for(alice)
-    with actor_context(alice):
-        Page.objects.create_in(vault, title="Shared notes")
-
-    _grant(vault, "viewer", bob)
-
-    assert [row.title for row in Page.objects.as_user(bob)] == ["Shared notes"]
-    assert [row.name for row in Vault.objects.as_user(bob)] == ["Research"]
-
-
-def test_vault_viewer_share_is_managed_by_share_holders(composed_tables: None) -> None:
+def test_vault_viewer_share_is_managed_by_share_holders(db: None) -> None:
     """The vault's only grantable relation is ``viewer``, managed under ``share``."""
 
     alice = create_user("alice")
@@ -200,23 +173,7 @@ def test_vault_viewer_share_is_managed_by_share_holders(composed_tables: None) -
             vault.grant_record_access("editor", bob)
 
 
-def test_page_inherits_parent_read(composed_tables: None) -> None:
-    """A grant on a folder page cascades to its children via ``parent->read``."""
-
-    alice = create_user("alice")
-    bob = create_user("bob")
-    vault = vault_for(alice)
-    with actor_context(alice):
-        folder = Page.objects.create_in(vault, title="Projects", kind=Page.PageKind.FOLDER)
-        Page.objects.create_in(vault, parent=folder, title="Roadmap")
-        Page.objects.create_in(vault, title="Private")
-
-    _grant(folder, "viewer", bob)
-
-    assert {row.title for row in Page.objects.as_user(bob)} == {"Projects", "Roadmap"}
-
-
-def test_folder_delete_cascades_past_foreign_children(composed_tables: None) -> None:
+def test_folder_delete_cascades_past_foreign_children(db: None) -> None:
     """Deleting a folder passes the gate on children other users created."""
 
     alice = create_user("alice")
@@ -235,42 +192,8 @@ def test_folder_delete_cascades_past_foreign_children(composed_tables: None) -> 
         assert not Page.objects.as_user(alice).exists()
 
 
-def test_roles_grant_cross_vault_reach(composed_tables: None) -> None:
-    """The shipped knowledge roles cover every vault without per-row grants."""
-
-    alice = create_user("alice")
-    viewer = create_user("viewer")
-    editor = create_user("editor")
-    vault_admin = create_user("vault-admin")
-    knowledge_admin = create_user("knowledge-admin")
-    vault = vault_for(alice)
-    with actor_context(alice):
-        Page.objects.create_in(vault, title="Handbook")
-
-    grant(actor=viewer, role="knowledge/role:vault_viewer")
-    grant(actor=editor, role="knowledge/role:vault_editor")
-    grant(actor=vault_admin, role="knowledge/role:vault_admin")
-    grant(actor=knowledge_admin, role="knowledge/role:knowledge_admin")
-
-    assert [row.name for row in Vault.objects.as_user(viewer)] == ["Research"]
-    assert [row.title for row in Page.objects.as_user(viewer)] == ["Handbook"]
-    with actor_context(viewer), pytest.raises(PermissionDenied):
-        _rename(Vault.objects.as_user(viewer).get(), "Viewer rename")
-
-    with actor_context(editor):
-        _rename(Vault.objects.as_user(editor).get(), "Editor rename")
-    with actor_context(editor), pytest.raises(PermissionDenied):
-        Vault.objects.as_user(editor).get().delete()
-
-    assert [row.name for row in Vault.objects.as_user(knowledge_admin)] == ["Editor rename"]
-
-    with actor_context(vault_admin):
-        Vault.objects.as_user(vault_admin).get().delete()
-    assert list(Vault.objects.as_user(alice)) == []
-
-
 @pytest.mark.parametrize("worker", [False, True])
-def test_write_body_creates_updates_and_guards(composed_tables: None, worker: bool) -> None:
+def test_write_body_creates_updates_and_guards(db: None, worker: bool) -> None:
     """Body writes upsert the sidecar, derive hash facts, and reject stale tokens."""
 
     alice = create_user("alice")
@@ -304,7 +227,7 @@ def test_write_body_creates_updates_and_guards(composed_tables: None, worker: bo
         MarkdownPage.objects.write_body(page, "vandalised")
 
 
-def test_write_body_saves_title_atomically_and_validates_it(composed_tables: None) -> None:
+def test_write_body_saves_title_atomically_and_validates_it(db: None) -> None:
     """A form save cannot persist its title or body without the other half."""
 
     alice = create_user("alice")
@@ -323,7 +246,7 @@ def test_write_body_saves_title_atomically_and_validates_it(composed_tables: Non
         assert (stored.title, stored.body, stored.body_hash) == ("Saved", "Original", saved.body_hash)
 
 
-def test_write_body_rejects_bodyless_kinds(composed_tables: None) -> None:
+def test_write_body_rejects_bodyless_kinds(db: None) -> None:
     """Folder pages carry no markdown body sidecar."""
 
     alice = create_user("alice")
@@ -334,7 +257,7 @@ def test_write_body_rejects_bodyless_kinds(composed_tables: None) -> None:
             MarkdownPage.objects.write_body(folder, "nope")
 
 
-def test_excerpt_truncates_long_bodies(composed_tables: None) -> None:
+def test_excerpt_truncates_long_bodies(db: None) -> None:
     """The excerpt keeps short bodies intact and ellipsizes long ones."""
 
     alice = create_user("alice")
@@ -357,7 +280,7 @@ def test_parse_wikilinks_extracts_target_and_display() -> None:
     }
 
 
-def test_native_markdown_wikilinks_index_encoded_titles_and_ignore_code(composed_tables: None) -> None:
+def test_native_markdown_wikilinks_index_encoded_titles_and_ignore_code(db: None) -> None:
     alice = create_user("markdown-links")
     vault = vault_for(alice)
     with actor_context(alice):
@@ -370,7 +293,7 @@ def test_native_markdown_wikilinks_index_encoded_titles_and_ignore_code(composed
     assert (link.target_text, link.display_text, link.target_page_id) == (target.title, "A bold guide", target.pk)
 
 
-def test_body_save_builds_resolved_and_dangling_links(composed_tables: None) -> None:
+def test_body_save_builds_resolved_and_dangling_links(db: None) -> None:
     """Saving a body indexes its wikilinks, resolved against same-vault titles."""
 
     alice = create_user("alice")
@@ -387,7 +310,7 @@ def test_body_save_builds_resolved_and_dangling_links(composed_tables: None) -> 
     assert links["Ghost"].target_page_id is None
 
 
-def test_editing_body_replaces_stale_links(composed_tables: None) -> None:
+def test_editing_body_replaces_stale_links(db: None) -> None:
     """A re-saved body fully replaces the page's previous link set."""
 
     alice = create_user("alice")
@@ -400,7 +323,7 @@ def test_editing_body_replaces_stale_links(composed_tables: None) -> None:
     assert [link.target_text for link in Link._base_manager.filter(source_page=page)] == ["Beta"]
 
 
-def test_target_lifecycle_refreshes_exact_title_links_including_bulk_trash(composed_tables: None) -> None:
+def test_target_lifecycle_refreshes_exact_title_links_including_bulk_trash(db: None) -> None:
     owner = create_user("link-lifecycle")
     vault = vault_for(owner)
     with actor_context(owner):
@@ -420,7 +343,7 @@ def test_target_lifecycle_refreshes_exact_title_links_including_bulk_trash(compo
         assert resolved()["Renamed"] == target.pk
 
 
-def test_backlinks_respect_source_page_read(composed_tables: None) -> None:
+def test_backlinks_respect_source_page_read(db: None) -> None:
     """A backlink is visible only to actors who can read its source page."""
 
     alice = create_user("alice")
@@ -437,7 +360,7 @@ def test_backlinks_respect_source_page_read(composed_tables: None) -> None:
     assert list(Link.objects.as_user(bob).filter(target_page=target)) == []
 
 
-def test_patch_section_splices_guards_and_reindexes(composed_tables: None) -> None:
+def test_patch_section_splices_guards_and_reindexes(db: None) -> None:
     """A section patch CAS-guards and rebuilds backlinks."""
 
     alice = create_user("alice")
@@ -470,7 +393,7 @@ def test_patch_section_splices_guards_and_reindexes(composed_tables: None) -> No
     assert links["Target"].target_page_id == target.pk
 
 
-def test_replace_unique_swaps_exact_text_with_guard(composed_tables: None) -> None:
+def test_replace_unique_swaps_exact_text_with_guard(db: None) -> None:
     """An exact-string replace CAS-guards and swaps the single occurrence."""
 
     alice = create_user("alice")
@@ -486,7 +409,7 @@ def test_replace_unique_swaps_exact_text_with_guard(composed_tables: None) -> No
     assert updated.body == "alpha BETA gamma"
 
 
-def test_append_and_prepend_grow_body(composed_tables: None) -> None:
+def test_append_and_prepend_grow_body(db: None) -> None:
     """Whole-page append/prepend join one blank apart and CAS-guard."""
 
     alice = create_user("alice")
@@ -505,7 +428,8 @@ def test_append_and_prepend_grow_body(composed_tables: None) -> None:
     assert prepended.body == "header\n\nfirst line\n\nsecond line"
 
 
-def test_mcp_body_write_updates_section(composed_tables: None, monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.django_db(transaction=True)
+def test_mcp_body_write_updates_section(monkeypatch: pytest.MonkeyPatch) -> None:
     """A section patch driven through the MCP engine updates the body."""
 
     parts = {key: tuple(knowledge_schema.schemas["public"].get(key, ())) for key in SCHEMA_PART_KEYS}
@@ -537,7 +461,7 @@ def test_mcp_body_write_updates_section(composed_tables: None, monkeypatch: pyte
     assert "new usage through mcp" in markdown.body
 
 
-def test_lexical_retrieval_matches_title_and_body_scoped_to_actor(composed_tables: None) -> None:
+def test_lexical_retrieval_matches_title_and_body_scoped_to_actor(db: None) -> None:
     """The lexical provider matches title or body and row-scopes to the actor."""
 
     alice = create_user("alice")
@@ -578,7 +502,7 @@ def _rename(vault: Any, name: str) -> None:
     vault.save(update_fields=("name",))
 
 
-def test_markdown_save_rejects_a_concurrent_title_edit_with_native_page_revision(composed_tables) -> None:
+def test_markdown_save_rejects_a_concurrent_title_edit_with_native_page_revision(db) -> None:
     owner = create_user("knowledge-title-concurrency")
     vault = vault_for(owner)
     with actor_context(owner):

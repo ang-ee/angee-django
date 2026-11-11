@@ -77,11 +77,24 @@ class MergeContractMixin(models.Model):
     """Foreign keys whose merge policy differs from what their ``on_delete`` implies, by field name.
 
     A lineage key (``converted_from``) ``KEEP``\\s pointing at the merged record
-    as history, where its delete behaviour alone would move it.
+    as history, where its delete behaviour alone would move it. Declarations
+    merge along the MRO (:meth:`declared_merge_policies`).
     """
 
     class Meta:
         abstract = True
+
+    @classmethod
+    def declared_merge_policies(cls) -> dict[str, Any]:
+        """Return every ``merge_policies`` along the MRO, the most derived declaration winning per key.
+
+        A composed extension or a mixin adds its keys without dropping its bases'.
+        """
+
+        policies: dict[str, Any] = {}
+        for owner in reversed(cls.__mro__):
+            policies.update(owner.__dict__.get("merge_policies", {}))
+        return policies
 
     def merge_collapse(self, duplicate: Any) -> bool:
         """Fold ``duplicate``'s state into this row before a merge drops it as the same fact.
@@ -410,7 +423,7 @@ def _references(model: type[models.Model]) -> Iterator[Reference]:
                 continue
             seen.add(key)
             declared = (
-                relation.related_model.merge_policies.get(relation.field.name)
+                relation.related_model.declared_merge_policies().get(relation.field.name)
                 if issubclass(relation.related_model, MergeContractMixin) else None
             )
             if declared is not None:

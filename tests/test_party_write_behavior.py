@@ -13,10 +13,9 @@ import tests.test_parties_circles  # noqa: F401 -- register the fixture model gr
 from angee.messaging.testing.models import Address, Handle, Party
 
 
-@pytest.mark.django_db(transaction=True)
-def test_handle_upsert_collision_refreshes_existing_row(composed_tables: None, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_handle_upsert_collision_refreshes_existing_row(db: None, monkeypatch: pytest.MonkeyPatch) -> None:
     """Handle upsert collision refreshes existing row."""
-    del composed_tables
+    del db
     with system_context(reason="handle refresh fixture"):
         source = Handle.objects.upsert(platform="email", value="old@example.test", external_id="stable-account")
         existing = Handle.objects.upsert(platform="email", value="new@example.test", display_name="Before")
@@ -31,10 +30,9 @@ def test_handle_upsert_collision_refreshes_existing_row(composed_tables: None, m
     assert source.value == "old@example.test"
 
 
-@pytest.mark.django_db(transaction=True)
-def test_stale_owner_repair_unowns_a_handle_a_suggestion_decided(composed_tables: None) -> None:
+def test_stale_owner_repair_unowns_a_handle_a_suggestion_decided(db: None) -> None:
     """The explicit command re-resolves a stale owner once."""
-    del composed_tables
+    del db
     owner = get_user_model().objects.create_user(username="stale-owner-repair-owner")
     with system_context(reason="stale owner fixture"):
         party = Party._base_manager.create(display_name="Ada Lovelace", created_by=owner)
@@ -55,10 +53,9 @@ def test_stale_owner_repair_unowns_a_handle_a_suggestion_decided(composed_tables
     assert party.handle_count == 0
 
 
-@pytest.mark.django_db(transaction=True)
-def test_primary_address_save_demotes_previous_primary(composed_tables: None, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_primary_address_save_demotes_previous_primary(db: None, monkeypatch: pytest.MonkeyPatch) -> None:
     """Primary address save demotes previous primary."""
-    del composed_tables
+    del db
     with system_context(reason="primary address fixture"):
         party = Party._base_manager.create(display_name="Customer")
         previous = Address._base_manager.create(party=party, is_primary=True)

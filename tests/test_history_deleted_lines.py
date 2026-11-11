@@ -19,7 +19,7 @@ from angee.provenance.querysets import model_history
 from angee.provenance.schema import RecordHistory
 from tests.conftest import create_user
 
-pytestmark = pytest.mark.usefixtures("composed_tables")
+pytestmark = pytest.mark.django_db
 
 Project = apps.get_model("projects", "Project")
 Milestone = apps.get_model("projects", "Milestone")
@@ -47,8 +47,8 @@ definition projects/milestone {
 
 
 @pytest.fixture
-def line_policy(composed_tables: None) -> Iterator[None]:
-    del composed_tables
+def line_policy(db: None) -> Iterator[None]:
+    del db
     install_schema(parse_zed(LINE_SCHEMA))
     try:
         yield
@@ -82,6 +82,7 @@ def _line_deltas(entry: Any, identity: str) -> dict[str, tuple[Any, Any]]:
     }
 
 
+@pytest.mark.django_db(transaction=True)
 def test_deleted_line_shows_prior_values_to_null_and_restores_through_its_parent(line_policy: None) -> None:
     owner = create_user("deleted-line-owner")
     project, milestone = _plan(owner)
@@ -102,6 +103,7 @@ def test_deleted_line_shows_prior_values_to_null_and_restores_through_its_parent
     assert (restored.project_id, restored.name, restored.description) == (project.pk, "Release", "Private scope")
 
 
+@pytest.mark.django_db(transaction=True)
 def test_deleted_line_keeps_its_native_field_read_gate(line_policy: None) -> None:
     owner = create_user("deleted-field-owner")
     reader = create_user("deleted-field-reader")
@@ -117,6 +119,7 @@ def test_deleted_line_keeps_its_native_field_read_gate(line_policy: None) -> Non
     assert not entry.can_revert
 
 
+@pytest.mark.django_db(transaction=True)
 def test_core_history_owners_scope_changesets_and_admit_one_document(line_policy: None) -> None:
     """HistoryMixin owns document membership; Changeset applies its declared replay gate."""
 
@@ -168,6 +171,7 @@ def test_core_history_diff_and_redaction_use_native_field_policy(line_policy: No
     assert {"name", "description"} <= history.redacted(version, stranger)
 
 
+@pytest.mark.django_db(transaction=True)
 def test_existing_unreadable_line_never_borrows_an_old_snapshot_gate(line_policy: None) -> None:
     owner = create_user("moved-line-owner")
     other = create_user("moved-line-other")
@@ -185,6 +189,7 @@ def test_existing_unreadable_line_never_borrows_an_old_snapshot_gate(line_policy
     assert all(not _line_deltas(entry, identity) for entry in history.entries)
 
 
+@pytest.mark.django_db(transaction=True)
 def test_create_then_delete_has_no_net_line_delta(line_policy: None) -> None:
     owner = create_user("transient-line-owner")
     with actor_context(owner), changeset(fresh=True):
@@ -216,6 +221,7 @@ def test_missing_snapshot_policy_or_relationship_target_denies_read(line_policy:
     assert not history.snapshot_allows(snapshot, "read", actor=owner)
 
 
+@pytest.mark.django_db(transaction=True)
 def test_uncaptured_denial_relation_does_not_become_an_empty_permission_fact(line_policy: None) -> None:
     owner = create_user("unknown-denial-owner")
     project, milestone = _plan(owner)
@@ -231,6 +237,7 @@ def test_uncaptured_denial_relation_does_not_become_an_empty_permission_fact(lin
     assert "description" not in deltas
 
 
+@pytest.mark.django_db(transaction=True)
 def test_existing_record_revert_preserves_a_stored_write_grant(line_policy: None) -> None:
     owner = create_user("stored-revert-owner")
     editor = create_user("stored-revert-editor")
@@ -249,6 +256,7 @@ def test_existing_record_revert_preserves_a_stored_write_grant(line_policy: None
     assert project.title == "Delivery plan"
 
 
+@pytest.mark.django_db(transaction=True)
 @pytest.mark.parametrize("model_label", ["parties.Party", "parties.Person"])
 def test_revert_skips_excluded_counters_and_restores_only_the_owning_mti_fields(model_label: str) -> None:
     owner = create_user(f"excluded-history-{model_label.rsplit('.', 1)[-1].lower()}")

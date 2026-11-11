@@ -39,7 +39,7 @@ def _held(user: Any, refs: list[str]) -> list[str]:
     return result_data(_permitted(user, refs))["current_user"]["permitted"]
 
 
-def test_a_role_holder_holds_its_refs_and_others_do_not(composed_tables: None) -> None:
+def test_a_role_holder_holds_its_refs_and_others_do_not(db: None) -> None:
     """The administrator role decides IAM's own arms, held directly or through a group."""
 
     direct = create_platform_admin("permitted-admin")
@@ -60,14 +60,14 @@ def test_a_role_holder_holds_its_refs_and_others_do_not(composed_tables: None) -
     assert _held(direct, ["iam.User#list", "iam.User#create", "iam.User#list"]) == ["iam.User#list", "iam.User#create"]
 
 
-def test_anonymous_sessions_hold_no_ref(composed_tables: None) -> None:
+def test_anonymous_sessions_hold_no_ref(db: None) -> None:
     """Signed out there is no identity to hold a ref."""
 
     assert result_data(_permitted(AnonymousUser(), ADMIN_REFS)) == {"current_user": None}
     assert subject_permitted(None, ADMIN_REFS) == []
 
 
-def test_an_unknown_model_or_permission_fails_loudly(composed_tables: None) -> None:
+def test_an_unknown_model_or_permission_fails_loudly(db: None) -> None:
     """A mistyped ref is an error, never a silently missing entry."""
 
     admin = create_platform_admin("permitted-typo")
@@ -85,7 +85,7 @@ def test_an_unknown_model_or_permission_fails_loudly(composed_tables: None) -> N
             subject_permitted(None, [ref])
 
 
-def test_a_row_dependent_permission_is_false_at_type_level(composed_tables: None) -> None:
+def test_a_row_dependent_permission_is_false_at_type_level(db: None) -> None:
     """A grant on one row lists that row; only an arm listing every row holds the ref."""
 
     reader = User.objects.create_user(username="permitted-reader")

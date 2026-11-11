@@ -1,9 +1,13 @@
-"""Tests for the OAuth/OIDC protocol, connect flow, and OIDC login resolution."""
+"""Tests for the OAuth/OIDC protocol, connect flow, and OIDC login resolution.
+
+The provider is ``OidcProvider`` behind integrate's ``mock_transport``: every
+exchange, discovery, JWKS and userinfo request crosses the real protocol code and
+every ID token is verified by PyJWT against the provider's published key.
+"""
 
 from __future__ import annotations
 
 import json
-import socket
 import threading
 import time
 from collections.abc import Iterator
@@ -15,19 +19,16 @@ from typing import Any
 from urllib import parse
 
 import httpx2
+import jwt
 import pytest
 import yaml
 from asgiref.sync import async_to_sync, sync_to_async
-from cryptography.hazmat.primitives.asymmetric import rsa
 from django.contrib.auth import get_user_model
 from django.contrib.auth.models import AnonymousUser
-from django.contrib.sessions.backends.signed_cookies import SessionStore
 from django.core.exceptions import ImproperlyConfigured, ValidationError
-from django.core.management import call_command
 from django.db import connection, transaction
 from django.test import override_settings
 from django.utils import timezone
-from jwt.algorithms import RSAAlgorithm
 from rebac import system_context
 from strawberry_django_aggregates import AggregateOp, compute_aggregation
 
@@ -35,18 +36,20 @@ from angee.graphql.schema import GraphQLSchemas
 from angee.graphql.testing.documents import execute_schema, graphql_request, result_data
 from angee.iam import schema as iam_schema
 from angee.iam_integrate_oidc import identity
-from angee.iam_integrate_oidc import protocol as oidc_protocol
 from angee.iam_integrate_oidc import schema as oidc_schema
 from angee.iam_integrate_oidc.errors import IDENTITY_RESOLUTION_FAILED, IdentityFlowError
 from angee.iam_integrate_oidc.protocol import OAuthClientOidcProtocol
 from angee.iam_integrate_oidc.providers import GoogleType
+from angee.iam_integrate_oidc.testing.provider import KEY_ID, OidcProvider, signing_key
 from angee.integrate import schema as integrate_schema
 from angee.integrate.connect import complete_account_connect
-from angee.integrate.errors import IntegrationError
-from angee.integrate.http import HTTP_TIMEOUT_SECONDS, _PinnedBackend
+from angee.integrate.errors import IntegrationError, RequestNotSentError
+from angee.integrate.http import HTTP_TIMEOUT_SECONDS
 from angee.integrate.models import AccountStatus, CredentialStatus
+from angee.integrate.net import AddressNotAllowedError
 from angee.integrate.oauth import client as oauth_protocol
 from angee.integrate.oauth import discovery as oauth_discovery
+from angee.integrate.oauth import flow as oauth_flow
 from angee.integrate.oauth import state as oauth_state
 from angee.integrate.oauth.client import OAuthClientProtocol
 from angee.integrate.oauth.errors import (
@@ -58,6 +61,7 @@ from angee.integrate.oauth.errors import (
     OAuthFlowError,
 )
 from angee.integrate.oauth.providers import GenericOAuth2
+from angee.integrate.testing.http import mock_transport, request_fields
 from angee.messaging.testing.models import Handle as PartiesHandle
 from tests.conftest import Credential, ExternalAccount, OAuthClient, SchemaAddon
 from tests.test_parties_graphql import Person as PartiesPerson
@@ -65,99 +69,63 @@ from tests.test_parties_graphql import Person as PartiesPerson
 # OIDC first login uses the same concrete Person and handle models as parties tests.
 
 
-def test_discovery_fallback_fills_blank_authorize_endpoint(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_discovery_fallback_fills_blank_authorize_endpoint() -> None:
     """A blank authorization endpoint is loaded from discovery."""
 
-    calls: list[str] = []
+    provider = OidcProvider(issuer="https://fallback.example")
+    discovery_url = f"{provider.issuer}/.well-known/openid-configuration"
     oauth_client = _stub_oauth_client(authorize_endpoint="")
-    oidc = _stub_login_oauth_client(
-        oauth_client=oauth_client,
-        discovery_url="https://issuer.example/.well-known/openid-configuration",
-    )
+    oidc = _stub_login_oauth_client(oauth_client=oauth_client, discovery_url=discovery_url)
 
-    def get_json(url: str, *, headers: dict[str, str] | None = None, allow_private: bool = False) -> dict[str, Any]:
-        del headers, allow_private
-        calls.append(url)
-        return {"authorization_endpoint": "https://issuer.example/oauth/authorize"}
+    with mock_transport(provider) as requests:
+        url = OAuthClientOidcProtocol(oidc).authorize_url(
+            state="state-token",
+            nonce="nonce-token",
+            redirect_uri="https://app.example/callback",
+            scopes=("openid", "email"),
+        )
 
-    monkeypatch.setattr(oauth_discovery, "oauth_get_json", get_json)
-
-    url = OAuthClientOidcProtocol(oidc).authorize_url(
-        state="state-token",
-        nonce="nonce-token",
-        redirect_uri="https://app.example/callback",
-        scopes=("openid", "email"),
-    )
-
-    assert calls == ["https://issuer.example/.well-known/openid-configuration"]
-    assert oauth_client.authorize_endpoint == "https://issuer.example/oauth/authorize"
-    assert url.startswith("https://issuer.example/oauth/authorize?")
+    assert [str(request.url) for request in requests] == [discovery_url]
+    assert oauth_client.authorize_endpoint == "https://fallback.example/oauth/authorize"
+    assert url.startswith("https://fallback.example/oauth/authorize?")
 
 
-def test_ensure_endpoints_caches_document_by_discovery_url(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_ensure_endpoints_caches_document_by_discovery_url() -> None:
     """Discovery cache hits avoid a second discovery document fetch."""
 
-    discovery_url = "https://cached.example/.well-known/openid-configuration"
+    provider = OidcProvider(issuer="https://cached.example")
+    discovery_url = f"{provider.issuer}/.well-known/openid-configuration"
     oauth_client = _stub_oauth_client(authorize_endpoint="", token_endpoint="", userinfo_endpoint="")
     oidc = _stub_login_oauth_client(oauth_client=oauth_client, issuer="", jwks_uri="", discovery_url=discovery_url)
-    cached_documents: dict[str, dict[str, Any]] = {}
-    cache_gets: list[str] = []
-    cache_sets: list[tuple[str, int | None]] = []
-    fetches: list[str] = []
-
-    def cache_get(key: str) -> dict[str, Any] | None:
-        cache_gets.append(key)
-        return cached_documents.get(key)
-
-    def cache_set(key: str, value: dict[str, Any], timeout: int | None = None) -> None:
-        cache_sets.append((key, timeout))
-        cached_documents[key] = value
-
-    def get_json(url: str, *, headers: dict[str, str] | None = None, allow_private: bool = False) -> dict[str, Any]:
-        del headers, allow_private
-        fetches.append(url)
-        return {
-            "issuer": "https://cached.example",
-            "authorization_endpoint": "https://cached.example/oauth/authorize",
-            "token_endpoint": "https://cached.example/oauth/token",
-            "userinfo_endpoint": "https://cached.example/oauth/userinfo",
-            "jwks_uri": "https://cached.example/oauth/jwks",
-        }
-
-    monkeypatch.setattr(oauth_discovery.cache, "get", cache_get)
-    monkeypatch.setattr(oauth_discovery.cache, "set", cache_set)
-    monkeypatch.setattr(oauth_discovery, "oauth_get_json", get_json)
-
     protocol = OAuthClientOidcProtocol(oidc)
-    first = protocol.ensure_endpoints()
-    second = protocol.ensure_endpoints()
 
-    assert first == second
-    assert fetches == [discovery_url]
-    assert len(cache_gets) == 2
-    assert len(cache_sets) == 1
-    assert cache_sets[0][1] == 3600
+    with mock_transport(provider) as requests:
+        first = protocol.ensure_endpoints()
+        second = protocol.ensure_endpoints()
+
+    assert first == second == provider.metadata
+    assert [str(request.url) for request in requests] == [discovery_url]
+    assert oauth_client.token_endpoint == "https://cached.example/oauth/token"
 
 
-@pytest.mark.parametrize(("result", "status"), [([], 400), (ValueError("invalid JSON"), 400),
-                                                 (httpx2.ConnectError("unavailable"), 503)])
-def test_discovery_rejects_invalid_documents_without_caching(monkeypatch, result, status):
-    cached = []
+@pytest.mark.parametrize(("answer", "status"), [("list", 400), ("text", 400), ("unreachable", 503)])
+def test_discovery_rejects_invalid_documents_without_caching(answer: str, status: int) -> None:
+    def respond(request: httpx2.Request) -> httpx2.Response:
+        if answer == "unreachable":
+            raise httpx2.ConnectError("unavailable", request=request)
+        return httpx2.Response(200, json=[]) if answer == "list" else httpx2.Response(200, text="not json")
 
-    def fetch(url, **kwargs):
-        assert kwargs["allow_private"] is True
-        assert kwargs["headers"] == oauth_protocol.OUTBOUND_HEADERS
-        if isinstance(result, Exception):
-            raise result
-        return result
+    url = f"https://invalid-{answer}.example/discovery"
+    with mock_transport(respond) as requests:
+        for _attempt in range(2):
+            with pytest.raises(OAuthFlowError) as refused:
+                oauth_discovery.discovery_document(url)
+            assert (refused.value.code, refused.value.http_status) == (DISCOVERY_FAILED, status)
 
-    monkeypatch.setattr(oauth_discovery.cache, "get", lambda key: None)
-    monkeypatch.setattr(oauth_discovery.cache, "set", lambda *args, **kwargs: cached.append(args))
-    monkeypatch.setattr(oauth_protocol, "HttpClient", lambda: SimpleNamespace(get_json=fetch))
-    with pytest.raises(OAuthFlowError) as refused:
-        oauth_discovery.discovery_document("https://invalid-document.example/discovery")
-    assert (refused.value.code, refused.value.http_status) == (DISCOVERY_FAILED, status)
-    assert not cached
+    assert len(requests) == 2
+    assert {(request.headers["Accept"], request.headers["User-Agent"]) for request in requests} == {
+        ("application/json", oauth_protocol.USER_AGENT),
+    }
 
 
 def test_outbound_requests_send_honest_user_agent() -> None:
@@ -168,24 +136,14 @@ def test_outbound_requests_send_honest_user_agent() -> None:
     The userinfo GET and the Authlib token POST both carry it.
     """
 
-    seen: list[str | None] = []
-
-    def handler(request: httpx2.Request) -> httpx2.Response:
-        seen.append(request.headers.get("user-agent"))
-        assert request.headers["Accept"] == "application/json"
-        if request.method == "GET":
-            assert request.headers["Authorization"] == "Bearer access-token"
-            return httpx2.Response(200, json={"sub": "profile"})
-        return httpx2.Response(200, json={"access_token": "access-token"})
-
-    transport = httpx2.MockTransport(handler)
-
     protocol = OAuthClientProtocol(_stub_oauth_client())
-    protocol._transport = transport
-    assert protocol.fetch_userinfo("access-token") == {"sub": "profile"}
-    protocol.exchange_code(code="abc", redirect_uri="https://app.example/callback")
+    with mock_transport(OidcProvider(userinfo={"sub": "profile"})) as requests:
+        assert protocol.fetch_userinfo("access-token") == {"sub": "profile"}
+        protocol.exchange_code(code="abc", redirect_uri="https://app.example/callback")
 
-    assert seen == [oauth_protocol.USER_AGENT, oauth_protocol.USER_AGENT]
+    assert [request.headers.get("user-agent") for request in requests] == [oauth_protocol.USER_AGENT] * 2
+    assert {request.headers["Accept"] for request in requests} == {"application/json"}
+    assert requests[0].headers["Authorization"] == "Bearer access-token"
     # Lock in the pitfall: never an HTTP-client default or a spoofed browser/curl UA.
     sent = oauth_protocol.USER_AGENT.lower()
     assert not any(token in sent for token in ("python-urllib", "python-httpx", "mozilla", "chrome", "curl"))
@@ -252,50 +210,35 @@ def test_oauth_authorize_url_omits_oidc_nonce_and_honors_extra_params() -> None:
 def test_exchange_code_posts_json_body_with_pkce() -> None:
     """OAuth clients can opt into the JSON token exchange provider quirk."""
 
-    captured: dict[str, Any] = {}
-
-    def handler(request: httpx2.Request) -> httpx2.Response:
-        captured["url"] = str(request.url)
-        captured["fields"] = json.loads(request.content)
-        captured["ua"] = request.headers.get("user-agent")
-        return httpx2.Response(
-            200,
-            json={
-                "access_token": "access-token",
-                "refresh_token": "refresh-token",
-                "account": {
-                    "uuid": "account-uuid",
-                    "email_address": "person@example.com",
-                },
-                "ignored": "not-token-material",
-            },
-        )
-
+    provider = OidcProvider(token={
+        "access_token": "access-token",
+        "refresh_token": "refresh-token",
+        "account": {"uuid": "account-uuid", "email_address": "person@example.com"},
+        "ignored": "not-token-material",
+    })
     oauth_client = _stub_oauth_client(
         supports_pkce=True,
         token_request_format="json",
         token_param_values={"audience": "https://api.example", "expires_in": 31536000},
     )
     protocol = OAuthClientProtocol(oauth_client)
-    protocol._transport = httpx2.MockTransport(handler)
 
-    tokens = protocol.exchange_code(
-        code="auth-code",
-        redirect_uri="https://app.example/callback",
-        code_verifier="verifier",
-        state="state-token",
-    )
+    with mock_transport(provider) as requests:
+        tokens = protocol.exchange_code(
+            code="auth-code",
+            redirect_uri="https://app.example/callback",
+            code_verifier="verifier",
+            state="state-token",
+        )
 
     assert tokens == {"access_token": "access-token", "refresh_token": "refresh-token"}
     assert protocol.token_response_claims == {
-        "account": {
-            "uuid": "account-uuid",
-            "email_address": "person@example.com",
-        },
+        "account": {"uuid": "account-uuid", "email_address": "person@example.com"},
     }
-    assert captured["url"] == "https://issuer.example/oauth/token"
-    assert captured["ua"] == oauth_protocol.USER_AGENT
-    assert captured["fields"] == {
+    [request] = requests
+    assert str(request.url) == "https://issuer.example/oauth/token"
+    assert request.headers["user-agent"] == oauth_protocol.USER_AGENT
+    assert json.loads(request.content) == {
         "audience": "https://api.example",
         "client_id": "oidc-client",
         "client_secret": "secret",
@@ -308,30 +251,24 @@ def test_exchange_code_posts_json_body_with_pkce() -> None:
     }
 
 
-def test_refresh_token_posts_refresh_grant() -> None:
+@pytest.mark.parametrize("request_format", ["form", "json"])
+def test_refresh_token_posts_refresh_grant(request_format: str) -> None:
     """`refresh_token` posts a ``refresh_token`` grant and returns the renewed material."""
 
-    captured: dict[str, Any] = {}
-
-    def handler(request: httpx2.Request) -> httpx2.Response:
-        captured["url"] = str(request.url)
-        captured["fields"] = json.loads(request.content)
-        return httpx2.Response(200, json={"access_token": "new-access", "refresh_token": "rotated", "expires_in": 7200})
-
+    renewed = {"access_token": "new-access", "refresh_token": "rotated", "expires_in": 7200}
     oauth_client = _stub_oauth_client(
-        token_request_format="json",
-        token_param_values={"audience": "https://api.example", "expires_in": 31536000},
+        token_request_format=request_format,
+        token_param_values={"audience": "https://api.example"},
     )
-    protocol = OAuthClientProtocol(oauth_client)
-    protocol._transport = httpx2.MockTransport(handler)
 
-    tokens = protocol.refresh_token(refresh_token="stored-refresh")
+    with mock_transport(OidcProvider(token=renewed)) as requests:
+        tokens = OAuthClientProtocol(oauth_client).refresh_token(refresh_token="stored-refresh")
 
-    assert tokens == {"access_token": "new-access", "refresh_token": "rotated", "expires_in": 7200}
-    assert captured["url"] == "https://issuer.example/oauth/token"
-    assert captured["fields"] == {
+    assert tokens == renewed
+    [request] = requests
+    assert str(request.url) == "https://issuer.example/oauth/token"
+    assert request_fields(request) == {
         "audience": "https://api.example",
-        "expires_in": 31536000,
         "client_id": "oidc-client",
         "client_secret": "secret",
         "grant_type": "refresh_token",
@@ -343,8 +280,6 @@ def test_refresh_token_posts_refresh_grant() -> None:
 @pytest.mark.parametrize("grant", ("authorization_code", "refresh_token"))
 def test_fixed_public_client_never_reads_encrypted_secret(request_format: str, grant: str) -> None:
     """A fixed public PKCE client exchanges every grant without secret access."""
-
-    captured: dict[str, Any] = {}
 
     class PublicClient:
         provider = GenericOAuth2
@@ -361,33 +296,25 @@ def test_fixed_public_client_never_reads_encrypted_secret(request_format: str, g
         def client_secret(self) -> str:
             raise ImproperlyConfigured("encrypted secret must remain unread")
 
-    def handler(request: httpx2.Request) -> httpx2.Response:
-        captured["fields"] = (
-            json.loads(request.content)
-            if request_format == "json"
-            else dict(parse.parse_qsl(request.content.decode()))
-        )
-        captured["authorization"] = request.headers.get("authorization")
-        return httpx2.Response(200, json={"access_token": "synthetic-access"})
-
     protocol = OAuthClientProtocol(PublicClient())
-    protocol._transport = httpx2.MockTransport(handler)
+    with mock_transport(OidcProvider(token={"access_token": "synthetic-access"})) as requests:
+        if grant == "authorization_code":
+            result = protocol.exchange_code(
+                code="synthetic-code",
+                redirect_uri="https://app.example/callback",
+                code_verifier="synthetic-verifier",
+                state="synthetic-state",
+            )
+        else:
+            result = protocol.refresh_token(refresh_token="synthetic-refresh")
 
-    if grant == "authorization_code":
-        result = protocol.exchange_code(
-            code="synthetic-code",
-            redirect_uri="https://app.example/callback",
-            code_verifier="synthetic-verifier",
-            state="synthetic-state",
-        )
-        assert captured["fields"]["code_verifier"] == "synthetic-verifier"
-    else:
-        result = protocol.refresh_token(refresh_token="synthetic-refresh")
-
+    [request] = requests
+    fields = request_fields(request)
     assert result["access_token"] == "synthetic-access"
-    assert captured["fields"]["client_id"] == "public-client-id"
-    assert "client_secret" not in captured["fields"]
-    assert captured["authorization"] is None
+    assert fields["client_id"] == "public-client-id"
+    assert fields.get("code_verifier") == ("synthetic-verifier" if grant == "authorization_code" else None)
+    assert "client_secret" not in fields
+    assert "authorization" not in request.headers
 
 
 def test_confidential_json_client_keeps_unreadable_secret_fail_closed() -> None:
@@ -425,14 +352,13 @@ def test_exchange_code_form_path_maps_non_json_error_to_oauth_flow_error() -> No
     a ``ValueError`` inside Authlib; it must map to the stable seam, not leak a 500.
     """
 
-    def handler(request: httpx2.Request) -> httpx2.Response:
-        return httpx2.Response(403, text="<html>403 Forbidden</html>")
-
-    protocol = OAuthClientProtocol(_stub_oauth_client())
-    protocol._transport = httpx2.MockTransport(handler)
-
-    with pytest.raises(OAuthFlowError) as exc_info:
-        protocol.exchange_code(code="auth-code", redirect_uri="https://app.example/callback")
+    with (
+        mock_transport(lambda request: httpx2.Response(403, text="<html>403 Forbidden</html>")),
+        pytest.raises(OAuthFlowError) as exc_info,
+    ):
+        OAuthClientProtocol(_stub_oauth_client()).exchange_code(
+            code="auth-code", redirect_uri="https://app.example/callback",
+        )
 
     assert exc_info.value.code == TOKEN_EXCHANGE_FAILED
 
@@ -444,33 +370,16 @@ def test_token_transport_error_log_omits_request_url_and_client_id(
 
     canary_url = "https://issuer.example/oauth/token?code=canary-code"
 
-    def handler(request: httpx2.Request) -> httpx2.Response:
+    def refuse(request: httpx2.Request) -> httpx2.Response:
         raise httpx2.ConnectError("failed " + canary_url, request=request)
 
     oauth_client = _stub_oauth_client(token_endpoint=canary_url)
-    protocol = OAuthClientProtocol(oauth_client)
-    protocol._transport = httpx2.MockTransport(handler)
-
-    with pytest.raises(OAuthFlowError):
-        protocol.exchange_code(code="canary-code", redirect_uri="https://app.example/callback")
+    with mock_transport(refuse), pytest.raises(OAuthFlowError):
+        OAuthClientProtocol(oauth_client).exchange_code(code="canary-code", redirect_uri="https://app.example/callback")
 
     assert "ConnectError" in caplog.text
     assert "canary-code" not in caplog.text
     assert oauth_client.client_id not in caplog.text
-
-
-def test_refresh_token_form_path_returns_renewed_material() -> None:
-    """The default (form) refresh path returns the filtered token material."""
-
-    def handler(request: httpx2.Request) -> httpx2.Response:
-        return httpx2.Response(200, json={"access_token": "new-access", "refresh_token": "rotated", "expires_in": 3600})
-
-    protocol = OAuthClientProtocol(_stub_oauth_client())
-    protocol._transport = httpx2.MockTransport(handler)
-
-    tokens = protocol.refresh_token(refresh_token="stored-refresh")
-
-    assert tokens == {"access_token": "new-access", "refresh_token": "rotated", "expires_in": 3600}
 
 
 @pytest.mark.parametrize("request_format", ["form", "json"])
@@ -478,28 +387,20 @@ def test_exchange_code_public_client_posts_client_id_and_verifier(request_format
     """A public client (no secret) still posts ``client_id`` and the PKCE ``code_verifier``
     (RFC 7636) and never a ``client_secret``."""
 
-    captured: dict[str, Any] = {}
-
-    def handler(request: httpx2.Request) -> httpx2.Response:
-        captured["body"] = (
-            json.loads(request.content) if request_format == "json" else dict(parse.parse_qsl(request.content.decode()))
-        )
-        assert "authorization" not in request.headers
-        return httpx2.Response(200, json={"access_token": "access-token"})
-
     protocol = OAuthClientProtocol(_stub_oauth_client(
         client_secret="", supports_pkce=True, token_request_format=request_format,
     ))
-    protocol._transport = httpx2.MockTransport(handler)
+    with mock_transport(OidcProvider()) as requests:
+        protocol.exchange_code(
+            code="auth-code",
+            redirect_uri="https://app.example/callback",
+            code_verifier="verifier",
+            state="state-token",
+        )
 
-    protocol.exchange_code(
-        code="auth-code",
-        redirect_uri="https://app.example/callback",
-        code_verifier="verifier",
-        state="state-token",
-    )
-
-    body = captured["body"]
+    [request] = requests
+    body = request_fields(request)
+    assert "authorization" not in request.headers
     assert body["client_id"] == "oidc-client"
     assert body["code_verifier"] == "verifier"
     assert body["grant_type"] == "authorization_code"
@@ -573,7 +474,6 @@ def loopback_provider() -> Iterator[tuple[str, list[dict[str, Any]]]]:
 @pytest.mark.parametrize("token_request_format", ("form", "json"))
 def test_oauth_protocol_round_trips_over_the_real_pinned_transport(
     loopback_provider: tuple[str, list[dict[str, Any]]],
-    monkeypatch: pytest.MonkeyPatch,
     token_request_format: str,
 ) -> None:
     """Every OAuth call reaches a live provider through Authlib and the real SSRF pin.
@@ -581,19 +481,11 @@ def test_oauth_protocol_round_trips_over_the_real_pinned_transport(
     Regression: Authlib builds its OAuth2 client on httpx2, and a transport from another
     HTTP stack fails on its first request, so sign-in code exchange and refresh broke.
     Only the provider is a test double; the Authlib session, the JSON shim, the GET
-    helper, ``PinnedTransport``, its pinned backend (``allow_private`` admits loopback)
-    and the sockets are the production path.
+    helper, ``PinnedTransport`` (``allow_private`` admits loopback, never cloud
+    metadata) and the sockets are the production path.
     """
 
     base_url, received = loopback_provider
-    dialled: list[str] = []
-    connect_tcp = _PinnedBackend.connect_tcp
-
-    def record_dial(self: _PinnedBackend, host: str, port: int, **kwargs: Any) -> Any:
-        dialled.append(host)
-        return connect_tcp(self, host, port, **kwargs)
-
-    monkeypatch.setattr(_PinnedBackend, "connect_tcp", record_dial)
     protocol = OAuthClientProtocol(
         _stub_oauth_client(
             token_endpoint=f"{base_url}/oauth/token",
@@ -624,179 +516,73 @@ def test_oauth_protocol_round_trips_over_the_real_pinned_transport(
     assert received[2]["authorization"] == "Bearer renewed-access"
     assert received[3]["fields"]["token"] == "renewed-access"
     assert {request["user_agent"] for request in received} == {oauth_protocol.USER_AGENT}
-    assert dialled == ["127.0.0.1"] * 4
+    metadata_endpoint = _stub_oauth_client(token_endpoint="http://169.254.169.254/oauth/token")
+    with pytest.raises(AddressNotAllowedError):
+        OAuthClientProtocol(metadata_endpoint).exchange_code(code="code", redirect_uri="https://app.example/callback")
 
 
-@pytest.mark.parametrize("claim,value", [("iss", "https://wrong.example"), ("aud", "other-client")])
+@pytest.mark.parametrize("claim,value", [("iss", "https://wrong.example"), ("aud", "other-client"), ("nonce", "wrong")])
 def test_verify_id_token_rejects_wrong_native_claim(claim: str, value: str) -> None:
-    """Native PyJWT verification enforces issuer/audience for actual signed tokens."""
+    """Native PyJWT verification enforces issuer, audience and the flow's nonce for signed tokens."""
 
-    oidc = _stub_login_oauth_client()
-    private_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
-    claims = {
-        "iss": oidc.issuer,
-        "aud": oidc.client_id,
-        "iat": int(time.time()),
-        "exp": int(time.time()) + 60,
-        "sub": "native-claim-test",
-        "nonce": "nonce",
-        claim: value,
-    }
-    token = oidc_protocol.jwt.encode(claims, private_key, algorithm="RS256")
-    with pytest.raises(OAuthFlowError) as exc_info:
-        OAuthClientOidcProtocol(oidc).verify_id_token(
-            token, nonce="nonce", jwks_client=_FakeJwksClient(private_key.public_key()),
-        )
-    assert exc_info.value.code == INVALID_ID_TOKEN
-
-
-def test_verify_id_token_rejects_bad_nonce(monkeypatch: pytest.MonkeyPatch) -> None:
-    """ID token verification rejects a mismatched nonce claim."""
-
-    oidc = _stub_login_oauth_client()
-    monkeypatch.setattr(
-        oidc_protocol.jwt,
-        "decode",
-        lambda *args, **kwargs: {"iss": oidc.issuer, "aud": oidc.oauth_client.client_id, "nonce": "wrong"},
-    )
-
-    with pytest.raises(OAuthFlowError) as exc_info:
-        OAuthClientOidcProtocol(oidc).verify_id_token("token", nonce="nonce", jwks_client=_FakeJwksClient())
-
+    provider = OidcProvider()
+    token = provider.id_token(**{"sub": "native-claim-test", "nonce": "nonce", claim: value})
+    with mock_transport(provider), pytest.raises(OAuthFlowError) as exc_info:
+        OAuthClientOidcProtocol(_stub_login_oauth_client()).verify_id_token(token, nonce="nonce")
     assert exc_info.value.code == INVALID_ID_TOKEN
 
 
 def test_verify_id_token_accepts_rs256_and_rejects_ps256() -> None:
     """ID token verification accepts only the configured asymmetric algorithms."""
 
-    private_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
-    oidc = _stub_login_oauth_client()
+    provider = OidcProvider()
+    protocol = OAuthClientOidcProtocol(_stub_login_oauth_client())
     now = int(time.time())
-    claims = {
-        "aud": oidc.oauth_client.client_id,
-        "exp": now + 60,
-        "iat": now,
-        "iss": oidc.issuer,
-        "nonce": "nonce",
-        "sub": "sub-alg",
-    }
-    rs256_token = oidc_protocol.jwt.encode(claims, private_key, algorithm="RS256", headers={"kid": "kid"})
-    ps256_token = oidc_protocol.jwt.encode(claims, private_key, algorithm="PS256", headers={"kid": "kid"})
-    jwks_client = _FakeJwksClient(private_key.public_key())
+    claims = {"aud": provider.client_id, "iss": provider.issuer, "iat": now, "exp": now + 60, "nonce": "nonce"}
+    ps256_token = jwt.encode({**claims, "sub": "sub-alg"}, signing_key(), algorithm="PS256", headers={"kid": KEY_ID})
 
-    verified = OAuthClientOidcProtocol(oidc).verify_id_token(rs256_token, nonce="nonce", jwks_client=jwks_client)
-
-    assert verified["sub"] == "sub-alg"
-    with pytest.raises(OAuthFlowError) as exc_info:
-        OAuthClientOidcProtocol(oidc).verify_id_token(ps256_token, nonce="nonce", jwks_client=jwks_client)
+    with mock_transport(provider):
+        verified = protocol.verify_id_token(provider.id_token(sub="sub-alg", nonce="nonce"), nonce="nonce")
+        assert verified["sub"] == "sub-alg"
+        with pytest.raises(OAuthFlowError) as exc_info:
+            protocol.verify_id_token(ps256_token, nonce="nonce")
     assert exc_info.value.code == INVALID_ID_TOKEN
 
 
-def test_jwks_client_is_cached_per_uri(monkeypatch: pytest.MonkeyPatch) -> None:
-    """OIDC verification reuses the JWKS client for one configured URI."""
+def test_jwks_is_fetched_once_per_uri_through_the_oauth_get_policy() -> None:
+    """Verification fetches a URI's JWKS once, with the OAuth GET headers; PyJWT caches the set."""
 
-    clients: list[Any] = []
+    provider = OidcProvider(issuer="https://jwks-once.example")
+    oidc = _stub_login_oauth_client(issuer=provider.issuer, jwks_uri=provider.metadata["jwks_uri"])
 
-    class FakeJwksClient:
-        """Stub PyJWT client for cache tests."""
+    with mock_transport(provider) as requests:
+        for subject in ("first", "second"):
+            token = provider.id_token(sub=subject, nonce="nonce")
+            assert OAuthClientOidcProtocol(oidc).verify_id_token(token, nonce="nonce")["sub"] == subject
 
-        def __init__(self, uri: str) -> None:
-            self.uri = uri
-            clients.append(self)
-
-    monkeypatch.setattr(oidc_protocol, "_PinnedPyJWKClient", FakeJwksClient)
-    oidc_protocol._jwks_client.cache_clear()
-    try:
-        first = oidc_protocol._jwks_client("https://issuer.example/jwks")
-        second = oidc_protocol._jwks_client("https://issuer.example/jwks")
-    finally:
-        oidc_protocol._jwks_client.cache_clear()
-
-    assert first is second
-    assert [client.uri for client in clients] == ["https://issuer.example/jwks"]
-
-
-def test_jwks_fetch_uses_pinned_http_client(monkeypatch: pytest.MonkeyPatch) -> None:
-    """PyJWT owns key parsing, while Angee owns the JWKS HTTP transport."""
-
-    requests: list[httpx2.Request] = []
-
-    def handler(request: httpx2.Request) -> httpx2.Response:
-        requests.append(request)
-        return httpx2.Response(200, json={"keys": []})
-
-    def transport(*, allow_private: bool) -> httpx2.BaseTransport:
-        assert allow_private is True
-        return httpx2.MockTransport(handler)
-
-    monkeypatch.setattr(oauth_protocol.HttpClient, "transport_factory", staticmethod(transport))
-    data = oidc_protocol._PinnedPyJWKClient("https://issuer.example/jwks").fetch_data()
-
-    assert data == {"keys": []}
     [request] = requests
-    assert str(request.url) == "https://issuer.example/jwks"
+    assert str(request.url) == provider.metadata["jwks_uri"]
     assert request.headers["Accept"] == "application/json"
     assert request.headers["User-Agent"] == oauth_protocol.USER_AGENT
     assert request.extensions["timeout"] == dict.fromkeys(("connect", "read", "write", "pool"), HTTP_TIMEOUT_SECONDS)
 
 
-@pytest.mark.parametrize(
-    ("failure", "error"),
-    [
-        ("transport", httpx2.ConnectError),
-        ("http", httpx2.HTTPStatusError),
-        ("json", ValueError),
-    ],
-)
-def test_jwks_fetch_maps_oauth_get_errors(
-    monkeypatch: pytest.MonkeyPatch,
-    failure: str,
-    error: type[Exception],
-) -> None:
-    def handler(request: httpx2.Request) -> httpx2.Response:
+@pytest.mark.parametrize("failure", ["transport", "http", "json"])
+def test_jwks_fetch_failure_refuses_the_id_token(failure: str) -> None:
+    def respond(request: httpx2.Request) -> httpx2.Response:
         if failure == "transport":
             raise httpx2.ConnectError("unavailable", request=request)
         return httpx2.Response(503 if failure == "http" else 200, text="not json")
 
-    monkeypatch.setattr(
-        oauth_protocol.HttpClient,
-        "transport_factory",
-        staticmethod(lambda **kw: httpx2.MockTransport(handler)),
-    )
-    with pytest.raises(oidc_protocol.PyJWKClientConnectionError) as refused:
-        oidc_protocol._PinnedPyJWKClient("https://issuer.example/jwks").fetch_data()
-    assert isinstance(refused.value.__cause__, error)
+    provider = OidcProvider(issuer=f"https://jwks-{failure}.example")
+    oidc = _stub_login_oauth_client(issuer=provider.issuer, jwks_uri=provider.metadata["jwks_uri"])
+    with mock_transport(respond), pytest.raises(OAuthFlowError) as refused:
+        OAuthClientOidcProtocol(oidc).verify_id_token(provider.id_token(sub="s", nonce="n"), nonce="n")
+    assert refused.value.code == INVALID_ID_TOKEN
 
 
-def test_pinned_jwks_set_is_parsed_and_cached_by_pyjwt(monkeypatch: pytest.MonkeyPatch) -> None:
-    """PyJWT's JWK-set cache holds what the pinned transport fetched."""
-
-    public_key = rsa.generate_private_key(public_exponent=65537, key_size=2048).public_key()
-    public_jwk = {**RSAAlgorithm.to_jwk(public_key, as_dict=True), "kid": "signing-key", "use": "sig"}
-    fetches: list[str] = []
-
-    def handler(request: httpx2.Request) -> httpx2.Response:
-        fetches.append(str(request.url))
-        return httpx2.Response(200, json={"keys": [public_jwk]})
-
-    monkeypatch.setattr(
-        oauth_protocol.HttpClient,
-        "transport_factory",
-        staticmethod(lambda **kw: httpx2.MockTransport(handler)),
-    )
-    client = oidc_protocol._PinnedPyJWKClient("https://issuer.example/jwks")
-
-    first = client.get_jwk_set()
-    second = client.get_jwk_set()
-
-    assert [key.key_id for key in first.keys] == ["signing-key"]
-    assert second is first
-    assert fetches == ["https://issuer.example/jwks"]
-
-
-@pytest.mark.django_db(transaction=True)
 def test_resolver_existing_external_account_returns_owner(
-    composed_tables: None,
+    db: None,
 ) -> None:
     """An existing external account resolves through its owner relationship."""
 
@@ -821,8 +607,7 @@ def test_resolver_existing_external_account_returns_owner(
     assert account.pk is not None
 
 
-@pytest.mark.django_db(transaction=True)
-def test_resolver_blocks_non_active_account(composed_tables: None) -> None:
+def test_resolver_blocks_non_active_account(db: None) -> None:
     """A revoked/expired/disabled external account must not log its owner in."""
 
     user = get_user_model().objects.create_user(username="revoked-owner", email="rev@example.com")
@@ -839,8 +624,7 @@ def test_resolver_blocks_non_active_account(composed_tables: None) -> None:
         identity.resolve(oauth_client, sub="sub-revoked", email="rev@example.com", claims={"sub": "sub-revoked"})
 
 
-@pytest.mark.django_db(transaction=True)
-def test_external_account_manager_coerces_status_member_names(composed_tables: None) -> None:
+def test_external_account_manager_coerces_status_member_names(db: None) -> None:
     """External-account status normalization lives in the manager field owner."""
 
     user = get_user_model().objects.create_user(username="status-owner", email="status@example.com")
@@ -856,8 +640,7 @@ def test_external_account_manager_coerces_status_member_names(composed_tables: N
     assert account.status == AccountStatus.REVOKED
 
 
-@pytest.mark.django_db(transaction=True)
-def test_resolver_blocks_inactive_user(composed_tables: None) -> None:
+def test_resolver_blocks_inactive_user(db: None) -> None:
     """A deactivated owner must not authenticate via OIDC (parity with the password path)."""
 
     user = get_user_model().objects.create_user(username="inactive-owner", email="ina@example.com")
@@ -871,8 +654,7 @@ def test_resolver_blocks_inactive_user(composed_tables: None) -> None:
         identity.resolve(oauth_client, sub="sub-inactive", email="ina@example.com", claims={"sub": "sub-inactive"})
 
 
-@pytest.mark.django_db(transaction=True)
-def test_resolver_blocks_existing_external_account_with_service_owner(composed_tables: None) -> None:
+def test_resolver_blocks_existing_external_account_with_service_owner(db: None) -> None:
     """An existing OIDC account cannot authenticate a service principal owner."""
 
     user = get_user_model().objects.create_user(
@@ -892,9 +674,8 @@ def test_resolver_blocks_existing_external_account_with_service_owner(composed_t
         )
 
 
-@pytest.mark.django_db(transaction=True)
 def test_resolver_link_on_email_match_requires_verified_email(
-    composed_tables: None,
+    db: None,
 ) -> None:
     """Email-match login only trusts provider-verified email addresses."""
 
@@ -913,9 +694,8 @@ def test_resolver_link_on_email_match_requires_verified_email(
         assert not ExternalAccount.objects.filter(oauth_client=oauth_client, external_id="sub-unverified").exists()
 
 
-@pytest.mark.django_db(transaction=True)
 def test_resolver_create_on_login_requires_verified_email(
-    composed_tables: None,
+    db: None,
 ) -> None:
     """Create-on-login only provisions from provider-verified email addresses."""
 
@@ -933,9 +713,8 @@ def test_resolver_create_on_login_requires_verified_email(
         assert not ExternalAccount.objects.filter(oauth_client=oauth_client, external_id="sub-unverified-new").exists()
 
 
-@pytest.mark.django_db(transaction=True)
 def test_resolver_link_on_email_match_creates_external_account(
-    composed_tables: None,
+    db: None,
 ) -> None:
     """Email-match login links a new external account to an existing user."""
 
@@ -955,9 +734,8 @@ def test_resolver_link_on_email_match_creates_external_account(
     assert account.email == "match@example.com"
 
 
-@pytest.mark.django_db(transaction=True)
 def test_resolver_link_on_email_match_skips_service_accounts(
-    composed_tables: None,
+    db: None,
 ) -> None:
     """Email-match login must never link a service principal row."""
 
@@ -980,23 +758,8 @@ def test_resolver_link_on_email_match_skips_service_accounts(
         assert not ExternalAccount.objects.filter(oauth_client=oauth_client, external_id="sub-service-email").exists()
 
 
-def test_oidc_email_match_fails_loud_without_person_lookup(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The OIDC email-match path must use the user owner's person_for_email lookup."""
-
-    class UserModel:
-        objects = object()
-
-    monkeypatch.setattr(identity, "get_user_model", lambda: UserModel)
-    resolver = object.__new__(identity.OidcIdentityResolver)
-
-    with pytest.raises(AttributeError, match="person_for_email"):
-        resolver._find_by_email("someone@example.com")
-
-
 @pytest.mark.django_db(transaction=True)
-def test_resolver_link_on_email_match_rejects_ambiguous_email(
-    composed_tables: None,
-) -> None:
+def test_resolver_link_on_email_match_rejects_ambiguous_email() -> None:
     """Legacy ambiguous email refuses login even when provisioning is enabled."""
 
     user_model = get_user_model()
@@ -1031,9 +794,8 @@ def test_resolver_link_on_email_match_rejects_ambiguous_email(
             editor.add_constraint(user_model, constraint)
 
 
-@pytest.mark.django_db(transaction=True)
 def test_resolver_create_on_login_provisions_user_and_external_account(
-    composed_tables: None,
+    db: None,
 ) -> None:
     """Create-on-login provisions a non-superuser user and linked account."""
 
@@ -1054,9 +816,8 @@ def test_resolver_create_on_login_provisions_user_and_external_account(
     assert account.display_name == "New User"
 
 
-@pytest.mark.django_db(transaction=True)
 def test_resolver_create_on_login_sets_user_names_from_claims(
-    composed_tables: None,
+    db: None,
 ) -> None:
     """Provisioned users receive first and last names from OIDC name claims."""
 
@@ -1079,9 +840,8 @@ def test_resolver_create_on_login_sets_user_names_from_claims(
     assert user.last_name == "Lovelace"
 
 
-@pytest.mark.django_db(transaction=True)
 def test_async_resolver_create_on_login_provisions_user_and_external_account(
-    composed_tables: None,
+    db: None,
 ) -> None:
     """The ASGI-facing resolver path provisions through thread-sensitive sync ORM."""
 
@@ -1104,9 +864,8 @@ def test_async_resolver_create_on_login_provisions_user_and_external_account(
     assert account.display_name == "Async User"
 
 
-@pytest.mark.django_db(transaction=True)
 def test_resolver_disallowed_domain_raises_403(
-    composed_tables: None,
+    db: None,
 ) -> None:
     """Domain policy blocks linking and provisioning."""
 
@@ -1128,43 +887,35 @@ def test_resolver_disallowed_domain_raises_403(
     assert exc_info.value.http_status == 403
 
 
-@pytest.mark.django_db(transaction=True)
-def test_complete_link_populates_credential_token_fields(
-    composed_tables: None,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def test_complete_link_populates_credential_token_fields(db: None) -> None:
     """Credential link persists token-derived expiry, scopes, and refresh telemetry."""
 
     link_user = get_user_model().objects.create_user(username="token-fields", email="tokens@example.com")
     oauth_client = _oauth_client()
-    state_token, _record = oauth_state.issue(
+    state_token, record = oauth_state.issue(
         oauth_client,
         "https://app.example/callback",
         user_id=str(link_user.pk),
         flow="link",
     )
-    tokens = {
-        "access_token": "access-token",
-        "refresh_token": "refresh-token",
-        "id_token": "id-token",
-        "expires_in": "120",
-        "scope": "openid email profile",
-    }
-    monkeypatch.setattr(OAuthClientOidcProtocol, "exchange_code", lambda self, **kwargs: tokens)
-    monkeypatch.setattr(
-        OAuthClientOidcProtocol,
-        "verify_id_token",
-        lambda self, id_token, **kwargs: {"sub": "sub-token-fields", "email": "tokens@example.com"},
+    provider = OidcProvider(
+        token={
+            "access_token": "access-token",
+            "refresh_token": "refresh-token",
+            "expires_in": "120",
+            "scope": "openid email profile",
+        },
+        id_claims={"sub": "sub-token-fields", "email": "tokens@example.com", "nonce": record.nonce},
     )
-    monkeypatch.setattr(OAuthClientOidcProtocol, "fetch_userinfo", lambda self, access_token, params=None: {})
 
     before = timezone.now()
-    result = identity.complete_link(
-        oauth_client,
-        code="code",
-        state_token=state_token,
-        redirect_uri="https://app.example/callback",
-    )
+    with mock_transport(provider):
+        result = identity.complete_link(
+            oauth_client,
+            code="code",
+            state_token=state_token,
+            redirect_uri="https://app.example/callback",
+        )
     account = result.account
 
     with system_context(reason="test oidc assertions"):
@@ -1181,12 +932,8 @@ def test_complete_link_populates_credential_token_fields(
     assert credential.reveal()["refresh_token"] == "refresh-token"
 
 
-@pytest.mark.django_db(transaction=True)
-def test_complete_account_connect_links_oauth_userinfo_claims_and_credential(
-    composed_tables: None,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """A plain OAuth connect flow resolves identity from configured userinfo claims."""
+def test_complete_account_connect_links_oauth_userinfo_claims_and_credential(db: None) -> None:
+    """A plain OAuth connect flow resolves identity from configured userinfo claims, never an ID token."""
 
     link_user = get_user_model().objects.create_user(username="oauth-connect", email="connect@example.com")
     oauth_client = _oauth_client(
@@ -1202,36 +949,28 @@ def test_complete_account_connect_links_oauth_userinfo_claims_and_credential(
         user_id=str(link_user.pk),
         flow=oauth_state.StateFlow.CONNECT,
     )
-    tokens = {
-        "access_token": "oauth-access",
-        "refresh_token": "oauth-refresh",
-        "scope": "offline email",
-    }
-    claims = {
-        "id": "acct_123",
-        "email": "connect@example.com",
-        "name": "Connected User",
-        "avatar_url": "https://avatar.example/u.png",
-    }
-
-    def exchange_code(self: Any, **kwargs: Any) -> dict[str, Any]:
-        assert kwargs["state"] == state_token
-        return tokens
-
-    monkeypatch.setattr(OAuthClientProtocol, "exchange_code", exchange_code)
-    monkeypatch.setattr(OAuthClientProtocol, "fetch_userinfo", lambda self, access_token, params=None: claims)
-    monkeypatch.setattr(
-        OAuthClientOidcProtocol,
-        "verify_id_token",
-        lambda self, id_token, **kwargs: pytest.fail("plain OAuth connect must not verify an ID token"),
+    provider = OidcProvider(
+        token={
+            "access_token": "oauth-access",
+            "refresh_token": "oauth-refresh",
+            "scope": "offline email",
+            "id_token": "unverifiable",
+        },
+        userinfo={
+            "id": "acct_123",
+            "email": "connect@example.com",
+            "name": "Connected User",
+            "avatar_url": "https://avatar.example/u.png",
+        },
     )
 
-    result = complete_account_connect(
-        oauth_client,
-        code="code",
-        state_token=state_token,
-        redirect_uri="https://app.example/oauth/callback",
-    )
+    with mock_transport(provider):
+        result = complete_account_connect(
+            oauth_client,
+            code="code",
+            state_token=state_token,
+            redirect_uri="https://app.example/oauth/callback",
+        )
 
     account = result.account
     credential = result.credential
@@ -1249,11 +988,7 @@ def test_complete_account_connect_links_oauth_userinfo_claims_and_credential(
     assert credential.reveal()["access_token"] == "oauth-access"
 
 
-@pytest.mark.django_db(transaction=True)
-def test_complete_account_connect_falls_back_to_token_response_account(
-    composed_tables: None,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def test_complete_account_connect_falls_back_to_token_response_account(db: None) -> None:
     """Restricted tokens can resolve an account without userinfo scope."""
 
     link_user = get_user_model().objects.create_user(
@@ -1273,30 +1008,20 @@ def test_complete_account_connect_falls_back_to_token_response_account(
         user_id=str(link_user.pk),
         flow=oauth_state.StateFlow.CONNECT,
     )
+    provider = OidcProvider(token={
+        "access_token": "long-lived-access",
+        "expires_in": 31536000,
+        "scope": "user:inference",
+        "account": {"uuid": "anthropic-account-uuid", "email_address": "subscriber@example.com"},
+    })
 
-    def exchange_code(self: OAuthClientProtocol, **kwargs: Any) -> dict[str, Any]:
-        del kwargs
-        self._token_response_claims = {
-            "account": {
-                "uuid": "anthropic-account-uuid",
-                "email_address": "subscriber@example.com",
-            },
-        }
-        return {
-            "access_token": "long-lived-access",
-            "expires_in": 31536000,
-            "scope": "user:inference",
-        }
-
-    monkeypatch.setattr(OAuthClientProtocol, "exchange_code", exchange_code)
-    monkeypatch.setattr(OAuthClientProtocol, "fetch_userinfo", lambda self, access_token, params=None: {})
-
-    result = complete_account_connect(
-        oauth_client,
-        code="code",
-        state_token=state_token,
-        redirect_uri="https://app.example/oauth/callback",
-    )
+    with mock_transport(provider):
+        result = complete_account_connect(
+            oauth_client,
+            code="code",
+            state_token=state_token,
+            redirect_uri="https://app.example/oauth/callback",
+        )
 
     result.account.refresh_from_db()
     assert result.account.external_id == "anthropic-account-uuid"
@@ -1315,11 +1040,7 @@ def test_complete_account_connect_falls_back_to_token_response_account(
     }
 
 
-@pytest.mark.django_db(transaction=True)
-def test_complete_account_connect_rejects_missing_stable_external_id(
-    composed_tables: None,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def test_complete_account_connect_rejects_missing_stable_external_id(db: None) -> None:
     """Providers must return the configured stable account id claim."""
 
     link_user = get_user_model().objects.create_user(username="oauth-missing-id", email="missing@example.com")
@@ -1330,18 +1051,9 @@ def test_complete_account_connect_rejects_missing_stable_external_id(
         user_id=str(link_user.pk),
         flow=oauth_state.StateFlow.CONNECT,
     )
-    monkeypatch.setattr(
-        OAuthClientProtocol,
-        "exchange_code",
-        lambda self, **kwargs: {"access_token": "oauth-access"},
-    )
-    monkeypatch.setattr(
-        OAuthClientProtocol,
-        "fetch_userinfo",
-        lambda self, access_token, params=None: {"email": "missing@example.com"},
-    )
+    provider = OidcProvider(token={"access_token": "oauth-access"}, userinfo={"email": "missing@example.com"})
 
-    with pytest.raises(OAuthFlowError) as exc_info:
+    with mock_transport(provider), pytest.raises(OAuthFlowError) as exc_info:
         complete_account_connect(
             oauth_client,
             code="code",
@@ -1353,9 +1065,8 @@ def test_complete_account_connect_rejects_missing_stable_external_id(
     assert exc_info.value.http_status == 400
 
 
-@pytest.mark.django_db(transaction=True)
 def test_credential_upsert_reasserts_active_status(
-    composed_tables: None,
+    db: None,
 ) -> None:
     """Re-upserting an OAuth credential reactivates a previously revoked row."""
 
@@ -1372,10 +1083,9 @@ def test_credential_upsert_reasserts_active_status(
     assert updated.reveal()["access_token"] == "second-token"
 
 
-@pytest.mark.django_db(transaction=True)
 @pytest.mark.parametrize("deferred", (False, True), ids=("loaded", "deferred"))
 def test_credential_disconnect_guard_blocks_last_oidc_sign_in(
-    composed_tables: None,
+    db: None,
     deferred: bool,
 ) -> None:
     """The sign-in invariant is enforced with loaded or deferred credential fields."""
@@ -1407,9 +1117,8 @@ def test_credential_disconnect_guard_blocks_last_oidc_sign_in(
     assert exc_info.value.messages == ["This is your only sign-in method."]
 
 
-@pytest.mark.django_db(transaction=True)
 @pytest.mark.parametrize("other_sign_in", ["password", "oidc", "oauth_only", "local"])
-def test_credential_disconnect_preserves_other_sign_in_methods(composed_tables: None, other_sign_in: str) -> None:
+def test_credential_disconnect_preserves_other_sign_in_methods(db: None, other_sign_in: str) -> None:
     """The model contribution permits alternatives and non-login credentials."""
 
     user = get_user_model().objects.create_user(
@@ -1448,15 +1157,14 @@ def test_credential_disconnect_preserves_other_sign_in_methods(composed_tables: 
         credential.check_disconnect()
 
 
-@pytest.mark.django_db(transaction=True)
 @pytest.mark.parametrize("changed_field", ["password", "login_enabled"])
 @pytest.mark.parametrize("previous", [False, True])
 def test_credential_disconnect_reads_current_sign_in_facts_despite_cached_relations(
-    composed_tables: None, changed_field: str, previous: bool
+    db: None, changed_field: str, previous: bool
 ) -> None:
     """Password and provider-policy changes supersede the credential's cached rows."""
 
-    del composed_tables
+    del db
     user = get_user_model().objects.create_user(
         username="disconnect-stale-cache",
         password="old-password" if changed_field == "password" and previous else None,
@@ -1488,9 +1196,8 @@ def test_credential_disconnect_reads_current_sign_in_facts_despite_cached_relati
             assert exc_info.value.messages == ["This is your only sign-in method."]
 
 
-@pytest.mark.django_db(transaction=True)
 def test_low_level_credential_delete_does_not_run_disconnect_guard(
-    composed_tables: None,
+    db: None,
 ) -> None:
     """The OIDC guard belongs to explicit disconnect, not model-delete signals."""
 
@@ -1518,28 +1225,11 @@ def test_low_level_credential_delete_does_not_run_disconnect_guard(
         assert not Credential.objects.filter(pk=credential.pk).exists()
 
 
-@pytest.mark.django_db(transaction=True)
-def test_userinfo_claims_merge_into_login_and_link_claims(
-    composed_tables: None,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Userinfo claims enrich ID-token claims before login resolve and account link."""
+def test_userinfo_claims_merge_into_link_and_login_claims(db: None) -> None:
+    """Userinfo claims enrich, and never override, verified ID-token claims on link and login."""
 
     link_user = get_user_model().objects.create_user(username="merged-claims", email="merged@example.com")
     oauth_client = _oauth_client()
-    token_response = {"access_token": "access", "id_token": "id-token"}
-    id_claims = {
-        "sub": "sub-merged",
-        "email": "id-token@example.com",
-        "email_verified": True,
-        "preferred_username": "id-token-name",
-    }
-    userinfo_claims = {
-        "sub": "sub-merged",
-        "email": "userinfo@example.com",
-        "preferred_username": "userinfo-name",
-        "groups": ["ops"],
-    }
     expected_claims = {
         "sub": "sub-merged",
         "email": "id-token@example.com",
@@ -1547,170 +1237,93 @@ def test_userinfo_claims_merge_into_login_and_link_claims(
         "preferred_username": "id-token-name",
         "groups": ["ops"],
     }
-    captured: dict[str, Any] = {}
-
-    def resolve_user(
-        oauth_client_arg: Any,
-        *,
-        sub: str,
-        email: str | None,
-        claims: dict[str, Any],
-    ) -> Any:
-        captured["oauth_client"] = oauth_client_arg
-        captured["sub"] = sub
-        captured["email"] = email
-        captured["claims"] = claims
-        return link_user
-
-    monkeypatch.setattr(OAuthClientOidcProtocol, "exchange_code", lambda self, **kwargs: token_response)
-    monkeypatch.setattr(OAuthClientOidcProtocol, "verify_id_token", lambda self, id_token, **kwargs: id_claims)
-    userinfo_calls = []
-
-    def fetch_userinfo(self, access_token, *, params=None):
-        userinfo_calls.append((access_token, params))
-        return userinfo_claims
-
-    monkeypatch.setattr(type(oauth_client), "userinfo_params", lambda self, protocol, token: {"proof": token})
-    monkeypatch.setattr(OAuthClientOidcProtocol, "fetch_userinfo", fetch_userinfo)
-    monkeypatch.setattr(identity, "resolve", resolve_user)
-
-    login_state, _login_record = oauth_state.issue(
-        oauth_client,
-        "https://app.example/callback",
-        next_path="/login-next",
+    provider = OidcProvider(userinfo={
+        "sub": "sub-merged",
+        "email": "userinfo@example.com",
+        "preferred_username": "userinfo-name",
+        "groups": ["ops"],
+    })
+    link_state, link_record = oauth_state.issue(
+        oauth_client, "https://app.example/callback", user_id=str(link_user.pk), next_path="/link-next", flow="link",
     )
-    login_result = identity.complete_login(
-        oauth_client,
-        code="code",
-        state_token=login_state,
-        redirect_uri="https://app.example/callback",
-    )
+    login_state, login_record = oauth_state.issue(oauth_client, "https://app.example/callback", next_path="/login-next")
 
+    id_claims = {key: value for key, value in expected_claims.items() if key != "groups"}
+    with mock_transport(provider):
+        provider.id_claims = {**id_claims, "nonce": link_record.nonce}
+        link_result = identity.complete_link(
+            oauth_client, code="code", state_token=link_state, redirect_uri="https://app.example/callback",
+        )
+        provider.id_claims = {**id_claims, "nonce": login_record.nonce}
+        login_result = identity.complete_login(
+            oauth_client, code="code", state_token=login_state, redirect_uri="https://app.example/callback",
+        )
+
+    link_result.account.refresh_from_db()
+    assert link_result.user.pk == link_user.pk
+    assert expected_claims.items() <= link_result.claims.items()
+    assert link_result.next_path == "/link-next"
+    assert expected_claims.items() <= link_result.account.identity_claims.items()
     assert login_result.user.pk == link_user.pk
     assert login_result.user.backend == identity.SESSION_AUTH_BACKEND
-    assert login_result.claims == expected_claims
+    assert expected_claims.items() <= login_result.claims.items()
     assert login_result.next_path == "/login-next"
-    assert captured["oauth_client"] == oauth_client
-    assert captured["sub"] == "sub-merged"
-    assert captured["email"] == "id-token@example.com"
-    assert captured["claims"] == expected_claims
-
-    # First login establishes the user's own party: a controlled handle + confirmed self-link.
+    # The verified login establishes the user's own party: a controlled handle + confirmed self-link.
     with system_context(reason="test verify login claim"):
         own_handle = PartiesHandle.objects.get(value="id-token@example.com")
         person = PartiesPerson.objects.for_user(link_user)
         assert own_handle.controller_id == link_user.pk
         assert own_handle.party_id == person.pk
 
-    link_state, _link_record = oauth_state.issue(
-        oauth_client,
-        "https://app.example/callback",
-        user_id=str(link_user.pk),
-        next_path="/link-next",
-        flow="link",
-    )
-    link_result = identity.complete_link(
-        oauth_client,
-        code="code",
-        state_token=link_state,
-        redirect_uri="https://app.example/callback",
-    )
-    account = link_result.account
 
-    account.refresh_from_db()
-    assert link_result.user.pk == link_user.pk
-    assert link_result.claims == expected_claims
-    assert link_result.next_path == "/link-next"
-    assert account.identity_claims == expected_claims
-    assert userinfo_calls == [("access", {"proof": "access"}), ("access", {"proof": "access"})]
-
-
-@pytest.mark.django_db(transaction=True)
-def test_complete_login_does_not_claim_an_unverified_email(
-    composed_tables: None,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def test_complete_login_does_not_claim_an_unverified_email(db: None) -> None:
     """An OIDC email becomes a parties identity claim only when explicitly verified."""
 
-    del composed_tables
-    user = get_user_model().objects.create_user(username="unverified-login", email="unverified@example.com")
+    del db
+    user = get_user_model().objects.create_user(username="unverified-login", email="unverified-account@example.com")
     oauth_client = _oauth_client(slug="unverified-claim")
-    state_token, _record = oauth_state.issue(oauth_client, "https://app.example/callback")
-    claims = {
-        "sub": "sub-unverified",
-        "email": "unverified@example.com",
-        "email_verified": False,
-    }
-    claimed: list[str] = []
-    monkeypatch.setattr(
-        OAuthClientOidcProtocol,
-        "exchange_code",
-        lambda self, **kwargs: {"access_token": "access", "id_token": "id-token"},
-    )
-    monkeypatch.setattr(OAuthClientOidcProtocol, "verify_id_token", lambda self, id_token, **kwargs: claims)
-    monkeypatch.setattr(OAuthClientOidcProtocol, "fetch_userinfo", lambda self, access_token, params=None: {})
-    monkeypatch.setattr(identity, "resolve", lambda *args, **kwargs: user)
-    monkeypatch.setattr(identity, "_claim_login_handle", lambda user_arg, email, claims_arg: claimed.append(email))
+    ExternalAccount.objects.link(oauth_client, "sub-unverified", owner=user)
+    state_token, record = oauth_state.issue(oauth_client, "https://app.example/callback")
+    provider = OidcProvider(id_claims={
+        "sub": "sub-unverified", "email": "unverified@example.com", "email_verified": False, "nonce": record.nonce,
+    })
 
-    completion = identity.complete_login(
-        oauth_client,
-        code="code",
-        state_token=state_token,
-        redirect_uri="https://app.example/callback",
-    )
+    with mock_transport(provider):
+        completion = identity.complete_login(
+            oauth_client, code="code", state_token=state_token, redirect_uri="https://app.example/callback",
+        )
 
     assert completion.user.pk == user.pk
-    assert claimed == []
+    with system_context(reason="test unverified email stays unclaimed"):
+        assert not PartiesHandle.objects.filter(value="unverified@example.com").exists()
 
 
-@pytest.mark.django_db(transaction=True)
 def test_complete_login_contains_parties_bookkeeping_failure(
-    composed_tables: None,
-    monkeypatch: pytest.MonkeyPatch,
+    db: None,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """A parties bookkeeping exception is logged but never turns a verified login into failure."""
+    """A parties bookkeeping refusal is logged but never turns a verified login into failure."""
 
-    del composed_tables
+    del db
     user = get_user_model().objects.create_user(username="bookkeeping-login", email="bookkeeping@example.com")
     oauth_client = _oauth_client(slug="bookkeeping-failure")
-    state_token, _record = oauth_state.issue(oauth_client, "https://app.example/callback")
-    claims = {
-        "sub": "sub-bookkeeping",
-        "email": "bookkeeping@example.com",
-        "email_verified": True,
-    }
-    monkeypatch.setattr(
-        OAuthClientOidcProtocol,
-        "exchange_code",
-        lambda self, **kwargs: {"access_token": "access", "id_token": "id-token"},
-    )
-    monkeypatch.setattr(OAuthClientOidcProtocol, "verify_id_token", lambda self, id_token, **kwargs: claims)
-    monkeypatch.setattr(OAuthClientOidcProtocol, "fetch_userinfo", lambda self, access_token, params=None: {})
-    monkeypatch.setattr(identity, "resolve", lambda *args, **kwargs: user)
+    ExternalAccount.objects.link(oauth_client, "sub-bookkeeping", owner=user)
+    state_token, record = oauth_state.issue(oauth_client, "https://app.example/callback")
+    overlong = f"{'x' * 520}@example.com"  # parties refuses a handle longer than its value column
+    provider = OidcProvider(id_claims={
+        "sub": "sub-bookkeeping", "email": overlong, "email_verified": True, "nonce": record.nonce,
+    })
 
-    def fail_bookkeeping(user_arg: Any, email: str, claims_arg: dict[str, Any]) -> None:
-        del user_arg, email, claims_arg
-        raise RuntimeError("parties unavailable")
-
-    monkeypatch.setattr(identity, "_claim_login_handle", fail_bookkeeping)
-
-    completion = identity.complete_login(
-        oauth_client,
-        code="code",
-        state_token=state_token,
-        redirect_uri="https://app.example/callback",
-    )
+    with mock_transport(provider):
+        completion = identity.complete_login(
+            oauth_client, code="code", state_token=state_token, redirect_uri="https://app.example/callback",
+        )
 
     assert completion.user.pk == user.pk
     assert "Could not record the verified OIDC email in parties" in caplog.text
 
 
-@pytest.mark.django_db(transaction=True)
-def test_complete_link_rejects_account_owned_by_another_user(
-    composed_tables: None,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def test_complete_link_rejects_account_owned_by_another_user(db: None) -> None:
     """Account linking fails when the external account belongs to another user."""
 
     owner = get_user_model().objects.create_user(username="linked-owner", email="owner@example.com")
@@ -1723,25 +1336,15 @@ def test_complete_link_rejects_account_owned_by_another_user(
         email="owner@example.com",
         identity_claims={"sub": "sub-linked"},
     )
-    state_token, _record = oauth_state.issue(
+    state_token, record = oauth_state.issue(
         oauth_client,
         "https://app.example/callback",
         user_id=str(other.pk),
         flow="link",
     )
-    monkeypatch.setattr(
-        OAuthClientOidcProtocol,
-        "exchange_code",
-        lambda self, **kwargs: {"access_token": "access", "id_token": "id-token"},
-    )
-    monkeypatch.setattr(
-        OAuthClientOidcProtocol,
-        "verify_id_token",
-        lambda self, id_token, **kwargs: {"sub": "sub-linked", "email": "other@example.com"},
-    )
-    monkeypatch.setattr(OAuthClientOidcProtocol, "fetch_userinfo", lambda self, access_token, params=None: {})
+    provider = OidcProvider(id_claims={"sub": "sub-linked", "email": "other@example.com", "nonce": record.nonce})
 
-    with pytest.raises(OAuthFlowError) as exc_info:
+    with mock_transport(provider), pytest.raises(OAuthFlowError) as exc_info:
         identity.complete_link(
             oauth_client,
             code="code",
@@ -1753,40 +1356,27 @@ def test_complete_link_rejects_account_owned_by_another_user(
     assert exc_info.value.http_status == 409
 
 
-@pytest.mark.django_db(transaction=True)
-def test_complete_link_binds_to_state_user_after_session_swap(
-    composed_tables: None,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def test_complete_link_binds_to_state_user_after_session_swap(db: None) -> None:
     """Account linking uses the start-flow user captured in state, not a later session user."""
 
     start_user = get_user_model().objects.create_user(username="link-start", email="start@example.com")
     swapped_user = get_user_model().objects.create_user(username="link-swapped", email="swapped@example.com")
     oauth_client = _oauth_client()
-    state_token, _record = oauth_state.issue(
+    state_token, record = oauth_state.issue(
         oauth_client,
         "https://app.example/callback",
         user_id=str(start_user.pk),
         flow="link",
     )
-    monkeypatch.setattr(
-        OAuthClientOidcProtocol,
-        "exchange_code",
-        lambda self, **kwargs: {"access_token": "access", "id_token": "id-token"},
-    )
-    monkeypatch.setattr(
-        OAuthClientOidcProtocol,
-        "verify_id_token",
-        lambda self, id_token, **kwargs: {"sub": "sub-swapped", "email": "start@example.com"},
-    )
-    monkeypatch.setattr(OAuthClientOidcProtocol, "fetch_userinfo", lambda self, access_token, params=None: {})
+    provider = OidcProvider(id_claims={"sub": "sub-swapped", "email": "start@example.com", "nonce": record.nonce})
 
-    result = identity.complete_link(
-        oauth_client,
-        code="code",
-        state_token=state_token,
-        redirect_uri="https://app.example/callback",
-    )
+    with mock_transport(provider):
+        result = identity.complete_link(
+            oauth_client,
+            code="code",
+            state_token=state_token,
+            redirect_uri="https://app.example/callback",
+        )
     account = result.account
 
     with system_context(reason="test oidc assertions"):
@@ -1953,19 +1543,6 @@ def _stub_login_oauth_client(*, oauth_client: OAuthClient | None = None, **overr
     return client
 
 
-class _FakeJwksClient:
-    """JWKS client test double returning a stable signing key."""
-
-    def __init__(self, key: object = "secret") -> None:
-        self.key = key
-
-    def get_signing_key_from_jwt(self, token: str) -> SimpleNamespace:
-        """Return the key object shape PyJWT exposes."""
-
-        del token
-        return SimpleNamespace(key=self.key)
-
-
 @pytest.mark.django_db
 def test_oidc_group_by_login_enabled() -> None:
     """OAuth clients group directly by the login-enabled OIDC discriminator.
@@ -1974,7 +1551,6 @@ def test_oidc_group_by_login_enabled() -> None:
     ``OAuthClient.login_enabled``.
     """
 
-    call_command("rebac", "sync", verbosity=0)
     with system_context(reason="test oidc group-by"):
         enabled = OAuthClient.objects.create(
             slug="enabled-client",
@@ -2000,11 +1576,10 @@ def test_oidc_group_by_login_enabled() -> None:
     assert by_enabled == {True: 1, False: 1}
 
 
-@pytest.mark.django_db(transaction=True)
-def test_oidc_login_picker_queryset_scope(composed_tables: None) -> None:
+def test_oidc_login_picker_queryset_scope(db: None) -> None:
     """The OIDC extension owns the public login-picker queryset predicate."""
 
-    del composed_tables
+    del db
     _oauth_client(slug="picker-enabled", oidc=True, is_enabled=True)
     _oauth_client(slug="picker-disabled", oidc=True, is_enabled=False)
     _oauth_client(slug="picker-oauth", oidc=False, is_enabled=True)
@@ -2025,54 +1600,84 @@ def test_oidc_login_picker_queryset_scope(composed_tables: None) -> None:
     assert slugs == {"picker-enabled", "picker-discovery"}
 
 
+class RefusingProvider(GenericOAuth2):
+    """A provider preset whose grant refinement refuses the connection."""
 
-@pytest.mark.usefixtures("composed_tables")
-def test_oidc_link_refines_the_grant_before_userinfo_and_credential_persistence(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+    transient = False
+
+    @classmethod
+    def refine_grant(cls, protocol: Any, tokens: dict[str, Any]) -> dict[str, Any]:
+        raise IntegrationError("Connection was refused.", transient=cls.transient)
+
+
+class UnavailableProvider(RefusingProvider):
+    """A provider preset whose grant refinement reports a transient outage."""
+
+    transient = True
+
+
+def _bound_flow(request: Any, client: Any, flow: oauth_state.StateFlow, user: Any = None) -> tuple[str, Any, str]:
+    """Start one flow bound to ``request``'s session; return its state token, record and redirect."""
+
+    token, record, redirect, _mode = oauth_flow.issue_flow(
+        request, client, "https://app.example/callback", user_id=str(user.pk) if user else None, flow=flow,
+    )
+    return token, record, redirect
+
+
+def _complete(schema: Any, request: Any, mutation: str, token: str, redirect: str, fields: str) -> dict[str, Any]:
+    """Run one completion mutation for a session-bound flow."""
+
+    document = f'''mutation {{
+      {mutation}(code: "code", state: "{token}", redirect_uri: "{redirect}") {{ {fields} }}
+    }}'''
+    return result_data(execute_schema(schema, document, request=request))[mutation]
+
+
+def _console_schema() -> Any:
+    return GraphQLSchemas([
+        SchemaAddon(module.schemas) for module in (iam_schema, integrate_schema, oidc_schema)
+    ]).build("console")
+
+
+@pytest.mark.django_db
+def test_oidc_link_refines_the_grant_before_userinfo_and_credential_persistence() -> None:
     with override_settings(ANGEE_OAUTH_PROVIDER_TYPE_CLASSES={
         "generic_oauth2": "tests.integrate_fixtures.RefiningProvider",
     }), system_context(reason="test refined OIDC link"):
         user = get_user_model().objects.create_user(username="refined-link")
         client = _oauth_client("refined-link-client")
-        state_token, _record = oauth_state.issue(
+        state_token, record = oauth_state.issue(
             client, "https://app.example/callback", user_id=str(user.pk), flow="link",
         )
-        grants = []
+        provider = OidcProvider(
+            token={"access_token": "short"},
+            id_claims={"sub": "linked-subject", "nonce": record.nonce},
+            userinfo={"sub": "linked-subject", "name": "Linked identity"},
+        )
 
         def respond(request: httpx2.Request) -> httpx2.Response:
-            if request.url.path == "/oauth/userinfo":
-                assert request.headers["Authorization"] == "Bearer refined"
-                assert request.url.params["proof"] == "refined"
-                return httpx2.Response(200, json={"sub": "linked-subject", "name": "Linked identity"})
-            body = parse.parse_qs(request.content.decode())
-            grants.append(body["grant_type"][0])
-            if body["grant_type"] == ["resource_grant"]:
-                assert body["short_token"] == ["short"]
+            if request.url.path == "/oauth/token" and request_fields(request)["grant_type"] == "resource_grant":
+                assert request_fields(request)["short_token"] == "short"
+                # Refinement may replace the ID token; only the code exchange's token proves the login.
                 return httpx2.Response(200, json={"access_token": "refined", "id_token": "refined-identity"})
-            return httpx2.Response(200, json={"access_token": "short", "id_token": "initial-identity"})
+            return provider(request)
 
-        original = OAuthClientProtocol.__init__
-
-        def with_transport(self: Any, oauth_client: Any) -> None:
-            original(self, oauth_client)
-            self._transport = httpx2.MockTransport(respond)
-
-        def verify(self: Any, token: str, **kwargs: Any) -> dict[str, Any]:
-            assert token == "initial-identity"
-            return {"sub": "linked-subject"}
-
-        monkeypatch.setattr(OAuthClientProtocol, "__init__", with_transport)
-        monkeypatch.setattr(OAuthClientOidcProtocol, "verify_id_token", verify)
-        result = identity.complete_link(
-            client, code="code", state_token=state_token, redirect_uri="https://app.example/callback",
-        )
+        with mock_transport(respond) as requests:
+            result = identity.complete_link(
+                client, code="code", state_token=state_token, redirect_uri="https://app.example/callback",
+            )
+        grants = [request_fields(request)["grant_type"] for request in requests if request.url.path == "/oauth/token"]
+        [userinfo] = [request for request in requests if request.url.path == "/oauth/userinfo"]
         assert grants == ["authorization_code", "resource_grant"]
+        assert userinfo.headers["Authorization"] == "Bearer refined"
+        assert userinfo.url.params["proof"] == "refined"
         assert result.account.external_id == "linked-subject"
+        assert result.account.display_name == "Linked identity"
         assert Credential.objects.get(user=user, oauth_client=client).secret_value() == "refined"
 
 
-@pytest.mark.usefixtures("composed_tables")
+@pytest.mark.django_db
 def test_google_preset_owns_the_subject_bearing_profile_endpoint() -> None:
     with system_context(reason="test Google preset identity"):
         client = OAuthClient.objects.create(slug="google-profile", provider_type="google")
@@ -2080,82 +1685,51 @@ def test_google_preset_owns_the_subject_bearing_profile_endpoint() -> None:
     assert endpoint == "https://openidconnect.googleapis.com/v1/userinfo"
     assert client.userinfo_endpoint == endpoint
 
-    def profile(request: httpx2.Request) -> httpx2.Response:
-        assert str(request.url) == endpoint
-        return httpx2.Response(200, json={"sub": "provider-subject"})
-
-    protocol = OAuthClientProtocol(client)
-    protocol._transport = httpx2.MockTransport(profile)
-    claims = protocol.fetch_userinfo("fake")
+    with mock_transport(lambda request: httpx2.Response(200, json={"sub": "provider-subject"})) as requests:
+        claims = OAuthClientProtocol(client).fetch_userinfo("fake")
+    assert [str(request.url) for request in requests] == [endpoint]
     assert client.external_id_from_claims(claims) == "provider-subject"
 
 
-def test_google_seed_discovers_the_preset_profile_without_a_conflicting_override(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def test_google_seed_discovers_the_preset_profile_without_a_conflicting_override() -> None:
     seed_file = Path(__file__).parents[1] / "src/angee/integrate/resources/install/010_integrate.oauthclient.yaml"
     seed = next(row for row in yaml.safe_load(seed_file.read_text()) if row["xref"] == "oauth_gemini")
     client = _stub_oauth_client(**{key: value for key, value in seed.items() if key != "xref"})
     endpoint = GoogleType.effective_defaults()["userinfo_endpoint"]
-    discovery_calls: list[str] = []
 
-    def discover(url: str, **kwargs: Any) -> dict[str, str]:
-        discovery_calls.append(url)
-        return {"userinfo_endpoint": endpoint}
-
-    def profile(request: httpx2.Request) -> httpx2.Response:
-        assert str(request.url) == endpoint
+    def respond(request: httpx2.Request) -> httpx2.Response:
+        if str(request.url) == client.discovery_url:
+            return httpx2.Response(200, json={"userinfo_endpoint": endpoint})
         return httpx2.Response(200, json={"sub": "seed-subject"})
 
-    monkeypatch.setattr(oauth_discovery, "oauth_get_json", discover)
-    monkeypatch.setattr(oauth_discovery.cache, "get", lambda key: None)
-    protocol = OAuthClientProtocol(client)
-    protocol._transport = httpx2.MockTransport(profile)
-    claims = protocol.fetch_userinfo("fake")
-    assert discovery_calls == [client.discovery_url]
+    with mock_transport(respond) as requests:
+        claims = OAuthClientProtocol(client).fetch_userinfo("fake")
+    assert str(requests[-1].url) == endpoint
     assert client.external_id_from_claims(claims) == "seed-subject"
 
 
-@pytest.mark.usefixtures("composed_tables")
+@pytest.mark.django_db
 @pytest.mark.parametrize("flow_name", ["login", "link", "connect"])
 @pytest.mark.parametrize("request_format", ["form", "json"])
-def test_oauth_completion_returns_typed_outage_for_refused_endpoint(
-    monkeypatch: pytest.MonkeyPatch, flow_name: str, request_format: str,
-) -> None:
-    schema = GraphQLSchemas([
-        SchemaAddon(module.schemas) for module in (iam_schema, integrate_schema, oidc_schema)
-    ]).build("console")
+def test_oauth_completion_returns_typed_outage_for_refused_endpoint(flow_name: str, request_format: str) -> None:
     with system_context(reason="test refused provider"):
         user = get_user_model().objects.create_user(username="refused-provider-user")
         client = _oauth_client("refused-provider", token_request_format=request_format)
-    redirect = "https://app.example/callback"
-    with socket.socket() as reserved:
-        reserved.bind(("127.0.0.1", 0))
-        client.token_endpoint = f"http://127.0.0.1:{reserved.getsockname()[1]}/token"
-        token, _record = oauth_state.issue(
-            client, redirect, user_id=str(user.pk) if flow_name != "login" else None, flow=flow_name,
-        )
-        monkeypatch.setattr(oauth_protocol, "HTTP_TIMEOUT_SECONDS", 1)
-        monkeypatch.setattr(integrate_schema.flow, "remembered_oauth_client", lambda *args: client)
-        mutation = {
-            "login": "login_complete", "link": "link_account_complete", "connect": "connect_account_complete",
-        }[flow_name]
-        request = graphql_request(AnonymousUser() if flow_name == "login" else user)
-        result = result_data(execute_schema(schema, f'''mutation {{
-          {mutation}(code: "code", state: "{token}", redirect_uri: "{redirect}") {{
-            error error_code
-          }}
-        }}''', request=request))[mutation]
+    request = graphql_request(AnonymousUser() if flow_name == "login" else user, session=True)
+    token, _record, redirect = _bound_flow(
+        request, client, oauth_state.StateFlow(flow_name), user if flow_name != "login" else None,
+    )
+    mutation = {"login": "login_complete", "link": "link_account_complete", "connect": "connect_account_complete"}
+    with mock_transport(_refuse_dial):
+        result = _complete(_console_schema(), request, mutation[flow_name], token, redirect, "error error_code")
     expected_code = "provider_unavailable" if flow_name == "connect" else TOKEN_EXCHANGE_FAILED
     assert result == {"error": OAuthFlowError(expected_code, 503).public_message, "error_code": expected_code}
     with system_context(reason="test refused provider wrote no credential"):
         assert not Credential.objects.filter(user=user, oauth_client=client).exists()
 
 
-@pytest.mark.usefixtures("composed_tables")
-def test_oidc_login_verifies_code_exchange_when_refinement_omits_id_token(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+@pytest.mark.django_db
+def test_oidc_login_verifies_code_exchange_when_refinement_omits_id_token() -> None:
     with override_settings(ANGEE_OAUTH_PROVIDER_TYPE_CLASSES={
         "generic_oauth2": "tests.integrate_fixtures.RefiningProvider",
     }), system_context(reason="test nonce proof survives refinement"):
@@ -2163,154 +1737,106 @@ def test_oidc_login_verifies_code_exchange_when_refinement_omits_id_token(
         client = _oauth_client("refined-login-client")
         ExternalAccount.objects.link(client, "login-subject", owner=user)
         token, record = oauth_state.issue(client, "https://app.example/callback")
-        grants = []
+        provider = OidcProvider(
+            token={"access_token": "short"},
+            id_claims={"sub": "login-subject", "nonce": record.nonce},
+            userinfo={"sub": "login-subject"},
+        )
 
         def respond(request: httpx2.Request) -> httpx2.Response:
-            if request.url.path == "/oauth/userinfo":
-                assert request.headers["Authorization"] == "Bearer refined"
-                return httpx2.Response(200, json={"sub": "login-subject"})
-            body = parse.parse_qs(request.content.decode())
-            grants.append(body["grant_type"][0])
-            if body["grant_type"] == ["resource_grant"]:
+            if request.url.path == "/oauth/token" and request_fields(request)["grant_type"] == "resource_grant":
                 return httpx2.Response(200, json={"access_token": "refined"})
-            return httpx2.Response(200, json={"access_token": "short", "id_token": "nonce-bound-proof"})
+            return provider(request)
 
-        original = OAuthClientProtocol.__init__
-
-        def with_transport(self: Any, oauth_client: Any) -> None:
-            original(self, oauth_client)
-            self._transport = httpx2.MockTransport(respond)
-
-        def verify(self: Any, id_token: str, *, nonce: str) -> dict[str, Any]:
-            assert id_token == "nonce-bound-proof"
-            assert nonce == record.nonce
-            return {"sub": "login-subject"}
-
-        monkeypatch.setattr(OAuthClientProtocol, "__init__", with_transport)
-        monkeypatch.setattr(OAuthClientOidcProtocol, "verify_id_token", verify)
-        completed = identity.complete_login(
-            client, code="code", state_token=token, redirect_uri="https://app.example/callback",
-        )
+        with mock_transport(respond) as requests:
+            completed = identity.complete_login(
+                client, code="code", state_token=token, redirect_uri="https://app.example/callback",
+            )
         assert completed.user.pk == user.pk
-        assert grants == ["authorization_code", "resource_grant"]
+        assert [request_fields(r)["grant_type"] for r in requests if r.url.path == "/oauth/token"] == [
+            "authorization_code", "resource_grant",
+        ]
+
+
+def _refuse_dial(request: httpx2.Request) -> httpx2.Response:
+    """Answer as ``PinnedTransport`` does when the provider refuses the connection."""
+
+    raise RequestNotSentError()
 
 
 @pytest.mark.parametrize("operation", ["revoke", "metadata"])
 def test_oauth_helpers_map_refused_endpoint_to_transient_flow_error(operation: str) -> None:
-    with socket.socket() as reserved:
-        reserved.bind(("127.0.0.1", 0))
-        endpoint = f"http://127.0.0.1:{reserved.getsockname()[1]}/oauth"
-        with pytest.raises(OAuthFlowError) as raised:
-            if operation == "revoke":
-                OAuthClientProtocol(_stub_oauth_client(revoke_endpoint=endpoint)).revoke_token("synthetic-token")
-            else:
-                oauth_discovery.discovery_document(endpoint)
+    endpoint = f"https://refused-{operation}.example/oauth"
+    with mock_transport(_refuse_dial), pytest.raises(OAuthFlowError) as raised:
+        if operation == "revoke":
+            OAuthClientProtocol(_stub_oauth_client(revoke_endpoint=endpoint)).revoke_token("synthetic-token")
+        else:
+            oauth_discovery.discovery_document(endpoint)
     assert raised.value.http_status == 503 and raised.value.transient
     assert raised.value.code == (TOKEN_EXCHANGE_FAILED if operation == "revoke" else DISCOVERY_FAILED)
 
 
-@pytest.mark.usefixtures("composed_tables")
+@pytest.mark.django_db(transaction=True)
 @pytest.mark.parametrize("request_format", ["form", "json"])
-def test_blank_secret_public_client_refreshes_credential(monkeypatch: pytest.MonkeyPatch, request_format: str) -> None:
+def test_blank_secret_public_client_refreshes_credential(request_format: str) -> None:
     with system_context(reason="test public refresh"):
         user = get_user_model().objects.create_user(username="public-refresh")
         client = _oauth_client("public-refresh", client_secret="", token_request_format=request_format)
         credential = Credential.objects.upsert_for_user(
             user, client, "oauth", {"access_token": "old-access", "refresh_token": "old-refresh", "expires_in": 1},
         )
+    provider = OidcProvider(token={"access_token": "new-access", "refresh_token": "new-refresh", "expires_in": 3600})
 
-    def respond(request: httpx2.Request) -> httpx2.Response:
-        body = (
-            json.loads(request.content) if request_format == "json" else dict(parse.parse_qsl(request.content.decode()))
-        )
-        assert body["grant_type"] == "refresh_token"
-        assert body["client_id"] == client.client_id
-        assert body["refresh_token"] == "old-refresh"
-        assert "client_secret" not in body and "authorization" not in request.headers
-        return httpx2.Response(200, json={
-            "access_token": "new-access", "refresh_token": "new-refresh", "expires_in": 3600,
-        })
-
-    original = OAuthClientProtocol.__init__
-
-    def with_transport(self: Any, oauth_client: Any) -> None:
-        original(self, oauth_client)
-        self._transport = httpx2.MockTransport(respond)
-
-    monkeypatch.setattr(OAuthClientProtocol, "__init__", with_transport)
-    with system_context(reason="test public refresh operation"):
+    with mock_transport(provider) as requests, system_context(reason="test public refresh operation"):
         credential.refresh_now()
         assert credential.reveal()["access_token"] == "new-access"
         assert credential.reveal()["refresh_token"] == "new-refresh"
         assert credential.last_refresh_status == "ok"
         assert not credential.is_reconnect_required
+    [request] = requests
+    fields = request_fields(request)
+    assert (fields["grant_type"], fields["client_id"], fields["refresh_token"]) == (
+        "refresh_token", client.client_id, "old-refresh",
+    )
+    assert "client_secret" not in fields and "authorization" not in request.headers
 
 
-@pytest.mark.usefixtures("composed_tables")
-def test_oidc_login_with_blank_secret_public_client(monkeypatch: pytest.MonkeyPatch) -> None:
-    schema = GraphQLSchemas([
-        SchemaAddon(module.schemas) for module in (iam_schema, integrate_schema, oidc_schema)
-    ]).build("console")
+@pytest.mark.django_db
+def test_oidc_login_with_blank_secret_public_client() -> None:
     with system_context(reason="test public OIDC login"):
         user = get_user_model().objects.create_user(username="public-login")
         client = _oauth_client("public-login", client_secret="")
         ExternalAccount.objects.link(client, "public-subject", owner=user)
-    redirect = "https://app.example/callback"
-    token, record = oauth_state.issue(client, redirect)
+    request = graphql_request(AnonymousUser(), session=True)
+    token, record, redirect = _bound_flow(request, client, oauth_state.StateFlow.LOGIN)
+    provider = OidcProvider(id_claims={"sub": "public-subject", "nonce": record.nonce})
 
-    def respond(request: httpx2.Request) -> httpx2.Response:
-        if request.url.path == "/oauth/userinfo":
-            return httpx2.Response(200, json={"sub": "public-subject"})
-        body = dict(parse.parse_qsl(request.content.decode()))
-        assert body["client_id"] == client.client_id and body["code_verifier"] == record.code_verifier
-        assert "client_secret" not in body and "authorization" not in request.headers
-        return httpx2.Response(200, json={"access_token": "access", "id_token": "proof"})
+    with mock_transport(provider) as requests:
+        result = _complete(_console_schema(), request, "login_complete", token, redirect, "ok error error_code")
 
-    original = OAuthClientProtocol.__init__
-
-    def with_transport(self: Any, oauth_client: Any) -> None:
-        original(self, oauth_client)
-        self._transport = httpx2.MockTransport(respond)
-
-    def verify(self: Any, id_token: str, *, nonce: str) -> dict[str, Any]:
-        assert id_token == "proof" and nonce == record.nonce
-        return {"sub": "public-subject"}
-
-    monkeypatch.setattr(OAuthClientProtocol, "__init__", with_transport)
-    monkeypatch.setattr(OAuthClientOidcProtocol, "verify_id_token", verify)
-    monkeypatch.setattr(oidc_schema.oauth_flow, "remembered_oauth_client", lambda *args: client)
-    request = graphql_request(AnonymousUser())
-    request.session = SessionStore()
-    result = result_data(execute_schema(schema, f'''mutation {{
-      login_complete(code: "code", state: "{token}", redirect_uri: "{redirect}") {{ ok error error_code }}
-    }}''', request=request))["login_complete"]
     assert result == {"ok": True, "error": None, "error_code": None}
     assert request.user.pk == user.pk
+    fields = request_fields(requests[0])
+    assert fields["client_id"] == client.client_id and fields["code_verifier"] == record.code_verifier
+    assert "client_secret" not in fields and "authorization" not in requests[0].headers
 
 
-@pytest.mark.usefixtures("composed_tables")
+@pytest.mark.django_db
 @pytest.mark.parametrize("flow_name", ["login", "link"])
 @pytest.mark.parametrize("transient", [False, True])
-def test_oidc_completion_returns_typed_integration_error(
-    monkeypatch: pytest.MonkeyPatch, flow_name: str, transient: bool,
-) -> None:
-    schema = GraphQLSchemas([
-        SchemaAddon(module.schemas) for module in (iam_schema, integrate_schema, oidc_schema)
-    ]).build("console")
-    with system_context(reason="test OIDC integration refusal"):
-        user = get_user_model().objects.create_user(username="integration-refusal")
-        client = _oauth_client("integration-refusal")
-
-    def refuse(*args: Any, **kwargs: Any) -> None:
-        raise IntegrationError("Connection was refused.", transient=transient)
-
-    monkeypatch.setattr(oidc_schema.oauth_flow, "remembered_oauth_client", lambda *args: client)
-    monkeypatch.setattr(identity, f"complete_{flow_name}", refuse)
-    mutation = "login_complete" if flow_name == "login" else "link_account_complete"
-    request = graphql_request(user if flow_name == "link" else AnonymousUser())
-    result = result_data(execute_schema(schema, f'''mutation {{
-      {mutation}(code: "code", state: "state", redirect_uri: "https://app.example/callback") {{ error error_code }}
-    }}''', request=request))[mutation]
+def test_oidc_completion_returns_typed_integration_error(flow_name: str, transient: bool) -> None:
+    preset = "UnavailableProvider" if transient else "RefusingProvider"
+    with override_settings(ANGEE_OAUTH_PROVIDER_TYPE_CLASSES={"generic_oauth2": f"tests.test_oidc.{preset}"}):
+        with system_context(reason="test OIDC integration refusal"):
+            user = get_user_model().objects.create_user(username="integration-refusal")
+            client = _oauth_client("integration-refusal")
+        request = graphql_request(user if flow_name == "link" else AnonymousUser(), session=True)
+        token, _record, redirect = _bound_flow(
+            request, client, oauth_state.StateFlow(flow_name), user if flow_name == "link" else None,
+        )
+        mutation = "login_complete" if flow_name == "login" else "link_account_complete"
+        with mock_transport(OidcProvider()):
+            result = _complete(_console_schema(), request, mutation, token, redirect, "error error_code")
     assert result == {
         "error": (
             "The provider is temporarily unavailable. Try again later." if transient else "Connection was refused."
@@ -2319,40 +1845,32 @@ def test_oidc_completion_returns_typed_integration_error(
     }
 
 
-@pytest.mark.usefixtures("composed_tables")
+@pytest.mark.django_db
 @pytest.mark.parametrize("userinfo_sub", [None, "different-subject", "verified-subject"])
-def test_oidc_userinfo_email_link_requires_matching_subject(
-    monkeypatch: pytest.MonkeyPatch, userinfo_sub: str | None,
-) -> None:
+def test_oidc_userinfo_email_link_requires_matching_subject(userinfo_sub: str | None) -> None:
     user = get_user_model().objects.create_user(username="email-link-target", email="target@example.com")
     client = _oauth_client("subject-check", link_on_email_match=True)
     redirect = "https://app.example/callback"
-    token, _record = oauth_state.issue(client, redirect)
+    token, record = oauth_state.issue(client, redirect)
     userinfo = {"email": "target@example.com", "email_verified": True}
     if userinfo_sub is not None:
         userinfo["sub"] = userinfo_sub
-    monkeypatch.setattr(OAuthClientOidcProtocol, "exchange_code", lambda self, **kwargs: {
-        "access_token": "access", "id_token": "proof",
-    })
-    monkeypatch.setattr(
-        OAuthClientOidcProtocol, "verify_id_token", lambda self, *args, **kwargs: {"sub": "verified-subject"},
-    )
-    monkeypatch.setattr(OAuthClientOidcProtocol, "fetch_userinfo", lambda self, *args, **kwargs: userinfo)
-    if userinfo_sub == "verified-subject":
-        completion = identity.complete_login(client, code="code", state_token=token, redirect_uri=redirect)
-        assert completion.user.pk == user.pk
-        assert completion.claims["email"] == "target@example.com"
-    else:
-        with pytest.raises(IdentityFlowError):
-            identity.complete_login(client, code="code", state_token=token, redirect_uri=redirect)
-        with system_context(reason="test untrusted userinfo never linked"):
-            assert not ExternalAccount.objects.filter(oauth_client=client).exists()
+    provider = OidcProvider(id_claims={"sub": "verified-subject", "nonce": record.nonce}, userinfo=userinfo)
+    with mock_transport(provider):
+        if userinfo_sub == "verified-subject":
+            completion = identity.complete_login(client, code="code", state_token=token, redirect_uri=redirect)
+            assert completion.user.pk == user.pk
+            assert completion.claims["email"] == "target@example.com"
+        else:
+            with pytest.raises(IdentityFlowError):
+                identity.complete_login(client, code="code", state_token=token, redirect_uri=redirect)
+            with system_context(reason="test untrusted userinfo never linked"):
+                assert not ExternalAccount.objects.filter(oauth_client=client).exists()
 
 
-@pytest.mark.django_db(transaction=True)
 @pytest.mark.parametrize("domains,allowed", [(["corp.example"], False), ([], True)])
 def test_signup_without_email_respects_provider_domain_policy(
-    composed_tables: None, domains: list[str], allowed: bool,
+    db: None, domains: list[str], allowed: bool,
 ) -> None:
     client = _oauth_client(create_on_login=True, allowed_email_domains=domains)
     if allowed:
@@ -2365,9 +1883,8 @@ def test_signup_without_email_respects_provider_domain_policy(
         assert not ExternalAccount.system_queryset().filter(external_id="without-email").exists()
 
 
-@pytest.mark.django_db(transaction=True)
 @pytest.mark.parametrize("unusable", ["revoked", "expired", "disabled"])
-def test_disconnect_does_not_count_unusable_oidc_alternatives(composed_tables: None, unusable: str) -> None:
+def test_disconnect_does_not_count_unusable_oidc_alternatives(db: None, unusable: str) -> None:
     user = get_user_model().objects.create_user("unusable-alternative")
     client = _oauth_client()
     account = ExternalAccount.objects.link(client, "working-subject", owner=user)
@@ -2386,9 +1903,8 @@ def test_disconnect_does_not_count_unusable_oidc_alternatives(composed_tables: N
         credential.check_disconnect()
     assert caught.value.code == "only_sign_in_method"
 
-@pytest.mark.django_db(transaction=True)
 @pytest.mark.parametrize("selected_status", ["revoked", "expired"])
-def test_disconnect_unusable_account_preserves_the_active_alternative(composed_tables, selected_status) -> None:
+def test_disconnect_unusable_account_preserves_the_active_alternative(db, selected_status) -> None:
     user = get_user_model().objects.create_user("disconnect-unusable-account")
     client = _oauth_client()
     selected = ExternalAccount.objects.link(client, "unusable-selected", owner=user)

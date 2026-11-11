@@ -1,10 +1,8 @@
 // @vitest-environment happy-dom
-import { cleanup, render, screen } from "@testing-library/react";
-import { afterEach, expect, test } from "vitest";
+import { render, screen } from "@testing-library/react";
+import { expect, test } from "vitest";
 
 import { MetaGrid, MetaSection } from "./MetaGrid";
-
-afterEach(cleanup);
 
 test("metadata rows share the collection label column and preserve pair semantics", () => {
   const { container } = render(

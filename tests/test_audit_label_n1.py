@@ -68,7 +68,7 @@ def _author_pages(vault: Any, authors: list[Any], count: int, *, start: int = 0)
         ("created_by updated_by", 0),
     ],
 )
-def test_audited_list_labels_batch_distinct_authors(composed_tables: None, selection: str, label_queries: int) -> None:
+def test_audited_list_labels_batch_distinct_authors(db: None, selection: str, label_queries: int) -> None:
     """One or 25 distinct authors cost one query per selected label relation."""
 
     alice = create_user("alice")
@@ -108,7 +108,7 @@ def test_audited_list_labels_batch_distinct_authors(composed_tables: None, selec
     assert rows and all(row.username is None for row in rows)
 
 
-def test_audited_label_prefetch_preserves_missing_authors(composed_tables: None) -> None:
+def test_audited_label_prefetch_preserves_missing_authors(db: None) -> None:
     """Nullable audit references resolve without spurious User reads."""
 
     alice = create_user("alice")
@@ -128,7 +128,7 @@ def test_audited_label_prefetch_preserves_missing_authors(composed_tables: None)
     assert _label_reads(captured) == []
 
 
-def test_vault_owner_labels_batch_distinct_owners(composed_tables: None) -> None:
+def test_vault_owner_labels_batch_distinct_owners(db: None) -> None:
     """Visible vaults expose owner labels with one query, without exposing users."""
 
     reader = create_user("vault-reader")
@@ -161,10 +161,10 @@ def test_vault_owner_labels_batch_distinct_owners(composed_tables: None) -> None
     assert rows and all(row.username is None for row in rows)
 
 
-def test_user_display_labels_batches_and_primes_request_memo(transactional_db: Any) -> None:
+def test_user_display_labels_batches_and_primes_request_memo(db: Any) -> None:
     """The batch label owner resolves many user ids with one elevated read."""
 
-    del transactional_db
+    del db
     alice = create_user("batch-alice")
     bob = create_user("batch-bob")
     request = RequestFactory().get("/")

@@ -3,29 +3,31 @@
 from __future__ import annotations
 
 from contextlib import nullcontext
+from copy import copy
 from types import SimpleNamespace
 from typing import Any
 
 import pytest
 from django.core.exceptions import ValidationError
+from django.db import connection
+from django.test.utils import CaptureQueriesContext
 from rebac import PermissionDenied, actor_context, current_actor, sudo, system_context, to_subject_ref
 from rebac.models import PermissionAuditEvent, active_relationship_model
 from strawberry import Schema
 
 from angee.base.models.locks import StaleRevisionError
+from angee.base.testing.queries import statement_startswith
 from angee.graphql.deletion import DeletePreview
+from angee.messaging.testing.models import Person
 from angee.projects.testing.models import Milestone, Project, ProjectBinding, Task
-from angee.proposals.models import ClarificationWidenBlocked, PublishedQuestion
 from angee.provenance.contrib.angee.exceptions import CreationKeyConflict
 from tests.conftest import Drive
 from tests.proposals_campaign import ProposalCampaign, as_actor, grant
 from tests.proposals_campaign import campaign as campaign
 from tests.proposals_campaign import campaign_schema as campaign_schema
-from tests.proposals_campaign import campaign_store as campaign_store
 from tests.proposals_campaign import proposal_delete_schema as proposal_delete_schema
 from tests.proposals_models import Proposal, Round, Topic
 from tests.t3_campaign import relationship_snapshot
-from tests.test_project_access import project_access_schema as project_access_schema
 
 
 @pytest.mark.parametrize("touched", (False, True))
@@ -499,6 +501,14 @@ def test_question_replay_is_asker_scoped_and_surrender_does_not_duplicate_conten
         )
     assert error.value.code == "CREATION_KEY_CONFLICT"
     assert first.created_by_id is None and first.updated_by_id is None and first.owner_id is None
+    manager = c.person("facilitator")
+    with actor_context(manager), pytest.raises(ValidationError, match="surrendered"):
+        as_actor(round, manager).pass_clarification(first, c.person("peer"))
+    with system_context(reason="tests.proposals.campaign.immutable_question"):
+        row = Task.objects.get(pk=first.pk)
+        row.visibility = "inherited"
+        with pytest.raises(ValidationError, match="immutable"):
+            row.save(update_fields=("visibility",))
 
 
 def test_question_edit_checks_revision_and_first_pass_freezes_content(campaign: ProposalCampaign) -> None:
@@ -662,40 +672,108 @@ def test_round_delete_receiver_allows_untouched_proposal_cascades(campaign: Prop
     assert not Proposal._base_manager.filter(pk=proposal_pk).exists()
 
 
-def test_hidden_asker_message_prevents_widening_and_default_pass_at_the_model_owner(campaign: ProposalCampaign) -> None:
+@pytest.mark.parametrize("policy", ("answers", "drafts_and_tracks"))
+def test_late_admission_obeys_the_opening_policy(campaign: ProposalCampaign, policy: str) -> None:
+    """After opening only drafts-and-tracks admits, and a late shell is disclosed with its track at once."""
+
     c = campaign
-    round = c.round()
-    c.admit(round, "responder")
-    task = c.ask(round)
-    manager, asker = c.person("facilitator"), c.person("responder")
+    round = c.round(policy=policy)
+    own = c.admit(round, "responder", track=True)
+    manager = c.person("facilitator")
     with actor_context(manager):
-        as_actor(task, manager).set_visibility("restricted")
-    with actor_context(asker):
-        as_actor(task, asker).message_post("Keep this identity private")
-    before = Task._base_manager.filter(pk=task.pk).values().get()
-    with actor_context(manager):
-        with pytest.raises(ClarificationWidenBlocked) as error:
-            as_actor(task, manager).set_visibility("inherited")
-        assert error.value.code == "HIDDEN_ASKER_IN_THREAD"
-        with pytest.raises(ClarificationWidenBlocked):
-            as_actor(round, manager).pass_clarification(task, c.person("recipient"))
-    assert Task._base_manager.filter(pk=task.pk).values().get() == before
+        as_actor(own, manager).submit()
+    c.open(round)
+    before = Proposal._base_manager.count()
+    if policy != "drafts_and_tracks":
+        with pytest.raises(ValidationError, match="not accepting"):
+            c.admit(round, "late", track=True)
+        assert Proposal._base_manager.count() == before
+        return
+    shell = Proposal._base_manager.get(pk=c.admit(round, "late", track=True).pk)
+    assert shell.disclosed_at is not None and shell.track_published_at is not None
+    assert as_actor(own, c.person("late")).has_access("read")
+    assert as_actor(shell, c.person("responder")).has_access("read")
 
 
-def test_published_question_refuses_narrowing_and_stale_hidden_asker_posts(campaign: ProposalCampaign) -> None:
+@pytest.mark.parametrize("roster", ("hidden", "named", "status"))
+def test_roster_lists_names_and_optional_status_by_roster_visibility(campaign: ProposalCampaign, roster: str) -> None:
     c = campaign
-    round = c.round()
-    c.admit(round, "responder")
-    task = c.ask(round)
-    manager, asker = c.person("facilitator"), c.person("responder")
-    stale = as_actor(task, asker)
+    round = c.round(roster_visibility=roster)
+    c.admit(round, "responder", track=True)
+    peer = c.admit(round, "peer", track=True)
+    reader, manager = c.person("responder"), c.person("facilitator")
+    everyone = {reader.pk, c.person("peer").pk}
     with actor_context(manager):
-        as_actor(round, manager).pass_clarification(task, c.person("recipient"))
-        with pytest.raises(PublishedQuestion) as error:
-            as_actor(task, manager).set_visibility("restricted")
-        assert error.value.code == "PUBLISHED_QUESTION"
-    with actor_context(asker):
-        for method in (stale.message_post, stale.message_log):
-            with pytest.raises(ClarificationWidenBlocked):
-                method("Must never be published")
-    assert Task._base_manager.get(pk=task.pk).visibility == "inherited"
+        entries = as_actor(round, manager).roster()
+    assert {entry.user_id for entry in entries} == everyone
+    assert all(entry.track_status == peer.track.status for entry in entries)
+    with actor_context(reader):
+        entries = as_actor(round, reader).roster()
+    assert {entry.user_id for entry in entries} == (set() if roster == "hidden" else everyone)
+    assert all(entry.track_status == (peer.track.status if roster == "status" else None) for entry in entries)
+
+
+@pytest.mark.parametrize("model_name", ("round", "topic", "proposal"))
+def test_proposal_save_leaves_unrelated_deferred_columns_unwritten(campaign: ProposalCampaign, model_name: str) -> None:
+    """Invariant checks must preserve Django's loaded-fields-only UPDATE."""
+
+    round = campaign.round()
+    proposal = campaign.admit(round, "responder")
+    with system_context(reason="tests.proposals.deferred_save"):
+        topic = Topic.objects.create(round=round, key="scope", name="Original topic", sort_order=1024.0)
+        rows = {"round": (round, "name"), "topic": (topic, "name"), "proposal": (proposal, "staffing")}
+        row, field = rows[model_name]
+        deferred = type(row)._base_manager.defer("created_at").get(pk=row.pk)
+        assert "created_at" not in deferred.__dict__
+        setattr(deferred, field, "Changed value")
+        with CaptureQueriesContext(connection) as queries:
+            deferred.save()
+        updates = [query["sql"] for query in queries
+                   if statement_startswith(query["sql"], f'UPDATE "{row._meta.db_table}"')]
+        assert len(updates) == 1
+        assert '"created_at" =' not in updates[0]
+        stored = type(row)._base_manager.get(pk=row.pk)
+        assert getattr(stored, field) == "Changed value"
+        assert stored.created_at == row.created_at
+
+
+def test_requester_identity_changes_only_through_the_round_instance(campaign: ProposalCampaign) -> None:
+    """Collection updates and native upserts, even elevated, cannot bypass the locked round owner."""
+
+    round = campaign.round()
+    with system_context(reason="tests.proposals.requester.collection"):
+        party = Person.objects.for_user(campaign.person("requester"))
+        for manager in (Round.objects, Round._base_manager):
+            with pytest.raises(ValidationError):
+                manager.filter(pk=round.pk).update(requester_party=party)
+    candidate = copy(round)
+    candidate.requester_party = party
+    for manager in (Round._base_manager, Round.objects.sudo(reason="tests.proposals.requester.conflict")):
+        with pytest.raises(ValidationError, match="Change requester identity through the round instance"):
+            manager.bulk_create([candidate], None, False, True, ["requester_party"], ["pk"])
+        with pytest.raises(ValidationError, match="Change requester identity through the round instance"):
+            manager.bulk_create(
+                [candidate], update_conflicts=True, update_fields=["requester_party"], unique_fields=["pk"],
+            )
+    round.refresh_from_db()
+    assert round.requester_party_id is None
+
+
+def test_requester_party_delete_and_merge_use_the_native_collector_and_round_identity_owner(
+    campaign: ProposalCampaign,
+) -> None:
+    manager = campaign.person("facilitator")
+    with actor_context(manager), system_context(reason="tests.proposals.requester.lifecycle"):
+        unreferenced = Person.objects.create(display_name="Unreferenced requester")
+        unreferenced.delete()
+        deleted = Person.objects.create(display_name="Disposable requester")
+        cleared = campaign.round(requester_party=deleted)
+        deleted.delete()
+        cleared.refresh_from_db()
+        assert cleared.requester_party_id is None
+        source = Person.objects.create(display_name="Duplicate requester", owner=manager)
+        survivor = Person.objects.create(display_name="Kept requester", owner=manager)
+        merged = campaign.round(requester_party=source)
+        survivor.merge(records=[source.public_id])
+        merged.refresh_from_db()
+        assert merged.requester_party_id == survivor.pk

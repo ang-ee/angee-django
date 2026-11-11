@@ -1,4 +1,4 @@
-import { createNamespaceT } from "@angee/ui";
+import { createNamespaceT } from "@angee/ui/i18n";
 
 /** The timeline addon's own copy: what a kind without a presentation, and a folded count, are called. */
 export const enTimelineMessages: Record<string, string> = {

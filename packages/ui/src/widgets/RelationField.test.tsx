@@ -1,12 +1,10 @@
 // @vitest-environment happy-dom
 
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { useState } from "react";
-import { afterEach, expect, test, vi } from "vitest";
+import { expect, test, vi } from "vitest";
 
 import { RelationField } from "./RelationField";
-
-afterEach(cleanup);
 
 const OPTIONS = [{ value: "a", label: "Alpha" }, { value: "b", label: "Beta" }];
 

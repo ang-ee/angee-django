@@ -12,7 +12,7 @@ from angee.messaging.testing.models import Thread
 from angee.projects.testing.models import Queue, Task
 from tests.conftest import create_user
 
-pytestmark = pytest.mark.django_db(transaction=True)
+pytestmark = pytest.mark.django_db
 
 
 def test_task_keeps_objects_as_default_manager_beside_the_work_manager() -> None:

@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 import { useState, type ReactNode } from "react";
-import { act, cleanup, renderHook } from "@testing-library/react";
-import { afterEach, expect, test } from "vitest";
+import { act, renderHook } from "@testing-library/react";
+import { expect, test } from "vitest";
 import { QueryParseError } from "@angee/metadata";
 import { AppRuntimeProvider } from "../../../runtime";
 import { ResourceViewProvider, useResourceView } from "../resource-view-context";
@@ -11,7 +11,6 @@ import { searchFixture } from "./search-fixture.test-support";
 import type { SearchFacetOption } from "./types";
 import { useResourceSearch } from "./use-resource-search";
 
-afterEach(cleanup);
 const defaults: ResourceViewInitialState = { filter: { title: { iContains: "baseline" } },
   groupStack: [{ field: "status" }], sort: { field: "title", dir: "desc" } };
 const options: readonly SearchFacetOption[] = [

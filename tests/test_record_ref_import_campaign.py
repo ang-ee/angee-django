@@ -28,7 +28,7 @@ from tests.test_record_refs import (
 
 
 @pytest.fixture
-def import_reference(composed_tables, record_ref_tables, tmp_path):
+def import_reference(record_ref_tables, tmp_path):
     """Bind native resources to the existing suite ledger and model-table owner."""
 
     addon = make_addon(name="tests.reference_import", label="reference_import", path=tmp_path)
@@ -176,7 +176,7 @@ def test_dry_run_resolves_references_without_leaving_rows_or_receipts(import_ref
         assert not Resource.objects.filter(xref="edge").exists()
 
 
-def test_resource_file_loads_ownerless_vault_and_both_binding_kinds(composed_tables, tmp_path: Path):
+def test_resource_file_loads_ownerless_vault_and_both_binding_kinds(db, tmp_path: Path):
     addon = make_addon(
         name="tests.knowledge_seed", label="knowledge_seed", path=tmp_path,
         resources={"install": [

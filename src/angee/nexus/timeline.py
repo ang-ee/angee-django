@@ -88,7 +88,9 @@ class CorrespondenceKind(TimelineKind):
         elif label in ("messaging.Participant", "messaging.Part"):
             messages = message.objects.filter(pk=row.message_id)
         elif label == "parties.Handle":
-            messages = message.objects.filter(models.Q(participants__handle=row) | models.Q(sender=row))
+            # A handle merge keeps messages on the retired handle; its survivor's group concerns them.
+            handles = apps.get_model("parties", "Handle")._base_manager.redirect_groups([row.merged_into_id or row.pk])
+            messages = message.objects.filter(models.Q(participants__handle__in=handles) | models.Q(sender__in=handles))
         elif label in ("messaging.Thread", "messaging.ThreadAttachment"):
             messages = message.objects.for_thread(row if label == "messaging.Thread" else row.thread)
         else:
@@ -99,8 +101,10 @@ class CorrespondenceKind(TimelineKind):
             else:
                 parties = party.objects.filter(pk__in=(row.pk, row.canonical().pk))
             return self._records(parties)
+        involved = messages.order_by().values("pk")
         return self._records(party.objects.canonical().filter(
-            handles__participations__message__in=messages.order_by().values("pk"),
+            models.Q(handles__participations__message__in=involved)
+            | models.Q(handles__merged_from__participations__message__in=involved),
         ).distinct())
 
     @staticmethod

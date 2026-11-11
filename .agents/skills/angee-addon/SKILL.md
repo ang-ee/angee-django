@@ -188,7 +188,7 @@ Done means: package metadata parses, the app entry-point key agrees with its nat
 fragment's `index.test.ts` passes; `runtime/web/manifest.json` (`WebRuntime.manifest_json` in `src/angee/web/build.py`) lists the package.
 
 - In a lane (jj workspace: no host, database or JS install): focused pytest, ruff and mypy on touched files,
-  `tests/test_layering.py`, `tests/test_base_layering.py` — [Python and composition contracts](../../../docs/checks.md#python-and-composition-contracts).
+  `lint-imports`, `tests/test_layering.py` — [Python and composition contracts](../../../docs/checks.md#python-and-composition-contracts).
 - Only on integrated `src`: composition drift, runtime checks, SDL, codegen, composed and per-package typecheck,
   vitest and the architecture guardrail — [composition and schema](../../../docs/checks.md#composition-and-schema),
   [frontend packages and addon fragments](../../../docs/checks.md#frontend-packages-and-addon-fragments).

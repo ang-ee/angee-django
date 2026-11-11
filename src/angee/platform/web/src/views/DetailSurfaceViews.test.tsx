@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
-import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
+import { fireEvent, render, screen } from "@testing-library/react";
+import { beforeEach, describe, expect, test, vi } from "vitest";
 import { InAppLinkProvider } from "@angee/ui";
 import { createRouteHref } from "@angee/ui/runtime";
 
@@ -27,12 +27,6 @@ vi.mock("@angee/ui", async () => ({
   useRouteRecordId: () => routerMocks.params.id,
 }));
 
-vi.mock("../i18n", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../i18n")>()),
-  usePlatformT: () => (key: string, vars?: Record<string, number>) =>
-    vars?.count ? `${key}:${vars.count}` : key,
-}));
-
 vi.mock("../lib/explorer", () => ({
   usePlatformAddon: platformMocks.usePlatformAddon,
   usePlatformAddonHref: () => (name: string) => platformMocks.routeHref("platform.addons.record", { id: `addon_${name.split(".").at(-1)}` }),
@@ -54,8 +48,6 @@ beforeEach(() => {
   platformMocks.usePlatformModel.mockReset();
 });
 
-afterEach(() => cleanup());
-
 describe("platform detail surfaces", () => {
   test("AddonDetail preserves loading and not-found states", () => {
     platformMocks.usePlatformAddon.mockReturnValue({
@@ -69,7 +61,7 @@ describe("platform detail surfaces", () => {
     const view = render(<AddonDetail />);
 
     expect(screen.getByRole("status")).toBeTruthy();
-    expect(screen.getByText("detail.addon.loading")).toBeTruthy();
+    expect(screen.getByText("Loading addon…")).toBeTruthy();
 
     platformMocks.usePlatformAddon.mockReturnValue({
       addon: undefined,
@@ -82,7 +74,7 @@ describe("platform detail surfaces", () => {
     view.rerender(<AddonDetail />);
 
     expect(screen.getByRole("heading", {
-      name: "detail.addon.notFound",
+      name: "Addon not found",
     })).toBeTruthy();
     expect(screen.getByText("angee.missing")).toBeTruthy();
   });
@@ -111,14 +103,14 @@ describe("platform detail surfaces", () => {
 
     expect(screen.getByRole("heading", { name: "Storage" })).toBeTruthy();
     expect(screen.getByText("angee.storage")).toBeTruthy();
-    expect(screen.getByText("col.models")).toBeTruthy();
+    expect(screen.getByText("Models")).toBeTruthy();
     expect(platformMocks.routeHref).toHaveBeenCalledWith("platform.models", undefined, { addon: "angee.storage" });
     expect(platformMocks.routeHref).toHaveBeenCalledWith("platform.fields", undefined, { addon: "angee.storage" });
     expect(screen.getByText("2")).toBeTruthy();
-    expect(screen.getByText("detail.dependencies")).toBeTruthy();
+    expect(screen.getByText("Dependencies")).toBeTruthy();
     expect((screen.getByRole("link", { name: "angee.iam" }) as HTMLAnchorElement).pathname)
       .toBe("/platform/addons/addon_iam");
-    expect(screen.getByText("detail.modelsWithCount:1")).toBeTruthy();
+    expect(screen.getByText("Models (1)")).toBeTruthy();
     expect(
       (screen.getByRole("link", { name: "storage.File" }) as HTMLAnchorElement)
         .pathname,
@@ -152,7 +144,7 @@ describe("platform detail surfaces", () => {
     render(<AddonDetail />);
 
     expect(screen.getByRole("heading", { name: "example.base" })).toBeTruthy();
-    expect(screen.getByText("apps.notInstalled")).toBeTruthy();
+    expect(screen.getByText("Not installed")).toBeTruthy();
   });
 
   test("ModelDetail keeps metric links navigable", () => {
@@ -176,7 +168,7 @@ describe("platform detail surfaces", () => {
     render(<InAppLinkProvider navigate={platformMocks.navigate}><ModelDetail /></InAppLinkProvider>);
 
     expect(screen.getByRole("heading", { name: "Note" })).toBeTruthy();
-    fireEvent.click(screen.getByRole("link", { name: /col.graph/ }));
+    fireEvent.click(screen.getByRole("link", { name: /Graph/ }));
     expect(platformMocks.navigate).toHaveBeenCalledWith(
       "/platform?model=notes.Note",
     );
@@ -185,7 +177,7 @@ describe("platform detail surfaces", () => {
       undefined,
       { model: "notes.Note" },
     );
-    expect(screen.getByText("detail.definition")).toBeTruthy();
+    expect(screen.getByText("Definition")).toBeTruthy();
     expect(screen.getByText("notes_note")).toBeTruthy();
   });
 });

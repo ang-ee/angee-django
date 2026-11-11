@@ -1,14 +1,12 @@
 // @vitest-environment happy-dom
 
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { Outlet, RouterProvider, createMemoryHistory, createRootRoute, createRoute, createRouter } from "@tanstack/react-router";
-import { afterEach, describe, expect, test, vi } from "vitest";
+import { describe, expect, test, vi } from "vitest";
 
 import { AppRailTree, type AppRailTreeProps } from "./AppRailTree";
 import { MenuTree } from "./menu-tree";
 import { ChromePlaceProvider, useChromePlace } from "./refine-menu";
-
-afterEach(cleanup);
 
 // Aggregators include apps; an app's page/menu entries never carry app: true.
 const projects = { id: "projects", label: "Projects", to: "/projects", children: [

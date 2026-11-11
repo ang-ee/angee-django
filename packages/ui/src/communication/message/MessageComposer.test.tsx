@@ -1,15 +1,11 @@
 // @vitest-environment happy-dom
 
-import { cleanup, render, screen } from "@testing-library/react";
-import { afterEach, describe, expect, test } from "vitest";
+import { render, screen } from "@testing-library/react";
+import { describe, expect, test } from "vitest";
 
 import { MessageAttachmentChip, MessageComposer, MessageComposerHint } from "./index";
 
 describe("MessageComposer", () => {
-  afterEach(() => {
-    cleanup();
-  });
-
   test("frames the input slot, attachment chips, hint, and actions", () => {
     render(
       <MessageComposer

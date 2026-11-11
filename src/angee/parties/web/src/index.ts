@@ -54,7 +54,7 @@ const parties = defineBaseAddon({
     },
     {
       name: "parties.merge",
-      path: "/parties/merge/$left/$right",
+      path: "/parties/review/merge/$left/$right",
       layout: "console",
       // Param-bearing routes must name their chrome parent (the review queue is
       // the merge flow's home per its breadcrumb).
@@ -104,7 +104,7 @@ const parties = defineBaseAddon({
     "parties.directories#toolbar": {},
   },
 });
-export { senderAvatarUrl, senderDisplayName, type SenderIdentity } from "./identity";
+export { resolvedSender, senderAvatarUrl, senderDisplayName, type SenderIdentity } from "./identity";
 export { addressFields, PartyAddresses } from "./PartyAddresses";
 export { useOrganizationFields } from "./OrganizationForm";
 export {

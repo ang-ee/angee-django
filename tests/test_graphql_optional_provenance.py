@@ -4,11 +4,13 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from angee.base.testing.packages import write_addon_distribution
 from tests.composed_host import run_composed_tests
 
 
-def test_graphql_native_crud_does_not_load_optional_provenance(tmp_path: Path) -> None:
+def test_graphql_native_crud_does_not_load_optional_provenance(tmp_path: Path, subtests: pytest.Subtests) -> None:
     addon = tmp_path / "addons" / "native_graphql"
     addon.mkdir(parents=True)
     (addon / "__init__.py").write_text("")
@@ -83,5 +85,5 @@ class NativeCrudTests(TransactionTestCase):
                              for name in sys.modules))
 ''')
     run_composed_tests(
-        tmp_path, "native_graphql.tests", app="native_graphql", addon_dirs=(addon.parent,),
+        tmp_path, subtests, app="native_graphql", sqlite=("native_graphql.tests",), addon_dirs=(addon.parent,),
     )

@@ -36,10 +36,6 @@ vi.mock("@angee/ui", async (importOriginal) => {
       }),
       { fetching: false, error: null },
     ],
-    useNamespaceT:
-      (_namespace: string, messages: Record<string, string>) =>
-      (key: string) =>
-        messages[key] ?? key,
   };
 });
 

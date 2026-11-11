@@ -18,7 +18,6 @@ from tests.test_messaging import _ingest, _parsed, _storage_drive
 from tests.test_messaging import channel as channel
 
 
-@pytest.mark.django_db(transaction=True)
 @pytest.mark.parametrize("prefetched", [False, True])
 def test_attached_files_select_one_forward_level_and_count_each_skipped_part(
     channel: Any, tmp_path: Path, prefetched: bool,
@@ -101,7 +100,6 @@ def test_attached_files_select_one_forward_level_and_count_each_skipped_part(
         assert set(message.parts.attached_files().values_list("pk", flat=True)) == {part.pk for part in selected}
 
 
-@pytest.mark.django_db(transaction=True)
 def test_attached_files_preserve_actor_scope_even_with_prefetched_parts(channel: Any, tmp_path: Path) -> None:
     """An elevated relation cache cannot bypass the queryset's pinned actor."""
 
@@ -126,7 +124,6 @@ def test_attached_files_preserve_actor_scope_even_with_prefetched_parts(channel:
         assert scope.attached_file_skip_counts() == {}
 
 
-@pytest.mark.django_db(transaction=True)
 def test_attached_files_body_only_message_has_no_skips(channel: Any) -> None:
     """Only stored-file parts contribute to selection or skip counts."""
 
@@ -138,7 +135,6 @@ def test_attached_files_body_only_message_has_no_skips(channel: Any) -> None:
     assert scope.attached_file_skip_counts() == {}
 
 
-@pytest.mark.django_db(transaction=True)
 def test_attached_files_remain_message_scoped_and_use_stored_mime_facts(channel: Any, tmp_path: Path) -> None:
     """Names do not veto ordinary files, and a report veto stays in its message."""
 
@@ -169,7 +165,6 @@ def test_attached_files_remain_message_scoped_and_use_stored_mime_facts(channel:
     assert all_parts.attached_file_skip_counts() == {"delivery_report": 1, "forwarded_message": 1}
 
 
-@pytest.mark.django_db(transaction=True)
 def test_attached_files_never_follow_foreign_parents_or_repeat_cycles(channel: Any, tmp_path: Path) -> None:
     """The shared ancestor owner keeps malformed edges finite and message-local."""
 
@@ -191,7 +186,6 @@ def test_attached_files_never_follow_foreign_parents_or_repeat_cycles(channel: A
     assert scope.attached_file_skip_counts() == {}
 
 
-@pytest.mark.django_db(transaction=True)
 def test_attached_files_queryset_classifies_lazily(channel: Any, tmp_path: Path) -> None:
     """Saved selectors classify current file uses when SQL runs without eager reads."""
 

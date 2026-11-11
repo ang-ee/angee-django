@@ -1,17 +1,13 @@
 // @vitest-environment happy-dom
 
-import { cleanup, render, screen } from "@testing-library/react";
-import { afterEach, describe, expect, test, vi } from "vitest";
-
-vi.mock("./i18n", () => ({ usePartiesT: () => (key: string) => key }));
+import { render, screen } from "@testing-library/react";
+import { describe, expect, test } from "vitest";
 
 import {
   PartyContactSummary,
   partyAddressText,
   partyContactValues,
 } from "./PartyContactSummary";
-
-afterEach(cleanup);
 
 describe("PartyContactSummary", () => {
   const party = {
@@ -42,7 +38,7 @@ describe("PartyContactSummary", () => {
 
   test("renders the loaded party identity without another data owner", () => {
     render(<PartyContactSummary party={party} />);
-    const line = screen.getByLabelText("party.contact.summary");
+    const line = screen.getByLabelText("Contact details");
     expect(screen.getByText("Example Organization")).toBeTruthy();
     expect(line.textContent).toMatch(/151 Main St/);
     expect(line.textContent).toContain(" · contact@example.test · +1 555 0100");

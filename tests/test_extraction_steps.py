@@ -55,6 +55,8 @@ from tests.test_extraction_models import NotesProfile
 from tests.test_extraction_models import evidence as evidence
 from tests.test_storage import drive as drive
 
+pytestmark = pytest.mark.django_db(transaction=True)
+
 SCHEMA = {
     "$id": "urn:test:step-evidence",
     "type": "object",

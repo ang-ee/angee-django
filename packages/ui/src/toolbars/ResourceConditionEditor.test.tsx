@@ -1,8 +1,8 @@
 // @vitest-environment happy-dom
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import { ModelMetadataProvider, schemaFieldMetadataFromDataResources } from "@angee/metadata";
 import { testDataResource, testQueryField, testResourceQuery } from "@angee/metadata/testing";
-import { afterEach, expect, test, vi } from "vitest";
+import { expect, test, vi } from "vitest";
 import { createUiTestProviders } from "../testing";
 import { ResourceConditionEditor } from "./ResourceConditionEditor";
 
@@ -14,7 +14,6 @@ const resource = testDataResource("demo.Record", { fields: [{
   title: testQueryField("title", { filter: { field: "label", scalar: "String", values: [], operators: ["exact"] } }),
 } }) });
 const metadata = schemaFieldMetadataFromDataResources([resource]);
-afterEach(cleanup);
 
 function fixture(value: unknown, readOnly = false) {
   const onChange = vi.fn();

@@ -1,12 +1,10 @@
 """A task's hand verbs are offered exactly where their owners admit them."""
 
-from pathlib import Path
 
 from django.core.exceptions import ValidationError
 from django.db import transaction
 from rebac import PermissionDenied, actor_context, system_context
 
-from tests.composed_host import run_composed_tests
 from tests.native_work import WorkCase
 
 ACTIONS = """query($id: String!) { project_tasks_by_pk(id: $id) { task_actions } }"""
@@ -111,7 +109,3 @@ class TaskActionTests(WorkCase):
         task = self.task("Triage")
         self.share(task, self.reader)
         self.assertEqual(self.offered(task, user=self.reader), set())
-
-
-def test_work_task_actions(tmp_path: Path):
-    run_composed_tests(tmp_path, "tests.test_work_task_actions.TaskActionTests", app="angee.work")

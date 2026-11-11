@@ -200,7 +200,7 @@ mutation($pk: ID!, $patch: documents_set_input, $lines: [documents_lines_insert_
 """
 
 
-def test_nested_insert_writes_parent_and_lines_atomically(composed_tables):
+def test_nested_insert_writes_parent_and_lines_atomically(db):
     """One insert mutation persists the document and its child lines."""
 
     actor = create_platform_admin("author")
@@ -228,7 +228,7 @@ def test_nested_insert_writes_parent_and_lines_atomically(composed_tables):
     assert rows == [("Widget", 2, 0), ("Gadget", 5, 1)]
 
 
-def test_nested_insert_does_not_return_an_unreadable_created_row(composed_tables):
+def test_nested_insert_does_not_return_an_unreadable_created_row(db):
     """Create authority grants neither read nor write, yet the creation admits its nested lines."""
 
     actor = create_user("unreadable-author")
@@ -256,7 +256,7 @@ def test_nested_insert_does_not_return_an_unreadable_created_row(composed_tables
     assert not document.has_access("write")
 
 
-def test_nested_insert_rolls_back_parent_on_line_failure(composed_tables):
+def test_nested_insert_rolls_back_parent_on_line_failure(db):
     """A child validation failure rolls the whole nested insert back."""
 
     actor = create_user("author")
@@ -282,7 +282,7 @@ def test_nested_insert_rolls_back_parent_on_line_failure(composed_tables):
         assert not DocumentLine.objects.filter(label="ok").exists()
 
 
-def test_save_diffs_lines_create_update_delete_in_one_transaction(composed_tables):
+def test_save_diffs_lines_create_update_delete_in_one_transaction(db):
     """``_save`` creates/updates/deletes children and patches the parent atomically."""
 
     owner = create_user("owner")
@@ -318,7 +318,7 @@ def test_save_diffs_lines_create_update_delete_in_one_transaction(composed_table
         assert not DocumentLine.objects.filter(pk=drop.pk).exists()
 
 
-def test_removing_a_line_other_records_use_is_a_public_refusal(composed_tables):
+def test_removing_a_line_other_records_use_is_a_public_refusal(db):
     """A protected line is kept and the caller learns why, never an internal error."""
 
     owner = create_user("owner")
@@ -346,7 +346,7 @@ def test_removing_a_line_other_records_use_is_a_public_refusal(composed_tables):
         assert DocumentLine.objects.filter(pk=used.pk).exists()
 
 
-def test_save_without_lines_leaves_children_untouched(composed_tables):
+def test_save_without_lines_leaves_children_untouched(db):
     """Omitting ``lines`` is a parent-only save; the children are left alone."""
 
     owner = create_user("owner")
@@ -368,7 +368,7 @@ def test_save_without_lines_leaves_children_untouched(composed_tables):
         assert doc.lines.count() == 1
 
 
-def test_save_denies_actor_without_write_on_parent(composed_tables):
+def test_save_denies_actor_without_write_on_parent(db):
     """An actor with no write on the parent is denied — the row is never found."""
 
     owner = create_user("owner")
@@ -396,7 +396,7 @@ def test_save_denies_actor_without_write_on_parent(composed_tables):
     assert line.label == "Line" and line.quantity == 1
 
 
-def test_save_denies_reader_without_write_even_with_empty_patch(composed_tables):
+def test_save_denies_reader_without_write_even_with_empty_patch(db):
     """A reader (read, no write) is denied a lines-only save — the write-gate hole.
 
     The ``reader`` grant makes ``read`` and ``write`` diverge, so the parent row
@@ -437,7 +437,7 @@ def test_save_denies_reader_without_write_even_with_empty_patch(composed_tables)
         assert doc.lines.count() == 1
 
 
-def test_save_rejects_line_ids_not_on_the_parent(composed_tables):
+def test_save_rejects_line_ids_not_on_the_parent(db):
     """A line id absent from the parent's stored set is rejected wholesale.
 
     Enforces the completeness contract server-side: a stale/foreign/truncated
@@ -474,7 +474,7 @@ def test_save_rejects_line_ids_not_on_the_parent(composed_tables):
     assert foreign.label == "Foreign"
 
 
-def test_save_fetches_kept_lines_without_per_row_growth(composed_tables):
+def test_save_fetches_kept_lines_without_per_row_growth(db):
     """The kept-child fetch is batched: its query cost does not grow per row (no N+1)."""
 
     owner = create_user("owner")
@@ -506,7 +506,7 @@ def test_save_fetches_kept_lines_without_per_row_growth(composed_tables):
     assert child_selects_for(2) == child_selects_for(5)
 
 
-def test_save_locks_the_parent_row_before_diffing_lines(composed_tables, monkeypatch):
+def test_save_locks_the_parent_row_before_diffing_lines(db, monkeypatch):
     """The child diff runs under a parent-row lock (serializes concurrent saves).
 
     A true cross-delete race needs two Postgres connections; Django emits no
@@ -541,7 +541,7 @@ def test_save_locks_the_parent_row_before_diffing_lines(composed_tables, monkeyp
     assert all(paths == ("self",) for paths in document_locks)
 
 
-def test_save_decodes_line_relation_under_the_callers_actor(composed_tables):
+def test_save_decodes_line_relation_under_the_callers_actor(db):
     """A line referencing a product the caller cannot read is rejected before elevation.
 
     The relation decode runs under the caller's actor (phase 1), so an invisible
@@ -742,7 +742,7 @@ def test_rich_lines_metadata_projects_enum_and_m2m_child_fields():
     assert tags.relation_model_label == "linesdemo.Tag"
 
 
-def test_rich_nested_insert_persists_enum_and_m2m(composed_tables):
+def test_rich_nested_insert_persists_enum_and_m2m(db):
     """A nested insert writes the enum child (lowercase model value) and its M2M tags."""
 
     actor = create_platform_admin("author")
@@ -782,7 +782,7 @@ def test_rich_nested_insert_persists_enum_and_m2m(composed_tables):
         assert set(row.tags.values_list("name", flat=True)) == {"Red", "Blue"}
 
 
-def test_rich_save_round_trips_enum_and_m2m_diff(composed_tables):
+def test_rich_save_round_trips_enum_and_m2m_diff(db):
     """``_save`` diff-applies an enum change (lowercase) and an M2M set (sqids) atomically."""
 
     owner = create_user("owner")
@@ -911,7 +911,7 @@ def _pinned_rows(doc: Document) -> list[tuple[str, int, int, bool]]:
         return list(doc.pinned_lines.order_by("position", "pk").values_list("label", "quantity", "position", "pinned"))
 
 
-def test_lines_save_edits_unlocked_cells_of_a_locked_row(composed_tables):
+def test_lines_save_edits_unlocked_cells_of_a_locked_row(db):
     """A locked row keeps its locked cell but its other cells and its order stay editable."""
 
     owner = create_user("owner")
@@ -947,7 +947,7 @@ def test_lines_save_edits_unlocked_cells_of_a_locked_row(composed_tables):
     ],
     ids=["change-locked-cell", "remove-locked-row"],
 )
-def test_lines_save_refuses_to_bypass_a_row_lock(composed_tables, lines, message):
+def test_lines_save_refuses_to_bypass_a_row_lock(db, lines, message):
     """The parent-authorized elevation never lets a line alter or remove a system row."""
 
     owner = create_user("owner")
@@ -960,7 +960,7 @@ def test_lines_save_refuses_to_bypass_a_row_lock(composed_tables, lines, message
     assert _pinned_rows(doc) == before
 
 
-def test_lines_cannot_create_a_system_row(composed_tables):
+def test_lines_cannot_create_a_system_row(db):
     """A new line is a user write, so it can never become a system row."""
 
     owner = create_user("owner")
@@ -981,7 +981,7 @@ def test_lines_cannot_create_a_system_row(composed_tables):
     assert _pinned_rows(doc) == []
 
 
-def test_system_writers_keep_owning_locked_rows(composed_tables):
+def test_system_writers_keep_owning_locked_rows(db):
     """Outside lines the model guard still distinguishes users from system writers."""
 
     owner = create_user("owner")
@@ -1047,7 +1047,7 @@ def test_row_locked_lines_require_the_node_lock_projection():
 
 
 @pytest.mark.parametrize("operation", ["update", "save"])
-def test_writes_delegate_prepared_values_and_reload_after_owner_lock(composed_tables, monkeypatch, operation):
+def test_writes_delegate_prepared_values_and_reload_after_owner_lock(db, monkeypatch, operation):
     """Owner locks see pending scope; unrelated data committed while waiting survives."""
     owner = create_user("prepared-lock-owner")
     with system_context(reason="seed prepared lock target"):
@@ -1075,7 +1075,7 @@ def test_writes_delegate_prepared_values_and_reload_after_owner_lock(composed_ta
     assert (doc.title, doc.note) == ("After", "Current after wait")
 
 
-def test_owner_lock_does_not_bypass_narrowed_write_surface(composed_tables, monkeypatch):
+def test_owner_lock_does_not_bypass_narrowed_write_surface(db, monkeypatch):
     owner = create_user("scoped-lock-owner")
     with system_context(reason="seed scoped lock target"):
         doc = Document.objects.create(title="In scope")
@@ -1099,7 +1099,7 @@ def test_owner_lock_does_not_bypass_narrowed_write_surface(composed_tables, monk
     assert doc.note == ""
 
 
-def test_owner_lock_rechecks_write_permission_for_lines_only_save(composed_tables, monkeypatch):
+def test_owner_lock_rechecks_write_permission_for_lines_only_save(db, monkeypatch):
     owner = create_user("revoked-lock-owner")
     with system_context(reason="seed revoked lock target"):
         doc = Document.objects.create(title="Document")

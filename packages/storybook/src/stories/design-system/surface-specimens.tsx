@@ -5,7 +5,7 @@ import { themes } from "@angee/theme-angee/themes";
 import { ResourceQuery } from "@angee/metadata";
 import type { TypedDocumentNode } from "@angee/refine";
 import { gql } from "@angee/ui/lib/gql";
-import { jsonResponse, storySchema, testDataResource, testQueryAxis, testQueryField, testResourceQuery } from "../runtime-fixtures";
+import { storySchema, testDataResource, testQueryAxis, testQueryField, testResourceQuery } from "../runtime-fixtures";
 
 const noop = () => undefined;
 const formSpec = { type: "object", properties: { title: { type: "string", label: "Title" } } };
@@ -31,14 +31,14 @@ const resource = testDataResource("notes.Note", {
     }) },
   }),
 });
-const schemas = storySchema(async () => jsonResponse({ data: {
-  note: record,
-  notes: [record],
-  notes_aggregate: { aggregate: { count: 1 } },
-  libraryPage: { rows: [{ ...record, parent: null, expandable: false }], total: 1 },
-  action_selection_limit: 100,
-  impl_choices: choices,
-} }));
+const schemas = storySchema({
+  note: () => record,
+  notes: () => [record],
+  notes_aggregate: () => ({ aggregate: { count: 1 } }),
+  libraryPage: () => ({ rows: [{ ...record, parent: null, expandable: false }], total: 1 }),
+  action_selection_limit: () => 100,
+  impl_choices: () => choices,
+});
 const publicSchema = schemas.public;
 if (!publicSchema) throw new Error("The library fixture requires its public schema.");
 publicSchema.metadata = { angee: { resources: [resource] } };

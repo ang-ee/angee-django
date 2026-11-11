@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 
-import { act, cleanup, render, screen } from "@testing-library/react";
-import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
+import { act, render, screen } from "@testing-library/react";
+import { beforeEach, describe, expect, test, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   model: { resource: { subjectField: "assignmentSubject", roots: { list: "users" } } } as unknown,
@@ -45,7 +45,6 @@ describe("SubjectPicker", () => {
     mocks.relationProps = null;
     mocks.enabled = false;
   });
-  afterEach(() => cleanup());
 
   test("reports a resource without a list root instead of mounting a picker", () => {
     mocks.model = { resource: { subjectField: "assignmentSubject", roots: {} } };

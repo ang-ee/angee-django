@@ -12,7 +12,7 @@ import {
   type MetaQuery,
 } from "@refinedev/core";
 import { resourceMutationMeta, type ResourceMutationOperations, type ResourceMutationTarget } from "./operations";
-import { hashKey, type QueryClient, type QueryKey } from "@tanstack/react-query";
+import { hashKey, type QueryClient } from "@tanstack/react-query";
 import { ServerUnavailableError, type ServerConnection } from "./server-connection";
 import {
   graphQLWebSocketUrl,
@@ -27,6 +27,7 @@ import {
 import {
   catchUpAuthoredQueries,
   createLiveInvalidation,
+  queryReadsLiveChange,
   retainedAuthoredQueryHashes,
   type LiveChange,
   type LiveDelivery,
@@ -327,6 +328,7 @@ export function createAngeeChangeLiveProvider(
 ): AngeeChangeLiveProvider {
   const resourcesByList = resourcesByListRoot(resources);
   const resourcesByModel = resourcesByModelLabel(resources);
+  const modelsByChanges = modelLabelsByChangesRoot(resources);
   // graphql-ws does not dedup identical documents, so fan one upstream
   // subscription per document and variables out to every mounted consumer — resource hooks
   // (useList/useOne, keyed by list root) and authored queries (keyed by model
@@ -357,9 +359,7 @@ export function createAngeeChangeLiveProvider(
   function joinSubscription(
     subscriptionKey: string,
     resource: AngeeLiveResource | undefined,
-    channel: string,
-    callback: (event: LiveEvent) => void,
-    queryKey?: QueryKey,
+    consumer: ChangeConsumer,
     request: { query: string; variables?: Record<string, unknown> } = { query: changeSubscriptionDocument(subscriptionKey) },
   ): () => void {
     const entry = subscriptions.get(subscriptionKey) ?? {
@@ -368,14 +368,6 @@ export function createAngeeChangeLiveProvider(
       consumers: new Set<ChangeConsumer>(),
       dedicated: resource === undefined,
     };
-    const deliver = (changes: readonly ChangeEvent[]) => {
-      if (enabled && resource && entry.consumers.has(consumer)) callback(changeEvent(changes, channel, resource));
-    };
-    // Direct subscriptions consume individual event data (e.g. preferences).
-    // Only resource-hook callbacks initiate Refine's automatic invalidation.
-    const consumer: ChangeConsumer = queryKey
-      ? { queryKey, callback: deliver }
-      : (change) => deliver([change]);
     entry.consumers.add(consumer);
     if (!subscriptions.has(subscriptionKey)) {
       if (subscriptions.size === 0) {
@@ -426,15 +418,21 @@ export function createAngeeChangeLiveProvider(
                 }
                 return;
               }
-              // One upstream result is one change, however many consumers share it.
+              // One upstream result is one change of one row, however many consumers share it.
+              // A resource without a feed of its own reads its nearest MTI ancestor's
+              // (its metadata names that root), so the row changed under every model
+              // reading this root, with the same public id.
               const change = liveChangeFromResult(result.data, subscriptionKey, resource);
               const deliveries = [...entry.consumers].filter(
                 (consumer): consumer is LiveDelivery<ChangeEvent> => typeof consumer !== "function",
               );
-              liveInvalidation.push(change, deliveries);
-              entry.consumers.forEach((consumer) => {
-                if (typeof consumer === "function") consumer(change);
-              });
+              for (const model of new Set([change.model, ...(modelsByChanges.get(subscriptionKey) ?? [])])) {
+                const delivered = model === change.model ? change : { ...change, model };
+                liveInvalidation.push(delivered, deliveries);
+                entry.consumers.forEach((consumer) => {
+                  if (typeof consumer === "function") consumer(delivered);
+                });
+              }
             },
             error: (error) => {
               if (!active) return;
@@ -497,7 +495,7 @@ export function createAngeeChangeLiveProvider(
       const queryKey = params?.queryKey;
       if (typeof query === "string" && Array.isArray(queryKey)) {
         const request = { query, variables: recordValue(meta?.gqlVariables) ?? {} };
-        return joinSubscription(hashKey([request]), undefined, channel, callback, queryKey, request);
+        return joinSubscription(hashKey([request]), undefined, { queryKey, callback: noopSubscription }, request);
       }
       const targets = changeTargetsFromSubscribeParams(
         params,
@@ -505,14 +503,33 @@ export function createAngeeChangeLiveProvider(
         resourcesByModel,
       );
       if (targets.length === 0) return noopSubscription;
+      const resource = typeof params?.resource === "string" ? resourcesByList.get(params.resource) : undefined;
+      const interest = resource ? {
+        angeeModels: targets.map((target) => target.resource.modelLabel),
+        angeeBroadModels: [resource.modelLabel],
+        angeeRelatedModels: targets.map((target) => target.resource.modelLabel).filter((model) => model !== resource.modelLabel),
+        angeeRecords: [{ model: resource.modelLabel }],
+      } : undefined;
+      // One mounted resource subscription has one delivery across all its roots,
+      // so its own and related changes share a single coalesced callback.
+      let active = true;
+      const consumer: ChangeConsumer | undefined = resource ? {
+        queryKey: keys().data(meta?.dataProviderName ?? resource.schemaName)
+          .resource(resource.identifier ?? resource.roots.list!).get(),
+        matches: (change) => queryReadsLiveChange(interest, change),
+        callback: (changes) => {
+          if (active && enabled) callback(changeEvent(changes, channel, resource));
+        },
+      } : undefined;
       const disposers = targets.map(({ resource, changesRoot }) =>
-        joinSubscription(changesRoot, resource, channel, callback,
-          typeof params?.resource === "string"
-            ? keys().data(meta?.dataProviderName ?? resource.schemaName)
-              .resource(resource.identifier ?? params.resource).get()
-            : undefined),
+        joinSubscription(changesRoot, resource, consumer ?? ((change) => {
+          if (active && enabled) callback(changeEvent([change], channel, resource));
+        })),
       );
-      return () => disposers.forEach((dispose) => dispose());
+      return () => {
+        active = false;
+        disposers.forEach((dispose) => dispose());
+      };
     },
     unsubscribe(subscription) {
       if (typeof subscription === "function") subscription();
@@ -585,6 +602,17 @@ function resourcesByListRoot(
   );
 }
 
+function modelLabelsByChangesRoot(
+  resources: readonly AngeeLiveResource[],
+): ReadonlyMap<string, readonly string[]> {
+  const models = new Map<string, string[]>();
+  for (const resource of resources) {
+    const root = resource.roots.changes;
+    if (root) models.set(root, [...(models.get(root) ?? []), resource.modelLabel]);
+  }
+  return models;
+}
+
 function resourcesByModelLabel(
   resources: readonly AngeeLiveResource[],
 ): ReadonlyMap<string, AngeeLiveResource> {
@@ -603,17 +631,21 @@ function changeTargetsFromSubscribeParams(
   byModelLabel: ReadonlyMap<string, AngeeLiveResource>,
 ): ChangeTarget[] {
   const listRoot = typeof params?.resource === "string" ? params.resource : undefined;
-  const resources = listRoot
-    ? [byListRoot.get(listRoot)]
+  const listResource = listRoot ? byListRoot.get(listRoot) : undefined;
+  if (listRoot && !listResource) return [];
+  const resources = listResource
+    ? [listResource, ...(
+      params?.subscriptionType === "useList" ? modelLabelsFromSubscribeParams(params, "relatedModels") : []
+    ).map((label) => byModelLabel.get(label))]
     : modelLabelsFromSubscribeParams(params).map((label) => byModelLabel.get(label));
-  return resources.flatMap((resource) => {
+  return [...new Set(resources)].flatMap((resource) => {
     const changesRoot = resource?.roots.changes;
     return resource && changesRoot ? [{ resource, changesRoot }] : [];
   });
 }
 
-function modelLabelsFromSubscribeParams(params: LiveSubscribeParams): string[] {
-  const models = params?.models;
+function modelLabelsFromSubscribeParams(params: LiveSubscribeParams, key: "models" | "relatedModels" = "models"): string[] {
+  const models = params?.[key];
   return Array.isArray(models)
     ? models.filter((model): model is string => typeof model === "string")
     : [];
@@ -635,11 +667,12 @@ function changeEvent(
   channel: string,
   resource: AngeeLiveResource,
 ): LiveEvent {
+  const models = new Set(changes.map((change) => change.model));
   // No ids means model-wide to Refine consumers; a later row must not narrow it.
   const ids = changes.every((change) => change.id)
     ? [...new Set(changes.flatMap((change) => change.id ? [change.id] : []))]
     : undefined;
-  const id = ids?.length === 1 ? ids[0] : undefined;
+  const id = models.size === 1 && ids?.length === 1 ? ids[0] : undefined;
   const actions = new Set(changes.map((change) => change.action));
   const action = actions.size === 1 ? changes[0]?.action ?? "*" : "*";
   const relatedRecords = [...new Map(changes.flatMap((change) =>
@@ -651,10 +684,10 @@ function changeEvent(
     payload: {
       ...(ids ? { ids } : {}),
       ...(id ? { id } : {}),
-      model: changes[0]?.model ?? resource.modelLabel,
+      model: models.size === 1 ? changes[0]?.model ?? resource.modelLabel : undefined,
       action,
       changedFields: [...new Set(changes.flatMap((change) => change.changedFields))],
-      // Values from different records cannot describe a single row patch.
+      // Values from different records or models cannot describe a single row patch.
       changedValues: id || changes.length === 1
         ? changes.reduce<Record<string, unknown>>((values, change) => ({ ...values, ...change.changedValues }), {})
         : {},

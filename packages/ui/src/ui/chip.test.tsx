@@ -1,11 +1,9 @@
 // @vitest-environment happy-dom
 
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
-import { afterEach, expect, test, vi } from "vitest";
+import { fireEvent, render, screen } from "@testing-library/react";
+import { expect, test, vi } from "vitest";
 
 import { ChipList } from "./chip";
-
-afterEach(cleanup);
 
 test("a chip list renders each item once, removable only when it can report removals", () => {
   const items = [{ id: "rec-1", label: <em>Ada</em>, text: "Ada" }, { id: "draft", label: "draft" }];

@@ -1,12 +1,10 @@
 // @vitest-environment happy-dom
 // @vitest-environment-options {"settings":{"navigation":{"disableMainFrameNavigation":true,"disableChildPageNavigation":true}}}
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
-import { afterEach, expect, test, vi } from "vitest";
+import { fireEvent, render, screen } from "@testing-library/react";
+import { expect, test, vi } from "vitest";
 
 import { InAppLinkProvider } from "../lib/in-app-link";
 import { PaneRow, PaneRowsSkeleton } from "./pane-list";
-
-afterEach(cleanup);
 
 test.each([false, true])("href rows compose native navigation and preload, with a leading control: %s", (leading) => {
   vi.useFakeTimers();

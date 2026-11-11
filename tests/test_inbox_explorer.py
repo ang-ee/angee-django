@@ -22,7 +22,7 @@ from tests.conftest import make_integration
 from tests.test_messaging import _storage_drive
 from tests.test_nexus import _schema
 
-pytestmark = pytest.mark.usefixtures("composed_tables")
+pytestmark = pytest.mark.django_db
 User = get_user_model()
 T0 = datetime(2026, 1, 1, tzinfo=UTC)
 
@@ -84,6 +84,15 @@ def test_file_backlinks_allow_empty_files_and_deduplicate_authorized_messages(tm
         assert [message.pk for message in first.messages] == [messages[1].pk]
         assert all(row.part.file_id == file.pk for row in [*first.rows, *second.rows])
     with actor_context(other):
+        related = InboxRelated(Message.objects.all().explorer(), target, str(messages[2].sqid))
+        assert related.summary().count == 1
+        page = related.page()
+        assert (page.count, page.message_count) == (1, 1)
+        assert [row.message_id for row in page.rows] == [str(messages[2].sqid)]
+        assert [message.pk for message in page.messages] == [messages[2].pk]
+        assert all(row.part.file_id == file.pk for row in page.rows)
+    stranger = User.objects.create_user(username="explorer-file-stranger")
+    with actor_context(stranger):
         with pytest.raises(ValueError, match="Related content unavailable"):
             InboxRelated(Message.objects.all().explorer(), target).page()
 

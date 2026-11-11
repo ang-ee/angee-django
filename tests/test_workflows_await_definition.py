@@ -144,7 +144,6 @@ def test_native_output_alternatives_preserve_nested_model_references(register_st
     assert not contract.is_valid({"payload": {"value": "invalid"}})
 
 
-@pytest.mark.django_db(transaction=True)
 def test_await_requires_published_expected_workflow(execution):
     """Absent and unpublished identities yield author-scoped publication issues."""
     actor, _ = execution
@@ -192,7 +191,6 @@ def test_await_requires_published_expected_workflow(execution):
         )
 
 
-@pytest.mark.django_db(transaction=True)
 @pytest.mark.parametrize("terminal", ["canceled", "interrupted"])
 def test_await_requires_every_outcome_route_and_checks_successor_by_outcome(execution, terminal):
     """An accepted edge supplies Number while default failures remain empty."""
@@ -210,7 +208,6 @@ def test_await_requires_every_outcome_route_and_checks_successor_by_outcome(exec
     assert any(issue.code == "input" and issue.node == "value" for issue in issues)
 
 
-@pytest.mark.django_db(transaction=True)
 def test_await_checks_output_against_the_selected_child_outcome(execution):
     """An await can forward error, but cannot forward another outcome's shape."""
     actor, _ = execution
@@ -246,7 +243,6 @@ def test_historical_await_without_interrupted_keeps_its_frozen_contract():
         AwaitRun.check(_AwaitedRun(run_id=123, completed=True, outcome="interrupted", output={}), config=config)
 
 
-@pytest.mark.django_db(transaction=True)
 def test_parent_routes_a_natively_interrupted_child_after_its_terminal_wake(execution):
     """Restart recovery's empty interruption settles an already waiting observer."""
     actor, _ = execution
@@ -273,7 +269,6 @@ def test_parent_routes_a_natively_interrupted_child_after_its_terminal_wake(exec
     assert awaited.status == "succeeded" and awaited.awaited_run_id == child.pk
 
 
-@pytest.mark.django_db(transaction=True)
 def test_await_successor_field_binding_uses_its_routed_outcome_contract(execution):
     """An accepted edge can bind accepted fields without admitting empty closures."""
     actor, _ = execution
@@ -287,7 +282,6 @@ def test_await_successor_field_binding_uses_its_routed_outcome_contract(executio
     assert any(issue.code == "binding" and issue.node == "value" for issue in issues)
 
 
-@pytest.mark.django_db(transaction=True)
 @pytest.mark.parametrize("whole", [False, True])
 def test_await_result_projection_uses_selected_outcome_contract(execution, whole):
     """A result's eligibility selects the same child shape as its binding."""
@@ -302,7 +296,6 @@ def test_await_result_projection_uses_selected_outcome_contract(execution, whole
     assert validator(definition.output_schemas["answer"]).is_valid(3 if whole else {"answer": 3})
 
 
-@pytest.mark.django_db(transaction=True)
 def test_await_whole_error_result_retains_the_publication_restriction(execution):
     """Dynamic empty outcomes do not remove the graph's universal error-binding rule."""
     actor, _ = execution
@@ -313,7 +306,6 @@ def test_await_whole_error_result_retains_the_publication_restriction(execution)
     assert any(issue.code == "binding" and "error" in issue.message for issue in issues)
 
 
-@pytest.mark.django_db(transaction=True)
 @pytest.mark.parametrize("failed", [False, True])
 def test_await_map_body_preserves_error_label_and_child_output(execution, register_step, failed):
     """Observing a child's failure succeeds; its error label is still its output contract."""
@@ -344,7 +336,6 @@ def test_await_map_body_preserves_error_label_and_child_output(execution, regist
     assert StepRun.system_queryset().get(run=run, node_key="each.body").awaited_run_id == child.pk
 
 
-@pytest.mark.django_db(transaction=True)
 def test_observing_already_failed_owned_child_preserves_its_open_rows(execution, register_step):
     """Immediate terminal observation counts as awaited when the parent finishes."""
     class Branch(Step[None, None, None]):
@@ -406,7 +397,6 @@ def test_observing_already_failed_owned_child_preserves_its_open_rows(execution,
     assert parked.status == "waiting"
 
 
-@pytest.mark.django_db(transaction=True)
 def test_parent_retains_child_contract_and_reports_republish_dependency(execution, register_step):
     """A child change leaves the parent version fixed and names it for republishing."""
 
@@ -449,7 +439,6 @@ def test_parent_retains_child_contract_and_reports_republish_dependency(executio
     assert "outside this published await contract" in StepAttempt.system_queryset().get(step_run=awaited).error
 
 
-@pytest.mark.django_db(transaction=True)
 def test_draft_author_cannot_resolve_unreadable_child_contract(execution):
     """Write access to a parent does not disclose another workflow's outcomes."""
     admin, _ = execution
@@ -489,7 +478,6 @@ def test_draft_author_cannot_resolve_unreadable_child_contract(execution):
     )
 
 
-@pytest.mark.django_db(transaction=True)
 def test_historical_await_contract_never_recurses_into_current_publications(execution):
     """A published parent uses its frozen contract even if a child later awaits it."""
     actor, _ = execution

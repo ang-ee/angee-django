@@ -1,15 +1,11 @@
 // @vitest-environment happy-dom
 
-import { render, screen, cleanup } from "@testing-library/react";
-import { afterEach, describe, expect, test } from "vitest";
+import { render, screen } from "@testing-library/react";
+import { describe, expect, test } from "vitest";
 
 import { many2oneWidget } from "./many2one";
 
 describe("many2oneWidget", () => {
-  afterEach(() => {
-    cleanup();
-  });
-
   test("renders a nested relation record by its option label", () => {
     const Read = many2oneWidget.read;
 

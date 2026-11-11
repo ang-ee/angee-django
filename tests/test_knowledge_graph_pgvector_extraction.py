@@ -22,7 +22,10 @@ from tests.conftest import MarkdownPage, Page, Vault, vault_for
 from tests.pgvector_fixtures import passage_records as passage_records
 from tests.pgvector_graph_fixtures import graph_records as graph_records
 
-pytestmark = pytest.mark.skipif(connection.vendor != "postgresql", reason="Requires PostgreSQL index failure state")
+pytestmark = [
+    pytest.mark.skipif(connection.vendor != "postgresql", reason="Requires PostgreSQL index failure state"),
+    pytest.mark.django_db(transaction=True),
+]
 
 GRAPH = {
     "entities": [

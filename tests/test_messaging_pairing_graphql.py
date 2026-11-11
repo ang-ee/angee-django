@@ -32,14 +32,14 @@ pytest_plugins = ("tests.test_messaging_graphql",)
 
 @pytest.fixture
 def pairing_graphql(
-    composed_tables: None,
+    db: None,
     settings: Any,
     tmp_path: Any,
     monkeypatch: pytest.MonkeyPatch,
 ) -> list[dict[str, Any]]:
     """Register a fake live backend and isolate its session store."""
 
-    del composed_tables
+    del db
     settings.ANGEE_DATA_DIR = str(tmp_path / "data")
     settings.ANGEE_CHANNEL_BACKEND_CLASSES = {
         **settings.ANGEE_CHANNEL_BACKEND_CLASSES,
@@ -101,11 +101,7 @@ def test_channel_pairing_bounds_arbitrary_backend_value_error(
     admin = _platform_admin("msg-pairing-error-admin")
     channel = _live_channel("msg-pairing-error")
     secret = "provider-secret-value"
-    monkeypatch.setattr(
-        type(channel),
-        "pairing",
-        lambda _channel: (_ for _ in ()).throw(ValueError(secret)),
-    )
+    monkeypatch.setattr(FakePairingBackend, "pairing", lambda backend: (_ for _ in ()).throw(ValueError(secret)))
 
     result = execute_schema(
         _schema(),

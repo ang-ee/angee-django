@@ -11,7 +11,6 @@ import {
 } from "@angee/ui";
 
 import {
-  jsonResponse,
   storySchema,
   testDataResource,
 } from "./runtime-fixtures";
@@ -22,7 +21,7 @@ const fields: readonly DescriptorField[] = [
   { name: "display_name", label: "Name", readOnly: true },
   { name: "language", label: "Language", readOnly: true },
 ];
-const schemas = storySchema(async () => jsonResponse({ data: {} }));
+const schemas = storySchema({});
 schemas.public!.metadata = { angee: { resources: [
   testDataResource("parties.Party", { schemaName: "public" }),
   testDataResource("parties.PartyStatement", { schemaName: "public" }),

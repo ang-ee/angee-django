@@ -2,13 +2,11 @@
 
 import { AppRuntimeProvider, defaultWidgets } from "@angee/ui";
 import { markdownPreviewWidget } from "@angee/ui/widgets/markdown";
-import { cleanup, render, screen } from "@testing-library/react";
-import { afterEach, expect, test, vi } from "vitest";
+import { render, screen } from "@testing-library/react";
+import { expect, test, vi } from "vitest";
 
 import type { ComparisonAnswer, ComparisonProposal, ComparisonTopic } from "./comparison-data";
 import { RoundComparisonGrid, type RoundComparisonGridProps } from "./comparison-grid";
-
-afterEach(cleanup);
 
 // The registry loads the markdown widget lazily; statements and answers render
 // it eagerly here, so the assertions never race the chunk on a loaded runner.

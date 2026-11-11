@@ -206,6 +206,12 @@ export function listChromeState(
 export interface ListViewProps<TRow extends Row = Row> {
   /** Model label rendered by this list, e.g. `"notes.Note"`. */
   resource: string;
+  /**
+   * Canonical model labels whose changes refresh this native list when
+   * related_records names any record of its model, including rows off the page.
+   * Authored collection sources declare their interests on their queries.
+   */
+  relatedModels?: readonly string[];
   /** Show or hide list chrome while preserving the resource view's query. */
   chrome?: ListChrome;
   /** Page/workspace surfaces fill their owner with full chrome; embedded

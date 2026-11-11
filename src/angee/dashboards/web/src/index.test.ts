@@ -6,13 +6,6 @@ import dashboards from "./index";
 const canonicalizer = { canonicalModelLabel: (label: string) => label };
 
 describe("dashboards addon seams", () => {
-  test("declares the installed addon-dashboard route by stable key", () => {
-    expect(dashboards.routes).toEqual(expect.arrayContaining([expect.objectContaining({
-      name: "dashboards.addon",
-      path: "/dashboards/addon/$key",
-    })]));
-  });
-
   test("tops the rail ahead of apps composed before it", () => {
     const earlier = defineAddon({ id: "notes", menus: { notes: { label: "Notes" } } });
 

@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+from collections import defaultdict
 from collections.abc import Iterable, Iterator, Mapping
+from functools import lru_cache
 from typing import TYPE_CHECKING, Any, Self, cast
 
 from django.apps import apps
@@ -98,8 +100,9 @@ class ChangesetQuerySet[T: models.Model](AngeeQuerySet[T]):
 
         This is the inverse of ``touching``: the same history scopes cover MTI,
         owned lines, pairs and their statements, plus an unchanged merge survivor.
-        SQL selects identities, never live/history bodies. The touched-model index
-        avoids probing documents whose tables cannot intersect these boundaries.
+        SQL selects identities, never live/history bodies. Only the documents of
+        the touched-model index and the merge origins are probed, so the cost
+        follows the tables these boundaries touched, not the installed models.
         """
 
         touched = {label for labels in self.order_by().values_list("touched", flat=True) for label in labels}
@@ -111,6 +114,9 @@ class ChangesetQuerySet[T: models.Model](AngeeQuerySet[T]):
         ):
             if content_type_id is not None and pk is not None:
                 merges.setdefault(content_type_id, set()).add(int(pk))
+        origins = (ContentType.objects.get_for_id(content_type_id).model_class() for content_type_id in merges)
+        labels = touched | {origin._meta.label_lower for origin in origins if origin is not None}
+        documents = _history_documents(tuple(apps.get_models()))
         identities: dict[tuple[type[models.Model], str], set[Any]] = {}
 
         def touched_ids(table: type[models.Model], column: str) -> set[Any]:
@@ -124,9 +130,8 @@ class ChangesetQuerySet[T: models.Model](AngeeQuerySet[T]):
                 )
             return identities[key]
 
-        for model in sorted(apps.get_models(), key=lambda model: model._meta.label_lower):
-            if not issubclass(model, HistoryMixin) or model_history(model) is None:
-                continue
+        candidates = {model for label in labels for model in documents.get(label, ())}
+        for model in sorted(candidates, key=lambda model: model._meta.label_lower):
             record = model()
             ids: set[Any] = set()
             for table, columns in record.history_identity_columns().items():
@@ -153,6 +158,24 @@ class ChangesetQuerySet[T: models.Model](AngeeQuerySet[T]):
                     ids.update(merges.get(content_type.pk, ()))
             rows = model._base_manager.filter(pk__in=ids)
             yield from ((model, pk) for pk in rows.order_by("pk").values_list("pk", flat=True))
+
+
+@lru_cache(maxsize=1)
+def _history_documents(installed: tuple[type[models.Model], ...]) -> Mapping[str, set[type[HistoryMixin]]]:
+    """Index each history and statement table label by the installed records whose documents hold it.
+
+    The inverse of ``history_identity_columns`` and ``statement_models``, computed
+    once per app registry (``installed`` is its model list).
+    """
+
+    documents: defaultdict[str, set[type[HistoryMixin]]] = defaultdict(set)
+    for model in installed:
+        if issubclass(model, HistoryMixin) and model_history(model) is not None:
+            for table in model().history_identity_columns():
+                statements = table.statement_models() if issubclass(table, StatementsMixin) else ()
+                for owner in (table, *statements):
+                    documents[owner._meta.label_lower].add(model)
+    return documents
 
 
 _ChangesetManagerBase = AngeeManager.from_queryset(ChangesetQuerySet)

@@ -59,7 +59,10 @@ def write(title: str = "captured") -> Any:
 
 
 def changesets() -> list[Any]:
-    return list(apps.get_model(changeset_model_label())._base_manager.order_by("pk"))
+    """The changesets the test recorded; the host baseline's resource loads are not under test."""
+
+    changeset_model = apps.get_model(changeset_model_label())
+    return list(changeset_model._base_manager.exclude(change_reason="resources.load").order_by("pk"))
 
 
 def changeset_of(row: Any) -> Any:

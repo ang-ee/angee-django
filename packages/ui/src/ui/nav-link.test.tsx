@@ -1,11 +1,9 @@
 // @vitest-environment happy-dom
 
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
-import { afterEach, expect, test, vi } from "vitest";
+import { fireEvent, render, screen } from "@testing-library/react";
+import { expect, test, vi } from "vitest";
 
 import { NavLink } from "./nav-link";
-
-afterEach(cleanup);
 
 test("requires href, asChild, or render to own the destination", () => {
   // @ts-expect-error A bare NavLink would render an unfocusable anchor.

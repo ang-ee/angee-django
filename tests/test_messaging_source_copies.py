@@ -24,8 +24,6 @@ from tests.test_messaging import ThreadedTicket, _ingest, _parsed
 from tests.test_messaging import channel as channel
 from tests.test_nexus import _schema
 
-pytestmark = pytest.mark.django_db(transaction=True)
-
 
 @pytest.fixture
 def retained_feed_copy(channel):
@@ -37,6 +35,7 @@ def retained_feed_copy(channel):
     return left, right, other.owner
 
 
+@pytest.mark.django_db(transaction=True)
 def test_feed_keeps_the_exact_copy_across_windows_continuation_and_revalidation(retained_feed_copy):
     left, right, reader = retained_feed_copy
     third = make_integration("copy-anchor-unselected", model=Channel, backend_class="manual", owner=reader)
@@ -68,6 +67,7 @@ def test_feed_keeps_the_exact_copy_across_windows_continuation_and_revalidation(
         assert [row.pk for row in changed.rows] == [left.pk]
 
 
+@pytest.mark.django_db(transaction=True)
 @pytest.mark.parametrize("change", ["search", "move", "trash", "unreadable"])
 def test_copy_anchor_cannot_widen_current_search_thread_or_read_scope(retained_feed_copy, channel, change):
     left, right, reader = retained_feed_copy
@@ -100,6 +100,7 @@ def test_copy_anchor_cannot_widen_current_search_thread_or_read_scope(retained_f
             assert [row.pk for row in continuation.rows] == [left.pk]
 
 
+@pytest.mark.django_db(transaction=True)
 def test_copy_anchor_and_match_navigation_share_the_merged_transcript(retained_feed_copy):
     left, right, reader = retained_feed_copy
     request = graphql_request(reader)
@@ -129,6 +130,7 @@ def test_copy_anchor_and_match_navigation_share_the_merged_transcript(retained_f
         assert transcript.matches(visible=[], at=left.public_id).next == right.public_id
 
 
+@pytest.mark.django_db(transaction=True)
 def test_email_copies_fold_into_the_oldest_and_a_reader_without_it_still_reads_their_own(channel):
     other = make_integration("copy-visible", model=Channel, backend_class="manual")
     _ingest([_parsed("shared@example.com")], channel=channel)
@@ -148,6 +150,7 @@ def test_email_copies_fold_into_the_oldest_and_a_reader_without_it_still_reads_t
         assert Message.objects.inbox().for_feed(all_copies=True).count() == 2
 
 
+@pytest.mark.django_db(transaction=True)
 def test_a_person_keeps_copies_separate_and_confirms_them_again_without_moving_rows(channel):
     other = make_integration("copy-decision", model=Channel, backend_class="manual", owner=channel.owner)
     _ingest([_parsed("decision@example.com")], channel=channel)
@@ -169,6 +172,7 @@ def test_a_person_keeps_copies_separate_and_confirms_them_again_without_moving_r
     )) == original
 
 
+@pytest.mark.django_db(transaction=True)
 def test_retained_source_identity_blocks_destructive_channel_purge(channel):
     other = make_integration("copy-retained", model=Channel, backend_class="manual", owner=channel.owner)
     _ingest([_parsed("retained@example.com")], channel=channel)
@@ -198,7 +202,7 @@ def test_purging_a_survivor_without_evidence_releases_its_copy(channel):
     assert Thread._base_manager.get(pk=right.thread_id).merged_into_id is None
 
 
-def test_chatter_fold_keeps_physical_messages_and_current_record_attachment(composed_tables):
+def test_chatter_fold_keeps_physical_messages_and_current_record_attachment(db):
     with system_context(reason="retained chatter fold"):
         kept = ThreadedTicket.objects.create(title="Kept")
         old = ThreadedTicket.objects.create(title="Old")
@@ -229,7 +233,7 @@ def test_channel_thread_identity_accepts_both_native_foreign_key_forms(channel):
     assert repeated.channel_id == channel.pk
 
 
-def test_subscribe_reuses_effective_retained_follow_and_receipt(composed_tables):
+def test_subscribe_reuses_effective_retained_follow_and_receipt(db):
     with system_context(reason="retained follow preferences"):
         watcher = get_user_model().objects.create_user(username="retained-follow-watcher")
         old = ThreadedTicket.objects.create(title="Original followed record")
@@ -267,7 +271,7 @@ def test_subscribe_reuses_effective_retained_follow_and_receipt(composed_tables)
 @pytest.mark.parametrize("bulk", [False, True])
 @pytest.mark.parametrize("missing_survivor", [False, True])
 def test_retired_host_deletion_retains_follow_and_notification_bookkeeping(
-    composed_tables, bulk, missing_survivor,
+    db, bulk, missing_survivor,
 ):
     with system_context(reason="retired chatter host deletion"):
         watcher = get_user_model().objects.create_user(username="retained-deletion-watcher")

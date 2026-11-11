@@ -38,7 +38,6 @@ from rebac import (
     to_subject_ref,
     write_relationships,
 )
-from rebac.actors import current_sudo_reason, is_sudo
 
 import angee.spaces.testing.models  # noqa: F401 -- register related models before native database setup
 import tests.test_integrate_vcs  # noqa: F401 -- register related models before native database setup
@@ -160,14 +159,13 @@ _AT = datetime(2026, 1, 1, 12, 0, tzinfo=timezone.utc)
 
 
 @pytest.fixture
-def channel(composed_tables: None) -> Any:
+def channel(db: None) -> Any:
     """Provide the real channel composition consumed by message-ingested receivers."""
 
-    del composed_tables
+    del db
     return make_integration("msgchan", model=Channel, backend_class="manual")
 
 
-@pytest.mark.django_db(transaction=True)
 def test_channel_source_kind_is_its_backends_declaration(channel: Any, monkeypatch: pytest.MonkeyPatch) -> None:
     """A channel is admitted as a statement source only as the kind its protocol declares."""
 
@@ -219,7 +217,6 @@ def _ingest(messages: list[ParsedMessage], *, channel: Any) -> int:
         return len(Message.objects.ingest(messages, channel=channel))
 
 
-@pytest.mark.django_db(transaction=True)
 def test_ingest_commits_each_message_and_does_not_lock_an_unchanged_observation(channel: Any) -> None:
     """A later bad envelope cannot roll back the previous message's committed work."""
 
@@ -247,7 +244,6 @@ def test_ingest_commits_each_message_and_does_not_lock_an_unchanged_observation(
     assert not any(statement_startswith(query["sql"].lstrip(), "UPDATE") for query in queries)
 
 
-@pytest.mark.django_db(transaction=True)
 def test_synced_own_message_edits_and_late_parent_land_and_emit(channel: Any) -> None:
     """Direction is provider evidence, not proof that messaging authored an envelope."""
 
@@ -295,7 +291,6 @@ def test_synced_own_message_edits_and_late_parent_land_and_emit(channel: Any) ->
         message_ingested.disconnect(observe)
 
 
-@pytest.mark.django_db(transaction=True)
 def test_identical_synced_own_reply_repairs_a_late_parent(channel: Any) -> None:
     own = replace(_parsed("own-late", in_reply_to="own-root", sent_at=_AT), direction="outbound")
     _ingest([own], channel=channel)
@@ -305,7 +300,6 @@ def test_identical_synced_own_reply_repairs_a_late_parent(channel: Any) -> None:
     assert row.parent_id == Message._base_manager.get(external_id="own-root").pk
 
 
-@pytest.mark.django_db(transaction=True)
 def test_ingest_bounds_neutral_part_fields_without_truncating_subject(channel: Any) -> None:
     """Every bridge shares the part limits while fragment-backed subjects stay whole."""
 
@@ -430,11 +424,10 @@ def test_derived_part_name_slugs_and_caps_the_content_id() -> None:
     assert len(_cid_slug("<" + "a" * 200 + ">")) == 80
 
 
-@pytest.mark.django_db(transaction=True)
-def test_threaded_model_resolves_one_chatter_thread(composed_tables: None) -> None:
+def test_threaded_model_resolves_one_chatter_thread(db: None) -> None:
     """A threaded model row owns one stable chatter thread attachment."""
 
-    del composed_tables
+    del db
     with system_context(reason="test threaded model setup"):
         ticket = ThreadedTicket.objects.create(title="Escalation")
         first = ticket.message_thread()
@@ -453,7 +446,6 @@ def test_threaded_model_resolves_one_chatter_thread(composed_tables: None) -> No
     assert attachment.role == "chatter"
 
 
-@pytest.mark.django_db(transaction=True)
 def test_historical_ingest_binds_explicit_thread_and_heals_reply_order(channel: Any) -> None:
     """Source history retains dates/replies without emitting a live workflow event."""
     from angee.messaging.events import message_ingested
@@ -502,7 +494,6 @@ def test_historical_ingest_binds_explicit_thread_and_heals_reply_order(channel: 
         message_ingested.disconnect(capture)
 
 
-@pytest.mark.django_db(transaction=True)
 @pytest.mark.parametrize("changed_body", [False, True])
 def test_explicit_ingest_rejects_same_channel_message_reassignment(channel: Any, changed_body: bool) -> None:
     """Neither an identical replay nor a source edit can move record chatter."""
@@ -538,7 +529,6 @@ def test_explicit_ingest_rejects_same_channel_message_reassignment(channel: Any,
         assert other.message_count == 0
 
 
-@pytest.mark.django_db(transaction=True)
 def test_source_thread_correction_compares_locked_prior_and_keeps_native_counters(channel: Any) -> None:
     with system_context(reason="test source thread correction"):
         first, second, third = (
@@ -617,7 +607,6 @@ def test_source_thread_correction_race_has_one_compare_and_set_winner(channel: A
         assert Message.objects.filter(external_id="source-cas-race", channel=channel).count() == 1
 
 
-@pytest.mark.django_db(transaction=True)
 @pytest.mark.parametrize("historical", (False, True))
 def test_source_thread_correction_same_content_preserves_event_policy(channel: Any, historical: bool) -> None:
     with system_context(reason="source correction events"):
@@ -641,8 +630,7 @@ def test_source_thread_correction_same_content_preserves_event_policy(channel: A
         assert received == ([] if historical else [original.pk])
 
 
-@pytest.mark.django_db(transaction=True)
-def test_record_chatter_dedups_across_mti_levels(composed_tables: None) -> None:
+def test_record_chatter_dedups_across_mti_levels(db: None) -> None:
     """A record and its REBAC-typed MTI ancestor share one canonical chatter edge.
 
     ``mtidemo``'s gated MTI pair stands in for the ``parties.Person`` IS-A
@@ -651,7 +639,7 @@ def test_record_chatter_dedups_across_mti_levels(composed_tables: None) -> None:
     parent converge on one thread instead of splitting across two content types.
     """
 
-    del composed_tables
+    del db
     with system_context(reason="chatter mti dedup"):
         child = MtiChild.objects.create(title="Acme", detail="org")
         parent = MtiParent.objects.get(pk=child.pk)
@@ -670,11 +658,10 @@ def test_record_chatter_dedups_across_mti_levels(composed_tables: None) -> None:
     assert ThreadAttachment._base_manager.count() == 1
 
 
-@pytest.mark.django_db(transaction=True)
-def test_threaded_model_posts_internal_message(composed_tables: None) -> None:
+def test_threaded_model_posts_internal_message(db: None) -> None:
     """Posting on a threaded model writes a message body and advances the thread."""
 
-    del composed_tables
+    del db
     with system_context(reason="test threaded model post"):
         ticket = ThreadedTicket.objects.create(title="Customer reply")
         message = ticket.message_post("Please follow up with the customer.")
@@ -696,11 +683,10 @@ def test_threaded_model_posts_internal_message(composed_tables: None) -> None:
     assert part.fragment.text == "Please follow up with the customer."
 
 
-@pytest.mark.django_db(transaction=True)
-def test_threaded_model_logs_internal_note(composed_tables: None) -> None:
+def test_threaded_model_logs_internal_note(db: None) -> None:
     """Logging a note writes an Odoo-style notification with the note subtype."""
 
-    del composed_tables
+    del db
     user_model = get_user_model()
     with system_context(reason="test threaded model log note setup"):
         user = user_model.objects.create_user(username="note-author", email="note-author@example.com")
@@ -715,11 +701,10 @@ def test_threaded_model_logs_internal_note(composed_tables: None) -> None:
     assert not ThreadFollower._base_manager.filter(party__person__user=user).exists()
 
 
-@pytest.mark.django_db(transaction=True)
-def test_threaded_model_posts_reply(composed_tables: None) -> None:
+def test_threaded_model_posts_reply(db: None) -> None:
     """Posting a reply stores the parent message inside the same chatter thread."""
 
-    del composed_tables
+    del db
     with system_context(reason="test threaded model reply"):
         ticket = ThreadedTicket.objects.create(title="Reply case")
         parent = ticket.message_post("Original message.")
@@ -734,11 +719,10 @@ def test_threaded_model_posts_reply(composed_tables: None) -> None:
             ticket.message_post("Wrong parent.", parent=other_parent)
 
 
-@pytest.mark.django_db(transaction=True)
-def test_threaded_model_toggles_message_reaction(composed_tables: None) -> None:
+def test_threaded_model_toggles_message_reaction(db: None) -> None:
     """Reacting to a chatter message uses a stable user handle and same-thread guard."""
 
-    del composed_tables
+    del db
     user_model = get_user_model()
     with system_context(reason="test threaded model reaction setup"):
         user = user_model.objects.create_user(username="reactor", email="reactor@example.com")
@@ -780,11 +764,10 @@ def test_threaded_model_toggles_message_reaction(composed_tables: None) -> None:
             ticket.message_reaction(other_message, reaction="👍", user=user)
 
 
-@pytest.mark.django_db(transaction=True)
-def test_threaded_model_toggles_message_star(composed_tables: None) -> None:
+def test_threaded_model_toggles_message_star(db: None) -> None:
     """Starring a chatter message is per-user and same-thread guarded."""
 
-    del composed_tables
+    del db
     user_model = get_user_model()
     with system_context(reason="test threaded model star setup"):
         user = user_model.objects.create_user(username="starred-user", email="starred@example.com")
@@ -823,11 +806,10 @@ def test_threaded_model_toggles_message_star(composed_tables: None) -> None:
             ticket.message_set_starred(other_message, user=user)
 
 
-@pytest.mark.django_db(transaction=True)
-def test_threaded_model_unlinks_chatter_message(composed_tables: None) -> None:
+def test_threaded_model_unlinks_chatter_message(db: None) -> None:
     """Deleting a chatter message removes its owned rows and repairs thread counters."""
 
-    del composed_tables
+    del db
     user_model = get_user_model()
     user = user_model.objects.create_user(username="unlinker", email="unlinker@example.com")
     with actor_context(user), system_context(reason="test threaded model unlink setup"):
@@ -862,10 +844,9 @@ def test_threaded_model_unlinks_chatter_message(composed_tables: None) -> None:
             ticket.message_unlink(other_message)
 
 
-@pytest.mark.django_db(transaction=True)
 @pytest.mark.parametrize("delete_args", [(), ("default",)])
 @pytest.mark.usefixtures("activity_catalog")
-def test_threaded_record_delete_tears_down_chatter_graph(composed_tables: None, delete_args: tuple[str, ...]) -> None:
+def test_threaded_record_delete_tears_down_chatter_graph(delete_args: tuple[str, ...]) -> None:
     """Hard-deleting a chattered record collects its whole private thread subtree (M1).
 
     The record's chatter thread is private to it, so deleting the record must remove its
@@ -875,7 +856,6 @@ def test_threaded_record_delete_tears_down_chatter_graph(composed_tables: None, 
     through the task owner (projects), not through the thread.
     """
 
-    del composed_tables
     user_model = get_user_model()
     with system_context(reason="test threaded model delete cascade setup"):
         watcher = user_model.objects.create_user(username="cascade-watcher", email="cascade-watcher@example.com")
@@ -906,12 +886,10 @@ def test_threaded_record_delete_tears_down_chatter_graph(composed_tables: None, 
     assert Thread._base_manager.filter(pk=survivor_thread.pk).exists()
 
 
-@pytest.mark.django_db(transaction=True)
 @pytest.mark.usefixtures("activity_catalog")
-def test_record_authorized_delete_tears_down_private_chatter_graph(composed_tables: None) -> None:
+def test_record_authorized_delete_tears_down_private_chatter_graph() -> None:
     """Deleting a permitted parent record removes its private chatter implementation rows."""
 
-    del composed_tables
     user_model = get_user_model()
     with system_context(reason="test threaded model actor delete setup"):
         owner = user_model.objects.create_user(username="actor-cascade-owner", email="actor-cascade-owner@example.com")
@@ -948,11 +926,10 @@ def test_record_authorized_delete_tears_down_private_chatter_graph(composed_tabl
     assert not ThreadFollower._base_manager.filter(thread_id=thread_pk).exists()
 
 
-@pytest.mark.django_db(transaction=True)
-def test_record_denied_delete_does_not_teardown_private_chatter_graph(composed_tables: None) -> None:
+def test_record_denied_delete_does_not_teardown_private_chatter_graph(db: None) -> None:
     """A record actor without delete permission cannot trigger the elevated chatter cascade."""
 
-    del composed_tables
+    del db
     user_model = get_user_model()
     with system_context(reason="test threaded model denied delete setup"):
         writer = user_model.objects.create_user(
@@ -984,9 +961,8 @@ def test_record_denied_delete_does_not_teardown_private_chatter_graph(composed_t
     assert Message._base_manager.filter(pk=message_pk).exists()
 
 
-@pytest.mark.django_db(transaction=True)
 @pytest.mark.usefixtures("activity_catalog")
-def test_threaded_record_bulk_delete_tears_down_chatter_graph(composed_tables: None) -> None:
+def test_threaded_record_bulk_delete_tears_down_chatter_graph() -> None:
     """A bulk ``QuerySet.delete()`` tears down the thread subtree too, not just the row (M1).
 
     The ``GenericForeignKey`` the attachment binds through points *at* the thread, so the
@@ -995,7 +971,6 @@ def test_threaded_record_bulk_delete_tears_down_chatter_graph(composed_tables: N
     its private graph on both instance and queryset paths.
     """
 
-    del composed_tables
     with system_context(reason="test threaded model bulk delete setup"):
         ticket = ThreadedTicket.objects.create(title="Bulk cascade case")
         ticket.message_post("Body to be collected in bulk.")
@@ -1022,8 +997,7 @@ def test_threaded_record_bulk_delete_tears_down_chatter_graph(composed_tables: N
     assert Thread._base_manager.filter(pk=survivor_thread.pk).exists()
 
 
-@pytest.mark.django_db(transaction=True)
-def test_threaded_mti_child_delete_leaves_no_attachment_row(composed_tables: None) -> None:
+def test_threaded_mti_child_delete_leaves_no_attachment_row(db: None) -> None:
     """Deleting a threaded MTI child collects its chatter attachment, leaving no orphan.
 
     ``TrackedRecordChild`` composes ``ThreadedModelMixin`` through its MTI parent, so the
@@ -1033,7 +1007,7 @@ def test_threaded_mti_child_delete_leaves_no_attachment_row(composed_tables: Non
     invariant in ``angee.base.refs``).
     """
 
-    del composed_tables
+    del db
     with system_context(reason="test threaded mti child delete"):
         record = TrackedRecordChild.objects.create(title="Child record", note="child column")
         attachment = record.message_thread_attachment(create=True)
@@ -1048,11 +1022,10 @@ def test_threaded_mti_child_delete_leaves_no_attachment_row(composed_tables: Non
     assert not Thread._base_manager.filter(pk=thread_pk).exists()
 
 
-@pytest.mark.django_db(transaction=True)
-def test_threaded_model_create_autofollows_its_author_without_a_creation_message(composed_tables: None) -> None:
+def test_threaded_model_create_autofollows_its_author_without_a_creation_message(db: None) -> None:
     """Creating a threaded row subscribes its creator; the creation is history, not a comment."""
 
-    del composed_tables
+    del db
     user_model = get_user_model()
     with system_context(reason="test threaded model creation setup"):
         user = user_model.objects.create_user(username="creator", email="creator@example.com")
@@ -1070,15 +1043,14 @@ def test_threaded_model_create_autofollows_its_author_without_a_creation_message
     assert not ThreadFollower.objects.unread_messages(thread, user=user).exists()
 
 
-@pytest.mark.django_db(transaction=True)
-def test_a_row_inserted_under_its_querysets_scope_owns_its_thread(composed_tables: None) -> None:
+def test_a_row_inserted_under_its_querysets_scope_owns_its_thread(db: None) -> None:
     """A queryset's pinned actor or system scope writes the row's chatter without an ambient scope.
 
     The pinned actor owns the new thread as an ambient actor does; an elevated
     insert has no creator to subscribe, so its thread waits for the first post.
     """
 
-    del composed_tables
+    del db
     with system_context(reason="test queryset-scoped creation setup"):
         user = get_user_model().objects.create_user(username="pinned-creator", email="pinned@example.com")
 
@@ -1097,8 +1069,7 @@ def test_a_row_inserted_under_its_querysets_scope_owns_its_thread(composed_table
     assert threads["Elevated case"] is None
 
 
-@pytest.mark.django_db(transaction=True)
-def test_materialized_child_transition_keeps_native_history(composed_tables: None) -> None:
+def test_materialized_child_transition_keeps_native_history(db: None) -> None:
     """An MTI transition records the parent's changed state without a second message store."""
 
     with system_context(reason="historized child transition"):
@@ -1112,11 +1083,10 @@ def test_materialized_child_transition_keeps_native_history(composed_tables: Non
         assert Message._base_manager.count() == before
 
 
-@pytest.mark.django_db(transaction=True)
-def test_threaded_model_subscribe_and_unsubscribe(composed_tables: None) -> None:
+def test_threaded_model_subscribe_and_unsubscribe(db: None) -> None:
     """A threaded model row owns Odoo-style user followers."""
 
-    del composed_tables
+    del db
     user_model = get_user_model()
     with system_context(reason="test threaded model follower setup"):
         user = user_model.objects.create_user(username="follower", email="follower@example.com")
@@ -1145,11 +1115,10 @@ def test_threaded_model_subscribe_and_unsubscribe(composed_tables: None) -> None
         assert ticket.message_is_follower() is False
 
 
-@pytest.mark.django_db(transaction=True)
-def test_threaded_model_post_autofollows_author(composed_tables: None) -> None:
+def test_threaded_model_post_autofollows_author(db: None) -> None:
     """Posting a chatter comment subscribes the author for replies."""
 
-    del composed_tables
+    del db
     user_model = get_user_model()
     with system_context(reason="test threaded model autofollow setup"):
         user = user_model.objects.create_user(username="author", email="author@example.com")
@@ -1166,8 +1135,7 @@ def test_threaded_model_post_autofollows_author(composed_tables: None) -> None:
         assert ticket.message_is_follower() is True
 
 
-@pytest.mark.django_db(transaction=True)
-def test_threaded_model_updates_comment_content(composed_tables: None) -> None:
+def test_threaded_model_updates_comment_content(db: None) -> None:
     """Editing a comment rewrites its body in place and appends an edit-history entry.
 
     Edits are data, not shadow rows: the message row survives, its body part is
@@ -1176,7 +1144,7 @@ def test_threaded_model_updates_comment_content(composed_tables: None) -> None:
     lives on as an immutable fragment) — nothing lands in ``metadata`` anymore.
     """
 
-    del composed_tables
+    del db
     user_model = get_user_model()
     with system_context(reason="test threaded model message edit setup"):
         user = user_model.objects.create_user(username="editor", email="editor@example.com")
@@ -1210,11 +1178,10 @@ def test_threaded_model_updates_comment_content(composed_tables: None) -> None:
     assert thread.message_count == 1
 
 
-@pytest.mark.django_db(transaction=True)
-def test_threaded_model_rejects_system_message_updates(composed_tables: None) -> None:
+def test_threaded_model_rejects_system_message_updates(db: None) -> None:
     """System notifications are immutable chatter messages."""
 
-    del composed_tables
+    del db
     user_model = get_user_model()
     with system_context(reason="test threaded model message edit guard setup"):
         user = user_model.objects.create_user(username="edit-guard", email="guard@example.com")
@@ -1226,8 +1193,7 @@ def test_threaded_model_rejects_system_message_updates(composed_tables: None) ->
             ticket.message_update_content(message, body="Tampered")
 
 
-@pytest.mark.django_db(transaction=True)
-def test_threaded_model_post_notifies_matching_followers(composed_tables: None) -> None:
+def test_threaded_model_post_notifies_matching_followers(db: None) -> None:
     """Posting fans out delivery rows to inbox and email followers matching the subtype.
 
     Each told account gets a row, filtered by subtype preferences. The follower's
@@ -1235,7 +1201,7 @@ def test_threaded_model_post_notifies_matching_followers(composed_tables: None) 
     gets nothing unless directly addressed.
     """
 
-    del composed_tables
+    del db
     user_model = get_user_model()
     with system_context(reason="test threaded model notification setup"):
         author = user_model.objects.create_user(username="notify-author", email="notify-author@example.com")
@@ -1266,8 +1232,7 @@ def test_threaded_model_post_notifies_matching_followers(composed_tables: None) 
     assert ThreadFollower.objects.unread_count_for_record(ticket, user=inbox_watcher) == 1
 
 
-@pytest.mark.django_db(transaction=True)
-def test_threaded_model_mark_read_advances_receipt(composed_tables: None) -> None:
+def test_threaded_model_mark_read_advances_receipt(db: None) -> None:
     """A follower owns read state through their positional receipt, not flag rows.
 
     Marking a record thread read advances the follower's ``last_read_message`` to the
@@ -1275,7 +1240,7 @@ def test_threaded_model_mark_read_advances_receipt(composed_tables: None) -> Non
     second mark-read has nothing left to advance.
     """
 
-    del composed_tables
+    del db
     user_model = get_user_model()
     with system_context(reason="test threaded model mark-read setup"):
         author = user_model.objects.create_user(username="read-author", email="read-author@example.com")
@@ -1298,8 +1263,7 @@ def test_threaded_model_mark_read_advances_receipt(composed_tables: None) -> Non
         assert ThreadFollower.objects.mark_read_for_record(ticket, user=watcher) == 0
 
 
-@pytest.mark.django_db(transaction=True)
-def test_threaded_model_marks_one_message_done(composed_tables: None) -> None:
+def test_threaded_model_marks_one_message_done(db: None) -> None:
     """Message done is positional: the receipt advances to that message, not a flag.
 
     ``message_set_done`` moves the follower's ``last_read_message`` receipt to the
@@ -1307,7 +1271,7 @@ def test_threaded_model_marks_one_message_done(composed_tables: None) -> None:
     messages stay unread — the IM semantics that replaced per-message flags.
     """
 
-    del composed_tables
+    del db
     user_model = get_user_model()
     with system_context(reason="test threaded model message-done setup"):
         author = user_model.objects.create_user(username="done-author", email="done-author@example.com")
@@ -1346,8 +1310,7 @@ def test_threaded_model_marks_one_message_done(composed_tables: None) -> None:
         ticket.message_set_done(other_message, user=watcher)
 
 
-@pytest.mark.django_db(transaction=True)
-def test_unread_count_respects_default_subtype_subscription(composed_tables: None) -> None:
+def test_unread_count_respects_default_subtype_subscription(db: None) -> None:
     """An empty subtype selection is the default subscription, not "everything".
 
     A follower who never narrowed their subtypes still counts plain comments and the
@@ -1356,7 +1319,7 @@ def test_unread_count_respects_default_subtype_subscription(composed_tables: Non
     follower who explicitly picked a subtype counts only that one.
     """
 
-    del composed_tables
+    del db
     user_model = get_user_model()
     with system_context(reason="test unread subtype subscription setup"):
         author = user_model.objects.create_user(username="mute-author", email="mute-author@example.com")
@@ -1398,11 +1361,10 @@ def test_unread_count_respects_default_subtype_subscription(composed_tables: Non
     assert not messages.unread_for(default_watcher).exists()
 
 
-@pytest.mark.django_db(transaction=True)
-def test_threaded_model_post_notifies_direct_recipient_without_following(composed_tables: None) -> None:
+def test_threaded_model_post_notifies_direct_recipient_without_following(db: None) -> None:
     """Direct post recipients get notifications even when they are not followers."""
 
-    del composed_tables
+    del db
     user_model = get_user_model()
     with system_context(reason="test threaded model direct-recipient setup"):
         author = user_model.objects.create_user(username="direct-author", email="direct-author@example.com")
@@ -1419,11 +1381,10 @@ def test_threaded_model_post_notifies_direct_recipient_without_following(compose
     assert ThreadFollower._base_manager.filter(party__person__user=recipient).count() == 0
 
 
-@pytest.mark.django_db(transaction=True)
-def test_threaded_model_suggests_record_user_and_latest_direct_recipient(composed_tables: None) -> None:
+def test_threaded_model_suggests_record_user_and_latest_direct_recipient(db: None) -> None:
     """Recipient suggestions merge declared record users and recent recipients."""
 
-    del composed_tables
+    del db
     user_model = get_user_model()
     with system_context(reason="test threaded model suggested recipients setup"):
         author = user_model.objects.create_user(username="suggest-author", email="suggest-author@example.com")
@@ -1449,11 +1410,10 @@ def test_threaded_model_suggests_record_user_and_latest_direct_recipient(compose
     ]
 
 
-@pytest.mark.django_db(transaction=True)
-def test_threaded_model_post_can_autofollow_direct_recipient(composed_tables: None) -> None:
+def test_threaded_model_post_can_autofollow_direct_recipient(db: None) -> None:
     """A direct recipient can be subscribed after a post, like Odoo autofollow."""
 
-    del composed_tables
+    del db
     user_model = get_user_model()
     with system_context(reason="test threaded model direct-recipient-autofollow setup"):
         author = user_model.objects.create_user(username="direct-follow-author", email="follow-author@example.com")
@@ -1485,8 +1445,7 @@ def _record_holders(doc: Any, **holders: Any) -> None:
     ])
 
 
-@pytest.mark.django_db(transaction=True)
-@pytest.mark.usefixtures("composed_permissions", "activity_catalog")
+@pytest.mark.usefixtures("activity_catalog")
 def test_record_task_completion_notifies_the_records_activity_followers() -> None:
     """Completing a record task delivers to the record's followers of that subtype."""
 
@@ -1509,8 +1468,7 @@ def test_record_task_completion_notifies_the_records_activity_followers() -> Non
     assert notification.message.subtype.key == "activity_done"
 
 
-@pytest.mark.django_db(transaction=True)
-@pytest.mark.usefixtures("composed_permissions", "activity_catalog")
+@pytest.mark.usefixtures("activity_catalog")
 def test_agent_record_task_completion_posts_system_message_with_service_user(monkeypatch: pytest.MonkeyPatch) -> None:
     """An agent completing a record task posts the record's log as its service user."""
 
@@ -1526,23 +1484,11 @@ def test_agent_record_task_completion_posts_system_message_with_service_user(mon
         _record_holders(doc, reader=owner, writer=agent.user)
         task = ProjectTask.objects.schedule(doc, title="Close the loop", assignee=owner, due_date=_AT.date())
 
-    post_context: dict[str, Any] = {}
-    manager_type = type(Message.objects)
-    original_post_to_thread = manager_type.post_to_thread
-
-    def spy_post_to_thread(manager: Any, *args: Any, **kwargs: Any) -> Any:
-        post_context["is_sudo"] = is_sudo()
-        post_context["reason"] = current_sudo_reason()
-        return original_post_to_thread(manager, *args, **kwargs)
-
-    monkeypatch.setattr(manager_type, "post_to_thread", spy_post_to_thread)
-
     with actor_context(agent.principal_subject()):
         ProjectTask.objects.get(pk=task.pk).complete(feedback="Handled by agent.")
 
     message = Message._base_manager.get(subtype__key="activity_done")
-    assert post_context == {"is_sudo": True, "reason": "messaging.system_post"}
-    assert message.created_by_id == service_user_id
+    assert message.created_by_id == service_user_id  # a system post, never the acting agent
     assert message.message_type == Message.MessageKind.NOTIFICATION
     assert message.subtype is not None
     assert message.subtype.key == "activity_done"
@@ -1551,11 +1497,10 @@ def test_agent_record_task_completion_posts_system_message_with_service_user(mon
     )
 
 
-@pytest.mark.django_db(transaction=True)
-def test_threaded_model_post_accepts_storage_attachments(composed_tables: None, tmp_path: Path) -> None:
+def test_threaded_model_post_accepts_storage_attachments(db: None, tmp_path: Path) -> None:
     """Posting on a threaded model can attach existing storage files."""
 
-    del composed_tables
+    del db
     user_model = get_user_model()
     with system_context(reason="test threaded model attachment setup"):
         user = user_model.objects.create_user(username="attach-author", email="attach-author@example.com")
@@ -1578,8 +1523,7 @@ def test_threaded_model_post_accepts_storage_attachments(composed_tables: None, 
     assert attachment_part.file.size_bytes == len(b"Attachment body")
 
 
-@pytest.mark.django_db(transaction=True)
-def test_unnamed_media_ingest_names_the_file_from_its_mime(composed_tables: None, tmp_path: Path) -> None:
+def test_unnamed_media_ingest_names_the_file_from_its_mime(db: None, tmp_path: Path) -> None:
     """A nameless part that is neither chat nor a Content-ID lands on the MIME fallback.
 
     With no source-named conversation (so the message is an ``EMAIL`` kind) and no
@@ -1589,7 +1533,7 @@ def test_unnamed_media_ingest_names_the_file_from_its_mime(composed_tables: None
     addresses and sniffs the stored bytes.
     """
 
-    del composed_tables
+    del db
     user_model = get_user_model()
     with system_context(reason="test unnamed media ingest setup"):
         user = user_model.objects.create_user(username="wa-media", email="wa-media@example.com")
@@ -1615,11 +1559,10 @@ def test_unnamed_media_ingest_names_the_file_from_its_mime(composed_tables: None
     assert attachment_part.file.filename == "attachment.jpg"
 
 
-@pytest.mark.django_db(transaction=True)
-def test_nameless_chat_part_names_from_the_message_id(composed_tables: None, tmp_path: Path) -> None:
+def test_nameless_chat_part_names_from_the_message_id(db: None, tmp_path: Path) -> None:
     """A chat message's nameless media takes the message id after the last ``/``."""
 
-    del composed_tables
+    del db
     user_model = get_user_model()
     with system_context(reason="test chat media ingest setup"):
         user = user_model.objects.create_user(username="chat-media", email="chat-media@example.com")
@@ -1648,11 +1591,10 @@ def test_nameless_chat_part_names_from_the_message_id(composed_tables: None, tmp
     assert attachment_part.file.filename == "3EB0STANZA.jpg"
 
 
-@pytest.mark.django_db(transaction=True)
-def test_nameless_email_inline_part_names_from_the_content_id(composed_tables: None, tmp_path: Path) -> None:
+def test_nameless_email_inline_part_names_from_the_content_id(db: None, tmp_path: Path) -> None:
     """An email inline part with a Content-ID and no name takes ``inline-{cid-slug}{ext}``."""
 
-    del composed_tables
+    del db
     user_model = get_user_model()
     with system_context(reason="test inline media ingest setup"):
         user = user_model.objects.create_user(username="mail-inline", email="mail-inline@example.com")
@@ -1681,11 +1623,10 @@ def test_nameless_email_inline_part_names_from_the_content_id(composed_tables: N
     assert attachment_part.file.filename == "inline-hero7mail.example.com.png"
 
 
-@pytest.mark.django_db(transaction=True)
-def test_deduped_file_keeps_first_name_while_each_part_keeps_its_own(composed_tables: None, tmp_path: Path) -> None:
+def test_deduped_file_keeps_first_name_while_each_part_keeps_its_own(db: None, tmp_path: Path) -> None:
     """One content-addressed File keeps its first name; each nameless Part gets its own."""
 
-    del composed_tables
+    del db
     shared_bytes = b"\xff\xd8\xff\xe0 shared chat media bytes"
     user_model = get_user_model()
     with system_context(reason="test dedup media ingest setup"):
@@ -1720,8 +1661,7 @@ def test_deduped_file_keeps_first_name_while_each_part_keeps_its_own(composed_ta
     assert second_part.name == "SECOND.jpg"
 
 
-@pytest.mark.django_db(transaction=True)
-def test_threaded_model_history_keeps_record_values(composed_tables: None) -> None:
+def test_threaded_model_history_keeps_record_values(db: None) -> None:
     """The record's history preserves versions; comments carry authored discussion."""
 
     with system_context(reason="record history"):
@@ -1734,8 +1674,7 @@ def test_threaded_model_history_keeps_record_values(composed_tables: None) -> No
         assert Message._base_manager.count() == before
 
 
-@pytest.mark.django_db(transaction=True)
-def test_threaded_model_history_preserves_multiple_field_changes(composed_tables: None) -> None:
+def test_threaded_model_history_preserves_multiple_field_changes(db: None) -> None:
     with system_context(reason="record history fields"):
         ticket = ThreadedTicket.objects.create(title="Initial")
         ticket.title = "Escalated"
@@ -1747,8 +1686,7 @@ def test_threaded_model_history_preserves_multiple_field_changes(composed_tables
         assert Message._base_manager.count() == 0
 
 
-@pytest.mark.django_db(transaction=True)
-def test_threaded_model_history_uses_persisted_update_fields(composed_tables: None) -> None:
+def test_threaded_model_history_uses_persisted_update_fields(db: None) -> None:
     with system_context(reason="record history persisted fields"):
         ticket = ThreadedTicket.objects.create(title="Unchanged")
         ticket.title = "Not persisted"
@@ -1760,8 +1698,7 @@ def test_threaded_model_history_uses_persisted_update_fields(composed_tables: No
         assert Message._base_manager.count() == 0
 
 
-@pytest.mark.django_db(transaction=True)
-@pytest.mark.usefixtures("composed_permissions", "activity_catalog")
+@pytest.mark.usefixtures("activity_catalog")
 def test_threaded_model_schedules_and_completes_a_record_task() -> None:
     """A threaded record carries record tasks; completing one logs it on the record."""
 
@@ -1833,7 +1770,6 @@ def test_ingest_autolinks_sender_from_resolved_normalized_twin(channel: Any) -> 
     assert not link.is_confirmed
 
 
-@pytest.mark.django_db(transaction=True)
 def test_ingest_leaves_unknown_first_contact_sender_unresolved(channel: Any) -> None:
     """A first-contact sender with no evidence remains an unresolved handle."""
 
@@ -1847,7 +1783,6 @@ def test_ingest_leaves_unknown_first_contact_sender_unresolved(channel: Any) -> 
     assert not Party.statements.sudo(reason="test.messaging.statement_observation").filter(handle=sender).exists()
 
 
-@pytest.mark.django_db(transaction=True)
 def test_claimed_sender_proposal_accumulates_evidence_without_demoting_confirmation(channel: Any) -> None:
     """Repeated source claims accumulate on the rule's statement; the person's confirmation stays authoritative."""
 
@@ -2011,7 +1946,6 @@ def test_ingest_suggests_sender_from_organization_domain(channel: Any) -> None:
     assert not link.is_confirmed
 
 
-@pytest.mark.django_db(transaction=True)
 def test_automated_senders_send_only_list_or_auto_submitted_mail(channel: Any) -> None:
     """A sender is automated only when every message it sent carries an automation header."""
 
@@ -2043,7 +1977,6 @@ def test_automated_senders_send_only_list_or_auto_submitted_mail(channel: Any) -
     assert automated == expected
 
 
-@pytest.mark.django_db(transaction=True)
 def test_ingest_suggests_each_unresolved_handle_once_after_batch_commit(
     channel: Any,
     monkeypatch: pytest.MonkeyPatch,
@@ -2057,11 +1990,7 @@ def test_ingest_suggests_each_unresolved_handle_once_after_batch_commit(
         "on_commit",
         lambda callback, **options: callbacks.append(callback),
     )
-    monkeypatch.setattr(
-        type(Party.objects),
-        "suggest_for",
-        lambda manager, handle: suggested.append(handle.pk),
-    )
+    monkeypatch.setattr(Party.objects, "suggest_for", lambda handle: suggested.append(handle.pk))
     shared = ParsedHandle(platform="email", value="shared@example.com")
     messages = [
         ParsedMessage(
@@ -2099,13 +2028,12 @@ def test_ingest_contains_suggestion_failures_and_continues_batch(
 
     attempted: list[str] = []
 
-    def suggest(manager: Any, handle: Handle) -> None:
-        del manager
+    def suggest(handle: Handle) -> None:
         attempted.append(handle.value)
         if handle.value == "fail@example.com":
             raise RuntimeError("directory unavailable")
 
-    monkeypatch.setattr(type(Party.objects), "suggest_for", suggest)
+    monkeypatch.setattr(Party.objects, "suggest_for", suggest)
     messages = [
         ParsedMessage(
             external_id=f"suggest-failure-{index}",
@@ -2125,7 +2053,6 @@ def test_ingest_contains_suggestion_failures_and_continues_batch(
     assert "Could not suggest a party for messaging handle" in caplog.text
 
 
-@pytest.mark.django_db(transaction=True)
 def test_ingest_dedup_is_channel_scoped(channel: Any) -> None:
     """Message identity is (channel, external_id): re-sync dedups, a second channel does not.
 
@@ -2154,7 +2081,6 @@ def test_ingest_dedup_is_channel_scoped(channel: Any) -> None:
     assert thread.message_count == 1
 
 
-@pytest.mark.django_db(transaction=True)
 def test_group_ingest_resolves_visibility_and_accumulates_unique_participants(channel: Any) -> None:
     """GROUP ingest keeps one thread while each message contributes its envelope."""
 
@@ -2281,7 +2207,6 @@ def test_parsed_message_sync_hash_follows_what_ingest_writes() -> None:
     assert digest != replace(parsed, in_reply_to="m0").sync_hash(channel_id=1, metadata={})
 
 
-@pytest.mark.django_db(transaction=True)
 def test_identical_resync_does_not_churn_message_or_parts(channel: Any) -> None:
     """A second identical ingest rewrites nothing — no re-save, stable Part PKs (M3).
 
@@ -2314,7 +2239,6 @@ def test_identical_resync_does_not_churn_message_or_parts(channel: Any) -> None:
     assert Thread._base_manager.get().message_count == 1
 
 
-@pytest.mark.django_db(transaction=True)
 def test_identical_resync_without_receipt_time_does_not_save_or_rebuild_parts(channel: Any, monkeypatch) -> None:
     received = replace(_parsed("m1", sent_at=_AT), received_at=_AT + timedelta(minutes=5))
     assert _ingest([received], channel=channel) == 1
@@ -2335,7 +2259,6 @@ def test_identical_resync_without_receipt_time_does_not_save_or_rebuild_parts(ch
     assert set(Part._base_manager.filter(message=message).values_list("pk", flat=True)) == part_pks
 
 
-@pytest.mark.django_db(transaction=True)
 def test_resync_without_receipt_time_keeps_the_known_one(channel: Any) -> None:
     received = replace(_parsed("m1", sent_at=_AT), received_at=_AT + timedelta(minutes=5))
     assert _ingest([received], channel=channel) == 1
@@ -2346,7 +2269,6 @@ def test_resync_without_receipt_time_keeps_the_known_one(channel: Any) -> None:
         assert message.body_text() == "Edited body"
 
 
-@pytest.mark.django_db(transaction=True)
 def test_counter_survives_null_sent_at(channel: Any) -> None:
     """A message with no sent_at bumps the count without crashing (the M1 bug).
 
@@ -2361,7 +2283,6 @@ def test_counter_survives_null_sent_at(channel: Any) -> None:
     assert thread.updated_at is not None  # auto_now owned it
 
 
-@pytest.mark.django_db(transaction=True)
 def test_last_message_at_is_monotonic(channel: Any) -> None:
     """Out-of-order ingest never regresses last_message_at."""
 
@@ -2374,7 +2295,6 @@ def test_last_message_at_is_monotonic(channel: Any) -> None:
     assert thread.last_message_at == later
 
 
-@pytest.mark.django_db(transaction=True)
 def test_null_bytes_are_stripped_on_write(channel: Any) -> None:
     """Null bytes are stripped before every write (Postgres rejects them).
 
@@ -2395,7 +2315,6 @@ def test_null_bytes_are_stripped_on_write(channel: Any) -> None:
     assert thread.title.text == "Hithere"
 
 
-@pytest.mark.django_db(transaction=True)
 def test_references_resolve_into_one_thread(channel: Any) -> None:
     """References win over subject: a reply with a different subject joins the root thread."""
 
@@ -2405,7 +2324,6 @@ def test_references_resolve_into_one_thread(channel: Any) -> None:
     assert Thread._base_manager.get().message_count == 2
 
 
-@pytest.mark.django_db(transaction=True)
 def test_resync_rethreads_and_reconciles_both_thread_counters(channel: Any) -> None:
     """Re-threading a message on re-sync moves its count off the old thread onto the new (H1).
 
@@ -2437,7 +2355,6 @@ def test_resync_rethreads_and_reconciles_both_thread_counters(channel: Any) -> N
     assert not Thread._base_manager.filter(pk=orphan_thread.pk).exists()
 
 
-@pytest.mark.django_db(transaction=True)
 def test_resync_rehomes_null_thread_message_and_bumps_winner(channel: Any) -> None:
     """A thread-less message re-homed on re-sync still bumps the winning thread (H1).
 
@@ -2470,7 +2387,6 @@ def test_resync_rehomes_null_thread_message_and_bumps_winner(channel: Any) -> No
     assert root_thread.last_message_at == b_sent
 
 
-@pytest.mark.django_db(transaction=True)
 def test_quote_edge_runs_from_earlier_to_later(channel: Any) -> None:
     """Two messages sharing a fragment get one quote edge, earlier → later."""
 
@@ -2488,7 +2404,6 @@ def test_quote_edge_runs_from_earlier_to_later(channel: Any) -> None:
     assert (edge.src_id, edge.dst_id) == (old.pk, new.pk)
 
 
-@pytest.mark.django_db(transaction=True)
 def test_shared_title_fragment_mints_no_quote_edges(channel: Any) -> None:
     """Messages sharing ONLY a title fragment get zero quote edges.
 
@@ -2512,7 +2427,6 @@ def test_shared_title_fragment_mints_no_quote_edges(channel: Any) -> None:
     assert MessageEdge._base_manager.filter(kind="quote").count() == 0
 
 
-@pytest.mark.django_db(transaction=True)
 def test_long_subject_lands_intact_and_groups_replies(channel: Any) -> None:
     """A 7,970-char subject lands intact and still groups its reply into one thread.
 
@@ -2540,7 +2454,6 @@ def test_long_subject_lands_intact_and_groups_replies(channel: Any) -> None:
     assert Thread._base_manager.count() == 1
 
 
-@pytest.mark.django_db(transaction=True)
 def test_second_title_part_is_rejected(channel: Any) -> None:
     """A message carries at most one TITLE part (the partial unique constraint)."""
 
@@ -2558,7 +2471,6 @@ def test_second_title_part_is_rejected(channel: Any) -> None:
             )
 
 
-@pytest.mark.django_db(transaction=True)
 def test_fragment_upsert_survives_oversized_text(channel: Any) -> None:
     """A text past the tsvector input bound still lands (vector prefix is bounded).
 
@@ -2577,7 +2489,6 @@ def test_fragment_upsert_survives_oversized_text(channel: Any) -> None:
     assert again.pk == fragment.pk
 
 
-@pytest.mark.django_db(transaction=True)
 def test_ingest_rejects_oversized_message_metadata(channel: Any) -> None:
     """Externally controlled metadata over 512 KiB is rejected before a message lands."""
 
@@ -2590,7 +2501,6 @@ def test_ingest_rejects_oversized_message_metadata(channel: Any) -> None:
     assert not Message._base_manager.filter(external_id="oversized-metadata").exists()
 
 
-@pytest.mark.django_db(transaction=True)
 def test_resync_with_changed_body_appends_edit_history(channel: Any) -> None:
     """A provider re-sync whose fragment set changed appends an edit-history entry.
 
@@ -2621,9 +2531,8 @@ def test_resync_with_changed_body_appends_edit_history(channel: Any) -> None:
     assert len(message.edit_history) == 1
 
 
-@pytest.mark.django_db(transaction=True)
 @pytest.mark.parametrize("equal_timestamps", [False, True])
-def test_read_receipts_anchor_unread_and_never_regress(composed_tables: None, equal_timestamps: bool) -> None:
+def test_read_receipts_anchor_unread_and_never_regress(db: None, equal_timestamps: bool) -> None:
     """Unread is everything past the receipt; the receipt only ever advances.
 
     A follower with no receipt sees the whole thread unread; marking read up to the
@@ -2632,7 +2541,7 @@ def test_read_receipts_anchor_unread_and_never_regress(composed_tables: None, eq
     for them (their receipt advances with each post).
     """
 
-    del composed_tables
+    del db
     user_model = get_user_model()
     with system_context(reason="test receipts setup"):
         author = user_model.objects.create_user(username="receipt-author", email="receipt-author@example.com")
@@ -2696,8 +2605,7 @@ def _grant(record: Any, relation: str, user: Any) -> None:
     )
 
 
-@pytest.mark.django_db(transaction=True)
-def test_record_history_captures_write_without_post_access(composed_tables: None) -> None:
+def test_record_history_captures_write_without_post_access(db: None) -> None:
     """Record write and comment post are separate permissions, including capture."""
 
     with system_context(reason="history write setup"):
@@ -2714,15 +2622,14 @@ def test_record_history_captures_write_without_post_access(composed_tables: None
         assert Message._base_manager.count() == before
 
 
-@pytest.mark.django_db(transaction=True)
-def test_user_authored_post_still_denied_without_post_access(composed_tables: None) -> None:
+def test_user_authored_post_still_denied_without_post_access(db: None) -> None:
     """User-authored chatter still rides the post gate for a no-post actor.
 
     F-v part 1: only automatic system writes bypass ``can_post``. A ``writer`` (write,
     no ``post``) is still denied posting a comment or logging a note.
     """
 
-    del composed_tables
+    del db
     user_model = get_user_model()
     with system_context(reason="test.chatterdemo.part1b.seed"):
         writer = user_model.objects.create_user(username="cdc-writer2", email="cdc-writer2@example.com")
@@ -2773,8 +2680,7 @@ def _collecting_thread_broadcasts(
         yield sent
 
 
-@pytest.mark.django_db(transaction=True)
-def test_post_bumps_thread_through_an_instance_save(composed_tables: None) -> None:
+def test_post_bumps_thread_through_an_instance_save(db: None) -> None:
     """A post advances the thread with an instance ``save``, so ``post_save`` fires once.
 
     F-stream part B: the bump moved off the publisher-invisible queryset ``.update()``
@@ -2783,7 +2689,7 @@ def test_post_bumps_thread_through_an_instance_save(composed_tables: None) -> No
     them — the regression guard.
     """
 
-    del composed_tables
+    del db
     saves: list[dict[str, Any]] = []
 
     def _record(sender: Any, instance: Any, created: bool, update_fields: Any = None, **kwargs: Any) -> None:
@@ -2809,9 +2715,8 @@ def test_post_bumps_thread_through_an_instance_save(composed_tables: None) -> No
     assert thread.last_message_at == message.sent_at
 
 
-@pytest.mark.django_db(transaction=True)
 def test_post_on_opted_in_host_emits_one_member_gated_thread_changed(
-    composed_tables: None, monkeypatch: pytest.MonkeyPatch
+    db: None, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """A post on an opted-in host emits one ``threadChanged``, gated to thread readers.
 
@@ -2821,7 +2726,7 @@ def test_post_on_opted_in_host_emits_one_member_gated_thread_changed(
     and is dropped for a non-member — no existence or activity leak on the socket.
     """
 
-    del composed_tables
+    del db
     user_model = get_user_model()
     with system_context(reason="test opted-in room seed"):
         member = user_model.objects.create_user(username="room-member", email="room-member@example.com")
@@ -2844,8 +2749,7 @@ def test_post_on_opted_in_host_emits_one_member_gated_thread_changed(
     assert ChangeReadGate(Thread, to_subject_ref(stranger)).filter(change) is None
 
 
-@pytest.mark.django_db(transaction=True)
-def test_record_chatter_host_stays_silent_on_a_post(composed_tables: None, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_record_chatter_host_stays_silent_on_a_post(db: None, monkeypatch: pytest.MonkeyPatch) -> None:
     """A non-opted threaded host streams nothing on a post — F-v isolation intact.
 
     The F-stream default is ``thread_broadcasts_changes = False``, so a record-chatter
@@ -2853,7 +2757,7 @@ def test_record_chatter_host_stays_silent_on_a_post(composed_tables: None, monke
     silent thread because ``publish_change`` short-circuits on ``broadcasts_changes()``.
     """
 
-    del composed_tables
+    del db
     with system_context(reason="test record chatter silent seed"):
         ticket = ThreadedTicket.objects.create(title="Silent case")
         ticket.message_thread(create=True)
@@ -2865,8 +2769,7 @@ def test_record_chatter_host_stays_silent_on_a_post(composed_tables: None, monke
     assert [payload for model, payload in sent if model is Thread] == []
 
 
-@pytest.mark.django_db(transaction=True)
-def test_room_post_emits_no_message_changed(composed_tables: None, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_room_post_emits_no_message_changed(db: None, monkeypatch: pytest.MonkeyPatch) -> None:
     """A post on an opted-in room streams ``threadChanged`` only, never ``messageChanged``.
 
     Room members hold ``messaging/thread.reader``, not ``message.read``, so every
@@ -2876,7 +2779,7 @@ def test_room_post_emits_no_message_changed(composed_tables: None, monkeypatch: 
     is the live contract.
     """
 
-    del composed_tables
+    del db
     with system_context(reason="test room message-silence seed"):
         room = BroadcastRoom.objects.create(title="general")
         room.message_thread(create=True)
@@ -2890,8 +2793,7 @@ def test_room_post_emits_no_message_changed(composed_tables: None, monkeypatch: 
     assert [payload for model, payload in sent if model is Thread] != []
 
 
-@pytest.mark.django_db(transaction=True)
-def test_resubscribe_preserves_follower_policy(composed_tables: None) -> None:
+def test_resubscribe_preserves_follower_policy(db: None) -> None:
     """A re-subscribe leaves an existing follower's create-time state untouched.
 
     ``notification_policy`` / ``subtype_keys`` are create-time defaults: a bare
@@ -2899,7 +2801,7 @@ def test_resubscribe_preserves_follower_policy(composed_tables: None) -> None:
     back to ``inbox``. An explicit value still wins.
     """
 
-    del composed_tables
+    del db
     user_model = get_user_model()
     with system_context(reason="test resubscribe seed"):
         watcher = user_model.objects.create_user(username="resub-watcher", email="resub-watcher@example.com")
@@ -2921,8 +2823,7 @@ def test_resubscribe_preserves_follower_policy(composed_tables: None) -> None:
         assert changed.subtype_keys == ["comment"]
 
 
-@pytest.mark.django_db(transaction=True)
-def test_stale_broadcast_flag_heals_on_next_activity(composed_tables: None) -> None:
+def test_stale_broadcast_flag_heals_on_next_activity(db: None) -> None:
     """A record thread minted before its host opted in heals its broadcast flag on next post.
 
     ``host_broadcasts_changes`` is stamped only in the ``get_or_create`` defaults, so a
@@ -2930,7 +2831,7 @@ def test_stale_broadcast_flag_heals_on_next_activity(composed_tables: None) -> N
     ``ensure_for_record`` re-stamps it from the host on the next activity.
     """
 
-    del composed_tables
+    del db
     with system_context(reason="test broadcast-flag heal seed"):
         room = BroadcastRoom.objects.create(title="stale-room")
         thread = room.message_thread(create=True)
@@ -2946,11 +2847,10 @@ def test_stale_broadcast_flag_heals_on_next_activity(composed_tables: None) -> N
     assert thread.broadcasts_changes() is True
 
 
-@pytest.mark.django_db(transaction=True)
-def test_broadcasting_room_creator_socket_gated_by_membership(composed_tables: None) -> None:
+def test_broadcasting_room_creator_socket_gated_by_membership(db: None) -> None:
     """Broadcasting threads release ownership but retain their creator attribution."""
 
-    del composed_tables
+    del db
     creator = get_user_model().objects.create_user(username="room-creator", email="room-creator@example.com")
     with actor_context(creator):
         room = BroadcastRoom.objects.create(title="creator-room")
@@ -2984,15 +2884,14 @@ def test_broadcasting_room_creator_socket_gated_by_membership(composed_tables: N
                 change_reader(user_id=-1)
 
 
-@pytest.mark.django_db(transaction=True)
-def test_first_post_autofollow_seeds_the_author_receipt(composed_tables: None) -> None:
+def test_first_post_autofollow_seeds_the_author_receipt(db: None) -> None:
     """An author's FIRST post on an unfollowed record is never unread for them.
 
     The write path creates the author's follow before advancing its receipt to
     the just-posted message, in the same transaction.
     """
 
-    del composed_tables
+    del db
     user_model = get_user_model()
     with system_context(reason="test first-post receipt setup"):
         author = user_model.objects.create_user(username="first-post-author", email="first-post@example.com")
@@ -3004,7 +2903,6 @@ def test_first_post_autofollow_seeds_the_author_receipt(composed_tables: None) -
         assert ThreadFollower.objects.unread_messages(message.thread, user=author).count() == 0
 
 
-@pytest.mark.django_db(transaction=True)
 def test_ingest_named_thread_converges_chat_messages(channel: Any) -> None:
     """A chat adapter's ParsedThread names the conversation — one thread per chat.
 
@@ -3041,7 +2939,6 @@ def test_ingest_named_thread_converges_chat_messages(channel: Any) -> None:
     assert room.title.text == "Weekend plans"
 
 
-@pytest.mark.django_db(transaction=True)
 def test_ingest_named_thread_fills_a_missing_title_but_never_renames(channel: Any) -> None:
     """A source may learn a chat's name after its first message (a group subject)."""
 
@@ -3066,7 +2963,6 @@ def test_ingest_named_thread_fills_a_missing_title_but_never_renames(channel: An
     assert room.title.text == "Climbing crew"
 
 
-@pytest.mark.django_db(transaction=True)
 def test_fill_chat_titles_names_only_this_channels_untitled_chats(channel: Any) -> None:
     other = make_integration("other-chats", model=Channel, backend_class="manual")
     _ingest(
@@ -3099,7 +2995,6 @@ def test_fill_chat_titles_names_only_this_channels_untitled_chats(channel: Any) 
     assert titles[f"{Thread.objects.chat_key_prefix(other)}g-1"] is None
 
 
-@pytest.mark.django_db(transaction=True)
 def test_name_untitled_names_only_the_selected_threads(channel: Any) -> None:
     """The queryset verb never titles a thread the caller's selection excludes."""
 
@@ -3117,7 +3012,6 @@ def test_name_untitled_names_only_the_selected_threads(channel: Any) -> None:
     assert excluded.title_id is None
 
 
-@pytest.mark.django_db(transaction=True)
 def test_ingest_named_thread_honors_visibility_hint(channel: Any) -> None:
     """A broadcast adapter names its feed public; the default stays private.
 
@@ -3143,7 +3037,6 @@ def test_ingest_named_thread_honors_visibility_hint(channel: Any) -> None:
     assert threads[f"chat:{channel.pk}:dm-1"].visibility == Thread.Visibility.PRIVATE
 
 
-@pytest.mark.django_db(transaction=True)
 def test_ingest_derives_message_kind_from_structure(channel: Any) -> None:
     """The ingest owner decides the functional kind from structural facts.
 
@@ -3176,7 +3069,6 @@ def test_ingest_derives_message_kind_from_structure(channel: Any) -> None:
     }
 
 
-@pytest.mark.django_db(transaction=True)
 def test_ingest_resolves_reply_parent(channel: Any) -> None:
     """``in_reply_to`` lands the single-parent pointer, for email and named chats.
 
@@ -3200,7 +3092,6 @@ def test_ingest_resolves_reply_parent(channel: Any) -> None:
     assert chat_reply.parent_id == Message._base_manager.get(external_id="chat-a").pk
 
 
-@pytest.mark.django_db(transaction=True)
 def test_ingest_reply_before_parent_heals_on_resync(channel: Any) -> None:
     """A reply that lands before its parent backfills on the no-op re-sync.
 
@@ -3221,8 +3112,7 @@ def test_ingest_reply_before_parent_heals_on_resync(channel: Any) -> None:
     assert row.edit_history == []
 
 
-@pytest.mark.django_db(transaction=True)
-def test_handle_upsert_resolves_external_id_before_value(composed_tables: None) -> None:
+def test_handle_upsert_resolves_external_id_before_value(db: None) -> None:
     """The source-stable external id wins over the human-readable value.
 
     A handle whose value drifts (a chat account behind a changed number) must
@@ -3230,7 +3120,7 @@ def test_handle_upsert_resolves_external_id_before_value(composed_tables: None) 
     instead of forking a duplicate or crashing on the conditional unique key.
     """
 
-    del composed_tables
+    del db
     with system_context(reason="test handle external-id upsert"):
         original = Handle.objects.upsert(
             platform=Handle.Platform.WHATSAPP,
@@ -3254,8 +3144,7 @@ def test_handle_upsert_resolves_external_id_before_value(composed_tables: None) 
         assert Handle._base_manager.count() == 1
 
 
-@pytest.mark.django_db(transaction=True)
-def test_handle_upsert_converges_a_value_collision_across_external_ids(composed_tables: None) -> None:
+def test_handle_upsert_converges_a_value_collision_across_external_ids(db: None) -> None:
     """A second source identity claiming an existing value converges, never crashes.
 
     A WhatsApp contact reachable both by phone JID and by a hidden ``@lid`` that
@@ -3265,7 +3154,7 @@ def test_handle_upsert_converges_a_value_collision_across_external_ids(composed_
     duplicate or raising ``IntegrityError``.
     """
 
-    del composed_tables
+    del db
     with system_context(reason="test handle value-collision upsert"):
         phone = Handle.objects.upsert(
             platform=Handle.Platform.WHATSAPP,
@@ -3289,9 +3178,8 @@ def test_handle_upsert_converges_a_value_collision_across_external_ids(composed_
     assert phone.display_name == "Ada Lovelace"
 
 
-@pytest.mark.django_db(transaction=True)
 def test_handle_upsert_converges_a_value_collision_on_the_external_id_refresh_path(
-    composed_tables: None,
+    db: None,
 ) -> None:
     """A resolved ``@lid`` whose refreshed value hits an existing phone row converges.
 
@@ -3303,7 +3191,7 @@ def test_handle_upsert_converges_a_value_collision_on_the_external_id_refresh_pa
     LID row untouched for the offline backfill to merge.
     """
 
-    del composed_tables
+    del db
     with system_context(reason="test handle external-id refresh collision"):
         phone = Handle.objects.upsert(
             platform=Handle.Platform.WHATSAPP,
@@ -3338,7 +3226,6 @@ def test_handle_upsert_converges_a_value_collision_on_the_external_id_refresh_pa
     assert lid.external_id == "113352894324870@lid"
 
 
-@pytest.mark.django_db(transaction=True)
 def test_conversation_labels_name_untitled_threads_by_their_people(channel: Any) -> None:
     """Untitled chats read as who they are with; outbound senders are the account holder."""
 

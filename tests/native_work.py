@@ -14,10 +14,9 @@ from angee.graphql.testing.documents import graphql_request
 
 class WorkCase(TransactionTestCase):
     __test__ = False
-    storage = "registry"
 
     def setUp(self):
-        settings = override_settings(REBAC_LOCAL_BACKEND_STORAGE=self.storage, REBAC_SUPERUSER_BYPASS=False)
+        settings = override_settings(REBAC_SUPERUSER_BYPASS=False)
         settings.enable()
         self.addCleanup(settings.disable)
         call_command("rebac", "sync", verbosity=0)

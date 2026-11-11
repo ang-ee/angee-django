@@ -10,7 +10,7 @@ import {
 } from "@angee/metadata";
 import { testDataResource, testQueryField, testResourceQuery } from "@angee/metadata/testing";
 import { getCoreRowModel, useReactTable, flexRender } from "@tanstack/react-table";
-import { afterEach, expect, test, vi } from "vitest";
+import { expect, test, vi } from "vitest";
 import { AppRuntimeProvider, createRouteHref } from "../../runtime";
 import { createUiTestProviders } from "../../testing";
 import type { WidgetRenderProps } from "../../widgets";
@@ -25,12 +25,6 @@ import {
   ListCellContent,
   RowActionsHeader,
 } from "./resource-view-list-body";
-
-vi.mock("../../i18n", () => ({
-  useUiT: () => (key: string) => key,
-}));
-
-afterEach(cleanup);
 
 test.each([undefined, "text", "statusBadge"])("conditional cells hide ordinary values and %s widgets", (widget) => {
   const column = { field: "status", widget, showWhen: (row: { visible: boolean }) => row.visible };
@@ -81,7 +75,7 @@ test("renders the framework row-actions header as visually hidden copy", () => {
     </table>,
   );
 
-  expect(screen.getByText("list.actions").classList.contains("sr-only")).toBe(true);
+  expect(screen.getByText("Actions").classList.contains("sr-only")).toBe(true);
 });
 
 test("projects count columns into aggregate measures", () => {

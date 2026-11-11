@@ -82,13 +82,7 @@ class OAuthClientOidcProtocol(OAuthClientProtocol):
             state=state,
         )
 
-    def verify_id_token(
-        self,
-        id_token: str,
-        *,
-        nonce: str | None = None,
-        jwks_client: Any | None = None,
-    ) -> dict[str, Any]:
+    def verify_id_token(self, id_token: str, *, nonce: str | None = None) -> dict[str, Any]:
         """Verify and return claims from one OIDC ID token."""
 
         if not id_token:
@@ -99,8 +93,7 @@ class OAuthClientOidcProtocol(OAuthClientProtocol):
         if not issuer or not jwks_uri:
             raise OAuthFlowError(MISSING_ENDPOINT, 400)
         try:
-            verifier = jwks_client or _jwks_client(jwks_uri)
-            signing_key = verifier.get_signing_key_from_jwt(id_token)
+            signing_key = _jwks_client(jwks_uri).get_signing_key_from_jwt(id_token)
             claims = jwt.decode(
                 id_token,
                 signing_key.key,

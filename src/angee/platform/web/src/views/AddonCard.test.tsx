@@ -1,8 +1,7 @@
 // @vitest-environment happy-dom
 
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { useCallback } from "react";
-import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { beforeEach, describe, expect, test, vi } from "vitest";
 
 import { DisableAddon, EnableAddon, InstallAddon, UninstallAddon } from "../documents";
 import { AddonCard, AddonCardActions, type AddonResourceRow } from "./AddonCard";
@@ -38,13 +37,6 @@ vi.mock("@angee/ui", async (importOriginal) => {
       else mocks.toast.danger({ title: outcome?.message });
       return outcome ?? undefined;
     },
-    // Mirror the real (memoized) translator so the namespace bundle resolves to English.
-    useNamespaceT: (_namespace: string, messages: Record<string, string>) =>
-      useCallback(
-        (key: string, values: Record<string, string | number> = {}) =>
-          (messages[key] ?? key).replace(/\{(\w+)\}/g, (_match, name: string) => String(values[name] ?? `{${name}}`)),
-        [messages],
-      ),
   };
 });
 
@@ -127,7 +119,6 @@ beforeEach(() => {
   mocks.toast.danger.mockClear();
   CONTEXT.refresh.mockClear();
 });
-afterEach(cleanup);
 
 describe("AddonCard", () => {
   test("renders the package metadata and lifecycle badges", () => {

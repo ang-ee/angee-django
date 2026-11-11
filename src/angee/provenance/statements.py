@@ -797,6 +797,12 @@ class Aspect:
             return (self.member,)
         return tuple(sorted(self.member or ()))
 
+    @property
+    def admits_person(self) -> bool:
+        """Whether a person states this aspect; one whose precedence leaves PERSON out belongs to its native owner."""
+
+        return not self.precedence or SourceKind.PERSON in self.precedence
+
     def priority(self, row: Any) -> int:
         """Place the row's source in this precedence; unlisted kinds sort last.
 
@@ -902,11 +908,28 @@ class StatementsMixin(PersistenceMixin, HistoryDocumentMixin):
         return tuple(sorted(carriers, key=lambda model: model._meta.label_lower))
 
     def statement_managers(self) -> Iterable[Any]:
-        """Yield each MTI owner's bound table once, including parent declarations."""
+        """Yield each MTI owner's bound table once, including parent declarations.
 
+        A parent declaration's subject is the ancestor row built by Django's
+        ``from_db`` from this row's primary key and loaded fields, deferring what
+        this row deferred, so binding it reads nothing.
+        """
+
+        deferred = self.get_deferred_fields()
         for model in self.statement_models():
             subject_model = model.statement_subject_model
-            subject = self if subject_model is type(self) else subject_model._base_manager.get(pk=self.pk)
+            subject: Any = self
+            if self._meta.concrete_model is not subject_model:
+                fields = [
+                    field
+                    for field in subject_model._meta.concrete_fields
+                    if field.primary_key or field.attname not in deferred
+                ]
+                subject = subject_model.from_db(
+                    self._state.db,
+                    [field.attname for field in fields],
+                    [self.pk if field.primary_key else getattr(self, field.attname) for field in fields],
+                )
             if subject is not self and (actor := instance_actor(self)) is not None:
                 if not isinstance(subject, RebacMixin):
                     raise ImproperlyConfigured("Statement subjects require REBAC actor binding.")
@@ -965,7 +988,7 @@ class StatementsMixin(PersistenceMixin, HistoryDocumentMixin):
                     if (
                         declaration.members
                         or not fields
-                        or (declaration.precedence and SourceKind.PERSON not in declaration.precedence)
+                        or not declaration.admits_person
                         or not any(
                             (saved_fields is None or name in saved_fields)
                             and (previous is None or getattr(previous, name) != getattr(self, name))

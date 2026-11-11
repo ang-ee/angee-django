@@ -37,7 +37,6 @@ vi.mock("@angee/ui", () => ({
   useRouteHref: () => () => "/integrate/add",
   useRouteSearch: () => ({ capability: mocks.capability }),
 }));
-vi.mock("../i18n", () => ({ useIntegrateT: () => (key: string) => key }));
 
 import { AddIntegrationPage } from "./AddIntegrationPage";
 
@@ -51,7 +50,7 @@ describe("AddIntegrationPage", () => {
   test("routes a CONNECT capability to its native collection", () => {
     mocks.capability = "messaging.Channel";
     render(<AddIntegrationPage />);
-    fireEvent.click(screen.getByRole("button", { name: "integrations.add.continue" }));
+    fireEvent.click(screen.getByRole("button", { name: "Continue" }));
     expect(mocks.navigate).toHaveBeenCalledWith({ to: "/messages/channels" });
   });
 });

@@ -1,11 +1,9 @@
 // @vitest-environment happy-dom
 
-import { cleanup, render, screen } from "@testing-library/react";
-import { afterEach, describe, expect, test } from "vitest";
+import { render, screen } from "@testing-library/react";
+import { describe, expect, test } from "vitest";
 
 import { LogStream } from "./LogStream";
-
-afterEach(() => cleanup());
 
 describe("LogStream", () => {
   test("renders each line in order", () => {

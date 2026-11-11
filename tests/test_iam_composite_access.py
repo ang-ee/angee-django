@@ -2,11 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any
-
-import pytest
 from django.apps import apps
-from django.test import override_settings
 from rebac import (
     ObjectRef,
     RelationshipTuple,
@@ -24,31 +20,12 @@ from angee.messaging.testing.models import Channel, Message, Thread
 from angee.projects.testing.models import Project, ProjectBinding
 from tests.conftest import Backend, Drive, Folder, Vendor
 from tests.iam_models import Group
-from tests.test_project_access import project_access_schema as project_access_schema
 
 
-@pytest.fixture(params=("denormalized", "registry"))
-def rebac_storage(request: pytest.FixtureRequest) -> Any:
-    """Exercise the same public behavior through both local storage shapes."""
-
-    with override_settings(REBAC_LOCAL_BACKEND_STORAGE=request.param):
-        yield request.param
-
-
-@pytest.fixture
-def composite_schema(rebac_storage: str, project_access_schema: Any) -> None:
-    """Order storage selection before composed-schema synchronization."""
-
-    del rebac_storage, project_access_schema
-
-
-@pytest.mark.django_db(transaction=True)
-def test_group_membership_reaches_and_revokes_project_resource_cascade(
-    composite_schema: None,
-) -> None:
+def test_group_membership_reaches_and_revokes_project_resource_cascade(db: None) -> None:
     """Person and service members inherit one project grant and lose every arrow on removal."""
 
-    del composite_schema
+    del db
     user_model = apps.get_model("iam", "User")
     owner = user_model.objects.create_user(username="composite-owner")
     person = user_model.objects.create_user(username="composite-person", kind="person")

@@ -1,11 +1,9 @@
 // @vitest-environment happy-dom
 
-import { cleanup, render, screen } from "@testing-library/react";
-import { afterEach, expect, test } from "vitest";
+import { render, screen } from "@testing-library/react";
+import { expect, test } from "vitest";
 
 import { DefinitionPair } from "./DefinitionPair";
-
-afterEach(cleanup);
 
 test("renders inline and stacked definition pairs with their declared layouts", () => {
   render(

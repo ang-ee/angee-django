@@ -90,6 +90,7 @@ def test_graphql_discovery_scans_installed_metadata_once(monkeypatch):
         return original(**kwargs)
 
     monkeypatch.setattr(metadata, "distributions", distributions)
+    importlib.invalidate_caches()
     graph = GraphQLSchemas((apps.get_app_config("base"), apps.get_app_config("resources")))
     assert graph.parts == {}
     assert calls == 1

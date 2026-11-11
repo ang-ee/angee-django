@@ -8,6 +8,7 @@ from itertools import batched
 from typing import TYPE_CHECKING, Any, Self, TypeVar
 
 from django.db import NotSupportedError, connections, models, transaction
+from django.db.models import ExpressionWrapper
 from simple_history.exceptions import NotHistoricalModelError
 from simple_history.utils import get_history_manager_for_model
 
@@ -50,6 +51,17 @@ class HistoryQuerySet(models.QuerySet[_ModelT]):
 
         return list(self.order_by().values_list("pk", flat=True))
 
+    def capture_unrecorded(self, history: ModelHistory, model: type[models.Model]) -> tuple[list[Any], list[Any]]:
+        """Freeze the keys this write will change, and those with no history yet, in one locked read.
+
+        It reads what :meth:`capture_keys` reads and carries
+        :meth:`ModelHistory.recorded`, so the baseline test costs no statement.
+        """
+
+        recorded = ExpressionWrapper(history.recorded(model), output_field=models.BooleanField())
+        flagged = dict(self.annotate(_recorded=recorded).order_by().values_list("pk", "_recorded"))
+        return list(flagged), [pk for pk, recorded in flagged.items() if not recorded]
+
     def capture_batches(self, keys: Sequence[Any]) -> Iterator[Self]:
         """Use the database's native batch size for ordinary Django querysets.
 
@@ -65,7 +77,8 @@ class HistoryQuerySet(models.QuerySet[_ModelT]):
         """Capture stored state after an authorized write of frozen, locked keys.
 
         A write to columns the history excludes (a counter), with at most its
-        timestamp stamps, changes no tracked state and records no version.
+        timestamp stamps, changes no tracked state and records no version. A key
+        with no history yet gets its baseline first (:meth:`ModelHistory.record_baselines`).
         """
 
         history_model = self.model._meta.concrete_model or self.model
@@ -75,10 +88,11 @@ class HistoryQuerySet(models.QuerySet[_ModelT]):
         self._for_write = True
         selection = self.capture_queryset()
         with transaction.atomic(using=self.db):
-            keys = list(dict.fromkeys(selection.capture_keys()))
+            keys, unrecorded = selection.capture_unrecorded(history, history_model)
             if not keys:
                 return 0
             current_changeset(required=True, record=True)
+            history.record_baselines(history_model, unrecorded)
             with transaction.atomic(using=self.db, savepoint=False), write_group():
                 count = sum(super(HistoryQuerySet, rows).update(**kwargs) for rows in self.capture_batches(keys))
                 history.bulk_history_create(history_model, keys, "~")
