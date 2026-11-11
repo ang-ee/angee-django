@@ -1,11 +1,11 @@
 // @vitest-environment happy-dom
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { expect, test } from "vitest";
-import type { StoryRequest } from "@angee/storybook/testing";
+import type { GraphQLWireRequest } from "@angee/storybook/testing";
 import { TriggerStory } from "./TriggersPage.stories";
 
 test("enable and disable dispatch the displayed trigger through native actions", async () => {
-  const requests: StoryRequest[] = [];
+  const requests: GraphQLWireRequest[] = [];
   render(<TriggerStory onRequest={(request) => requests.push(request)} />);
   const enabled = await screen.findByRole("checkbox", { name: "Enabled" });
   expect(enabled.getAttribute("aria-checked")).toBe("false");
@@ -27,7 +27,7 @@ test("enable and disable dispatch the displayed trigger through native actions",
 });
 
 test("the ledger tab uses native trigger filtering and retains record and run references", async () => {
-  const requests: StoryRequest[] = [];
+  const requests: GraphQLWireRequest[] = [];
   render(<TriggerStory onRequest={(request) => requests.push(request)} />);
   fireEvent.click(await screen.findByRole("tab", { name: "Events" }));
   await screen.findByText("Review notes");
@@ -36,7 +36,7 @@ test("the ledger tab uses native trigger filtering and retains record and run re
 });
 
 test("the principal grants tab lists direct tuples and revokes through the trigger action", async () => {
-  const requests: StoryRequest[] = [];
+  const requests: GraphQLWireRequest[] = [];
   render(<TriggerStory onRequest={(request) => requests.push(request)} />);
   fireEvent.click(await screen.findByRole("tab", { name: "Principal grants" }));
   expect((await screen.findAllByText("Role")).length).toBeGreaterThan(0);
@@ -51,7 +51,7 @@ test("the principal grants tab lists direct tuples and revokes through the trigg
 });
 
 test("a new embedded trigger preserves the workflow default in its native create payload", async () => {
-  const requests: StoryRequest[] = [];
+  const requests: GraphQLWireRequest[] = [];
   render(<TriggerStory embedded onRequest={(request) => requests.push(request)} />);
   await screen.findByText("Review admission");
   expect(screen.getByText("Record changed")).toBeTruthy();
@@ -74,7 +74,7 @@ test("a new embedded trigger preserves the workflow default in its native create
 });
 
 test("viewer facts make the existing trigger immutable and avoid implementation-choice queries", async () => {
-  const requests: StoryRequest[] = [];
+  const requests: GraphQLWireRequest[] = [];
   render(<TriggerStory canEdit={false} onRequest={(request) => requests.push(request)} />);
   await screen.findByRole("heading", { name: "Review admission" });
   const value = await screen.findByRole("combobox", { name: "Filter value" });
@@ -95,7 +95,7 @@ test("viewer facts make the existing trigger immutable and avoid implementation-
 });
 
 test("a stored generic trigger renders its retained condition through the resolved model", async () => {
-  const requests: StoryRequest[] = [];
+  const requests: GraphQLWireRequest[] = [];
   render(<TriggerStory onRequest={(request) => requests.push(request)} />);
   expect((await screen.findAllByRole("combobox", { name: "Filter value" }))[0]!.textContent).toContain("In review");
   expect(screen.queryByText("Select a record model to edit its condition.")).toBeNull();
@@ -107,7 +107,7 @@ test("a stored generic trigger renders its retained condition through the resolv
 });
 
 test("a fixed source supplies its model to the new condition editor", async () => {
-  const requests: StoryRequest[] = [];
+  const requests: GraphQLWireRequest[] = [];
   render(<TriggerStory embedded onRequest={(request) => requests.push(request)} />);
   fireEvent.click(await screen.findByRole("button", { name: /New/ }));
   const dialog = await screen.findByRole("dialog");
@@ -126,7 +126,7 @@ test("a fixed source supplies its model to the new condition editor", async () =
 });
 
 test("generic sources beyond record_changed can author the model and stored condition", async () => {
-  const requests: StoryRequest[] = [];
+  const requests: GraphQLWireRequest[] = [];
   render(<TriggerStory embedded onRequest={(request) => requests.push(request)} />);
   fireEvent.click(await screen.findByRole("button", { name: /New/ }));
   const dialog = await screen.findByRole("dialog");

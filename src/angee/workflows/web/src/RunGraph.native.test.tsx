@@ -5,7 +5,7 @@ import { createAngeeChangeLiveProvider } from "@angee/refine";
 import { createRefineTestProviders } from "@angee/refine/testing";
 import { RUN_GRAPH_INSPECTOR_TAB } from "./RunGraph";
 import { RunGraphStory } from "./RunGraph.stories";
-import type { StoryRequest } from "@angee/storybook/testing";
+import type { GraphQLWireRequest } from "@angee/storybook/testing";
 import { RUN_MODEL } from "./documents.console";
 import { mappedRunGraphFixture } from "./testing";
 
@@ -60,7 +60,7 @@ test("retained tabs preserve the canvas and selection while withdrawing their in
 });
 
 test("a map inspector shows complete progress and filters the node and its items", async () => {
-  const requests: StoryRequest[] = [];
+  const requests: GraphQLWireRequest[] = [];
   render(<RunGraphStory graph={mappedRunGraphFixture()} onRequest={(request) => requests.push(request)} />);
   const node = await screen.findByTestId("rf__node-reviews");
   expect(node.textContent).toContain("Waiting");
@@ -93,7 +93,7 @@ test("committed run changes refetch once while preserving the canvas and node UR
   };
   const liveProvider = createAngeeChangeLiveProvider(socket, [{ schemaName: "console", modelLabel: RUN_MODEL,
     roots: { list: "workflowrun", changes: "workflowRunChanged" } }], { queryClient: client });
-  const requests: StoryRequest[] = [];
+  const requests: GraphQLWireRequest[] = [];
   render(<RunGraphStory retained initialEntry="/workflows/runs/wfr_review?node=inspect"
     liveProvider={liveProvider} queryClient={client} onRequest={(request) => requests.push(request)} />);
   const canvas = await screen.findByTestId("run-graph-canvas");

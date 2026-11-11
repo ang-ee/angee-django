@@ -34,7 +34,6 @@
     "@angee/theme-warm-red": "workspace:*",
     "@angee/ui": "workspace:*",
     "@refinedev/core": "^5.0.12",
-    "graphql": "^16.14.0",
     "nuqs": "^2.10.1",
     "react": "^19.2.7",
     "react-dom": "^19.2.7",

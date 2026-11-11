@@ -2,7 +2,7 @@
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { expect, test } from "vitest";
 import { RecordChromeProvider } from "@angee/ui";
-import { RuntimeFixture, storySchema, testDataResource, type StoryRequest } from "@angee/storybook/testing";
+import { RuntimeFixture, storySchema, testDataResource, type GraphQLWireRequest } from "@angee/storybook/testing";
 
 import { ProjectRoundRecord } from "./round-record";
 
@@ -14,8 +14,8 @@ const round = (overrides: Record<string, unknown> = {}) => ({
 const resources = ["projects.Project", "proposals.Round", "proposals.Proposal"].map((label) => testDataResource(label));
 
 /** A project record whose server projection carries its active round. */
-function renderProject(activeRound: Record<string, unknown>): StoryRequest[] {
-  const requests: StoryRequest[] = [];
+function renderProject(activeRound: Record<string, unknown>): GraphQLWireRequest[] {
+  const requests: GraphQLWireRequest[] = [];
   const schemas = { console: { ...storySchema({
     open_proposal_round: (args) => ({ ok: true, message: "Round opened.", id: args.round, code: null, validation_errors: null }),
   }, (request) => requests.push(request)).public!, metadata: { angee: { resources } } } };

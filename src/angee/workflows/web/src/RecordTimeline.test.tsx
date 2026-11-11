@@ -2,7 +2,7 @@
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { beforeAll, expect, test, vi } from "vitest";
 import { decisionFixture } from "@angee/decisions/testing";
-import type { StoryRequest } from "@angee/storybook/testing";
+import type { GraphQLWireRequest } from "@angee/storybook/testing";
 import { TimelineStory } from "./RecordTimeline.stories";
 import { timelineFixture } from "./timeline-testing";
 
@@ -29,7 +29,7 @@ test.each([
 });
 
 test("answers inline with the observed revision and refreshes the stepper", async () => {
-  const requests: StoryRequest[] = [];
+  const requests: GraphQLWireRequest[] = [];
   render(<TimelineStory onRequest={(request) => requests.push(request)} />);
   fireEvent.click(await screen.findByRole("radio", { name: /Use proposed name/ }));
   fireEvent.click(screen.getByRole("button", { name: "Confirm" }));
@@ -69,7 +69,7 @@ test("answered cards do not nest list items outside a list", async () => {
 });
 
 test("a retry with possible duplicate effects uses the shared acknowledgement form", async () => {
-  const requests: StoryRequest[] = [];
+  const requests: GraphQLWireRequest[] = [];
   render(<TimelineStory state="error" duplicateRisk onRequest={(request) => requests.push(request)} />);
   const label = "Retry accepting a possible duplicate";
   fireEvent.click(await screen.findByRole("button", { name: label }));
@@ -85,7 +85,7 @@ test("a retry with possible duplicate effects uses the shared acknowledgement fo
 });
 
 test("stop confirms through the shared action before withdrawing questions", async () => {
-  const requests: StoryRequest[] = [];
+  const requests: GraphQLWireRequest[] = [];
   render(<TimelineStory onRequest={(request) => requests.push(request)} />);
   const card = await screen.findByRole("region", { name: "Confirm the name" });
   expect((within(card).getByRole("button", { name: "Stop and do it manually" }) as HTMLButtonElement).disabled).toBe(false);
@@ -100,7 +100,7 @@ test("stop confirms through the shared action before withdrawing questions", asy
 });
 
 test("answering refreshes the concerned form without a socket", async () => {
-  const requests: StoryRequest[] = [];
+  const requests: GraphQLWireRequest[] = [];
   render(<TimelineStory onRequest={(request) => requests.push(request)} />);
   fireEvent.click(await screen.findByRole("radio", { name: /Use proposed name/ }));
   fireEvent.click(screen.getByRole("button", { name: "Confirm" }));

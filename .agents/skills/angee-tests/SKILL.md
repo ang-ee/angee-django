@@ -24,9 +24,10 @@ This skill authors tests; running them, their roots and CI coverage belong to `d
 | `src/angee/graphql/testing/documents.py` | document execution as an actor and statement ceilings: `execute_schema`, `result_data`, `measure_graphql_document` | [GraphQL document budgets](../../../docs/checks.md#graphql-document-budgets) |
 | `tests/test_<addon>*.py` (framework) / `<addon>/tests/test_*.py` (consumer) | the test modules, one per concern | `tests/test_work_cycles.py`, `examples/src/example/notes/tests/` |
 | `tests/composed_host.py` | the composed-host subprocess that runs consumer `TransactionTestCase` modules in the framework suite | `test_composed_note_workflow` in `tests/test_composed_note_workflow.py` |
+| `packages/refine/src/testing-wire.ts` | `graphqlWireFetch`, the GraphQL wire fake: one handler per root field, loud on an unhandled field or a missing required variable | `src/angee/spaces/web/src/SpacesPage.native.test.tsx` |
 | `packages/app/src/testing.tsx`, `packages/ui/src/testing.tsx` | `expectValidBaseAddon`, `chromeSnapshotForRoute`, `TEST_SCHEMAS`; `createUiTestProviders` (`ui`) | `src/angee/tags/web/src/index.test.ts` |
 | `packages/app/config/vitest.ts`, `src/angee/vitest.shared.ts` | `defineAngeeWebVitestConfig`, `gqlAliasFor`; the addon-tree `gqlAlias` | `src/angee/tags/web/vitest.config.ts` |
-| `packages/storybook/src/stories/runtime-fixtures.tsx`, `.storybook/main.mjs`, `scripts/catalog.test.mjs` | `storySchema` (the GraphQL wire fake, one handler per root field), `RuntimeFixture`; addon story discovery; token-drift scan over `src/` | `src/angee/workflows/web/src/TriggersPage.stories.tsx` |
+| `packages/storybook/src/stories/runtime-fixtures.tsx`, `.storybook/main.mjs`, `scripts/catalog.test.mjs` | `storySchema` (a schema config over refine's GraphQL wire fake), `RuntimeFixture`; addon story discovery; token-drift scan over `src/` | `src/angee/workflows/web/src/TriggersPage.stories.tsx` |
 | `packages/e2e/src/` | `test`/`api` (`fixtures.ts`), `defineE2EConfig` (`config.ts`), `loginViaApi` and `roleStatePath` (`auth.ts`), `PageObject` (`pom.ts`) | `examples/e2e/` |
 
 ## Reuse first

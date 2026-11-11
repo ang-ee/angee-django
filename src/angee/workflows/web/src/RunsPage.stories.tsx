@@ -1,6 +1,6 @@
 import { useMemo, type ComponentProps, type ReactNode } from "react";
 import { operationDocuments } from "@angee/gql/console/actions";
-import { GraphQLError, storyAppearance, type RuntimeFixtureProps, RoutedRuntimeFixture, storySchema, type StoryRequest } from "@angee/storybook/testing";
+import { GraphQLError, storyAppearance, type RuntimeFixtureProps, RoutedRuntimeFixture, storySchema, type GraphQLWireRequest } from "@angee/storybook/testing";
 import { ChatterTabsTestHost, ShellPageTestProviders } from "@angee/app/testing";
 import { createRouteHref, defaultWidgets } from "@angee/ui";
 
@@ -61,7 +61,7 @@ export function RunStory({ appearance, list = false, waiting = false, redacted =
   list?: boolean; waiting?: boolean; redacted?: boolean; unavailable?: boolean; queryError?: boolean; rejectAction?: boolean;
   run?: Run; steps?: readonly StepRun[]; children?: readonly Run[];
   evidence?: readonly { id: string; record_model: string | null; record_id: string | null }[];
-  onRequest?: (request: StoryRequest) => void;
+  onRequest?: (request: GraphQLWireRequest) => void;
   content?: ReactNode;
   graph?: RunGraphData;
   initialEntry?: string;

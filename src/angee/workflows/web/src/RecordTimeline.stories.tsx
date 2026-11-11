@@ -1,7 +1,7 @@
 import { useMemo } from "react";
 import { operationDocuments } from "@angee/gql/console/actions";
 import { decisionLinkFixture, decisionRecordFixture, decisionResourceFixture, decisionUserFixture } from "@angee/decisions/testing";
-import { storyAppearance, type RuntimeFixtureProps, RoutedRuntimeFixture, storySchema, type StoryRequest } from "@angee/storybook/testing";
+import { storyAppearance, type RuntimeFixtureProps, RoutedRuntimeFixture, storySchema, type GraphQLWireRequest } from "@angee/storybook/testing";
 import {
   Button, ChatterProvider, FormView, RecordFieldMarksProvider, ScrollArea, createRouteHref, useChatter,
 } from "@angee/ui";
@@ -35,7 +35,7 @@ const runtime = {
 /** The real read and inline mutation owners over a neutral, disposable transport. */
 export function TimelineStory({ appearance, state = "decision", collapsed = false, duplicateRisk = false, data, onRequest }: {
   appearance?: RuntimeFixtureProps["appearance"];
-  state?: TimelineState; collapsed?: boolean; duplicateRisk?: boolean; onRequest?: (request: StoryRequest) => void;
+  state?: TimelineState; collapsed?: boolean; duplicateRisk?: boolean; onRequest?: (request: GraphQLWireRequest) => void;
   data?: TimelineSelection;
 }) {
   const schemas = useMemo(() => {

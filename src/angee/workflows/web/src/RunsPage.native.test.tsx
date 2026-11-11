@@ -2,7 +2,7 @@
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { beforeAll, expect, test, vi } from "vitest";
 
-import type { StoryRequest } from "@angee/storybook/testing";
+import type { GraphQLWireRequest } from "@angee/storybook/testing";
 import { RunStory } from "./RunsPage.stories";
 import { runFixture, stepRunFixture } from "./testing";
 import { StepRuns } from "./StepRuns";
@@ -24,7 +24,7 @@ test("the routed run defaults to its filling graph beneath its sheet", async () 
 });
 
 test("node-scoped step evidence keeps the run filter and selects parent plus item rows", async () => {
-  const requests: StoryRequest[] = [];
+  const requests: GraphQLWireRequest[] = [];
   render(<RunStory content={<StepRuns runId="wfr_review" nodeKeys={["inspect", "inspect.body"]} />}
     onRequest={(request) => requests.push(request)} />);
   await screen.findByRole("button", { name: "Open Inspect source" });
@@ -37,7 +37,7 @@ test("node-scoped step evidence keeps the run filter and selects parent plus ite
 });
 
 test("step checkpoint and linked decisions compose the existing form and list", async () => {
-  const requests: StoryRequest[] = [];
+  const requests: GraphQLWireRequest[] = [];
   render(<RunStory steps={[stepRunFixture({ decision: { id: "dcn_review" } })]}
     onRequest={(request) => requests.push(request)} />);
   const step = await openStep();
@@ -102,7 +102,7 @@ test("populated run facts remain visible", async () => {
 });
 
 test("parent references and the child tab compose the existing scoped runs list", async () => {
-  const requests: StoryRequest[] = [];
+  const requests: GraphQLWireRequest[] = [];
   render(<RunStory run={runFixture({ parent_step: { id: "wsr_parent", run: { id: "wfr_parent" } } })}
     children={[runFixture({ id: "wfr_child", origin: "WORKFLOW" })]}
     onRequest={(request) => requests.push(request)} />);
@@ -116,7 +116,7 @@ test("parent references and the child tab compose the existing scoped runs list"
 });
 
 test("retained evidence links readable records and marks redacted records", async () => {
-  const requests: StoryRequest[] = [];
+  const requests: GraphQLWireRequest[] = [];
   render(<RunStory evidence={[
     { id: "wre_readable", record_model: "notes.Note", record_id: "nte_7" },
     { id: "wre_hidden", record_model: null, record_id: null },
@@ -140,7 +140,7 @@ test("a run waiter shows its target as a normal record reference", async () => {
 });
 
 test("a record waiter reads its watches on demand and follows the shared record route", async () => {
-  const requests: StoryRequest[] = [];
+  const requests: GraphQLWireRequest[] = [];
   render(<RunStory run={runFixture({ status: "WAITING", can_cancel: true, can_reprocess: false, finished_at: null })}
     steps={[stepRunFixture({ status: "WAITING", outcome: "", waiting_kind: "RECORD", can_retry: false,
     watches: [{ id: "wsw_note", record_model: "notes.Note", record_id: "nte_7" }] })]}
@@ -163,7 +163,7 @@ test("trigger origin links to its retained admission event", async () => {
 });
 
 test("reprocess confirms then navigates to the returned replacement through the route owner", async () => {
-  const requests: StoryRequest[] = [];
+  const requests: GraphQLWireRequest[] = [];
   render(<RunStory onRequest={(request) => requests.push(request)} />);
   const dialog = await action("Reprocess run");
   fireEvent.click(within(dialog).getByRole("button", { name: "Reprocess run" }));
@@ -174,7 +174,7 @@ test("reprocess confirms then navigates to the returned replacement through the 
 });
 
 test("cancel reports the backend outcome through the shared action lifecycle", async () => {
-  const requests: StoryRequest[] = [];
+  const requests: GraphQLWireRequest[] = [];
   render(<RunStory waiting onRequest={(request) => requests.push(request)} />);
   const label = "Stop and do it manually";
   const dialog = await action(label);
@@ -186,7 +186,7 @@ test("cancel reports the backend outcome through the shared action lifecycle", a
 });
 
 test("step rows are paged in execution order without per-row detail queries", async () => {
-  const requests: StoryRequest[] = [];
+  const requests: GraphQLWireRequest[] = [];
   const steps = Array.from({ length: 11 }, (_, index) => stepRunFixture({ id: `wsr_${index}`, node_key: `step-${index}`, rank: index }));
   render(<RunStory steps={steps} onRequest={(request) => requests.push(request)} />);
   fireEvent.click(await screen.findByRole("tab", { name: "Step runs" }));
@@ -257,7 +257,7 @@ test("selected step opens in the shared drawer with attempts and records", async
 });
 
 test("run list filters status, workflow and origin through shared metadata", async () => {
-  const requests: StoryRequest[] = [];
+  const requests: GraphQLWireRequest[] = [];
   render(<RunStory list onRequest={(request) => requests.push(request)} />);
   await screen.findByRole("button", { name: "Failed" });
   expect(requests.some(({ variables }) => JSON.stringify(variables.group_by) === '[{"field":"STATUS"}]')).toBe(true);
@@ -280,7 +280,7 @@ test("run list filters status, workflow and origin through shared metadata", asy
 });
 
 test("run list adds grouping axes and filters a group while retaining route filters", async () => {
-  const requests: StoryRequest[] = [];
+  const requests: GraphQLWireRequest[] = [];
   const filter = { status: { exact: "failed" }, origin: { exact: "manual" } };
   render(<RunStory list initialEntry={`/workflows/runs?filter=${encodeURIComponent(JSON.stringify(filter))}`}
     onRequest={(request) => requests.push(request)} />);
@@ -329,7 +329,7 @@ test("waiting reason appears only on a waiting step and retry uses backend capab
 });
 
 test("duplicate retry requires a checked typed acknowledgement before any mutation", async () => {
-  const requests: StoryRequest[] = [];
+  const requests: GraphQLWireRequest[] = [];
   render(<RunStory steps={[stepRunFixture({ requires_duplicate_acknowledgement: true })]} onRequest={(request) => requests.push(request)} />);
   const step = await openStep();
   const label = "Retry accepting a possible duplicate";

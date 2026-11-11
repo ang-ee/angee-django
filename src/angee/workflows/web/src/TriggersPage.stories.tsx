@@ -1,7 +1,7 @@
 import { useMemo } from "react";
 import { operationDocuments } from "@angee/gql/console/actions";
 import { composeAddons } from "@angee/app";
-import { storyAppearance, type RuntimeFixtureProps, RoutedRuntimeFixture, storySchema, type StoryRequest } from "@angee/storybook/testing";
+import { storyAppearance, type RuntimeFixtureProps, RoutedRuntimeFixture, storySchema, type GraphQLWireRequest } from "@angee/storybook/testing";
 import { createRouteHref, defaultWidgets } from "@angee/ui";
 import { TriggerCondition } from "./TriggerCondition";
 import { TriggersList } from "./TriggersPage";
@@ -41,7 +41,7 @@ const runtime = {
 
 /** Native form and actions over retained trigger rows, with generated mutation documents. */
 export function TriggerStory({ appearance, embedded = false, canEdit = true, onRequest }: {
-  appearance?: RuntimeFixtureProps["appearance"]; embedded?: boolean; canEdit?: boolean; onRequest?: (request: StoryRequest) => void }) {
+  appearance?: RuntimeFixtureProps["appearance"]; embedded?: boolean; canEdit?: boolean; onRequest?: (request: GraphQLWireRequest) => void }) {
   const schemas = useMemo(() => {
     let current = { ...triggerFixture, can_edit: canEdit, enable_preview: canEdit ? triggerFixture.enable_preview : null };
     const result = (message: string) => ({ ok: true, message, id: current.id });

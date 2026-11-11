@@ -1,6 +1,6 @@
 import { useMemo } from "react";
 import { operationDocuments } from "@angee/gql/console/actions";
-import { GraphQLError, storyAppearance, type RuntimeFixtureProps, RoutedRuntimeFixture, storySchema, type StoryRequest } from "@angee/storybook/testing";
+import { GraphQLError, storyAppearance, type RuntimeFixtureProps, RoutedRuntimeFixture, storySchema, type GraphQLWireRequest } from "@angee/storybook/testing";
 import { createRouteHref } from "@angee/ui";
 
 import { WorkflowsPage } from "./WorkflowsPage";
@@ -36,7 +36,7 @@ const runtime = {
 export function CatalogueStory({ appearance, list = false, unavailable = false, queryError = false, writer = false, onRequest }: {
   appearance?: RuntimeFixtureProps["appearance"];
   list?: boolean; unavailable?: boolean; queryError?: boolean; writer?: boolean;
-  onRequest?: (request: StoryRequest) => void;
+  onRequest?: (request: GraphQLWireRequest) => void;
 }) {
   const schemas = useMemo(() => {
     const fixture = storySchema({

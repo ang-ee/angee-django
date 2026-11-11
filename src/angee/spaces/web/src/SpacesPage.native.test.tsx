@@ -5,7 +5,7 @@ import { expect, test } from "vitest";
 import type { DataResourceFieldMetadata } from "@angee/metadata";
 import type { RecordPanelContext } from "@angee/ui";
 import {
-  RoutedRuntimeFixture, storySchema, testDataResource, testQueryField, testResourceQuery, type StoryRequest,
+  RoutedRuntimeFixture, storySchema, testDataResource, testQueryField, testResourceQuery, type GraphQLWireRequest,
 } from "@angee/storybook/testing";
 
 import { useGroupRecordTabs } from "./group-record-tabs";
@@ -65,7 +65,7 @@ const scoped = (args: Record<string, unknown>) => {
   return Object.entries(threadsByGroup).find(([group]) => where.includes(`"${group}"`))?.[1] ?? [];
 };
 
-function groupSchemas(requests: StoryRequest[]) {
+function groupSchemas(requests: GraphQLWireRequest[]) {
   const fixture = storySchema({
     space_memberships: () => memberships,
     space_memberships_aggregate: () => count(memberships),
@@ -88,7 +88,7 @@ function GroupTab({ tab, recordId, record }: { tab: "roster" | "threads"; record
 }
 
 function renderGroupTab(tab: "roster" | "threads", membershipRoles: readonly string[] = ["OWNER", "MODERATOR", "MEMBER", "VIEWER"]) {
-  const requests: StoryRequest[] = [];
+  const requests: GraphQLWireRequest[] = [];
   const schemas = groupSchemas(requests);
   const record = { permissions: ["write", "manage_roster"], membership_roles: membershipRoles };
   const host = (recordId: string) => <RoutedRuntimeFixture activeSchema="console" schemas={schemas} collectionPath="/spaces">

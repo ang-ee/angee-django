@@ -4,7 +4,7 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { expect, test } from "vitest";
 import { operationDocuments } from "@angee/gql/console/actions";
 import { RecordChromeProvider } from "@angee/ui";
-import { RuntimeFixture, storySchema, testDataResource, type StoryOperation, type StoryRequest } from "@angee/storybook/testing";
+import { RuntimeFixture, storySchema, testDataResource, type GraphQLWireOperation, type GraphQLWireRequest } from "@angee/storybook/testing";
 
 import { TriageRecordActions } from "./triage-actions";
 import type { WorkTaskRow } from "./task-work";
@@ -22,9 +22,9 @@ const queued = (overrides: Partial<WorkTaskRow> = {}): WorkTaskRow => ({
 
 /** The record toolbar's verbs over the generated action documents; `stage` is the task's authored category read. */
 function renderActions({ record, stage = null, readOnly = false, start }: {
-  record: WorkTaskRow | null; stage?: Stage; readOnly?: boolean; start?: StoryOperation;
-}): StoryRequest[] {
-  const requests: StoryRequest[] = [];
+  record: WorkTaskRow | null; stage?: Stage; readOnly?: boolean; start?: GraphQLWireOperation;
+}): GraphQLWireRequest[] {
+  const requests: GraphQLWireRequest[] = [];
   const schemas = { console: { ...storySchema({
     project_tasks_by_pk: (args) => ({ id: args.id, stage }),
     start_task: start ?? ((args) => ({ ok: true, message: "Started.", id: args.id, validation_errors: null })),

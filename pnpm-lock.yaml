@@ -310,9 +310,6 @@ importers:
       '@refinedev/core':
         specifier: ^5.0.12
         version: 5.0.12(patch_hash=4f168eb83b408c82efa76d911df2c053a0a64547ab3acf5c4a35c885fb9ed289)(@tanstack/react-query@5.107.1(@types/react@19.3.0)(react@19.3.1))(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.1(react@19.3.1))(react@19.3.1)
-      graphql:
-        specifier: ^16.14.0
-        version: 16.15.0
       nuqs:
         specifier: 2.10.1
         version: 2.10.1(patch_hash=2148684edec6dc099ae9f4aaef272464500bb73467292d51851a7da70ccb1db4)(@tanstack/react-router@1.170.46(react-dom@19.3.1(react@19.3.1))(react@19.3.1))(react@19.3.1)
@@ -789,6 +786,9 @@ importers:
         specifier: workspace:*
         version: link:../../../../packages/ui
     devDependencies:
+      '@angee/storybook':
+        specifier: workspace:*
+        version: link:../../../../packages/storybook
       '@tanstack/react-router':
         specifier: ^1.170.41
         version: 1.170.46(react-dom@19.3.1(react@19.3.1))(react@19.3.1)

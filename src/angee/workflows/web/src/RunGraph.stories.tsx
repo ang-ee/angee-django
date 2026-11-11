@@ -1,4 +1,4 @@
-import { storyAppearance, type RuntimeFixtureProps, type StoryRequest } from "@angee/storybook/testing";
+import { storyAppearance, type RuntimeFixtureProps, type GraphQLWireRequest } from "@angee/storybook/testing";
 import { useState, type ComponentProps } from "react";
 import { ChatterTabsTestHost } from "@angee/app/testing";
 import { Button, routeSearchParam, useChatter, useRouteSearch } from "@angee/ui";
@@ -17,7 +17,7 @@ export const Retained = { render: (_args: unknown, { globals }: { globals: Recor
 
 export function RunGraphStory({ appearance, graph, active = true, retained = false, onRequest, initialEntry, liveProvider, queryClient }: {
   appearance?: RuntimeFixtureProps["appearance"];
-  graph?: RunGraphData; active?: boolean; retained?: boolean; onRequest?: (request: StoryRequest) => void;
+  graph?: RunGraphData; active?: boolean; retained?: boolean; onRequest?: (request: GraphQLWireRequest) => void;
   initialEntry?: string; liveProvider?: ComponentProps<typeof RunStory>["liveProvider"];
   queryClient?: ComponentProps<typeof RunStory>["queryClient"];
 }) {

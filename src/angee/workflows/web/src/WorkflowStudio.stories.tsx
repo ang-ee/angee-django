@@ -1,7 +1,7 @@
 import * as React from "react";
 import * as v from "valibot";
 import { Link } from "@tanstack/react-router";
-import { GraphQLError, storyAppearance, type RuntimeFixtureProps, RoutedRuntimeFixture, storySchema, type StoryRequest } from "@angee/storybook/testing";
+import { GraphQLError, storyAppearance, type RuntimeFixtureProps, RoutedRuntimeFixture, storySchema, type GraphQLWireRequest } from "@angee/storybook/testing";
 import { ChatterTabsTestHost, ShellPageTestProviders } from "@angee/app/testing";
 import { Button, defaultWidgets, useChatter } from "@angee/ui";
 import { WorkflowStudio } from "./WorkflowStudio";
@@ -26,7 +26,7 @@ const choices = [
 export function StudioStory({ appearance, conflict = false, invalid = false, unrenderedIssues = false, failLatest = false, readOnly = false, outcomesGate, retained = false, linked = false,
   extended = false, saveInvalid = false, savedDiagnostics = false, outcomeIssue = false, badUnusedSchema = false, emptyLayout = false, onRequest }: {
   appearance?: RuntimeFixtureProps["appearance"];
-  conflict?: boolean; invalid?: boolean; unrenderedIssues?: boolean; failLatest?: boolean; readOnly?: boolean; retained?: boolean; linked?: boolean; outcomesGate?: () => Promise<void>; onRequest?: (request: StoryRequest) => void;
+  conflict?: boolean; invalid?: boolean; unrenderedIssues?: boolean; failLatest?: boolean; readOnly?: boolean; retained?: boolean; linked?: boolean; outcomesGate?: () => Promise<void>; onRequest?: (request: GraphQLWireRequest) => void;
   extended?: boolean; saveInvalid?: boolean; savedDiagnostics?: boolean; outcomeIssue?: boolean; badUnusedSchema?: boolean; emptyLayout?: boolean;
 }) {
   const schemas = React.useMemo(() => {
