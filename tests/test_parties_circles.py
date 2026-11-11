@@ -1261,6 +1261,42 @@ def test_a_merge_revert_restores_every_moved_kind(
     assert pointed_at() == {merged.pk}
 
 
+@pytest.mark.parametrize("pre_history", [False, True], ids=["recorded", "pre-history"])
+def test_a_person_merge_reverts_across_its_mti_lineage(
+    composed_tables: None, django_capture_on_commit_callbacks: Any, pre_history: bool,
+) -> None:
+    """A person's versions live on its child table; a party merge still reverts, also for rows older than history.
+
+    Creating a ``Person`` records no ``Party`` version, so the revert reads the
+    parent's pre-boundary state from the child's; a row with no history at all
+    gets a baseline on its first write instead.
+    """
+
+    del composed_tables
+    admin = create_platform_admin(f"mti-merge-{'pre' if pre_history else 'recorded'}")
+    with actor_context(admin):
+        gamma, delta = (Person.objects.create(display_name=name) for name in ("Gamma", "Delta"))
+    with system_context(reason="test mti merge"):
+        member = CircleMember._base_manager.create(circle=Circle._base_manager.create(name="Friends"), party=delta)
+        follow = ThreadFollower._base_manager.create(thread=Thread._base_manager.create(), party=delta)
+        if pre_history:
+            for model, pks in ((Party, (gamma.pk, delta.pk)), (Person, (gamma.pk, delta.pk)),
+                               (CircleMember, (member.pk,)), (ThreadFollower, (follow.pk,))):
+                model.history.filter(id__in=pks).delete()
+
+    def parties() -> set[Any]:
+        return {type(row)._base_manager.values_list("party_id", flat=True).get(pk=row.pk) for row in (member, follow)}
+
+    with actor_context(admin), django_capture_on_commit_callbacks(execute=True):
+        Party.objects.get(pk=gamma.pk).with_actor(admin).merge(records=[delta.public_id])
+    assert parties() == {gamma.pk}
+    boundary = Party.history.filter(id=delta.pk).order_by("-history_id").first().changeset
+    with actor_context(admin):
+        boundary.with_actor(admin).revert()
+    assert parties() == {delta.pk}
+    assert Party._base_manager.get(pk=delta.pk).merged_into_id is None
+
+
 def test_ingest_contact_upserts_carddav_employment_in_place(composed_tables: None) -> None:
     """ORG/TITLE/ROLE map to one stable CardDAV edge while manual rows survive."""
 

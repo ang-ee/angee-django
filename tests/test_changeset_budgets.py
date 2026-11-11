@@ -92,11 +92,11 @@ def test_tracked_save_and_queryset_update_query_budgets(composed_tables: None) -
     assert not _touching(saved, _changeset_model()) and not _touching(updated, _changeset_model())
     party_table = Party._meta.db_table
     history_table = Party.history.model._meta.db_table
-    # The baseline probe (an instance save reads nothing before it writes), REBAC's
-    # schema-revision check, the UPDATE, then capture: one stored-state re-select
-    # and one history insert.
+    # The baseline probe (an instance save reads nothing before it writes; the row's
+    # history may live on its MTI children), REBAC's schema-revision check, the
+    # UPDATE, then capture: one stored-state re-select and one history insert.
     assert _data_statements(saved) == [
-        f"SELECT {history_table}",
+        f"SELECT {party_table}",
         "SELECT rebac_schemageneration",
         f"UPDATE {party_table}",
         f"SELECT {party_table}",

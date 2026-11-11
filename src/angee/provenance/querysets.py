@@ -8,6 +8,7 @@ from itertools import batched
 from typing import TYPE_CHECKING, Any, Self, TypeVar
 
 from django.db import NotSupportedError, connections, models, transaction
+from django.db.models import ExpressionWrapper
 from simple_history.exceptions import NotHistoricalModelError
 from simple_history.utils import get_history_manager_for_model
 
@@ -57,7 +58,8 @@ class HistoryQuerySet(models.QuerySet[_ModelT]):
         :meth:`ModelHistory.recorded`, so the baseline test costs no statement.
         """
 
-        flagged = dict(self.annotate(_recorded=history.recorded(model)).order_by().values_list("pk", "_recorded"))
+        recorded = ExpressionWrapper(history.recorded(model), output_field=models.BooleanField())
+        flagged = dict(self.annotate(_recorded=recorded).order_by().values_list("pk", "_recorded"))
         return list(flagged), [pk for pk, recorded in flagged.items() if not recorded]
 
     def capture_batches(self, keys: Sequence[Any]) -> Iterator[Self]:
