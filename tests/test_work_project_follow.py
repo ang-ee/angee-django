@@ -1,12 +1,10 @@
 """The selected project phase and status drive the source task atomically."""
 
 from datetime import date
-from pathlib import Path
 
 from django.core.exceptions import ValidationError
 from rebac import actor_context, system_context
 
-from tests.composed_host import run_composed_tests
 from tests.native_work import WorkCase
 
 
@@ -88,7 +86,3 @@ class ProjectFollowTests(WorkCase):
         project.refresh_from_db()
         self.assertEqual(project.current_milestone_id, opening.pk)
         self.assert_stage(task, "Active")
-
-
-def test_work_project_follow(tmp_path: Path):
-    run_composed_tests(tmp_path, "tests.test_work_project_follow.ProjectFollowTests", app="angee.work")

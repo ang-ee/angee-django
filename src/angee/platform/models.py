@@ -34,6 +34,7 @@ from rebac import system_context
 from angee.base.fields.state import StateField
 from angee.base.managers import AngeeManager
 from angee.base.models.base import AngeeModel
+from angee.base.models.timestamps import update_fields_with_auto_now
 from angee.base.serialization import canonical_json_sha256
 from angee.platform import composed
 from angee.platform.discovery import (
@@ -369,8 +370,10 @@ class AddonManager[T: Addon](AngeeManager[T]):
         marked ``REMOVED`` — its row, and so its history, is kept — rather than
         pruned. Scoped to the tier this reconcile owns (installed/local); rows of
         other tiers (the VCS marketplace ``platform_integrate_vcs`` contributes) are
-        left untouched. Each present addon's row is a full overwrite so a state flip
-        (enabled ↔ disabled) resets every reflected field. Runs under the caller's
+        left untouched. Every reflected field of each owned row is recomputed, so a
+        state flip (enabled ↔ disabled) resets them all, and only the fields whose
+        value differs are written: a converged table takes no writes. Dependency
+        edges belong to :meth:`reconcile_dependencies`. Runs under the caller's
         ``system_context`` (see ``signals.py``), wrapped in one transaction like
         the sibling source reconciles, so a mid-loop failure never leaves the
         table half-converged.
@@ -396,18 +399,18 @@ class AddonManager[T: Addon](AngeeManager[T]):
         manifests = {name: manifest for name, (manifest, _origin) in available.items()}
         counts = composed.resource_counts()
         rows = self.all()
+        removed = {**self.model.reset_runtime_facts(), "state": Addon.AddonState.REMOVED}
         with transaction.atomic():
+            existing = {row.name: row for row in rows.select_for_update()}
             package_identity_index((
-                *((row.distribution, row.name) for row in rows.select_for_update() if row.distribution),
+                *((row.distribution, row.name) for row in existing.values() if row.distribution),
                 *((package["distribution"], name) for name, package in manifests.items()),
             ))
             pending_by_name = dict(rows.values_list("name", "pending")) if canonical_desired is None else {}
-            rows.filter(source__in=(Addon.AddonSource.INSTALLED, Addon.AddonSource.LOCAL)).exclude(
-                name__in=manifests
-            ).update(
-                state=Addon.AddonState.REMOVED,
-                **self.model.reset_runtime_facts(),
-            )
+            targets: dict[str, dict[str, Any]] = {
+                name: removed for name, row in existing.items()
+                if name not in manifests and row.source in (Addon.AddonSource.INSTALLED, Addon.AddonSource.LOCAL)
+            }
             for name, manifest in sorted(manifests.items()):
                 config = configs.get(name)
                 enabled = name in loaded
@@ -426,24 +429,29 @@ class AddonManager[T: Addon](AngeeManager[T]):
                     pending = bool(pending_by_name.get(name, False))
                 else:
                     pending = (root and name not in canonical_desired) if enabled else name in canonical_desired
-                rows.update_or_create(
-                    name=name,
-                    defaults={
-                        **runtime_facts,
-                        "label": config.label if config is not None else "",
-                        "namespace": manifest["namespace"],
-                        "distribution": manifest["distribution"],
-                        "requirements": list(manifest["requirements"]),
-                        "description": manifest["description"],
-                        "keywords": list(manifest["keywords"]),
-                        "category": manifest["category"] or "",
-                        "kind": Addon.AddonKind.CONSUMER if root else Addon.AddonKind.REQUIRED,
-                        "source": Addon.AddonSource.INSTALLED,
-                        "state": Addon.AddonState.ENABLED if enabled else Addon.AddonState.DISABLED,
-                        "pending": pending,
-                        "depends_on": list(manifest["depends_on"]),
-                    },
-                )
+                targets[name] = {
+                    **runtime_facts,
+                    "label": config.label if config is not None else "",
+                    "namespace": manifest["namespace"],
+                    "distribution": manifest["distribution"],
+                    "requirements": list(manifest["requirements"]),
+                    "description": manifest["description"],
+                    "keywords": list(manifest["keywords"]),
+                    "category": manifest["category"] or "",
+                    "kind": Addon.AddonKind.CONSUMER if root else Addon.AddonKind.REQUIRED,
+                    "source": Addon.AddonSource.INSTALLED,
+                    "state": Addon.AddonState.ENABLED if enabled else Addon.AddonState.DISABLED,
+                    "pending": pending,
+                }
+            for name, values in sorted(targets.items()):
+                if (row := existing.get(name)) is None:
+                    rows.create(name=name, depends_on=list(manifests[name]["depends_on"]), **values)
+                    continue
+                changed = [field for field, value in values.items() if getattr(row, field) != value]
+                for field in changed:
+                    setattr(row, field, values[field])
+                if changed:
+                    row.save(update_fields=update_fields_with_auto_now(row, changed))
 
             self.reconcile_dependencies(index=index)
 
@@ -651,7 +659,6 @@ class Addon(AngeeModel, concrete=True):
             "field_count": 0,
             "resource_count": 0,
             "model_labels": [],
-            "depended_by": [],
         }
 
 

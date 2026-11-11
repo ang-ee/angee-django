@@ -15,7 +15,7 @@ from tests.conftest import addon_schema, create_platform_admin, create_user
 
 
 @pytest.fixture
-def targets(composed_tables):
+def targets(db):
     from tests.scopedemo.models import ProposalTarget
     reviewer = create_user("proposal-reviewer")
     outsider = create_user("proposal-outsider")

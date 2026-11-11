@@ -9,6 +9,7 @@ from angee.base.models.identity import public_id_of
 from angee.messaging.testing.models import Message, ThreadAttachment
 from angee.messaging.timeline import CommentKind
 from angee.projects.testing.models import Task
+from tests.chatterdemo.models import ChatterDoc
 from tests.conftest import create_user
 from tests.messaging_campaign import comment_record as comment_record  # noqa: F401 -- fixture
 from tests.messaging_campaign import grant
@@ -92,7 +93,7 @@ def test_comments_obey_the_hosts_thread_read_permission(comment_record, monkeypa
     record, author = comment_record.record, comment_record.author
     with actor_context(author):
         record.message_post("Visible to thread readers")
-    monkeypatch.setattr(type(record), "thread_read_access", "write")
+    monkeypatch.setattr(ChatterDoc, "thread_read_access", "write")  # the host declares its thread read policy
     hidden = read_timeline(record, author)
     assert hidden["timeline"]["entries"] == []
     assert next(kind["count"] for kind in hidden["timeline"]["kinds"] if kind["id"] == "messaging.comment") == 0

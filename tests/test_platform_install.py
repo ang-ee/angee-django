@@ -76,12 +76,12 @@ def test_catalogue_display_label_preserves_native_identity(label: str) -> None:
 
 
 def test_enable_appends_the_root_and_reflects_pending(
-    composed_tables: None,
+    db: None,
     project_settings_yaml: Path,
 ) -> None:
     """Enable adds the root to ``settings.yaml`` and flips the reflected row to pending."""
 
-    del composed_tables
+    del db
     admin = _platform_admin("install-admin")
 
     result = _data(execute_schema(_schema(), _ENABLE, {"addon": _AVAILABLE_ADDON}, user=admin))["enable"]
@@ -101,13 +101,13 @@ def test_enable_appends_the_root_and_reflects_pending(
 
 
 def test_enable_reports_a_committed_edit_whose_catalogue_refresh_failed(
-    composed_tables: None,
+    db: None,
     project_settings_yaml: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A mirror failure after the settings edit is an applied edit with pending reconciliation."""
 
-    del composed_tables
+    del db
     admin = _platform_admin("install-mirror-admin")
 
     def fail_reconcile(self: Any, *, desired: frozenset[str] | None) -> None:
@@ -125,12 +125,12 @@ def test_enable_reports_a_committed_edit_whose_catalogue_refresh_failed(
 
 
 def test_enable_is_idempotent_for_an_already_listed_root(
-    composed_tables: None,
+    db: None,
     project_settings_yaml: Path,
 ) -> None:
     """Installing a root already in ``INSTALLED_APPS`` reports the no-op, file unchanged."""
 
-    del composed_tables
+    del db
     admin = _platform_admin("install-idempotent-admin")
     before = project_settings_yaml.read_text(encoding="utf-8")
 
@@ -142,7 +142,7 @@ def test_enable_is_idempotent_for_an_already_listed_root(
 
 
 def test_enable_refuses_a_non_materialised_addon(
-    composed_tables: None,
+    db: None,
     project_settings_yaml: Path,
 ) -> None:
     """Install of a name no bundle/local addon provides is refused; the file is untouched.
@@ -152,7 +152,7 @@ def test_enable_refuses_a_non_materialised_addon(
     available set and refuses before any edit.
     """
 
-    del composed_tables
+    del db
     admin = _platform_admin("install-unknown-admin")
     before = project_settings_yaml.read_text(encoding="utf-8")
 
@@ -164,12 +164,12 @@ def test_enable_refuses_a_non_materialised_addon(
 
 
 def test_disable_preview_refuses_an_unknown_addon(
-    composed_tables: None,
+    db: None,
     project_settings_yaml: Path,
 ) -> None:
     """A crafted Disable target is a refusal rather than a successful no-op."""
 
-    del composed_tables, project_settings_yaml
+    del db, project_settings_yaml
     with system_context(reason="test.platform.disable-preview.unknown"):
         preview = Addon.objects.change_preview("not.a.real.addon", "disable")
 
@@ -278,12 +278,12 @@ def test_data_inventory_lists_donor_fields_separately(monkeypatch: pytest.Monkey
 
 
 def test_disable_removes_the_root(
-    composed_tables: None,
+    db: None,
     project_settings_yaml: Path,
 ) -> None:
     """Disable drops the root from ``settings.yaml`` (it leaves on the next boot)."""
 
-    del composed_tables
+    del db
     # Seed an extra root so there is something to disable in the file.
     _data(execute_schema(_schema(), _ENABLE, {"addon": _AVAILABLE_ADDON}, user=_platform_admin("seed-admin")))
     admin = _platform_admin("disable-admin")
@@ -297,14 +297,14 @@ def test_disable_removes_the_root(
 
 @pytest.mark.parametrize("persisted_forced", [True, False, None])
 def test_disable_refuses_an_addon_required_by_the_loaded_graph(
-    composed_tables: None,
+    db: None,
     project_settings_yaml: Path,
     monkeypatch: pytest.MonkeyPatch,
     persisted_forced: bool | None,
 ) -> None:
     """The loaded dependency graph refuses disable even with a stale or absent row."""
 
-    del composed_tables
+    del db
     admin = _platform_admin("forced-admin")
     monkeypatch.setattr(platform_models.composed, "root_app_names", lambda: frozenset({"angee.platform"}))
     if persisted_forced is not None:
@@ -324,13 +324,13 @@ def test_disable_refuses_an_addon_required_by_the_loaded_graph(
 
 
 def test_disable_ignores_stale_catalogue_dependency_flags(
-    composed_tables: None,
+    db: None,
     project_settings_yaml: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A stale forced row and catalogue reverse edges cannot block a free loaded root."""
 
-    del composed_tables
+    del db
     admin = _platform_admin("stale-forced-admin")
     monkeypatch.setattr(platform_models.composed, "root_app_names", lambda: frozenset({"angee.platform"}))
     with system_context(reason="test.platform.stale-forced.seed"):
@@ -351,12 +351,12 @@ def test_disable_ignores_stale_catalogue_dependency_flags(
 
 
 def test_enable_denies_a_non_admin(
-    composed_tables: None,
+    db: None,
     project_settings_yaml: Path,
 ) -> None:
     """The REBAC admin gate denies a non-admin actor (the file stays unedited)."""
 
-    del composed_tables
+    del db
     plain = User.objects.create_user(username="plain-user", password="plain-user")
     before = project_settings_yaml.read_text(encoding="utf-8")
 
@@ -421,11 +421,11 @@ def test_pending_changes_uses_configured_transport(
 
 @pytest.mark.parametrize("remove", [False, True])
 def test_package_changes_delegate_to_native_job_without_editing_roots(
-    composed_tables, project_settings_yaml, monkeypatch, remove,
+    db, project_settings_yaml, monkeypatch, remove,
 ) -> None:
     """Installation returns the operator's opaque operation and leaves root intent alone."""
 
-    del composed_tables
+    del db
     operation = {"id": "native-operation", "status": "queued"}
     calls = []
 

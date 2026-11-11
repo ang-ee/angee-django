@@ -243,7 +243,7 @@ def _titles() -> list[str]:
         return sorted(Document.objects.values_list("title", flat=True))
 
 
-def test_insert_applies_input_extensions_after_the_row_write(composed_tables: None) -> None:
+def test_insert_applies_input_extensions_after_the_row_write(db: None) -> None:
     """The model hook receives values no model field owns, once the row exists."""
 
     result = result_data(execute_schema(_STAMPED_SCHEMA, """mutation {
@@ -256,7 +256,7 @@ def test_insert_applies_input_extensions_after_the_row_write(composed_tables: No
     assert _stamps() == [f"document:first@{document.pk}"]
 
 
-def test_update_applies_input_extensions_after_the_row_write(composed_tables: None) -> None:
+def test_update_applies_input_extensions_after_the_row_write(db: None) -> None:
     """A patch writes its model fields, then hands its extension values to the hook."""
 
     document, owner = _owned_document("Draft")
@@ -271,7 +271,7 @@ def test_update_applies_input_extensions_after_the_row_write(composed_tables: No
     assert _stamps() == [f"document:second@{document.pk}"]
 
 
-def test_save_applies_parent_and_line_input_extensions(composed_tables: None) -> None:
+def test_save_applies_parent_and_line_input_extensions(db: None) -> None:
     """A document save applies an extension-only patch and each child line's values."""
 
     document, owner = _owned_document("Draft")
@@ -288,7 +288,7 @@ def test_save_applies_parent_and_line_input_extensions(composed_tables: None) ->
 
 
 @pytest.mark.parametrize("operation", ["insert", "update"])
-def test_a_raising_input_extension_rolls_back_the_row_write(composed_tables: None, operation: str) -> None:
+def test_a_raising_input_extension_rolls_back_the_row_write(db: None, operation: str) -> None:
     """The hook shares the row write's transaction, so its failure leaves no write behind."""
 
     document, owner = _owned_document("Kept")
@@ -306,7 +306,7 @@ def test_a_raising_input_extension_rolls_back_the_row_write(composed_tables: Non
     assert _stamps() == []
 
 
-def test_an_unconsumed_input_extension_value_fails_fast_without_a_row(composed_tables: None) -> None:
+def test_an_unconsumed_input_extension_value_fails_fast_without_a_row(db: None) -> None:
     """A value that reaches the terminal hook names itself and rolls the insert back."""
 
     author = create_user("author")
@@ -341,7 +341,7 @@ def test_input_extension_fields_are_writable_in_resource_metadata() -> None:
     assert (line_stamp.creatable, line_stamp.updatable) == (True, True)
 
 
-def test_optional_claim_adapter_preserves_custom_untracked_backend_replay(composed_tables: None) -> None:
+def test_optional_claim_adapter_preserves_custom_untracked_backend_replay(db: None) -> None:
     """Idempotency wraps a native custom backend even when its model has no history."""
 
     class PersistingBackend(CaptureBackend):
@@ -377,7 +377,7 @@ def test_optional_claim_adapter_preserves_custom_untracked_backend_replay(compos
     assert len(backend.calls) == 1
 
 
-def test_claimed_create_rolls_back_failed_input_extensions_before_retry(composed_tables: None) -> None:
+def test_claimed_create_rolls_back_failed_input_extensions_before_retry(db: None) -> None:
     """A failed insert consumes neither its key nor its row or input-extension effects."""
 
     author = create_platform_admin("retryable-claim-author")
@@ -394,7 +394,7 @@ def test_claimed_create_rolls_back_failed_input_extensions_before_retry(composed
     assert len(_stamps()) == 1
 
 
-def test_native_django_model_without_persistence_contract_still_updates(composed_tables):
+def test_native_django_model_without_persistence_contract_still_updates(db):
     """The Hasura adapter also accepts plain Sqid-backed Django models."""
     record = RecordRefPlainTarget.objects.create(name="Before")
     result = AngeeHasuraWriteBackend(RecordRefPlainTarget).update(None, record.sqid, {"name": "After"})

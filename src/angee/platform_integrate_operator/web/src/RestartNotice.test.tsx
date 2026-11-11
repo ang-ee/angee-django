@@ -51,10 +51,6 @@ vi.mock("@angee/ui/chrome/refine-menu", () => ({
   useChromePlace: () => ({ railPlace: { scope: mocks.scope } }),
 }));
 
-vi.mock("./i18n", () => ({
-  usePlatformIntegrateOperatorT: () => (key: string) => key,
-}));
-
 beforeEach(() => {
   mocks.connection = null;
   mocks.operation = null;
@@ -91,7 +87,7 @@ describe("RestartNotice", () => {
 
     render(<RestartNotice />);
 
-    expect(screen.getByText("restart.running.title")).not.toBeNull();
+    expect(screen.getByText("Restarting application")).not.toBeNull();
     expect(screen.getByText("Restarting web")).not.toBeNull();
   });
 });

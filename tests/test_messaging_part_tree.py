@@ -18,10 +18,10 @@ from tests.test_messaging import _storage_drive
 
 
 @pytest.fixture
-def part_tree(composed_tables: None) -> tuple[Message, dict[str, Part]]:
+def part_tree(db: None) -> tuple[Message, dict[str, Part]]:
     """Persist mixed, alternative, related and forwarded MIME branches."""
 
-    del composed_tables
+    del db
     with system_context(reason="messaging part tree setup"), mute_changes():
         message = Message.objects.create(platform="email")
         parts: dict[str, Part] = {}
@@ -157,11 +157,11 @@ def test_part_queries_never_follow_cross_message_parent_edges(
 
 @pytest.mark.parametrize("prefetched", [False, True])
 def test_part_ties_cycles_and_orphan_components_have_deterministic_order(
-    composed_tables: None, prefetched: bool
+    db: None, prefetched: bool
 ) -> None:
     """Sibling sqids break ties, and rootless cycles remain finite and visible."""
 
-    del composed_tables
+    del db
     with system_context(reason="messaging cyclic part setup"), mute_changes():
         message = Message.objects.create(platform="email")
         root = Part.objects.create(message=message, position=9)
@@ -192,10 +192,10 @@ def test_part_ties_cycles_and_orphan_components_have_deterministic_order(
     assert Part.objects.descendants_for_message(message, alone.pk) == []
 
 
-def test_empty_message_and_missing_parent_in_native_prefetch(composed_tables: None) -> None:
+def test_empty_message_and_missing_parent_in_native_prefetch(db: None) -> None:
     """Empty forests and incomplete native prefetches do not invent ancestors."""
 
-    del composed_tables
+    del db
     with system_context(reason="messaging incomplete part setup"), mute_changes():
         message = Message.objects.create(platform="email")
         assert Part.objects.reading_order_for_message(message) == []

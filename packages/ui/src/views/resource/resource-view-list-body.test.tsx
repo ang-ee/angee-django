@@ -26,10 +26,6 @@ import {
   RowActionsHeader,
 } from "./resource-view-list-body";
 
-vi.mock("../../i18n", () => ({
-  useUiT: () => (key: string) => key,
-}));
-
 test.each([undefined, "text", "statusBadge"])("conditional cells hide ordinary values and %s widgets", (widget) => {
   const column = { field: "status", widget, showWhen: (row: { visible: boolean }) => row.visible };
   const { container, rerender } = render(<ListCellContent column={column} row={{ status: "ACTIVE", visible: false }} />);
@@ -79,7 +75,7 @@ test("renders the framework row-actions header as visually hidden copy", () => {
     </table>,
   );
 
-  expect(screen.getByText("list.actions").classList.contains("sr-only")).toBe(true);
+  expect(screen.getByText("Actions").classList.contains("sr-only")).toBe(true);
 });
 
 test("projects count columns into aggregate measures", () => {

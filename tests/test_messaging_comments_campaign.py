@@ -56,29 +56,31 @@ def test_comment_writes_refresh_stale_message_kind_under_lock(comment_record, ve
     assert Message._base_manager.get(pk=message.pk).preview == "Before retained kind"
 
 
-@pytest.mark.parametrize("seat", ["author", "peer", "writer", "outsider"])
-def test_comment_mutations_match_author_post_access_or_record_moderation(comment_record, seat):
+def test_comment_mutations_match_author_post_access_or_record_moderation(comment_record):
+    """The author (who may post) and a record moderator edit and delete; a peer reader and an outsider may not."""
+
     case = comment_record
-    with actor_context(case.author):
-        message = case.record.message_post("Original comment")
-    actor = getattr(case, seat)
-    expected = seat in {"author", "writer"}
-    with actor_context(actor):
-        assert message.can_edit(post_access=case.record.can_post(), moderate_access=case.record.can_moderate(),
-                                actor_id=actor.pk) is expected
-        assert message.can_delete(post_access=case.record.can_post(), moderate_access=case.record.can_moderate(),
-                                  actor_id=actor.pk) is expected
-        if expected:
-            edited = case.record.message_update_content(message, body="Revised comment")
-            assert edited.created_by_id == case.author.pk
-            assert edited.edit_history[0]["edited_by_id"] == str(actor.pk)
-            case.record.message_unlink(edited)
-        else:
-            with pytest.raises(PermissionDenied):
-                case.record.message_update_content(message, body="Unauthorized edit")
-            with pytest.raises(PermissionDenied):
-                case.record.message_unlink(message)
-    assert Message._base_manager.filter(pk=message.pk).exists() is not expected
+    for seat in ("author", "peer", "writer", "outsider"):
+        with actor_context(case.author):
+            message = case.record.message_post("Original comment")
+        actor = getattr(case, seat)
+        expected = seat in {"author", "writer"}
+        with actor_context(actor):
+            access = dict(post_access=case.record.can_post(), moderate_access=case.record.can_moderate(),
+                          actor_id=actor.pk)
+            assert message.can_edit(**access) is expected, seat
+            assert message.can_delete(**access) is expected, seat
+            if expected:
+                edited = case.record.message_update_content(message, body="Revised comment")
+                assert edited.created_by_id == case.author.pk
+                assert edited.edit_history[0]["edited_by_id"] == str(actor.pk)
+                case.record.message_unlink(edited)
+            else:
+                with pytest.raises(PermissionDenied):
+                    case.record.message_update_content(message, body="Unauthorized edit")
+                with pytest.raises(PermissionDenied):
+                    case.record.message_unlink(message)
+        assert Message._base_manager.filter(pk=message.pk).exists() is not expected, seat
 
 
 def test_author_who_loses_post_access_cannot_edit_or_delete_their_comment(comment_record, monkeypatch):
@@ -97,8 +99,9 @@ def test_author_who_loses_post_access_cannot_edit_or_delete_their_comment(commen
     assert Message._base_manager.get(pk=message.pk).preview == "Before permission change"
 
 
-@pytest.mark.parametrize("seat", ["author", "peer", "writer", "outsider"])
-def test_senderless_comment_grants_nobody_edit_or_delete(comment_record, seat):
+def test_senderless_comment_grants_nobody_edit_or_delete(comment_record):
+    """Without a sender, neither the author nor a moderator edits or deletes."""
+
     case = comment_record
     with actor_context(case.author):
         message = case.record.message_post("Unattributed comment")
@@ -106,15 +109,16 @@ def test_senderless_comment_grants_nobody_edit_or_delete(comment_record, seat):
     with system_context(reason="test.comments.missing_sender"):
         Message._base_manager.filter(pk=message.pk).update(sender_id=None)
     message.refresh_from_db()
-    actor = getattr(case, seat)
-    with actor_context(actor):
-        access = dict(post_access=case.record.can_post(), moderate_access=case.record.can_moderate(), actor_id=actor.pk)
-        assert not message.can_edit(**access)
-        assert not message.can_delete(**access)
-        with pytest.raises(PermissionDenied):
-            case.record.message_update_content(message, body="Unauthorized edit")
-        with pytest.raises(PermissionDenied):
-            case.record.message_unlink(message)
+    for actor in (case.author, case.writer):
+        with actor_context(actor):
+            access = dict(post_access=case.record.can_post(), moderate_access=case.record.can_moderate(),
+                          actor_id=actor.pk)
+            assert not message.can_edit(**access)
+            assert not message.can_delete(**access)
+            with pytest.raises(PermissionDenied):
+                case.record.message_update_content(message, body="Unauthorized edit")
+            with pytest.raises(PermissionDenied):
+                case.record.message_unlink(message)
 
 
 def test_record_membership_is_required_even_for_a_writer(comment_record):
@@ -131,7 +135,7 @@ def test_record_membership_is_required_even_for_a_writer(comment_record):
     assert Message._base_manager.filter(pk=foreign.pk).exists()
 
 
-def test_provider_edits_record_no_local_editor_even_with_an_ambient_user(channel, composed_tables):
+def test_provider_edits_record_no_local_editor_even_with_an_ambient_user(channel):
     actor = make_user("sync-operator")
     initial = _parsed("provider-campaign", text="First provider body", sent_at=_AT)
     with actor_context(actor):
@@ -154,7 +158,7 @@ def test_provider_edits_record_no_local_editor_even_with_an_ambient_user(channel
 
 
 @pytest.mark.parametrize("named", [False, True])
-def test_email_and_named_provider_conversations_stay_ownerless_on_repeated_ingest(channel, composed_tables, named):
+def test_email_and_named_provider_conversations_stay_ownerless_on_repeated_ingest(channel, named):
     parsed = _parsed("ownerless-ingest", sent_at=_AT)
     if named:
         parsed = replace(parsed, platform="slack", thread=ParsedThread(external_id="named-conversation"))

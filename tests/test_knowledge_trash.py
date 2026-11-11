@@ -15,7 +15,7 @@ from tests.conftest import Page, Vault, addon_schema, create_user, vault_for
 
 knowledge_schema = importlib.import_module("angee.knowledge.schema")
 
-pytestmark = pytest.mark.usefixtures("composed_tables")
+pytestmark = pytest.mark.django_db
 
 TRASH = """
 mutation Trash($id: ID!, $reason: String!, $confirm: Boolean!) {

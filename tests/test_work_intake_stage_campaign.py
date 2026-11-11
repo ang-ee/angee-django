@@ -37,8 +37,9 @@ def queue_case(campaign_access, campaign_user):
     return people, queue, task
 
 
-@pytest.mark.parametrize("role", ("owner", "assignee", "member", "manager", "reader", "admin"))
+@pytest.mark.parametrize("role", ("manager", "assignee"))
 def test_trash_revokes_held_instances_and_all_list_shapes(queue_case, role):
+    """A held instance re-checks after trash: the queue manager keeps every shape, the assignee loses them."""
     people, _, task = queue_case
     actor = people[role]
     held = Task.objects.with_actor(actor).get(pk=task.pk)

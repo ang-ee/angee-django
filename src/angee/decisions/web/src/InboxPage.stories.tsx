@@ -1,8 +1,8 @@
 import { useMemo } from "react";
 import * as v from "valibot";
 import { operationDocuments } from "@angee/gql/console/actions";
-import { storyAppearance, type RuntimeFixtureProps, RoutedRuntimeFixture, jsonResponse, storySchema } from "@angee/storybook/testing";
-import { createRouteHref, JsonValueSchema } from "@angee/ui";
+import { GraphQLError, storyAppearance, type RuntimeFixtureProps, RoutedRuntimeFixture, storySchema } from "@angee/storybook/testing";
+import { createRouteHref } from "@angee/ui";
 
 import { ProposalSchema } from "./proposal";
 import { InboxPage } from "./InboxPage";
@@ -20,7 +20,6 @@ export const Conflict = { render: (_args: unknown, { globals }: { globals: Recor
 export const InvalidAttempt = { render: (_args: unknown, { globals }: { globals: Record<string, unknown> }) => <DecisionStory appearance={storyAppearance(globals)} invalidAttempt /> };
 export const ReadOnly = { render: (_args: unknown, { globals }: { globals: Record<string, unknown> }) => <DecisionStory appearance={storyAppearance(globals)} readOnly /> };
 
-const RequestSchema = v.object({ query: v.string(), variables: v.optional(v.record(v.string(), JsonValueSchema), {}) });
 const documents = { console: operationDocuments };
 const runtime = {
   routeHref: createRouteHref([{ name: "decisions.inbox", path: "/decisions" }, { name: "decisions.inbox.record", path: "/decisions/$id" }, { name: "notes", path: "/notes" }, { name: "notes.record", path: "/notes/$id" }, { name: "iam.users", path: "/iam/users" }, { name: "iam.users.record", path: "/iam/users/$id" }]),
@@ -47,28 +46,28 @@ export function DecisionStory({ appearance, multiple = false, closed = false, in
     if (emptyFacts) current = { ...current, answered_by: null, answered_at: null };
     if (pendingEmpty) current = { ...current, requester: null };
 
-    const fixture = storySchema(async (_input, init) => {
-      const { query, variables } = v.parse(RequestSchema, JSON.parse(String(init?.body ?? "{}")));
-      if (query.includes("decide(")) {
+    const listed = () => ({ ...current, kind_label: "Review", assignees: [{ id: "usr_reviewer", display_name: "Reviewer" }] });
+    const fixture = storySchema({
+      decide: (args) => {
         if (conflicting) { current = { ...current, revision: current.revision + 1 }; conflicting = false; }
-        if (variables.revision !== current.revision) return jsonResponse({ data: null, errors: [{
-          message: "The decision has changed.", path: ["decide"], extensions: { code: "STALE_REVISION" },
-        }] });
+        if (args.revision !== current.revision) {
+          throw new GraphQLError("The decision has changed.", { path: ["decide"], extensions: { code: "STALE_REVISION" } });
+        }
         if (rejectAttempt) {
           rejectAttempt = false;
-          return jsonResponse({ data: { decide: { ok: false, message: "Check the answer.", validation_errors: { chosen: ["Choose an offered alternative."] } } } });
+          return { ok: false, message: "Check the answer.", validation_errors: { chosen: ["Choose an offered alternative."] } };
         }
-        const chosen = v.parse(v.array(v.string()), variables.chosen);
+        const chosen = v.parse(v.array(v.string()), args.chosen);
         if (!chosen.length || chosen.some((key) => key !== "accept" && key !== "reject")) throw new Error("Unexpected choice.");
         current = { ...current, is_open: false, permissions: [], revision: current.revision + 1,
           verdict: chosen, verdict_label: chosen.map((key) => key === "accept" ? "Accept and archive" : "Keep what is on the record").join("; "),
           answered_by: { display_name: "Reviewer" }, answered_at: "2026-09-29T09:30:00Z" };
-        return jsonResponse({ data: { decide: { ok: true, message: "Decision recorded.", id: current.id } } });
-      }
-      if (query.includes("decisions_by_pk")) return jsonResponse({ data: { decisions_by_pk: { ...current, kind_label: "Review",
-        assignees: [{ id: "usr_reviewer", display_name: "Reviewer" }] } } });
-      if (query.includes("notes_by_pk")) return jsonResponse({ data: { notes_by_pk: { id: "nte_7", display_name: "Review notes" } } });
-      return jsonResponse({ data: { decisions: [{ ...current, kind_label: "Review", assignees: [{ id: "usr_reviewer", display_name: "Reviewer" }] }], decisions_aggregate: { aggregate: { count: 1 } } } });
+        return { ok: true, message: "Decision recorded.", id: current.id };
+      },
+      decisions_by_pk: listed,
+      notes_by_pk: () => ({ id: "nte_7", display_name: "Review notes" }),
+      decisions: () => [listed()],
+      decisions_aggregate: () => ({ aggregate: { count: 1 } }),
     }).public!;
     return { public: fixture, console: { ...fixture, metadata: { angee: { resources: [
       decisionResourceFixture,

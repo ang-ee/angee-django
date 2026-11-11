@@ -49,7 +49,7 @@ class GroupedSearchPlugin(RetrievalBackend):
     key = "lexical"
 
 
-def test_grouped_and_bound_search_dispatch_to_hit_contract(composed_tables, settings, monkeypatch):
+def test_grouped_and_bound_search_dispatch_to_hit_contract(db, settings, monkeypatch):
     settings.ANGEE_KNOWLEDGE_RETRIEVAL_CLASSES = {
         **settings.ANGEE_KNOWLEDGE_RETRIEVAL_CLASSES,
         "lexical": "tests.test_knowledge_plugin.GroupedSearchPlugin",
@@ -105,7 +105,7 @@ def test_related_pages_tool_compiles_with_bounded_inputs():
         tool._variables({"page": "page-id", "first": MAX_QUERY_LIMIT + 1})
 
 
-def test_related_pages_resolver_refuses_an_unreadable_source(composed_tables, monkeypatch):
+def test_related_pages_resolver_refuses_an_unreadable_source(db, monkeypatch):
     owner, outsider = create_user("related-owner"), create_user("related-outsider")
     vault = vault_for(owner)
     with actor_context(owner):

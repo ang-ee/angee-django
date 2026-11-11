@@ -10,6 +10,21 @@ live in code docstrings.
 
 ## Unreleased — shared addon contracts, native embeddings and graph retrieval
 
+- The `composed_tables` test fixture is removed: a database test requests
+  pytest-django's `db` or carries a `django_db` mark, and rolls back over the
+  session baseline `angee.base.testing.fixtures` records. The
+  `angee.parties.testing.fixtures` plugin and its `statement_sources` fixture are
+  removed too; `angee.provenance.testing.fixtures` loads every installed addon's
+  statement principals into that baseline.
+- `storage/file` derives `read`, `write` and `share` from the new
+  `read_granted`, `write_granted` and `share_granted` alone and withholds a
+  trashed file from everyone who cannot delete it, as knowledge pages and
+  dashboards do. Fragments union their file arms into the granted permissions
+  (messaging's `message_part`, projects' `task_record` and the notes example's
+  `note_record` moved); the security check `storage.E001` refuses an arm on
+  `storage/file` `read`, `write` or `share`. Operators re-sync the permission
+  schema: storage revision 12, the messaging fragment 7, the projects fragment
+  10 and the notes example fragment 4.
 - Native lists accept `relatedModels: readonly string[]` for columns and filter
   membership derived from related rows. Declared model changes refresh flat,
   client and grouped lists when `related_records` names any record of the list's

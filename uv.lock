@@ -320,7 +320,7 @@ dev = [
     { name = "hypothesis", specifier = ">=6.100" },
     { name = "import-linter", specifier = ">=2.1" },
     { name = "psycopg", extras = ["binary", "pool"], specifier = ">=3.2" },
-    { name = "pytest", specifier = ">=8.0" },
+    { name = "pytest", specifier = ">=9" },
     { name = "pytest-django", specifier = ">=4.8" },
     { name = "pytest-randomly", specifier = ">=3.16" },
     { name = "pytest-split", specifier = ">=0.11" },

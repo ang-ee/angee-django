@@ -493,6 +493,35 @@ describe("Angee Hasura provider defaults", () => {
     live.provider.unsubscribe(second);
   });
 
+  test("a resource reading its MTI ancestor's feed refreshes on that row's changes", async () => {
+    vi.useFakeTimers();
+    const { subscribe, sinks } = recordingClient();
+    const callback = vi.fn();
+    const provider = createAngeeChangeLiveProvider(
+      { subscribe, on: vi.fn(() => () => undefined) } as never,
+      [
+        resource({ changes: "partyChanged", list: "parties", model: "parties.Party" }),
+        resource({ changes: "partyChanged", list: "people", model: "parties.Person" }),
+      ],
+    );
+
+    const subscription = provider.subscribe({
+      channel: "resources/people",
+      types: ["*"],
+      callback,
+      params: { resource: "people" },
+    });
+    nthSink(sinks, 0).next({ data: { partyChanged: { model: "parties.Party", id: "pty_1", action: "update" } } });
+    await vi.advanceTimersByTimeAsync(300);
+    provider.unsubscribe(subscription);
+
+    expect(subscribe).toHaveBeenCalledTimes(1);
+    expect(callback).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+      type: "updated",
+      payload: expect.objectContaining({ id: "pty_1", model: "parties.Person" }),
+    }));
+  });
+
   test("skips resources without change roots", () => {
     const subscribe = vi.fn();
     const provider = createAngeeChangeLiveProvider(

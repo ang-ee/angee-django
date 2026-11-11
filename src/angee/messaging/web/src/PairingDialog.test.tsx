@@ -99,18 +99,6 @@ vi.mock("@angee/ui", async (importOriginal) => ({
   FieldControl: (props: React.InputHTMLAttributes<HTMLInputElement>) => <input {...props} />,
 }));
 
-vi.mock("./i18n", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./i18n")>();
-  return {
-    ...actual,
-    useMessagingT: () => (key: string) => {
-      const message = actual.enMessagingMessages[key];
-      if (message === undefined) throw new Error(`Missing messaging message: ${key}`);
-      return message;
-    },
-  };
-});
-
 import { ChannelPairingAction, PairingDialog } from "./PairingDialog";
 
 const lifecycleIs = (expected: string) =>

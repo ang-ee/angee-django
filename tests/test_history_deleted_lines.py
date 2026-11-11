@@ -19,7 +19,7 @@ from angee.provenance.querysets import model_history
 from angee.provenance.schema import RecordHistory
 from tests.conftest import create_user
 
-pytestmark = pytest.mark.usefixtures("composed_tables")
+pytestmark = pytest.mark.django_db
 
 Project = apps.get_model("projects", "Project")
 Milestone = apps.get_model("projects", "Milestone")
@@ -47,8 +47,8 @@ definition projects/milestone {
 
 
 @pytest.fixture
-def line_policy(composed_tables: None) -> Iterator[None]:
-    del composed_tables
+def line_policy(db: None) -> Iterator[None]:
+    del db
     install_schema(parse_zed(LINE_SCHEMA))
     try:
         yield

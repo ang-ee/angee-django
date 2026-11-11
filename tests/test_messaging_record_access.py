@@ -72,8 +72,8 @@ def test_follow_cleanup_failure_rolls_back_grant_and_follow(
     assert ThreadFollower._base_manager.filter(pk=follower.pk).exists()
 
 
-def test_plain_django_host_can_save_post_and_delete_chatter(composed_tables: None) -> None:
-    del composed_tables
+def test_plain_django_host_can_save_post_and_delete_chatter(db: None) -> None:
+    del db
     record = PlainChatterRecord.objects.create(title="Plain host")
 
     message = record.message_post("No Angee model base required")
@@ -84,8 +84,8 @@ def test_plain_django_host_can_save_post_and_delete_chatter(composed_tables: Non
     assert not Message._base_manager.filter(pk=message.pk).exists()
 
 
-def test_missing_chatter_target_is_rejected_at_the_attachment(composed_tables: None) -> None:
-    del composed_tables
+def test_missing_chatter_target_is_rejected_at_the_attachment(db: None) -> None:
+    del db
     edge = ThreadAttachment(
         content_type=ContentType.objects.get_for_model(PlainChatterRecord), object_id=1,
     )

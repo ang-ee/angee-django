@@ -9,7 +9,7 @@ from tests.conftest import create_user
 from tests.test_provenance_graphql import _history, _schema, _titled_page
 from tests.test_timeline import read_timeline
 
-pytestmark = [pytest.mark.django_db(transaction=True), pytest.mark.usefixtures("composed_tables")]
+pytestmark = pytest.mark.django_db(transaction=True)
 
 
 @override_settings(ANGEE_TIMELINE_KINDS=["angee.provenance.timeline.timeline_kinds"])

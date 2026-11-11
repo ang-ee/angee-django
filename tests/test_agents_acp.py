@@ -53,7 +53,7 @@ pytestmark = pytest.mark.django_db(transaction=True)
 
 
 @pytest.fixture
-def chat(composed_tables: None, capture_tasks: list[Any], monkeypatch: pytest.MonkeyPatch) -> Iterator[Any]:
+def chat(db: None, capture_tasks: list[Any], monkeypatch: pytest.MonkeyPatch) -> Iterator[Any]:
     owner = get_user_model().objects.create_user(username="acp-owner")
     with system_context(reason="test ACP agent"):
         agent = Agent.objects.create(name="Assistant", owner=owner, runtime_class="pydantic", runtime_status="running")
@@ -509,41 +509,15 @@ def test_binary_and_text_frames_and_sdk_validation(chat: Any, version: int) -> N
 
 
 @pytest.mark.parametrize("version", [1, 2])
-def test_connection_actor_survives_sdk_tasks_and_sync_verbs_and_hides_other_sessions(
-    chat: Any,
-    monkeypatch: pytest.MonkeyPatch,
-    version: int,
-) -> None:
+def test_connection_actor_survives_sdk_tasks_and_sync_verbs_and_hides_other_sessions(chat: Any, version: int) -> None:
     agent, owner, application, _ = chat
     other = create_platform_admin("acp-other")
     cookie, other_cookie = _cookie(owner), _cookie(other)
     with actor_context(owner):
         private = AgentSession.objects.start(agent, user=owner, context={})
         private.post("Private")
-    actors: list[Any] = []
-    start = AgentSessionManager.start
-    post = AgentSession.post
-    prompt = SessionAgent.prompt
 
-    def start_spy(manager: Any, *args: Any, **kwargs: Any) -> Any:
-        assert current_actor() == to_subject_ref(kwargs["actor"])
-        actors.append(current_actor())
-        return start(manager, *args, **kwargs)
-
-    def post_spy(session: Any, *args: Any, **kwargs: Any) -> Any:
-        assert current_actor() == to_subject_ref(kwargs["actor"])
-        actors.append(current_actor())
-        return post(session, *args, **kwargs)
-
-    async def prompt_spy(adapter: Any, *args: Any, **kwargs: Any) -> Any:
-        assert current_actor() == to_subject_ref(adapter.user)
-        return await prompt(adapter, *args, **kwargs)
-
-    monkeypatch.setattr(AgentSessionManager, "start", start_spy)
-    monkeypatch.setattr(AgentSession, "post", post_spy)
-    monkeypatch.setattr(SessionAgent, "prompt", prompt_spy)
-
-    async def scenario() -> None:
+    async def scenario() -> str:
         peer = Peer(application, agent, other_cookie, version)
         await peer.connect()
         own = await peer.new()
@@ -581,9 +555,14 @@ def test_connection_actor_survives_sdk_tasks_and_sync_verbs_and_hides_other_sess
         listed = await owner_peer.request("session/list", {})
         assert [s["sessionId"] for s in listed["sessions"]] == [str(private.sqid)]
         await owner_peer.socket.disconnect()
+        return own
 
-    asyncio.run(scenario())
-    assert actors == [to_subject_ref(other), to_subject_ref(other)]
+    own = asyncio.run(scenario())
+    with system_context(reason="test ACP rows carry the connection actor"):
+        own_session = AgentSession.objects.get(sqid=own)
+        own_turns = list(own_session.turns.all())
+    assert (own_session.user_id, own_session.created_by_id) == (other.pk, other.pk)
+    assert [(turn.prompt, turn.created_by_id) for turn in own_turns] == [("My message", other.pk)]
     private.refresh_from_db()
     assert private.status == "idle" and private.turns.count() == 1
 
@@ -673,28 +652,11 @@ def test_handshake_requires_call_and_available_in_process_chat(chat: Any, unavai
 
 
 @pytest.mark.parametrize("version", [1, 2])
-def test_cancel_close_and_live_updates_reach_every_attached_connection(
-    chat: Any,
-    monkeypatch: pytest.MonkeyPatch,
-    version: int,
-) -> None:
+def test_cancel_close_and_live_updates_reach_every_attached_connection(chat: Any, version: int) -> None:
     agent, owner, application, _ = chat
     cookie = _cookie(owner)
-    actors: list[Any] = []
 
-    def spy(operation: Any) -> Any:
-        def dispatch(session: Any, *args: Any, **kwargs: Any) -> Any:
-            assert current_actor() == to_subject_ref(owner) == to_subject_ref(kwargs["actor"])
-            actors.append(current_actor())
-            return operation(session, *args, **kwargs)
-
-        return dispatch
-
-    monkeypatch.setattr(AgentSession, "post", spy(AgentSession.post))
-    monkeypatch.setattr(AgentSession, "cancel_turn", spy(AgentSession.cancel_turn))
-    monkeypatch.setattr(AgentSession, "close", spy(AgentSession.close))
-
-    async def scenario() -> None:
+    async def scenario() -> str:
         first, second = Peer(application, agent, cookie, version), Peer(application, agent, cookie, version)
         await first.connect()
         await second.connect()
@@ -733,9 +695,14 @@ def test_cancel_close_and_live_updates_reach_every_attached_connection(
             assert error["error"]["code"] == -32602 and "closed" in error["error"]["message"]
         await first.socket.disconnect()
         await second.socket.disconnect()
+        return session_id
 
-    asyncio.run(scenario())
-    assert actors == [to_subject_ref(owner)] * (2 if version == 1 else 4)
+    session_id = asyncio.run(scenario())
+    with system_context(reason="test ACP cancel and close outcomes"):
+        session = AgentSession.objects.get(sqid=session_id)
+        turns = [(turn.status, turn.updated_by_id) for turn in session.turns.all()]
+    assert session.status == ("closed" if version == 2 else "idle")
+    assert turns == [(TurnStatus.CANCELED, owner.pk)]
 
 
 @pytest.mark.parametrize("version", [1, 2])

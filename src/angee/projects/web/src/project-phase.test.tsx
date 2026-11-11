@@ -40,10 +40,6 @@ vi.mock("@angee/ui", async (importOriginal) => ({
   DatePopover: ({ ariaLabel, onSelectDate }: { ariaLabel: string; onSelectDate: (date: Date) => void }) =>
     <button type="button" onClick={() => onSelectDate(new Date(2026, 9, 24))}>{ariaLabel}</button>,
 }));
-vi.mock("./i18n", () => ({
-  useProjectsT: () => (key: string, values?: Record<string, string>) =>
-    key === "project.phase.confirm" ? `Change from ${values?.previous} to ${values?.selected}?` : key,
-}));
 
 // happy-dom lays nothing out: give the filled bar room so its steps stay expanded rather than collapsing to a menu.
 beforeEach(() => { vi.spyOn(HTMLElement.prototype, "clientWidth", "get").mockReturnValue(800); });
@@ -60,7 +56,7 @@ test("only selectable milestones ask for confirmation, and a declined confirmati
   const next = screen.getByRole("button", { name: "Second" });
   fireEvent.click(next);
   await waitFor(() => expect(mocks.confirm).toHaveBeenCalledWith(expect.objectContaining({
-    body: "Change from First to Second?",
+    body: "Change the current phase from First to Second? A finished project will reopen.",
   })));
   expect(mocks.select).not.toHaveBeenCalled();
   fireEvent.click(next);
@@ -79,7 +75,7 @@ test("only a milestone writer can edit dates through the milestone resource", as
   }} />);
   expect(screen.queryByRole("button", { name: "Edit dates for Second" })).toBeNull();
   fireEvent.click(screen.getByRole("button", { name: "Edit dates for First" }));
-  fireEvent.click(screen.getByRole("button", { name: "project.phase.starts" }));
+  fireEvent.click(screen.getByRole("button", { name: "Starts" }));
   await waitFor(() => expect(mocks.update).toHaveBeenCalledWith(expect.objectContaining({
     id: "one", values: { start_date: "2026-10-24" },
     meta: expect.objectContaining({ gqlVariables: { expected_revision: 2 } }),
@@ -95,7 +91,7 @@ test("the project lifecycle projection mutes the path and replaces the title bad
   }} />);
   expect(screen.getByText("Dropped · Sep 24")).toBeTruthy();
   expect(screen.getByText("First").closest("[role='listitem']")?.className).toContain("bg-border-strong");
-  expect(screen.queryByRole("button", { name: "project.action.resume" })).toBeNull();
+  expect(screen.queryByRole("button", { name: "Resume" })).toBeNull();
 });
 
 test.each([["paused", "Paused"], ["done", "Completed"]])("%s projects show their state as an off-path chip", (status, label) => {

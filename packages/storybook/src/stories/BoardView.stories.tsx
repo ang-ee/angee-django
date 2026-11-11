@@ -8,7 +8,7 @@ import type {
 } from "@angee/metadata";
 import { ResourceList, type ListColumn } from "@angee/ui";
 
-import { jsonResponse, storySchema } from "./runtime-fixtures";
+import { storySchema } from "./runtime-fixtures";
 
 interface TaskRow extends Row {
   id: string;
@@ -204,25 +204,21 @@ function createBoardStorySchemas() {
     stage: { ...task.stage },
   }));
   let createdCount = 0;
-  const schemas = storySchema(async (_input, init) => {
-    const request = storyRequest(init);
-    const variables = request.variables ?? {};
-    const mutationValues = recordValue(variables.object)
-      ?? recordValue(variables.values)
-      ?? recordValue(variables.input)
-      ?? {};
-    let mutationTask = storedTasks[0];
-    if (request.query.includes("update_tasks_by_pk")) {
-      const id = stringValue(variables.id)
-        ?? stringValue(recordValue(variables.pk_columns)?.id);
-      storedTasks = storedTasks.map((task) => {
-        if (task.id !== id) return task;
-        mutationTask = taskWithValues(task, mutationValues);
-        return mutationTask;
-      });
-    } else if (request.query.includes("insert_tasks_one")) {
+  const values = (args: Record<string, unknown>) => recordValue(args.object) ?? recordValue(args._set) ?? {};
+  const schemas = storySchema({
+    tasks: () => storedTasks,
+    tasks_aggregate: () => ({ aggregate: { count: storedTasks.length } }),
+    stages: () => stages,
+    stages_aggregate: () => ({ aggregate: { count: stages.length } }),
+    tasks_by_pk: (args) => storedTasks.find((task) => task.id === stringValue(args.id)),
+    update_tasks_by_pk: (args) => {
+      const id = stringValue(recordValue(args.pk_columns)?.id);
+      storedTasks = storedTasks.map((task) => task.id === id ? taskWithValues(task, values(args)) : task);
+      return storedTasks.find((task) => task.id === id);
+    },
+    insert_tasks_one: (args) => {
       createdCount += 1;
-      mutationTask = taskWithValues(
+      const created = taskWithValues(
         {
           id: `task-created-${createdCount}`,
           title: "Untitled task",
@@ -230,24 +226,11 @@ function createBoardStorySchemas() {
           stage: { id: stages[0].id, name: stages[0].name },
           sort_order: 1024,
         },
-        mutationValues,
+        values(args),
       );
-      storedTasks = [...storedTasks, mutationTask];
-    }
-    const detailId = stringValue(variables.id);
-    const detailTask = storedTasks.find((task) => task.id === detailId)
-      ?? mutationTask;
-    return jsonResponse({
-      data: {
-        tasks: storedTasks,
-        tasks_aggregate: { aggregate: { count: storedTasks.length } },
-        stages,
-        stages_aggregate: { aggregate: { count: stages.length } },
-        tasks_by_pk: detailTask,
-        insert_tasks_one: mutationTask,
-        update_tasks_by_pk: mutationTask,
-      },
-    });
+      storedTasks = [...storedTasks, created];
+      return created;
+    },
   });
   schemas.public = { ...schemas.public!, metadata };
   return schemas;
@@ -273,24 +256,6 @@ function taskWithValues(
       ? { sort_order: rank }
       : {}),
   };
-}
-
-function storyRequest(init: RequestInit | undefined): {
-  query: string;
-  variables?: Record<string, unknown>;
-} {
-  if (typeof init?.body !== "string") return { query: "" };
-  try {
-    const body = recordValue(JSON.parse(init.body));
-    if (!body) return { query: "" };
-    const variables = recordValue(body.variables);
-    return {
-      query: typeof body.query === "string" ? body.query : "",
-      ...(variables ? { variables } : {}),
-    };
-  } catch {
-    return { query: "" };
-  }
 }
 
 function recordValue(value: unknown): Record<string, unknown> | undefined {

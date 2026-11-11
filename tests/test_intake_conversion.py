@@ -21,7 +21,7 @@ def _project_need(username: str, **queue: Any) -> tuple[Any, Any, Any]:
         return owner, need, Queue.objects.create(key="DESK", name="Desk", slug="desk", **queue)
 
 
-def test_converting_a_need_files_one_triage_task_and_retargets_the_need(composed_tables: None) -> None:
+def test_converting_a_need_files_one_triage_task_and_retargets_the_need(db: None) -> None:
     owner, need, queue = _project_need("need-converter")
     project = need.project
     with actor_context(owner):
@@ -33,7 +33,7 @@ def test_converting_a_need_files_one_triage_task_and_retargets_the_need(composed
     assert list(Task._base_manager.all()) == [task]
 
 
-def test_conversion_refuses_a_queue_without_triage_and_an_unsaved_need(composed_tables: None) -> None:
+def test_conversion_refuses_a_queue_without_triage_and_an_unsaved_need(db: None) -> None:
     owner, need, queue = _project_need("need-refused", provision_stages=False)
     project = need.project
     with actor_context(owner):

@@ -34,6 +34,7 @@ import {
   type AngeeHasuraSchemaConfig,
 } from "@angee/refine";
 import type { IResourceItem } from "@refinedev/core";
+import { graphqlWireFetch, type GraphQLWireOperation, type GraphQLWireRequest } from "@angee/refine/testing/wire";
 import { composeAddons } from "@angee/app";
 import { parseFlatSearch, stringifyFlatSearch } from "@angee/app/create-app";
 import { NuqsTestingAdapter } from "nuqs/adapters/testing";
@@ -49,6 +50,7 @@ import {
 } from "@tanstack/react-router";
 
 export { testDataResource, testQueryAxis, testQueryField, testResourceQuery } from "@angee/metadata/testing";
+export { GraphQLError, type GraphQLWireOperation, type GraphQLWireRequest } from "@angee/refine/testing/wire";
 
 /**
  * The one Storybook environment, shared by the global preview decorator and
@@ -95,30 +97,16 @@ export function storyAppearance(globals: Record<string, unknown>): NonNullable<R
   };
 }
 
-/** A JSON `Response` for a story fetch responder. */
-export function jsonResponse(data: unknown): Response {
-  return new Response(JSON.stringify(data), {
-    headers: { "content-type": "application/json" },
-  });
-}
-
 /**
- * Build the `public` schema config for a story from its model fetch responder,
- * answering the CSRF probe uniformly so the responder only describes its model
- * queries/mutations.
+ * The `public` schema config of a story or native test, whose transport is
+ * refine's GraphQL wire fake: each root field is answered by the handler named
+ * for it, and an unhandled field or a missing required variable fails loudly.
  */
 export function storySchema(
-  fetch: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>,
+  operations: Readonly<Record<string, GraphQLWireOperation>>,
+  onRequest?: (request: GraphQLWireRequest) => void,
 ): Record<string, StorySchemaConfig> {
-  return {
-    public: {
-      url: "/graphql/public/",
-      fetch: (input, init) =>
-        String(input).includes("/auth/csrf/")
-          ? Promise.resolve(jsonResponse({ token: "storybook" }))
-          : fetch(input, init),
-    },
-  };
+  return { public: { url: "/graphql/public/", fetch: graphqlWireFetch(operations, onRequest) } };
 }
 
 export interface RuntimeFixtureProps {

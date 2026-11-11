@@ -99,7 +99,7 @@ def api(monkeypatch):
 
 
 @pytest.fixture
-def bridge(composed_tables):
+def bridge(db):
     with system_context(reason="test.notion.sync"):
         yield make_integration("notion-test", model=NotionConnection)
 
@@ -407,7 +407,7 @@ def test_vault_is_private_and_a_transferred_connection_cannot_write_it(bridge, a
         sync_bridge(bridge)
 
 
-def test_sync_action_requires_write_access(composed_tables, monkeypatch):
+def test_sync_action_requires_write_access(monkeypatch):
     with system_context(reason="test.notion.action.setup"):
         connection = make_integration("notion-action", model=NotionConnection)
     schema = addon_schema(schemas, "console")

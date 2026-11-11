@@ -112,6 +112,8 @@ class CardDavDirectoryBackend(DirectoryBackend):
     icon = "address-book"
     defaults = {"vendor": "carddav"}
     supports_identity_reads: ClassVar[bool] = True
+    response_cap: ClassVar[int] = _DAV_RESPONSE_CAP
+    """The largest decoded DAV response body read; a multiget splits until each answer fits."""
 
     # --- discovery (DirectoryBackend contract) ---
 
@@ -360,7 +362,7 @@ class CardDavDirectoryBackend(DirectoryBackend):
                 body=body.encode("utf-8"),
                 allow_private=True,
                 same_origin_redirects=3,
-                max_bytes=_DAV_RESPONSE_CAP,
+                max_bytes=self.response_cap,
             )
         except RedirectOriginError as error:
             raise CardDavError("CardDAV redirects must retain the request origin.") from error

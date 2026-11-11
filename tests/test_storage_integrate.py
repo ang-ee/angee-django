@@ -41,10 +41,10 @@ BASE_MTIME_NS = 1_700_000_000_000_000_000
 
 
 @pytest.fixture()
-def mount_env(tmp_path: Path, composed_tables: None) -> SimpleNamespace:
+def mount_env(tmp_path: Path, db: None) -> SimpleNamespace:
     """Seed the local vendor and managed default drive used by Mount tests."""
 
-    del composed_tables
+    del db
     managed_root = tmp_path / "managed"
     managed_root.mkdir()
     owner = create_platform_admin(
@@ -561,15 +561,14 @@ def test_reference_entry_data_error_is_contained_and_counted(
     mount = _connect(mount_env, root, mode=MountMode.REFERENCE, name="Data error")
     del queued_mounts
 
-    manager_type = type(File.objects)
-    original_index_external = manager_type.index_external
+    original_index_external = File.objects.index_external
 
-    def index_external(manager: Any, **kwargs: Any) -> Any:
+    def index_external(**kwargs: Any) -> Any:
         if kwargs["filename"] == long_name:
             raise DataError("value too long for storage filename")
-        return original_index_external(manager, **kwargs)
+        return original_index_external(**kwargs)
 
-    monkeypatch.setattr(manager_type, "index_external", index_external)
+    monkeypatch.setattr(File.objects, "index_external", index_external)
     assert _run_sync(mount) == 1
     assert mount.sync_stage == mount.SyncStage.COMPLETED
     assert _details(mount)["errors"] == 1

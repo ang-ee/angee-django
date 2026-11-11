@@ -2,9 +2,6 @@
 
 from __future__ import annotations
 
-from typing import Any
-
-import pytest
 from django.apps import apps
 from rebac import (
     ObjectRef,
@@ -25,19 +22,10 @@ from tests.conftest import Backend, Drive, Folder, Vendor
 from tests.iam_models import Group
 
 
-@pytest.fixture
-def composite_schema(composed_tables: Any) -> None:
-    """Synchronize the composed schema."""
-
-    del composed_tables
-
-
-def test_group_membership_reaches_and_revokes_project_resource_cascade(
-    composite_schema: None,
-) -> None:
+def test_group_membership_reaches_and_revokes_project_resource_cascade(db: None) -> None:
     """Person and service members inherit one project grant and lose every arrow on removal."""
 
-    del composite_schema
+    del db
     user_model = apps.get_model("iam", "User")
     owner = user_model.objects.create_user(username="composite-owner")
     person = user_model.objects.create_user(username="composite-person", kind="person")

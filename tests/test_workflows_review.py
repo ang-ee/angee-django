@@ -16,7 +16,7 @@ from angee.workflows.runner import runner
 from angee.workflows.steps import Step
 from angee.workflows.testing.drivers import decide, deliver_decision_wakes, load_workflow, run_until, start_run
 from angee.workflows.testing.models import StepAttempt, StepRecord, StepRun, Workflow, WorkflowRun
-from tests.conftest import create_platform_admin, create_user, vault_for
+from tests.conftest import Vault, create_platform_admin, create_user, vault_for
 from tests.mtidemo.models import MtiChild, MtiParent
 
 
@@ -409,7 +409,7 @@ def test_application_uses_owner_write_permission(review):
     assert question.review_subject.name != "Applied"
 
 
-def test_concrete_action_owner_applies_child_fields_with_canonical_concern(composed_tables):
+def test_concrete_action_owner_applies_child_fields_with_canonical_concern(db):
     actor = create_platform_admin("concrete-review")
     reader = create_user("concrete-reader")
     with system_context(reason="test concrete decision target"):
@@ -438,7 +438,7 @@ def test_concrete_action_owner_applies_child_fields_with_canonical_concern(compo
 
 
 @pytest.mark.parametrize("model", ["storage.Drive", "missing.Model", "not-a-model", ""])
-def test_action_model_must_share_the_concerned_identity(composed_tables, model):
+def test_action_model_must_share_the_concerned_identity(db, model):
     actor = create_platform_admin("invalid-concrete-review")
     with system_context(reason="test invalid decision target"):
         record = MtiChild.objects.create(detail="Before")
@@ -456,7 +456,8 @@ def test_proposal_uses_prepared_subject_lock_and_rechecks_permission(review, mon
     actor, people, _, question = review
     _, step = start_review(review)
     decision = answer(questions(step)[0], people[0])
-    model = type(question.review_subject)
+    model = Vault  # the review subject's concrete model
+    assert isinstance(question.review_subject, model)
     original_lock = model.lock_subject
     original_access = model.has_access
     observed = []

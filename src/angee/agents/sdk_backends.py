@@ -20,6 +20,8 @@ class SDKInferenceBackend(InferenceBackend):
 
     client_class: ClassVar[Any | None] = None
     client_class_path: ClassVar[str] = ""
+    async_client_class: ClassVar[Any | None] = None
+    """The async SDK client factory; unset, ``async_client_class_path`` is imported."""
     async_client_class_path: ClassVar[str] = ""
     default_broker_name: ClassVar[str] = ""
     default_model_limit: ClassVar[int] = 1000
@@ -33,6 +35,8 @@ class SDKInferenceBackend(InferenceBackend):
         return client_class(**self._client_kwargs())
 
     def _async_client_class(self) -> Any:
+        if self.async_client_class is not None:
+            return self.async_client_class
         if not self.async_client_class_path:
             raise RuntimeError(f"{self.label} inference does not declare an async SDK client.")
         try:

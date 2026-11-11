@@ -1,8 +1,12 @@
+// @vitest-environment happy-dom
+import { render } from "@testing-library/react";
 import type { ReactNode } from "react";
-import { afterEach, describe, expect, test, vi } from "vitest";
+import { describe, expect, test } from "vitest";
 
 import {
+  AppRuntimeProvider,
   Column,
+  containersFromChildren,
   pageChildren,
   pageElementProps,
   parsePageActions,
@@ -12,38 +16,33 @@ import {
   type ListProps,
 } from "@angee/ui";
 
-vi.mock("../i18n", () => ({ useIamT: () => (key: string) => key }));
-vi.mock("../PrincipalAccess", () => ({ usePrincipalAccessRecordTab: () => ({ id: "access" }) }));
-
-// The page is called as a plain function to read its declarations, so its container reads are stubbed per address.
-const contributed = vi.hoisted(() => ({ byAddress: {} as Record<string, readonly { content: unknown }[]> }));
-vi.mock("@angee/ui", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("@angee/ui")>();
-  return { ...actual, useContainer: (address: string) => contributed.byAddress[address] ?? [] };
-});
-afterEach(() => { contributed.byAddress = {}; });
-
 import { USER_LIST_COLUMNS } from "../users-list";
 import { UsersPage } from "./UsersPage";
 
-function declarations(): { list: ListProps; form: FormProps } {
-  const page = UsersPage();
-  const children = pageChildren((page.props as { children?: ReactNode }).children);
+/** Render the page under the runtime, with IAM's real columns and a seat column another addon places by sequence. */
+function declarations(): { page: { baseFilter?: unknown }; list: ListProps; form: FormProps } {
+  let page: { props: { children?: ReactNode; baseFilter?: unknown } } | undefined;
+  function Declarations(): null {
+    page = UsersPage() as typeof page;
+    return null;
+  }
+  const [first, second, ...rest] = Object.entries(USER_LIST_COLUMNS);
+  // IAM's manifest declares the columns container; a runtime resolves only declared addresses.
+  const containers = containersFromChildren([{ address: "iam.users#columns" }], {
+    "iam.users#columns": Object.fromEntries([first!, second!, ["seats.seat", { sequence: 25, content: <Column field="seat" /> }], ...rest]),
+  });
+  render(<AppRuntimeProvider runtime={{ containers, auth: { user: { id: "usr_admin", name: "Admin" }, status: "authenticated", hasRole: () => false } }}>
+    <Declarations />
+  </AppRuntimeProvider>);
+  const children = pageChildren(page?.props.children);
   const list = children.map((child) => pageElementProps<ListProps>(child, "list")).find(Boolean);
   const form = children.map((child) => pageElementProps<FormProps>(child, "form")).find(Boolean);
-  if (!list || !form) throw new Error("UsersPage must declare one list and one form");
-  return { list, form };
+  if (!page || !list || !form) throw new Error("UsersPage must declare one list and one form");
+  return { page: page.props, list, form };
 }
 
 describe("UsersPage", () => {
   test("renders its columns from iam.users#columns, so contributed seat columns sit among IAM's", () => {
-    contributed.byAddress = {
-      "iam.users#columns": [
-        ...Object.values(USER_LIST_COLUMNS).slice(0, 2),
-        { content: <Column field="seat" /> },
-        ...Object.values(USER_LIST_COLUMNS).slice(2),
-      ],
-    };
     const { list } = declarations();
     expect(parsePageColumns(list.children).map((column) => column.field)).toEqual([
       "username", "email", "seat", "is_staff", "is_active", "last_login",
@@ -52,7 +51,7 @@ describe("UsersPage", () => {
   });
 
   test("lists the viewer's people directory, which is empty for anyone who manages no one", () => {
-    expect((UsersPage().props as { baseFilter?: unknown }).baseFilter).toEqual({ directory: { exact: true } });
+    expect(declarations().page.baseFilter).toEqual({ directory: { exact: true } });
   });
 
   test("the form selects the revision and leaves account verbs to the record actions container", () => {

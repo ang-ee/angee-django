@@ -5,6 +5,7 @@ from types import SimpleNamespace
 
 import pytest
 from django.core.exceptions import ImproperlyConfigured, ValidationError
+from django.db import connection
 from hypothesis import given, settings
 from hypothesis import strategies as st
 from pydantic import BaseModel, ConfigDict, Field, field_validator
@@ -1277,23 +1278,24 @@ def test_draft_save_applies_definition_rekey_and_layout_validation(execution):
     assert Workflow.system_queryset().get(pk=workflow.pk).draft_revision == saved.revision
 
 
-def test_draft_acknowledges_its_own_revision_when_another_writer_advances(execution, monkeypatch):
+def test_draft_acknowledges_its_own_revision_when_another_writer_advances(execution):
     from angee.workflows.testing.drivers import load_workflow
 
     actor, _ = execution
     workflow = load_workflow({"nodes": {"entry": {"step": "echo"}}}, actor=actor)
-    queryset_type = type(Workflow.objects.get_queryset())
-    original = queryset_type.update
+    advanced = []
 
-    def update(queryset, **values):
-        changed = original(queryset, **values)
-        if "draft" in values and changed:
-            original(Workflow.system_queryset().filter(pk=workflow.pk), draft_revision=workflow.draft_revision + 2)
+    def another_writer(execute, sql, params, many, context):
+        changed = execute(sql, params, many, context)
+        if not advanced and sql.startswith("UPDATE") and Workflow._meta.db_table in sql and '"draft"' in sql:
+            advanced.append(True)  # another writer commits right after this draft write
+            Workflow.system_queryset().filter(pk=workflow.pk).update(draft_revision=workflow.draft_revision + 2)
         return changed
 
-    monkeypatch.setattr(queryset_type, "update", update)
-    saved = Workflow.objects.save_draft(
-        workflow, draft={"nodes": {"entry": {"step": "echo"}}}, expected_revision=workflow.draft_revision, actor=actor
-    )
+    with connection.execute_wrapper(another_writer):
+        saved = Workflow.objects.save_draft(
+            workflow, draft={"nodes": {"entry": {"step": "echo"}}}, expected_revision=workflow.draft_revision,
+            actor=actor,
+        )
     assert saved.revision == workflow.draft_revision + 1
     assert Workflow.system_queryset().get(pk=workflow.pk).draft_revision == saved.revision + 1

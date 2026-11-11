@@ -11,6 +11,7 @@ from django.core.exceptions import ImproperlyConfigured
 from rebac import RelationshipTuple, system_context, to_object_ref, to_subject_ref, write_relationships
 
 from angee.base.identity import public_subject_ref
+from angee.graphql.publishing import change_feed
 from angee.graphql.schema import SCHEMA_PART_KEYS, GraphQLSchemas
 from angee.graphql.testing.documents import execute_schema
 from angee.graphql.testing.documents import result_data as _data
@@ -163,6 +164,17 @@ def test_resource_metadata_lists_the_concrete_kinds_of_an_mti_parent() -> None:
     assert wire["parties.Handle"]["concreteKinds"] == []
 
 
+def test_mti_children_read_their_parents_change_feed() -> None:
+    """A kind without a feed of its own subscribes to, and publishes on, the Party feed: same key, same public id."""
+
+    resources = {item.model_label: item for item in _schema("console").angee_resources}
+    kinds = ("parties.Party", "parties.Person", "parties.Organization")
+
+    assert {resources[label].roots.changes_name for label in kinds} == {"partyChanged"}
+    assert "changes" not in resources["parties.Person"].capabilities
+    assert change_feed(messaging_models.Person) is messaging_models.Party
+
+
 def test_resource_metadata_omits_concrete_kinds_the_schema_does_not_expose() -> None:
     """A child without a resource in the built schema is not offered as a kind."""
 
@@ -242,7 +254,7 @@ def test_public_resource_metadata_converts_related_parties_surfaces() -> None:
     assert folder.capabilities == ("list", "detail", "aggregate")
 
 
-def test_person_hasura_insert_and_update(composed_tables: None) -> None:
+def test_person_hasura_insert_and_update(db: None) -> None:
     """Person writes use generated Hasura mutation roots and model-owned fields."""
 
     admin = _platform_admin("party-hasura-admin")
@@ -294,7 +306,7 @@ def test_person_hasura_insert_and_update(composed_tables: None) -> None:
     assert person.family_name == "Lovelace"
 
 
-def test_handle_aggregate_includes_unresolved_rows(composed_tables: None) -> None:
+def test_handle_aggregate_includes_unresolved_rows(db: None) -> None:
     """Handle aggregate filters operate over the same visible row domain as lists."""
 
     admin = _platform_admin("party-handle-aggregate-admin")
@@ -349,11 +361,11 @@ def test_handle_aggregate_includes_unresolved_rows(composed_tables: None) -> Non
 
 
 def test_circle_console_insert_establishes_private_creator_access(
-    composed_tables: None,
+    db: None,
 ) -> None:
     """A non-admin creator can create/read/write its private circle; an outsider cannot read it."""
 
-    del composed_tables
+    del db
     creator = User.objects.create_user(username="circle-creator")
     outsider = User.objects.create_user(username="circle-outsider")
     schema = _schema("console")
@@ -412,7 +424,7 @@ def _grant_reader(resource: Any, user: Any) -> None:
 
 
 def test_contact_resources_accept_declared_consumer_fields(
-    composed_tables: None,
+    db: None,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A model donor keeps read/query capabilities separate and relation writes scoped."""
@@ -485,7 +497,7 @@ def test_contact_resources_accept_declared_consumer_fields(
         importlib.reload(parties_schema)
 
 
-def test_a_confirmed_handle_reads_as_the_persons_statement_beside_its_producer(composed_tables: None) -> None:
+def test_a_confirmed_handle_reads_as_the_persons_statement_beside_its_producer(db: None) -> None:
     """The Identity tab's shape: confirming publishes the person's preferred statement; the producer keeps its row."""
 
     admin = _platform_admin("party-statement-confirmed-admin")
@@ -512,7 +524,7 @@ def test_a_confirmed_handle_reads_as_the_persons_statement_beside_its_producer(c
     assert (producer.source_kind, producer.confidence, producer.is_confirmed) == ("rule", 0.4, False)
 
 
-def test_statement_reads_never_widen_what_the_party_reader_sees(composed_tables: None) -> None:
+def test_statement_reads_never_widen_what_the_party_reader_sees(db: None) -> None:
     """``asserted_by`` names a principal only when the reader may read it; evidence keeps its own gates."""
 
     from angee.provenance.statements import (
@@ -584,7 +596,7 @@ def test_statement_reads_never_widen_what_the_party_reader_sees(composed_tables:
 
 
 def test_a_statement_read_under_system_context_answers_as_its_reader_and_remembers_nothing(
-    composed_tables: None,
+    db: None,
 ) -> None:
     """Under system_context the statement read returns the same evidence as for a reader, and the memo stays empty."""
 
@@ -635,13 +647,11 @@ def test_a_statement_read_under_system_context_answers_as_its_reader_and_remembe
 @pytest.mark.django_db(transaction=True)
 @pytest.mark.parametrize("row_count", [2, 8])
 def test_statement_reference_reads_have_a_page_query_budget(
-    composed_tables: None,
     django_assert_num_queries: Any,
     row_count: int,
 ) -> None:
     """Evidence and asserting principals add a fixed query count, not one per statement."""
 
-    del composed_tables
     admin = _platform_admin(f"statement-query-budget-{row_count}")
     with system_context(reason="test.parties.statement_query_budget.seed"):
         for index in range(row_count):
@@ -680,10 +690,10 @@ def test_party_statements_group_only_by_axes_the_party_reader_may_read() -> None
     assert "SUBJECT__DISPLAY_NAME" in sdl
 
 
-def test_merge_scalar_fields_follow_the_party_and_person_projections(composed_tables: None) -> None:
+def test_merge_scalar_fields_follow_the_party_and_person_projections(db: None) -> None:
     """Each projection declares the merge scalars it carries; a person adds its own."""
 
-    del composed_tables
+    del db
     admin = _platform_admin("party-merge-fields-admin")
     with system_context(reason="test.parties.merge_fields.seed"):
         person = Person.objects.create(display_name="Readable person", created_by=admin)

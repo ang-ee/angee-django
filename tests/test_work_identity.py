@@ -1,13 +1,11 @@
 """Work stage identities and resource pointers use their canonical owners."""
 
-from pathlib import Path
 
 from django.apps import apps
 from rebac import system_context
 
 from angee.base.fields.identity import SqidField
 from angee.work.models import Stage
-from tests.composed_host import run_composed_tests
 from tests.native_work import WorkCase
 
 
@@ -38,9 +36,3 @@ class WorkStageResourceIdentityTests(WorkCase):
             self.assertEqual(resource.objects.seeding(stage).get().pk, ledger.pk)
             self.queue.refresh_from_db()
             self.assertEqual(self.queue.default_stage_id, stage.pk)
-
-
-def test_work_stage_resource_identity_on_native_composition(tmp_path: Path) -> None:
-    run_composed_tests(
-        tmp_path, "tests.test_work_identity.WorkStageResourceIdentityTests", app="angee.work",
-    )

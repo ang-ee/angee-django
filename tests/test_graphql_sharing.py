@@ -50,7 +50,7 @@ def test_grant_subject_rejects_missing_malformed_and_wildcard_subjects() -> None
         _grant_subject("auth/user:*")
 
 
-@pytest.mark.usefixtures("composed_tables")
+@pytest.mark.django_db
 def test_record_access_mutations_are_atomic_and_delegate_subject_policy() -> None:
     """The mutation preflights all targets and delegates tuple validity to REBAC."""
 

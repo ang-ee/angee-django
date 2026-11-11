@@ -24,10 +24,6 @@ vi.mock("@tanstack/react-router", () => ({
   useNavigate: () => vi.fn(),
 }));
 
-vi.mock("../i18n", () => ({
-  useWorkT: () => (key: string) => key,
-}));
-
 vi.mock("../queue-form", () => ({
   useQueueFormDeclaration: (props?: Record<string, unknown>) => {
     mocks.declarationProps = props ?? {};

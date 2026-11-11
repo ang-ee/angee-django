@@ -109,6 +109,6 @@ same transaction; enabling it grants membership only to a provisioned in-process
 agent. Catalogue synchronization updates tools and bundle contents.
 
 Native contracts live in `tests/native_workflows_posts.py`.
-`tests/test_workflows_posts.py` composes the messaging trigger, agent runtime,
+The `posts` profile of `tests/test_composed_workflows.py` composes the messaging trigger, agent runtime,
 knowledge tools and posts reply owner. Its PostgreSQL selection covers
 scheduling races, idempotency replay and retry rollback.

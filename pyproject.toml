@@ -97,7 +97,7 @@ dev = [
     "angee-django-stubs[compatible-mypy]==6.1.2.post3",
     "angee-mypy==2.1.0",
     "angee-server[profiling]==3.0.0",
-    "pytest>=8.0",
+    "pytest>=9",
     "pytest-django>=4.8",
     "pytest-randomly>=3.16",
     "pytest-xdist>=3.6",

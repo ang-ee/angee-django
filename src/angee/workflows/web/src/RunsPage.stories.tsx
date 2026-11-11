@@ -1,9 +1,8 @@
 import { useMemo, type ComponentProps, type ReactNode } from "react";
-import * as v from "valibot";
 import { operationDocuments } from "@angee/gql/console/actions";
-import { storyAppearance, type RuntimeFixtureProps, RoutedRuntimeFixture, jsonResponse, storySchema } from "@angee/storybook/testing";
+import { GraphQLError, storyAppearance, type RuntimeFixtureProps, RoutedRuntimeFixture, storySchema, type GraphQLWireRequest } from "@angee/storybook/testing";
 import { ChatterTabsTestHost, ShellPageTestProviders } from "@angee/app/testing";
-import { createRouteHref, defaultWidgets, JsonValueSchema } from "@angee/ui";
+import { createRouteHref, defaultWidgets } from "@angee/ui";
 
 import { decisionFixture, decisionResourceFixture } from "@angee/decisions/testing";
 import { RunsPage } from "./RunsPage";
@@ -30,8 +29,6 @@ export const Unavailable = { render: (_args: unknown, { globals }: { globals: Re
 export const QueryError = { render: (_args: unknown, { globals }: { globals: Record<string, unknown> }) => <RunStory appearance={storyAppearance(globals)} queryError /> };
 export const ActionRejected = { render: (_args: unknown, { globals }: { globals: Record<string, unknown> }) => <RunStory appearance={storyAppearance(globals)} rejectAction /> };
 
-const RequestSchema = v.object({ query: v.string(), variables: v.optional(v.record(v.string(), JsonValueSchema), {}) });
-export type RunRequest = v.InferOutput<typeof RequestSchema>;
 const mappedSteps = Array.from({ length: 11 }, (_, index) => stepRunFixture({
   id: `wsr_mapped_${index}`, node_key: "mapped.body", is_mapped: true, map_index: index, rank: 0,
   can_retry: false, attempts: [], records: [],
@@ -64,7 +61,7 @@ export function RunStory({ appearance, list = false, waiting = false, redacted =
   list?: boolean; waiting?: boolean; redacted?: boolean; unavailable?: boolean; queryError?: boolean; rejectAction?: boolean;
   run?: Run; steps?: readonly StepRun[]; children?: readonly Run[];
   evidence?: readonly { id: string; record_model: string | null; record_id: string | null }[];
-  onRequest?: (request: RunRequest) => void;
+  onRequest?: (request: GraphQLWireRequest) => void;
   content?: ReactNode;
   graph?: RunGraphData;
   initialEntry?: string;
@@ -83,71 +80,75 @@ export function RunStory({ appearance, list = false, waiting = false, redacted =
     if (redacted) currentSteps = currentSteps.map((step) => ({
       ...step, attempts: step.attempts.map((attempt) => ({ ...attempt, error: "", stacktrace: "" })),
     }));
-    const fixture = storySchema(async (_input, init) => {
-      const request = v.parse(RequestSchema, JSON.parse(String(init?.body ?? "{}")));
-      onRequest?.(request);
-      const { query, variables } = request;
-      const action = ["cancel_workflow_run", "reprocess_workflow_run", "retry_step_accepting_duplicate", "retry_step"]
-        .find((name) => query.includes(`${name}(`));
-      if (action) {
-        if (rejectAction) return jsonResponse({ data: { [action]: { ok: false, message: "This step cannot be retried in place.", validation_errors: {} } } });
-        const messages: Record<string, string> = {
-          cancel_workflow_run: "Open work canceled; the retained run is unchanged.",
-          reprocess_workflow_run: "Run reprocessed.",
-          retry_step: "Step retried; the run is waiting.",
-          retry_step_accepting_duplicate: "Step retried with duplicate risk acknowledged.",
-        };
-        if (action.startsWith("retry_step")) {
-          current = { ...current, status: "WAITING", can_cancel: true, can_reprocess: false, finished_at: null };
-          currentSteps = currentSteps.map((step) => step.id === variables.id
-            ? { ...step, status: "READY", can_retry: false, waiting_kind: null, wait_reason: "" } : step);
-        }
-        return jsonResponse({ data: { [action]: { ok: true, message: messages[action], id: action === "reprocess_workflow_run" ? "wfr_replacement" : String(variables.id) } } });
+    const messages: Record<string, string> = {
+      cancel_workflow_run: "Open work canceled; the retained run is unchanged.",
+      reprocess_workflow_run: "Run reprocessed.",
+      retry_step: "Step retried; the run is waiting.",
+      retry_step_accepting_duplicate: "Step retried with duplicate risk acknowledged.",
+    };
+    const action = (name: string) => (args: Record<string, unknown>) => {
+      if (rejectAction) return { ok: false, message: "This step cannot be retried in place.", validation_errors: {} };
+      if (name.startsWith("retry_step")) {
+        current = { ...current, status: "WAITING", can_cancel: true, can_reprocess: false, finished_at: null };
+        currentSteps = currentSteps.map((step) => step.id === args.id
+          ? { ...step, status: "READY", can_retry: false, waiting_kind: null, wait_reason: "" } : step);
       }
-      if (query.includes("workflowrun_by_pk")) return queryError
-        ? jsonResponse({ errors: [{ message: "The run could not be loaded." }] })
-        : jsonResponse({ data: { workflowrun_by_pk: unavailable ? null : { ...current, id: variables.id,
-          ...(query.includes("WorkflowRunGraph") ? runGraphReadFixture(graph ?? runGraphFixture(currentSteps[0])) : {}) } } });
-      if (query.includes("workflow_by_pk")) return jsonResponse({ data: { workflow_by_pk: current.version?.workflow } });
-      if (query.includes("user_by_pk")) return jsonResponse({ data: { user_by_pk: current.run_as } });
-      if (query.includes("triggerevent_by_pk")) return jsonResponse({ data: { triggerevent_by_pk: { id: "wte_review", display_name: "Review event" } } });
-      if (query.includes("notes_by_pk")) return jsonResponse({ data: { notes_by_pk: { id: "nte_7", display_name: "Review notes" } } });
-      if (query.includes("steprecord")) return jsonResponse({ data: {
-        steprecord: JSON.stringify(variables.where).includes("step_run") ? currentSteps.flatMap((step) => step.records) : evidence,
-        steprecord_aggregate: { aggregate: { count: JSON.stringify(variables.where).includes("step_run") ? currentSteps.flatMap((step) => step.records).length : evidence.length } },
-      } });
-      if (query.includes("steprun_by_pk")) {
-        const step = currentSteps.find((step) => step.id === variables.id);
-        return jsonResponse({ data: { steprun_by_pk: step ? { ...step,
-          ...(query.includes("StepDecision") ? { decision: step.decision ? decisionFixture() : null } : {}),
-        } : null } });
-      }
-      if (query.includes("stepattempt_by_pk")) return jsonResponse({ data: { stepattempt_by_pk: currentSteps.flatMap((step) => step.attempts).find((attempt) => attempt.id === variables.id) } });
-      for (const [name, rows] of [["stepattempt", currentSteps.flatMap((step) => step.attempts)], ["steprecord", currentSteps.flatMap((step) => step.records)], ["stepwatch", currentSteps.flatMap((step) => step.watches)]] as const) {
-        if (query.includes(name)) return jsonResponse({ data: { [name]: rows, [`${name}_aggregate`]: { aggregate: { count: rows.length } } } });
-      }
-      if (/\bsteprun(?:\s*\(|\s*\{)/.test(query)) {
-        const offset = typeof variables.offset === "number" ? variables.offset : 0;
-        const limit = typeof variables.limit === "number" ? variables.limit : currentSteps.length;
-        return jsonResponse({ data: { steprun: currentSteps.slice(offset, offset + limit), steprun_aggregate: { aggregate: { count: currentSteps.length } } } });
-      }
-      if (query.includes("steprun_aggregate")) return jsonResponse({ data: { steprun_aggregate: { aggregate: { count: currentSteps.length } } } });
-      if (/\bdecisions(?:\s*\(|\s*\{)/.test(query)) return jsonResponse({ data: {
-        decisions: [{ id: "dcn_review", kind: "review", verdict: null, answered_at: null }],
-        decisions_aggregate: { aggregate: { count: 1 } },
-      } });
-      // A child-runs scope lists the children; every other run scope lists the run itself.
-      const rows = JSON.stringify(variables.where ?? {}).includes("parent_step__run") ? children ?? [] : [current];
+      return { ok: true, message: messages[name], id: name === "reprocess_workflow_run" ? "wfr_replacement" : String(args.id) };
+    };
+    const scope = (args: Record<string, unknown>) => JSON.stringify(args.where ?? {});
+    // A step-scoped evidence read lists the steps' records; the run's own scope lists its retained evidence.
+    const evidenceRows = (args: Record<string, unknown>) => scope(args).includes("step_run") ? currentSteps.flatMap((step) => step.records) : evidence;
+    // A child-runs scope lists the children; every other run scope lists the run itself.
+    const runRows = (args: Record<string, unknown>) => scope(args).includes("parent_step__run") ? children ?? [] : [current];
+    const stepRows = (args: Record<string, unknown>) => {
+      if (scope(args).includes('"decision":{"_is_null":false}')) return currentSteps.filter((step) => step.decision);
+      const offset = typeof args.offset === "number" ? args.offset : 0;
+      const limit = typeof args.limit === "number" ? args.limit : currentSteps.length;
+      return currentSteps.slice(offset, offset + limit);
+    };
+    const count = (rows: readonly unknown[]) => ({ aggregate: { count: rows.length } });
+    const fixture = storySchema({
+      cancel_workflow_run: action("cancel_workflow_run"),
+      reprocess_workflow_run: action("reprocess_workflow_run"),
+      retry_step: action("retry_step"),
+      retry_step_accepting_duplicate: action("retry_step_accepting_duplicate"),
+      workflowrun_by_pk: (args, { operationName }) => {
+        if (queryError) throw new GraphQLError("The run could not be loaded.");
+        return unavailable ? null : { ...current, id: args.id,
+          ...(operationName === "WorkflowRunGraph" ? runGraphReadFixture(graph ?? runGraphFixture(currentSteps[0])) : {}) };
+      },
+      workflow_by_pk: () => current.version?.workflow,
+      user_by_pk: () => current.run_as,
+      triggerevent_by_pk: () => ({ id: "wte_review", display_name: "Review event" }),
+      notes_by_pk: () => ({ id: "nte_7", display_name: "Review notes" }),
+      steprecord: evidenceRows,
+      steprecord_aggregate: (args) => count(evidenceRows(args)),
+      steprun_by_pk: (args, { operationName }) => {
+        const step = currentSteps.find((step) => step.id === args.id);
+        return step ? { ...step, ...(operationName === "StepDecision" ? { decision: step.decision ? decisionFixture() : null } : {}) } : null;
+      },
+      stepattempt_by_pk: (args) => currentSteps.flatMap((step) => step.attempts).find((attempt) => attempt.id === args.id),
+      stepattempt: () => currentSteps.flatMap((step) => step.attempts),
+      stepattempt_aggregate: () => count(currentSteps.flatMap((step) => step.attempts)),
+      stepwatch: () => currentSteps.flatMap((step) => step.watches),
+      stepwatch_aggregate: () => count(currentSteps.flatMap((step) => step.watches)),
+      steprun: stepRows,
+      steprun_aggregate: () => count(currentSteps),
+      decisions: () => [{ id: "dcn_review", kind: "review", verdict: null, answered_at: null }],
+      decisions_aggregate: () => ({ aggregate: { count: 1 } }),
       // The leaf groups read carries each group's first page of the same scoped rows.
-      if (query.includes("workflowrun_groups")) return jsonResponse({ data: { workflowrun_groups: rows.slice(0, 1).map((row) => ({
+      workflowrun_groups: (args, { variables }) => runRows(args).slice(0, 1).map((row) => ({
         key: { status: row.status, origin: row.origin, version__workflow_id: row.version?.workflow?.id,
           version__workflow__name: row.version?.workflow?.name },
-        aggregate: { count: rows.length },
-        ...(variables.with_rows ? { rows } : {}),
-      })), totalCount: Math.min(rows.length, 1) } });
-      if (/\bworkflow\s*\(/.test(query)) return jsonResponse({ data: { workflow: [current.version?.workflow], workflow_aggregate: { aggregate: { count: 1 } } } });
-      return jsonResponse({ data: { workflowrun: rows, workflowrun_aggregate: { aggregate: { count: rows.length } } } });
-    }).public!;
+        aggregate: { count: runRows(args).length },
+        ...(variables.with_rows ? { rows: runRows(args) } : {}),
+      })),
+      workflowrun_groups_count: (args) => Math.min(runRows(args).length, 1),
+      workflow: () => [current.version?.workflow],
+      workflow_aggregate: () => ({ aggregate: { count: 1 } }),
+      workflowrun: runRows,
+      workflowrun_aggregate: (args) => count(runRows(args)),
+    }, onRequest).public!;
     return { public: fixture, console: { ...fixture, metadata: { angee: { resources: [
       runResourceFixture, recordResourceFixture, stepRunResourceFixture, workflowResourceFixture, runSubjectFixture,
       workflowVersionFixture, attemptResourceFixture, userResourceFixture,

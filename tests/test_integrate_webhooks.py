@@ -20,6 +20,7 @@ from rebac import system_context
 from angee.integrate.events import EventKind
 from angee.integrate.models import Bridge
 from angee.integrate.net import validate_public_url
+from angee.integrate.testing.http import mock_transport
 from angee.integrate.testing.integration import Integration
 from angee.integrate.webhooks import SIGNATURE_HEADER, WebhookDeliveryError
 from tests.conftest import (
@@ -171,14 +172,10 @@ def test_runtime_marker_is_per_class() -> None:
     assert RuntimeBridge.__dict__["runtime"] is True
 
 
-def test_deliver_event_signs_and_posts_only_matching_subscriptions(
-    db: None,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def test_deliver_event_signs_and_posts_only_matching_subscriptions(db: None, posts: list[httpx2.Request]) -> None:
     """Outbound delivery signs raw JSON and skips disabled or filtered subscriptions."""
 
     del db
-    posts = _record_posts(monkeypatch, status=202)
 
     user = get_user_model().objects.create_user(username="webhook-delivery", email="delivery@example.com")
     conn = make_integration("delivery-account")
@@ -238,12 +235,12 @@ def test_deliver_event_signs_and_posts_only_matching_subscriptions(
     )
 
     assert result == {"delivered": 2, "errors": 0}
-    assert [post["url"] for post in posts] == [
+    assert [str(post.url) for post in posts] == [
         "https://hooks-a.example.test/events",
         "https://hooks-all.example.test/events",
     ]
-    assert {post["body"] for post in posts} == {body}
-    assert {post["headers"][SIGNATURE_HEADER] for post in posts} == {
+    assert {post.content for post in posts} == {body}
+    assert {post.headers[SIGNATURE_HEADER] for post in posts} == {
         _signature("first-secret", body),
         _signature("all-secret", body),
     }
@@ -262,14 +259,10 @@ def test_deliver_event_signs_and_posts_only_matching_subscriptions(
 
 
 @pytest.mark.django_db(transaction=True)
-def test_enqueue_event_delivers_after_commit(
-    transactional_db: None,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def test_enqueue_event_delivers_after_commit(transactional_db: None, posts: list[httpx2.Request]) -> None:
     """The manager-owned queue seam sends webhook fan-out after commit."""
 
     del transactional_db
-    posts = _record_posts(monkeypatch, status=202)
 
     user = get_user_model().objects.create_user(username="webhook-queued", email="queued@example.com")
     with system_context(reason="test webhook queued setup"):
@@ -287,17 +280,17 @@ def test_enqueue_event_delivers_after_commit(
         )
         assert posts == []
 
-    assert [post["url"] for post in posts] == ["https://hooks-queued.example.test/events"]
+    assert [str(post.url) for post in posts] == ["https://hooks-queued.example.test/events"]
 
 
 def test_deliver_event_prefilters_integration_scope_before_row_matching(
     db: None,
+    posts: list[httpx2.Request],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """The manager excludes integration-filter misses before calling row matchers."""
 
-    del db
-    _record_posts(monkeypatch, status=202)
+    del db, posts
 
     user = get_user_model().objects.create_user(username="webhook-prefilter", email="prefilter@example.com")
     conn = make_integration("prefilter-account")
@@ -338,14 +331,13 @@ def test_deliver_event_prefilters_integration_scope_before_row_matching(
     assert wrong_account.pk not in checked
 
 
-def test_deliver_event_failure_increments_consecutive_failures(
-    db: None,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def test_deliver_event_failure_increments_consecutive_failures(db: None) -> None:
     """A failed POST records telemetry and increments the failure counter."""
 
     del db
-    posts = _record_posts(monkeypatch, post_error=ConnectionRefusedError("connection refused"))
+
+    def refuse(request: httpx2.Request) -> httpx2.Response:
+        raise ConnectionRefusedError("connection refused")
 
     user = get_user_model().objects.create_user(username="webhook-failure", email="failure@example.com")
     with system_context(reason="test webhook failure setup"):
@@ -357,10 +349,8 @@ def test_deliver_event_failure_increments_consecutive_failures(
             consecutive_failures=4,
         )
 
-    result = WebhookSubscription.objects.deliver_event(
-        kind=EventKind.BRIDGE_ERRORED,
-        payload={"bridge": "br_1"},
-    )
+    with mock_transport(refuse) as posts:
+        result = WebhookSubscription.objects.deliver_event(kind=EventKind.BRIDGE_ERRORED, payload={"bridge": "br_1"})
 
     subscription.refresh_from_db()
     assert result == {"delivered": 0, "errors": 1}
@@ -435,14 +425,10 @@ def test_deliver_event_rejects_unsafe_resolved_target_without_connecting(
     dial.assert_not_called()
 
 
-def test_deliver_event_redirect_response_fails_without_following(
-    db: None,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def test_deliver_event_redirect_response_fails_without_following(db: None) -> None:
     """A 3xx delivery response is telemetry failure and never another request."""
 
     del db
-    posts = _record_posts(monkeypatch, status=302)
 
     user = get_user_model().objects.create_user(username="webhook-redirect", email="redirect@example.com")
     with system_context(reason="test webhook redirect setup"):
@@ -454,15 +440,14 @@ def test_deliver_event_redirect_response_fails_without_following(
             consecutive_failures=2,
         )
 
-    result = WebhookSubscription.objects.deliver_event(
-        kind=EventKind.BRIDGE_ERRORED,
-        payload={"bridge": "br_1"},
-    )
+    redirect = httpx2.Response(302, headers={"Location": "https://elsewhere.example.test/events"})
+    with mock_transport(lambda request: redirect) as posts:
+        result = WebhookSubscription.objects.deliver_event(kind=EventKind.BRIDGE_ERRORED, payload={"bridge": "br_1"})
 
     subscription.refresh_from_db()
     assert result == {"delivered": 0, "errors": 1}
     assert len(posts) == 1
-    assert posts[0]["url"] == "https://hooks-redirect.example.test/events"
+    assert str(posts[0].url) == "https://hooks-redirect.example.test/events"
     assert subscription.consecutive_failures == 3
     assert subscription.last_delivery_status == "302"
     assert subscription.last_error == "Webhook returned HTTP 302."
@@ -514,37 +499,16 @@ def test_dispatch_inbound_does_not_handle_when_verify_raises(dispatch_bridge: Br
     assert bridge.calls == [("verify", payload)]
 
 
-def _record_posts(
-    monkeypatch: pytest.MonkeyPatch,
-    *,
-    status: int = 202,
-    post_error: Exception | None = None,
-) -> list[dict[str, Any]]:
-    """Record posts through the shared ``HttpClient`` (the seam webhook delivery uses).
+@pytest.fixture
+def posts() -> Iterator[list[httpx2.Request]]:
+    """Accept every outbound POST with 202 at integrate's transport seam; yield the requests sent.
 
     Pinning itself is covered by ``tests/test_integrate_http.py``; here we only need
-    to observe the URL, body, and signature delivery sends, and replay a status or a
-    transport error.
+    to observe the URL, body, and signature delivery sends.
     """
 
-    posts: list[dict[str, Any]] = []
-
-    def fake_post(
-        self: Any,
-        url: str,
-        *,
-        body: bytes | None = None,
-        headers: dict[str, str] | None = None,
-        **kwargs: Any,
-    ) -> httpx2.Response:
-        del kwargs
-        posts.append({"url": url, "body": body, "headers": headers or {}})
-        if post_error is not None:
-            raise post_error
-        return httpx2.Response(status, content=b"", headers={})
-
-    monkeypatch.setattr("angee.integrate.http.HttpClient.post", fake_post)
-    return posts
+    with mock_transport(lambda request: httpx2.Response(202)) as requests:
+        yield requests
 
 
 def _resolve_to(monkeypatch: pytest.MonkeyPatch, address: str) -> None:

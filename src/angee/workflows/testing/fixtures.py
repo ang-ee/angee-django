@@ -29,7 +29,7 @@ def capture_tasks() -> Iterator[list[tuple[str, dict[str, Any]]]]:
 
 
 @pytest.fixture
-def execution(composed_tables: None, capture_tasks: list[tuple[str, dict[str, Any]]]) -> tuple[Any, list[Any]]:
+def execution(db: None, capture_tasks: list[tuple[str, dict[str, Any]]]) -> tuple[Any, list[Any]]:
     """Provide an acting administrator and the ``capture_tasks`` list of sends."""
 
     with system_context(reason="workflows.testing execution actor"):

@@ -36,8 +36,8 @@ from tests.conftest import create_platform_admin
 
 
 @pytest.fixture
-def session(composed_tables: None, capture_tasks: list[Any]) -> Iterator[AgentSession]:
-    del composed_tables, capture_tasks
+def session(db: None, capture_tasks: list[Any]) -> Iterator[AgentSession]:
+    del db, capture_tasks
     owner = get_user_model().objects.create_user(username="session-user")
     with system_context(reason="test agent session seed"):
         agent = Agent.objects.create(

@@ -12,7 +12,8 @@ from asgiref.sync import async_to_sync, sync_to_async
 from django.apps import apps
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ImproperlyConfigured
-from django.db import models, transaction
+from django.db import connection, models, transaction
+from django.test.utils import CaptureQueriesContext
 from fastmcp import Context, FastMCP
 from fastmcp.tools import Tool, ToolResult
 from mcp.types import ToolAnnotations
@@ -103,16 +104,9 @@ def _native_context() -> SimpleNamespace:
     return SimpleNamespace(max_retries=2)
 
 
-def test_grant_advertisement_shares_one_accessible_lookup(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Concurrent native/external advertisement consumes one cached ``accessible`` call."""
+def test_grant_advertisement_shares_one_accessible_lookup(db: None) -> None:
+    """Concurrent native/external advertisement consumes one cached ``accessible`` lookup."""
 
-    calls: list[SubjectRef] = []
-
-    def accessible(agent: SubjectRef) -> frozenset[str]:
-        calls.append(agent)
-        return frozenset({"mcp_one.read_sessions"})
-
-    monkeypatch.setattr(toolsets_module, "_accessible_tool_grant_ids", accessible)
     agent = SubjectRef.of("auth/user", "one")
     access = ToolGrantAccess(agent)
 
@@ -120,17 +114,21 @@ def test_grant_advertisement_shares_one_accessible_lookup(monkeypatch: pytest.Mo
         first, second = await asyncio.gather(access.granted_ids(), access.granted_ids())
         return first, second
 
-    assert async_to_sync(read_twice)() == (frozenset({"mcp_one.read_sessions"}),) * 2
-    assert calls == [agent]
+    async_to_sync(ToolGrantAccess(agent).granted_ids)()  # warm the per-process caches
+    with CaptureQueriesContext(connection) as single:
+        alone = async_to_sync(ToolGrantAccess(agent).granted_ids)()
+    with CaptureQueriesContext(connection) as shared:
+        assert async_to_sync(read_twice)() == (alone, alone)
+    assert len(shared) == len(single) > 0
 
 
 def test_native_tool_grants_run_as_agent_service_user_and_regate(
-    composed_tables: None,
+    db: None,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """M2M grants advertise live tools and every call runs as the agent's user."""
 
-    del composed_tables
+    del db
     owner = User.objects.create_user(username="native-tool-owner")
     other = User.objects.create_user(username="native-tool-other")
     with system_context(reason="test native tool setup"):
@@ -213,11 +211,11 @@ def test_native_tool_grants_run_as_agent_service_user_and_regate(
 
 
 def test_toolrole_and_group_grantee_paths(
-    composed_tables: None,
+    db: None,
 ) -> None:
     """Advertisement resolves toolrole and group arms under the service user."""
 
-    del composed_tables
+    del db
     owner = User.objects.create_user(username="tool-bundle-owner")
     with system_context(reason="test tool bundle setup"):
         agent = Agent.objects.create(name="Tool Bundle Agent", owner=owner)
@@ -288,10 +286,10 @@ def test_toolrole_and_group_grantee_paths(
     ).allowed
 
 
-def test_server_qualified_grants_do_not_collide(composed_tables: None) -> None:
+def test_server_qualified_grants_do_not_collide(db: None) -> None:
     """Same-named tools on two servers grant and revoke independently."""
 
-    del composed_tables
+    del db
     owner = User.objects.create_user(username="qualified-grants-owner")
     with system_context(reason="test qualified grants setup"):
         agent = Agent.objects.create(name="Qualified Grants", owner=owner)
@@ -321,10 +319,10 @@ def test_server_qualified_grants_do_not_collide(composed_tables: None) -> None:
     ).allowed
 
 
-def test_tool_grant_identity_is_the_catalogue_primary_key(composed_tables: None) -> None:
+def test_tool_grant_identity_is_the_catalogue_primary_key(db: None) -> None:
     """Renaming catalogue metadata preserves the PK-backed authorization identity."""
 
-    del composed_tables
+    del db
     with system_context(reason="test tool identity"):
         server = MCPServer.objects.create(name="identity-server")
         tool = MCPTool.objects.create(server=server, name="search")
@@ -338,10 +336,10 @@ def test_tool_grant_identity_is_the_catalogue_primary_key(composed_tables: None)
         assert tool_grant_ref(str(server.sqid), "bulk-search").resource_id == str(bulk_tool.pk)
 
 
-def test_builtin_server_manager_adopts_refuses_and_requires_one_row(composed_tables: None) -> None:
+def test_builtin_server_manager_adopts_refuses_and_requires_one_row(db: None) -> None:
     """The manager adopts an authored builtin, refuses a foreign name, and never picks among two."""
 
-    del composed_tables
+    del db
     with system_context(reason="test builtin server manager"):
         with pytest.raises(ImproperlyConfigured, match="found 0"):
             MCPServer.objects.builtin()
@@ -360,10 +358,10 @@ def test_builtin_server_manager_adopts_refuses_and_requires_one_row(composed_tab
             MCPServer.objects.builtin(create=True)
 
 
-def test_m2m_grant_write_is_discarded_with_rolled_back_edit(composed_tables: None) -> None:
+def test_m2m_grant_write_is_discarded_with_rolled_back_edit(db: None) -> None:
     """The on-commit mirror cannot outlive a rolled-back Agent.mcp_tools edit."""
 
-    del composed_tables
+    del db
     owner = User.objects.create_user(username="rolled-back-grant-owner")
     with system_context(reason="test rolled back grant setup"):
         agent = Agent.objects.create(name="Rolled Back Grant", owner=owner)
@@ -406,12 +404,12 @@ def test_tool_grants_enumerate_the_canonical_catalogue(
 
 
 def test_builtin_catalogue_sync_is_deterministic_and_seeds_reader_bundle(
-    composed_tables: None,
+    db: None,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Live code projects to MCPTool rows and one sync-owned reader role grant set."""
 
-    del composed_tables
+    del db
     owner = User.objects.create_user(username="catalogue-sync-owner")
     with system_context(reason="test builtin catalogue setup"):
         agent = Agent.objects.create(name="Catalogue Sync", owner=owner)
@@ -478,12 +476,12 @@ def test_builtin_catalogue_sync_is_deterministic_and_seeds_reader_bundle(
 
 
 def test_production_reader_grant_path_advertises_and_executes_generated_tool(
-    composed_tables: None,
+    db: None,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Sync + successful in-process provision grants, advertises, and runs a reader."""
 
-    del composed_tables
+    del db
     owner = User.objects.create_user(username="generated-reader-owner")
     with system_context(reason="test generated reader setup"):
         agent = Agent.objects.create(
@@ -559,12 +557,12 @@ def test_tool_role_anchor_is_tableless() -> None:
 
 
 def test_native_tool_error_mapping_and_ceiling(
-    composed_tables: None,
+    db: None,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Direct Tool.run calls retry safely and bound their output."""
 
-    del composed_tables
+    del db
     owner = User.objects.create_user(username="native-errors-owner")
     with system_context(reason="test native errors setup"):
         agent = Agent.objects.create(name="Native Errors Agent", owner=owner)
@@ -651,12 +649,12 @@ def test_builtin_tools_declare_actor_execution_and_missing_meta_fails_closed() -
 
 
 def test_graphql_read_hint_cannot_override_structural_mutation_posture(
-    composed_tables: None,
+    db: None,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A mutation mislabeled read-only is rejected before owner-attributed execution."""
 
-    del composed_tables
+    del db
     owner = User.objects.create_user(username="structural-posture-owner")
     with system_context(reason="test structural posture setup"):
         agent = Agent.objects.create(name="Structural Posture", owner=owner)

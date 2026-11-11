@@ -29,7 +29,7 @@ from tests.conftest import create_platform_admin
 
 User = get_user_model()
 pytestmark = [
-    pytest.mark.django_db, pytest.mark.usefixtures("composed_tables", "activity_catalog"),
+    pytest.mark.django_db, pytest.mark.usefixtures("activity_catalog"),
 ]
 
 

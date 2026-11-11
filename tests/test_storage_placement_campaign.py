@@ -11,7 +11,7 @@ from tests.conftest import Drive, File, Folder, create_user
 from tests.test_storage import PNG_BYTES, PNG_SHA256
 from tests.test_storage import drive as drive
 
-pytestmark = [pytest.mark.django_db, pytest.mark.usefixtures("composed_tables")]
+pytestmark = pytest.mark.django_db
 
 
 def test_shared_drive_folder_does_not_narrow_files_to_project_readers(drive: Any) -> None:

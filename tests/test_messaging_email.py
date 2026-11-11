@@ -52,9 +52,9 @@ def test_native_mailer_open_failure_closes_without_entering_send(monkeypatch: py
 
 
 @pytest.fixture
-def header_message(composed_tables):
+def header_message(db):
     """Retain original metadata and divergent top-level and quoted header Parts."""
-    del composed_tables
+    del db
     with system_context(reason="native source-header fixtures"):
         owner = get_user_model().objects.create_user(username="header-owner")
         outsider = get_user_model().objects.create_user(username="header-outsider")
@@ -175,10 +175,10 @@ def test_default_sender_requires_a_configured_transport() -> None:
     assert refused.value.message_dict == {"channel": ["Outbound email delivery is not configured."]}
 
 
-def test_outbound_email_admits_every_connected_backend_declaring_configured_email(composed_tables: None) -> None:
+def test_outbound_email_admits_every_connected_backend_declaring_configured_email(db: None) -> None:
     """Email and IMAP channels qualify while email is configured; paused and non-email channels never do."""
 
-    del composed_tables
+    del db
     billing = make_integration(
         "billing",
         model=Channel,
@@ -197,10 +197,10 @@ def test_outbound_email_admits_every_connected_backend_declaring_configured_emai
                 paused.outbound_sender()
 
 
-def test_outbound_email_names_why_its_selection_is_empty(composed_tables: None) -> None:
+def test_outbound_email_names_why_its_selection_is_empty(db: None) -> None:
     """An empty selection is refused with a coded reason: no transport, or no connected channel."""
 
-    del composed_tables
+    del db
     billing = make_integration("billing", model=Channel, backend_class="email")
     mailbox = make_integration("mailbox", model=Channel, backend_class="imap", config={"host": "192.0.2.10"})
     paused = make_integration("paused-mail", model=Channel, backend_class="email")

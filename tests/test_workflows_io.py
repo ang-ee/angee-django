@@ -1,5 +1,6 @@
 """IO execution, retries, operator recovery and retained evidence contracts."""
 
+import time
 from contextlib import contextmanager
 from datetime import timedelta
 
@@ -11,9 +12,8 @@ from django.db.models.functions import Now
 from rebac import actor_context, current_actor, system_context, to_subject_ref
 from rebac.actors import is_sudo
 
-from angee.base.signals import change_published
+from angee.base.signals import change_observed, change_published
 from angee.workflows import models as models_module
-from angee.workflows import runner as runner_module
 from angee.workflows.managers import StepRunQuerySet
 from angee.workflows.runner import runner
 from angee.workflows.states import RunStatus, StepRunStatus
@@ -67,7 +67,6 @@ def test_io_claim_publication_failure_does_not_become_a_step_failure(execution, 
     """Publication diagnostics are isolated from the committed claim and IO body."""
     actor, _ = execution
     entered = []
-    original = runner_module.publish_change
 
     class Observed(Echo):
         mode = StepMode.IO
@@ -76,16 +75,18 @@ def test_io_claim_publication_failure_does_not_become_a_step_failure(execution, 
             entered.append(ctx.attempt.number)
             return ctx.done(ctx.input)
 
-    def publish(run, **kwargs):
-        if step_row(run).status == StepRunStatus.RUNNING:
+    def unavailable(sender, payload, **kwargs):
+        if step_row(payload.instance).status == StepRunStatus.RUNNING:
             raise RuntimeError("Claim publication unavailable")
-        return original(run, **kwargs)
 
     register_step(Observed)
     workflow = load_workflow(document("entry"), actor=actor)
     run = WorkflowRun.objects.start(workflow, actor=actor)
-    monkeypatch.setattr(runner_module, "publish_change", publish)
-    assert runner.execute(step_row(run).pk)
+    change_observed.connect(unavailable, sender=WorkflowRun, weak=False)  # a transport adapter fails
+    try:
+        assert runner.execute(step_row(run).pk)
+    finally:
+        change_observed.disconnect(unavailable, sender=WorkflowRun)
     assert entered == [1]
     assert step_row(run).status == StepRunStatus.SUCCEEDED
     assert "Workflow run change publication failed." in caplog.text
@@ -486,7 +487,7 @@ def test_io_settlement_retries_database_failure_without_repeating_body(execution
         return original(self, step_run, settlement)
 
     register_step(DurableResult)
-    monkeypatch.setattr(runner_module.time, "sleep", delays.append)
+    monkeypatch.setattr(time, "sleep", delays.append)  # the retry backoff, without waiting
     monkeypatch.setattr(StepRunQuerySet, "settle", settle)
     workflow = load_workflow(document("entry"), key="settlement_retry", actor=actor)
     run = WorkflowRun.objects.start(workflow, actor=actor)
@@ -552,7 +553,7 @@ def test_soft_limit_during_settlement_lock_wait_is_recorded_as_timeout(execution
     """The soft limit is handled while waiting for the result lock as well as inside the body."""
     actor, _ = execution
     original = StepRunQuerySet.settle
-    original_fenced = runner_module.Runner._fenced
+    hold = WorkflowRun.objects.hold
     bodies, settlements, waits = [], [], []
 
     class InterruptedSettlement(Echo):
@@ -569,16 +570,16 @@ def test_soft_limit_during_settlement_lock_wait_is_recorded_as_timeout(execution
         return original(self, step_run, settlement)
 
     @contextmanager
-    def interrupted_fence(self, step_run):
-        waits.append(step_run.pk)
+    def interrupted_hold(run_id, **kwargs):
+        waits.append(run_id)
         if len(waits) == 2:
-            raise SoftTimeLimitExceeded()
-        with original_fenced(self, step_run) as current:
-            yield current
+            raise SoftTimeLimitExceeded()  # the worker's soft limit fires while waiting for the run lock
+        with hold(run_id, **kwargs) as run:
+            yield run
 
     register_step(InterruptedSettlement)
     monkeypatch.setattr(StepRunQuerySet, "settle", settle)
-    monkeypatch.setattr(runner_module.Runner, "_fenced", interrupted_fence)
+    monkeypatch.setattr(WorkflowRun.objects, "hold", interrupted_hold)
     workflow = load_workflow(document("entry"), key="settlement_soft_limit", actor=actor)
     run = WorkflowRun.objects.start(workflow, actor=actor)
 

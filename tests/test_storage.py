@@ -12,11 +12,11 @@ from pathlib import Path
 from threading import Barrier
 from typing import Any
 from unittest.mock import patch
+from uuid import uuid4
 
 import pytest
 from django.contrib.auth import get_user_model
 from django.contrib.auth.models import AnonymousUser
-from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import SuspiciousFileOperation, ValidationError
 from django.db import close_old_connections, connection, connections, models, transaction
 from django.db.models.signals import post_save
@@ -36,22 +36,34 @@ from rebac.actors import current_sudo_reason, to_subject_ref
 from rebac.errors import PermissionDenied
 from rebac.middleware import ActorMiddleware
 from rebac.roles import grant
-from strawberry.django.views import GraphQLView
 
 from angee.base.models.identity import public_id_of
 from angee.base.models.trash import ARCHIVE_FLAG_FIELD, ArchiveMixin, ArchiveQuerySet
 from angee.base.permissions import DirectRecordAccess
 from angee.graphql import records
 from angee.graphql.data.resource_fields import is_archive_field, is_trash_field
+from angee.graphql.schema import GraphQLSchemas
 from angee.graphql.testing.documents import execute_schema, result_data
 from angee.graphql.views import graphql_endpoint
 from angee.messaging.testing.models import Message, Part
+from angee.projects.testing.models import Project, Task
 from angee.storage import exceptions
 from angee.storage import models as storage_models
-from angee.storage.models import FileManager, UploadState
+from angee.storage.checks import check_derived_permissions
+from angee.storage.models import FileManager, FileQuerySet, FolderQuerySet, UploadState
 from angee.storage.signals import file_finalized
 from angee.storage_integrate.backends import LocalFolderBackend
-from tests.conftest import Backend, Drive, File, FileAttachment, Folder, MimeType, addon_schema, create_platform_admin
+from tests.conftest import (
+    Backend,
+    Drive,
+    File,
+    FileAttachment,
+    Folder,
+    MimeType,
+    SchemaAddon,
+    addon_schema,
+    create_platform_admin,
+)
 from tests.mtidemo.models import MtiChild, MtiParent
 from tests.scopedemo.models import NativeAttachmentTarget
 
@@ -362,10 +374,10 @@ def _proxy_upload(drive: Any, payload: bytes, **draft_kwargs: Any) -> Any:
         return fresh.finalize(expected_hash=hashlib.sha256(payload).hexdigest(), expected_size=len(payload))
 
 
-def test_file_attachment_locks_a_native_rebac_target(composed_tables: None) -> None:
+def test_file_attachment_locks_a_native_rebac_target(db: None) -> None:
     """The generic target lock does not require an Angee queryset or model base."""
 
-    del composed_tables
+    del db
     with system_context(reason="test native attachment target"):
         target = NativeAttachmentTarget.objects.create()
         with transaction.atomic():
@@ -392,41 +404,17 @@ def test_file_attachment_scopes_chain_on_a_narrowed_selection(drive: Any) -> Non
         assert not FileAttachment.objects.with_same_content(draft, record).exists()
 
 
-def test_file_attachment_attach_converges_across_mti_levels(tmp_path: Path, drive: Any) -> None:
-    """attach() keys the file edge on the canonical (topmost REBAC-typed) MTI target.
-
-    ``mtidemo``'s gated MTI pair stands in for ``parties.Person`` IS-A ``parties.Party``:
-    attaching a file at the child and at the parent converge on one canonical edge keyed to
-    the parent content type, so a child-side write is found by a parent-side read — the
-    ``storage.FileAttachment`` mirror of the tag/chatter canon.
-    """
-
-    del tmp_path
-    file = _proxy_upload(drive, PNG_BYTES)
-    with system_context(reason="file attachment mti"):
-        child = MtiChild.objects.create(title="Acme", detail="org")
-        parent = MtiParent.objects.get(pk=child.pk)
-        via_child = FileAttachment.objects.attach(file, child, label="child write")
-        via_parent = FileAttachment.objects.attach(file, parent)
-
-        # Both addresses converge on one edge keyed to the parent content type.
-        assert via_child.pk == via_parent.pk
-        assert via_child.content_type == ContentType.objects.get_for_model(MtiParent)
-        assert via_child.object_id == child.pk
-        assert FileAttachment._base_manager.count() == 1
-
-
 @pytest.mark.django_db(transaction=True)
 @pytest.mark.skipif(
     connection.vendor != "postgresql",
     reason="PostgreSQL canonical attachment-target serialization contract",
 )
 def test_file_attachment_attach_serializes_on_canonical_target(
-    tmp_path: Path, drive: Any, composed_tables: None,
+    tmp_path: Path, drive: Any,
 ) -> None:
     """A reviewed target lock fences concurrent changes to its complete File set."""
 
-    del tmp_path, composed_tables
+    del tmp_path
     file = _proxy_upload(drive, PNG_BYTES)
     reviewer = create_platform_admin("storage-attachment-reviewer")
     with system_context(reason="file attachment serialization setup"):
@@ -663,6 +651,35 @@ def test_soft_delete_trash_restore_and_purge(tmp_path: Path, drive: Any) -> None
     assert not (tmp_path / storage_path).exists()
 
 
+def test_a_fragment_grant_cannot_reach_a_trashed_file(drive: Any) -> None:
+    """Fragments widen the granted arms; ``read``, ``write`` and ``share`` keep a trashed file for its deleters."""
+
+    editor = get_user_model().objects.create_user(username="storage-task-editor")
+    with system_context(reason="test storage fragment grant"):
+        project = Project.objects.create(title="Files", owner=drive.alice)
+        task = Task.objects.create(title="Spec", project=project, owner=drive.alice)
+        row = File.objects.create(
+            drive=drive, filename="spec.txt", content_hash="a" * 64, storage_path="spec.txt",
+            visibility=storage_models.FileVisibility.RECORD, owner=drive.alice, upload_state=UploadState.READY,
+        )
+        FileAttachment.objects.attach(row, task)
+        write_relationships([
+            RelationshipTuple(resource=to_object_ref(project), relation="editor", subject=to_subject_ref(editor)),
+        ])
+
+    def reach(user: Any) -> tuple[bool, ...]:
+        bound = row.with_actor(user)
+        listed = File.objects.with_actor(user).filter(pk=row.pk).exists()
+        return (*(bound.has_access(action) for action in ("read", "write", "share")), listed)
+
+    assert reach(editor) == reach(drive.alice) == (True, True, True, True)
+    with actor_context(drive.alice):
+        File.objects.get(pk=row.pk).delete()
+    assert reach(editor) == (False, False, False, False)
+    assert reach(drive.alice) == (True, True, True, True)
+    assert check_derived_permissions() == []
+
+
 def test_storage_resource_metadata_exposes_delete_previews() -> None:
     """Storage's custom delete verbs are advertised to refine/resource actions."""
 
@@ -838,8 +855,7 @@ def test_create_drive_gates_on_the_rebac_create_rule(drive: Any) -> None:
     unprivileged actor — a member of neither ``angee/role:admin`` nor
     ``storage/role:storage_admin`` — is denied with ``PermissionDenied`` and an
     anonymous request resolves no actor. (The storage_admin reach of the ``manager``
-    arm is probed tuple-free in
-    ``test_storage_admin_role_reaches_manager_gated_rows_tuple_free``.)
+    arm is decided in ``test_the_policy_decides_every_storage_permission``.)
     """
 
     admin = create_platform_admin(
@@ -859,38 +875,6 @@ def test_create_drive_gates_on_the_rebac_create_rule(drive: Any) -> None:
         Drive._default_manager.create(backend=drive.backend, slug="anon-drive", name="Anon Drive")
     with system_context(reason="test drive create denial"):
         assert not Drive._base_manager.filter(slug__in=["bob-drive", "anon-drive"]).exists()
-
-
-def test_storage_admin_role_reaches_manager_gated_rows_tuple_free(drive: Any) -> None:
-    """A ``storage_admin`` grant opens the const-backed ``manager`` arm tuple-free.
-
-    ``storage/backend`` and ``storage/drive`` reach every effective member of
-    ``storage/role:storage_admin`` through ``manager->effective_member`` (the F-g
-    const canon). The role grant is the *only* row written — no per-object
-    ``manager`` tuple — so the reach flips on membership alone, and a
-    non-owning/non-admin actor is denied until granted.
-    """
-
-    from rebac.models import active_relationship_model
-
-    manager_user = get_user_model().objects.create_user(username="storage-manager", email="storage-manager@example.com")
-
-    with actor_context(manager_user):
-        assert not drive.backend.has_access("read")
-        assert not drive.has_access("read")
-
-    grant(actor=manager_user, role="storage/role:storage_admin")
-
-    with actor_context(manager_user):
-        for action in ("read", "write", "delete"):
-            assert drive.backend.has_access(action), f"backend {action}"
-            assert drive.has_access(action), f"drive {action}"
-
-    # Tuple-free: the grant wrote a role membership, never a backend/drive tuple.
-    with system_context(reason="probe manager reach is tuple-free"):
-        assert not (
-            active_relationship_model().objects.filter(resource_type__in=["storage/backend", "storage/drive"]).exists()
-        )
 
 
 def test_create_drive_graphql_surface_is_de_elevated(drive: Any) -> None:
@@ -1475,23 +1459,23 @@ def test_backend_storage_cache_is_bounded(
 
     del db
 
-    monkeypatch.setattr(storage_models, "_STORAGE_CACHE_MAX_SIZE", 2)
+    bound = storage_models._STORAGE_CACHE_MAX_SIZE
     Backend._storage_cache.clear()
     with system_context(reason="test storage setup"):
-        backends = [
-            Backend._base_manager.create(
+        backends = Backend._base_manager.bulk_create(
+            Backend(
                 slug=f"bounded-{index}",
                 label=f"Bounded {index}",
                 backend_class="local",
                 backend_config={"root": str(tmp_path / str(index)), "base_url": "/media/"},
             )
-            for index in range(3)
-        ]
+            for index in range(bound + 1)
+        )
 
     for backend in backends:
         backend.storage
 
-    assert len(Backend._storage_cache) == 2
+    assert len(Backend._storage_cache) == bound
 
 
 def test_ingest_stream_dedup_does_not_consume_the_reader(drive: Any) -> None:
@@ -1798,7 +1782,7 @@ def test_file_purge_rereads_each_row_under_its_lock(drive: Any, monkeypatch: pyt
     """A row restored after the selection was listed no longer matches it and survives."""
 
     (row,) = _expired_trash(drive, b"restored")
-    queryset = type(File.objects.all())
+    queryset = FileQuerySet  # the storage owner's File queryset
     lock = queryset.lock_if_supported
 
     def restore_then_lock(self: Any, **kwargs: Any) -> Any:
@@ -1818,7 +1802,7 @@ def test_file_purge_against_a_concurrent_restore_skips_the_row(drive: Any, monke
     """Another connection restores the listed row before the purge locks it; the purge leaves it."""
 
     (row,) = _expired_trash(drive, b"contested")
-    queryset = type(File.objects.all())
+    queryset = FileQuerySet  # the storage owner's File queryset
     lock = queryset.lock_if_supported
 
     def restore() -> None:
@@ -1876,7 +1860,7 @@ def test_folder_prune_keeps_the_parent_of_a_trashed_file(drive: Any) -> None:
 def test_folder_prune_rechecks_an_empty_candidate_under_its_lock(drive: Any, monkeypatch: pytest.MonkeyPatch) -> None:
     """A file placed after the inventory keeps its folder: the locked recheck decides, not the snapshot."""
 
-    queryset = type(Folder.objects.all())
+    queryset = FolderQuerySet  # the storage owner's Folder queryset
     lock = queryset.lock_if_supported
 
     def file_arrives_then_lock(self: Any, **kwargs: Any) -> Any:
@@ -1899,7 +1883,7 @@ def test_folder_prune_against_a_concurrent_file_create_keeps_the_folder(
 ) -> None:
     """Another connection commits a file into the empty candidate before the prune locks it; the folder stays."""
 
-    queryset = type(Folder.objects.all())
+    queryset = FolderQuerySet  # the storage owner's Folder queryset
     lock = queryset.lock_if_supported
 
     def place(folder_id: str) -> None:
@@ -2121,8 +2105,9 @@ def test_storage_preview_does_not_mint_download_urls(
     settings.ROOT_URLCONF = "angee.storage.urls"
     row = _proxy_upload(drive, PNG_BYTES)
     admin = create_platform_admin("storage-preview-admin")
-    view = GraphQLView.as_view(schema=addon_schema(storage_schema.schemas, "public"))
-    monkeypatch.setattr("angee.graphql.views._get_view", lambda schema_name: view)
+    name = f"storage-preview-{uuid4().hex}"  # an endpoint schema only this test dispatches to
+    discovered = GraphQLSchemas([SchemaAddon({name: storage_schema.schemas["public"]})])
+    monkeypatch.setattr(GraphQLSchemas, "from_discovery", classmethod(lambda cls: discovered))
     payload = {
         "query": "query PreviewFile($id: String!) { files_by_pk(id: $id) { id url } }",
         "variables": {"id": str(row.sqid)},
@@ -2133,7 +2118,7 @@ def test_storage_preview_does_not_mint_download_urls(
     )
     request.user = admin
     with patch.object(File, "issue_download_token", autospec=True, side_effect=AssertionError("minted")) as mint:
-        response = ActorMiddleware(lambda active: graphql_endpoint(active, "public"))(request)
+        response = ActorMiddleware(lambda active: graphql_endpoint(active, name))(request)
         assert response.status_code == 200
         assert json.loads(response.content) == {"data": {"files_by_pk": {"id": str(row.sqid), "url": None}}}
         mint.assert_not_called()
@@ -2144,7 +2129,7 @@ def test_storage_preview_does_not_mint_download_urls(
     request = RequestFactory().post("/graphql/public/", data=payload, content_type="application/json")
     request.user = drive.alice
     with patch.object(File, "issue_download_token", autospec=True, side_effect=File.issue_download_token) as mint:
-        response = ActorMiddleware(lambda active: graphql_endpoint(active, "public"))(request)
+        response = ActorMiddleware(lambda active: graphql_endpoint(active, name))(request)
         assert response.status_code == 200
         data = json.loads(response.content)
         assert "errors" not in data

@@ -385,7 +385,7 @@ class MessageTriggerTests(TransactionTestCase):
 
         with (
             patch.object(AngeeQuerySet, "select_for_update", count_lock),
-            patch.object(type(StepWatch.objects), "record_change", autospec=True) as observed,
+            patch.object(StepWatch.objects, "record_change") as observed,
         ):
             self.ingest()
         self.assertEqual(locked.count(Message), 1)

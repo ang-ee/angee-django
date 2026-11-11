@@ -17,7 +17,7 @@ from tests.conftest import create_user
 from tests.linesdemo.models import Document, PinnedLine
 
 
-def test_collection_writes_cannot_mutate_or_create_system_rows(composed_tables: None) -> None:
+def test_collection_writes_cannot_mutate_or_create_system_rows(db: None) -> None:
     user = create_user("row-lock-writer")
     with system_context(reason="test.row_lock.seed"):
         parent = Document.objects.create(title="Document")
@@ -49,7 +49,7 @@ def test_row_lock_model_requires_collection_guard_on_default_and_base_managers()
 
 
 @pytest.mark.parametrize("positional", (False, True))
-def test_unfiltered_conflict_updates_cannot_mutate_system_rows(composed_tables: None, positional: bool) -> None:
+def test_unfiltered_conflict_updates_cannot_mutate_system_rows(db: None, positional: bool) -> None:
     """The unfiltered writer checks native positional and keyword conflict flags."""
 
     with system_context(reason="test.row_lock.conflict_seed"):
@@ -73,7 +73,7 @@ def test_unfiltered_conflict_updates_cannot_mutate_system_rows(composed_tables: 
 @pytest.mark.skipif(connection.vendor != "postgresql", reason="Real READ COMMITTED interleaving is required.")
 @pytest.mark.parametrize("manager_path", ("default", "base"))
 def test_collection_write_excludes_rows_entering_predicate_after_validation(
-    composed_tables: None, manager_path: str,
+    manager_path: str,
 ) -> None:
     """A newly matching system row is outside the locked and validated write set."""
 
@@ -115,7 +115,7 @@ def test_collection_write_excludes_rows_entering_predicate_after_validation(
     assert entered.label == "Selected system"
 
 
-def test_named_system_scope_and_pinned_actor_keep_native_row_lock_precedence(composed_tables: None) -> None:
+def test_named_system_scope_and_pinned_actor_keep_native_row_lock_precedence(db: None) -> None:
     """Ambient system work owns rows; a pinned user keeps the user invariant."""
 
     user = create_user("row-lock-pinned-writer")

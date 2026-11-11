@@ -1,7 +1,6 @@
 """D26 contracts on the emitted proposals + projects + messaging model graph."""
 
 from datetime import timedelta
-from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
@@ -25,12 +24,6 @@ from rebac import (
 
 from angee.graphql.schema import GraphQLSchemas
 from angee.proposals.models import ClarificationWidenBlocked, PublishedQuestion
-from tests.composed_host import run_composed_tests
-
-
-def test_publication_contracts(tmp_path: Path) -> None:
-    """Use the existing isolated host so schema tests bind real composed models."""
-    run_composed_tests(tmp_path, "tests.test_proposals_publication.PublicationTests", app="angee.proposals")
 
 
 class PublicationTests(TransactionTestCase):

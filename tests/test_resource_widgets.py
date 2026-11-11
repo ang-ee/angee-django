@@ -14,7 +14,7 @@ from angee.resources.widgets import NativeJSONWidget, resolve_ledger_xref, split
 from tests.conftest import create_platform_admin
 
 
-@pytest.mark.usefixtures("composed_tables")
+@pytest.mark.django_db
 @pytest.mark.parametrize("choice", ["anyOf", "oneOf"])
 def test_config_resolution_uses_only_valid_relation_branches_and_preserves_the_source(choice):
     actor = create_platform_admin("config-reader")

@@ -13,7 +13,7 @@ from django.test.utils import CaptureQueriesContext
 from rebac import system_context
 
 # Django's composed-host runner owns this campaign. Its pytest entrypoint is
-# tests/test_composed_query_budgets.py; the bare source host has no HTTP runtime.
+# tests/test_composed_examples.py; the bare source host has no HTTP runtime.
 __test__ = False
 
 

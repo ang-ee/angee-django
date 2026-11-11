@@ -1,12 +1,13 @@
 """Foundation registry and permission fixtures requiring pytest and pytest-django."""
 
+import gc
 import sys
 from collections.abc import Generator, Iterator
 from contextlib import contextmanager
 from typing import Any
 
 import pytest
-from django.apps import apps
+from django.apps import AppConfig, apps
 from django.conf import settings
 from django.core.management import call_command
 from django.db import DEFAULT_DB_ALIAS, connections, transaction
@@ -104,6 +105,14 @@ def monkeypatch(installed_app_registry: None) -> Iterator[pytest.MonkeyPatch]:
 SESSION_BASELINE = pytest.StashKey[Rows]()
 
 
+def prime_content_types() -> None:
+    """Warm Django's content-type cache for every installed model, as every test starts with it."""
+
+    content_types = apps.get_model("contenttypes", "ContentType").objects
+    content_types.clear_cache()
+    content_types.get_for_models(*apps.get_models(), for_concrete_models=False)
+
+
 def database_rows(connection: BaseDatabaseWrapper) -> Rows:
     """Return each table a flush clears that holds rows, with an ``INSERT`` statement and its parameters."""
 
@@ -130,13 +139,16 @@ def pytest_fixture_setup(
     """Record the default database as each ``django_db_setup`` layer returns.
 
     The outermost layer returns last, so the record that stands is the whole session
-    baseline, including the rows a host's extension of the fixture loads.
+    baseline, including the rows a host's extension of the fixture loads. The objects
+    still alive by then are frozen, so later full collections scan only what tests allocate.
     """
 
     value = yield
     if fixturedef.argname == "django_db_setup":
         with request.getfixturevalue("django_db_blocker").unblock():
             request.config.stash[SESSION_BASELINE] = database_rows(connections[DEFAULT_DB_ALIAS])
+        gc.collect()
+        gc.freeze()
     return value
 
 
@@ -167,20 +179,18 @@ def django_db_setup(
     local policy to preserve. A host extends this fixture to load its own baseline
     rows; once its outermost layer returns, every row of the default database is the
     recorded baseline. Tests roll back to it. A transactional test's flush empties
-    every table and re-sends ``post_migrate``, whose receivers write only tables the
-    baseline holds; at the last app's turn those tables are emptied again and refilled
-    with the recorded rows, keys included, and Django's content-type cache and REBAC's
-    process backend start again from them, so a flush recomputes nothing.
+    every table and re-sends ``post_migrate``. At the first app's turn every recorded
+    table is emptied again and refilled with the recorded rows, keys included, so the
+    later turns' receivers find the rows they converge instead of rebuilding them. At
+    the last app's turn the recorded rows are restored once more, undoing what those
+    receivers still write (audit rows, reflections the baseline recorded stale), and
+    Django's content-type cache and REBAC's process backend start again from them.
     """
 
-    last = [config for config in apps.get_app_configs() if config.models_module is not None][-1]
+    configs = [config for config in apps.get_app_configs() if config.models_module is not None]
+    first, last = configs[0], configs[-1]
 
-    def prime_content_types() -> None:
-        content_types = apps.get_model("contenttypes", "ContentType").objects
-        content_types.clear_cache()
-        content_types.get_for_models(*apps.get_models(), for_concrete_models=False)
-
-    def restore(*, using: str, **kwargs: Any) -> None:
+    def restore(*, sender: AppConfig, using: str, **kwargs: Any) -> None:
         if using != DEFAULT_DB_ALIAS:
             return
         connection, recorded = connections[using], pytestconfig.stash[SESSION_BASELINE]
@@ -189,17 +199,20 @@ def django_db_setup(
                 cursor.execute(f"DELETE FROM {table}")
             for _, statement, values in recorded:
                 cursor.executemany(statement, values)
-        prime_content_types()
-        reset_backend()
+        if sender is last:
+            prime_content_types()
+            reset_backend()
 
     with django_db_blocker.unblock():
         call_command("rebac", "sync", "--force-overwrite", "--yes", verbosity=0)
         prime_content_types()
-    post_migrate.connect(restore, sender=last, weak=False)
+    for sender in (first, last):
+        post_migrate.connect(restore, sender=sender, weak=False)
     try:
         yield
     finally:
-        post_migrate.disconnect(restore, sender=last)
+        for sender in (first, last):
+            post_migrate.disconnect(restore, sender=sender)
 
 
 @pytest.fixture(autouse=True)
@@ -218,19 +231,3 @@ def restore_composed_permission_bindings(monkeypatch: pytest.MonkeyPatch) -> Ite
                 del config.__dict__[key]
     yield
     reset_backend()
-
-
-@pytest.fixture()
-def composed_tables(db: None) -> None:
-    """Compatibility alias of pytest-django's ``db`` kept for consumer suites; new tests request ``db``.
-
-    Every database test runs over the session's permission baseline in a transaction
-    rolled back at its end, so the REBAC schema and every row the baseline loads stay
-    in place. A test whose contract needs
-    real commits (other threads or connections, row locks, ``on_commit`` work run
-    by a real worker) declares ``django_db(transaction=True)``; its flush restores
-    the recorded baseline rows. Assert ``on_commit`` callbacks with
-    pytest-django's ``django_capture_on_commit_callbacks`` instead.
-    """
-
-    del db

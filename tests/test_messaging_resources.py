@@ -50,9 +50,9 @@ CHATTER = {
 
 
 def test_rows_post_comments_replies_and_notes_as_their_author(
-    composed_tables: None, tmp_path: Path,
+    db: None, tmp_path: Path,
 ) -> None:
-    del composed_tables
+    del db
     addon = _addon(tmp_path, CHATTER)
 
     result = _load(addon)
@@ -80,8 +80,8 @@ def test_rows_post_comments_replies_and_notes_as_their_author(
         assert Message.objects.filter(thread=thread, created_by=author).count() == 3
 
 
-def test_a_changed_chatter_row_is_refused_rather_than_reposted(composed_tables: None, tmp_path: Path) -> None:
-    del composed_tables
+def test_a_changed_chatter_row_is_refused_rather_than_reposted(db: None, tmp_path: Path) -> None:
+    del db
     files = dict(CHATTER)
     addon = _addon(tmp_path, files)
     _load(addon)
@@ -99,8 +99,8 @@ def test_a_changed_chatter_row_is_refused_rather_than_reposted(composed_tables: 
         assert question.preview == "Which day does it break?"
 
 
-def test_the_record_owner_refuses_an_author_without_post_access(composed_tables: None, tmp_path: Path) -> None:
-    del composed_tables
+def test_the_record_owner_refuses_an_author_without_post_access(db: None, tmp_path: Path) -> None:
+    del db
     addon = _addon(tmp_path, {
         USERS: (
             "- _xref: author\n  username: chatter-outsider\n  email: chatter-outsider@example.com\n"

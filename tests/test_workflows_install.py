@@ -132,7 +132,7 @@ def test_definition_composes_before_point_edges_and_bindings() -> None:
 
 
 def test_resource_composes_extensions_without_editing_the_base_draft(
-    composed_tables: None,
+    db: None,
     tmp_path: Path,
     monkeypatch,
     register_step,
@@ -213,7 +213,7 @@ def test_resource_composes_extensions_without_editing_the_base_draft(
     [("missing", "contributed", "unknown point"), ("after_entry", "entry", "duplicate node key")],
 )
 def test_resource_fails_fast_on_unknown_points_and_node_collisions(
-    composed_tables: None,
+    db: None,
     tmp_path: Path,
     register_step,
     at: str,
@@ -251,7 +251,7 @@ def test_resource_fails_fast_on_unknown_points_and_node_collisions(
 
 @pytest.mark.parametrize("publish", [True, False, None])
 def test_resource_row_installs_one_document_and_reuses_its_hash(
-    composed_tables: None,
+    db: None,
     tmp_path: Any,
     register_step,
     publish: bool | None,

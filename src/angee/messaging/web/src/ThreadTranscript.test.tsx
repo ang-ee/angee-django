@@ -38,10 +38,6 @@ vi.mock("@angee/ui", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@angee/ui")>();
   return {
     ...actual,
-    useNamespaceT:
-      (_namespace: string, messages: Record<string, string>) =>
-      (key: string, values?: Record<string, unknown>) =>
-        (messages[key] ?? key).replace(/\{(\w+)\}/g, (_, name: string) => String(values?.[name] ?? `{${name}}`)),
     // The jump-to-date control is the runtime's date widget; the suite stands in a plain field for it.
     useResolvedWidget: (key: string) => key === "date" ? {
       edit: ({ value, onChange, field }: { value: unknown; onChange?: (next: unknown) => void; field?: { label?: string } }) => (

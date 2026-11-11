@@ -17,6 +17,7 @@ from dataclasses import asdict, dataclass, replace
 from datetime import date, timedelta
 from io import StringIO
 from typing import Any
+from unittest.mock import patch
 from urllib.parse import urljoin
 from xml.sax.saxutils import escape
 
@@ -55,6 +56,7 @@ from angee.integrate.streams import (
     reconcile_stream,
     sync_bridge,
 )
+from angee.integrate.testing.http import mock_transport
 from angee.integrate.testing.models import RecordLink, SyncStream
 from angee.messaging.testing.models import Directory, Folder, Handle, Party, Person, RelationshipKind
 from angee.parties.backends import (
@@ -285,11 +287,17 @@ class Replica:
         pytest.fail("The CardDAV reconciliation checkpoint did not finish")
 
 
+def real_network() -> Any:
+    """Restore the pinned transport inside the replica's scripted network, for address-policy tests."""
+
+    return patch.object(HttpClient, "transport_factory", PinnedTransport)
+
+
 @pytest.fixture
-def replica(composed_tables: None, monkeypatch: pytest.MonkeyPatch) -> Iterator[Replica]:
+def replica(db: None) -> Iterator[Replica]:
     """Create the complete existing model graph, preserving real ingest/cascades."""
 
-    del composed_tables
+    del db
     with system_context(reason="test CardDAV replica"):
         directory = make_integration(
             "carddav-replica",
@@ -306,24 +314,24 @@ def replica(composed_tables: None, monkeypatch: pytest.MonkeyPatch) -> Iterator[
         )
         server = FakeDav()
 
-        def transport(*, allow_private: bool) -> httpx2.MockTransport:
-            server.private_access.append(allow_private)
-            return httpx2.MockTransport(server.handle_request)
+        def answer(request: httpx2.Request) -> httpx2.Response:
+            server.private_access.append(request.extensions["allow_private"])
+            return server.handle_request(request)  # tests may replace the server's handler
 
-        monkeypatch.setattr(HttpClient, "transport_factory", staticmethod(transport))
-        backend = CardDavDirectoryBackend(directory)
-        definitions = tuple(backend.streams())
-        assert len(definitions) == 1
-        definition = definitions[0]
-        assert (definition.key, definition.partition, definition.kind, definition.direction) == (
-            "contacts",
-            _BOOK,
-            StreamKind.RECORD_REPLICA,
-            StreamDirection.BIDIRECTIONAL,
-        )
-        stream = current_stream(directory, **asdict(definition))
-        yield Replica(directory, backend, server, stream)
-        backend.close()
+        with mock_transport(answer):
+            backend = CardDavDirectoryBackend(directory)
+            definitions = tuple(backend.streams())
+            assert len(definitions) == 1
+            definition = definitions[0]
+            assert (definition.key, definition.partition, definition.kind, definition.direction) == (
+                "contacts",
+                _BOOK,
+                StreamKind.RECORD_REPLICA,
+                StreamDirection.BIDIRECTIONAL,
+            )
+            stream = current_stream(directory, **asdict(definition))
+            yield Replica(directory, backend, server, stream)
+            backend.close()
 
 
 def test_new_remote_contact_uses_ingest_identity_and_both_bases(replica: Replica) -> None:
@@ -422,22 +430,16 @@ def test_tokenless_collection_completes_a_bridge_sync_without_error_telemetry(re
     assert RecordLink.objects.get(stream=replica.stream, external_key="ada").target.display_name == "Ada Lovelace"
 
 
-def test_carddav_refusal_reaches_bridge_telemetry_with_the_failed_partition(
-    replica: Replica,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    cause = CardDavError("The CardDAV address book does not expose a DAV:sync-token.")
-
-    def refuse(backend: CardDavDirectoryBackend, collection: str) -> tuple[str, str]:
-        raise cause
-
-    monkeypatch.setattr(CardDavDirectoryBackend, "_collection_state", refuse)
+def test_carddav_refusal_reaches_bridge_telemetry_with_the_failed_partition(replica: Replica) -> None:
+    replica.server.has_sync_token = False
+    replica.server.list_etags = False
     with pytest.raises(BridgeSyncError) as refused:
         replica.directory.run_sync(now=timezone.now())
-    assert refused.value.__cause__ is cause
+    assert isinstance(refused.value.__cause__, CardDavError)
     replica.directory.refresh_from_db()
     assert replica.directory.sync_error == (
-        "contacts (/books/contacts/): The CardDAV address book does not expose a DAV:sync-token."
+        "contacts (/books/contacts/): The CardDAV address book (/books/contacts/) exposes neither "
+        "a DAV:sync-token nor a complete ETag listing."
     )
     assert replica.directory.sync_progress["details"]["partition"] == "/books/contacts/"
     assert replica.directory.sync_progress["details"]["stage"] == "pull"
@@ -651,15 +653,14 @@ def test_selected_push_projects_only_requested_contacts(
     keys = frozenset() if selected == "empty" else frozenset({choices[selected][0]})
     expected = set() if selected in {"empty", "bound-alias"} else {choices[selected][1].pk}
     projected: set[int] = set()
-    manager_class = type(Party.objects)
-    project_contacts = manager_class.project_contacts
+    project_contacts = Party.objects.project_contacts
 
-    def capture_projection(self: Any, people: Any) -> Any:
+    def capture_projection(people: Any) -> Any:
         people = tuple(people)
         projected.update(person.pk for person in people)
-        return project_contacts(self, people)
+        return project_contacts(people)
 
-    monkeypatch.setattr(manager_class, "project_contacts", capture_projection)
+    monkeypatch.setattr(Party.objects, "project_contacts", capture_projection)
     replica.server.requests.clear()
 
     result = push_stream(replica.stream, replica.backend, external_keys=keys)
@@ -1143,7 +1144,7 @@ def test_unchanged_token_does_not_ingest_put_or_change_cursor(
         del args, kwargs
         pytest.fail("An unchanged token must not ingest a contact")
 
-    monkeypatch.setattr(type(Party.objects), "ingest_contact", unexpected_ingest)
+    monkeypatch.setattr(Party.objects, "ingest_contact", unexpected_ingest)
     replica.server.requests.clear()
     result = replica.pull()
     pushed = push_stream(replica.stream, replica.backend)
@@ -1800,9 +1801,8 @@ def test_discovery_falls_back_after_oversized_principal_response(
 
 def test_oversized_multiget_splits_until_every_card_fits_and_advances_sync(
     replica: Replica,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(carddav_backend, "_DAV_RESPONSE_CAP", 4096)
+    replica.backend.response_cap = 4096
     replica.server.store(_HREF, _card(notes="x" * 3000))
     for uid in ("grace", "katherine", "linus"):
         replica.server.store(f"{_BOOK}{uid}.vcf", _card(uid=uid, name=uid, notes="x" * 3000))
@@ -1826,11 +1826,10 @@ def test_oversized_multiget_splits_until_every_card_fits_and_advances_sync(
 @pytest.mark.parametrize("existing", [False, True])
 def test_oversized_single_card_is_quarantined_while_healthy_card_and_cursor_commit(
     replica: Replica,
-    monkeypatch: pytest.MonkeyPatch,
     existing: bool,
 ) -> None:
     previous_person = replica.baseline()[0] if existing else None
-    monkeypatch.setattr(carddav_backend, "_DAV_RESPONSE_CAP", 4096)
+    replica.backend.response_cap = 4096
     replica.server.store(_HREF, _card(notes="x" * 5000))
     replica.server.store(f"{_BOOK}grace.vcf", _card(uid="grace", name="Grace Hopper"))
 
@@ -1941,9 +1940,8 @@ def test_same_origin_private_photo_is_refused_by_pinned_client(
     monkeypatch.setattr(
         "angee.integrate.http.resolved_addresses", lambda host, port: (ipaddress.ip_address("127.0.0.1"),)
     )
-    monkeypatch.setattr(HttpClient, "transport_factory", PinnedTransport)
     contact = ParsedContact(photo=ParsedPhoto(uri="http://private.example/avatar.png", mime="image/png"))
-    with pytest.raises(CardDavError) as rejected:
+    with real_network(), pytest.raises(CardDavError) as rejected:
         replica.backend._resolve_photo(contact, collection="http://private.example/book/")
     assert isinstance(rejected.value.__cause__, ValidationError)
 
@@ -1979,7 +1977,6 @@ def test_extract_prestores_avatar_and_apply_and_local_scan_do_no_storage_io(
     phases: list[str] = []
 
     def ingest_bytes(
-        manager: Any,
         content: bytes,
         *,
         filename: str,
@@ -1990,7 +1987,7 @@ def test_extract_prestores_avatar_and_apply_and_local_scan_do_no_storage_io(
         assert not connection.in_atomic_block
         assert content == PNG_BYTES
         phases.append("extract")
-        return manager.get_or_create(
+        return File.objects.get_or_create(
             drive=drive,
             content_hash=hashlib.sha256(content).hexdigest(),
             defaults={
@@ -2017,8 +2014,8 @@ def test_extract_prestores_avatar_and_apply_and_local_scan_do_no_storage_io(
         phases.append("apply")
         return original_apply(stream, record)
 
-    monkeypatch.setattr(type(Drive.objects), "image_drive", lambda manager: drive)
-    monkeypatch.setattr(type(File.objects), "ingest_bytes", ingest_bytes)
+    monkeypatch.setattr(Drive.objects, "image_drive", lambda: drive)
+    monkeypatch.setattr(File.objects, "ingest_bytes", ingest_bytes)
     monkeypatch.setattr(File, "open_stream", unexpected_open)
     monkeypatch.setattr(replica.backend, "apply_record", apply_after_intake)
     replica.server.store(_HREF, _card().replace("END:VCARD", f"PHOTO;ENCODING=b;TYPE=PNG:{encoded}\r\nEND:VCARD"))
@@ -2427,16 +2424,11 @@ def test_generation_bump_deepcopies_nested_config(replica: Replica, monkeypatch:
 
 
 @pytest.mark.parametrize("url", ["file:///tmp/addressbook", "http://169.254.169.254/addressbook/"])
-def test_request_preserves_url_gate_validation_error(
-    replica: Replica,
-    monkeypatch: pytest.MonkeyPatch,
-    url: str,
-) -> None:
-    monkeypatch.setattr(HttpClient, "transport_factory", PinnedTransport)
+def test_request_preserves_url_gate_validation_error(replica: Replica, url: str) -> None:
     # An unsafe configured origin reaches the native URL gate. Foreign origins
     # are separately refused before credential headers can leave the server.
     replica.directory.config = {"server_url": url}
-    with pytest.raises(ValidationError):
+    with real_network(), pytest.raises(ValidationError):
         replica.backend._request("PROPFIND", url, "<propfind/>")
 
 
@@ -2451,12 +2443,11 @@ def test_cross_origin_redirect_refuses_to_forward_basic_auth(
         return httpx2.Response(302, headers={"Location": "https://attacker.example/collect"})
 
     monkeypatch.setattr(replica.server, "handle_request", redirect)
-    monkeypatch.setattr(replica.backend, "_auth", lambda: {"Authorization": "Basic dXNlcjpwYXNz"})
     with pytest.raises(CardDavError, match="request origin"):
         replica.backend._request("PROPFIND", _BOOK, "<propfind/>")
     assert len(sent) == 1
     assert str(sent[0].url) == _BOOK
-    assert sent[0].headers["authorization"] == "Basic dXNlcjpwYXNz"
+    assert sent[0].headers["authorization"] == replica.directory.credential.auth_headers()["Authorization"]
 
 
 @pytest.mark.parametrize("status", [207, 412, 404])

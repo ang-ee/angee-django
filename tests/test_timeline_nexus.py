@@ -27,7 +27,7 @@ AT = datetime(2026, 10, 19, 12, tzinfo=UTC)
 
 
 @pytest.fixture
-def correspondence(composed_tables):  # noqa: ANN001, ANN201 - fixture namespace
+def correspondence(db):  # noqa: ANN001, ANN201 - fixture namespace
     with (
         override_settings(ANGEE_TIMELINE_KINDS=["angee.nexus.timeline.timeline_kinds"]),
         system_context(reason="test nexus timeline"),
@@ -103,7 +103,7 @@ def test_nexus_uses_the_timeline_identity_contract(correspondence) -> None:  # n
 
 
 @override_settings(ANGEE_TIMELINE_KINDS=["angee.nexus.timeline.timeline_kinds"])
-def test_nexus_correspondence_keeps_the_message_read_gate(composed_tables) -> None:  # noqa: ANN001
+def test_nexus_correspondence_keeps_the_message_read_gate(db) -> None:  # noqa: ANN001
     with system_context(reason="test nexus target visibility"):
         owner = get_user_model().objects.create_user(username="message-owner")
         reader = get_user_model().objects.create_user(username="party-reader")

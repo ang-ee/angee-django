@@ -65,11 +65,6 @@ vi.mock("@angee/integrate", () => ({
   },
 }));
 
-vi.mock("../i18n", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../i18n")>()),
-  useAgentsT: () => (key: string) => key,
-}));
-
 import { InferenceProvidersPage } from "./InferencePage";
 
 describe("InferenceProvidersPage", () => {

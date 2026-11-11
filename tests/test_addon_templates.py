@@ -229,7 +229,7 @@ def test_copier_renders_the_addon_template(tmp_path: Path, include_web: bool, te
         assert not (target / "tests").exists()
         test_module = (target / "test_contacts.py").read_text(encoding="utf-8")
         assert "from acme.contacts.testing.models import Contact" in test_module
-        assert "composed_tables" in test_module
+        assert "(db: None)" in test_module
         for step in (
             "``tests/test_contacts.py``",
             '``"acme.contacts"`` in ``tests/settings.py`` ``INSTALLED_APPS``',

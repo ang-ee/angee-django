@@ -40,31 +40,15 @@ def test_user_source_model_owns_auth_identity() -> None:
     assert "user_permissions" not in field_names
 
 
-def test_user_pk_get_is_not_the_session_bypass(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_user_pk_get_is_not_the_session_bypass(db: None) -> None:
     """The session bypass is a named manager method, not a ``get`` override."""
 
-    from angee.iam.models import User, UserManager
+    from angee.iam.models import UserManager
 
-    manager = User._meta.managers_map["objects"]
-    calls: list[tuple[str, dict[str, object]]] = []
-
-    class ScopedQuery:
-        def get(self, **kwargs: object) -> object:
-            calls.append(("get", kwargs))
-            return "user"
-
-    def system_context(self: UserManager, *, reason: str) -> ScopedQuery:
-        calls.append(("system_context", {"reason": reason}))
-        return ScopedQuery()
-
-    monkeypatch.setattr(type(manager), "system_context", system_context)
+    user = get_user_model().objects.create_user("session-bypass")
 
     assert "get" not in UserManager.__dict__
-    assert manager.get_for_session("usr_123") == "user"
-    assert calls == [
-        ("system_context", {"reason": "iam.session"}),
-        ("get", {"pk": "usr_123"}),
-    ]
+    assert get_user_model().objects.get_for_session(user.pk) == user  # no actor is in context
 
 
 @pytest.mark.parametrize(
@@ -72,25 +56,15 @@ def test_user_pk_get_is_not_the_session_bypass(monkeypatch: pytest.MonkeyPatch) 
     [("person", True, True), ("person", False, False), ("service", True, False)],
     ids=["person", "inactive", "service"],
 )
-def test_iam_model_backend_uses_named_session_lookup(
-    monkeypatch: pytest.MonkeyPatch, kind: str, is_active: bool, allowed: bool
-) -> None:
+@pytest.mark.django_db
+def test_iam_model_backend_uses_named_session_lookup(kind: str, is_active: bool, allowed: bool) -> None:
     """The named lookup reloads a configured user and reapplies the login gate."""
 
     from angee.iam.auth import ModelBackend
 
-    User = get_user_model()
-    user = User(is_active=is_active, kind=kind)
-    calls: list[object] = []
+    user = get_user_model().objects.create_user(f"backend-{kind}-{is_active}", kind=kind, is_active=is_active)
 
-    def get_for_session(self: object, user_id: object) -> AbstractBaseUser:
-        calls.append(user_id)
-        return user
-
-    monkeypatch.setattr(type(User.objects), "get_for_session", get_for_session)
-
-    assert ModelBackend().get_user("usr_123") is (user if allowed else None)
-    assert calls == ["usr_123"]
+    assert ModelBackend().get_user(user.pk) == (user if allowed else None)
 
 
 @pytest.mark.django_db
