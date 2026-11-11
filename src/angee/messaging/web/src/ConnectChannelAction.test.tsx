@@ -94,8 +94,9 @@ describe("ConnectChannelAction", () => {
       description: "channel.demo.description",
       submitLabel: "Connect",
       submittingLabel: "Connecting…",
-      errorFallback: "channel.demo.error",
     });
+    // A vendor without its own `<prefix>.error` message leaves the dialog's generic fallback.
+    expect(actionMocks.dialogProps?.errorFallback).toBeUndefined();
     expect(actionMocks.dialogProps).not.toHaveProperty("cancelLabel");
 
     fireEvent.submit(screen.getByRole("form", { name: "channel.demo.title" }));

@@ -21,7 +21,8 @@ function Composed({ runtime, children }: { runtime: Partial<AppRuntime>; childre
 
 test("opens the queue's record wherever composition routes it", () => {
   render(<Composed runtime={routed}><QueueSettingsLink queueId="que_eng" /></Composed>);
-  expect(screen.getByRole("link", { name: "Queue settings" }).getAttribute("href")).toBe("/work/queues/que_eng");
+  // The shared Button renders the NavLink as its element, so the anchor carries the button role.
+  expect(screen.getByRole("button", { name: "Queue settings" }).getAttribute("href")).toBe("/work/queues/que_eng");
 });
 
 test("renders nothing when the queue record is not routed or no queue is open", () => {

@@ -2,6 +2,7 @@
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import type { ReactElement } from "react";
 import { expect, test } from "vitest";
+import { AuthStateProvider } from "@angee/app";
 import type { DataResourceFieldMetadata } from "@angee/metadata";
 import type { RecordPanelContext } from "@angee/ui";
 import {
@@ -81,18 +82,23 @@ function groupSchemas(requests: GraphQLWireRequest[]) {
   return { console: { ...fixture, metadata: { angee: { resources } } } };
 }
 
-/** One record tab as the group page mounts it: the tabs read the record id and the loaded group record. */
+/** One record tab as the group page mounts it, active, with the panel context FormView passes. */
 function GroupTab({ tab, recordId, record }: { tab: "roster" | "threads"; recordId: string; record: Record<string, unknown> }): ReactElement {
   const entry = useGroupRecordTabs().find(({ id }) => id === tab)!;
-  return <>{entry.render({ recordId, form: { displayRecord: record } } as unknown as RecordPanelContext)}</>;
+  // The tabs read only the loaded group record from the form's save surface.
+  const form = { displayRecord: record } as unknown as RecordPanelContext["form"];
+  return <>{entry.render({ recordId, reload: () => undefined, focusField: () => undefined, form, active: true })}</>;
 }
+
+// The transcript's keyset feed reads only for a signed-in actor.
+const SIGNED_IN = { user: { id: "usr_grace", name: "Grace Hopper" }, status: "authenticated" as const, hasRole: () => false };
 
 function renderGroupTab(tab: "roster" | "threads", membershipRoles: readonly string[] = ["OWNER", "MODERATOR", "MEMBER", "VIEWER"]) {
   const requests: GraphQLWireRequest[] = [];
   const schemas = groupSchemas(requests);
   const record = { permissions: ["write", "manage_roster"], membership_roles: membershipRoles };
   const host = (recordId: string) => <RoutedRuntimeFixture activeSchema="console" schemas={schemas} collectionPath="/spaces">
-    <GroupTab tab={tab} recordId={recordId} record={record} />
+    <AuthStateProvider auth={SIGNED_IN}><GroupTab tab={tab} recordId={recordId} record={record} /></AuthStateProvider>
   </RoutedRuntimeFixture>;
   const view = render(host("grp_1"));
   return { requests, showGroup: (recordId: string) => view.rerender(host(recordId)) };
