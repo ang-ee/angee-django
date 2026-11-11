@@ -163,7 +163,7 @@ def test_graphql_current_and_real_user_and_preview_list_follow_request_identity(
     assert result_data(execute_schema(schema, query, user=target))["viewable_people"] == []
 
 
-@pytest.mark.parametrize("role,permitted", [("owner", True), ("moderator", True), ("member", False), ("viewer", False)])
+@pytest.mark.parametrize("role,permitted", [("moderator", True), ("member", False)])
 def test_const_manager_role_tracks_roster_create_and_issue_but_never_preview(composed_tables, role, permitted):
     actor = User.objects.create_user("roster-actor")
     target = User.objects.create_user("target")

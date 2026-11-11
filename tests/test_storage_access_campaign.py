@@ -4,6 +4,7 @@ from typing import Any
 from urllib.parse import parse_qs, urlsplit
 
 import pytest
+from django.contrib.auth import get_user_model
 from django.contrib.auth.models import AnonymousUser
 from django.contrib.contenttypes.models import ContentType
 from django.core import signing
@@ -60,17 +61,22 @@ def test_the_policy_decides_every_storage_permission(drive: Any) -> None:
 
     alice = drive.alice
     people = {name: create_user(f"storage-policy-{name}") for name in (
-        "editor", "viewer", "storage-admin", "leaf-member", "folder-owner", "named", "outsider",
+        "editor", "viewer", "storage-admin", "folder-owner", "named", "outsider",
     )}
+    with system_context(reason="test.storage.policy.service"):
+        # Role inheritance reaches service accounts as it reaches people.
+        people["leaf-member"] = get_user_model().objects.create_user(username="storage-policy-leaf", kind="service")
     people.update(alice=alice, admin=create_platform_admin("storage-policy-admin"), anonymous=AnonymousUser())
-    leaf, storage_admin = ObjectRef("storage/role", "leaf"), ObjectRef("storage/role", "storage_admin")
+    leaf, middle = ObjectRef("storage/role", "leaf"), ObjectRef("storage/role", "middle")
+    storage_admin = ObjectRef("storage/role", "storage_admin")
     with system_context(reason="test.storage.policy.world"):
         write_relationships([
             RelationshipTuple(to_object_ref(drive), "editor", to_subject_ref(people["editor"])),
             RelationshipTuple(to_object_ref(drive), "viewer", to_subject_ref(people["viewer"])),
             RelationshipTuple(storage_admin, "member", to_subject_ref(people["storage-admin"])),
             RelationshipTuple(leaf, "member", to_subject_ref(people["leaf-member"])),
-            RelationshipTuple(storage_admin, "includes", SubjectRef(leaf)),
+            RelationshipTuple(middle, "includes", SubjectRef(leaf)),
+            RelationshipTuple(storage_admin, "includes", SubjectRef(middle)),
         ])
         open_drive = Drive.objects.create(backend=drive.backend, slug="open", name="Open", prefix="open", owner=alice)
         write_relationships([
@@ -96,6 +102,8 @@ def test_the_policy_decides_every_storage_permission(drive: Any) -> None:
         checks=seat_cells(
             people.__getitem__,
             (storage_admin, "effective_member", "storage-admin leaf-member admin", "alice outsider"),
+            (middle, "effective_member", "leaf-member", "storage-admin"),
+            (storage_admin, "member", "storage-admin", "leaf-member"),
             *((drive.backend, action, "storage-admin admin", "alice outsider")
               for action in ("create", "read", "write", "delete")),
             (drive, "create", "admin storage-admin", "alice"),

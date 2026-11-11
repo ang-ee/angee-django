@@ -15,6 +15,7 @@ from typing import Any
 
 import pytest
 from django.contrib.auth import get_user_model
+from django.contrib.auth.models import AnonymousUser
 from django.utils import timezone
 from rebac import (
     ObjectRef,
@@ -28,9 +29,12 @@ from rebac import (
 )
 from rebac.backends.local import mark_relationships_changed
 from rebac.models import active_relationship_model
+from rebac.testing import assert_decisions
 
 from angee.graphql.testing.documents import execute_schema, result_data
 from tests.conftest import Page, addon_schema, create_platform_admin, vault_for
+from tests.decision_table import seat_cells
+from tests.iam_models import Group
 from tests.test_iam_account_actions import _manager
 from tests.test_iam_graphql import _schema
 from tests.test_messaging import ThreadedTicket
@@ -272,3 +276,58 @@ def test_disclosed_audiences_reach_only_the_accounts_their_sites_reach(composed_
     assert disclosed(admin, "active_account") == set(pks)
     assert disclosed(admin, "nonstaff_account") == {viewer.pk, stranger.pk}
     assert protected(admin) == {staff.pk}
+
+
+def test_the_policy_decides_every_iam_permission(composed_tables: None) -> None:
+    """One world, every IAM permission with an allow and a deny: accounts, groups, audiences and roles."""
+
+    seats = {name: _person(f"iam-policy-{name}") for name in (
+        "target", "directory-reader", "named-reader", "group-member", "outsider",
+    )}
+    seats.update(
+        staff=_person("iam-policy-staff", is_staff=True),
+        inactive=_person("iam-policy-inactive", is_active=False),
+        admin=create_platform_admin("iam-policy-admin"),
+        anonymous=AnonymousUser(),
+    )
+    target = seats["target"]
+    with system_context(reason="test.iam.policy.world"):
+        group = Group.objects.create(name="Policy group")
+        group.add_member(str(SubjectRef(to_object_ref(seats["group-member"]))))
+        write_relationships([
+            RelationshipTuple(_DIRECTORY, "reader", to_subject_ref(seats["directory-reader"])),
+            RelationshipTuple(to_object_ref(target), "directory_reader", to_subject_ref(seats["named-reader"])),
+        ])
+    account_verbs = (
+        "write", "delete", "issue_password", "reset_password", "set_active", "rename", "administer",
+        *(f"write__{field}" for field in (
+            "username", "email", "password", "kind", "is_active", "is_staff", "is_superuser", "preferences",
+            "date_joined", "last_login",
+        )),
+    )
+    restricted = ("username", "email", "last_login", "is_active", "is_staff", "preferences")
+    cells = seat_cells(
+        seats.__getitem__,
+        # auth/user
+        (target, "create", "admin", "outsider"),
+        (target, "view_as", "admin", "directory-reader"),
+        (target, "read", "outsider", "anonymous"),
+        (target, "list", "directory-reader named-reader admin", "outsider target"),
+        (target, "colleague", "target directory-reader", "outsider"),
+        (target, "active_account", "directory-reader admin", "outsider"),
+        (seats["inactive"], "active_account", "", "directory-reader admin"),
+        (target, "nonstaff_account", "admin", "outsider"),
+        (seats["staff"], "nonstaff_account", "", "admin"),
+        (target, "read_private", "target named-reader", "outsider"),
+        *((target, f"read__{field}", "target", "outsider") for field in restricted),
+        *((target, verb, "admin", "directory-reader target") for verb in account_verbs),
+        # audiences, protected accounts, groups and roles
+        (ObjectRef("iam/audience", "active"), "disclosed", "outsider", "anonymous"),
+        (ObjectRef("iam/protected", "main"), "member", "admin", "outsider"),
+        (group, "create", "admin", "group-member"),
+        (group, "read", "group-member admin", "outsider"),
+        (group, "write", "admin", "group-member"),
+        (group, "delete", "admin", "group-member"),
+        (ObjectRef("angee/role", "admin"), "effective_member", "admin", "outsider"),
+    )
+    assert_decisions(checks=cells)
