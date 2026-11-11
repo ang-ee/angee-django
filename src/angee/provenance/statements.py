@@ -797,6 +797,12 @@ class Aspect:
             return (self.member,)
         return tuple(sorted(self.member or ()))
 
+    @property
+    def admits_person(self) -> bool:
+        """Whether a person states this aspect; one whose precedence leaves PERSON out belongs to its native owner."""
+
+        return not self.precedence or SourceKind.PERSON in self.precedence
+
     def priority(self, row: Any) -> int:
         """Place the row's source in this precedence; unlisted kinds sort last.
 
@@ -971,7 +977,7 @@ class StatementsMixin(PersistenceMixin, HistoryDocumentMixin):
                     if (
                         declaration.members
                         or not fields
-                        or (declaration.precedence and SourceKind.PERSON not in declaration.precedence)
+                        or not declaration.admits_person
                         or not any(
                             (saved_fields is None or name in saved_fields)
                             and (previous is None or getattr(previous, name) != getattr(self, name))

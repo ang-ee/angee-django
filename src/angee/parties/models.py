@@ -47,7 +47,7 @@ from angee.base.fields.implementation import ImplClassField
 from angee.base.fields.relations import RetainedGenericRelation
 from angee.base.fields.state import StateField
 from angee.base.fields.text import ColorField
-from angee.base.lineage import concrete_child, concrete_child_models
+from angee.base.lineage import concrete_child, concrete_child_models, most_derived_concrete
 from angee.base.models.audit import AuditMixin
 from angee.base.models.base import AngeeDataModel
 from angee.base.models.hierarchy import HierarchyMixin
@@ -287,56 +287,46 @@ class Party(
             return self._merge_scalar_fields + self._person_merge_scalar_fields
         return self._merge_scalar_fields
 
-    def apply_merge_field_overrides(
-        self,
-        source: Party,
-        field_overrides: Any,
-    ) -> None:
-        """Apply the scalar overrides both merge endpoints admit to the survivor.
+    def keep_merge_fields(self, source: Party, field_overrides: Any) -> None:
+        """Keep this survivor's merge scalars against ``source``: each chosen override, else its own value.
 
-        Common human fields live on ``Party``. Person-only name and birthday
-        fields are admitted only when both endpoints materialize a ``Person``
-        child; the child owns coercion and persistence for those columns.
+        Both endpoints must admit an override; a person's name parts and birthday
+        are admitted only between people. The fold then moves ``source``'s
+        statements here, where survivorship could select their values, so the
+        merging person confirms the kept values of every aspect an override or a
+        differing ``source`` value decides: a preferred statement precedes each
+        moved one, at this resolve and every later one. Aspects both records agree
+        on keep resolving over their sources; an override that no person-stated
+        aspect holds saves as an ordinary edit.
         """
 
-        if field_overrides is None:
-            return
-        if not isinstance(field_overrides, Mapping):
+        overrides = {} if field_overrides is None else field_overrides
+        if not isinstance(overrides, Mapping):
             raise ValidationError({"field_overrides": "Expected an object of field values."})
-
         allowed = set(self.merge_scalar_fields).intersection(source.merge_scalar_fields)
-        unknown = set(field_overrides) - allowed
-        if unknown:
+        if unknown := set(overrides) - allowed:
             names = ", ".join(sorted(str(name) for name in unknown))
             raise ValidationError({"field_overrides": f"Unsupported merge field(s): {names}."})
-
-        self._apply_merge_scalar_values(field_overrides, self._merge_scalar_fields)
-        if any(name in field_overrides for name in self._person_merge_scalar_fields):
-            person_model = apps.get_model("parties", "Person")
-            person = person_model.objects.filter(pk=self.pk).first()
-            if person is None or not person.has_access("write"):
-                raise PermissionDenied("write access to the surviving person is required")
-            person = person.with_actor(instance_actor(self))
-            person._apply_merge_scalar_values(field_overrides, self._person_merge_scalar_fields)
-
-    def _apply_merge_scalar_values(
-        self,
-        field_overrides: Mapping[Any, Any],
-        field_names: tuple[str, ...],
-    ) -> None:
-        """Coerce and save this row's selected merge fields through Django fields."""
-
-        dirty: list[str] = []
-        for name in field_names:
-            if name not in field_overrides:
-                continue
-            field = cast(models.Field[Any, Any], self._meta.get_field(name))
-            value = field.clean(field_overrides[name], self)
-            if getattr(self, name) != value:
-                setattr(self, name, value)
-                dirty.append(name)
-        if dirty:
-            self.save(update_fields=[*dirty, "updated_at"])
+        survivor = most_derived_concrete(self).with_actor(instance_actor(self))
+        other = most_derived_concrete(source)
+        kept = {}
+        for name in sorted(allowed):
+            field = survivor._meta.get_field(name)
+            assert isinstance(field, models.Field)
+            kept[name] = field.clean(overrides[name], survivor) if name in overrides else getattr(survivor, name)
+        decided = {name for name, value in kept.items() if name in overrides or value != getattr(other, name)}
+        for manager in survivor.statement_managers():
+            for aspect, declaration in manager.model.statement_aspects.items():
+                if declaration.members or not declaration.admits_person or decided.isdisjoint(declaration.fields):
+                    continue
+                values = {name: kept[name] if name in kept else getattr(survivor, name) for name in declaration.fields}
+                survivor.confirm(aspect=aspect, values=values)
+                decided.difference_update(declaration.fields)
+        edits = [name for name in sorted(decided.intersection(overrides)) if getattr(survivor, name) != kept[name]]
+        for name in edits:
+            setattr(survivor, name, kept[name])
+        if edits:
+            survivor.save(update_fields=[*edits, "updated_at"])
 
     def apply_identity(
         self,
@@ -519,7 +509,7 @@ class Party(
     def merge_fields(self, merged: Sequence[Any], *, field_overrides: Any = None, **options: Any) -> None:
         super().merge_fields(merged, **options)
         for row in merged:
-            self.apply_merge_field_overrides(row, field_overrides)
+            self.keep_merge_fields(row, field_overrides)
             self.same_as.for_pair(self, row).with_actor(instance_actor(self)).confirm(aspect="same_as", values={})
 
 

@@ -5,7 +5,7 @@ import { UnknownRouteError, aliasRouteHref, createRouteHref } from "./route-href
 const routeHref = createRouteHref([
   { name: "notes.list", path: "/notes" },
   { name: "notes.record", path: "/notes/$id" },
-  { name: "parties.merge", path: "/parties/merge/$left/$right" },
+  { name: "notes.compare", path: "/notes/compare/$left/$right" },
 ]);
 
 describe("routeHref", () => {
@@ -28,8 +28,8 @@ describe("routeHref", () => {
   });
 
   test("interpolates a two-param route", () => {
-    expect(routeHref("parties.merge", { left: "a", right: "b" })).toBe(
-      "/parties/merge/a/b",
+    expect(routeHref("notes.compare", { left: "a", right: "b" })).toBe(
+      "/notes/compare/a/b",
     );
   });
 

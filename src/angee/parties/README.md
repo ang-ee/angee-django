@@ -60,4 +60,6 @@ Identity matching writes normal RULE same_as statements on the ordered Party
 pair, skipping current assertions and dismissals before each run's cap without
 continuation state. A preferred no_value is the symmetric anti-link; preferred value
 awaits a person's survivor choice. `survivor.merge` owns the changeset and redirect;
-pointing owners union statements, retaining collisions as superseded.
+pointing owners union statements, retaining collisions as superseded. Where the
+records disagree on a merge field, the merging person confirms the value kept
+(the survivor's, or the chosen override), so no moved statement outranks it.
