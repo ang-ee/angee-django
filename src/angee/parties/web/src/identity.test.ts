@@ -59,6 +59,7 @@ describe("resolvedSender", () => {
   const survivor = {
     party_link_confirmed: true,
     party: { display_name: "Jane Doe", display_avatar: { url: "/files/party.png?token=a" } },
+    merged_into: null,
   };
   const merged = { display_name: "jane@old.acme.com", party_link_confirmed: false, party: null, merged_into: survivor };
 

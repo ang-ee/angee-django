@@ -25,6 +25,7 @@ from rebac.backends import LocalBackend, backend, reset_backend
 from rebac.schema import parse_zed
 from rebac.testing import install_schema
 
+from angee.base.models.merge_references import MergeContractMixin, MergePolicy
 from angee.graphql.data.hasura import AngeeHasuraWriteBackend, hasura_model_resource, public_pk_decoder
 from angee.graphql.node import AngeeNode
 from angee.graphql.testing.documents import execute_schema, result_data
@@ -62,8 +63,13 @@ class ProjectAccessTaskType(AngeeNode):
     promoted_phase: str | None = strawberry_django.field(resolver=AbstractTask.promoted_phase)
 
 
-class TaskPromotion(models.Model):
-    """Minimal relation target for the production task's phase expression."""
+class TaskPromotion(MergeContractMixin):
+    """Minimal relation target for the production task's phase expression.
+
+    Like ``projects.Project.converted_from``, the lineage key stays on a merged task.
+    """
+
+    merge_policies = {"converted_from": MergePolicy.KEEP}
 
     converted_from = models.ForeignKey(ProjectAccessTask, on_delete=models.CASCADE, related_name="promoted_projects")
     current_milestone = models.ForeignKey(Scope, null=True, on_delete=models.SET_NULL)

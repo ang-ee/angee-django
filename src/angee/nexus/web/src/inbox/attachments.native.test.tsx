@@ -41,7 +41,10 @@ const pdf = (n: number) => ({
     mime_type: { mime_type: "application/pdf", label: "PDF" },
   },
 });
-const sender = { id: "handle-1", display_name: "Ada", value: "ada@example.com", party_link_confirmed: false, avatar: null, party: null };
+const sender = {
+  id: "handle-1", display_name: "Ada", value: "ada@example.com", party_link_confirmed: false, avatar: null, party: null,
+  merged_into: null,
+};
 const parent = {
   id: "parent-1", preview: "Meet at Casa Cosecha.", message_type: "COMMENT",
   sender: { ...sender, display_name: "Dane" }, thread: { id: "thread-1" },
