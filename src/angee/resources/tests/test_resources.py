@@ -18,7 +18,7 @@ from import_export.results import Result, RowResult
 from rebac import system_context
 from rebac.errors import MissingActorError
 from rebac.testing import install_schema
-from tests.conftest import addon_fixture_resources, make_addon  # noqa: F401 -- share fake-addon lifetime
+from tests.conftest import make_addon
 from tests.tables import model_tables
 
 from angee.base.models.base import AngeeModel

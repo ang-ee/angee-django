@@ -12,9 +12,6 @@ from tests.conftest import (
     make_addon,
     vault_for,
 )
-from tests.conftest import (
-    addon_fixture_resources as addon_fixture_resources,
-)
 
 from angee.base.models.identity import public_id_of
 from angee.resources.exceptions import ResourceLoadError
