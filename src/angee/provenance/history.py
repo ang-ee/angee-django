@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import operator
 from collections.abc import Iterable, Mapping, Sequence
 from datetime import datetime
+from functools import reduce
 from typing import TYPE_CHECKING, Any, ClassVar, Protocol, Self, cast
 
 from django.apps import apps
@@ -11,7 +13,7 @@ from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ImproperlyConfigured, ObjectDoesNotExist
 from django.db import models, router, transaction
-from django.db.models import Exists, OuterRef
+from django.db.models import Exists, OuterRef, Q
 from django.db.models.base import ModelBase
 from django.utils import timezone
 from django.utils.functional import classproperty
@@ -23,6 +25,12 @@ from simple_history.utils import get_change_reason_from_object, get_history_mana
 from angee.provenance.bases import ChangesetHistory as ChangesetHistory
 from angee.provenance.context import changeset, changeset_model_label, current_changeset, write_group
 from angee.provenance.querysets import HistoryQuerySet, model_history
+
+BASELINE_REASON = "history.baseline"
+"""The change reason of a baseline: a row's stored state recorded before its first tracked write.
+
+A baseline is the state before the boundary that triggered it, never a write of its own.
+"""
 
 UNLOADED = object()
 """Default for a history argument the caller has not loaded; the history owner reads it itself."""
@@ -321,15 +329,33 @@ class ModelHistory(HistoricalRecords):
                     )
         return captured
 
-    def recorded(self, model: type[models.Model]) -> Exists:
-        """Whether the outer row (``OuterRef("pk")``) has any stored version yet.
+    def carriers(self, model: type[models.Model]) -> tuple[type[models.Model], ...]:
+        """Return the tables whose versions carry ``model``'s columns: its own and its tracked MTI descendants'.
+
+        A multi-table child's version stores the inherited columns too, so a row
+        created through a child (a ``Person``) has its parent's state in the
+        child's history even while the parent table (``Party``) has none.
+        """
+
+        tables, pending = [model], [model]
+        while pending:
+            for child in self.capture_children(pending.pop()):
+                if model_history(child) is not None:
+                    tables.append(child)
+                    pending.append(child)
+        return tuple(tables)
+
+    def recorded(self, model: type[models.Model]) -> Q:
+        """Whether the outer row (``OuterRef("pk")``) has a version carrying ``model``'s columns yet.
 
         A tracked write carries this test on the read it already makes of the
         rows it is about to change (:meth:`HistoryQuerySet.update`).
         """
 
-        manager = get_history_manager_for_model(model)
-        return Exists(manager.filter(**{model._meta.pk.attname: OuterRef("pk")}))
+        return reduce(operator.or_, (
+            Q(Exists(get_history_manager_for_model(table).filter(**{table._meta.pk.attname: OuterRef("pk")})))
+            for table in self.carriers(model)
+        ))
 
     def record_baselines(self, model: type[models.Model], keys: Sequence[Any]) -> None:
         """Snapshot the stored state of ``keys``, rows with no history yet, before a tracked write changes them.
@@ -346,7 +372,7 @@ class ModelHistory(HistoricalRecords):
 
         if not keys:
             return
-        with changeset(fresh=True, activity="system", change_reason="history.baseline"), write_group() as group:
+        with changeset(fresh=True, activity="system", change_reason=BASELINE_REASON), write_group() as group:
             pending = set(group.seen)
             self.bulk_history_create(model, keys, "~")
             # The baseline is not the native capture the following write still owes.
@@ -506,9 +532,10 @@ class HistoryMixin(models.Model):
                 if history is not None and history.capture_enabled:
                     current_changeset(required=True, record=True)
                     model = type(self)._meta.concrete_model or type(self)
-                    versions = get_history_manager_for_model(model).filter(**{model._meta.pk.attname: self.pk})
-                    if not self._state.adding and not versions.exists():
-                        history.record_baselines(model, [self.pk])
+                    if not self._state.adding:
+                        recorded = model._base_manager.filter(history.recorded(model), pk=self.pk)
+                        if not recorded.exists():
+                            history.record_baselines(model, [self.pk])
             super().save_base(raw, force_insert, force_update, alias, update_fields)
 
     def delete(self, *args: Any, **kwargs: Any) -> tuple[int, dict[str, int]]:
