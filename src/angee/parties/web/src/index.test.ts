@@ -70,6 +70,6 @@ describe("parties addon manifest", () => {
       "/parties/statements/association%201",
     );
     expect(routeHref("parties.merge", { left: "left/1", right: "right 2" }))
-      .toBe("/parties/merge/left%2F1/right%202");
+      .toBe("/parties/review/merge/left%2F1/right%202");
   });
 });
