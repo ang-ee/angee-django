@@ -12,13 +12,13 @@ from django.apps import AppConfig, apps
 from django.contrib.auth.models import Group, Permission
 from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import ImproperlyConfigured
-from django.db import IntegrityError, connection, models
+from django.db import IntegrityError, connection, models, transaction
 from django.test.utils import CaptureQueriesContext
 from import_export.results import Result, RowResult
 from rebac import system_context
 from rebac.errors import MissingActorError
 from rebac.testing import install_schema
-from tests.conftest import addon_fixture_resources, make_addon  # noqa: F401 -- share fake-addon lifetime
+from tests.conftest import make_addon
 from tests.tables import model_tables
 
 from angee.base.models.base import AngeeModel
@@ -2530,22 +2530,27 @@ def test_content_type_label_rows_hash_labels_not_ids(tmp_path: Path) -> None:
                 and any(table in query["sql"] for table in tables)
             ]
 
-            # A fresh database assigns the same label another content-type id.
-            previous_id = ContentType.objects.get_for_model(ContentTypeRow).pk
-            ledger.objects.filter(source_addon=owner.name).delete()
-            ContentTypeRow._default_manager.all().delete()
-            Permission.objects.filter(content_type_id=previous_id).delete()
-            # A content-type delete through the ORM collects every registered model
-            # relating to content types, including other modules' unmigrated test models.
-            with connection.cursor() as cursor:
-                cursor.execute(
-                    f"DELETE FROM {connection.ops.quote_name(ContentType._meta.db_table)} WHERE id = %s",
-                    [previous_id],
-                )
-            ContentType.objects.clear_cache()
-            ledger.objects.load_addons((owner,), tiers=[Resource.Tier.MASTER])
+            # A fresh database assigns the same label another content-type id; the
+            # savepoint gives the session's ids back.
+            with transaction.atomic():
+                previous_id = ContentType.objects.get_for_model(ContentTypeRow).pk
+                ledger.objects.filter(source_addon=owner.name).delete()
+                ContentTypeRow._default_manager.all().delete()
+                Permission.objects.filter(content_type_id=previous_id).delete()
+                # A content-type delete through the ORM collects every registered model
+                # relating to content types, including other modules' unmigrated test models.
+                with connection.cursor() as cursor:
+                    cursor.execute(
+                        f"DELETE FROM {connection.ops.quote_name(ContentType._meta.db_table)} WHERE id = %s",
+                        [previous_id],
+                    )
+                ContentType.objects.clear_cache()
+                ledger.objects.load_addons((owner,), tiers=[Resource.Tier.MASTER])
 
-            assert ContentTypeRow._default_manager.values_list("content_type", flat=True).get() != previous_id
-            assert ledger.objects.get(source_addon=owner.name, xref="row").content_hash == seeded_hash
+                assert ContentTypeRow._default_manager.values_list("content_type", flat=True).get() != previous_id
+                assert ledger.objects.get(source_addon=owner.name, xref="row").content_hash == seeded_hash
+                transaction.set_rollback(True)
     finally:
+        # Later tests start from the session's warm content-type cache.
         ContentType.objects.clear_cache()
+        ContentType.objects.get_for_models(*apps.get_models(), for_concrete_models=False)

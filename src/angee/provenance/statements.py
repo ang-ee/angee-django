@@ -902,11 +902,17 @@ class StatementsMixin(PersistenceMixin, HistoryDocumentMixin):
         return tuple(sorted(carriers, key=lambda model: model._meta.label_lower))
 
     def statement_managers(self) -> Iterable[Any]:
-        """Yield each MTI owner's bound table once, including parent declarations."""
+        """Yield each MTI owner's bound table once, including parent declarations.
+
+        A parent declaration's subject is the ancestor row reached through Django's
+        parent links, which build it from this row's loaded fields without a query.
+        """
 
         for model in self.statement_models():
             subject_model = model.statement_subject_model
-            subject = self if subject_model is type(self) else subject_model._base_manager.get(pk=self.pk)
+            subject: Any = self
+            while (concrete := subject._meta.concrete_model) is not subject_model:
+                subject = getattr(subject, concrete._meta.get_ancestor_link(subject_model).name)
             if subject is not self and (actor := instance_actor(self)) is not None:
                 if not isinstance(subject, RebacMixin):
                     raise ImproperlyConfigured("Statement subjects require REBAC actor binding.")

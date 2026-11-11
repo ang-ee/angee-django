@@ -184,12 +184,13 @@ through imports in the root conftest before database setup. Tests roll back by
 default over a session baseline: the base plugin binds the installed addons' merged
 permission inputs (a composed host binds its generated ones), and its
 `django_db_setup` synchronizes REBAC once per worker; a host extends that fixture
-to load its own baseline rows. The framework-generic
+to load its own baseline rows, and the plugin records every row once the outermost
+extension returns. The framework-generic
 [`composed_tables`](../src/angee/base/testing/fixtures.py) fixture is a
 compatibility alias of the native `db` fixture, kept for consumer suites. Declare `django_db(transaction=True)` only when the
 contract needs real commits: other threads or connections, row locks, or
-`on_commit` work a real worker runs; its flush restores the baseline through
-`post_migrate`. Assert `on_commit` callbacks with pytest-django's
+`on_commit` work a real worker runs; its flush restores the recorded baseline
+rows, keys included, instead of recomputing them. Assert `on_commit` callbacks with pytest-django's
 `django_capture_on_commit_callbacks`. A test synchronizes REBAC itself only after
 binding its own schema; `composed_permissions` binds a test-owned copy of the merged
 inputs for a test that edits one on disk. Register
