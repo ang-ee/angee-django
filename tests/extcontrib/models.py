@@ -88,10 +88,14 @@ class Claimed(ClaimedBilling, ClaimedSource):
 
 
 class Stated(StatementsMixin, HistoryMixin, AngeeDataModel):
-    """A subject whose ``status`` shares a stance column's name, recording person stances only once stated."""
+    """A subject whose ``status`` shares a stance column's name, recording person stances only once stated.
+
+    Its statements admit through ``write_statements``, which also holds a ``stater`` who cannot write the row.
+    """
 
     sqid_prefix = "xst_"
     person_stances_once_stated = True
+    statement_write_permission = "write_statements"
     status = models.CharField(max_length=20, blank=True, default="")
     note = models.CharField(max_length=40, blank=True, default="")
     statements = StatementRecords(

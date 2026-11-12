@@ -1107,7 +1107,9 @@ which contradicts "a plain stream ranks below people" for these rows; the owner-
 cure is to seed PERSON stances from the row's history attribution when its first
 non-authoritative assertion arrives. A subject whose `write` other rows inherit names
 a narrower `statement_write_permission` (projects' `write_statements`), so admission
-lends a source nothing those rows reach (see [projects](../../src/angee/projects/README.md)).
+lends a source nothing those rows reach (see [projects](../../src/angee/projects/README.md));
+`statement_source` stays out of every permission another row inherits, a record task's
+`*_as_subject` arms included.
 Confirm or dismiss stay explicit.
 Consumers contribute domain aspects through the descriptor's abstract donors: the
 subject source's own declaration finalizes the one statement table (bases, prefix,

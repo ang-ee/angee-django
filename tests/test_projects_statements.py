@@ -26,7 +26,7 @@ from angee.graphql.deletion import DeletePreview
 from angee.integrate.states import StreamKind
 from angee.integrate.testing.models import RecordLink, SyncStream
 from angee.messaging.backends import ManualChannelBackend
-from angee.messaging.testing.models import Channel, Message
+from angee.messaging.testing.models import Channel, Message, Person
 from angee.projects.events import project_status_changed
 from angee.projects.testing.models import Milestone, Project, Queue, Stage, Task
 from angee.provenance.context import changeset
@@ -505,3 +505,23 @@ def test_a_dismissed_lifecycle_reopens_the_task_and_stays_on_top() -> None:
 
     source.state(task, "lifecycle", status=Task.TaskStatus.DONE, done_at=timezone.now())
     assert task.status == Task.TaskStatus.OPEN
+
+
+@pytest.mark.usefixtures("activity_catalog")
+def test_a_subjects_source_never_reaches_the_record_tasks_about_it() -> None:
+    """A party's source states the party; a record task about it lends that source nothing (``*_as_subject``)."""
+
+    owner = _person("party-subject-owner")
+    with system_context(reason="tests.projects.statements.party"):
+        party = Person.objects.create(display_name="Stated person", owner=owner)
+    source = Source("party-subject")
+    source.link(party)
+    with actor_context(owner):
+        task = Task.objects.schedule(Person._default_manager.get(pk=party.pk), title="About the person")
+    with system_context(reason="tests.projects.statements.party"), pytest.raises(PermissionDenied):
+        task.statements_for("identity").set(
+            aspect="identity", values={"title": "Stated through the party", "note": ""}, asserted_by=source.integration
+        )
+    task.refresh_from_db()
+    assert task.title == "About the person" and not task.carries_statements()
+    assert not Task.objects.with_actor(source.integration).filter(pk=task.pk).exists()
