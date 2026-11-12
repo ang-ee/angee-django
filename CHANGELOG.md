@@ -10,6 +10,10 @@ live in code docstrings.
 
 ## Unreleased — shared addon contracts, native embeddings and graph retrieval
 
+- An adopted Person (`Party.objects.for_user(user, adopt=)`) is owned by its
+  account, like a Person the account's creation makes, so the account reads and
+  edits its own private fields. `follow_user_name` no longer renames a Person
+  whose `identity` aspect a source states: survivorship keeps the source's name.
 - `UserManager.create_person_as_system(..., identity=)` carries an existing
   identity record on `person_created`, and `Party.objects.for_user(user,
   adopt=)` links that Person to the new account instead of creating another:

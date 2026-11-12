@@ -1545,9 +1545,10 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
 
         ``adopt`` is an existing Person a trusted ingress resolved as this user
         (an imported contact, carried by IAM's person event): it becomes the user's
-        Person instead of a new row, keeping its identity and statements. A Person
-        already linked to another user, or a user already linked to another
-        Person, refuses rather than moving an identity.
+        Person instead of a new row, keeping its identity and statements, and its
+        ownership passes to the account, as a Person created here is owned by its
+        user. A Person already linked to another user, or a user already linked to
+        another Person, refuses rather than moving an identity.
         """
 
         person_model = apps.get_model("parties", "Person")
@@ -1563,20 +1564,26 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
             if linked or person.user_id not in (None, user.pk):
                 raise ValidationError({"user": "This person and this account already have other identities."})
             if person.user_id is None:
-                person.user = user
-                person.save(update_fields=["user", "updated_at"])
+                person.user, person.owner = user, user
+                person.save(update_fields=["user", "owner", "updated_at"])
             return person
 
     def follow_user_name(self, user: Any) -> None:
         """Rename ``user``'s linked :class:`Person` after the account, as :meth:`for_user` names it.
 
         Runs within the caller's ``system_context``; a person already carrying
-        the account's name is left untouched.
+        the account's name is left untouched, and so is one whose name a source
+        states (an adopted contact): the ``identity`` aspect's survivorship owns it.
         """
 
         name = _user_display_name(user)
         person_model = apps.get_model("parties", "Person")
-        for person in person_model.objects.filter(user=user).exclude(display_name=name):
+        party_model = apps.get_model("parties", "Party")
+        stated = party_model.statements.model._base_manager.filter(
+            aspect="identity", applied=True, superseded__isnull=True
+        )
+        people = person_model.objects.filter(user=user).exclude(display_name=name)
+        for person in people.exclude(pk__in=stated.values("subject_id")):
             person.display_name = name
             person.save(update_fields=["display_name", "updated_at"])
 
