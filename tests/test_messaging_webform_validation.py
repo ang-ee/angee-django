@@ -2,17 +2,15 @@
 
 from __future__ import annotations
 
-import json
-import os
-import subprocess
-import sys
 from pathlib import Path
 
+import pytest
+
 from angee.base.testing.packages import write_addon_distribution
-from tests.composed_host import COMPOSED_TEST_TIMEOUT
+from tests.composed_host import run_composed_tests
 
 
-def test_composed_webform_validation(tmp_path: Path) -> None:
+def test_composed_webform_validation(tmp_path: Path, subtests: pytest.Subtests) -> None:
     addon = tmp_path / "addons" / "example" / "webform_semantics"
     addon.mkdir(parents=True)
     (addon / "__init__.py").write_text("")
@@ -42,29 +40,7 @@ def test_composed_webform_validation(tmp_path: Path) -> None:
         "        if errors:\n"
         "            raise ValidationError(errors)\n"
     )
-    root = Path(__file__).resolve().parents[1]
-    report = tmp_path / "composed-webform.json"
-    env = dict(os.environ)
-    env.pop("DJANGO_SETTINGS_MODULE", None)
-    result = subprocess.run(
-        [
-            sys.executable,
-            str(root / "tests" / "composed_host.py"),
-            "--runtime-dir", str(tmp_path / "runtime"),
-            "--addon-dir", str(tmp_path / "addons"),
-            "--app", "example.webform_semantics",
-            "--app", "angee.intake",
-            "--no-examples",
-            "--action", "tests",
-            "--test-label", "tests.native_messaging_webform_validation",
-            "--output", str(report),
-        ],
-        cwd=root,
-        env=env,
-        capture_output=True,
-        text=True,
-        timeout=COMPOSED_TEST_TIMEOUT,
-        check=False,
+    run_composed_tests(
+        tmp_path, subtests, app=("example.webform_semantics", "angee.intake"),
+        sqlite=("tests.native_messaging_webform_validation",), addon_dirs=(tmp_path / "addons",),
     )
-    assert result.returncode == 0, f"Composed webform tests failed:\n{result.stdout}\n{result.stderr}"
-    assert json.loads(report.read_text()) == {"failures": 0, "vendor": "sqlite"}

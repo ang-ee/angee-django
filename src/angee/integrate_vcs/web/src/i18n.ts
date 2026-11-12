@@ -1,4 +1,4 @@
-import { createNamespaceT } from "@angee/ui";
+import { createNamespaceT } from "@angee/ui/i18n";
 
 export const enIntegrateVcsMessages: Record<string, string> = {
   "action.refresh": "Refresh",

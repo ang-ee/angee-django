@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 
-import { cleanup, render, screen } from "@testing-library/react";
-import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
+import { render, screen } from "@testing-library/react";
+import { beforeEach, describe, expect, test, vi } from "vitest";
 import { RouterContextProvider, createRootRoute, createRouter, createMemoryHistory } from "@tanstack/react-router";
 import { createRouteHref } from "@angee/ui/runtime";
 import {
@@ -37,22 +37,15 @@ vi.mock("@angee/refine", async (importOriginal) => ({
   useAuthoredQuery: sdkMocks.useAuthoredQuery,
 }));
 
-// `@angee/ui` carries the real rail/empty/skeleton primitives; only the route
-// owners and namespace translator are overridden.
+// `@angee/ui` carries the real rail/empty/skeleton primitives; only the route owners are overridden.
 vi.mock("@angee/ui", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@angee/ui")>();
-  const React = await import("react");
   return {
     ...actual,
     useRouteHref: () => routerMocks.routeHref,
     useRouteRecordId: () => routerMocks.params.id,
     useRouteSearch: () => routerMocks.search,
-    // Mirror the real `useNamespaceT` contract: a STABLE translator identity (memoized
-    // on its inputs). AgentSessionsPage publishes a `t`-derived node into the shell
-    // primary pane via `usePrimaryPane`, so an unstable `t` would churn that node and
-    // republish on every render — an infinite publish/re-render loop.
-    useNamespaceT: (_namespace: string, messages: Record<string, string>) =>
-      React.useCallback((key: string) => messages[key] ?? key, [messages]), };
+  };
 });
 
 // Stub the chat surface so the test never pulls in the assistant-ui runtime — it only
@@ -114,10 +107,6 @@ beforeEach(() => {
   Object.assign(routerMocks.routeHref, { maybe: routeHref.maybe });
   sdkMocks.useAuthoredQuery.mockReset();
   sdkMocks.navigation = true;
-});
-
-afterEach(() => {
-  cleanup();
 });
 
 describe("AgentSessionsPage", () => {

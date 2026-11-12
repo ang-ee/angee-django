@@ -49,7 +49,7 @@ def test_base_addon_keeps_its_label_and_foreign_django_app_has_no_addon_contract
     assert not is_angee_addon(apps.get_app_config("auth"))
 
 
-def test_resource_manifest_normalizes_tiers_and_entries(monkeypatch) -> None:
+def test_resource_manifest_normalizes_tiers_and_entries() -> None:
     """Resource declarations from the manifest normalize in the resource subsystem."""
 
     config = make_addon(
@@ -526,7 +526,7 @@ def test_storage_install_resources_adopt_unique_slugs() -> None:
     )
 
 
-def test_resource_manifest_rejects_unknown_tiers(monkeypatch) -> None:
+def test_resource_manifest_rejects_unknown_tiers() -> None:
     """Only resource tiers owned by the resource subsystem are accepted."""
 
     config = make_addon(resources={"fixture": ("resources/fixture.csv",)})
@@ -535,36 +535,29 @@ def test_resource_manifest_rejects_unknown_tiers(monkeypatch) -> None:
         resource_manifest_for(config)
 
 
-def _schema_config(monkeypatch, schemas: object) -> AppConfig:
-    """Return a config whose resolved schema declaration is ``schemas``."""
-
-    monkeypatch.setattr("angee.graphql.schema._raw_schemas", lambda _config, *, index: schemas)
-    return apps.get_app_config("base")
-
-
-def test_get_schema_parts_normalizes_scalars_and_buckets(monkeypatch) -> None:
+def test_get_schema_parts_normalizes_scalars_and_buckets() -> None:
     """A scalar contribution becomes a one-tuple; absent buckets are empty."""
 
     sentinel = object()
-    config = _schema_config(monkeypatch, {"public": {"query": sentinel}})
+    config = make_addon(schemas={"public": {"query": sentinel}})
     parts = schema_parts_for(config)
 
     assert parts["public"].query == (sentinel,)
     assert parts["public"].mutation == ()
 
 
-def test_get_schema_parts_rejects_unknown_keys(monkeypatch) -> None:
+def test_get_schema_parts_rejects_unknown_keys() -> None:
     """An unknown merge bucket fails fast."""
 
-    config = _schema_config(monkeypatch, {"public": {"queries": []}})
+    config = make_addon(schemas={"public": {"queries": []}})
     with pytest.raises(ImproperlyConfigured, match="unknown keys: queries"):
         schema_parts_for(config)
 
 
-def test_get_schema_parts_rejects_sets(monkeypatch) -> None:
+def test_get_schema_parts_rejects_sets() -> None:
     """Unordered sets are rejected so builds stay deterministic."""
 
-    config = _schema_config(monkeypatch, {"public": {"query": {object()}}})
+    config = make_addon(schemas={"public": {"query": {object()}}})
     with pytest.raises(ImproperlyConfigured, match="not a set"):
         schema_parts_for(config)
 

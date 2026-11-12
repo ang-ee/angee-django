@@ -21,10 +21,9 @@ from angee.messaging.testing.models import Message
 from tests.test_messaging import channel as channel
 
 
-@pytest.mark.django_db(transaction=True)
 @pytest.mark.parametrize("kind", list(Message.MessageKind))
 def test_content_edit_validation_uses_retained_kind(
-    composed_tables: None,
+    db: None,
     django_assert_num_queries: Callable[..., AbstractContextManager[Any]],
     kind: str,
 ) -> None:
@@ -35,8 +34,7 @@ def test_content_edit_validation_uses_retained_kind(
         assert (message.delete_error() is None) == (kind == Message.MessageKind.COMMENT)
 
 
-@pytest.mark.django_db(transaction=True)
-def test_notification_messages_remain_readonly(composed_tables: None) -> None:
+def test_notification_messages_remain_readonly(db: None) -> None:
     """The retained notification kind, not obsolete payload metadata, owns edit policy."""
     message = Message(direction="internal", message_type="notification")
     assert message.content_edit_error() is not None
@@ -46,7 +44,7 @@ def test_notification_messages_remain_readonly(composed_tables: None) -> None:
 
 @pytest.mark.django_db(transaction=True)
 def test_queued_delivery_waits_for_commit_and_persists_status(
-    channel: Any, composed_tables: None, monkeypatch: pytest.MonkeyPatch
+    channel: Any, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Explicit retry admits FAILED delivery and dispatches only after commit."""
     with system_context(reason="messaging delivery setup"), mute_changes():
@@ -102,9 +100,8 @@ def test_queued_delivery_waits_for_commit_and_persists_status(
         assert message.sent_at is not None
 
 
-@pytest.mark.django_db(transaction=True)
 def test_reserve_delivery_leases_a_due_draft_once_and_publishes_nothing(
-    channel: Any, composed_tables: None, monkeypatch: pytest.MonkeyPatch
+    channel: Any, monkeypatch: pytest.MonkeyPatch, django_capture_on_commit_callbacks: Any,
 ) -> None:
     """The row reserves a due draft under its lock; a live lease refuses a second reservation."""
     sent: list[dict[str, Any]] = []
@@ -112,7 +109,11 @@ def test_reserve_delivery_leases_a_due_draft_once_and_publishes_nothing(
         "angee.jobs.enqueue.celery_app.send_task",
         lambda _name, *, kwargs, **_options: sent.append(kwargs),
     )
-    with system_context(reason="messaging reservation setup"), mute_changes():
+    with (
+        django_capture_on_commit_callbacks(execute=True),
+        system_context(reason="messaging reservation setup"),
+        mute_changes(),
+    ):
         message = Message.objects.create(
             channel_id=channel.pk,
             platform="email",
@@ -131,8 +132,7 @@ def test_reserve_delivery_leases_a_due_draft_once_and_publishes_nothing(
     assert sent == []
 
 
-@pytest.mark.django_db(transaction=True)
-def test_reserve_delivery_refuses_an_unsaved_or_inbound_message(channel: Any, composed_tables: None) -> None:
+def test_reserve_delivery_refuses_an_unsaved_or_inbound_message(channel: Any) -> None:
     """Reservation requires the persisted outbound envelope every delivery entrypoint shares."""
     with system_context(reason="messaging reservation refusal"), mute_changes():
         with pytest.raises(ValidationError, match="unsaved message"):

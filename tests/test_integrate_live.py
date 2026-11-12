@@ -13,7 +13,6 @@ from typing import Any, ClassVar
 
 import pytest
 from django.core.exceptions import ImproperlyConfigured
-from django.core.management import call_command
 from django.utils import timezone
 from rebac import system_context
 
@@ -26,17 +25,19 @@ from angee.messaging.testing.models import Message
 from tests.conftest import make_integration
 from tests.test_messaging_graphql import Channel
 
+Sent = list[tuple[str, dict[str, Any]]]
+"""The task sends ``capture_tasks`` records at the Celery boundary."""
 
-@pytest.mark.django_db
-def test_run_bridge_session_skips_actual_periodic_vcs_bridge(monkeypatch: pytest.MonkeyPatch) -> None:
+
+def test_run_bridge_session_skips_actual_periodic_vcs_bridge(db: None) -> None:
     """A stale live-session delivery for a periodic VCS bridge exits cleanly."""
 
     from angee.integrate import tasks as tasks_module
     from tests.conftest import VcsBridge
 
-    monkeypatch.setattr(type(VcsBridge._default_manager.all()), "first", lambda _queryset: VcsBridge())
+    bridge = make_integration("periodic-vcs", model=VcsBridge)
 
-    assert tasks_module.run_bridge_session("integrate_vcs.vcsbridge", 1) == {
+    assert tasks_module.run_bridge_session(bridge._meta.label_lower, bridge.pk) == {
         "ok": True,
         "skipped": True,
         "reason": "not-live-capable",
@@ -165,7 +166,7 @@ class _QueuedLiveMessage:
 
 @pytest.fixture
 def live_tables(settings: Any, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Register the fake live backend and sync its policy."""
+    """Register the fake live backend."""
 
     settings.ANGEE_DATA_DIR = str(tmp_path / "data")
     settings.ANGEE_CHANNEL_BACKEND_CLASSES = {
@@ -173,7 +174,6 @@ def live_tables(settings: Any, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) 
         "fake_live": "tests.test_integrate_live.FakeLiveChannelBackend",
     }
     monkeypatch.setattr("angee.integrate.tasks.models_with", lambda *, base: (Channel,))
-    call_command("rebac", "sync", verbosity=0)
 
 
 def _live_channel(slug: str = "fake-live") -> Any:
@@ -255,13 +255,12 @@ def test_live_session_lost_lock_exits_for_clean_restart(live_tables: Any, monkey
 
     monkeypatch.setattr(session_module, "WAKE_SECONDS", 0.05)
     channel = _live_channel()
-    monkeypatch.setattr(type(channel), "sync_is_locked", lambda _bridge: False)
     session = FakeLiveSession(
         channel,
         stop_event=threading.Event(),
     )
-    with system_context(reason="test live lost lock"), channel.sync_lock() as acquired:
-        assert acquired
+    with system_context(reason="test live lost lock"):
+        assert not channel.sync_is_locked()  # nothing holds the bridge's advisory lock
         assert session.run() == PairingState.STARTING
 
 
@@ -841,7 +840,7 @@ def test_ensure_bridge_sessions_skips_poll_only_channels_before_desire_write(
 
 @pytest.mark.django_db(transaction=True)
 def test_ensure_bridge_sessions_reconciles_live_desire_and_routes_to_session_queue(
-    live_tables: Any, monkeypatch: pytest.MonkeyPatch
+    capture_tasks: Sent, live_tables: Any, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A healthy connected live bridge gets live desire and a queued session."""
 
@@ -858,13 +857,6 @@ def test_ensure_bridge_sessions_reconciles_live_desire_and_routes_to_session_que
     assert Channel.live_implementation_field() is Channel._meta.get_field("backend_class")
     monkeypatch.setattr(tasks_module, "models_with", models_with)
 
-    sent: list[dict[str, Any]] = []
-    monkeypatch.setattr(
-        "angee.integrate.impl.enqueue_task",
-        lambda name, *, kwargs, queue=None, expires=None, **_: sent.append(
-            {"name": name, "kwargs": kwargs, "queue": queue, "expires": expires}
-        ),
-    )
     channel = make_integration(
         "fake-live-reconcile",
         model=Channel,
@@ -878,36 +870,31 @@ def test_ensure_bridge_sessions_reconciles_live_desire_and_routes_to_session_que
 
     channel.refresh_from_db()
     assert channel.subscription_state["desired"] == Channel.LiveState.LIVE
-    assert sent == [
+    assert capture_tasks == [(
+        RUN_SESSION_TASK,
         {
-            "name": RUN_SESSION_TASK,
             "kwargs": {"model_label": channel._meta.label_lower, "pk": channel.pk},
             "queue": "fake-live",
             "expires": SESSION_START_EXPIRES,
-        }
-    ]
+        },
+    )]
 
 
 @pytest.mark.django_db(transaction=True)
 def test_ensure_bridge_sessions_latches_runtime_error_until_resume(
-    live_tables: Any, monkeypatch: pytest.MonkeyPatch
+    capture_tasks: Sent, live_tables: Any,
 ) -> None:
     """A failed handshake stays quiet until the operator's resume clears it."""
 
     from angee.integrate import tasks as tasks_module
 
-    sent: list[str] = []
-    monkeypatch.setattr(
-        "angee.integrate.impl.enqueue_task",
-        lambda name, **_: sent.append(name),
-    )
     channel = _live_channel("fake-live-runtime-error")
     with system_context(reason="test live runtime error latch"):
         channel.runtime_status = IntegrationRuntimeStatus.ERROR
         channel.save(update_fields=["runtime_status", "updated_at"])
 
     assert tasks_module.ensure_bridge_sessions() == {"ok": True, "dispatched": 0}
-    assert sent == []
+    assert capture_tasks == []
 
     channel.resume_pairing()
 
@@ -1012,7 +999,6 @@ def test_live_channel_session_owns_message_ingest(live_tables: Any) -> None:
 @pytest.mark.django_db(transaction=True)
 def test_live_channel_media_resolution_downloads_once_per_fact(
     live_tables: Any,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """The base passes each media fact without mutating a frozen DTO's metadata."""
 
@@ -1021,22 +1007,18 @@ def test_live_channel_media_resolution_downloads_once_per_fact(
 
     assert hasattr(messaging_backends, "MediaItem")
     media_item_class = messaging_backends.MediaItem
-    channel = _live_channel("fake-live-media-owner")
-    session = LiveChannelSession(
-        channel,
-        stop_event=threading.Event(),
-    )
+    downloads: list[tuple[Any, Any]] = []
+
+    class DownloadingSession(LiveChannelSession):
+        def _download(self, payload: Any, fact: Any) -> bytes:
+            downloads.append((payload, fact))
+            return fact.name.encode()
+
+    session = DownloadingSession(_live_channel("fake-live-media-owner"), stop_event=threading.Event())
     first = media_item_class(mime="image/jpeg", name="photo.jpg")
     second = media_item_class(mime="image/png", name="diagram.png")
     original_metadata = {"_media_facts": (first, second), "kept": "value"}
     queued = _QueuedLiveMessage(metadata=original_metadata)
-    downloads: list[tuple[Any, Any]] = []
-
-    def download(payload: Any, fact: Any) -> bytes:
-        downloads.append((payload, fact))
-        return fact.name.encode()
-
-    monkeypatch.setattr(session, "_download", download)
 
     resolved = session._with_media(queued, "wire")
 
@@ -1086,13 +1068,12 @@ def test_live_report_preserves_caller_supplied_identity(live_tables: Any) -> Non
 
 
 @pytest.mark.django_db(transaction=True)
-def test_live_backend_requires_a_dedicated_session_queue(live_tables: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_live_backend_requires_a_dedicated_session_queue(capture_tasks: Sent, live_tables: Any) -> None:
     """A long-lived session may never fall through to the shared prefork queue."""
 
     class QueueLessBackend(FakeLiveChannelBackend):
         session_queue = ""
 
-    monkeypatch.setattr("angee.integrate.impl.enqueue_task", lambda *args, **kwargs: None)
     with pytest.raises(ImproperlyConfigured, match="shared prefork queue"):
         QueueLessBackend(_live_channel()).start_live()
 
@@ -1140,9 +1121,9 @@ def test_run_bridge_session_duplicate_discards_new_store_without_moving_lifecycl
 
 @pytest.mark.django_db(transaction=True)
 def test_ensure_bridge_sessions_contains_unresolvable_registered_impl(
+    capture_tasks: Sent,
     live_tables: Any,
     settings: Any,
-    monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     """One broken registry key is logged and excluded before any row resolves it."""
@@ -1160,7 +1141,6 @@ def test_ensure_bridge_sessions_contains_unresolvable_registered_impl(
         "manual": "tests.test_integrate_live.MissingBackend",
     }
     _live_channel("fake-live-after-broken")
-    monkeypatch.setattr("angee.integrate.impl.enqueue_task", lambda *args, **kwargs: None)
 
     assert tasks_module.ensure_bridge_sessions() == {"ok": True, "dispatched": 1}
     assert "manual" in caplog.text
@@ -1168,7 +1148,7 @@ def test_ensure_bridge_sessions_contains_unresolvable_registered_impl(
 
 @pytest.mark.django_db(transaction=True)
 def test_ensure_bridge_sessions_does_not_write_a_settled_live_row(
-    live_tables: Any, monkeypatch: pytest.MonkeyPatch
+    capture_tasks: Sent, live_tables: Any,
 ) -> None:
     """A healthy settled tick dispatches without publishing a no-op row edit."""
 
@@ -1177,7 +1157,6 @@ def test_ensure_bridge_sessions_does_not_write_a_settled_live_row(
     channel = _live_channel("fake-live-settled")
     channel.refresh_from_db()
     settled_at = channel.updated_at
-    monkeypatch.setattr("angee.integrate.impl.enqueue_task", lambda *args, **kwargs: None)
 
     assert tasks_module.ensure_bridge_sessions() == {"ok": True, "dispatched": 1}
 
@@ -1186,7 +1165,9 @@ def test_ensure_bridge_sessions_does_not_write_a_settled_live_row(
 
 
 @pytest.mark.django_db(transaction=True)
-def test_native_session_crash_is_visible_and_retried(live_tables: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_native_session_crash_is_visible_and_retried(
+    capture_tasks: Sent, live_tables: Any, monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """A reaped child crash preserves account health and the next beat can recover."""
 
     from angee.integrate import session_runner
@@ -1215,11 +1196,9 @@ def test_native_session_crash_is_visible_and_retried(live_tables: Any, monkeypat
     assert channel.sync_stage == channel.SyncStage.FAILED
     assert channel.sync_error == "Live session process exited with code 2."
     assert channel.live_retry_at is not None
-    sent: list[Any] = []
-    monkeypatch.setattr("angee.integrate.impl.enqueue_task", lambda *args, **kwargs: sent.append(kwargs))
     assert tasks_module.ensure_bridge_sessions() == {"ok": True, "dispatched": 0}
     assert tasks_module.ensure_bridge_sessions(_after_live_retry(channel)) == {"ok": True, "dispatched": 1}
-    assert len(sent) == 1
+    assert len(capture_tasks) == 1
 
 
 @pytest.mark.django_db(transaction=True)
@@ -1390,6 +1369,7 @@ def test_native_crash_report_preserves_terminal_or_stopped_row(live_tables: Any,
 
 @pytest.mark.django_db(transaction=True)
 def test_reconciler_warns_about_crashed_startup(
+    capture_tasks: Sent,
     live_tables: Any,
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
@@ -1403,7 +1383,6 @@ def test_reconciler_warns_about_crashed_startup(
         channel.sync_stage = channel.SyncStage.DISCOVERING
         channel.save(update_fields=["sync_stage"])
     monkeypatch.setattr(tasks_module, "task_locks_are_cross_process", lambda: True)
-    monkeypatch.setattr("angee.integrate.impl.enqueue_task", lambda *args, **kwargs: None)
     assert tasks_module.ensure_bridge_sessions() == {"ok": True, "dispatched": 1}
     assert "active stage with no running session" in caplog.text
 
@@ -1435,15 +1414,13 @@ class _FailingSession(FakeLiveSession):
 
 @pytest.mark.django_db(transaction=True)
 def test_transient_session_failure_defers_restart_with_doubling_backoff(
-    live_tables: Any, monkeypatch: pytest.MonkeyPatch
+    capture_tasks: Sent, live_tables: Any, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A dropped connection is shown and retried later instead of latching runtime health."""
 
     from angee.integrate import tasks as tasks_module
 
     monkeypatch.setattr(FakeLiveChannelBackend, "session_class", _FailingSession)
-    sent: list[Any] = []
-    monkeypatch.setattr("angee.integrate.impl.enqueue_task", lambda *args, **kwargs: sent.append(kwargs))
     channel = _live_channel("fake-live-transient-failure")
 
     delays = []
@@ -1461,7 +1438,7 @@ def test_transient_session_failure_defers_restart_with_doubling_backoff(
         assert tasks_module.ensure_bridge_sessions() == {"ok": True, "dispatched": 0}
         assert tasks_module.ensure_bridge_sessions(_after_live_retry(channel)) == {"ok": True, "dispatched": 1}
     assert [round(delay / timedelta(minutes=1)) for delay in delays] == [1, 2, 4]
-    assert len(sent) == 3
+    assert len(capture_tasks) == 3
 
 
 @pytest.mark.django_db(transaction=True)
@@ -1486,7 +1463,7 @@ def test_transient_session_failure_honours_retry_after(live_tables: Any, monkeyp
 
 @pytest.mark.django_db(transaction=True)
 def test_permanent_session_failure_still_latches_runtime_health(
-    live_tables: Any, monkeypatch: pytest.MonkeyPatch
+    capture_tasks: Sent, live_tables: Any, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A non-transient outcome stays a known-broken handshake until the operator repairs it."""
 
@@ -1497,7 +1474,6 @@ def test_permanent_session_failure_still_latches_runtime_health(
         failure = IntegrationError("The vendor refused this client.")
 
     monkeypatch.setattr(FakeLiveChannelBackend, "session_class", RefusedSession)
-    monkeypatch.setattr("angee.integrate.impl.enqueue_task", lambda *args, **kwargs: None)
     channel = _live_channel("fake-live-refused")
     tasks_module.run_bridge_session(channel._meta.label_lower, channel.pk)
     channel.refresh_from_db()
@@ -1563,7 +1539,7 @@ def test_pairing_ends_a_transient_failure_streak(live_tables: Any) -> None:
 
 @pytest.mark.django_db(transaction=True)
 def test_a_non_transient_exception_from_the_session_latches_like_a_reported_one(
-    live_tables: Any, monkeypatch: pytest.MonkeyPatch
+    capture_tasks: Sent, live_tables: Any, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """One policy owner: a raised broken setup latches instead of looping every tick."""
 
@@ -1575,7 +1551,6 @@ def test_a_non_transient_exception_from_the_session_latches_like_a_reported_one(
             raise FileNotFoundError(2, "No such file or directory", "signal-cli")
 
     monkeypatch.setattr(FakeLiveChannelBackend, "session_class", BrokenSetupSession)
-    monkeypatch.setattr("angee.integrate.impl.enqueue_task", lambda *args, **kwargs: None)
     channel = _live_channel("fake-live-broken-setup")
     assert tasks_module.run_bridge_session(channel._meta.label_lower, channel.pk)["session_error"] is True
     channel.refresh_from_db()
@@ -1602,16 +1577,16 @@ def test_a_transient_failure_drops_the_dead_sessions_pairing_report(live_tables:
         channel.record_live_session_failure(ConnectionError("dropped"), now=timezone.now())
     channel.refresh_from_db()
     assert "pairing" not in channel.sync_progress.get("details", {})
+    # The seeded ``stage`` copy predates ``sync_stage`` owning the stage alone; the failure marker drops it.
+    assert "stage" not in channel.sync_progress
     assert channel.live_impl.pairing().state is PairingState.STARTING
     assert channel.live_impl.pairing().qr == ""
 
 
 @pytest.mark.django_db(transaction=True)
-def test_operator_start_and_repair_end_a_retry_streak(live_tables: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_operator_start_and_repair_end_a_retry_streak(capture_tasks: Sent, live_tables: Any) -> None:
     """An explicit start is never deferred and restarts the backoff; so does the generic connect."""
 
-    sent: list[Any] = []
-    monkeypatch.setattr("angee.integrate.impl.enqueue_task", lambda *args, **kwargs: sent.append(kwargs))
     channel = _live_channel("fake-live-operator-start")
 
     def fail_twice() -> None:
@@ -1625,7 +1600,7 @@ def test_operator_start_and_repair_end_a_retry_streak(live_tables: Any, monkeypa
     fail_twice()
     channel.resume_pairing()
     channel.refresh_from_db()
-    assert len(sent) == 1
+    assert len(capture_tasks) == 1
     assert channel.live_retry_at is None and channel.live_retry_attempts == 0
 
     fail_twice()

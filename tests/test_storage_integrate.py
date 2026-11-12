@@ -41,10 +41,10 @@ BASE_MTIME_NS = 1_700_000_000_000_000_000
 
 
 @pytest.fixture()
-def mount_env(tmp_path: Path, composed_tables: None) -> SimpleNamespace:
+def mount_env(tmp_path: Path, db: None) -> SimpleNamespace:
     """Seed the local vendor and managed default drive used by Mount tests."""
 
-    del composed_tables
+    del db
     managed_root = tmp_path / "managed"
     managed_root.mkdir()
     owner = create_platform_admin(
@@ -161,7 +161,6 @@ def _assert_path_error(error: pytest.ExceptionInfo[ValidationError], text: str) 
     assert text in " ".join(error.value.message_dict["path"])
 
 
-@pytest.mark.django_db(transaction=True)
 def test_connect_reference_provisions_read_only_backend_and_owned_drive(
     mount_env: SimpleNamespace,
     queued_mounts: list[Any],
@@ -188,7 +187,6 @@ def test_connect_reference_provisions_read_only_backend_and_owned_drive(
     assert queued_mounts == [(mount, {})]
 
 
-@pytest.mark.django_db(transaction=True)
 def test_connect_copy_reuses_managed_backend_and_stamps_drive_owner(
     mount_env: SimpleNamespace,
     queued_mounts: list[Any],
@@ -208,7 +206,6 @@ def test_connect_copy_reuses_managed_backend_and_stamps_drive_owner(
     assert queued_mounts == [(mount, {})]
 
 
-@pytest.mark.django_db(transaction=True)
 def test_connect_refusals_are_field_keyed_for_unsafe_or_duplicate_roots(
     mount_env: SimpleNamespace,
     queued_mounts: list[Any],
@@ -251,7 +248,6 @@ def test_connect_refusals_are_field_keyed_for_unsafe_or_duplicate_roots(
     _assert_path_error(data_error, "ANGEE_DATA_DIR")
 
 
-@pytest.mark.django_db(transaction=True)
 def test_browse_mount_source_dispatches_local_neutral_locations(
     mount_env: SimpleNamespace,
     queued_mounts: list[Any],
@@ -300,7 +296,6 @@ def test_browse_mount_source_dispatches_local_neutral_locations(
     assert "backend_class" in unknown_backend.value.message_dict
 
 
-@pytest.mark.django_db(transaction=True)
 def test_reference_sync_creates_updates_prunes_restores_and_mirrors_folders(
     mount_env: SimpleNamespace,
     queued_mounts: list[Any],
@@ -349,7 +344,6 @@ def test_reference_sync_creates_updates_prunes_restores_and_mirrors_folders(
     assert not restored.is_trashed
 
 
-@pytest.mark.django_db(transaction=True)
 def test_reference_sync_mirrors_and_prunes_empty_source_directories(
     mount_env: SimpleNamespace,
     queued_mounts: list[Any],
@@ -379,7 +373,6 @@ def test_reference_sync_mirrors_and_prunes_empty_source_directories(
     assert _file_map(mount.drive)["full/doc.txt"].folder.name == "full"
 
 
-@pytest.mark.django_db(transaction=True)
 def test_reference_sync_uses_mtime_ns_freshness_before_hashing(
     mount_env: SimpleNamespace,
     queued_mounts: list[Any],
@@ -412,7 +405,6 @@ def test_reference_sync_uses_mtime_ns_freshness_before_hashing(
     assert hashes == ["same.txt"]
 
 
-@pytest.mark.django_db(transaction=True)
 def test_reference_rename_converges_across_two_syncs(
     mount_env: SimpleNamespace,
     queued_mounts: list[Any],
@@ -441,7 +433,6 @@ def test_reference_rename_converges_across_two_syncs(
     assert not converged.is_trashed
 
 
-@pytest.mark.django_db(transaction=True)
 def test_reference_duplicate_content_is_counted_and_retried_each_sync(
     mount_env: SimpleNamespace,
     queued_mounts: list[Any],
@@ -475,7 +466,6 @@ def test_reference_duplicate_content_is_counted_and_retried_each_sync(
     assert _details(mount)["scanned"] == 2
 
 
-@pytest.mark.django_db(transaction=True)
 def test_reference_vanished_file_reappears_at_new_path_in_one_sync(
     mount_env: SimpleNamespace,
     queued_mounts: list[Any],
@@ -502,7 +492,6 @@ def test_reference_vanished_file_reappears_at_new_path_in_one_sync(
     assert not returned.is_trashed
 
 
-@pytest.mark.django_db(transaction=True)
 def test_reference_stat_race_is_counted_without_trashing_observed_path(
     mount_env: SimpleNamespace,
     queued_mounts: list[Any],
@@ -533,7 +522,6 @@ def test_reference_stat_race_is_counted_without_trashing_observed_path(
     assert not _file_map(mount.drive)["racy.txt"].is_trashed
 
 
-@pytest.mark.django_db(transaction=True)
 def test_reference_entry_validation_error_is_contained_and_counted(
     mount_env: SimpleNamespace,
     queued_mounts: list[Any],
@@ -558,7 +546,6 @@ def test_reference_entry_validation_error_is_contained_and_counted(
     assert _details(mount)["scanned"] == 1
 
 
-@pytest.mark.django_db(transaction=True)
 def test_reference_entry_data_error_is_contained_and_counted(
     mount_env: SimpleNamespace,
     queued_mounts: list[Any],
@@ -574,15 +561,14 @@ def test_reference_entry_data_error_is_contained_and_counted(
     mount = _connect(mount_env, root, mode=MountMode.REFERENCE, name="Data error")
     del queued_mounts
 
-    manager_type = type(File.objects)
-    original_index_external = manager_type.index_external
+    original_index_external = File.objects.index_external
 
-    def index_external(manager: Any, **kwargs: Any) -> Any:
+    def index_external(**kwargs: Any) -> Any:
         if kwargs["filename"] == long_name:
             raise DataError("value too long for storage filename")
-        return original_index_external(manager, **kwargs)
+        return original_index_external(**kwargs)
 
-    monkeypatch.setattr(manager_type, "index_external", index_external)
+    monkeypatch.setattr(File.objects, "index_external", index_external)
     assert _run_sync(mount) == 1
     assert mount.sync_stage == mount.SyncStage.COMPLETED
     assert _details(mount)["errors"] == 1
@@ -590,7 +576,6 @@ def test_reference_entry_data_error_is_contained_and_counted(
     assert set(_file_map(mount.drive)) == {"good.txt"}
 
 
-@pytest.mark.django_db(transaction=True)
 def test_reference_sync_skips_unmirrorable_directory_without_aborting(
     mount_env: SimpleNamespace,
     queued_mounts: list[Any],
@@ -625,7 +610,6 @@ def test_reference_sync_skips_unmirrorable_directory_without_aborting(
         assert set(Folder.objects.filter(drive=mount.drive).values_list("name", flat=True)) == {"good"}
 
 
-@pytest.mark.django_db(transaction=True)
 def test_reference_content_change_collision_becomes_external_duplicate(
     mount_env: SimpleNamespace,
     queued_mounts: list[Any],
@@ -654,7 +638,6 @@ def test_reference_content_change_collision_becomes_external_duplicate(
     assert not after["b.txt"].is_trashed
 
 
-@pytest.mark.django_db(transaction=True)
 def test_copy_sync_ingests_dedups_stamps_metadata_and_never_prunes(
     mount_env: SimpleNamespace,
     queued_mounts: list[Any],
@@ -695,7 +678,6 @@ def test_copy_sync_ingests_dedups_stamps_metadata_and_never_prunes(
     assert _details(mount)["trashed"] == 0
 
 
-@pytest.mark.django_db(transaction=True)
 def test_run_sync_records_success_and_missing_root_error_telemetry(
     mount_env: SimpleNamespace,
     queued_mounts: list[Any],
@@ -736,7 +718,6 @@ def test_run_sync_records_success_and_missing_root_error_telemetry(
     assert mount.next_sync_at is None
 
 
-@pytest.mark.django_db(transaction=True)
 def test_next_sync_at_requires_poll_enabled(mount_env: SimpleNamespace) -> None:
     """Manual mounts stay unscheduled unless their own config opts into polling."""
 
@@ -756,7 +737,6 @@ def test_next_sync_at_requires_poll_enabled(mount_env: SimpleNamespace) -> None:
     assert mount._next_sync_at(now=now) == now + timedelta(seconds=37)
 
 
-@pytest.mark.django_db(transaction=True)
 def test_mount_graphql_connect_sync_list_and_non_admin_reader_denials(
     mount_env: SimpleNamespace,
     queued_mounts: list[Any],
@@ -863,7 +843,6 @@ def test_mount_graphql_connect_sync_list_and_non_admin_reader_denials(
     assert denied_connect.errors is not None
 
 
-@pytest.mark.django_db(transaction=True)
 def test_failed_directory_enumeration_never_becomes_a_missing_file_inventory(
     mount_env: SimpleNamespace, queued_mounts: list[Any], monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -883,7 +862,6 @@ def test_failed_directory_enumeration_never_becomes_a_missing_file_inventory(
     assert not _file_map(mount.drive)["kept.txt"].is_trashed
 
 
-@pytest.mark.django_db(transaction=True)
 def test_mount_sync_closes_its_backend_after_success_and_failure(
     mount_env: SimpleNamespace,
     queued_mounts: list[Any],

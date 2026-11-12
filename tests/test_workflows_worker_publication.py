@@ -16,6 +16,8 @@ from angee.workflows.testing.drivers import load_workflow, run_until, start_run
 from angee.workflows.testing.models import StepRun
 from tests.conftest import vault_for
 
+pytestmark = pytest.mark.django_db(transaction=True)
+
 
 def _worker_wake(decision_id: int, url: str, result: multiprocessing.Queue) -> None:
     """Use Celery's fork shape with inherited publisher registrations."""

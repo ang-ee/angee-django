@@ -1,12 +1,10 @@
 // @vitest-environment happy-dom
 
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
-import { afterEach, describe, expect, test } from "vitest";
+import { fireEvent, render, screen } from "@testing-library/react";
+import { describe, expect, test } from "vitest";
 
 import { ModalsHost } from "./ModalsHost";
 import { useSecretReveal } from "./secret-reveal";
-
-afterEach(() => cleanup());
 
 function RevealSignIn() {
   const reveal = useSecretReveal();

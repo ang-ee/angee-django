@@ -243,7 +243,3 @@ class ProjectSurfaceCampaign(WorkCase):
         for row in (self.queue, self.stages["Ready"], task):
             self.assertFalse(self.scoped(row, self.outsider))
             self.assertTrue(self.scoped(row, self.moderator))
-
-
-class ProjectSurfaceDenormalizedCampaign(ProjectSurfaceCampaign):
-    storage = "denormalized"

@@ -1,8 +1,8 @@
 // @vitest-environment happy-dom
 
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import * as React from "react";
-import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
+import { beforeEach, describe, expect, test, vi } from "vitest";
 
 const actionMocks = vi.hoisted(() => ({
   connect: vi.fn(async () => ({ connect_local_folder: { id: "int_1" } })),
@@ -51,18 +51,9 @@ vi.mock("@angee/ui", async (importOriginal) => {
   };
 });
 
-vi.mock("./i18n", () => ({
-  useStorageIntegrateT: () => (key: string) =>
-    key === "mount.localFolder.error"
-      ? "Could not connect the local folder."
-      : key,
-}));
-
 import { ConnectLocalFolderAction } from "./ConnectLocalFolderAction";
 
 describe("ConnectLocalFolderAction", () => {
-  afterEach(cleanup);
-
   beforeEach(() => {
     actionMocks.connect.mockClear();
     actionMocks.dialogProps = null;
@@ -71,20 +62,20 @@ describe("ConnectLocalFolderAction", () => {
 
   test("declares the local backend and submits typed mount variables", async () => {
     render(<ConnectLocalFolderAction />);
-    fireEvent.click(screen.getByRole("button", { name: "mount.localFolder.button" }));
+    fireEvent.click(screen.getByRole("button", { name: "Connect local folder" }));
 
     expect(actionMocks.mutationOptions).toEqual({
       invalidateModels: ["storage_integrate.Mount"],
     });
     expect(actionMocks.dialogProps).toMatchObject({
-      title: "mount.localFolder.title",
-      submitLabel: "mount.connect.submit",
-      submittingLabel: "mount.connect.submitting",
+      title: "Connect local folder",
+      submitLabel: "Connect",
+      submittingLabel: "Connecting…",
       errorFallback: "Could not connect the local folder.",
       size: "lg",
     });
 
-    fireEvent.submit(screen.getByRole("form", { name: "mount.localFolder.title" }));
+    fireEvent.submit(screen.getByRole("form", { name: "Connect local folder" }));
     await waitFor(() =>
       expect(actionMocks.connect).toHaveBeenCalledWith({
         name: "Shared",

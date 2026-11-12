@@ -20,7 +20,9 @@ from concurrent.futures import ThreadPoolExecutor
 from functools import partial
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
+import httpx2
 import pytest
 import strawberry
 from django.apps import apps
@@ -28,7 +30,6 @@ from django.contrib.auth import BACKEND_SESSION_KEY, SESSION_KEY, get_user_model
 from django.contrib.auth.hashers import PBKDF2PasswordHasher
 from django.contrib.auth.models import AnonymousUser
 from django.core.exceptions import ValidationError
-from django.core.management import call_command
 from django.db import connection, transaction
 from django.test import RequestFactory
 from django.test.utils import CaptureQueriesContext, override_settings
@@ -36,7 +37,6 @@ from rebac import actor_context, system_context, to_object_ref, to_subject_ref
 from rebac.backends import backend
 from rebac.middleware import ActorMiddleware
 from rebac.roles import grant as grant_role
-from strawberry.django.views import GraphQLView
 
 from angee.agents.testing.models import Agent
 from angee.base.identity import public_data_id_field
@@ -46,21 +46,20 @@ from angee.graphql import subscriptions
 from angee.graphql.data.metadata import readable_model_field_names
 from angee.graphql.data.resource_fields import resource_field_kind, resource_field_widget
 from angee.graphql.events import ChangePayload
-from angee.graphql.schema import AngeeSchema
+from angee.graphql.schema import GraphQLSchemas
 from angee.graphql.testing.documents import execute_schema, graphql_request
 from angee.graphql.testing.documents import result_data as _data
-from angee.graphql.view_as import ViewAsReadOnlyExtension
 from angee.graphql.views import graphql_endpoint
 from angee.integrate.credentials import CredentialKind
-from angee.integrate.oauth import discovery as oauth_discovery
 from angee.integrate.oauth import state
 from angee.integrate.oauth.client import OAuthClientProtocol
 from angee.integrate.oauth.errors import OAuthFlowError
+from angee.integrate.testing.http import mock_transport
 from tests import (
     test_agents_graphql,  # noqa: F401 -- register the concrete relation graph
     test_messaging,  # noqa: F401 -- register the concrete relation graph
 )
-from tests.conftest import Credential, ExternalAccount, OAuthClient, addon_schema
+from tests.conftest import Credential, ExternalAccount, OAuthClient, SchemaAddon, addon_schema
 from tests.conftest import create_platform_admin as _platform_admin
 from tests.iam_models import Group as IAMGroup
 from tests.lock_waits import submit, wait_for_lock
@@ -840,6 +839,7 @@ def test_reveal_credential_returns_the_secret_and_is_admin_only(
     assert _execute(console_schema, reveal, {"id": credential_id}, user=plain).errors is not None
 
 
+@pytest.mark.django_db(transaction=True)
 def test_admin_refresh_of_a_revoked_credential_is_refused(
     iam_connection_tables: None,
     monkeypatch: pytest.MonkeyPatch,
@@ -1502,6 +1502,7 @@ def test_iam_schemas_expose_user_change_subscriptions(
     assert "userChanged: ChangeEvent!" in _sdl_block(console_sdl, "type Subscription")
 
 
+@pytest.mark.django_db(transaction=True)
 def test_public_user_change_subscription_only_yields_the_actor(
     iam_connection_tables: None,
     monkeypatch: pytest.MonkeyPatch,
@@ -1592,7 +1593,6 @@ def test_iam_group_hasura_resource_uses_public_identity_sqids() -> None:
     with system_context(reason="test.iam.group.resource"):
         group = iam_schema.Group.objects.create(name="Operators")
     group_id = group.sqid
-    call_command("rebac", "sync", verbosity=0)
     admin = _platform_admin("auth-catalogue-admin")
     console_schema = _schema("console")
 
@@ -1759,6 +1759,7 @@ def test_disconnect_account_docstring_names_check_disconnect_owner() -> None:
     assert "check_disconnect" in doc
 
 
+@pytest.mark.django_db(transaction=True)
 def test_disconnect_account_revokes_owner_so_oidc_login_is_blocked(
     iam_connection_tables: None,
     monkeypatch: pytest.MonkeyPatch,
@@ -1875,6 +1876,7 @@ def test_disconnect_account_blocks_last_oidc_sign_in_method_for_passwordless_use
         assert Credential.objects.filter(user=user, external_account=account).exists()
 
 
+@pytest.mark.django_db(transaction=True)
 @pytest.mark.skipif(connection.vendor != "postgresql", reason="Real PostgreSQL row locks are required.")
 @pytest.mark.parametrize("second_path", ("self_service", "administrator"))
 def test_competing_oidc_disconnects_keep_one_sign_in_method(
@@ -2020,17 +2022,16 @@ assert Credential.objects.count() == 1
 
 
 @pytest.fixture()
-def iam_connection_tables(transactional_db: Any) -> Iterator[None]:
-    """Sync connection policy and materialize test-only auth relations.
+def iam_connection_tables(db: Any) -> Iterator[None]:
+    """Materialize test-only auth relations.
 
     The migrated auth app cannot sync these test models natively. User deletion
     traverses their audit relations, including models registered by other tests.
     """
 
-    del transactional_db
+    del db
     auth_models = tuple(model for model in apps.get_app_config("auth").get_models() if model._meta.managed)
     with model_tables(auth_models):
-        call_command("rebac", "sync", verbosity=0)
         yield
 
 
@@ -2055,7 +2056,6 @@ def test_discover_oauth_endpoints_is_admin_gated_and_validates_discovery_url(
 
 def test_discover_oauth_endpoints_persists_the_filled_endpoints(
     iam_connection_tables: None,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """The client row saves the endpoints discovery filled; the action only reports the issuer."""
 
@@ -2073,15 +2073,12 @@ def test_discover_oauth_endpoints_persists_the_filled_endpoints(
         "token_endpoint": "https://persisted.example/token",
     }
 
-    def fetch_document(url: str) -> dict[str, str]:
-        assert url == client.discovery_url
-        return document
-
-    monkeypatch.setattr(oauth_discovery, "oauth_get_json", fetch_document)
     discover = "mutation($id: ID!){ discover_oauth_endpoints(id: $id){ ok message } }"
 
-    result = _data(_execute(_schema("console"), discover, {"id": str(client.sqid)}, user=admin))
+    with mock_transport(lambda request: httpx2.Response(200, json=document)) as requests:
+        result = _data(_execute(_schema("console"), discover, {"id": str(client.sqid)}, user=admin))
 
+    assert [str(request.url) for request in requests] == [client.discovery_url]
     assert result["discover_oauth_endpoints"] == {
         "ok": True,
         "message": "Discovered endpoints for https://persisted.example.",
@@ -2094,8 +2091,17 @@ def test_discover_oauth_endpoints_persists_the_filled_endpoints(
     )
 
 
+def _serve(monkeypatch: pytest.MonkeyPatch, query: type) -> str:
+    """Serve ``query`` from discovery at an endpoint schema name only this test dispatches to."""
+
+    name = f"view-as-{uuid4().hex}"
+    discovered = GraphQLSchemas([SchemaAddon({name: {"query": (query,)}})])
+    monkeypatch.setattr(GraphQLSchemas, "from_discovery", classmethod(lambda cls: discovered))
+    return name
+
+
 def test_view_as_target_has_no_pinned_admitting_actor(
-    composed_tables: None,
+    db: None,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """The real endpoint through ActorMiddleware binds only the target authority."""
@@ -2115,23 +2121,22 @@ def test_view_as_target_has_no_pinned_admitting_actor(
             assert active.user.effective_actor() == (to_subject_ref(target), False)
             return active.user.has_access("write")
 
-    view = GraphQLView.as_view(schema=AngeeSchema(query=Query))
-    monkeypatch.setattr("angee.graphql.views._get_view", lambda schema_name: view)
+    name = _serve(monkeypatch, Query)
     request = RequestFactory().post(
         "/graphql/public/",
-        data={"query": "{ targetAuthority }"},
+        data={"query": "{ target_authority }"},
         content_type="application/json",
         HTTP_X_ANGEE_VIEW_AS=_user_public_id(target),
     )
     request.user = admin
-    response = ActorMiddleware(lambda active: graphql_endpoint(active, "public"))(request)
-    assert json.loads(response.content) == {"data": {"targetAuthority": False}}
+    response = ActorMiddleware(lambda active: graphql_endpoint(active, name))(request)
+    assert json.loads(response.content) == {"data": {"target_authority": False}}
     assert request.user is admin
     assert not hasattr(request, "view_as")
 
 
 def test_view_as_unknown_operation_uses_strawberry_bad_request(
-    composed_tables: None,
+    db: None,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     admin = _platform_admin("preview-operation-admin")
@@ -2143,9 +2148,7 @@ def test_view_as_unknown_operation_uses_strawberry_bad_request(
         def hello(self) -> str:
             return "hello"
 
-    schema = AngeeSchema(query=Query, extensions=[ViewAsReadOnlyExtension])
-    view = GraphQLView.as_view(schema=schema)
-    monkeypatch.setattr("angee.graphql.views._get_view", lambda schema_name: view)
+    name = _serve(monkeypatch, Query)  # discovery builds carry ViewAsReadOnlyExtension
     request = RequestFactory().post(
         "/graphql/public/",
         content_type="application/json",
@@ -2153,19 +2156,13 @@ def test_view_as_unknown_operation_uses_strawberry_bad_request(
         data={"query": "query Existing { hello }", "operationName": "Missing"},
     )
     request.user = admin
-    response = ActorMiddleware(lambda active: graphql_endpoint(active, "public"))(request)
+    response = ActorMiddleware(lambda active: graphql_endpoint(active, name))(request)
     assert response.status_code == 400
     assert request.user is admin
     assert not hasattr(request, "view_as")
 
 
-@pytest.mark.parametrize("storage", ["denormalized", "registry"])
-def test_viewable_people_admission_is_batched_before_limit(
-    composed_tables: None,
-    settings: Any,
-    storage: str,
-) -> None:
-    settings.REBAC_LOCAL_BACKEND_STORAGE = storage
+def test_viewable_people_admission_is_batched_before_limit(db: None) -> None:
     admin = _platform_admin("picker-query-admin")
     User._base_manager.bulk_create([User(username=f"picker-person-{index:02}", password="!") for index in range(25)])
     for username, flags in (
@@ -2198,13 +2195,12 @@ def test_viewable_people_admission_is_batched_before_limit(
 
 
 def test_view_as_denial_is_audited_and_missing_admission_fails_closed(
-    composed_tables: None,
+    db: None,
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     admin = _platform_admin("preview-denied-admin")
     monkeypatch.setattr(User._default_manager, "admit_view_as", AngeeManager().admit_view_as)
-    monkeypatch.setattr("angee.graphql.views._get_view", lambda schema_name: None)
     request = RequestFactory().post(
         "/graphql/public/",
         data={"query": "query Preview { __typename }", "operationName": "Preview"},

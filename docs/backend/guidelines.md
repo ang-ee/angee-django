@@ -947,9 +947,10 @@ data through REBAC, never a queryset bypass.
   API — `filter`/`exclude`/`get` kwargs, `Q` objects, and
   `values`/`values_list`/`order_by`/`annotate` field names — so query with the
   natural denormalized names; instance attributes (`row.subject_id`) are
-  portable too (the registry manager eager-joins them). Any read shape beyond
-  that API must be verified in both modes by parametrizing
-  `REBAC_LOCAL_BACKEND_STORAGE` over `registry` and `denormalized`.
+  portable too (the registry manager eager-joins them). The suite runs `registry`;
+  a read shape beyond that API is verified in both modes in the one cross-storage
+  module, [`tests/test_iam_permission_hub_graphql.py`](../../tests/test_iam_permission_hub_graphql.py),
+  by parametrizing `REBAC_LOCAL_BACKEND_STORAGE` over `registry` and `denormalized`.
 - Derive operator/edge token scope from `<ns>/role:<id>#effective_member` (folds
   in role-hierarchy `includes`), never `roles_of`/`roleRefs` (a direct-grants UX
   hint that under-grants).
@@ -1106,7 +1107,11 @@ unique constraint compare the stored column without SQL transforms.
 admission and the system fold. Models declare domain refusals and carry/retire
 hooks; pointing rows declare `MergePolicy` (an edge's `merge_policy`, a key's
 entry in `merge_policies` where its `on_delete` implies the wrong one) and their
-collision contract. Retained
+collision contract. `Changeset.revert` undoes a merge by replaying history, so
+every model a revertible merge moves (`moved_references()`) keeps history,
+which `angee.E051` checks; a derived or high-volume row is `KEEP` instead, and
+its readers resolve the redirect through `MergeableQuerySet.survivor_id`,
+`survivor_field` and `redirect_groups`. Retained
 references include their historical versions. Redirects flatten in the same
 changeset and protect their survivor from deletion. `canonical()` selects
 operational identities; statement querysets use `applied()` for winning value

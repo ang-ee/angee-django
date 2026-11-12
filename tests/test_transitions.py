@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterator
+from concurrent.futures import ThreadPoolExecutor
 from copy import copy
 from functools import wraps
 from inspect import signature
@@ -10,7 +11,7 @@ from typing import Any
 
 import pytest
 from django.core.exceptions import ImproperlyConfigured
-from django.db import models, transaction
+from django.db import OperationalError, connection, models, transaction
 from django.test import override_settings
 from django.test.utils import isolate_apps
 from rebac import system_context
@@ -30,6 +31,7 @@ from angee.base.models.transitions import (
 from angee.integrate.models import IntegrationLifecycle
 from angee.integrate.testing.integration import Integration
 from tests.conftest import make_integration
+from tests.lock_waits import submit
 from tests.tables import model_tables
 
 POLICY_SETTING = "ANGEE_TEST_TRANSITION_POLICY"
@@ -216,28 +218,15 @@ def transition_task_table() -> Iterator[None]:
 
 
 @pytest.mark.django_db(transaction=True)
-def test_deferred_transition_refreshes_state_and_locks_before_saving(
-    transition_task_table: None,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Deferred source state, the hook lock and commit callbacks retain their ordering."""
+def test_deferred_transition_refreshes_state_and_saves_before_commit(transition_task_table: None) -> None:
+    """Deferred source state, the hook save and commit callbacks retain their ordering."""
 
     task = TransitionTask.objects.create(state=TransitionTask.State.RUNNING)
     task = TransitionTask.objects.defer("state").get(pk=task.pk)
-    reader = TransitionTask.system_queryset
-    lock_requests = []
-
-    def checked_reader(cls: type[models.Model], **kwargs: Any) -> Any:
-        assert cls is TransitionTask
-        lock_requests.append(kwargs["lock"])
-        return reader(**kwargs)
-
-    monkeypatch.setattr(TransitionTask, "system_queryset", classmethod(checked_reader))
     with transaction.atomic():
         task.persist_with_body_write()
         assert task.commit_states == []
 
-    assert lock_requests == [("self",)]
     assert task.body_save_field is None
     assert task.save_contexts == ["state"]
     assert task.commit_states == [TransitionTask.State.DONE]
@@ -246,6 +235,27 @@ def test_deferred_transition_refreshes_state_and_locks_before_saving(
     assert task.ready is False
     assert task.state == TransitionTask.State.DONE
     assert get_transition_save_field(task) is None
+
+
+@pytest.mark.skipif(connection.vendor != "postgresql", reason="Row locks are a PostgreSQL contract.")
+@pytest.mark.django_db(transaction=True)
+def test_a_guarded_transition_holds_its_row_lock_until_commit(transition_task_table: None) -> None:
+    """The guarded save reloads its source state under a row lock that no contender takes before commit."""
+
+    task = TransitionTask.objects.create(state=TransitionTask.State.RUNNING)
+    task = TransitionTask.objects.defer("state").get(pk=task.pk)
+
+    def lock_now() -> list[Any]:
+        with transaction.atomic():
+            return list(TransitionTask._base_manager.select_for_update(nowait=True).filter(pk=task.pk))
+
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        with transaction.atomic():
+            task.persist_with_body_write()
+            contender, _pid = submit(pool, lock_now)
+            with pytest.raises(OperationalError):
+                contender.result(timeout=10)
+        assert [row.state for row in submit(pool, lock_now)[0].result(timeout=10)] == [TransitionTask.State.DONE]
 
 
 @pytest.mark.django_db(transaction=True)

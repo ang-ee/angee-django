@@ -13,7 +13,6 @@ from angee.projects.testing.models import Project
 from angee.spaces.testing.models import Membership
 from tests.messaging_campaign import add_member, fanout, grant, make_user
 from tests.messaging_campaign import audience_record as audience_record
-from tests.test_spaces import spaces_tables as spaces_tables
 
 
 @pytest.mark.parametrize("source", ["follow", "team", "named", "direct"])
@@ -313,7 +312,7 @@ def test_follow_and_unfollow_do_not_grant_or_remove_a_read_share(audience_record
     assert case.record.thread_reader_allowed(case.recipient)
 
 
-def test_preference_predicate_and_sql_agree_for_default_internal_and_explicit_subtypes(composed_tables):
+def test_preference_predicate_and_sql_agree_for_default_internal_and_explicit_subtypes(db):
     with system_context(reason="test.audience.preference-matrix"):
         subtypes = [None]
         for key, default, internal in (("public", True, False), ("internal", True, True), ("opt-in", False, False)):

@@ -211,6 +211,12 @@ class HandleType(AngeeNode):
 
     party: PartyType | None = actor_scoped_to_one("party")
     avatar: FileType | None = actor_scoped_to_one("avatar")
+    merged_into: HandleType | None = actor_scoped_to_one("merged_into")
+    """The readable survivor this handle merged into, which carries the party link.
+
+    A handle merge keeps messages and recipients on the merged handle, so a
+    sender reads its party identity here and its envelope on itself.
+    """
 
     @strawberry_django.field(only=["controller_id"])
     def controller(self) -> strawberry.ID | None:

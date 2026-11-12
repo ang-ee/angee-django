@@ -18,14 +18,19 @@ from angee.workflows.testing.drivers import capture_tasks as capture_task_sends
 
 @pytest.fixture
 def capture_tasks() -> Iterator[list[tuple[str, dict[str, Any]]]]:
-    """Capture task sends after real commits for the duration of a test."""
+    """Capture the test's task sends; a send happens when its transaction commits.
+
+    A transactional test captures each send at commit. A rollback test never commits:
+    wrap the action whose sends it asserts, absent ones included, in
+    ``django_capture_on_commit_callbacks(execute=True)``.
+    """
     with capture_task_sends() as sent:
         yield sent
 
 
 @pytest.fixture
-def execution(composed_tables: None, capture_tasks: list[tuple[str, dict[str, Any]]]) -> tuple[Any, list[Any]]:
-    """Provide an acting administrator and sends captured after real commits."""
+def execution(db: None, capture_tasks: list[tuple[str, dict[str, Any]]]) -> tuple[Any, list[Any]]:
+    """Provide an acting administrator and the ``capture_tasks`` list of sends."""
 
     with system_context(reason="workflows.testing execution actor"):
         actor = get_user_model().objects.create_user(username="workflow-runner")

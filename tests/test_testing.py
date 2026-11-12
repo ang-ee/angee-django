@@ -8,10 +8,15 @@ from pathlib import Path
 import pytest
 from django.apps import apps
 from django.contrib.auth import get_user_model
+from django.contrib.contenttypes.models import ContentType
+from django.core.management import call_command
 from django.db import connection
+from django.test.utils import CaptureQueriesContext
 from rebac import actor_context, system_context
+from rebac.models import SchemaDefinition
 
 from angee.agents.testing import models as agents_models
+from angee.base.testing.fixtures import SESSION_BASELINE, database_rows
 from angee.decisions.testing import models as decisions_models
 from angee.integrate.testing import integration as integration_models
 from angee.integrate.testing import models as integrate_models
@@ -61,7 +66,7 @@ assert not settings.configured
     messaging_models, nexus_models, portfolio_models, projects_models,
     sequence_models, spaces_models, tags_models, uom_models, workflow_models,
 ))
-def test_native_database_setup_creates_shared_model_tables(transactional_db: None, shared_models) -> None:
+def test_native_database_setup_creates_shared_model_tables(db: None, shared_models) -> None:
     """Shared tables exist without requesting the permission-sync fixture."""
 
     tables = {
@@ -75,8 +80,8 @@ def test_native_database_setup_creates_shared_model_tables(transactional_db: Non
 
 
 @pytest.mark.parametrize("case", ("first", "second"))
-def test_native_database_cleanup_isolates_shared_models(transactional_db: None, case: str) -> None:
-    """Each native transactional fixture starts with no prior shared-model row."""
+def test_native_database_cleanup_isolates_shared_models(db: None, case: str) -> None:
+    """Each native rollback-isolated test starts with no prior shared-model row."""
 
     with system_context(reason="test native database isolation"):
         assert not Workflow.objects.filter(key="native-table-isolation").exists()
@@ -103,7 +108,7 @@ def test_decision_resources_register_once_from_central_models() -> None:
     )
 
 
-def test_workflow_run_reads_through_the_version_workflow_relation(composed_tables: None) -> None:
+def test_workflow_run_reads_through_the_version_workflow_relation(db: None) -> None:
     """Forward FK paths inherit workflow access without copying its foreign key."""
 
     with system_context(reason="workflow forward relation fixture"):
@@ -114,3 +119,27 @@ def test_workflow_run_reads_through_the_version_workflow_relation(composed_table
         run = WorkflowRun.objects.create(version=version, run_as=runner, origin=RunOrigin.MANUAL)
     with actor_context(owner):
         assert WorkflowRun.objects.filter(pk=run.pk).exists()
+
+
+@pytest.mark.entrypoint_boundaries
+@pytest.mark.django_db(transaction=True)
+def test_a_flush_restores_the_recorded_session_baseline(pytestconfig: pytest.Config) -> None:
+    """A flush drops committed rows and restores every baseline row, keys included, under a warm content-type cache."""
+
+    ContentType.objects.create(app_label="baseline", model="committed")
+
+    call_command("flush", interactive=False, reset_sequences=False, verbosity=0)
+
+    restored, baseline = (
+        {table: sorted(values, key=repr) for table, _, values in rows}
+        for rows in (database_rows(connection), pytestconfig.stash[SESSION_BASELINE])
+    )
+    assert restored == baseline
+    with system_context(reason="tests.testing.baseline"):
+        assert all(
+            model._base_manager.exists()
+            for model in (SchemaDefinition, apps.get_model("provenance", "Rule"), apps.get_model("platform", "Addon"))
+        )
+    with CaptureQueriesContext(connection) as queries:
+        ContentType.objects.get_for_model(Workflow)
+    assert not queries

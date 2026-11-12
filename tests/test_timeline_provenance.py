@@ -28,7 +28,7 @@ def kinds(settings):
     settings.ANGEE_TIMELINE_KINDS = ["angee.provenance.timeline.timeline_kinds"]
 
 
-def test_closure_admits_the_owner_history(composed_permissions) -> None:
+def test_closure_admits_the_owner_history() -> None:
     owner = create_platform_admin("timeline-history-owner")
     with open_changeset(fresh=True, change_reason="vault"):
         vault = vault_for(owner)
@@ -41,7 +41,7 @@ def test_closure_admits_the_owner_history(composed_permissions) -> None:
 
 
 def test_only_explicit_closure_invalidates_and_changesets_never_gain_a_transport_feed(
-    composed_permissions, monkeypatch,
+    monkeypatch,
 ) -> None:
     owner = create_platform_admin("timeline-explicit-close")
     states = []
@@ -60,7 +60,7 @@ def test_only_explicit_closure_invalidates_and_changesets_never_gain_a_transport
 
 
 def test_notification_failure_keeps_the_closed_changeset_readable(
-    composed_permissions, monkeypatch, caplog,
+    monkeypatch, caplog,
 ) -> None:
     owner = create_platform_admin("timeline-history-failure")
     vault = vault_for(owner)
@@ -82,7 +82,7 @@ def test_notification_failure_keeps_the_closed_changeset_readable(
     assert timeline_entries(vault, owner)[0].detail == "Still committed"
 
 
-def test_inverse_history_scope_includes_owned_lines_and_deleted_lines(composed_permissions) -> None:
+def test_inverse_history_scope_includes_owned_lines_and_deleted_lines() -> None:
     owner = create_platform_admin("timeline-document-owner")
     project_model = apps.get_model("projects", "Project")
     milestone_model = apps.get_model("projects", "Milestone")
@@ -105,7 +105,7 @@ def test_inverse_history_scope_includes_owned_lines_and_deleted_lines(composed_p
             assert (project_model, project.pk) in set(changesets.filter(pk=boundary.pk).records_touched())
 
 
-def test_closure_writes_no_timeline_projection(composed_permissions) -> None:
+def test_closure_writes_no_timeline_projection() -> None:
     owner = create_platform_admin("timeline-batch-owner")
     with CaptureQueriesContext(connection) as queries:
         with actor_context(owner), open_changeset(fresh=True):
@@ -118,7 +118,7 @@ def test_closure_writes_no_timeline_projection(composed_permissions) -> None:
     assert inserts == []
 
 
-def test_inverse_history_scope_covers_mti_pairs_and_generated_statements(composed_permissions) -> None:
+def test_inverse_history_scope_covers_mti_pairs_and_generated_statements() -> None:
     owner = create_platform_admin("timeline-document-relations")
     party_model = apps.get_model("parties", "Party")
     person_model = apps.get_model("parties", "Person")
@@ -153,7 +153,7 @@ def test_inverse_history_scope_covers_mti_pairs_and_generated_statements(compose
                 assert any(line.target_id == public_id_of(boundary) for line in timeline_entries(record, owner))
 
 
-def test_merge_history_includes_the_unchanged_survivor(composed_permissions) -> None:
+def test_merge_history_includes_the_unchanged_survivor() -> None:
     owner = create_platform_admin("timeline-history-merge")
     tag_model = apps.get_model("tags", "Tag")
     with actor_context(owner):
@@ -167,7 +167,7 @@ def test_merge_history_includes_the_unchanged_survivor(composed_permissions) -> 
     assert sum(line.target_id == public_id_of(boundary) for line in timeline_entries(survivor, owner)) == 1
 
 
-def test_machine_reason_never_reaches_a_user(composed_permissions) -> None:
+def test_machine_reason_never_reaches_a_user() -> None:
     """A system-context reason code is silent in the API and the timeline; a sentence passes through."""
 
     owner = create_platform_admin("timeline-machine-reason")
@@ -185,7 +185,7 @@ def test_machine_reason_never_reaches_a_user(composed_permissions) -> None:
     assert timeline_entries(vault, owner)[0].detail == "Renamed after the audit"
 
 
-def test_sync_bookkeeping_writes_no_change_event(composed_permissions) -> None:
+def test_sync_bookkeeping_writes_no_change_event() -> None:
     """A changeset that only stamps record links (no readable history) projects nothing: the read would admit none."""
 
     with system_context(reason="test.timeline.bookkeeping"):
@@ -202,7 +202,7 @@ def test_sync_bookkeeping_writes_no_change_event(composed_permissions) -> None:
 
 
 @pytest.mark.parametrize("origin_id", ["external-key", "999999999999999999999999"])
-def test_noninteger_origin_does_not_break_a_readable_history_line(composed_permissions, origin_id):
+def test_noninteger_origin_does_not_break_a_readable_history_line(origin_id):
     owner = create_platform_admin("timeline-foreign-origin")
     with open_changeset(fresh=True, change_reason="External origin"):
         record = vault_for(owner)
@@ -211,7 +211,7 @@ def test_noninteger_origin_does_not_break_a_readable_history_line(composed_permi
     assert timeline_entries(record, owner)[0].detail == "External origin"
 
 
-def test_self_origin_stays_visible_and_only_other_changes_fold_beneath_it(composed_permissions):
+def test_self_origin_stays_visible_and_only_other_changes_fold_beneath_it():
     owner = create_platform_admin("timeline-self-origin")
     with actor_context(owner), open_changeset(fresh=True, change_reason="Parent"):
         record = vault_for(owner)
@@ -228,7 +228,7 @@ def test_self_origin_stays_visible_and_only_other_changes_fold_beneath_it(compos
     assert [(child.kind, child.count) for child in entry.children] == [("provenance.change", 1)]
 
 
-def test_history_actor_labels_are_resolved_as_a_batch(composed_permissions):
+def test_history_actor_labels_are_resolved_as_a_batch():
     owner = create_platform_admin("timeline-batched-actor")
     with actor_context(owner), open_changeset(fresh=True):
         record = vault_for(owner)

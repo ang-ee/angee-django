@@ -16,7 +16,7 @@ from angee.workflows.runner import runner
 from angee.workflows.steps import Step
 from angee.workflows.testing.drivers import decide, deliver_decision_wakes, load_workflow, run_until, start_run
 from angee.workflows.testing.models import StepAttempt, StepRecord, StepRun, Workflow, WorkflowRun
-from tests.conftest import create_platform_admin, create_user, vault_for
+from tests.conftest import Vault, create_platform_admin, create_user, vault_for
 from tests.mtidemo.models import MtiChild, MtiParent
 
 
@@ -95,6 +95,7 @@ def answer(decision, person, key="approve"):
     return decide(decision, actor=person, chosen=[key])
 
 
+@pytest.mark.django_db(transaction=True)
 def test_ask_answer_then_apply_as_run_actor(review):
     actor, people, sent, question = review
     run, step = start_review(review)
@@ -115,6 +116,7 @@ def test_ask_answer_then_apply_as_run_actor(review):
     assert any(name == "workflows.execute" for name, _ in sent)
 
 
+@pytest.mark.django_db(transaction=True)
 @pytest.mark.parametrize("assignment_config", [{}, {"assignees": []}])
 def test_configured_decision_without_assignees_waits_answers_and_applies(execution, register_step, assignment_config):
     actor, sent = execution
@@ -146,6 +148,7 @@ def test_configured_decision_without_assignees_waits_answers_and_applies(executi
     assert run.output == {"decision": public_id_of(decision), "chosen": ["rename"]}
 
 
+@pytest.mark.django_db(transaction=True)
 def test_multiple_choices_receive_the_set_and_route_done(review):
     _, people, sent, _ = review
     run, step = start_review(review, input={"multiple": True})
@@ -156,6 +159,7 @@ def test_multiple_choices_receive_the_set_and_route_done(review):
     assert run.outcome == "done" and run.output["chosen"] == ["approve", "reject"]
 
 
+@pytest.mark.django_db(transaction=True)
 def test_choose_is_applied_on_workflow_resume(review):
     _, people, sent, question = review
     write_relationships([
@@ -175,6 +179,7 @@ def test_choose_is_applied_on_workflow_resume(review):
     assert question.review_subject.name == "Answerer's value"
 
 
+@pytest.mark.django_db(transaction=True)
 def test_apply_failure_rolls_back_record_writes_and_retains_answer(review, register_step):
     actor, people, sent, question = review
     run, step = start_review(review, input={"invalid": True})
@@ -210,6 +215,7 @@ def test_sweep_recovers_missed_answer_notification(review):
     assert run.status == "succeeded"
 
 
+@pytest.mark.django_db(transaction=True)
 def test_answer_enqueues_wake_on_commit_without_running_it_in_request(review):
     _, people, sent, _ = review
     run, step = start_review(review)
@@ -282,6 +288,7 @@ def test_cancel_withdraws_only_the_open_question(review, answered):
     assert runner.wake_decisions() == 0
 
 
+@pytest.mark.django_db(transaction=True)
 def test_later_step_loads_only_this_runs_decision(review, register_step):
     _, people, sent, _ = review
 
@@ -307,6 +314,7 @@ def test_later_step_loads_only_this_runs_decision(review, register_step):
     assert run.output == {"answered_by": public_id_of(people[0]), "verdict": ["approve"]}
 
 
+@pytest.mark.django_db(transaction=True)
 def test_answered_question_can_be_replaced_without_losing_its_run_association(review, register_step):
     actor, people, sent, question = review
 
@@ -401,7 +409,7 @@ def test_application_uses_owner_write_permission(review):
     assert question.review_subject.name != "Applied"
 
 
-def test_concrete_action_owner_applies_child_fields_with_canonical_concern(composed_tables):
+def test_concrete_action_owner_applies_child_fields_with_canonical_concern(db):
     actor = create_platform_admin("concrete-review")
     reader = create_user("concrete-reader")
     with system_context(reason="test concrete decision target"):
@@ -430,7 +438,7 @@ def test_concrete_action_owner_applies_child_fields_with_canonical_concern(compo
 
 
 @pytest.mark.parametrize("model", ["storage.Drive", "missing.Model", "not-a-model", ""])
-def test_action_model_must_share_the_concerned_identity(composed_tables, model):
+def test_action_model_must_share_the_concerned_identity(db, model):
     actor = create_platform_admin("invalid-concrete-review")
     with system_context(reason="test invalid decision target"):
         record = MtiChild.objects.create(detail="Before")
@@ -448,7 +456,8 @@ def test_proposal_uses_prepared_subject_lock_and_rechecks_permission(review, mon
     actor, people, _, question = review
     _, step = start_review(review)
     decision = answer(questions(step)[0], people[0])
-    model = type(question.review_subject)
+    model = Vault  # the review subject's concrete model
+    assert isinstance(question.review_subject, model)
     original_lock = model.lock_subject
     original_access = model.has_access
     observed = []

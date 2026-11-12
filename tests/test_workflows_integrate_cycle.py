@@ -15,7 +15,6 @@ from django.utils import timezone
 from rebac import actor_context, system_context
 
 from angee.integrate import scheduler
-from angee.integrate import sync_runner as integrate_sync_runner
 from angee.integrate.models import Bridge, IntegrationLifecycle, IntegrationRuntimeStatus
 from angee.integrate.sync import SyncDispatch
 from angee.integrate.sync_runner import run_bridge_sync_job
@@ -31,7 +30,7 @@ from tests.conftest import make_integration
 from tests.lock_waits import submit, wait_for_lock
 from tests.workflow_steps import Echo, document
 
-pytestmark = [pytest.mark.django_db(transaction=True), pytest.mark.usefixtures("workflow_step_classes")]
+pytestmark = [pytest.mark.django_db, pytest.mark.usefixtures("workflow_step_classes")]
 
 
 @pytest.fixture
@@ -67,6 +66,7 @@ def dispatch(bridge):
     return WorkflowRun.system_queryset().get(pk=bridge.sync_run_id)
 
 
+@pytest.mark.django_db(transaction=True)
 def test_scheduler_dispatches_once_and_request_replay_keeps_the_original_input(
     cycle_factory, execution, monkeypatch,
 ):
@@ -123,31 +123,20 @@ def test_cycle_admission_refuses_a_bridge_without_a_queued_token(cycle_factory, 
 
 
 @pytest.mark.parametrize("terminal", [False, True])
-def test_delayed_delivery_reads_the_current_cycle_under_its_row_lock(cycle_factory, monkeypatch, terminal):
+def test_delayed_delivery_reads_the_current_cycle_under_its_row_lock(cycle_factory, terminal):
     """A stale delivery preserves both an active dispatch and a completed cycle."""
     _workflow, bridge = cycle_factory()
     now = timezone.now()
     bridge.request_sync(now=now)
-    bridge_model = integrate_sync_runner._bridge_model
-    observed = {}
     fields = (
         "sync_run_id", "sync_stage", "last_sync_started_at", "last_sync_completed_at", "sync_progress", "next_sync_at",
     )
-
-    def first_delivery_wins(model_label):
-        with monkeypatch.context() as first_delivery:
-            first_delivery.setattr(integrate_sync_runner, "_bridge_model", bridge_model)
-            assert run_bridge_sync_job(
-                bridge._meta.label_lower, bridge.pk, now, require_queue_token=True,
-            )["dispatched"] is True
-            bridge.refresh_from_db()
-            run = WorkflowRun.system_queryset().get(pk=bridge.sync_run_id)
-            if terminal:
-                run_until(run)
-            observed.update(SyncCycleTestBridge.system_queryset().filter(pk=bridge.pk).values(*fields).get())
-        return bridge_model(model_label)
-
-    monkeypatch.setattr(integrate_sync_runner, "_bridge_model", first_delivery_wins)
+    # The first delivery of the same queued occurrence wins before the delayed one reads its row.
+    assert run_bridge_sync_job(bridge._meta.label_lower, bridge.pk, now, require_queue_token=True)["dispatched"] is True
+    bridge.refresh_from_db()
+    if terminal:
+        run_until(WorkflowRun.system_queryset().get(pk=bridge.sync_run_id))
+    observed = SyncCycleTestBridge.system_queryset().filter(pk=bridge.pk).values(*fields).get()
 
     result = run_bridge_sync_job(
         bridge._meta.label_lower, bridge.pk, now, require_queue_token=terminal,
@@ -163,6 +152,7 @@ def test_delayed_delivery_reads_the_current_cycle_under_its_row_lock(cycle_facto
     assert bridge.sync_is_dispatched is not terminal
 
 
+@pytest.mark.django_db(transaction=True)
 @pytest.mark.skipif(connection.vendor != "postgresql", reason="Real PostgreSQL row locks are required.")
 def test_duplicate_delivery_cannot_clear_the_winners_queue_token(cycle_factory, monkeypatch):
     """The winner consumes its token under the row lock before a loser can clear it."""
@@ -170,7 +160,7 @@ def test_duplicate_delivery_cannot_clear_the_winners_queue_token(cycle_factory, 
     now = timezone.now()
     bridge.request_sync(now=now)
     acquired, release_winner = Event(), Event()
-    advisory_lock = type(bridge).sync_lock
+    advisory_lock = SyncCycleTestBridge.sync_lock
 
     @contextmanager
     def pause_acquired(row):
@@ -180,7 +170,7 @@ def test_duplicate_delivery_cannot_clear_the_winners_queue_token(cycle_factory, 
                 assert release_winner.wait(10)
             yield held
 
-    monkeypatch.setattr(type(bridge), "sync_lock", pause_acquired)
+    monkeypatch.setattr(SyncCycleTestBridge, "sync_lock", pause_acquired)  # hold the winner inside its lock
 
     def deliver():
         return run_bridge_sync_job(bridge._meta.label_lower, bridge.pk, now, require_queue_token=True)
@@ -205,6 +195,7 @@ def test_duplicate_delivery_cannot_clear_the_winners_queue_token(cycle_factory, 
     assert bridge.settle_dispatch(run.pk) is False
 
 
+@pytest.mark.django_db(transaction=True)
 def test_queued_sync_releases_its_row_transaction_before_the_sync_body(cycle_factory, monkeypatch):
     """The advisory lock spans sync work without carrying the queue row transaction."""
     _workflow, bridge = cycle_factory()
@@ -220,6 +211,7 @@ def test_queued_sync_releases_its_row_transaction_before_the_sync_body(cycle_fac
     assert observed == [False]
 
 
+@pytest.mark.django_db(transaction=True)
 def test_ui_cancel_settles_once_and_repeated_delivery_cannot_overwrite_it(cycle_factory, execution):
     _workflow, bridge = cycle_factory()
     run = dispatch(bridge)
@@ -247,6 +239,7 @@ def test_ui_cancel_settles_once_and_repeated_delivery_cannot_overwrite_it(cycle_
     assert not bridge.sync_is_dispatched
 
 
+@pytest.mark.django_db(transaction=True)
 @pytest.mark.parametrize("timeout", [False, True])
 def test_failure_and_worker_timeout_settle_the_bridge_as_failed(cycle_factory, register_step, timeout):
     class FailingCycle(Echo):
@@ -275,6 +268,7 @@ def test_failure_and_worker_timeout_settle_the_bridge_as_failed(cycle_factory, r
     assert attempt.result == ("timed_out" if timeout else "failed")
 
 
+@pytest.mark.django_db(transaction=True)
 def test_success_sums_stream_outputs_including_mapped_partitions(cycle_factory, register_step):
     class CountedStream(StreamStage):
         """Emit typed stream counts without introducing an external adapter here."""

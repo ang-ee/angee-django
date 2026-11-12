@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import io
+import tracemalloc
 import zipfile
 import zlib
 
@@ -65,11 +66,9 @@ def test_metadata_rejects_non_wheel_compression_methods():
 def test_forged_zip_size_cannot_trigger_unbounded_decompression(monkeypatch):
     files = wheel_files()
     metadata_name = next(name for name in files if name.endswith("/METADATA"))
-    payload = "x" * 262144
+    payload = "x" * (32 * 1024 * 1024)  # compresses to kilobytes; inflating it whole would allocate 32 MiB
     files[metadata_name] = payload
     original_inventory = zipfile.ZipFile.infolist
-    original_decompressor = zipfile._get_decompressor
-    lengths = []
     def inventory(archive):
         members = original_inventory(archive)
         for member in members:
@@ -77,18 +76,15 @@ def test_forged_zip_size_cannot_trigger_unbounded_decompression(monkeypatch):
                 member.file_size = 64
                 member.CRC = zlib.crc32(payload[:64].encode())
         return members
-    class Observe:
-        def __init__(self, native):
-            self.native = native
-        def decompress(self, data, max_length=0):
-            lengths.append(max_length)
-            return self.native.decompress(data, max_length)
-        def __getattr__(self, name):
-            return getattr(self.native, name)
     monkeypatch.setattr(zipfile.ZipFile, "infolist", inventory)
-    monkeypatch.setattr(zipfile, "_get_decompressor", lambda *args: Observe(original_decompressor(*args)))
-    assert wheels.wheel_metadata(archive_bytes(files))[metadata_name] == payload[:64]
-    assert lengths and 0 < max(lengths) <= 1024 * 1024 + 1
+    archive = archive_bytes(files)
+    tracemalloc.start()
+    try:
+        assert wheels.wheel_metadata(archive)[metadata_name] == payload[:64]
+        _current, peak = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+    assert peak < 4 * 1024 * 1024
 
 
 def local_source(root):
@@ -101,7 +97,7 @@ def local_source(root):
         return Source.objects.create(repository=Repository.objects.get(name="local-wheels"), kind="addon", path="dist")
 
 
-def test_local_catalogue_reads_built_wheels_without_importing_source(composed_tables, tmp_path, monkeypatch):
+def test_local_catalogue_reads_built_wheels_without_importing_source(db, tmp_path, monkeypatch):
     write_wheel(tmp_path / "dist/local.whl", "local.addon", "local-addon", description="Built locally", code=True)
     (tmp_path / "pyproject.toml").write_text('[build-system]\nrequires=[]\nbuild-backend="must_not_import"\n')
     source = local_source(tmp_path)
@@ -111,7 +107,7 @@ def test_local_catalogue_reads_built_wheels_without_importing_source(composed_ta
         assert row.description == "Built locally" and row.vcs_path == "dist/local.whl"
 
 
-def test_local_source_without_wheels_requires_an_explicit_author_build(composed_tables, tmp_path):
+def test_local_source_without_wheels_requires_an_explicit_author_build(db, tmp_path):
     (tmp_path / "dist").mkdir()
     source = local_source(tmp_path)
     with pytest.raises(ImproperlyConfigured, match="already built wheels"):

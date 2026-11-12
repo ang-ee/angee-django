@@ -29,6 +29,7 @@ from django.core.exceptions import ObjectDoesNotExist, ValidationError
 from django.db import IntegrityError, models, transaction
 from django.db.models import Case, Count, Exists, IntegerField, OuterRef, Prefetch, Q, Subquery, TextField, Value, When
 from django.db.models.functions import Coalesce, NullIf
+from django.db.models.lookups import Exact
 from django.utils.crypto import salted_hmac
 from phonenumbers import PhoneNumberMatcher
 from rebac import (
@@ -220,18 +221,19 @@ class HandleQuerySet[HandleT: Handle](MergeableQuerySet[HandleT], AngeeHistoryQu
 
         Callers authorize the handle population; the party fallback keeps its
         own read gate. Prefix follows Django relation paths, including ``__``.
+        A merged handle names its survivor's party, since messages and
+        recipients stay on the handle they used; its envelope name is its own.
         """
 
         actor = self.actor() or current_actor()
         party_model = apps.get_model("parties", "Party")
-        party_name = party_model.objects.filter(pk=OuterRef(f"{prefix}party_id")).readable_scalar_subquery(
-            "display_name",
-            actor=actor,
-        )
+        party_id = MergeableQuerySet.survivor_field(prefix, "party_id", ref=OuterRef)
+        party_name = party_model.objects.filter(pk=party_id).readable_scalar_subquery("display_name", actor=actor)
+        confirmed = MergeableQuerySet.survivor_field(prefix, "party_link_confirmed")
         return Coalesce(
             NullIf(
                 Case(
-                    When(**{f"{prefix}party_link_confirmed": True}, then=party_name),
+                    When(Exact(confirmed, True), then=party_name),
                     default=Value(None),
                     output_field=TextField(),
                 ),

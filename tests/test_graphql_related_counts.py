@@ -18,7 +18,7 @@ from angee.graphql.related_counts import RelatedCount, check_related_counts, cou
 from angee.graphql.testing.documents import execute_schema, result_data
 from tests.conftest import Backend, Drive, File, Page, addon_schema, create_user, vault_for
 
-pytestmark = pytest.mark.django_db(transaction=True)
+pytestmark = pytest.mark.django_db
 
 QUERY = """query($model: String!, $id: ID!, $groups: [String!]!) {
   related_counts(model: $model, id: $id, groups: $groups) { group count }
@@ -50,7 +50,7 @@ def schema():
 
 
 @pytest.fixture
-def referenced(composed_tables, decision_counts):
+def referenced(db, decision_counts):
     """One owner-readable decision on each of two records with colliding numeric IDs."""
 
     owner, outsider = create_user("count-owner"), create_user("count-outsider")
@@ -95,6 +95,7 @@ def count_and_reads(captured):
     return [sql for sql in statements if "COUNT(" in sql], [sql for sql in statements if "COUNT(" not in sql]
 
 
+@pytest.mark.django_db(transaction=True)
 def test_every_applicable_group_shares_one_count_statement(schema, referenced):
     owner, _outsider, _records, decisions = referenced
     # Measured warm, as document budgets are: Django caches each content type on first use.
@@ -143,7 +144,7 @@ def test_an_unknown_target_model_fails_manage_py_check(settings):
     assert "missing.Model" in error.msg
 
 
-def test_every_declared_count_agrees_with_the_rows_its_group_lists(composed_tables):
+def test_every_declared_count_agrees_with_the_rows_its_group_lists():
     """Each registered declaration counts exactly the rows its read lists, bounded like its group.
 
     The count statement reads under the aggregate scope, the rows under the row

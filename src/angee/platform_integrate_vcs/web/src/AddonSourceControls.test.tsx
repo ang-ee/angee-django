@@ -3,9 +3,8 @@
 import type { DocumentType } from "@angee/gql/console";
 import type { ActionMutate } from "@angee/refine";
 import type { ActionResultRun, MutationDialogProps } from "@angee/ui";
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
-import { useCallback } from "react";
-import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { beforeEach, describe, expect, test, vi } from "vitest";
 
 import { AddonSourceControls, parseAddonSourceValues } from "./AddonSourceControls";
 import { AddonSources } from "./documents";
@@ -35,8 +34,6 @@ vi.mock("@angee/ui", async (importOriginal) => {
     useActionResultRun: () => mocks.settle,
     useRelationOptions: () => ({ options: [] }),
     useToast: () => mocks.toast,
-    useNamespaceT: (_namespace: string, messages: Record<string, string>) =>
-      useCallback((key: string) => messages[key] ?? key, [messages]),
   };
 });
 
@@ -62,7 +59,6 @@ beforeEach(() => {
   mocks.query.error = null;
   mocks.query.refetch.mockReset();
 });
-afterEach(cleanup);
 
 describe("AddonSourceControls values", () => {
   test("omits blank optional source coordinates", () => {

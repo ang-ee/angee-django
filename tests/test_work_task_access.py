@@ -1,7 +1,6 @@
 """Queue inheritance, comment access and fragment scope on composed work tasks."""
 
 from copy import deepcopy
-from pathlib import Path
 
 from django.db import connection
 from django.test.utils import CaptureQueriesContext
@@ -11,7 +10,6 @@ from rebac.models import active_relationship_model
 from rebac.schema.parser import parse_zed
 from rebac.testing import install_schema
 
-from tests.composed_host import run_composed_tests
 from tests.native_work import WorkCase
 
 
@@ -111,10 +109,6 @@ class TaskAccessTests(WorkCase):
                             scoped.filter(pk=row.pk).exists(),
                             row.with_actor(self.member).has_access(permission.name),
                         )
-
-
-class TaskAccessDenormalizedTests(TaskAccessTests):
-    storage = "denormalized"
 
 
 class PublicQueueTests(WorkCase):
@@ -223,20 +217,3 @@ class DuplicateLinkTests(WorkCase):
         self.assertTrue(self.scoped(moved, self.reader))
         self.assertFalse(self.scoped(moved, self.outsider))
         self.assertEqual(list(grants.order_by("pk").values()), before)
-
-
-def test_work_task_access(tmp_path: Path):
-    run_composed_tests(tmp_path, "tests.test_work_task_access.TaskAccessTests", app="angee.intake")
-
-
-def test_work_task_access_denormalized(tmp_path: Path):
-    run_composed_tests(tmp_path, "tests.test_work_task_access.TaskAccessDenormalizedTests", app="angee.intake")
-
-
-def test_public_queue_creation(tmp_path: Path):
-    """Expected to pass after the public-visibility change in spaces lands."""
-    run_composed_tests(tmp_path, "tests.test_work_task_access.PublicQueueTests", app="angee.work")
-
-
-def test_queue_permissions(tmp_path: Path):
-    run_composed_tests(tmp_path, "tests.test_work_task_access.QueuePermissionsTests", app="angee.work")

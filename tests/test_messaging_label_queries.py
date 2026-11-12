@@ -13,7 +13,7 @@ from angee.graphql.testing.documents import execute_schema, result_data
 from angee.messaging.testing.models import Fragment, Message, MessageStar, Thread
 from tests.test_messaging_graphql import _schema
 
-pytestmark = pytest.mark.usefixtures("composed_tables")
+pytestmark = pytest.mark.django_db
 
 
 @pytest.mark.parametrize("root", ["threads", "messages"])

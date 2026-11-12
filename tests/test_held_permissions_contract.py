@@ -2,19 +2,16 @@
 
 from __future__ import annotations
 
-import pytest
 from rebac import actor_context, system_context
 
 from angee.graphql.capabilities import held_permissions, permission_expression
 from tests.conftest import create_user
 from tests.scopedemo.models import ProposalTarget
 
-pytestmark = pytest.mark.django_db(transaction=True)
-
 NAMES = ("create", "read", "write")
 
 
-def test_held_permissions_require_the_rows_read(composed_tables: None) -> None:
+def test_held_permissions_require_the_rows_read(db: None) -> None:
     """``create`` is held by every signed-in actor, yet never on a row the actor cannot read."""
 
     owner = create_user("held-contract-owner")
@@ -30,7 +27,7 @@ def test_held_permissions_require_the_rows_read(composed_tables: None) -> None:
         assert held_permissions(row, NAMES) == frozenset(NAMES)
 
 
-def test_permission_expression_holds_nothing_without_an_actor(composed_tables: None) -> None:
+def test_permission_expression_holds_nothing_without_an_actor(db: None) -> None:
     """A queryset with neither a bound nor an ambient actor projects ``False`` on every row."""
 
     owner = create_user("expression-owner")
@@ -46,7 +43,7 @@ def test_permission_expression_holds_nothing_without_an_actor(composed_tables: N
         assert list(rows.annotate(_held=bound).values_list("_held", flat=True)) == [True]
 
 
-def test_held_permissions_inside_system_context_are_the_actors_own(composed_tables: None) -> None:
+def test_held_permissions_inside_system_context_are_the_actors_own(db: None) -> None:
     """Ambient elevation neither grants a capability nor hides the ambient actor's own."""
 
     owner = create_user("held-elevated-owner")

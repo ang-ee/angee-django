@@ -17,11 +17,8 @@ def test_pytest_database_has_vector_extension(db: None) -> None:
         assert cursor.fetchone() == ("vector",)
 
 
-def test_composed_pgvector_database_inherits_vector(tmp_path: Path) -> None:
+def test_composed_pgvector_database_inherits_vector(tmp_path: Path, subtests: pytest.Subtests) -> None:
     """The composed host creates its own database and the pgvector addon tables."""
     run_composed_tests(
-        tmp_path,
-        "tests.native_postgresql_extensions",
-        app="angee.knowledge_graph_pgvector",
-        test_postgresql=True,
+        tmp_path, subtests, app="angee.knowledge_graph_pgvector", postgresql=("tests.native_postgresql_extensions",),
     )

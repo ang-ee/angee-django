@@ -3,9 +3,9 @@ import { useRouter, useRouterState } from "@tanstack/react-router";
 import { expect, userEvent, waitFor, within } from "storybook/test";
 import { Button, TopMenuTabs } from "@angee/ui";
 
-import { RuntimeFixture, RoutedRuntimeFixture, jsonResponse, storyAppearance, storySchema } from "./runtime-fixtures";
+import { RuntimeFixture, RoutedRuntimeFixture, storyAppearance, storySchema } from "./runtime-fixtures";
 
-const schemas = storySchema(async () => jsonResponse({ data: {} }));
+const schemas = storySchema({});
 const tabs = [{ id: "list", label: "List" }, { id: "board", label: "Board" }];
 
 function TabHistoryProbe() {

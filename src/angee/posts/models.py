@@ -39,8 +39,10 @@ from rebac.mixins import RebacModelBase
 from angee.base.fields.implementation import ImplClassField
 from angee.base.models.audit import AuditMixin
 from angee.base.models.base import AngeeDataModel
+from angee.base.models.merge_references import MergePolicy
 from angee.base.models.timestamps import update_fields_with_auto_now
 from angee.base.models.trash import TrashQuerySet
+from angee.base.querysets import MergeableQuerySet
 from angee.integrate.models import IntegrationCreateMode
 from angee.messaging.managers import MessageQuerySet
 from angee.posts.backends import FeedBackend, ParsedPost
@@ -50,6 +52,7 @@ from angee.posts.managers import (
     PostMetricsManager,
     QuotaManager,
 )
+from angee.provenance.contrib.angee.history import HistoryMixin
 
 if TYPE_CHECKING:
     from angee.messaging.models import Message
@@ -78,10 +81,13 @@ class Feed(Composable, metaclass=RebacModelBase, inherits="messaging.Channel"):
     A *paused* feed carries a NULL ``next_sync_at`` (not scheduled); activating it
     schedules the first poll. ``handle`` is the ``parties.Handle`` the feed monitors
     and posts as (its OAuth token lives on the handle / the integration credential).
+    A handle merge keeps the feed on its handle; the feed posts as, and recognises
+    its own comments by, that handle's merge survivor.
     """
 
     integration_create_mode: ClassVar[IntegrationCreateMode | None] = IntegrationCreateMode.FORM
     live_impl_field = None
+    merge_policies = {"handle": MergePolicy.KEEP}
 
     feed_backend_class = ImplClassField(
         FeedBackend,
@@ -158,7 +164,7 @@ class Feed(Composable, metaclass=RebacModelBase, inherits="messaging.Channel"):
         return timezone.now() + timedelta(hours=hours)
 
 
-class FeedFollow(AuditMixin, AngeeDataModel, concrete=True):
+class FeedFollow(AuditMixin, HistoryMixin, AngeeDataModel, concrete=True):
     """A follow of a :class:`Feed` by a ``parties.Handle`` — the timeline subscription.
 
     The following edge behind a public timeline: a handle subscribes to a feed's
@@ -507,14 +513,13 @@ class MessagePublic(Composable, extends="messaging.Message"):
         """
 
         message = cast("Message", self)
+        # A handle merge keeps messages and the feed on their handles: both compare as survivors.
+        sender = MergeableQuerySet.survivor_id("sender__")
         with system_context(reason="posts.reply.evidence"):
             sender_id, channel_id = (
                 type(message)
                 ._base_manager.filter(pk=message.pk)
-                .values_list(
-                    "sender_id",
-                    "channel_id",
-                )
+                .values_list(sender, "channel_id")
                 .get()
             )
             handle_id = (
@@ -522,17 +527,19 @@ class MessagePublic(Composable, extends="messaging.Message"):
                 ._base_manager.filter(
                     pk=channel_id,
                 )
-                .values_list("handle_id", flat=True)
+                .values_list(MergeableQuerySet.survivor_id("handle__"), flat=True)
                 .first()
             )
             if handle_id is not None and sender_id == handle_id:
                 return True
-            replies = type(message)._base_manager.filter(parent_id=message.pk, channel_id=channel_id)
+            replies = type(message)._base_manager.filter(parent_id=message.pk, channel_id=channel_id).alias(
+                _sender=sender,
+            )
             active = TrashQuerySet.untrashed_q() & models.Q(
                 direction=message.Direction.OUTBOUND, status__in=message.ACTIVE_OUTBOUND_STATUSES,
             )
             if handle_id is not None:
-                active |= MessageQuerySet.published_q() & models.Q(sender_id=handle_id)
+                active |= MessageQuerySet.published_q() & models.Q(_sender=handle_id)
             possible = models.Q(direction=message.Direction.OUTBOUND) & (
                 models.Q(status__in=message.POSSIBLY_PUBLIC_STATUSES) | models.Q(delivery_possibly_accepted=True)
             )
@@ -569,8 +576,9 @@ class MessagePublic(Composable, extends="messaging.Message"):
             if parent.channel_id is None:
                 raise ValidationError("The comment's feed has no publishing identity.")
             feed = apps.get_model("posts", "Feed").objects.with_actor(actor).filter(pk=parent.channel_id).first()
-            if feed is None or feed.handle_id is None:
+            if feed is None or feed.handle is None:
                 raise ValidationError("The comment's feed has no publishing identity.")
+            handle = feed.handle.canonical()
 
             def admit(comment: Any) -> None:
                 if comment.reply_state():
@@ -579,7 +587,7 @@ class MessagePublic(Composable, extends="messaging.Message"):
             return apps.get_model("messaging", "Message").objects.compose_reply(
                 parent,
                 body=body,
-                sender=feed.handle,
+                sender=handle,
                 actor=actor,
                 local=local,
                 idempotency_key=idempotency_key,

@@ -112,20 +112,20 @@ async def main():
     async def unexpected_fallback(scope, receive, send):
         raise AssertionError("root mount did not handle unmatched path")
     root_app.http = unexpected_fallback
-    for path, expected_root in (
-        ("/base/api/deep/item", "/base/api/deep"),
-        ("/base/api/item", "/base/api"),
-        ("/base/api", "/base/api"),
-        ("/base/apix", "/base"),
-        ("/base/other", "/base"),
-        ("/base/", "/base"),
+    for path, expected_root, served in (
+        ("/base/api/deep/item", "/base/api/deep", "/base/api/deep/item"),
+        ("/base/api/item", "/base/api", "/base/api/item"),
+        ("/base/api", "/base/api", "/base/api/"),
+        ("/base/apix", "/base", "/base/apix"),
+        ("/base/other", "/base", "/base/other"),
+        ("/base/", "/base", "/base/"),
     ):
         original = dict(scope, path=path, raw_path=path.encode(), query_string=b"a=1&x=%2F")
         comm = ApplicationCommunicator(root_app, original)
         assert (await comm.receive_output())["status"] == 204
         await comm.receive_output()
         await comm.wait()
-        assert seen.pop() == dict(original, root_path=expected_root)
+        assert seen.pop() == dict(original, root_path=expected_root, path=served, raw_path=served.encode())
         assert original["root_path"] == "/base"
     comm = ApplicationCommunicator(app, {"type": "lifespan"})
     await comm.send_input({"type": "lifespan.startup"})
@@ -313,4 +313,41 @@ for invalid in (None, {}, "websocket"):
         assert "protocols must be callable" in str(error)
     else:
         raise AssertionError("invalid protocol declaration accepted")
+""")
+
+
+
+def test_a_mount_serves_its_exact_prefix_as_the_application_root():
+    """``/mcp`` and ``/mcp/`` reach a root-routed app without a redirect; deeper paths are unchanged."""
+
+    run(SETUP + """
+import asyncio
+from asgiref.testing import ApplicationCommunicator
+from starlette.applications import Starlette
+from starlette.responses import Response
+from starlette.routing import Route
+from angee.server.asgi import _Application
+seen = []
+async def endpoint(request):
+    seen.append((request.scope["path"], request.scope["root_path"], request.scope["raw_path"]))
+    return Response(status_code=200)
+# Routed on its own root like FastMCP's http_app(path="/"); Starlette redirects an unmatched "".
+inner = Starlette(routes=[Route("/", endpoint, methods=["POST"]), Route("/deeper", endpoint, methods=["POST"])])
+apps.get_app_configs = lambda: [contributor("mcp", mounts=[("/mcp", inner)])]
+app = _Application()
+async def post(path):
+    comm = ApplicationCommunicator(app, {
+        "type": "http", "method": "POST", "path": path, "raw_path": path.encode(), "root_path": "",
+        "query_string": b"", "headers": [(b"host", b"testserver")], "scheme": "http",
+        "server": ("testserver", 80),
+    })
+    await comm.send_input({"type": "http.request", "body": b"", "more_body": False})
+    status = (await comm.receive_output())["status"]
+    await comm.receive_output()
+    await comm.wait()
+    return status
+async def main():
+    assert [await post(path) for path in ("/mcp", "/mcp/", "/mcp/deeper")] == [200, 200, 200]
+    assert seen == [("/mcp/", "/mcp", b"/mcp/"), ("/mcp/", "/mcp", b"/mcp/"), ("/mcp/deeper", "/mcp", b"/mcp/deeper")]
+asyncio.run(main())
 """)

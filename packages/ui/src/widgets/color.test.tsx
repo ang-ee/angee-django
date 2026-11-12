@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
-import { afterEach, describe, expect, test, vi } from "vitest";
+import { fireEvent, render, screen } from "@testing-library/react";
+import { describe, expect, test, vi } from "vitest";
 
 import { colorWidget } from "./color";
 
@@ -9,10 +9,6 @@ const Read = colorWidget.read;
 const Edit = colorWidget.edit;
 
 describe("color widget", () => {
-  afterEach(() => {
-    cleanup();
-  });
-
   test("reads a hex colour as a tinted swatch beside the value", () => {
     const { container } = render(<Read value="#17343d" />);
     const swatch = container.querySelector('[role="img"]') as HTMLElement;

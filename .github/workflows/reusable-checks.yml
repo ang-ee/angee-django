@@ -100,14 +100,24 @@ jobs:
         with:
           python-version: ${{ inputs.python-version }}
       - run: uv run --locked python -m ruff check . --no-cache
+      - run: uv run --locked lint-imports --no-cache
       - run: uv run --locked python -m mypy src
         env:
           PYTHONPATH: src
+      # Static test contracts read source and docs without Django: patch
+      # targets, documentation links and recipes, and the agent methodology.
+      - run: >-
+          uv run --locked python -m pytest -p no:django --noconftest -c /dev/null --rootdir=. -q
+          tests/test_patch_targets.py tests/test_documentation_contracts.py tests/test_owner_index.py
+          tests/test_agent_methodology.py tests/test_agent_owner_map_guard.py
+          tests/test_agent_stack_root_policy.py tests/test_agent_work_state_policy.py
 
   # The suite runs as six contiguous shards of equal stored time
   # (.test_durations, pytest-split); a test missing from it still runs in one.
   # loadfile keeps a file on one worker. Allow for long file-scoped campaigns
   # and runner cleanup; retain per-test timings for balancing the shards.
+  # A pull request runs only the test files its changed paths reach
+  # (scripts/changed_path_selection.py); every other event runs the whole suite.
   uv-shard:
     name: uv ${{ matrix.group }}/6
     if: ${{ inputs.uv-enabled }}
@@ -119,21 +129,35 @@ jobs:
         group: [1, 2, 3, 4, 5, 6]
     steps:
       - uses: actions/checkout@v5
+        with:
+          # A pull request's merge commit and its base give the changed paths.
+          fetch-depth: 2
       - uses: astral-sh/setup-uv@v7
         with:
           python-version: ${{ inputs.python-version }}
-      - run: >-
-          uv run pytest -q -n auto --dist loadfile --durations=25
-          --splits 6 --group ${{ matrix.group }} ${{ inputs.pytest-extra-args }}
+      # bash runs with pipefail, so a failed diff or selection fails the shard.
+      - shell: bash
+        env:
+          EVENT: ${{ github.event_name }}
+        run: |
+          if [ "$EVENT" = pull_request ]; then
+            tests=$(git diff --name-only HEAD^1 HEAD | uv run --locked python scripts/changed_path_selection.py)
+            [ -n "$tests" ] || { echo "The changed paths reach no Python test."; exit 0; }
+            echo "$tests"
+          fi
+          # A small selection can leave a shard nothing to run: pytest's exit code 5.
+          uv run pytest -q -n auto --dist loadfile --durations=25 \
+            --splits 6 --group ${{ matrix.group }} ${{ inputs.pytest-extra-args }} $tests \
+            || { [ $? -eq 5 ] && [ -n "$tests" ]; }
 
   # The PostgreSQL selection is balanced over its own timing map
   # (.test_durations_postgres, least_duration): every worker flushes the
   # whole schema between transactional tests, so one job no longer fits.
-  # CI runs 1.9-2.6x the local timings the map records, so six groups under
-  # the SQLite shards' 60-minute limit keep the margin the map cannot predict.
+  # Six groups under the SQLite shards' 60-minute limit keep the margin the
+  # map cannot predict. Pull requests skip it; main and releases run it.
   uv-postgres:
     name: uv postgres ${{ matrix.group }}/6
-    if: ${{ inputs.uv-enabled }}
+    if: ${{ inputs.uv-enabled && github.event_name != 'pull_request' }}
     runs-on: ubuntu-latest
     timeout-minutes: 60
     strategy:
@@ -200,30 +224,34 @@ jobs:
             tests/test_workflows_children_concurrency.py tests/test_workflows_children_surface.py \
             tests/test_workflows_retention.py \
             tests/test_workflows_triggers.py tests/test_workflows_triggers_surface.py \
-            tests/test_workflows_triggers_concurrency.py tests/test_workflows_messaging.py \
-            tests/test_workflows_posts.py \
+            tests/test_workflows_triggers_concurrency.py \
             tests/test_workflows_watches.py tests/test_workflows_watch_concurrency.py \
-            tests/test_workflows_parties.py \
-            tests/test_composed_note_workflow.py \
+            'tests/test_composed_workflows.py::test_composed_workflows[posts]' \
+            'tests/test_composed_workflows.py::test_composed_workflows[messaging]' \
+            'tests/test_composed_workflows.py::test_composed_workflows[parties]' \
+            'tests/test_composed_workflows.py::test_composed_workflows[extraction]' \
+            tests/test_composed_examples.py tests/test_composed_messaging.py \
+            'tests/test_composed_intake.py::test_composed_intake[intake]' \
+            'tests/test_composed_work.py::test_composed_work[work]' \
             tests/test_extraction_steps.py \
             tests/test_extraction_models.py::test_extraction_rejects_targets_outside_file_and_message \
             tests/test_extraction_models.py::test_competing_revision_requests_allocate_exactly_one_successor \
             tests/test_extraction_models.py::test_retention_waits_for_a_held_file_and_refuses_its_committed_change \
-            tests/test_composed_extraction_workflow.py \
             tests/test_decisions_lifecycle.py tests/test_decisions_concurrency.py \
             tests/test_agent_sessions.py tests/test_agent_sessions_concurrency.py \
             tests/test_integrate_discovery_concurrency.py \
             tests/test_framework_integration.py \
-            tests/test_messaging_delivery.py tests/test_messaging_delivery_concurrency.py \
             tests/test_base_row_lock.py \
             tests/test_connections.py::test_ensure_fresh_serializes_two_processes_on_postgresql \
             tests/test_hierarchy.py tests/test_iam_concurrency_campaign.py \
-            tests/test_iam_graphql.py tests/test_intake_access_decision.py \
+            tests/test_iam_graphql.py \
             tests/test_oidc.py::test_credential_disconnect_guard_blocks_last_oidc_sign_in \
             tests/test_oidc.py::test_credential_disconnect_preserves_other_sign_in_methods \
             tests/test_oidc.py::test_credential_disconnect_reads_current_sign_in_facts_despite_cached_relations \
             tests/test_oidc.py::test_disconnect_does_not_count_unusable_oidc_alternatives \
             tests/test_integrate_streams.py \
+            tests/test_integrate_scheduler.py::test_scheduled_admission_uses_the_schedulers_single_row_lock \
+            tests/test_integrate_scheduler.py::test_scheduler_skips_row_locked_bridge_and_enqueues_other_due_bridges \
             tests/test_knowledge_clone_concurrency_campaign.py tests/test_knowledge_search.py \
             tests/test_postgresql_extensions.py \
             tests/test_knowledge_graph_pgvector_extraction.py tests/test_knowledge_graph_pgvector_local.py \
@@ -232,10 +260,9 @@ jobs:
             tests/test_knowledge_graph_pgvector_postgres.py tests/test_knowledge_graph_pgvector_resolution.py \
             tests/test_knowledge_access_campaign.py::test_record_note_and_binding_keep_locks_replay_and_rollback \
             tests/test_messaging.py tests/test_messaging_concurrency_campaign.py \
-            tests/test_messaging_channel_concurrency.py tests/test_messaging_webform_submission.py \
+            tests/test_messaging_channel_concurrency.py \
             tests/test_messaging_inbox_read.py tests/test_inbox_explorer.py tests/test_inbox_part_reads.py \
             tests/test_group_rows.py \
-            'tests/test_composed_query_budgets.py::test_composed_addon_query_budgets[postgresql]' \
             tests/test_optimistic_lock.py \
             tests/test_ownership_seams.py tests/test_portfolio_concurrency.py \
             tests/test_proposals_campaign_queries.py tests/test_proposals_concurrency.py \
@@ -246,7 +273,8 @@ jobs:
             tests/test_storage_access_campaign.py::test_download_urls_are_window_aligned_and_expire_from_the_window_start \
             tests/test_storage_access_campaign.py::test_download_url_changes_for_new_content_inside_one_window \
             tests/test_system_queryset.py::test_system_queryset_emits_for_update_on_postgresql \
-            tests/test_task_locks.py tests/test_task_project_ordering.py \
+            tests/test_task_locks.py \
+            tests/test_transitions.py::test_a_guarded_transition_holds_its_row_lock_until_commit \
             tests/test_task_rank_allocation.py tests/test_projects_record_tasks.py \
             tests/test_projects_access_projections.py tests/test_timeline_concurrency.py \
             tests/test_work_intake_lock_campaign.py tests/test_work_stage_lock_campaign.py \
@@ -265,7 +293,7 @@ jobs:
           echo "quality=${{ needs.python-quality.result }} shards=${{ needs.uv-shard.result }} postgres=${{ needs.uv-postgres.result }}"
           test "${{ needs.python-quality.result }}" = success
           test "${{ needs.uv-shard.result }}" = success
-          test "${{ needs.uv-postgres.result }}" = success
+          test "${{ needs.uv-postgres.result }}" = "${{ github.event_name == 'pull_request' && 'skipped' || 'success' }}"
 
   pnpm:
     if: ${{ inputs.pnpm-enabled }}
@@ -443,14 +471,48 @@ jobs:
         run: |
           uv sync
           uv run --no-sync python manage.py compose
-          # Author disposable native history, then verify the native composition.
+          # Author disposable native history, then verify the native composition:
+          # the authored history must reproduce the composed models exactly.
           uv run --no-sync python manage.py makemigrations --noinput
+          uv run --no-sync python manage.py makemigrations --check --dry-run
           uv run --no-sync python manage.py compose --check
           uv run --no-sync python manage.py schema --check
       - name: Provision the composed stack
         working-directory: stack
         run: |
           uv run --no-sync python manage.py provision
+      # Composition escapes the bare source host cannot see: every system check on the
+      # composed models, the demo tier loading, and every folded model with a row loading
+      # one with only its primary key and saving it again (deferred-column reads,
+      # MRO-ordered save overrides). Append-only models refuse edits by contract, so they
+      # only load.
+      - name: Smoke the composed models
+        if: ${{ matrix.group == 1 }}
+        working-directory: stack
+        run: |
+          uv run --no-sync python manage.py check --database default
+          uv run --no-sync python manage.py resources load --include-demo
+          uv run --no-sync python manage.py shell -c '
+          from django.apps import apps
+          from rebac import system_context
+
+          from angee.base.addons import is_angee_addon
+          from angee.base.models.append_only import AppendOnlyModel
+
+          failures, loaded = [], 0
+          with system_context(reason="ci.composed_model_smoke"):
+              for model in apps.get_models():
+                  if model._meta.managed and is_angee_addon(model._meta.app_config):
+                      try:
+                          for row in model._base_manager.only("pk")[:1]:
+                              loaded += 1
+                              if not issubclass(model, AppendOnlyModel):
+                                  row.save()
+                      except Exception as error:
+                          failures.append(f"{model._meta.label}: {error!r}")
+          print(f"Loaded and saved one row of {loaded} composed models.")
+          assert not failures, "\n".join(failures)
+          '
       - name: Lint the consumer with the framework policy
         if: ${{ inputs.consumer-path != '' && matrix.group == 1 }}
         working-directory: stack
@@ -556,7 +618,6 @@ jobs:
               "--import-mode=importlib", "--nomigrations", "-o", "python_files=test*.py",
               # Register pytest-django before the shared django_db_setup override.
               "-p", "django", "-p", "angee.base.testing.fixtures", "-p", "angee.provenance.testing.fixtures",
-              "-p", "angee.parties.testing.fixtures",
               *(arg for plugin in plugins for arg in ("-p", plugin)),
               "-p", "no:randomly", "-n", "4", "--dist", "worksteal", "-q",
               "--splits", os.environ["CONSUMER_SPLITS"], "--group", os.environ["CONSUMER_GROUP"],

@@ -114,7 +114,7 @@ def test_denied_explorer_is_null_while_computed_collections_are_empty(monkeypatc
 
 @pytest.mark.parametrize("allowed", [False, True])
 def test_platform_owns_ledger_listing_and_its_read_gate(
-    composed_tables: None, monkeypatch: pytest.MonkeyPatch, allowed: bool,
+    db: None, monkeypatch: pytest.MonkeyPatch, allowed: bool,
 ) -> None:
     """The console retains the ledger wire contract and uses one platform gate."""
 
@@ -135,10 +135,10 @@ def test_platform_owns_ledger_listing_and_its_read_gate(
     assert metadata.roots.list_name == "resources"
 
 
-def test_explorer_reads_persisted_addons_and_shared_computed_rows(composed_tables: None, monkeypatch: Any) -> None:
+def test_explorer_reads_persisted_addons_and_shared_computed_rows(db: None, monkeypatch: Any) -> None:
     """Addon facts come from the catalogue while model and field bindings share rows."""
 
-    del composed_tables
+    del db
     admin = _platform_admin("explorer-admin")
     config = apps.get_app_config("linesdemo")
     line = apps.get_model("linesdemo", "DocumentLine")
@@ -241,10 +241,10 @@ def test_explorer_reads_persisted_addons_and_shared_computed_rows(composed_table
     }
 
 
-def test_addon_names_support_text_search_sort_and_labels_with_unknown_identity(composed_tables: None) -> None:
+def test_addon_names_support_text_search_sort_and_labels_with_unknown_identity(db: None) -> None:
     """Unknown Django identities retain searchable names and non-empty display labels."""
 
-    del composed_tables
+    del db
     admin = _platform_admin("catalogue-search-admin")
     addon = apps.get_model("platform", "Addon")
     rows = {}
@@ -276,10 +276,10 @@ def test_addon_names_support_text_search_sort_and_labels_with_unknown_identity(c
     ]
 
 
-def test_addon_detail_and_record_services_share_canonical_public_identity(composed_tables: None) -> None:
+def test_addon_detail_and_record_services_share_canonical_public_identity(db: None) -> None:
     """Catalogue names remain filter vocabulary; record navigation uses the model ID."""
 
-    del composed_tables
+    del db
     admin = _platform_admin("catalogue-identity-admin")
     addon = apps.get_model("platform", "Addon")
     with system_context(reason="test.platform.catalogue.identity"):
@@ -362,16 +362,17 @@ def test_field_collection_groups_rows_by_model_and_kind(monkeypatch: Any) -> Non
 
 
 def test_model_only_explorer_selection_skips_catalogue_and_edges(monkeypatch: Any) -> None:
-    """A model-only explorer request reads neither the catalogue nor graph edges."""
+    """A model-only explorer request reads neither the catalogue nor resource counts.
+
+    The test holds no database access, so reading the addon catalogue fails it.
+    """
 
     config = apps.get_app_config("linesdemo")
     model = apps.get_model("linesdemo", "Tag")
     row = composed.PlatformModelRow.from_model(config, model)
     monkeypatch.setattr(platform_schema, "platform_can_read", lambda: True)
     monkeypatch.setattr(composed, "model_rows", lambda: [row])
-    monkeypatch.setattr(type(platform_schema._Addon.objects), "all", _unexpected)
     monkeypatch.setattr(composed, "resource_counts", _unexpected)
-    monkeypatch.setattr(platform_schema, "_edge_rows", _unexpected)
 
     data = _data(
         execute_schema(
@@ -385,11 +386,11 @@ def test_model_only_explorer_selection_skips_catalogue_and_edges(monkeypatch: An
 
 @pytest.mark.parametrize("state", ["enabled", "disabled"])
 def test_installed_versions_use_native_metadata_for_catalogue_and_explorer(
-    composed_tables: None, state: str,
+    db: None, state: str,
 ) -> None:
     """Installed metadata wins over source version; unavailable packages have no version."""
 
-    del composed_tables
+    del db
     config = make_addon(name="version_probe.installed")
     distribution = metadata.distribution("version-probe-installed")
     source = Path(config.path) / "pyproject.toml"

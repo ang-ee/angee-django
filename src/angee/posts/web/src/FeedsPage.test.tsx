@@ -84,15 +84,10 @@ vi.mock("@angee/ui", async () => {
       return <div>{props.children as React.ReactNode}{form ? <form.Component resource={String(props.resource)} /> : null}</div>;
     },
     avatarInitials: (label: string) => label.slice(0, 2).toUpperCase(),
-    createNamespaceT: () => () => (key: string) => key,
     errorMessage: (error: unknown, fallback: string) =>
       error instanceof Error ? error.message : fallback,
   };
 });
-
-vi.mock("./i18n", () => ({
-  usePostsT: () => (key: string) => key,
-}));
 
 import { FeedsPage } from "./FeedsPage";
 

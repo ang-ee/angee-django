@@ -48,4 +48,4 @@ are idempotent, and each receiver's failure is logged and isolated in a savepoin
 so the terminal write and other receivers can finish.
 
 Native flow and recovery cases are in `tests/native_workflows_posts.py`, collected
-through `tests/test_workflows_posts.py` on SQLite and PostgreSQL.
+through the `posts` profile of `tests/test_composed_workflows.py` on SQLite and PostgreSQL.

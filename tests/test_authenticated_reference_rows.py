@@ -18,7 +18,7 @@ from tests.conftest import create_user
 
 
 @pytest.fixture
-def reference_rows(composed_tables):
+def reference_rows(db):
     with system_context(reason="test.reference.setup"):
         tag = Tag.objects.create(name="Reference")
         category = UomCategory.objects.create(name="Count")

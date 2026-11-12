@@ -8,13 +8,14 @@ rows, and field permissions redact owner-only fields from other readers.
 from __future__ import annotations
 
 from django.apps import apps
-from django.contrib.auth import authenticate, get_user_model
+from django.contrib.auth import get_user_model
 from django.core.management import call_command
 from django.test import TransactionTestCase, override_settings
-from rebac import system_context, to_object_ref
+from rebac import ObjectRef, system_context, to_object_ref, to_subject_ref
 from rebac.backends import backend
 from rebac.models import active_relationship_model
 from rebac.resources import model_resource_type
+from rebac.schema.ast import ConstBinding
 
 Note = apps.get_model("notes", "Note")
 User = get_user_model()
@@ -114,7 +115,8 @@ class NotesAuthorizationTests(TransactionTestCase):
             total = Note.objects.count()
         # as_user(admin) is NOT bracketed in sudo, so reach is purely
         # schema-based: the const-backed admin relation points every note at
-        # angee/role:admin, whose live member relation reads is_superuser.
+        # angee/role:admin, whose members are its declared grants (iam's demo
+        # admin grant), never Django's is_superuser flag.
         admin_notes = Note.objects.as_user(self.admin)
 
         self.assertEqual(admin_notes.count(), total)
@@ -122,12 +124,11 @@ class NotesAuthorizationTests(TransactionTestCase):
             {note.created_by_id for note in admin_notes},
             {self.admin.pk, self.alice.pk, self.bob.pk},
         )
+        role = ObjectRef("angee/role", "admin")
+        for user, member in ((self.admin, True), (self.alice, False)):
+            granted = backend().check_access(subject=to_subject_ref(user), action="effective_member", resource=role)
+            self.assertEqual(bool(granted), member, user.username)
         relationship_model = active_relationship_model()
-        self.assertFalse(
-            relationship_model.objects.filter(
-                resource_type="angee/role", resource_id="admin", relation="member"
-            ).exists()
-        )
         # The admin relation is synthetic (const-backed): the note table holds
         # no REBAC tuples at all.
         self.assertFalse(relationship_model.objects.filter(resource_type="notes/note").exists())
@@ -136,7 +137,7 @@ class NotesAuthorizationTests(TransactionTestCase):
             for relation in backend().schema().get_definition("notes/note").relations
             if relation.name == "admin"
         )
-        self.assertEqual(admin_rel.backing.kind, "const")
+        self.assertIsInstance(admin_rel.backing, ConstBinding)
         self.assertEqual(admin_rel.backing.target_id, "admin")
 
     def test_demo_load_is_idempotent(self) -> None:
@@ -147,15 +148,6 @@ class NotesAuthorizationTests(TransactionTestCase):
         with system_context(reason="test"):
             self.assertEqual(Note.objects.count(), notes_before)
             self.assertEqual(User.objects.count(), users_before)
-
-    def test_demo_users_authenticate(self) -> None:
-        alice = authenticate(username="alice", password="alice")
-        bob = authenticate(username="bob", password="bob")
-
-        self.assertIsNotNone(alice)
-        self.assertIsNotNone(bob)
-        self.assertTrue(alice.is_staff)
-        self.assertFalse(bob.is_staff)
 
     def test_reader_grant_redacts_owner_only_fields(self) -> None:
         self.welcome.with_actor(self.alice).grant_record_access("reader", self.bob)

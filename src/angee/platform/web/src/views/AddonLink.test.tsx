@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 
-import { cleanup, render, screen } from "@testing-library/react";
-import { afterEach, describe, expect, test, vi } from "vitest";
+import { render, screen } from "@testing-library/react";
+import { describe, expect, test, vi } from "vitest";
 import { createRouteHref } from "@angee/ui/runtime";
 
 const mocks = vi.hoisted(() => ({
@@ -25,8 +25,6 @@ vi.mock("@angee/ui", async (importOriginal) => ({
 
 import { PlatformAddonIdentities } from "../documents";
 import { AddonLink } from "./AddonLink";
-
-afterEach(cleanup);
 
 describe("AddonLink", () => {
   test("resolves native names through the readable catalogue to canonical record IDs", () => {

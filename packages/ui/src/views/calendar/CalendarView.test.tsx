@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 
 import { cleanup, render, screen, waitFor } from "@testing-library/react";
-import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
+import { beforeEach, describe, expect, test, vi } from "vitest";
 
 import { CalendarView, type Occurrence } from "./CalendarView";
 
@@ -95,7 +95,6 @@ beforeEach(() => {
   fcMock.changeViewCalls = [];
   fcMock.gotoDateCalls = [];
 });
-afterEach(cleanup);
 
 describe("CalendarView", () => {
   test("renders the occurrence array in month view", async () => {

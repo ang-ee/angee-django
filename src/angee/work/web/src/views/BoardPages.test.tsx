@@ -1,8 +1,8 @@
 // @vitest-environment happy-dom
 
-import { cleanup, render } from "@testing-library/react";
+import { render } from "@testing-library/react";
 import * as React from "react";
-import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
+import { beforeEach, describe, expect, test, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   listProps: null as Record<string, unknown> | null,
@@ -68,10 +68,6 @@ vi.mock("../cycle-actions", () => ({
   CycleCloseControl: () => null,
 }));
 
-vi.mock("../i18n", () => ({
-  useWorkT: () => (key: string) => key,
-}));
-
 vi.mock("../removed-tasks", () => ({
   RemovedTasks: (props: Record<string, unknown>) => {
     mocks.removedProps = props;
@@ -89,8 +85,6 @@ beforeEach(() => {
   mocks.params = { queueId: "que_eng", id: "cyc_7" };
 });
 
-afterEach(cleanup);
-
 describe("work board stage lanes", () => {
   test("offers the queue's removed tasks beside its board", () => {
     render(<QueueBoardPage />);
@@ -99,7 +93,7 @@ describe("work board stage lanes", () => {
 
   test("links the board to its queue's settings record instead of leaving Work, and names its crumb", () => {
     const { getByRole } = render(<QueueBoardPage />);
-    expect(getByRole("link", { name: "queue.settings" }).getAttribute("href")).toBe("/work/queues/que_eng");
+    expect(getByRole("link", { name: "Queue settings" }).getAttribute("href")).toBe("/work/queues/que_eng");
     expect(mocks.leafLabel).toBe("Engineering");
   });
 

@@ -1,15 +1,13 @@
 // @vitest-environment happy-dom
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { afterEach, beforeAll, expect, test, vi } from "vitest";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { beforeAll, expect, test, vi } from "vitest";
 
 import { CatalogueStory } from "./WorkflowsPage.stories";
 
 beforeAll(() => {
-  Element.prototype.getAnimations ??= () => [];
   class ResizeObserverStub { observe(): void {} unobserve(): void {} disconnect(): void {} }
   vi.stubGlobal("ResizeObserver", ResizeObserverStub);
 });
-afterEach(cleanup);
 
 test("opens a workflow from the catalogue with its retained versions and recent runs", async () => {
   render(<CatalogueStory list />);
@@ -33,12 +31,12 @@ test("versions and recent runs are filtered by the open workflow using native li
   await screen.findByText("usr_operator");
   fireEvent.click(screen.getByRole("tab", { name: "Recent runs" }));
   await screen.findAllByText("Failed");
-  const versions = onRequest.mock.calls.find(([entry]) => entry.query.includes("workflowversion("))?.[0];
+  const versions = onRequest.mock.calls.find(([entry]) => entry.fields.includes("workflowversion"))?.[0];
   expect(versions?.variables.where).toEqual({ _and: [{ workflow: { _eq: "wfl_review" } }] });
   // Recent runs group by status: the groups read is scoped to the workflow and carries each group's first page.
-  const runs = onRequest.mock.calls.find(([entry]) => entry.query.includes("workflowrun_groups") && entry.variables.with_rows === true)?.[0];
+  const runs = onRequest.mock.calls.find(([entry]) => entry.fields.includes("workflowrun_groups") && entry.variables.with_rows === true)?.[0];
   expect(runs?.variables.where).toEqual({ version__workflow: { _eq: "wfl_review" } });
-  expect(onRequest.mock.calls.some(([entry]) => entry.query.includes("workflowrun("))).toBe(false);
+  expect(onRequest.mock.calls.some(([entry]) => entry.fields.includes("workflowrun"))).toBe(false);
 });
 
 test("the workflow trigger tab uses its canonical scope and routes retained policies", async () => {
@@ -47,7 +45,7 @@ test("the workflow trigger tab uses its canonical scope and routes retained poli
   fireEvent.click(await screen.findByRole("tab", { name: "Triggers" }));
   const trigger = await screen.findByRole("link", { name: "Open Review admission" });
   expect(trigger.getAttribute("href")).toBe("/workflows/triggers/wft_review");
-  const request = onRequest.mock.calls.find(([entry]) => entry.query.includes("trigger("))?.[0];
+  const request = onRequest.mock.calls.find(([entry]) => entry.fields.includes("trigger"))?.[0];
   expect(request?.variables.where).toEqual({ _and: [{ workflow: { _eq: "wfl_review" } }] });
   expect(screen.getByRole("button", { name: /New/ })).toBeTruthy();
 });
@@ -83,7 +81,7 @@ test("writers default to Studio while readers open their first pane without auth
   const versions = await screen.findByRole("tab", { name: "Versions" });
   await waitFor(() => expect(versions.getAttribute("aria-selected")).toBe("true"));
   expect(screen.queryByRole("tab", { name: "Studio" })).toBeNull();
-  expect(onRequest.mock.calls.some(([request]) => request.query.includes("workflow_step_choices"))).toBe(false);
+  expect(onRequest.mock.calls.some(([request]) => request.fields.includes("workflow_step_choices"))).toBe(false);
 });
 
 test("transport errors offer the shared reload action", async () => {

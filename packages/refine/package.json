@@ -23,6 +23,10 @@
     "./testing": {
       "types": "./src/testing.tsx",
       "import": "./src/testing.tsx"
+    },
+    "./testing/wire": {
+      "types": "./src/testing-wire.ts",
+      "import": "./src/testing-wire.ts"
     }
   },
   "publishConfig": {
@@ -37,6 +41,10 @@
       "./testing": {
         "types": "./dist/testing.d.ts",
         "default": "./dist/testing.js"
+      },
+      "./testing/wire": {
+        "types": "./dist/testing-wire.d.ts",
+        "default": "./dist/testing-wire.js"
       }
     }
   },

@@ -28,7 +28,7 @@ from tests.test_storage import (  # noqa: F401 -- the image drive avatars land o
     image_drive,
 )
 
-pytestmark = [pytest.mark.django_db(transaction=True), pytest.mark.usefixtures("image_drive", "composed_permissions")]
+pytestmark = [pytest.mark.django_db, pytest.mark.usefixtures("image_drive")]
 parties_schema = importlib.import_module("angee.parties.schema")
 
 GIF_BYTES = bytes.fromhex("47494638396101000100800000000000ffffff21f90401000000002c00000000010001000002024401003b")
@@ -164,6 +164,7 @@ def test_the_display_avatar_never_reaches_the_address_book() -> None:
         assert Party.objects.project_contact(person).photo is None
 
 
+@pytest.mark.django_db(transaction=True)
 def test_the_people_list_shows_avatars_with_nested_fields_in_a_bounded_number_of_queries() -> None:
     """Selecting a party's own avatar beside its display avatar, with nested fields, costs the same per page."""
 
@@ -226,14 +227,14 @@ def test_a_live_sessions_reports_land_one_by_one_and_stop_between_chunks(monkeyp
     session = object.__new__(LiveChannelSession)
     session.bridge = SimpleNamespace(pk=1)
     session._still_wanted = lambda: wanted[0]
-    real_fill = type(Handle.objects).fill_avatar
+    real_fill = Handle.objects.fill_avatar
 
-    def fill(manager: Any, report: AvatarReport) -> bool:
+    def fill(report: AvatarReport) -> bool:
         if report.platform == "broken":
             raise RuntimeError("storage unavailable")
-        return real_fill(manager, report)
+        return real_fill(report)
 
-    monkeypatch.setattr(type(Handle.objects), "fill_avatar", fill)
+    monkeypatch.setattr(Handle.objects, "fill_avatar", fill)
     broken = AvatarReport(platform="broken", value="x", external_id="", avatar=PNG_BYTES)
 
     assert LiveChannelSession._fill_avatars(session, [broken, _report(PNG_BYTES)]) is True

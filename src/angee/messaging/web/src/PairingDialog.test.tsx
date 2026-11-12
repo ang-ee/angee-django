@@ -4,7 +4,7 @@ import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/re
 import type { RecordChromeContext } from "@angee/ui";
 import { ActionMenu } from "@angee/ui";
 import * as React from "react";
-import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
+import { beforeEach, describe, expect, test, vi } from "vitest";
 
 import type { PairingSnapshot } from "./PairingDialog";
 
@@ -59,10 +59,6 @@ vi.mock("@angee/refine", async (importOriginal) => ({
 
 vi.mock("@angee/ui", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@angee/ui")>()),
-  createNamespaceT:
-    (_namespace: string, messages: Record<string, string>) => () =>
-      (key: string) =>
-        messages[key] ?? key,
   useActionResultMutation: (
     field: string,
     options?: { invalidateModels?: readonly string[] },
@@ -103,18 +99,6 @@ vi.mock("@angee/ui", async (importOriginal) => ({
   FieldControl: (props: React.InputHTMLAttributes<HTMLInputElement>) => <input {...props} />,
 }));
 
-vi.mock("./i18n", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./i18n")>();
-  return {
-    ...actual,
-    useMessagingT: () => (key: string) => {
-      const message = actual.enMessagingMessages[key];
-      if (message === undefined) throw new Error(`Missing messaging message: ${key}`);
-      return message;
-    },
-  };
-});
-
 import { ChannelPairingAction, PairingDialog } from "./PairingDialog";
 
 const lifecycleIs = (expected: string) =>
@@ -122,8 +106,6 @@ const lifecycleIs = (expected: string) =>
     String(record.lifecycle ?? "").toLowerCase() === expected;
 
 describe("PairingDialog", () => {
-  afterEach(cleanup);
-
   beforeEach(() => {
     mocks.pairing = {
       state: "STARTING",
@@ -392,8 +374,6 @@ describe("PairingDialog", () => {
 });
 
 describe("ChannelPairingAction", () => {
-  afterEach(cleanup);
-
   beforeEach(() => {
     mocks.pairing = {
       state: "STARTING",

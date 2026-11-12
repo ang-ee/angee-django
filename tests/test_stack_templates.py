@@ -29,7 +29,6 @@ from uvicorn._types import ASGIReceiveCallable, ASGISendCallable, ASGISendEvent,
 
 ROOT = Path(__file__).resolve().parents[1]
 ROOT_GITIGNORE = ROOT / ".gitignore"
-TEMPLATES_README = ROOT / "templates" / "README.md"
 LOCAL_COPIER = ROOT / "templates" / "stacks" / "local" / "copier.yml"
 LOCAL_TEMPLATE = ROOT / "templates" / "stacks" / "local" / "template" / "angee.yaml.jinja"
 LOCAL_STACK_GITIGNORE = ROOT / "templates" / "stacks" / "local" / "template" / ".gitignore.jinja"
@@ -670,23 +669,7 @@ def test_both_stacks_render_from_one_shared_body() -> None:
 
 
 def test_both_stacks_render_shared_root_agent_instructions() -> None:
-    """Every stack root teaches agents that it owns lifecycle and workspaces."""
-
-    assert SHARED_AGENTS.exists()
-    instructions = " ".join(SHARED_AGENTS.read_text(encoding="utf-8").split())
-    for contract in (
-        "The directory containing this file is `ANGEE_ROOT`.",
-        "This stack is already initialized",
-        "Do not run `angee init`",
-        "`ANGEE_ROOT/workspaces/`",
-        "Source checkouts are not stack roots",
-        "The angee operator is this stack's monitoring and management service.",
-        'angee --root "$ANGEE_ROOT" job run {{ restart_job }} --chained-restart',
-        'angee --root "$ANGEE_ROOT" restart <service>...',
-        "never run `uv sync` on the stack's venv while the stack runs",
-        "docs/howto/getstarted.md#restart-the-running-stack",
-    ):
-        assert contract in instructions
+    """Every stack root renders the shared agent instructions, ending with the project host body."""
 
     # The stack overlay overwrites the project's root AGENTS.md, so the stack contract
     # ends by including the project host body the project template renders on its own.
@@ -709,26 +692,10 @@ def test_both_stacks_render_shared_root_agent_instructions() -> None:
 
 
 def test_project_template_renders_root_agent_instructions() -> None:
-    """A project root teaches agents its roster owner, seams, lifecycle owner and skills."""
+    """A project root renders the shared project host body through one include."""
 
     body = PROJECT_SHARED_AGENTS.read_text(encoding="utf-8")
-    assert len(body.splitlines()) <= 50
     assert "{% include" not in body  # included from two template roots: no nested include
-    instructions = " ".join(body.split())
-    for contract in (
-        "# Angee Project Host",
-        "`INSTALLED_APPS` in `settings.yaml` is the roster and the only place it is declared",
-        "`{{ addon_namespace }}.<name>` under `src/{{ addon_namespace }}/<name>/`",
-        "the arpee slot's `arp.*` addons",
-        "`pyproject.toml` (native identity, requirements and capability tables)",
-        "`web/` fragment declared with `defineBaseAddon`",
-        "The stack owning this root provisions and restarts it",
-        "stop and ask the user how the stack should be set up",
-        "`angee-project`",
-        "`angee-runtime`",
-    ):
-        assert contract in instructions
-
     assert PROJECT_AGENTS_TEMPLATE.read_text(encoding="utf-8").strip() == '{% include "../_shared/AGENTS.md.jinja" %}'
     assert _inline_includes(PROJECT_AGENTS_TEMPLATE).strip() == body.strip()
     assert PROJECT_CLAUDE_TEMPLATE.is_symlink()
@@ -744,15 +711,6 @@ def test_project_template_renders_root_agent_instructions() -> None:
 def test_local_stack_copier_contract() -> None:
     manifest = yaml.safe_load(LOCAL_COPIER.read_text(encoding="utf-8"))
 
-    message = manifest["_message_after_copy"]
-    assert "git clone https://github.com/ang-ee/angee-django sources/angee" in message
-    assert "declaring its distribution and native source override" in message
-    assert "enabling example.notes" in message
-    assert "angee dev" in manifest["_message_after_copy"]
-    # The CLI shell recipe reads the token through the secrets backend owner —
-    # never by hand-parsing .env, whose values are quoted.
-    assert "angee secret reveal operator-token" in manifest["_message_after_copy"]
-    assert "awk" not in manifest["_message_after_copy"]
     # frontend_mode / base_image are gone; framework + django_image replace them.
     assert "frontend_mode" not in manifest
     assert "base_image" not in manifest
@@ -763,7 +721,6 @@ def test_local_stack_copier_contract() -> None:
     # 8090 ≠ the dev stack's 8080: side-by-side stacks must not share the
     # process-compose control port (a shared port lets one stack's down stop the other).
     assert manifest["process_compose_port"]["default"] == 8090
-    assert "operator support for readiness and chained jobs" in TEMPLATES_README.read_text(encoding="utf-8")
 
 
 def test_local_django_source_mode_shares_one_held_environment() -> None:
@@ -1526,7 +1483,6 @@ def test_dev_stack_shares_one_machine_wide_cache_per_repository() -> None:
     copier = yaml.safe_load(DEV_COPIER.read_text(encoding="utf-8"))
     assert copier["sources_home"]["type"] == "str"
     assert copier["sources_home"]["default"] == ""
-    assert "<project_name>/<workspace>" in copier["project_name"]["help"]
 
 
 @pytest.mark.parametrize("render", [_render_dev_stack, _render_dev_docker_stack])

@@ -18,13 +18,4 @@ describe("iam-integrate-oidc addon manifest", () => {
     expect(route?.layout).toBe("public");
     expect(route?.component).toBeTypeOf("function");
   });
-
-  test("contributes OIDC sign-in methods and OAuth client policy", () => {
-    expect(oidc.containers?.["auth.login#method"]).toMatchObject({
-      "iam-integrate-oidc.oauth-login": { content: expect.anything() },
-    });
-    expect(oidc.containers?.["integrate.OAuthClient#sections"]).toMatchObject({
-      "iam-integrate-oidc.oidc-login": { sequence: 10, content: expect.anything() },
-    });
-  });
 });

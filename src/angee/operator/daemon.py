@@ -9,6 +9,7 @@ from datetime import datetime
 from typing import Any, cast
 from urllib.parse import quote, urlencode, urlsplit, urlunsplit
 
+import httpx2
 from django.conf import settings
 from django.core.cache import cache
 from django.core.exceptions import ValidationError
@@ -491,6 +492,9 @@ class OperatorDaemon:
             )
         except RequestNotSentError as error:
             raise OperatorDaemonError(error.public_message) from error
+        except httpx2.TransportError as error:
+            message = "The operator daemon did not answer; the request's outcome is unknown."
+            raise OperatorDaemonError(message) from error
         if not response.is_success:
             raise OperatorDaemonError.from_response(method, url, response.status_code, response.content)
         return response.json() if response.content else None

@@ -15,7 +15,7 @@ from tests.conftest import create_platform_admin, create_user, vault_for
 
 
 @pytest.fixture
-def people(composed_tables):
+def people(db):
     requester, reviewer, other, outsider = (
         create_user(name) for name in ("requester", "reviewer", "other", "outsider")
     )

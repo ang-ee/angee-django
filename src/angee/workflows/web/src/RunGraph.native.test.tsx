@@ -5,14 +5,13 @@ import { createAngeeChangeLiveProvider } from "@angee/refine";
 import { createRefineTestProviders } from "@angee/refine/testing";
 import { RUN_GRAPH_INSPECTOR_TAB } from "./RunGraph";
 import { RunGraphStory } from "./RunGraph.stories";
-import type { RunRequest } from "./RunsPage.stories";
+import type { GraphQLWireRequest } from "@angee/storybook/testing";
 import { RUN_MODEL } from "./documents.console";
 import { mappedRunGraphFixture } from "./testing";
 
 beforeAll(() => {
   class ResizeObserverStub { observe(): void {} unobserve(): void {} disconnect(): void {} }
   vi.stubGlobal("ResizeObserver", ResizeObserverStub);
-  Element.prototype.getAnimations ??= () => [];
 });
 const { createClient, clearClients } = createRefineTestProviders();
 afterEach(() => { cleanup(); clearClients(); });
@@ -44,7 +43,7 @@ test("an inactive graph sends no request and publishes no inspector", async () =
   expect(screen.getByTestId("shell-chatter").getAttribute("data-tab-ids")).toBe("");
   fireEvent.click(screen.getByRole("button", { name: "Show graph" }));
   await screen.findByTestId("rf__node-inspect");
-  expect(requests.mock.calls.filter(([request]) => request.query.includes("WorkflowRunGraph"))).toHaveLength(1);
+  expect(requests.mock.calls.filter(([request]) => request.operationName === "WorkflowRunGraph")).toHaveLength(1);
 });
 
 test("retained tabs preserve the canvas and selection while withdrawing their inspector", async () => {
@@ -61,21 +60,21 @@ test("retained tabs preserve the canvas and selection while withdrawing their in
 });
 
 test("a map inspector shows complete progress and filters the node and its items", async () => {
-  const requests: RunRequest[] = [];
+  const requests: GraphQLWireRequest[] = [];
   render(<RunGraphStory graph={mappedRunGraphFixture()} onRequest={(request) => requests.push(request)} />);
   const node = await screen.findByTestId("rf__node-reviews");
   expect(node.textContent).toContain("Waiting");
   expect(node.textContent).toContain("119/122");
   fireEvent.click(await screen.findByTestId("rf__node-reviews"));
-  await waitFor(() => expect(requests.some(({ query }) => /\bsteprun\s*\(/.test(query))).toBe(true));
+  await waitFor(() => expect(requests.some(({ fields }) => fields.includes("steprun"))).toBe(true));
   // `_and` is commutative; the shared filter owner decides clause order.
-  const where = requests.find(({ query }) => /\bsteprun\s*\(/.test(query))?.variables.where as { _and: unknown[] };
+  const where = requests.find(({ fields }) => fields.includes("steprun"))?.variables.where as { _and: unknown[] };
   expect(where._and).toHaveLength(2);
   expect(where._and).toEqual(expect.arrayContaining([
     { run: { _eq: "wfr_review" } }, { node_key: { _in: ["reviews", "reviews.body"] } },
   ]));
   expect(screen.queryByRole("dialog", { name: "Step Run" })).toBeNull();
-  const query = requests.find(({ query }) => query.includes("WorkflowRunGraph"))!.query;
+  const query = requests.find(({ operationName }) => operationName === "WorkflowRunGraph")!.query;
   expect(query).not.toMatch(/\b(input|output|state|stacktrace)\b/);
 });
 
@@ -94,12 +93,12 @@ test("committed run changes refetch once while preserving the canvas and node UR
   };
   const liveProvider = createAngeeChangeLiveProvider(socket, [{ schemaName: "console", modelLabel: RUN_MODEL,
     roots: { list: "workflowrun", changes: "workflowRunChanged" } }], { queryClient: client });
-  const requests: RunRequest[] = [];
+  const requests: GraphQLWireRequest[] = [];
   render(<RunGraphStory retained initialEntry="/workflows/runs/wfr_review?node=inspect"
     liveProvider={liveProvider} queryClient={client} onRequest={(request) => requests.push(request)} />);
   const canvas = await screen.findByTestId("run-graph-canvas");
   await waitFor(() => expect(change).toBeTypeOf("function"));
-  const reads = () => requests.filter(({ query }) => query.includes("WorkflowRunGraph")).length;
+  const reads = () => requests.filter(({ operationName }) => operationName === "WorkflowRunGraph").length;
   expect(reads()).toBe(1);
   await act(async () => { change!("wfr_review"); });
   await waitFor(() => expect(reads()).toBe(2));

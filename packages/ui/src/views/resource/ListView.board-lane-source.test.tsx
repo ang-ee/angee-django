@@ -10,7 +10,7 @@ import {
   type Row,
 } from "@angee/metadata";
 import type { ReactNode } from "react";
-import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
+import { beforeEach, describe, expect, test, vi } from "vitest";
 
 import type { BoardViewProps } from "./BoardView";
 import type { ColumnDescriptor } from "../page";
@@ -36,11 +36,6 @@ const harness = vi.hoisted(() => ({
   toast: {
     danger: vi.fn(),
   },
-}));
-
-vi.mock("../../i18n", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../i18n")>()),
-  useUiT: () => (key: string) => key,
 }));
 
 vi.mock("../../feedback", async (importOriginal) => ({
@@ -127,8 +122,6 @@ beforeEach(() => {
   harness.refetch.mockReset();
   harness.toast.danger.mockReset();
 });
-
-afterEach(cleanup);
 
 describe("ListView board laneSource", () => {
   test("derives board lanes from the relation source in server order with empty lanes", async () => {
@@ -439,7 +432,7 @@ describe("ListView board laneSource", () => {
     await waitFor(() => {
       expect(
         harness.boardProps?.groups.find((group) => group.key === "stg_hidden")?.label,
-      ).toBe("list.unknownValue");
+      ).toBe("Unknown");
     });
   });
 
@@ -479,7 +472,7 @@ describe("ListView board laneSource", () => {
       expect(rowIdsByLane().stg_new).toEqual(["led_1"]);
     });
     expect(harness.toast.danger).toHaveBeenCalledWith({
-      title: "board.moveFailed",
+      title: "Could not move card",
       description: "write rejected",
     });
     expect(harness.refetch).toHaveBeenCalledTimes(1);

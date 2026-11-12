@@ -7,7 +7,8 @@ from typing import Any
 import pytest
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
-from django.test.utils import isolate_apps
+from django.db import connection
+from django.test.utils import CaptureQueriesContext, isolate_apps
 from rebac import system_context
 
 from angee.base.managers import AngeeManager
@@ -16,14 +17,12 @@ from angee.messaging.testing.models import Handle, Organization, Party
 from angee.parties.managers import PartyQuerySet
 from tests.tables import model_tables
 
-pytestmark = pytest.mark.django_db(transaction=True)
-
 
 @pytest.mark.parametrize("refresh", [False, True])
-def test_handle_upsert_bounds_source_display_text(composed_tables: None, refresh: bool) -> None:
+def test_handle_upsert_bounds_source_display_text(db: None, refresh: bool) -> None:
     """Create and refresh share the model-declared display-name and label limits."""
 
-    del composed_tables
+    del db
     with system_context(reason="test bounded handle text"):
         prior = Handle.objects.upsert(platform="email", value="bounded@example.test") if refresh else None
         fields = {name: "é" * (Handle._meta.get_field(name).max_length + 1) for name in ("display_name", "label")}
@@ -36,10 +35,10 @@ def test_handle_upsert_bounds_source_display_text(composed_tables: None, refresh
 
 
 @pytest.mark.parametrize("field", ["value", "external_id"])
-def test_handle_upsert_refuses_oversized_identifiers(composed_tables: None, field: str) -> None:
+def test_handle_upsert_refuses_oversized_identifiers(db: None, field: str) -> None:
     """Unlandable identities raise field validation instead of changing their key."""
 
-    del composed_tables
+    del db
     fields = {"value": "bounded@example.test", "external_id": "stable-id"}
     fields[field] = "x" * (Handle._meta.get_field(field).max_length + 1)
     with system_context(reason="test invalid handle identifiers"):
@@ -50,10 +49,10 @@ def test_handle_upsert_refuses_oversized_identifiers(composed_tables: None, fiel
     assert not Handle._base_manager.exists()
 
 
-def test_handle_upsert_refuses_normalization_that_exceeds_its_field(composed_tables: None) -> None:
+def test_handle_upsert_refuses_normalization_that_exceeds_its_field(db: None) -> None:
     """Unicode case normalization may expand an otherwise column-sized identity."""
 
-    del composed_tables
+    del db
     value = "İ" * Handle._meta.get_field("value").max_length
     with system_context(reason="test invalid normalized handle"):
         with pytest.raises(ValidationError) as refused:
@@ -63,10 +62,10 @@ def test_handle_upsert_refuses_normalization_that_exceeds_its_field(composed_tab
 
 
 @pytest.fixture
-def owner(composed_tables: None) -> Any:
+def owner(db: None) -> Any:
     """Create an ordinary actor after the parties test graph is prepared."""
 
-    del composed_tables
+    del db
     return get_user_model().objects.create_user(username="party-lookup-owner")
 
 
@@ -169,6 +168,7 @@ def test_named_respects_the_legal_name_owners_read_scope(owner: Any) -> None:
     assert not Party.objects.with_actor(owner).named("Northstar Studio").exists()
 
 
+@pytest.mark.django_db(transaction=True)
 def test_named_excludes_archived_rows_in_an_archivable_composition(owner: Any) -> None:
     """An archive-aware party queryset composes its native archive predicate."""
 
@@ -248,3 +248,28 @@ def test_confirmed_preserves_actor_scope(owner: Any) -> None:
         party.with_actor(other).confirm(aspect="handle", handle=handle, values={})
 
     assert not Handle.objects.with_actor(owner).confirmed("email", handle.value).exists()
+
+
+@pytest.mark.parametrize("deferred", [False, True], ids=["loaded", "deferred-parent-fields"])
+def test_child_binds_parent_statements_without_a_query(owner: Any, deferred: bool) -> None:
+    """An MTI child's parent-declared statements bind the ancestor row without a query.
+
+    A GraphQL read defers parent columns it does not select; the ancestor still
+    binds by the child's primary key, so provenance reads cost only their own query.
+    """
+
+    with system_context(reason="test parent statements of a child"):
+        organization = Organization.objects.create(
+            display_name="Upcast Studio", legal_name="Upcast Legal", created_by=owner
+        )
+        organization.with_actor(owner).confirm(aspect="identity", values={"display_name": "Upcast Studio"})
+    rows = Organization.objects.with_actor(owner)
+    reader = (rows.only("pk", "legal_name") if deferred else rows).get(pk=organization.pk)
+
+    with CaptureQueriesContext(connection) as captured:
+        subjects = [manager.instance for manager in reader.statement_managers()]
+    assert captured.captured_queries == []
+    assert type(subjects[0]) is Party
+    assert all(subject.pk == organization.pk for subject in subjects)
+    with system_context(reason="test parent provenance of a child"):
+        assert list(reader.provenance("display_name").values_list("display_name", flat=True)) == ["Upcast Studio"]

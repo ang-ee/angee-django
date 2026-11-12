@@ -67,7 +67,6 @@ def body_rows(run):
     return StepRun.system_queryset().filter(run=run, node_key="items.body").order_by("map_index")
 
 
-@pytest.mark.django_db(transaction=True)
 def test_step_change_concerns_deduplicate_run_evidence_without_loading_the_run(execution, register_step):
     """One item's publication retains sibling timelines and existing inherited views."""
     from tests.mtidemo.models import MtiChild, MtiParent
@@ -297,6 +296,7 @@ def test_waiting_body_consumes_a_slot_and_retry_keeps_its_index(execution, map_s
     assert all(row.rank == mapped.rank for row in body_rows(run))
 
 
+@pytest.mark.django_db(transaction=True)
 def test_operator_wait_in_a_body_requires_duplicate_acknowledgement(execution, map_steps, register_step, settings):
     actor, _sent = execution
     settings.ANGEE_WORKFLOW_MAP_CONCURRENCY = 1
@@ -362,6 +362,7 @@ def test_map_progress_and_body_identity_are_resource_owned(execution, map_steps,
     assert all(row["rank"] == mapped.rank and row["map_total"] == row["map_settled"] == 0 for row in bodies)
 
 
+@pytest.mark.django_db(transaction=True)
 def test_decision_map_body_has_independent_questions_and_typed_outputs(execution, map_steps, register_step):
     actor, sent = execution
     reviewer = create_user("map-reviewer")

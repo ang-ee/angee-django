@@ -12,13 +12,12 @@ from pathlib import Path
 from threading import Barrier
 from typing import Any
 from unittest.mock import patch
+from uuid import uuid4
 
 import pytest
 from django.contrib.auth import get_user_model
 from django.contrib.auth.models import AnonymousUser
-from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import SuspiciousFileOperation, ValidationError
-from django.core.management import call_command
 from django.db import close_old_connections, connection, connections, models, transaction
 from django.db.models.signals import post_save
 from django.db.utils import OperationalError
@@ -37,22 +36,34 @@ from rebac.actors import current_sudo_reason, to_subject_ref
 from rebac.errors import PermissionDenied
 from rebac.middleware import ActorMiddleware
 from rebac.roles import grant
-from strawberry.django.views import GraphQLView
 
 from angee.base.models.identity import public_id_of
 from angee.base.models.trash import ARCHIVE_FLAG_FIELD, ArchiveMixin, ArchiveQuerySet
 from angee.base.permissions import DirectRecordAccess
 from angee.graphql import records
 from angee.graphql.data.resource_fields import is_archive_field, is_trash_field
+from angee.graphql.schema import GraphQLSchemas
 from angee.graphql.testing.documents import execute_schema, result_data
 from angee.graphql.views import graphql_endpoint
 from angee.messaging.testing.models import Message, Part
+from angee.projects.testing.models import Project, Task
 from angee.storage import exceptions
 from angee.storage import models as storage_models
-from angee.storage.models import FileManager, UploadState
+from angee.storage.checks import check_derived_permissions
+from angee.storage.models import FileManager, FileQuerySet, FolderQuerySet, UploadState
 from angee.storage.signals import file_finalized
 from angee.storage_integrate.backends import LocalFolderBackend
-from tests.conftest import Backend, Drive, File, FileAttachment, Folder, MimeType, addon_schema, create_platform_admin
+from tests.conftest import (
+    Backend,
+    Drive,
+    File,
+    FileAttachment,
+    Folder,
+    MimeType,
+    SchemaAddon,
+    addon_schema,
+    create_platform_admin,
+)
 from tests.mtidemo.models import MtiChild, MtiParent
 from tests.scopedemo.models import NativeAttachmentTarget
 
@@ -191,7 +202,6 @@ def test_storage_masters_fold_their_archive_flag_onto_the_mixin() -> None:
     assert issubclass(Drive.objects.all().__class__, ArchiveQuerySet)
 
 
-@pytest.mark.django_db(transaction=True)
 def test_archive_queryset_scopes_partition_storage_rows(drive: Any) -> None:
     """``.archived()`` / ``.unarchived()`` split rows on the mixin flag."""
 
@@ -272,11 +282,10 @@ def test_fallback_attachment_name_derives_extension_from_mime() -> None:
 
 
 @pytest.fixture
-def drive(tmp_path: Path, transactional_db: None) -> Any:
+def drive(tmp_path: Path, db: None) -> Any:
     """Provide a local-backend drive owned by the ``alice`` test user."""
 
-    del transactional_db
-    call_command("rebac", "sync", verbosity=0)
+    del db
     alice = get_user_model().objects.create_user(username="storage-alice", email="alice@example.com")
     with system_context(reason="test storage setup"):
         backend = Backend._base_manager.create(
@@ -310,7 +319,6 @@ def image_drive(drive: Any) -> Any:
     return row
 
 
-@pytest.mark.django_db(transaction=True)
 @pytest.mark.parametrize("cached_drive", [False, True])
 @pytest.mark.parametrize("system", [False, True])
 def test_file_storage_fetches_uncached_drive_and_backend_in_one_query(
@@ -332,7 +340,6 @@ def test_file_storage_fetches_uncached_drive_and_backend_in_one_query(
         assert current_sudo_reason() == ("test storage resolution" if system else None)
 
 
-@pytest.mark.django_db(transaction=True)
 @pytest.mark.parametrize("system", [False, True])
 def test_drive_storage_fetches_only_an_uncached_backend(
     drive: Any, django_assert_num_queries: Any, system: bool
@@ -367,18 +374,16 @@ def _proxy_upload(drive: Any, payload: bytes, **draft_kwargs: Any) -> Any:
         return fresh.finalize(expected_hash=hashlib.sha256(payload).hexdigest(), expected_size=len(payload))
 
 
-@pytest.mark.django_db(transaction=True)
-def test_file_attachment_locks_a_native_rebac_target(composed_tables: None) -> None:
+def test_file_attachment_locks_a_native_rebac_target(db: None) -> None:
     """The generic target lock does not require an Angee queryset or model base."""
 
-    del composed_tables
+    del db
     with system_context(reason="test native attachment target"):
         target = NativeAttachmentTarget.objects.create()
         with transaction.atomic():
             FileAttachment.objects._lock_target(generic_target(target))
 
 
-@pytest.mark.django_db(transaction=True)
 def test_file_attachment_scopes_chain_on_a_narrowed_selection(drive: Any) -> None:
     """Record and same-content scopes are queryset predicates, so a filtered selection keeps them."""
 
@@ -400,41 +405,16 @@ def test_file_attachment_scopes_chain_on_a_narrowed_selection(drive: Any) -> Non
 
 
 @pytest.mark.django_db(transaction=True)
-def test_file_attachment_attach_converges_across_mti_levels(tmp_path: Path, drive: Any) -> None:
-    """attach() keys the file edge on the canonical (topmost REBAC-typed) MTI target.
-
-    ``mtidemo``'s gated MTI pair stands in for ``parties.Person`` IS-A ``parties.Party``:
-    attaching a file at the child and at the parent converge on one canonical edge keyed to
-    the parent content type, so a child-side write is found by a parent-side read — the
-    ``storage.FileAttachment`` mirror of the tag/chatter canon.
-    """
-
-    del tmp_path
-    file = _proxy_upload(drive, PNG_BYTES)
-    with system_context(reason="file attachment mti"):
-        child = MtiChild.objects.create(title="Acme", detail="org")
-        parent = MtiParent.objects.get(pk=child.pk)
-        via_child = FileAttachment.objects.attach(file, child, label="child write")
-        via_parent = FileAttachment.objects.attach(file, parent)
-
-        # Both addresses converge on one edge keyed to the parent content type.
-        assert via_child.pk == via_parent.pk
-        assert via_child.content_type == ContentType.objects.get_for_model(MtiParent)
-        assert via_child.object_id == child.pk
-        assert FileAttachment._base_manager.count() == 1
-
-
-@pytest.mark.django_db(transaction=True)
 @pytest.mark.skipif(
     connection.vendor != "postgresql",
     reason="PostgreSQL canonical attachment-target serialization contract",
 )
 def test_file_attachment_attach_serializes_on_canonical_target(
-    tmp_path: Path, drive: Any, composed_permissions: None,
+    tmp_path: Path, drive: Any,
 ) -> None:
     """A reviewed target lock fences concurrent changes to its complete File set."""
 
-    del tmp_path, composed_permissions
+    del tmp_path
     file = _proxy_upload(drive, PNG_BYTES)
     reviewer = create_platform_admin("storage-attachment-reviewer")
     with system_context(reason="file attachment serialization setup"):
@@ -468,7 +448,6 @@ def test_file_attachment_attach_serializes_on_canonical_target(
     assert attachment.object_id == child.pk
 
 
-@pytest.mark.django_db(transaction=True)
 def test_proxy_upload_flow_verifies_bytes_and_dedups(tmp_path: Path, drive: Any) -> None:
     """Begin, push, and finalize converge on a READY row; identical bytes dedup."""
 
@@ -526,7 +505,6 @@ def test_finalize_publishes_once_when_stale_instance_loses_ready_race(drive: Any
     assert seen == [row.pk]
 
 
-@pytest.mark.django_db(transaction=True)
 def test_finalize_emits_post_save_for_change_feed(drive: Any) -> None:
     """The DRAFT->READY conditional update still reaches post_save publishers."""
 
@@ -557,7 +535,6 @@ def test_finalize_emits_post_save_for_change_feed(drive: Any) -> None:
     assert frozenset({"content_hash", "size_bytes", "mime_type", "upload_state", "updated_at"}) in seen
 
 
-@pytest.mark.django_db(transaction=True)
 def test_proxy_upload_token_is_one_shot(drive: Any) -> None:
     """A consumed upload token cannot push bytes twice."""
 
@@ -569,7 +546,6 @@ def test_proxy_upload_token_is_one_shot(drive: Any) -> None:
             File.objects.for_upload_token(token).receive_bytes(BytesIO(b"second"))
 
 
-@pytest.mark.django_db(transaction=True)
 def test_finalize_rejects_mismatched_bytes(tmp_path: Path, drive: Any) -> None:
     """A hash mismatch fails the row and removes the backend object."""
 
@@ -588,7 +564,6 @@ def test_finalize_rejects_mismatched_bytes(tmp_path: Path, drive: Any) -> None:
     assert not (tmp_path / row.storage_path).exists()
 
 
-@pytest.mark.django_db(transaction=True)
 def test_proxy_upload_enforces_the_byte_cap(tmp_path: Path, drive: Any, settings: Any) -> None:
     """A body above ANGEE_STORAGE_PROXY_UPLOAD_MAX_BYTES is rejected and cleaned up."""
 
@@ -603,7 +578,6 @@ def test_proxy_upload_enforces_the_byte_cap(tmp_path: Path, drive: Any, settings
     assert not (tmp_path / row.storage_path).exists()
 
 
-@pytest.mark.django_db(transaction=True)
 def test_other_users_cannot_target_the_drive(drive: Any) -> None:
     """An unrelated user cannot draft files into someone else's drive."""
 
@@ -612,7 +586,6 @@ def test_other_users_cannot_target_the_drive(drive: Any) -> None:
         File.objects.draft(filename="nope.bin", drive_id=str(drive.sqid))
 
 
-@pytest.mark.django_db(transaction=True)
 def test_upload_rejects_folders_from_other_drives(tmp_path: Path, drive: Any) -> None:
     """draft refuses a folder that does not belong to the target drive."""
 
@@ -633,7 +606,6 @@ def test_upload_rejects_folders_from_other_drives(tmp_path: Path, drive: Any) ->
         )
 
 
-@pytest.mark.django_db(transaction=True)
 def test_upload_naming_only_a_folder_targets_its_drive(tmp_path: Path, drive: Any) -> None:
     """draft resolves the drive from a named folder the actor can read."""
 
@@ -677,6 +649,35 @@ def test_soft_delete_trash_restore_and_purge(tmp_path: Path, drive: Any) -> None
         row.purge()
     assert not File._base_manager.filter(content_hash=PNG_SHA256).exists()
     assert not (tmp_path / storage_path).exists()
+
+
+def test_a_fragment_grant_cannot_reach_a_trashed_file(drive: Any) -> None:
+    """Fragments widen the granted arms; ``read``, ``write`` and ``share`` keep a trashed file for its deleters."""
+
+    editor = get_user_model().objects.create_user(username="storage-task-editor")
+    with system_context(reason="test storage fragment grant"):
+        project = Project.objects.create(title="Files", owner=drive.alice)
+        task = Task.objects.create(title="Spec", project=project, owner=drive.alice)
+        row = File.objects.create(
+            drive=drive, filename="spec.txt", content_hash="a" * 64, storage_path="spec.txt",
+            visibility=storage_models.FileVisibility.RECORD, owner=drive.alice, upload_state=UploadState.READY,
+        )
+        FileAttachment.objects.attach(row, task)
+        write_relationships([
+            RelationshipTuple(resource=to_object_ref(project), relation="editor", subject=to_subject_ref(editor)),
+        ])
+
+    def reach(user: Any) -> tuple[bool, ...]:
+        bound = row.with_actor(user)
+        listed = File.objects.with_actor(user).filter(pk=row.pk).exists()
+        return (*(bound.has_access(action) for action in ("read", "write", "share")), listed)
+
+    assert reach(editor) == reach(drive.alice) == (True, True, True, True)
+    with actor_context(drive.alice):
+        File.objects.get(pk=row.pk).delete()
+    assert reach(editor) == (False, False, False, False)
+    assert reach(drive.alice) == (True, True, True, True)
+    assert check_derived_permissions() == []
 
 
 def test_storage_resource_metadata_exposes_delete_previews() -> None:
@@ -734,7 +735,6 @@ def test_storage_delete_preview_requires_delete_permission(drive: Any, resource:
     assert type(target).objects.as_user(drive.alice).filter(pk=target.pk).exists()
 
 
-@pytest.mark.django_db(transaction=True)
 def test_storage_graphql_custom_mutations_accept_public_ids(drive: Any) -> None:
     """Custom storage mutations resolve raw sqids at the GraphQL boundary."""
 
@@ -843,7 +843,6 @@ def test_storage_graphql_purge_accepts_public_id(tmp_path: Path, drive: Any) -> 
     assert not (tmp_path / storage_path).exists()
 
 
-@pytest.mark.django_db(transaction=True)
 def test_create_drive_gates_on_the_rebac_create_rule(drive: Any) -> None:
     """The ``storage/drive`` ``create`` rule authorizes admins and denies others.
 
@@ -856,8 +855,7 @@ def test_create_drive_gates_on_the_rebac_create_rule(drive: Any) -> None:
     unprivileged actor — a member of neither ``angee/role:admin`` nor
     ``storage/role:storage_admin`` — is denied with ``PermissionDenied`` and an
     anonymous request resolves no actor. (The storage_admin reach of the ``manager``
-    arm is probed tuple-free in
-    ``test_storage_admin_role_reaches_manager_gated_rows_tuple_free``.)
+    arm is decided in ``test_the_policy_decides_every_storage_permission``.)
     """
 
     admin = create_platform_admin(
@@ -879,40 +877,6 @@ def test_create_drive_gates_on_the_rebac_create_rule(drive: Any) -> None:
         assert not Drive._base_manager.filter(slug__in=["bob-drive", "anon-drive"]).exists()
 
 
-@pytest.mark.django_db(transaction=True)
-def test_storage_admin_role_reaches_manager_gated_rows_tuple_free(drive: Any) -> None:
-    """A ``storage_admin`` grant opens the const-backed ``manager`` arm tuple-free.
-
-    ``storage/backend`` and ``storage/drive`` reach every effective member of
-    ``storage/role:storage_admin`` through ``manager->effective_member`` (the F-g
-    const canon). The role grant is the *only* row written — no per-object
-    ``manager`` tuple — so the reach flips on membership alone, and a
-    non-owning/non-admin actor is denied until granted.
-    """
-
-    from rebac.models import active_relationship_model
-
-    manager_user = get_user_model().objects.create_user(username="storage-manager", email="storage-manager@example.com")
-
-    with actor_context(manager_user):
-        assert not drive.backend.has_access("read")
-        assert not drive.has_access("read")
-
-    grant(actor=manager_user, role="storage/role:storage_admin")
-
-    with actor_context(manager_user):
-        for action in ("read", "write", "delete"):
-            assert drive.backend.has_access(action), f"backend {action}"
-            assert drive.has_access(action), f"drive {action}"
-
-    # Tuple-free: the grant wrote a role membership, never a backend/drive tuple.
-    with system_context(reason="probe manager reach is tuple-free"):
-        assert not (
-            active_relationship_model().objects.filter(resource_type__in=["storage/backend", "storage/drive"]).exists()
-        )
-
-
-@pytest.mark.django_db(transaction=True)
 def test_create_drive_graphql_surface_is_de_elevated(drive: Any) -> None:
     """The de-elevated console Hasura insert creates for a platform admin.
 
@@ -945,7 +909,6 @@ def test_create_drive_graphql_surface_is_de_elevated(drive: Any) -> None:
         assert Drive._base_manager.filter(slug="gql-drive").exists()
 
 
-@pytest.mark.django_db(transaction=True)
 def test_folder_tree_invariants(drive: Any) -> None:
     """Root names are unique per drive and a folder cannot contain itself."""
 
@@ -969,7 +932,6 @@ def test_folder_tree_invariants(drive: Any) -> None:
         assert root.parent_id is None
 
 
-@pytest.mark.django_db(transaction=True)
 def test_dedup_restores_a_trashed_hit(drive: Any) -> None:
     """draft with a known hash revives the trashed row instead of dooming it."""
 
@@ -987,7 +949,6 @@ def test_dedup_restores_a_trashed_hit(drive: Any) -> None:
     assert not dedup.is_trashed
 
 
-@pytest.mark.django_db(transaction=True)
 def test_ingest_dedup_grants_read_reach_to_second_owner(drive: Any) -> None:
     """A dedup hit reports no creation and grants the requested owner reach to the existing READY row."""
 
@@ -1012,7 +973,6 @@ def test_ingest_dedup_grants_read_reach_to_second_owner(drive: Any) -> None:
         assert File.objects.filter(pk=first.pk).exists()
 
 
-@pytest.mark.django_db(transaction=True)
 def test_file_purge_if_unretained_removes_only_an_unshared_unchanged_unattached_row(drive: Any) -> None:
     """A creation flag never authorizes the purge alone: an edit, a dedup share or an attachment keeps the row."""
 
@@ -1036,7 +996,6 @@ def test_file_purge_if_unretained_removes_only_an_unshared_unchanged_unattached_
     assert remaining == {edited.pk, shared.pk, attached.pk}
 
 
-@pytest.mark.django_db(transaction=True)
 def test_file_purge_if_unretained_requires_delete_outside_a_system_scope(drive: Any) -> None:
     """An actor without delete on the file cannot discard it, and the row stays."""
 
@@ -1048,7 +1007,6 @@ def test_file_purge_if_unretained_requires_delete_outside_a_system_scope(drive: 
     assert File._base_manager.filter(pk=row.pk).exists()
 
 
-@pytest.mark.django_db(transaction=True)
 def test_ingest_image_takes_raster_bytes_and_refuses_script_or_oversized_content(
     image_drive: Any, settings: Any
 ) -> None:
@@ -1067,7 +1025,6 @@ def test_ingest_image_takes_raster_bytes_and_refuses_script_or_oversized_content
             File.objects.ingest_image(PNG_BYTES)
 
 
-@pytest.mark.django_db(transaction=True)
 def test_the_image_drive_is_provisioned_on_the_default_backend_at_first_use(drive: Any, settings: Any) -> None:
     """Images land wherever the deployment keeps its files, apart from them; without a default drive, nowhere."""
 
@@ -1092,7 +1049,6 @@ def test_the_image_drive_is_provisioned_on_the_default_backend_at_first_use(driv
             File.objects.ingest_image(PNG_BYTES)
 
 
-@pytest.mark.django_db(transaction=True)
 def test_an_image_an_acting_user_ingests_stays_ownerless_and_the_next_one_lands(image_drive: Any) -> None:
     """The drive owns its images: an acting user never owns one, so it never disqualifies the drive."""
 
@@ -1107,7 +1063,6 @@ def test_an_image_an_acting_user_ingests_stays_ownerless_and_the_next_one_lands(
         assert Drive.objects.image_drive().pk == image_drive.pk
 
 
-@pytest.mark.django_db(transaction=True)
 def test_an_image_drive_provisioned_before_it_owned_its_items_gains_that_at_its_next_use(image_drive: Any) -> None:
     """An earlier image drive keeps serving, and later images are ownerless."""
 
@@ -1118,7 +1073,6 @@ def test_an_image_drive_provisioned_before_it_owned_its_items_gains_that_at_its_
         assert File.objects.ingest_image(PNG_BYTES).owner_id is None
 
 
-@pytest.mark.django_db(transaction=True)
 @pytest.mark.parametrize("squatter", ["granted", "writable_by_everyone", "owned_file"])
 def test_a_drive_that_only_shares_the_image_drives_name_is_refused(drive: Any, squatter: str) -> None:
     """An operator's drive with the slug must not take avatars onto its files or its grantees' reach."""
@@ -1136,7 +1090,6 @@ def test_a_drive_that_only_shares_the_image_drives_name_is_refused(drive: Any, s
             File.objects.ingest_image(PNG_BYTES + b"\x00")
 
 
-@pytest.mark.django_db(transaction=True)
 def test_every_signed_in_user_reads_an_image_and_nothing_else_the_drive_opens(image_drive: Any) -> None:
     """The image drive's grant lets a user read an image, never write it; anonymous and private files stay shut."""
 
@@ -1152,7 +1105,6 @@ def test_every_signed_in_user_reads_an_image_and_nothing_else_the_drive_opens(im
         assert not File.objects.filter(pk=image.pk).exists()
 
 
-@pytest.mark.django_db(transaction=True)
 def test_drive_and_file_listings_leave_out_the_image_drive(image_drive: Any) -> None:
     """A user reads an image by its id, yet no listing or picker offers the drive's images as a gallery."""
 
@@ -1170,7 +1122,6 @@ def test_drive_and_file_listings_leave_out_the_image_drive(image_drive: Any) -> 
         ]
 
 
-@pytest.mark.django_db(transaction=True)
 def test_an_image_never_deduplicates_onto_a_users_file_with_the_same_bytes(image_drive: Any) -> None:
     """Deduplication stays within the image drive, so an avatar never shares a row with a private upload."""
 
@@ -1183,7 +1134,6 @@ def test_an_image_never_deduplicates_onto_a_users_file_with_the_same_bytes(image
     assert (private.drive_id, private.owner_id) == (image_drive.assets.pk, image_drive.alice.pk)
 
 
-@pytest.mark.django_db(transaction=True)
 def test_read_image_passes_on_only_an_image_the_image_rule_admits(image_drive: Any, settings: Any) -> None:
     """A file stored before the rule may be a script or oversized; reading it as an image refuses it."""
 
@@ -1198,7 +1148,6 @@ def test_read_image_passes_on_only_an_image_the_image_rule_admits(image_drive: A
             image.read_image()
 
 
-@pytest.mark.django_db(transaction=True)
 def test_create_folder_factory_gates_on_drive_write(drive: Any) -> None:
     """The factory creates for a drive writer and denies an unrelated user."""
 
@@ -1215,7 +1164,6 @@ def test_create_folder_factory_gates_on_drive_write(drive: Any) -> None:
         Folder.objects.create_in_drive(drive_id=str(drive.sqid), name="Sneaky")
 
 
-@pytest.mark.django_db(transaction=True)
 def test_file_placement_requires_a_real_folder_of_the_files_drive(drive: Any) -> None:
     """One placement rule refuses a row's folder and answers a draft's folder with its upload error."""
 
@@ -1243,7 +1191,6 @@ def test_file_placement_requires_a_real_folder_of_the_files_drive(drive: Any) ->
             File.objects.draft(filename="x.png", drive_id=str(drive.sqid), folder_id=str(smart.sqid))
 
 
-@pytest.mark.django_db(transaction=True)
 @pytest.mark.parametrize("kind", ["file", "folder"])
 def test_checked_storage_factories_preserve_field_validation(drive: Any, kind: str) -> None:
     before = File._base_manager.count(), Folder._base_manager.count()
@@ -1256,7 +1203,6 @@ def test_checked_storage_factories_preserve_field_validation(drive: Any, kind: s
     assert (File._base_manager.count(), Folder._base_manager.count()) == before
 
 
-@pytest.mark.django_db(transaction=True)
 def test_file_factory_preserves_foreign_key_validation(drive: Any) -> None:
     missing_owner_id = drive.alice.pk + 1_000_000
     assert not get_user_model()._base_manager.filter(pk=missing_owner_id).exists()
@@ -1267,7 +1213,6 @@ def test_file_factory_preserves_foreign_key_validation(drive: Any) -> None:
     assert not File._base_manager.exists()
 
 
-@pytest.mark.django_db(transaction=True)
 def test_file_factory_validates_hidden_constraint_rows_before_insert(drive: Any) -> None:
     """An admitted factory checks integrity against rows outside its caller's read scope."""
 
@@ -1294,7 +1239,6 @@ def test_file_factory_validates_hidden_constraint_rows_before_insert(drive: Any)
     assert hidden.filename == "hidden.txt" and hidden.content_hash == digest
 
 
-@pytest.mark.django_db(transaction=True)
 def test_file_draft_rebinds_returned_row_to_actor(drive: Any) -> None:
     """The draft factory returns an actor-bound row after the sudo insert."""
 
@@ -1307,7 +1251,6 @@ def test_file_draft_rebinds_returned_row_to_actor(drive: Any) -> None:
     assert row.created_by_id == drive.alice.pk
 
 
-@pytest.mark.django_db(transaction=True)
 def test_bulk_delete_is_refused(drive: Any) -> None:
     """A queryset delete cannot bypass soft-trash and orphan backend bytes."""
 
@@ -1316,7 +1259,6 @@ def test_bulk_delete_is_refused(drive: Any) -> None:
         File.objects.all().delete()
 
 
-@pytest.mark.django_db(transaction=True)
 def test_proxy_upload_view_streams_for_actor_and_rejects_reuse_and_anon(drive: Any) -> None:
     """The proxy view maps the actor + token to a stream, then refuses reuse/anon.
 
@@ -1454,18 +1396,16 @@ def _header_values(value: str) -> set[str]:
     return {part.strip().lower() for part in value.split(",")}
 
 
-@pytest.mark.django_db(transaction=True)
-def test_users_get_a_trash_smart_folder(transactional_db: None) -> None:
+def test_users_get_a_trash_smart_folder(db: None) -> None:
     """Creating a user creates exactly one owned Trash smart folder."""
 
-    del transactional_db
+    del db
     user = get_user_model().objects.create_user(username="storage-carol", email="carol@example.com")
     folders = Folder._base_manager.filter(owner=user, is_virtual=True)
     assert [folder.smart_kind for folder in folders] == [Folder.SmartKind.TRASH]
     assert folders.get().drive_id is None
 
 
-@pytest.mark.django_db(transaction=True)
 @pytest.mark.parametrize("schema_name", ["public", "console"])
 def test_folder_kind_projects_native_null_and_enum(drive: Any, schema_name: str) -> None:
     """Real folders persist absence as NULL and smart folders expose their enum."""
@@ -1483,15 +1423,14 @@ def test_folder_kind_projects_native_null_and_enum(drive: Any, schema_name: str)
         }
 
 
-@pytest.mark.django_db(transaction=True)
 def test_backend_storage_cache_tracks_resolved_env_config(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
-    transactional_db: None,
+    db: None,
 ) -> None:
     """Environment-backed backend config changes produce a new storage instance."""
 
-    del transactional_db
+    del db
     Backend._storage_cache.clear()
     monkeypatch.setenv("ANGEE_TEST_STORAGE_ROOT", str(tmp_path / "one"))
     with system_context(reason="test storage setup"):
@@ -1511,36 +1450,34 @@ def test_backend_storage_cache_tracks_resolved_env_config(
     assert Path(second.location) == tmp_path / "two"
 
 
-@pytest.mark.django_db(transaction=True)
 def test_backend_storage_cache_is_bounded(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
-    transactional_db: None,
+    db: None,
 ) -> None:
     """The process cache evicts old resolved backend instances."""
 
-    del transactional_db
+    del db
 
-    monkeypatch.setattr(storage_models, "_STORAGE_CACHE_MAX_SIZE", 2)
+    bound = storage_models._STORAGE_CACHE_MAX_SIZE
     Backend._storage_cache.clear()
     with system_context(reason="test storage setup"):
-        backends = [
-            Backend._base_manager.create(
+        backends = Backend._base_manager.bulk_create(
+            Backend(
                 slug=f"bounded-{index}",
                 label=f"Bounded {index}",
                 backend_class="local",
                 backend_config={"root": str(tmp_path / str(index)), "base_url": "/media/"},
             )
-            for index in range(3)
-        ]
+            for index in range(bound + 1)
+        )
 
     for backend in backends:
         backend.storage
 
-    assert len(Backend._storage_cache) == 2
+    assert len(Backend._storage_cache) == bound
 
 
-@pytest.mark.django_db(transaction=True)
 def test_ingest_stream_dedup_does_not_consume_the_reader(drive: Any) -> None:
     """A READY content hit returns before touching the caller's stream."""
 
@@ -1574,7 +1511,6 @@ def test_ingest_stream_dedup_does_not_consume_the_reader(drive: Any) -> None:
     assert File._base_manager.filter(drive=drive).count() == 1
 
 
-@pytest.mark.django_db(transaction=True)
 def test_ingest_stream_rejects_a_hash_mismatch_and_discards_bytes(
     tmp_path: Path,
     drive: Any,
@@ -1597,7 +1533,6 @@ def test_ingest_stream_rejects_a_hash_mismatch_and_discards_bytes(
     assert not (tmp_path / failed.storage_path).exists()
 
 
-@pytest.mark.django_db(transaction=True)
 def test_ingest_stream_reads_in_chunks_instead_of_materializing(drive: Any) -> None:
     """Django storage pulls bounded chunks from the supplied binary stream."""
 
@@ -1625,7 +1560,6 @@ def test_ingest_stream_reads_in_chunks_instead_of_materializing(drive: Any) -> N
     assert set(read_sizes) == {64 * 1024}
 
 
-@pytest.mark.django_db(transaction=True)
 def test_file_metadata_merge_keeps_the_keys_a_stale_writer_never_read(drive: Any) -> None:
     """Each merge reads the stored metadata under the row lock, so an older instance drops no other owner's keys."""
 
@@ -1640,7 +1574,6 @@ def test_file_metadata_merge_keeps_the_keys_a_stale_writer_never_read(drive: Any
     assert file.metadata == stored
 
 
-@pytest.mark.django_db(transaction=True)
 def test_file_metadata_merge_requires_write_on_the_file(drive: Any) -> None:
     """Outside a system scope the merge is the actor's own file write."""
 
@@ -1729,7 +1662,6 @@ def test_index_external_creates_updates_and_emits_file_finalized(drive: Any) -> 
     assert seen == [created.pk, created.pk]
 
 
-@pytest.mark.django_db(transaction=True)
 def test_index_external_restores_and_repoints_a_trashed_content_hit(drive: Any) -> None:
     """A moved path reuses a trashed row carrying the same external bytes."""
 
@@ -1760,7 +1692,6 @@ def test_index_external_restores_and_repoints_a_trashed_content_hit(drive: Any) 
     assert restored.trashed_at is None and restored.trashed_by_id is None
 
 
-@pytest.mark.django_db(transaction=True)
 def test_index_external_rejects_a_live_duplicate_at_another_path(drive: Any) -> None:
     """Content uniqueness remains authoritative when both paths are live."""
 
@@ -1785,7 +1716,6 @@ def test_index_external_rejects_a_live_duplicate_at_another_path(drive: Any) -> 
     assert File._base_manager.filter(drive=drive).count() == 1
 
 
-@pytest.mark.django_db(transaction=True)
 def test_trash_missing_external_only_trashes_absent_live_paths(drive: Any) -> None:
     """The streamed reconciliation leaves present and already-trashed rows alone."""
 
@@ -1825,7 +1755,6 @@ def _expired_trash(drive: Any, *contents: bytes) -> list[Any]:
     return rows
 
 
-@pytest.mark.django_db(transaction=True)
 def test_file_purge_reports_a_failing_row_and_purges_the_rest(drive: Any, monkeypatch: pytest.MonkeyPatch) -> None:
     """One row's failure goes to ``on_error``; the selection's other rows are still purged."""
 
@@ -1849,12 +1778,11 @@ def test_file_purge_reports_a_failing_row_and_purges_the_rest(drive: Any, monkey
     assert list(File._base_manager.filter(drive=drive).values_list("pk", flat=True)) == [rows[1].pk]
 
 
-@pytest.mark.django_db(transaction=True)
 def test_file_purge_rereads_each_row_under_its_lock(drive: Any, monkeypatch: pytest.MonkeyPatch) -> None:
     """A row restored after the selection was listed no longer matches it and survives."""
 
     (row,) = _expired_trash(drive, b"restored")
-    queryset = type(File.objects.all())
+    queryset = FileQuerySet  # the storage owner's File queryset
     lock = queryset.lock_if_supported
 
     def restore_then_lock(self: Any, **kwargs: Any) -> Any:
@@ -1874,7 +1802,7 @@ def test_file_purge_against_a_concurrent_restore_skips_the_row(drive: Any, monke
     """Another connection restores the listed row before the purge locks it; the purge leaves it."""
 
     (row,) = _expired_trash(drive, b"contested")
-    queryset = type(File.objects.all())
+    queryset = FileQuerySet  # the storage owner's File queryset
     lock = queryset.lock_if_supported
 
     def restore() -> None:
@@ -1898,7 +1826,6 @@ def test_file_purge_against_a_concurrent_restore_skips_the_row(drive: Any, monke
     assert not File._base_manager.get(pk=row.pk).is_trashed
 
 
-@pytest.mark.django_db(transaction=True)
 def test_folder_prune_names_a_narrowed_selection_by_its_full_path(drive: Any) -> None:
     """Native ancestry names the selected folders; only the selection is ever deleted, deepest first."""
 
@@ -1913,7 +1840,6 @@ def test_folder_prune_names_a_narrowed_selection_by_its_full_path(drive: Any) ->
         assert not Folder.objects.filter(drive=drive, is_virtual=False).exists()
 
 
-@pytest.mark.django_db(transaction=True)
 def test_folder_prune_keeps_the_parent_of_a_trashed_file(drive: Any) -> None:
     """A trashed file still names its folder, so pruning never detaches it."""
 
@@ -1931,11 +1857,10 @@ def test_folder_prune_keeps_the_parent_of_a_trashed_file(drive: Any) -> None:
     assert file.is_trashed and file.folder_id == folder.pk
 
 
-@pytest.mark.django_db(transaction=True)
 def test_folder_prune_rechecks_an_empty_candidate_under_its_lock(drive: Any, monkeypatch: pytest.MonkeyPatch) -> None:
     """A file placed after the inventory keeps its folder: the locked recheck decides, not the snapshot."""
 
-    queryset = type(Folder.objects.all())
+    queryset = FolderQuerySet  # the storage owner's Folder queryset
     lock = queryset.lock_if_supported
 
     def file_arrives_then_lock(self: Any, **kwargs: Any) -> Any:
@@ -1958,7 +1883,7 @@ def test_folder_prune_against_a_concurrent_file_create_keeps_the_folder(
 ) -> None:
     """Another connection commits a file into the empty candidate before the prune locks it; the folder stays."""
 
-    queryset = type(Folder.objects.all())
+    queryset = FolderQuerySet  # the storage owner's Folder queryset
     lock = queryset.lock_if_supported
 
     def place(folder_id: str) -> None:
@@ -1989,7 +1914,6 @@ def test_folder_prune_against_a_concurrent_file_create_keeps_the_folder(
         assert File.objects.get(filename="concurrent.txt").folder_id == folder.pk
 
 
-@pytest.mark.django_db(transaction=True)
 def test_ensure_path_is_idempotent_and_reuses_the_prefix_cache(drive: Any) -> None:
     """One caller-owned cache shares ancestors across neighboring paths."""
 
@@ -2006,7 +1930,6 @@ def test_ensure_path_is_idempotent_and_reuses_the_prefix_cache(drive: Any) -> No
     assert Folder._base_manager.filter(drive=drive).count() == 3
 
 
-@pytest.mark.django_db(transaction=True)
 def test_read_only_drive_refuses_file_drafts_and_folder_creation(
     tmp_path: Path,
     drive: Any,
@@ -2097,7 +2020,6 @@ def test_finalize_publishes_once_after_commit_and_refreshes_stale_rows(drive: An
     assert stale.upload_state == UploadState.READY
 
 
-@pytest.mark.django_db(transaction=True)
 def test_ingest_dedup_restores_and_merges_metadata(drive: Any) -> None:
     """A READY dedup hit restores its row and preserves the supplied metadata."""
 
@@ -2120,7 +2042,6 @@ def test_ingest_dedup_restores_and_merges_metadata(drive: Any) -> None:
     assert stored.metadata == {"source": {"indexed": True}}
 
 
-@pytest.mark.django_db(transaction=True)
 def test_upload_consumes_nonce_and_persists_failure(drive: Any, settings: Any) -> None:
     """An oversized admitted upload spends its token and records its failure."""
 
@@ -2138,7 +2059,6 @@ def test_upload_consumes_nonce_and_persists_failure(drive: Any, settings: Any) -
     assert stored.upload_state == UploadState.FAILED
 
 
-@pytest.mark.django_db(transaction=True)
 def test_folder_tree_validation_saves_valid_parent(drive: Any) -> None:
     """Save validates the parent chain before persisting the new tree edge."""
 
@@ -2151,7 +2071,6 @@ def test_folder_tree_validation_saves_valid_parent(drive: Any) -> None:
     assert Folder._base_manager.get(pk=child.pk).parent_id == parent.pk
 
 
-@pytest.mark.django_db(transaction=True)
 def test_attachment_locks_canonical_target_and_file_before_creation(
     drive: Any, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -2186,8 +2105,9 @@ def test_storage_preview_does_not_mint_download_urls(
     settings.ROOT_URLCONF = "angee.storage.urls"
     row = _proxy_upload(drive, PNG_BYTES)
     admin = create_platform_admin("storage-preview-admin")
-    view = GraphQLView.as_view(schema=addon_schema(storage_schema.schemas, "public"))
-    monkeypatch.setattr("angee.graphql.views._get_view", lambda schema_name: view)
+    name = f"storage-preview-{uuid4().hex}"  # an endpoint schema only this test dispatches to
+    discovered = GraphQLSchemas([SchemaAddon({name: storage_schema.schemas["public"]})])
+    monkeypatch.setattr(GraphQLSchemas, "from_discovery", classmethod(lambda cls: discovered))
     payload = {
         "query": "query PreviewFile($id: String!) { files_by_pk(id: $id) { id url } }",
         "variables": {"id": str(row.sqid)},
@@ -2198,7 +2118,7 @@ def test_storage_preview_does_not_mint_download_urls(
     )
     request.user = admin
     with patch.object(File, "issue_download_token", autospec=True, side_effect=AssertionError("minted")) as mint:
-        response = ActorMiddleware(lambda active: graphql_endpoint(active, "public"))(request)
+        response = ActorMiddleware(lambda active: graphql_endpoint(active, name))(request)
         assert response.status_code == 200
         assert json.loads(response.content) == {"data": {"files_by_pk": {"id": str(row.sqid), "url": None}}}
         mint.assert_not_called()
@@ -2209,7 +2129,7 @@ def test_storage_preview_does_not_mint_download_urls(
     request = RequestFactory().post("/graphql/public/", data=payload, content_type="application/json")
     request.user = drive.alice
     with patch.object(File, "issue_download_token", autospec=True, side_effect=File.issue_download_token) as mint:
-        response = ActorMiddleware(lambda active: graphql_endpoint(active, "public"))(request)
+        response = ActorMiddleware(lambda active: graphql_endpoint(active, name))(request)
         assert response.status_code == 200
         data = json.loads(response.content)
         assert "errors" not in data
@@ -2217,7 +2137,6 @@ def test_storage_preview_does_not_mint_download_urls(
         mint.assert_called_once()
 
 
-@pytest.mark.django_db(transaction=True)
 def test_purge_preserves_bytes_when_an_enclosing_transaction_rolls_back(tmp_path: Path, drive: Any) -> None:
     row = _proxy_upload(drive, PNG_BYTES)
     pk, key = row.pk, row.storage_path
@@ -2229,7 +2148,6 @@ def test_purge_preserves_bytes_when_an_enclosing_transaction_rolls_back(tmp_path
     assert (tmp_path / key).exists()
 
 
-@pytest.mark.django_db(transaction=True)
 def test_backend_cache_includes_selected_implementation(tmp_path: Path, drive: Any) -> None:
     backend = drive.backend
     first = backend.storage

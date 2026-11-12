@@ -11,10 +11,9 @@ from tests.test_messaging_source_threads import sourced as sourced  # noqa: F401
 from tests.test_timeline import timeline_entries
 from tests.test_timeline_occurs import assert_branch_omitted, assert_occurs
 
-pytestmark = pytest.mark.django_db(transaction=True)
 
-
-def test_comments_elsewhere_do_not_compile_a_branch(comment_record, monkeypatch):
+@pytest.mark.django_db(transaction=True)
+def test_comments_elsewhere_do_not_compile_a_branch(comment_record):
     record, author = comment_record.record, comment_record.author
     with actor_context(author):
         record.message_post("Present only here")
@@ -23,7 +22,7 @@ def test_comments_elsewhere_do_not_compile_a_branch(comment_record, monkeypatch)
     kind = CommentKind()
     assert_occurs(kind, record, True, comment_record.outsider)
     assert_occurs(kind, absent, False, comment_record.outsider)
-    assert_branch_omitted(kind, absent, comment_record.writer, Message, monkeypatch)
+    assert_branch_omitted(kind, absent, comment_record.writer, Message)
 
 
 def test_comment_probe_includes_messages_on_a_redirected_thread(comment_record, settings):
@@ -43,7 +42,8 @@ def test_comment_probe_includes_messages_on_a_redirected_thread(comment_record, 
     assert_occurs(kind, survivor, False, author)
 
 
-def test_source_attachments_elsewhere_do_not_compile_a_branch(sourced, monkeypatch):
+@pytest.mark.django_db(transaction=True)
+def test_source_attachments_elsewhere_do_not_compile_a_branch(sourced):
     owner, record, thread = sourced["owner"], sourced["task"], sourced["thread"]
     with actor_context(owner):
         ThreadAttachment.objects.bind_source_thread(record, thread)
@@ -51,4 +51,4 @@ def test_source_attachments_elsewhere_do_not_compile_a_branch(sourced, monkeypat
     kind = ConversationKind()
     assert_occurs(kind, record, True, sourced["outsider"])
     assert_occurs(kind, absent, False, sourced["outsider"])
-    assert_branch_omitted(kind, absent, owner, ThreadAttachment, monkeypatch)
+    assert_branch_omitted(kind, absent, owner, ThreadAttachment)

@@ -12,10 +12,6 @@ vi.mock("@angee/ui", () => ({
   rowIdVariables: (row: { id: string }) => ({ id: row.id }),
 }));
 
-vi.mock("./i18n", () => ({
-  usePartiesT: () => (key: string) => key,
-}));
-
 import {
   usePartyStatementRowActions,
   type PartyStatementActionRow,

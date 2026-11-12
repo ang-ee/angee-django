@@ -2,7 +2,7 @@ import type { Meta, StoryObj } from "@storybook/react-vite";
 import { useMemo } from "react";
 import { FORM_CONTAINERS, FormView, GraphView, containersFromChildren, graphNodeStyle, Input, PrimaryPaneProvider, PrimaryPanePublisher, usePrimaryPaneContent, type FormField, type GroupDescriptor } from "@angee/ui";
 
-import { jsonResponse, storySchema, testDataResource } from "./runtime-fixtures";
+import { storySchema, testDataResource } from "./runtime-fixtures";
 
 const statusOptions = [
   { value: "DRAFT", label: "Draft" },
@@ -170,19 +170,11 @@ function readOnlyFieldFor(field: FormField): FormField {
   return readOnlyField;
 }
 
-const storySchemas = storySchema(async (_input, init) => {
-  const payload = requestPayload(init);
-  const patch = isRecord(payload.variables.data) ? payload.variables.data : {};
-
-  if (payload.query.includes("mutation updateNote")) {
-    return jsonResponse({ data: { updateNote: { ...storyRecord, ...patch } } });
-  }
-  if (payload.query.includes("mutation createNote")) {
-    return jsonResponse({
-      data: { createNote: { ...storyRecord, id: "note-new", ...patch } },
-    });
-  }
-  return jsonResponse({ data: { note: storyRecord } });
+const patch = (args: Record<string, unknown>) => isRecord(args.data) ? args.data : {};
+const storySchemas = storySchema({
+  note: () => storyRecord,
+  updateNote: (args) => ({ ...storyRecord, ...patch(args) }),
+  createNote: (args) => ({ ...storyRecord, id: "note-new", ...patch(args) }),
 });
 
 const meta = {
@@ -254,7 +246,7 @@ const railFields = ["title", "owner", "priority"].map((name) => ({
   name, kind: "scalar" as const, scalar: "String", readable: true, aggregatable: false,
   creatable: true, updatable: true, requiredOnCreate: false,
 }));
-const railSchemas = storySchema(async () => jsonResponse({ data: { note: storyRecord } }));
+const railSchemas = storySchema({ note: () => storyRecord });
 railSchemas.public!.metadata = { angee: { resources: [testDataResource("notes.Note", {
   schemaName: "public", fields: railFields,
 })] } };
@@ -305,19 +297,6 @@ function FormViewFixture({
       ]}
     />
   );
-}
-
-function requestPayload(init?: RequestInit): {
-  query: string;
-  variables: Record<string, unknown>;
-} {
-  if (typeof init?.body !== "string") return { query: "", variables: {} };
-  const parsed: unknown = JSON.parse(init.body);
-  if (!isRecord(parsed)) return { query: "", variables: {} };
-  return {
-    query: typeof parsed.query === "string" ? parsed.query : "",
-    variables: isRecord(parsed.variables) ? parsed.variables : {},
-  };
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

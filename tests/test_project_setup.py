@@ -510,28 +510,11 @@ class ServerVerbCase(ProjectSetupFixture):
         self.assertEqual(second.status, "open")
 
 
-class DenormalizedServerVerbCase(ServerVerbCase):
-    storage = "denormalized"
-
-
-class DenormalizedProjectSetupCase(ProjectSetupCase):
-    storage = "denormalized"
-
-
-class DenormalizedProjectAttentionCase(ProjectAttentionCase):
-    storage = "denormalized"
-
-
-class DenormalizedDashboardVisibilityCase(DashboardVisibilityCase):
-    storage = "denormalized"
-
-
-@pytest.mark.parametrize("storage", ("registry", "denormalized"))
-@pytest.mark.parametrize(
-    "group", ("ProjectSetupCase", "ProjectAttentionCase", "DashboardVisibilityCase", "ServerVerbCase"),
-)
-def test_project_setup_contracts(tmp_path: Path, storage: str, group: str):
-    case = ("Denormalized" if storage == "denormalized" else "") + group
+def test_project_setup_contracts(tmp_path: Path, subtests: pytest.Subtests):
     run_composed_tests(
-        tmp_path, f"tests.test_project_setup.{case}", app=("angee.intake", "angee.proposals_work", "angee.dashboards"),
+        tmp_path, subtests, app=("angee.intake", "angee.proposals_work", "angee.dashboards"),
+        sqlite=tuple(
+            f"tests.test_project_setup.{group}"
+            for group in ("ProjectSetupCase", "ProjectAttentionCase", "DashboardVisibilityCase", "ServerVerbCase")
+        ),
     )

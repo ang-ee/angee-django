@@ -1,8 +1,8 @@
 // @vitest-environment happy-dom
 
-import { cleanup, render, screen } from "@testing-library/react";
+import { render, screen } from "@testing-library/react";
 import * as React from "react";
-import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
+import { beforeEach, describe, expect, test, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   chrome: {
@@ -55,8 +55,6 @@ type Declared = {
 };
 
 describe("ConditionalMutationButton", () => {
-  afterEach(cleanup);
-
   beforeEach(() => {
     mocks.chrome = {
       resource: "messaging.Channel",

@@ -1,6 +1,4 @@
-"""Every ownership adopter gates raw owner writes, including the queue and person parents."""
-
-from pathlib import Path
+"""Ownership adopters declare the transfer gate, and raw owner writes require it."""
 
 import pytest
 from django.apps import apps
@@ -8,97 +6,54 @@ from rebac import PermissionDenied, actor_context, system_context
 from rebac.roles import grant as grant_role
 
 from angee.agents.testing.models import Agent
-from angee.messaging.testing.models import Folder, Party, Person, Thread
-from angee.projects.testing.models import Project, Queue, Task
-from angee.spaces.testing.models import Group, Membership
-from angee.workflows.testing.models import Workflow
-from tests.conftest import Backend, Drive, File, Vault
+from angee.base.models.ownership import OwnerMixin
+from angee.projects.testing.models import Project
 from tests.messaging_campaign import grant
 from tests.t3_campaign import campaign_access as campaign_access
 from tests.t3_campaign import campaign_user as campaign_user
-from tests.t3_campaign import messaging_access_schema as messaging_access_schema
 
 
-@pytest.fixture(
-    params=(Vault, Thread, Group, Queue, Project, Task, Drive, File, Agent, Workflow, Party, Person, Folder)
-)
-def owned_record(request, campaign_access, campaign_user):
+def test_every_adopter_declares_owner_and_transfer_gate(db):
+    """No composed adopter reports E022 or E027 on the merged schema; a failure names every offender.
+
+    Composed adopters are the addons' models and the root conftest's compositions; a test
+    module's own probe models install their own schema and are not adopters.
+    """
+    del db
+    composed = ("angee.", "tests.conftest")
+    adopters = [
+        model for model in apps.get_models() if issubclass(model, OwnerMixin) and model.__module__.startswith(composed)
+    ]
+    assert {Project, Agent} <= set(adopters)
+    offenders = {
+        model._meta.label: [error.msg for error in model.check() if error.id in {"angee.E022", "angee.E027"}]
+        for model in adopters
+    }
+    assert {label: errors for label, errors in offenders.items() if errors} == {}
+
+
+def test_raw_owner_writes_require_transfer(campaign_access, campaign_user):
+    """An editor's save, partial save or queryset update of the owner is refused; transfer moves it."""
     owner, writer, replacement = (campaign_user(role) for role in ("owner", "writer", "replacement"))
-    model = request.param
     with system_context(reason="tests.t3.owned_record"):
-        if model in (Drive, File):
-            backend = Backend.objects.create(slug="owner-gate", label="Storage", backend_class="local")
-            drive = Drive.objects.create(backend=backend, slug="owner-gate", name="Storage", owner=owner)
-            row = (
-                drive
-                if model is Drive
-                else File.objects.create(
-                    drive=drive,
-                    filename="record.txt",
-                    content_hash="a" * 64,
-                    storage_path="record.txt",
-                    owner=owner,
-                )
-            )
-        else:
-            values = {"owner": owner, "created_by": owner}
-            if model in (Vault, Group, Queue, Agent, Workflow, Folder):
-                values["name"] = "Owned row"
-            if model in (Party, Person):
-                values["display_name"] = "Owned row"
-            if model is Queue:
-                values["key"] = "GATE"
-            if model is Workflow:
-                values["key"] = "owner-gate"
-            if model in (Task, Project):
-                values["title"] = "Owned row"
-            row = model.objects.create(**values)
-        if model in (Group, Queue):
-            Membership.objects.create(
-                group=row.group_ptr if model is Queue else row,
-                party=Person.objects.for_user(writer),
-                role="moderator",
-                is_confirmed=True,
-            )
-        elif model is Task:
-            Task._base_manager.filter(pk=row.pk).update(assignee=writer)
-        elif model is File:
-            grant(drive, "editor", writer)
-        else:
-            grant(row, "editor", writer)
+        row = Project.objects.create(title="Owned row", owner=owner, created_by=owner)
+        grant(row, "editor", writer)
     assert row.with_actor(writer).has_access("write")
     assert not row.with_actor(writer).has_access("transfer")
-    return row, owner, writer, replacement
-
-
-@pytest.mark.parametrize("field", ("owner", "owner_id"))
-@pytest.mark.parametrize("path", ("full_save", "partial_save", "queryset"))
-def test_raw_owner_writes_require_transfer_on_every_adopter(owned_record, field, path):
-    row, owner, writer, replacement = owned_record
-    value = replacement if field == "owner" else replacement.pk
-    with actor_context(writer), pytest.raises(PermissionDenied):
-        if path == "queryset":
-            type(row).objects.filter(pk=row.pk).update(**{field: value})
-        else:
-            candidate = type(row).objects.get(pk=row.pk)
-            setattr(candidate, field, value)
-            candidate.save(**({"update_fields": (field,)} if path == "partial_save" else {}))
-    persisted = type(row)._base_manager.get(pk=row.pk)
-    assert persisted.owner_id == owner.pk
-
-
-def test_transfer_uses_owner_authority_and_preserves_attribution(owned_record):
-    row, owner, _, replacement = owned_record
-    author = type(row)._base_manager.get(pk=row.pk).created_by_id
+    for field, value in (("owner", replacement), ("owner_id", replacement.pk)):
+        for path in ("full_save", "partial_save", "queryset"):
+            with actor_context(writer), pytest.raises(PermissionDenied):
+                if path == "queryset":
+                    Project.objects.filter(pk=row.pk).update(**{field: value})
+                else:
+                    candidate = Project.objects.get(pk=row.pk)
+                    setattr(candidate, field, value)
+                    candidate.save(**({"update_fields": (field,)} if path == "partial_save" else {}))
+            assert Project._base_manager.get(pk=row.pk).owner_id == owner.pk, (field, path)
     with actor_context(owner):
-        type(row).objects.get(pk=row.pk).transfer_ownership(replacement)
-    persisted = type(row)._base_manager.get(pk=row.pk)
-    assert persisted.owner_id == replacement.pk
-    assert persisted.created_by_id == author
-    with actor_context(replacement):
-        type(row).objects.get(pk=row.pk).transfer_ownership(None)
-    persisted.refresh_from_db()
-    assert persisted.owner_id is None and persisted.created_by_id == author
+        Project.objects.get(pk=row.pk).transfer_ownership(replacement)
+    persisted = Project._base_manager.get(pk=row.pk)
+    assert (persisted.owner_id, persisted.created_by_id) == (replacement.pk, owner.pk)
 
 
 def test_an_agent_installed_without_a_user_is_claimed_only_through_transfer(campaign_access, campaign_user):
@@ -113,32 +68,3 @@ def test_an_agent_installed_without_a_user_is_claimed_only_through_transfer(camp
     with actor_context(admin):
         Agent._base_manager.get(pk=agent.pk).transfer_ownership(admin)
     assert Agent._base_manager.get(pk=agent.pk).owner_id == admin.pk
-
-
-@pytest.mark.parametrize("mutation", ("missing", "row_write", "widened"))
-def test_e027_names_the_real_adopter_and_expected_transfer_gate(owned_record, tmp_path, monkeypatch, mutation):
-    row, _, _, _ = owned_record
-    model = type(row)
-    config = apps.get_app_config(model._meta.app_label)
-    original = Path(config.rebac_schema).read_text()
-    start = original.index(f"definition {model._meta.rebac_resource_type} {{")
-    # No inline JSON occurs after the field gate; delimit on a standalone closing brace.
-    end = original.index("\n}", start)
-    definition = original[start:end]
-    gate = {Queue: "group->transfer", Person: "party->transfer"}.get(model, "transfer")
-    old = f"permission write__owner = {gate}"
-    assert old in definition
-    new = {
-        "missing": "",
-        "row_write": "permission write__owner = write",
-        "widened": f"permission write__owner = {gate} + write",
-    }[mutation]
-    changed = definition.replace(old, new)
-    path = tmp_path / "invalid-owner-gate.zed"
-    path.write_text(original[:start] + changed + original[end:])
-    monkeypatch.setattr(config, "rebac_schema", str(path))
-    errors = model.check()
-    assert [error.id for error in errors] == ["angee.E027"]
-    assert errors[0].obj is model
-    assert model._meta.label in errors[0].msg and model._meta.rebac_resource_type in errors[0].msg
-    assert gate in errors[0].msg

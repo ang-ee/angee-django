@@ -2,7 +2,7 @@
 
 import { cleanup, render, screen } from "@testing-library/react";
 import { RouterContextProvider, createMemoryHistory, createRootRoute, createRouter } from "@tanstack/react-router";
-import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
+import { beforeEach, describe, expect, test, vi } from "vitest";
 
 import { AppRuntimeProvider, defaultWidgets } from "@angee/ui";
 
@@ -71,8 +71,6 @@ beforeEach(() => {
     isPending: false,
   };
 });
-
-afterEach(() => cleanup());
 
 describe("ImplementationDetail", () => {
   test("shows only truthful read-only defaults", () => {

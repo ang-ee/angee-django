@@ -440,7 +440,7 @@ def _owned_document(owner: Any, *, title: str = "Document") -> Document:
     return document
 
 
-def test_authorized_action_target_returns_the_actor_reachable_row(composed_tables) -> None:
+def test_authorized_action_target_returns_the_actor_reachable_row(db) -> None:
     """An actor with the per-row permission gets the actor-bound row back."""
 
     owner = create_user("owner")
@@ -452,14 +452,14 @@ def test_authorized_action_target_returns_the_actor_reachable_row(composed_table
     assert target == document
 
 
-def test_authorized_action_target_denies_anonymous_sessions(composed_tables) -> None:
+def test_authorized_action_target_denies_anonymous_sessions(db) -> None:
     """An unauthenticated session raises the GraphQL-error denial, not an in-band shape."""
 
     with pytest.raises(PermissionDenied, match="Authentication required."):
         authorized_action_target(_info_for(AnonymousUser()), Document, "sd_missing", "write")
 
 
-def test_authorized_action_target_hides_unreachable_rows_as_not_found(composed_tables) -> None:
+def test_authorized_action_target_hides_unreachable_rows_as_not_found(db) -> None:
     """A row outside the actor's write scope reads as plain not-found (no existence oracle)."""
 
     owner = create_user("owner")
@@ -474,7 +474,7 @@ def test_authorized_action_target_hides_unreachable_rows_as_not_found(composed_t
     }
 
 
-def test_authorized_action_target_denies_readable_row_without_permission(composed_tables) -> None:
+def test_authorized_action_target_denies_readable_row_without_permission(db) -> None:
     """A reader (read without write) resolves the row but fails the per-row permission."""
 
     owner = create_user("owner")
@@ -494,7 +494,7 @@ def test_authorized_action_target_denies_readable_row_without_permission(compose
     }
 
 
-def test_action_guard_maps_authorized_action_target_failures_in_band(composed_tables) -> None:
+def test_action_guard_maps_authorized_action_target_failures_in_band(db) -> None:
     """The preflight raise and the guard compose into the in-band ``ActionResult``."""
 
     intruder = create_user("intruder")

@@ -1,11 +1,9 @@
 // @vitest-environment happy-dom
 
-import { cleanup, render, screen } from "@testing-library/react";
-import { afterEach, expect, test } from "vitest";
+import { render, screen } from "@testing-library/react";
+import { expect, test } from "vitest";
 
 import { PaneToolbar, PaneToolbarHost } from "./PaneToolbar";
-
-afterEach(cleanup);
 
 test("multiple pane toolbars remain intrinsic rows when they fall back inline above a tree", () => {
   render(

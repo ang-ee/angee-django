@@ -14,8 +14,9 @@ from django.db import models, transaction
 from django.utils import timezone
 
 from angee.base.managers import AngeeManager
-from angee.base.querysets import AngeeQuerySet
 from angee.messaging.managers import MessageManager
+from angee.provenance.contrib.angee.managers import AngeeHistoryManager
+from angee.provenance.contrib.angee.querysets import AngeeHistoryQuerySet
 
 if TYPE_CHECKING:
     from angee.messaging.models import Message
@@ -167,7 +168,7 @@ class MessagePostsManager[MessageT: Message](MessageManager[MessageT]):
         return targets
 
 
-class FeedFollowQuerySet[FollowT: FeedFollow](AngeeQuerySet[FollowT]):
+class FeedFollowQuerySet[FollowT: FeedFollow](AngeeHistoryQuerySet[FollowT]):
     """REBAC-scoped read scopes for the following/timeline edge."""
 
     def active(self) -> Self:
@@ -181,7 +182,7 @@ class FeedFollowQuerySet[FollowT: FeedFollow](AngeeQuerySet[FollowT]):
         return self.filter(feed=feed)
 
 
-_FeedFollowManagerBase = AngeeManager.from_queryset(FeedFollowQuerySet)
+_FeedFollowManagerBase = AngeeHistoryManager.from_queryset(FeedFollowQuerySet)
 
 
 class FeedFollowManager[FollowT: FeedFollow](_FeedFollowManagerBase[FollowT]):

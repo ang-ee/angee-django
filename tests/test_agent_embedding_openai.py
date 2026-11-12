@@ -79,7 +79,7 @@ def test_openai_embedding_uses_owned_credentials_native_protocol_and_limits(monk
     )
     endpoint = "https://gateway.example.test/v1" if compatible else "https://api.openai.com/v1"
     backend = OpenAIInferenceBackend(SimpleNamespace(base_url=endpoint, config={}, credential=credential))
-    monkeypatch.setattr(backend, "_async_client_class", lambda: client)
+    backend.async_client_class = client
     monkeypatch.setenv("OPENAI_API_KEY", "ambient-key")
     binding = backend.embedding_model("openai/text-embedding-3-small")
     assert credentials == ["refreshed"]

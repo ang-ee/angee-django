@@ -1,13 +1,11 @@
 // @vitest-environment happy-dom
 
-import { cleanup, render } from "@testing-library/react";
-import { afterEach, describe, expect, test } from "vitest";
+import { render } from "@testing-library/react";
+import { describe, expect, test } from "vitest";
 
 import { Glyph } from "./Glyph";
 
 describe("Glyph", () => {
-  afterEach(cleanup);
-
   test("adapts the logo owner's SVG through the base registry", () => {
     const { container } = render(<Glyph name="angee" size={20} />);
 

@@ -16,7 +16,7 @@ from angee.workflows.testing.models import StepAttempt, StepRun, WorkflowRun
 from tests.conftest import create_user
 from tests.workflow_steps import Value, document
 
-pytestmark = [pytest.mark.django_db(transaction=True), pytest.mark.usefixtures("workflow_step_classes")]
+pytestmark = [pytest.mark.django_db, pytest.mark.usefixtures("workflow_step_classes")]
 
 
 @pytest.fixture
@@ -78,6 +78,7 @@ def child_graph(execution, register_step):
     return actor, sent, admitted, build
 
 
+@pytest.mark.django_db(transaction=True)
 def test_await_run_wakes_once_and_forwards_the_child_output(child_graph):
     actor, sent, admitted, build = child_graph
     parent, _ = build()
@@ -117,6 +118,7 @@ def test_parent_cancel_follows_only_owned_children(child_graph, relation):
         assert child.status == "succeeded"
 
 
+@pytest.mark.django_db(transaction=True)
 @pytest.mark.parametrize("relation", ["owned", "continuation"])
 def test_parent_finishing_without_await_cancels_only_owned_child(child_graph, relation):
     _, _, admitted, build = child_graph
@@ -164,6 +166,7 @@ def test_derived_child_key_changes_with_parent_page(child_graph):
     assert first.parent_step_id == second.parent_step_id
 
 
+@pytest.mark.django_db(transaction=True)
 def test_child_cleanup_failure_cannot_roll_back_parent_terminal_state(child_graph, monkeypatch, caplog):
     _, _, admitted, build = child_graph
     parent, _ = build(await_child=False)
@@ -221,6 +224,7 @@ def age_runs(*runs):
     )
 
 
+@pytest.mark.django_db(transaction=True)
 def test_expired_io_attempt_cannot_admit_a_child_before_reaping(execution, register_step):
     """Child admission shares the deadline fence used by all live attempt writes."""
     actor, _ = execution
@@ -278,6 +282,7 @@ def test_observing_an_already_failed_child_keeps_its_open_siblings(child_graph):
     assert child.status == "failed" and result.children == 0
 
 
+@pytest.mark.django_db(transaction=True)
 def test_child_delivery_failures_cannot_suppress_parent_publication(child_graph, caplog):
     """Nested dispatch and terminal wake failures leave all committed changes observable."""
     _, _, admitted, build = child_graph

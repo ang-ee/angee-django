@@ -1,10 +1,8 @@
 // @vitest-environment happy-dom
 
-import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
-import { afterEach, expect, test, vi } from "vitest";
+import { fireEvent, render, screen, within } from "@testing-library/react";
+import { expect, test, vi } from "vitest";
 import { DashboardBars, DashboardDonut } from "./charts";
-
-afterEach(cleanup);
 
 test("stacked bars retain declared order, signed values and exact selectable series", () => {
   const select = vi.fn();

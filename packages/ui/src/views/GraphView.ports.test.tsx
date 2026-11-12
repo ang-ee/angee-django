@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
-import { cleanup, render, screen } from "@testing-library/react";
-import { afterEach, beforeAll, expect, test } from "vitest";
+import { render, screen } from "@testing-library/react";
+import { beforeAll, expect, test } from "vitest";
 import { createUiTestProviders } from "../testing";
 import { GraphView, graphNodeStyle } from "./GraphView";
 
@@ -8,7 +8,6 @@ const { Provider } = createUiTestProviders();
 beforeAll(() => {
   Object.defineProperty(globalThis, "ResizeObserver", { configurable: true, value: class { observe() {} unobserve() {} disconnect() {} } });
 });
-afterEach(cleanup);
 
 test("GraphNodeLabel preserves box geometry and caption rows through highlight and detail changes", () => {
   const base = { id: "a", kind: "node", title: "Alpha", code: "alpha", selected: true };

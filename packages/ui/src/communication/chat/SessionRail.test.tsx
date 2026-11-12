@@ -1,15 +1,11 @@
 // @vitest-environment happy-dom
 
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
-import { afterEach, describe, expect, test, vi } from "vitest";
+import { fireEvent, render, screen } from "@testing-library/react";
+import { describe, expect, test, vi } from "vitest";
 
 import { SessionRail, SessionRailItem } from "./index";
 
 describe("SessionRail", () => {
-  afterEach(() => {
-    cleanup();
-  });
-
   test("labels the nav landmark and renders the action over a ul > li list", () => {
     render(
       <SessionRail label="Running agents" action={<button type="button">New</button>}>

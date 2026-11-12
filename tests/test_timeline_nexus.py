@@ -23,12 +23,11 @@ from angee.timeline.kinds import timeline_kinds
 from tests.conftest import create_platform_admin
 from tests.test_timeline import timeline_entries
 
-pytestmark = pytest.mark.django_db(transaction=True)
 AT = datetime(2026, 10, 19, 12, tzinfo=UTC)
 
 
 @pytest.fixture
-def correspondence(composed_tables):  # noqa: ANN001, ANN201 - fixture namespace
+def correspondence(db):  # noqa: ANN001, ANN201 - fixture namespace
     with (
         override_settings(ANGEE_TIMELINE_KINDS=["angee.nexus.timeline.timeline_kinds"]),
         system_context(reason="test nexus timeline"),
@@ -104,7 +103,7 @@ def test_nexus_uses_the_timeline_identity_contract(correspondence) -> None:  # n
 
 
 @override_settings(ANGEE_TIMELINE_KINDS=["angee.nexus.timeline.timeline_kinds"])
-def test_nexus_correspondence_keeps_the_message_read_gate(composed_tables) -> None:  # noqa: ANN001
+def test_nexus_correspondence_keeps_the_message_read_gate(db) -> None:  # noqa: ANN001
     with system_context(reason="test nexus target visibility"):
         owner = get_user_model().objects.create_user(username="message-owner")
         reader = get_user_model().objects.create_user(username="party-reader")
@@ -179,6 +178,7 @@ def test_nexus_ignores_unread_fields_before_target_discovery(correspondence) -> 
     targets.assert_not_called()
 
 
+@pytest.mark.django_db(transaction=True)
 @pytest.mark.parametrize("subtype", ["Person", "Organization"])
 def test_nexus_observes_party_descendants_and_merge_redirects(correspondence, subtype) -> None:  # noqa: ANN001
     data = correspondence
@@ -212,6 +212,7 @@ def test_nexus_observes_party_descendants_and_merge_redirects(correspondence, su
         assert timeline_entries(survivor, data.actor)
 
 
+@pytest.mark.django_db(transaction=True)
 def test_reassignment_invalidates_old_and_new_records_after_commit(correspondence):
     data = correspondence
     observed = []

@@ -8,7 +8,7 @@ import {
   type RowsValue,
 } from "@angee/ui";
 
-import { jsonResponse, storySchema } from "./runtime-fixtures";
+import { storySchema } from "./runtime-fixtures";
 
 const rowTemplate: readonly FormSpecFieldDescriptor[] = [
   { name: "source", label: "Source", widget: "text", readOnly: true },
@@ -84,15 +84,11 @@ const channelMetadata = {
   },
 } satisfies AngeeSchemaMetadata;
 
-const storySchemas = storySchema(async () =>
-  jsonResponse({
-    data: {
-      channels,
-      channels_aggregate: { aggregate: { count: channels.length } },
-      insert_channels_one: { id: "chn-new", name: "New channel" },
-    },
-  }),
-);
+const storySchemas = storySchema({
+  channels: () => channels,
+  channels_aggregate: () => ({ aggregate: { count: channels.length } }),
+  insert_channels_one: () => ({ id: "chn-new", name: "New channel" }),
+});
 storySchemas.public = { ...storySchemas.public!, metadata: channelMetadata };
 
 const meta = {

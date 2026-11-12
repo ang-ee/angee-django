@@ -1,13 +1,11 @@
 // @vitest-environment happy-dom
 
 import {
-  cleanup,
   render,
   screen } from "@testing-library/react";
 import type { ReactElement,
   ReactNode } from "react";
-import { afterEach,
-  beforeEach,
+import { beforeEach,
   describe,
   expect,
   test,
@@ -47,10 +45,6 @@ vi.mock("@angee/ui", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@angee/ui")>();
   return {
     ...actual,
-    useNamespaceT:
-      (_namespace: string, messages: Record<string, string>) =>
-      (key: string): string =>
-        messages[key] ?? key,
     Card: ({ children }: { children: ReactNode }) => <article>{children}</article>,
     CardContent: ({ children }: { children: ReactNode }) => <div>{children}</div>,
     CardHeader: ({ children }: { children: ReactNode }) => <header>{children}</header>,
@@ -124,8 +118,6 @@ beforeEach(() => {
   mocks.record.conflict_name = "";
   mocks.workspaceStatus = null;
 });
-
-afterEach(cleanup);
 
 describe("AgentProvisioning", () => {
   test("shows the saved provisioning error even without recorded runtime names", () => {

@@ -1,13 +1,11 @@
 // @vitest-environment happy-dom
 
-import { cleanup, render, screen } from "@testing-library/react";
-import { afterEach, describe, expect, test } from "vitest";
+import { render, screen } from "@testing-library/react";
+import { describe, expect, test } from "vitest";
 import { AppRuntimeProvider } from "../runtime";
 
 import { baseIcons } from "../chrome/icon-registry";
 import { Statusline, StatusSegment, StatuslineSpacer } from "./Statusline";
-
-afterEach(() => cleanup());
 
 function withIcons(node: React.ReactNode): React.ReactElement {
   return (

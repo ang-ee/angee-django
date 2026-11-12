@@ -31,9 +31,9 @@ description: "Declares and wires REBAC permissions for an Angee addon: permissio
 | `src/angee/base/apps.py` | REBAC synchronization contribution to upstream provisioning | `BaseConfig.compose_provision`; explicit `ANGEE_REBAC_FORCE_OVERWRITE` setting |
 
 Parsing, sync, point checks, actor-scoped querysets and gated-field projection are
-`django-zed-rebac` (`docs/stack.md#backend`); `composed_tables`
-(`src/angee/base/testing/fixtures.py`) and `composed_permissions`
-(`src/angee/base/testing/permissions.py`) sync it into the test database.
+`django-zed-rebac` (`docs/stack.md#backend`); the test session's `django_db_setup`
+(`src/angee/base/testing/fixtures.py`) binds the merged inputs and syncs them once
+into the test database, and each test requesting `db` rolls back over it.
 
 ## Reuse first
 
@@ -93,7 +93,7 @@ Parsing, sync, point checks, actor-scoped querysets and gated-field projection a
    ```zed
    // a related row admits only under a column condition (notes → storage/file)
    relation note_record: notes/note // rebac:field={"path":"attachments__note","filters":{"visibility":"record"}}
-   permission read = note_record->read
+   permission read_granted = note_record->read
 
    // the row's own columns admit everyone signed in (money/rate, dashboards)
    relation shared: money/rate // rebac:const={"target_id":"shared","filters":{"context_object_id":""}}
@@ -157,7 +157,7 @@ Parsing, sync, point checks, actor-scoped querysets and gated-field projection a
        self.assertIsNone(bob_view.is_starred)            # read__is_starred = owner
        self.assertEqual(list(Note.objects.as_user(self.carol).filter(pk=self.welcome.pk)), [])
    ```
-   Composed host (`NotesAuthorizationTests` in `examples/src/example/notes/tests/test_rebac.py`): `TransactionTestCase`, `call_command("rebac", "sync")` in `setUp`, seed through `resources load`. Source-addon tests (`tests/test_scopedemo.py`): request `composed_tables` or `composed_permissions` (merges fragments, syncs with `--force-overwrite` into the disposable test database) and `backend().check_access(subject=…, action=…, resource=to_object_ref(row))`. Field-backed and const-backed reach leaves no tuples: assert `active_relationship_model().objects.filter(resource_type=…)` is empty when that is the design.
+   Composed host (`NotesAuthorizationTests` in `examples/src/example/notes/tests/test_rebac.py`): `TransactionTestCase`, `call_command("rebac", "sync")` in `setUp`, seed through `resources load`. Source-addon tests (`tests/test_scopedemo.py`): request `db` (the session baseline has merged every fragment and synced it with `--force-overwrite` into the disposable test database) and `backend().check_access(subject=…, action=…, resource=to_object_ref(row))`. Field-backed and const-backed reach leaves no tuples: assert `active_relationship_model().objects.filter(resource_type=…)` is empty when that is the design.
    **Owner rule:** tests exercise the composed runtime model and the schema the fixtures sync (`docs/checks.md#source-addon-test-models`); a test-local schema is justified only where no addon owns the definition, as `tests/scopedemo/permissions.zed` does.
 
 ## Do not
@@ -165,7 +165,7 @@ Parsing, sync, point checks, actor-scoped querysets and gated-field projection a
 - Caveated subjects or `with` contexts in any zed → `angee.E024` (`check_rebac_caveats` in `src/angee/base/checks.py`); use step 3.
 - A Python provider, `visible_to`, `is_superuser` branch or queryset filter as authorization → `docs/backend/guidelines.md#rebac` ("Visibility and access are REBAC-native, always").
 - Editing a framework addon's `permissions.zed` to name your role → `docs/backend/guidelines.md#rebac` ("A consumer addon contributes…"); use `permissions.extends.zed`.
-- A fragment that declares a new non-gate permission → `_merge_definition` (`build.py`) raises. A `read` arm on a definition that owns `read_granted` bypasses its withholding → `docs/backend/guidelines.md#rebac` ("Permission fragments widen `read_granted`"); union there. On `messaging/thread` a record's chatter arm goes to `chatter_read`, which the inbox's `read_inbox` skips; `messaging.E003` (`check_derived_reads` in `src/angee/messaging/checks.py`, a seal through `check_sealed_permissions` in `src/angee/base/checks.py`) refuses an arm on a thread or message `read` or `read_inbox`.
+- A fragment that declares a new non-gate permission → `_merge_definition` (`build.py`) raises. A `read` arm on a definition that owns `read_granted` bypasses its withholding → `docs/backend/guidelines.md#rebac` ("Permission fragments widen `read_granted`"); union there. On `messaging/thread` a record's chatter arm goes to `chatter_read`, which the inbox's `read_inbox` skips; `messaging.E003` (`check_derived_reads` in `src/angee/messaging/checks.py`, a seal through `check_sealed_permissions` in `src/angee/base/checks.py`) refuses an arm on a thread or message `read` or `read_inbox`, and `storage.E001` (`check_derived_permissions` in `src/angee/storage/checks.py`) one on `storage/file` `read`, `write` or `share`.
 - `#effective_member` inside a relation's allowed subjects → invalid schema; store the role and arrow (`docs/backend/guidelines.md#rebac`, "Relations constrain stored subjects").
 - Mirroring a column into tuples, or a remote backend → `docs/stack.md#backend` (local backend only).
 - A private share mutation, Django group M2M, or `auth.Permission` sync → `docs/backend/guidelines.md#rebac` ("Declare direct sharing once"; "Membership has one store").
@@ -178,7 +178,7 @@ Parsing, sync, point checks, actor-scoped querysets and gated-field projection a
 
 Validator: the addon's focused test module plus the system checks; the loop is `.agents/skills/slice/SKILL.md`.
 
-- In a jj lane (no host, database or JS install): the focused Python tests, `tests/test_permission_composition.py`, `tests/test_layering.py`, lint and types on touched files, all under `docs/checks.md#python-and-composition-contracts`. Per-actor assertions run here because `composed_tables`/`composed_permissions` sync REBAC into the SQLite test database (`docs/checks.md#source-addon-test-models`).
+- In a jj lane (no host, database or JS install): the focused Python tests, `tests/test_permission_composition.py`, `tests/test_layering.py`, `lint-imports`, lint and types on touched files, all under `docs/checks.md#python-and-composition-contracts`. Per-actor assertions run here because the session baseline syncs REBAC into the SQLite test database (`docs/checks.md#source-addon-test-models`).
 - Only on integrated `src`: composition drift, `check` (`angee.E015-E017`, `E022`, `E024`, `E027`, `E045`, `rebac.E009`, `tags.E002`), the stack sync and the composed example suite under `docs/checks.md#composition-and-schema`; the live page under `docs/checks.md#browser-verification`; CI scope under `docs/checks.md#what-ci-actually-runs`.
 - Done means: the test module proves read/write/deny for at least owner, grantee and outsider; `check` is clean; a grant through the share surface appears in `direct_record_access()`; a backed relation leaves no stored tuples.
 - False greens: a green unit suite with a live "loaded N rows outside actor scope" failure (`docs/backend/guidelines.md#rebac`, "Never `select_related` a REBAC-guarded relation into an actor-scoped queryset"); admin-only tests that hide a leaked system scope ("User-requested reads and writes retain their actor scope").

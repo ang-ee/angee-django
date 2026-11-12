@@ -1,8 +1,8 @@
 // @vitest-environment happy-dom
 
-import { cleanup, render, screen } from "@testing-library/react";
+import { render, screen } from "@testing-library/react";
 import * as React from "react";
-import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
+import { beforeEach, describe, expect, test, vi } from "vitest";
 import { createRouteHref } from "@angee/ui/runtime";
 
 import type { AgentRosterItem, AgentSession } from "../documents";
@@ -45,10 +45,6 @@ vi.mock("@angee/ui", async (importOriginal) => {
   return {
     ...actual,
     useRouteHref: () => sdkMocks.routeHref,
-    useNamespaceT:
-      (_namespace: string, messages: Record<string, string>) =>
-      (key: string) =>
-        messages[key] ?? key,
   };
 });
 
@@ -152,8 +148,6 @@ beforeEach(() => {
     },
   );
 });
-
-afterEach(cleanup);
 
 describe("AgentChatterPane", () => {
   test("leaves the no-agent state when the session query refetches with a running agent", async () => {

@@ -1,4 +1,4 @@
-"""Party same_as detection."""
+"""Party same_as detection and the merge it leads to."""
 
 from __future__ import annotations
 
@@ -7,9 +7,10 @@ from typing import Any
 import pytest
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
-from rebac import system_context
+from rebac import actor_context, system_context
 
 import tests.test_parties_circles  # noqa: F401 -- register the fixture model graph before database setup
+from angee.graphql.testing import capture_broadcasts
 from angee.messaging.testing.models import Handle, Party, Person
 
 
@@ -25,11 +26,10 @@ def _same_as_pair(owner: Any) -> set[Any]:
     return {left.pk, right.pk}
 
 
-@pytest.mark.django_db(transaction=True)
-def test_same_as_pairs_scope_handles_to_the_pinned_actor(composed_tables: None) -> None:
+def test_same_as_pairs_scope_handles_to_the_pinned_actor(db: None) -> None:
     """A queryset pinned to an actor finds that actor's same_as pairs without an ambient actor."""
 
-    del composed_tables
+    del db
     owner = get_user_model().objects.create_user(username="same-as-owner")
     pair = _same_as_pair(owner)
 
@@ -38,11 +38,10 @@ def test_same_as_pairs_scope_handles_to_the_pinned_actor(composed_tables: None) 
     assert [{candidate.left.pk, candidate.right.pk} for candidate in candidates] == [pair]
 
 
-@pytest.mark.django_db(transaction=True)
-def test_same_as_pairs_run_under_system_context_without_an_actor(composed_tables: None) -> None:
+def test_same_as_pairs_run_under_system_context_without_an_actor(db: None) -> None:
     """A system scan with no actor at all still finds the pair."""
 
-    del composed_tables
+    del db
     pair = _same_as_pair(get_user_model().objects.create_user(username="same-as-system-owner"))
 
     with system_context(reason="same_as scan"):
@@ -51,11 +50,10 @@ def test_same_as_pairs_run_under_system_context_without_an_actor(composed_tables
     assert [{candidate.left.pk, candidate.right.pk} for candidate in candidates] == [pair]
 
 
-@pytest.mark.django_db(transaction=True)
-def test_merge_scalar_fields_admit_person_choices_only_between_people(composed_tables: None) -> None:
+def test_merge_scalar_fields_admit_person_choices_only_between_people(db: None) -> None:
     """Merge validation and its GraphQL metadata share the row's declared scalar choices."""
 
-    del composed_tables
+    del db
     with system_context(reason="test.parties.merge_fields"):
         party = Party.objects.create(display_name="Plain")
         person = Person.objects.create(display_name="Person")
@@ -63,4 +61,52 @@ def test_merge_scalar_fields_admit_person_choices_only_between_people(composed_t
         assert set(party.merge_scalar_fields) < set(person.merge_scalar_fields)
         assert "birthday" in person.merge_scalar_fields
         with pytest.raises(ValidationError, match="Unsupported merge field"):
-            party.apply_merge_field_overrides(person, {"birthday": "2000-01-01"})
+            party.keep_merge_fields(person, {"birthday": "2000-01-01"})
+
+
+@pytest.mark.parametrize(
+    ("field_overrides", "kept"),
+    [({}, ("Mergeprobe Gamma", "Gamma")), ({"display_name": "Mergeprobe Delta"}, ("Mergeprobe Delta", "Gamma"))],
+    ids=("survivor-values", "override"),
+)
+def test_a_merge_keeps_the_chosen_values_over_the_newer_statements_it_moves(
+    db: None, field_overrides: dict[str, str], kept: tuple[str, str]
+) -> None:
+    """The duplicate's newer statements move to the survivor; survivorship still keeps what the merge chose."""
+
+    del db
+    owner = get_user_model().objects.create_user(username="merge-values-owner")
+    with actor_context(owner):
+        gamma, delta = [
+            Person.objects.create(display_name=f"Mergeprobe {name}", given_name="Mergeprobe", family_name=name)
+            for name in ("Gamma", "Delta")
+        ]
+        Party.objects.get(pk=gamma.pk).merge(records=[delta.public_id], field_overrides=field_overrides)
+        survivor = Person.objects.get(pk=gamma.pk)
+        merged = (survivor.display_name, survivor.family_name)
+        for statements in survivor.statement_managers():
+            statements.resolve()
+        survivor.refresh_from_db()
+    assert merged == (survivor.display_name, survivor.family_name) == kept
+
+
+def test_reverting_a_merge_publishes_the_survivors_restored_values_on_its_record_feed(
+    db: None, django_capture_on_commit_callbacks: Any,
+) -> None:
+    """A person's page reads the Party feed live; the revert's Person restore reaches it like an ordinary edit."""
+
+    del db
+    owner = get_user_model().objects.create_user(username="merge-revert-feed-owner")
+    with actor_context(owner):
+        gamma, delta = [Person.objects.create(display_name=f"Feedprobe {name}") for name in ("Gamma", "Delta")]
+        with django_capture_on_commit_callbacks(execute=True):  # the merge's changeset closes on commit
+            Party.objects.get(pk=gamma.pk).merge(records=[delta.public_id], field_overrides={"display_name": "Merged"})
+        boundary = Party.history.filter(id=delta.pk).order_by("-history_id").first().changeset
+        with capture_broadcasts() as sent, django_capture_on_commit_callbacks(execute=True):
+            boundary.with_actor(owner).revert()
+    assert Person._base_manager.get(pk=gamma.pk).display_name == "Feedprobe Gamma"
+    assert any(
+        (event["model"], event["id"], event["action"]) == ("parties.Party", gamma.public_id, "update")
+        and "display_name" in event["changed_fields"]
+        for event in sent
+    ), sent

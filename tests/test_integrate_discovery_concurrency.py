@@ -16,7 +16,6 @@ from tests.test_integrate_discovery import sent_tasks as sent_tasks
 
 pytestmark = [
     pytest.mark.django_db(transaction=True),
-    pytest.mark.usefixtures("composed_tables"),
     pytest.mark.skipif(connection.vendor != "postgresql", reason="Real PostgreSQL row locks are required."),
 ]
 

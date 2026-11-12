@@ -5,7 +5,6 @@ from django.core.exceptions import ValidationError
 from django.db import connection
 from django.test.utils import CaptureQueriesContext
 from rebac import SubjectRef, actor_context, system_context, to_subject_ref
-from rebac.backends import reset_backend
 from rebac.errors import PermissionDenied
 from rebac.models import PermissionAuditEvent, active_relationship_model
 
@@ -14,6 +13,14 @@ from angee.base.testing.queries import statement_startswith
 from tests.conftest import create_user
 from tests.core_persistence import OwnedRow, ownership_tables  # noqa: F401
 from tests.core_seam_models import SubjectGuardedRow, subject_tables  # noqa: F401
+
+
+def _row_relationships():
+    """Relationships on this module's rows; the host baseline holds unrelated principals."""
+
+    return active_relationship_model().objects.filter(
+        resource_type__in=(OwnedRow._meta.rebac_resource_type, SubjectGuardedRow._meta.rebac_resource_type),
+    )
 
 
 def _non_audit_writes(queries):
@@ -27,16 +34,8 @@ def _non_audit_writes(queries):
     ]
 
 
-@pytest.fixture(params=["denormalized", "registry"])
-def relationship_store(request, settings):
-    settings.REBAC_LOCAL_BACKEND_STORAGE = request.param
-    reset_backend()
-    yield
-    reset_backend()
-
-
 @pytest.fixture
-def grant_case(relationship_store, subject_tables):  # noqa: F811 -- imported shared fixture
+def grant_case(subject_tables):  # noqa: F811 -- imported shared fixture
     owner = create_user("grant-owner")
     recipient = create_user("grant-recipient")
     with actor_context(owner):
@@ -84,7 +83,7 @@ def test_refused_grant_writes_no_relationship_or_row(grant_case, relation, entry
         else:
             row._grant_declared_record_access(SubjectGuardedRow.record_access_permission, relation, subject)
     assert not _non_audit_writes(queries)
-    assert not active_relationship_model().objects.exists()
+    assert not _row_relationships().exists()
     assert list(OwnedRow.history.filter(id=row.id).values()) == history_before
     assert row.with_actor(owner).direct_record_access() == ()
 
@@ -105,7 +104,7 @@ def test_allowed_grants_are_idempotent_but_revalidate_every_attempt(grant_case, 
     assert [call[:2] for call in calls] == [(relation, recipient), (relation, recipient)]
     assert calls[0][2] == ()
     assert len(calls[1][2]) == 1
-    assert active_relationship_model().objects.count() == 1
+    assert _row_relationships().count() == 1
     assert row.with_actor(recipient).has_access("read")
 
     row.refused_subject = str(to_subject_ref(recipient))
@@ -113,7 +112,7 @@ def test_allowed_grants_are_idempotent_but_revalidate_every_attempt(grant_case, 
     with pytest.raises(RecordAccessSubjectRefused):
         row.grant_record_access(relation, recipient)
     assert len(calls) == 3
-    assert active_relationship_model().objects.count() == 1
+    assert _row_relationships().count() == 1
 
 
 @pytest.mark.parametrize("entrypoint", ["public", "declared"])
@@ -132,7 +131,7 @@ def test_revoke_does_not_ask_subject_validation_even_if_holder_is_now_refused(gr
             row.revoke_record_access("reader", recipient)
         else:
             row._revoke_declared_record_access(SubjectGuardedRow.record_access_permission, "reader", recipient)
-    assert not active_relationship_model().objects.exists()
+    assert not _row_relationships().exists()
     assert not row.with_actor(recipient).has_access("read")
 
 
@@ -159,7 +158,7 @@ def test_invalid_or_unauthorized_grants_fail_before_subject_policy(grant_case, f
         row.with_actor(recipient)
     with pytest.raises(expected):
         row.grant_record_access(relation, recipient)
-    assert not active_relationship_model().objects.exists()
+    assert not _row_relationships().exists()
 
 
 @pytest.mark.usefixtures("subject_tables")
@@ -254,11 +253,11 @@ def test_system_revoke_requires_an_explicit_boundary_and_remains_idempotent(gran
     row.with_actor(owner).grant_record_access("reader", recipient)
     with pytest.raises(PermissionDenied, match="explicit system scope"):
         row.system_revoke_record_access("reader", recipient)
-    assert active_relationship_model().objects.count() == 1
+    assert _row_relationships().count() == 1
     with system_context(reason="record_access.test"):
         with pytest.raises(ValueError, match="does not declare"):
             row.system_revoke_record_access("undeclared", recipient)
-    assert active_relationship_model().objects.count() == 1
+    assert _row_relationships().count() == 1
 
     def refuse_subject(*args, **kwargs):
         pytest.fail("Revocation must not validate the departing holder.")
@@ -267,7 +266,7 @@ def test_system_revoke_requires_an_explicit_boundary_and_remains_idempotent(gran
     with system_context(reason="record_access.test"):
         row.system_revoke_record_access("reader", recipient)
         row.system_revoke_record_access("reader", recipient)
-    assert not active_relationship_model().objects.exists()
+    assert not _row_relationships().exists()
 
 
 def test_system_revoke_rolls_back_when_a_lifecycle_owner_fails(grant_case):
@@ -285,4 +284,4 @@ def test_system_revoke_rolls_back_when_a_lifecycle_owner_fails(grant_case):
             row.system_revoke_record_access("reader", recipient)
     finally:
         record_access_revoked.disconnect(fail_receiver, sender=SubjectGuardedRow)
-    assert active_relationship_model().objects.count() == 1
+    assert _row_relationships().count() == 1

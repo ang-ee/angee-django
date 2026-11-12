@@ -786,6 +786,9 @@ importers:
         specifier: workspace:*
         version: link:../../../../packages/ui
     devDependencies:
+      '@angee/storybook':
+        specifier: workspace:*
+        version: link:../../../../packages/storybook
       '@tanstack/react-router':
         specifier: ^1.170.41
         version: 1.170.46(react-dom@19.3.1(react@19.3.1))(react@19.3.1)
@@ -1864,6 +1867,9 @@ importers:
         specifier: ^1.21.0
         version: 1.70.0(@types/react@19.3.0)(react@19.3.1)
     devDependencies:
+      '@angee/storybook':
+        specifier: workspace:*
+        version: link:../../../../packages/storybook
       '@tanstack/react-router':
         specifier: ^1.170.41
         version: 1.170.46(react-dom@19.3.1(react@19.3.1))(react@19.3.1)
@@ -1999,6 +2005,9 @@ importers:
         specifier: ^1.21.0
         version: 1.70.0(@types/react@19.3.0)(react@19.3.1)
     devDependencies:
+      '@angee/storybook':
+        specifier: workspace:*
+        version: link:../../../../packages/storybook
       '@tanstack/react-router':
         specifier: ^1.170.41
         version: 1.170.46(react-dom@19.3.1(react@19.3.1))(react@19.3.1)
@@ -2499,6 +2508,9 @@ importers:
         specifier: ^1.21.0
         version: 1.70.0(@types/react@19.3.0)(react@19.3.1)
     devDependencies:
+      '@angee/storybook':
+        specifier: workspace:*
+        version: link:../../../../packages/storybook
       '@tanstack/react-router':
         specifier: ^1.170.41
         version: 1.170.46(react-dom@19.3.1(react@19.3.1))(react@19.3.1)

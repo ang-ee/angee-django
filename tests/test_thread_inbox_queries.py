@@ -13,7 +13,7 @@ from rebac import actor_context, system_context
 from angee.messaging.testing.models import Fragment, Message, Part, Thread, ThreadAttachment
 from tests.chatterdemo.models import ChatterDoc
 
-pytestmark = [pytest.mark.django_db(transaction=True), pytest.mark.usefixtures("composed_tables")]
+pytestmark = pytest.mark.django_db
 
 
 def test_inbox_antijoin_preserves_title_projection_and_null_timestamp_ties() -> None:

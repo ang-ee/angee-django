@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 
 import { cleanup, render, screen } from "@testing-library/react";
-import { afterEach, beforeEach, expect, test, vi } from "vitest";
+import { beforeEach, expect, test, vi } from "vitest";
 import type { RecordThreadStreamSource } from "@angee/messaging";
 import type { ChatterViewContext } from "@angee/ui";
 
@@ -73,7 +73,6 @@ beforeEach(() => {
   sdk.calls.length = 0;
   sdk.createNote.mockReset().mockResolvedValue({ create_record_note: { id: "binding_new", page: "pg_new" } });
 });
-afterEach(cleanup);
 
 test("lists bound pages in the shared child stream without a page conversation", () => {
   render(<RecordNotesStream target={target} role="notes" vault="vlt_1"

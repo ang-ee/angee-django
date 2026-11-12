@@ -9,7 +9,7 @@ from angee.knowledge.retrieval import LexicalRetrievalBackend, RetrievalHit, Ret
 from tests.conftest import Page, Vault, addon_schema, create_user, vault_for
 
 
-def test_lexical_hits_keep_page_search_and_actor_scope(composed_tables):
+def test_lexical_hits_keep_page_search_and_actor_scope(db):
     owner, outsider = create_user("hit-owner"), create_user("hit-outsider")
     vault = vault_for(owner)
     with actor_context(owner):
@@ -22,7 +22,7 @@ def test_lexical_hits_keep_page_search_and_actor_scope(composed_tables):
         assert Vault.objects.search_passages("Needle").hits == []
 
 
-def test_search_passages_projects_evidence_and_page_search_keeps_its_shape(composed_tables, monkeypatch):
+def test_search_passages_projects_evidence_and_page_search_keeps_its_shape(db, monkeypatch):
     owner = create_user("hit-projection")
     vault = vault_for(owner)
     with actor_context(owner):
@@ -59,7 +59,7 @@ def test_search_passages_projects_evidence_and_page_search_keeps_its_shape(compo
     assert data["search_pages"] == [{"id": str(page.sqid), "title": "Needle"}]
 
 
-def test_vault_backend_is_writable_only_by_its_writer(composed_tables):
+def test_vault_backend_is_writable_only_by_its_writer(db):
     owner, outsider = create_user("selection-owner"), create_user("selection-outsider")
     vault = vault_for(owner)
     schema = addon_schema(importlib.import_module("angee.knowledge.schema").schemas, "public")

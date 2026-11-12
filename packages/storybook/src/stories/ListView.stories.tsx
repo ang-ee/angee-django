@@ -9,7 +9,7 @@ import {
 } from "@angee/ui";
 
 import { ResourceQuery } from "@angee/metadata";
-import { jsonResponse, storySchema, testDataResource, testQueryField, testResourceQuery } from "./runtime-fixtures";
+import { storySchema, testDataResource, testQueryField, testResourceQuery } from "./runtime-fixtures";
 
 const rows = [
   {
@@ -79,14 +79,10 @@ const rowActions: readonly RowActionDeclaration<StoryRow>[] = [
   }),
 ];
 
-const storySchemas = storySchema(async () =>
-  jsonResponse({
-    data: {
-      notes: rows,
-      notes_aggregate: { aggregate: { count: rows.length } },
-    },
-  }),
-);
+const storySchemas = storySchema({
+  notes: () => rows,
+  notes_aggregate: () => ({ aggregate: { count: rows.length } }),
+});
 
 storySchemas.public!.metadata = { angee: { resources: [testDataResource("notes.Note", {
   schemaName: "public",

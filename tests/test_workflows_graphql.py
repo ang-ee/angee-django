@@ -370,6 +370,7 @@ def test_retry_action_uses_run_permission_instead_of_engine_row_write(schema, ca
     assert WorkflowRun.system_queryset().get(pk=run.pk).status == RunStatus.RUNNING
 
 
+@pytest.mark.django_db(transaction=True)
 def test_duplicate_retry_action_records_requesting_operator(schema, callers, register_step):
     """Only explicit acknowledgment permits retry after an uncertain external effect."""
 
@@ -737,7 +738,8 @@ def test_studio_native_field_reads_follow_monitor_on_every_path_and_batch(
     from tests.conftest import make_addon
 
     admin, editor, reader = callers
-    monkeypatch.setattr(GraphQLSchemas, "_discovered", GraphQLSchemas([make_addon(schemas=knowledge_schema.schemas)]))
+    discovered = GraphQLSchemas([make_addon(schemas=knowledge_schema.schemas)])
+    monkeypatch.setattr(GraphQLSchemas, "from_discovery", classmethod(lambda cls: discovered))
 
     def create(key):
         workflow = load_workflow(document("entry"), key=key, actor=admin, subject_model="knowledge.vault")

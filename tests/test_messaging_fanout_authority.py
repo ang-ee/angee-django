@@ -5,7 +5,6 @@ from unittest.mock import patch
 
 import pytest
 from django.contrib.auth import get_user_model
-from django.contrib.auth.models import AnonymousUser
 from django.db import connection, models
 from django.test.utils import CaptureQueriesContext
 from rebac import (
@@ -19,14 +18,13 @@ from rebac.models import active_relationship_model
 
 from angee.base.signals import mute_changes
 from angee.base.testing.queries import is_rebac_revision_read, statement_body, statement_startswith
-from angee.messaging.testing.models import Message, ThreadAttachment, ThreadNotification
+from angee.messaging.testing.models import Message, ThreadNotification
 from tests.chatterdemo.models import ChatterDoc
-from tests.messaging_campaign import grant
 from tests.t3_campaign import campaign_access as campaign_access
 from tests.t3_campaign import campaign_user as campaign_user
-from tests.t3_campaign import messaging_access_schema as messaging_access_schema
 
 
+@pytest.mark.django_db(transaction=True)
 @pytest.mark.parametrize("size", (100, 1500))
 def test_fanout_chunks_account_read_gates_and_delivers_exactly_the_readable_half(
     campaign_access,
@@ -57,8 +55,8 @@ def test_fanout_chunks_account_read_gates_and_delivers_exactly_the_readable_half
     statements = [statement_body(q["sql"]) for q in gate_queries]
     chunks = [sql for sql in statements if statement_startswith(sql, "SELECT") and "EXISTS(" in sql]
     # Native check_bulk_permissions decides 50 items per batch: statements per batch, not per user.
-    # 0.31 (2 -> 2 or 3) splits a batch's bounds at its statement-size budget; registry items compile wider.
-    per_batch = 3 if campaign_access == "registry" else 2
+    # 0.31 (2 -> 3) splits a batch's bounds at its statement-size budget; registry items compile wider.
+    per_batch = 3
     batches = size // 50
     assert len(chunks) == per_batch * batches
     # 0.31 (1 per batch -> 0): actor memberships are predicates of the bound statements, never a separate read.
@@ -93,23 +91,3 @@ def test_fanout_chunks_account_read_gates_and_delivers_exactly_the_readable_half
     insert_size = connection.ops.bulk_batch_size(fields, [None] * count)
     # 0.31 (3 -> per_batch gate statements per batch): the audience gate above, without membership reads.
     assert len(fanout_queries) <= per_batch * batches + 8 + ceil(count / insert_size)
-
-
-@pytest.mark.parametrize("attachment_role", ("chatter", "source"))
-@pytest.mark.parametrize("actor_role", ("reader", "writer", "manager", "outsider", "other_reader", "anonymous"))
-def test_record_arm_is_read_only_and_role_filtered(campaign_access, campaign_user, attachment_role, actor_role):
-    actor = AnonymousUser() if actor_role == "anonymous" else campaign_user(actor_role)
-    with system_context(reason="tests.t3.thread_matrix"):
-        record = ChatterDoc.objects.create(title="Record A")
-        other = ChatterDoc.objects.create(title="Record B")
-        attachment = ThreadAttachment.objects.ensure_for_record(record, role=attachment_role)
-    if actor_role in ("reader", "writer", "manager"):
-        grant(record, actor_role, actor)
-    elif actor_role == "other_reader":
-        grant(other, "reader", actor)
-    expected = attachment_role == "chatter" and actor_role in ("reader", "writer", "manager")
-    thread = attachment.thread
-    for permission in ("read", "write", "delete", "share", "transfer"):
-        allowed = expected and permission == "read"
-        assert thread.with_actor(actor).has_access(permission) is allowed
-        assert type(thread).objects.with_actor(actor).with_action(permission).filter(pk=thread.pk).exists() is allowed

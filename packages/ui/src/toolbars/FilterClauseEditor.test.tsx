@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 import { useState } from "react";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { afterEach, expect, test, vi } from "vitest";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { expect, test, vi } from "vitest";
 import { createUiTestProviders } from "../testing";
 import { RelationPicker } from "../views/relation/RelationPicker";
 import { FilterClauseEditor, FilterClauseRow, type FilterClauseDraft, type FilterClauseField } from "./FilterClauseEditor";
@@ -11,7 +11,6 @@ const fields: readonly FilterClauseField[] = [
   { id: "name", label: "Name", type: "text", operators: ["iContains", "exact", "isNull"] },
   { id: "count", field: "item_count", label: "Count", type: "number", operators: ["gte", "exact"] },
 ];
-afterEach(cleanup);
 async function choose(label: string, option: string) {
   fireEvent.click(screen.getByLabelText(label));
   const item = await screen.findByRole("option", { name: option });

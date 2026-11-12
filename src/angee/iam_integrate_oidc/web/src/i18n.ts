@@ -1,4 +1,4 @@
-import { createNamespaceT } from "@angee/ui";
+import { createNamespaceT } from "@angee/ui/i18n";
 
 export const enOidcMessages: Record<string, string> = {
   // OAuth login methods (the public sign-in slot).
