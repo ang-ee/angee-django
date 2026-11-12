@@ -17,7 +17,9 @@ from hypothesis import strategies as st
 from rebac import RelationshipTuple, actor_context, system_context, to_object_ref, to_subject_ref, write_relationships
 
 from angee.base.models.base import AngeeModel
+from angee.provenance.context import changeset
 from angee.provenance.evidence import FactAuthority
+from angee.provenance.schema import RecordHistory
 from angee.provenance.statements import (
     Aspect,
     SourceKind,
@@ -26,7 +28,7 @@ from angee.provenance.statements import (
     StatementsMixin,
 )
 from tests.conftest import create_platform_admin, create_user
-from tests.extcontrib.models import Claimed, ClaimedBilling, ClaimedSource, ClaimedStatementQuerySet
+from tests.extcontrib.models import Claimed, ClaimedBilling, ClaimedSource, ClaimedStatementQuerySet, Stated
 from tests.statement_models import Ledger
 
 
@@ -307,3 +309,121 @@ def test_insertion_order_never_changes_the_survivor(
             outcomes.append((vat, [indexes[int(source)] for source in applied]))
         assert outcomes[0] == outcomes[1]
         transaction.set_rollback(True)
+
+
+def _stated(writer: Any) -> Any:
+    """A ``Stated`` row ``writer`` may write."""
+
+    with system_context(reason="test stated fixture"):
+        record = Stated.objects.create(status="draft")
+        write_relationships([RelationshipTuple(to_object_ref(record), "writer", to_subject_ref(writer))])
+    return record
+
+
+def _state_stance(record: Any, source: str, kind: str, **columns: Any) -> Any:
+    """Store one source's ``state`` stance by its statement columns, then resolve the aspect."""
+
+    with system_context(reason="test stated stance"):
+        row = Stated.statements.model._base_manager.create(
+            subject=record, aspect="state", asserted_by=source, source_kind=kind, **columns
+        )
+        Stated.statements.resolve(subject=record, aspect="state")
+    record.refresh_from_db()
+    return row
+
+
+def test_a_value_field_named_like_a_stance_column_is_held_as_stated_name() -> None:
+    """The stance keeps its own ``status``; the subject's is copied, typed as the subject's, as ``stated_status``."""
+
+    generated = Stated.statements.model
+    state = generated.statement_aspects["state"]
+    assert (state.column("status"), state.column("note")) == ("stated_status", "note")
+    assert generated._meta.get_field("status").choices_enum is generated.StatementStatus
+    assert type(generated._meta.get_field("stated_status")) is models.CharField
+    assert generated.stated_field("state", "status") is generated._meta.get_field("stated_status")
+    assert not generated.check()
+
+
+@isolate_apps("tests")
+def test_a_stated_alias_colliding_with_another_value_field_is_refused() -> None:
+    class Colliding(StatementsMixin, AngeeModel):
+        status = models.CharField(max_length=10)
+        stated_status = models.CharField(max_length=10)
+        statements = StatementRecords(
+            aspects={"state": Aspect(fields=("status",)), "copy": Aspect(fields=("stated_status",))}
+        )
+
+        class Meta:
+            app_label = "tests"
+
+    assert "provenance.E041" in {error.id for error in Colliding.statements.model.check()}
+
+
+def test_survivorship_fill_and_confirm_read_a_stated_status_by_its_field_name(
+    db: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    del db
+    writer = create_user("stated-status-writer")
+    record = _stated(writer)
+    source = _state_stance(record, "src:ledger", SOR, stated_status="closed", note="theirs")
+    _state_stance(record, str(to_subject_ref(writer)), P, stated_status="", note="mine")
+    assert (record.status, record.note) == ("", "mine")
+
+    aspects = Stated.statements.model.statement_aspects
+    monkeypatch.setitem(aspects, "state", replace(aspects["state"], allow_fill=True))
+    with system_context(reason="test stated fill"):
+        Stated.statements.resolve(subject=record, aspect="state")
+    record.refresh_from_db()
+    assert (record.status, record.note) == ("closed", "mine")
+
+    with actor_context(writer):
+        confirmed = source.with_actor(writer).confirm()
+    record.refresh_from_db()
+    assert (confirmed.stated_status, confirmed.note, confirmed.is_confirmed) == ("closed", "theirs", True)
+    assert (record.status, record.note) == ("closed", "theirs")
+
+
+@pytest.mark.django_db(transaction=True)
+def test_record_history_reads_a_stated_status_by_its_field_name() -> None:
+    reader = create_user("stated-history-reader")
+    with changeset(fresh=True, change_reason="Import state"):
+        record = _stated(reader)
+        _state_stance(record, "src:ledger", SOR, stated_status="closed")
+    # The creation and survivorship's applied mark are two versions of the one stance.
+    assert {
+        (statement.values["status"], str(statement.status))
+        for entry in RecordHistory(record, actor=reader).page(25, 0).entries
+        for statement in entry.statements
+    } == {("closed", "asserted")}
+
+
+def test_person_stances_wait_until_a_statement_names_the_row(db: None) -> None:
+    """An unstated row's edits are ordinary saves; once stated (confirmed, or withdrawn later) they are stances."""
+
+    del db
+    writer = create_user("stated-gate-writer")
+    record = _stated(writer)
+
+    def edit(row: Any, note: str) -> None:
+        with actor_context(writer):
+            edited = Stated.objects.get(pk=row.pk)
+            edited.note = note
+            edited.save()
+
+    edit(record, "local")
+    assert not record.carries_statements()
+    _state_stance(record, "src:ledger", SOR, stated_status="open", note="remote")
+    assert record.carries_statements() and record.note == "remote"
+    edit(record, "mine")
+    rows = Stated.statements.model._base_manager
+    assert rows.get(subject=record, source_kind=P).note == "mine"
+    with system_context(reason="test stated withdrawal"):
+        rows.filter(subject=record).update(status="withdrawn")
+    assert record.carries_statements()
+
+    other = _stated(writer)
+    with actor_context(writer):
+        other.with_actor(writer).confirm(aspect="state", values={"status": "kept", "note": ""})
+    assert other.carries_statements()
+    edit(other, "after")
+    assert rows.filter(subject=other, source_kind=P).get().note == "after"
