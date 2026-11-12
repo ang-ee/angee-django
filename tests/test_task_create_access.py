@@ -117,6 +117,7 @@ def task_create_case(db: None) -> Iterator[tuple[Scope, Any, Any]]:
             permission create = authenticated
             permission read = authenticated
             permission write = authenticated
+            permission write_statements = write
             permission narrow = write
             permission widen = owner
             permission read_promoted_phase = owner

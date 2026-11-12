@@ -1,6 +1,6 @@
 // Generic role anchored to one team's live roster.
 // @rebac_package: extcontrib
-// @rebac_schema_revision: 4
+// @rebac_schema_revision: 5
 
 definition extcontrib/role {
     relation admin: angee/role // rebac:const=admin
@@ -31,14 +31,17 @@ definition extcontrib/claimed {
     permission delete = admin->member
 }
 
-// A statement subject whose own `status` shares a stance column's name.
+// A statement subject whose own `status` shares a stance column's name, and
+// whose statements admit through their own permission.
 definition extcontrib/stated {
     relation reader: auth/user
     relation writer: auth/user
+    relation stater: auth/user
     relation admin: angee/role // rebac:const=admin
 
     permission create = admin->member
-    permission read = reader + writer + admin->member
+    permission read = reader + writer + stater + admin->member
     permission write = writer + admin->member
+    permission write_statements = write + stater
     permission delete = admin->member
 }
