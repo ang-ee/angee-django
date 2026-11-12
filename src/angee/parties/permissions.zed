@@ -1,7 +1,7 @@
 // Authorization schema for the parties addon.
 // @rebac_package: parties
 // @rebac_package_version: 0.1.0
-// @rebac_schema_revision: 18
+// @rebac_schema_revision: 19
 
 // Parties, folders and circles are grant roots: each is owned through its
 // transferable `owner` column (OwnerMixin), which an insert defaults to the row's
@@ -43,8 +43,9 @@ definition parties/party {
     permission read = read_granted
     // What a party lends the record tasks about it: its direct holders only, so
     // task access never recurses through a thread the party follows (rebac.E016).
-    permission read_as_subject = owner + editor + reader + statement_source + admin->member
-    permission write_as_subject = owner + editor + statement_source + admin->member
+    // A source states the party, never the record tasks about it: it admits through `write` alone.
+    permission read_as_subject = owner + editor + reader + admin->member
+    permission write_as_subject = owner + editor + admin->member
     permission read_private = owner + editor + reader + admin->member
     permission read__notes = read_private
     permission read__first_met_note = read_private

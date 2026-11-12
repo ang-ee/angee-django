@@ -1963,7 +1963,8 @@ queue's stages or a document's lines. Declare them with `lines=HasuraLines(...)`
 the form renders them as one ordered section, saved by its one Save, with row
 order as the position. `linePrimaryFields` chooses the columns shown first (the
 rest wait in the data view's visible-fields menu) and `lineFields` their headers,
-choices and help. `<Group label lines />` places the lines as a section; carried
+choices and help, and `readOnlyWhen` locks a cell on the rows the domain says
+carry no such fact (a section row has no price). `<Group label lines />` places the lines as a section; carried
 by a `<model>#sections` child it narrows like any section, so a product keeps only
 the lines on its route with `only` under `when`, and narrowed away they are gone.
 Undeclared, the lines trail the form. A record with a life of its own (its own verbs, revision,

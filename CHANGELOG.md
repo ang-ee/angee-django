@@ -10,6 +10,9 @@ live in code docstrings.
 
 ## Unreleased — shared addon contracts, native embeddings and graph retrieval
 
+- `EditableLineField.readOnlyWhen(row, parentRow)` locks one line cell per row
+  from the row and its owning document, so a document's section and note rows
+  read their commercial cells while their text and row actions stay editable.
 - The `composed_tables` test fixture is removed: a database test requests
   pytest-django's `db` or carries a `django_db` mark, and rolls back over the
   session baseline `angee.base.testing.fixtures` records. The

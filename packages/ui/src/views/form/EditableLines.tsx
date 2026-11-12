@@ -70,6 +70,12 @@ export interface EditableLineField extends Pick<
 > {
   /** Column header and the cells' accessible name. */
   label?: string;
+  /**
+   * Locks this field's cell on the rows the domain says carry no such fact (a
+   * section row has no product or price). The row stays editable elsewhere and
+   * keeps its row actions; the backend owns the rule, this only presents it.
+   */
+  readOnlyWhen?: (row: Row, parentRow: Row | null) => boolean;
 }
 
 export interface EditableLineSupplementalColumn {
@@ -167,7 +173,8 @@ export function EditableLines({
         || ["money", "integer", "float"].includes(widget ?? "") ? "right" : "left",
       render: ({ id, index, value }) => {
         const messages = rowMessages(rowErrors?.[index], field.name);
-        const cellReadOnly = readOnly || lineLockedFields(value, config).includes(field.name);
+        const cellReadOnly = readOnly || lineLockedFields(value, config).includes(field.name)
+          || Boolean(authored?.readOnlyWhen?.(value, parentRow ?? null));
         const controlProps: WidgetControlProps = {
           presentation: "cell", id: `${controlId}-${id}-${field.name}`,
           "aria-invalid": messages.length > 0 || undefined,
