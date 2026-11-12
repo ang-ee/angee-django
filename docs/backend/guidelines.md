@@ -1088,8 +1088,14 @@ save. A person's create states no group whose values are all empty; clearing a
 field later is an edit and is stated. Retained statements protect their subject and
 every row they name from deletion, so a subject whose local rows stay deletable sets
 `StatementsMixin.person_stances_once_stated`: a person's save states nothing until
-the row carries a statement, and the first source assertion applies over its local
-values (see [projects](../../src/angee/projects/README.md)). Confirm or dismiss stay explicit.
+the row carries a statement (`carries_statements()`). Known debt: the first source
+assertion on such a row applies over its local values even from a plain stream,
+which contradicts "a plain stream ranks below people" for these rows; the owner-level
+cure is to seed PERSON stances from the row's history attribution when its first
+non-authoritative assertion arrives. A subject whose `write` other rows inherit names
+a narrower `statement_write_permission` (projects' `write_statements`), so admission
+lends a source nothing those rows reach (see [projects](../../src/angee/projects/README.md)).
+Confirm or dismiss stay explicit.
 Consumers contribute domain aspects through the descriptor's abstract donors: the
 subject source's own declaration finalizes the one statement table (bases, prefix,
 queryset, link) and every donor's aspects join it. `Aspect.precedence` owns source

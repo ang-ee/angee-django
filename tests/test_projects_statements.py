@@ -8,19 +8,31 @@ from typing import Any
 
 import pytest
 from django.contrib.auth import get_user_model
+from django.core.exceptions import ValidationError
 from django.db import models
+from django.db.models import ProtectedError
 from django.utils import timezone
-from rebac import PermissionDenied, actor_context, system_context
+from rebac import (
+    PermissionDenied,
+    RelationshipTuple,
+    actor_context,
+    system_context,
+    to_object_ref,
+    to_subject_ref,
+    write_relationships,
+)
 
+from angee.graphql.deletion import DeletePreview
 from angee.integrate.states import StreamKind
 from angee.integrate.testing.models import RecordLink, SyncStream
 from angee.messaging.backends import ManualChannelBackend
-from angee.messaging.testing.models import Channel
+from angee.messaging.testing.models import Channel, Message
 from angee.projects.events import project_status_changed
-from angee.projects.testing.models import Milestone, Project, Queue, Task
+from angee.projects.testing.models import Milestone, Project, Queue, Stage, Task
 from angee.provenance.context import changeset
 from angee.provenance.schema import RecordHistory
 from angee.provenance.statements import SourceKind
+from tests.chatterdemo.models import ChatterDoc
 from tests.conftest import current_stream, make_integration
 
 pytestmark = pytest.mark.django_db
@@ -145,8 +157,11 @@ def test_a_system_of_record_states_every_milestone_aspect() -> None:
     assert (milestone.start_date, milestone.target_date) == (date(2026, 2, 1), date(2026, 3, 1))
     assert (milestone.reached_at, milestone.reached_by_id) == (reached_at, None)
 
+    # A stamped receipt is historical: a stance that it is unreached never competes, so it is never applied.
     source.state(milestone, "lifecycle", reached_at=None)
     assert milestone.reached_at == reached_at
+    assert not _stance(milestone, "lifecycle", SourceKind.SYSTEM_OF_RECORD).applied
+    assert not milestone.with_actor(owner).provenance("reached_at").exists()
 
 
 def test_a_system_of_record_states_every_task_aspect() -> None:
@@ -214,19 +229,27 @@ def test_a_stated_lifecycle_moves_a_queued_task_to_the_stage_that_projects_it() 
     assert lifecycle() == ("open", "unstarted", None) and task.stage_id == queue.default_stage_id
 
 
-def test_an_unlinked_source_cannot_state_a_row() -> None:
-    """Admission is the row's ``statement_source`` arm: only an integration whose link names the row writes it."""
+def test_a_source_states_and_reads_only_the_rows_it_links() -> None:
+    """Admission is ``write_statements`` alone: a project's source reaches none of the rows its access lends."""
 
-    owner = _person("unlinked-owner")
-    task, other = _task(owner), _task(owner, title="Other")
-    source = Source("unlinked")
-    link = source.link(other)
-    with system_context(reason="tests.projects.statements.unlinked"), pytest.raises(PermissionDenied):
-        task.statements_for("identity").set(
-            aspect="identity", values={"title": "Foreign"}, asserted_by=source.integration, link=link
-        )
+    owner = _person("lent-owner")
+    project = _project(owner)
+    task, other = _task(owner, project=project), _task(owner, title="Other")
+    with system_context(reason="tests.projects.statements.lent"):
+        milestone = Milestone.objects.create(project=project, name="Phase")
+    source = Source("lent")
+    source.state(project, "identity", title="Remote project", body="")
+    for row, aspect, values, link in (
+        (task, "identity", {"title": "Foreign", "note": ""}, source.link(project)),
+        (milestone, "identity", {"name": "Foreign", "description": ""}, source.link(project)),
+        (task, "identity", {"title": "Foreign", "note": ""}, source.link(other)),
+    ):
+        with system_context(reason="tests.projects.statements.lent"), pytest.raises(PermissionDenied):
+            row.statements_for(aspect).set(aspect=aspect, values=values, asserted_by=source.integration, link=link)
     task.refresh_from_db()
-    assert task.title == "Local task" and not task.carries_statements()
+    assert task.title == "Local task" and not task.carries_statements() and not milestone.carries_statements()
+    for model, row in ((Project, project), (Task, task), (Milestone, milestone)):
+        assert not model.objects.with_actor(source.integration).filter(pk=row.pk).exists()
 
 
 def test_a_person_edit_on_a_local_row_stays_an_ordinary_deletable_save() -> None:
@@ -355,3 +378,130 @@ def test_record_history_projects_a_stated_status_under_its_field_name() -> None:
         if statement.aspect == "lifecycle"
     )
     assert (lifecycle.values["status"], str(lifecycle.status)) == ("done", "asserted")
+
+
+
+def test_a_persons_pause_on_an_authoritative_project_announces_only_the_surviving_change(
+    status_changes: list[tuple[str, str]],
+) -> None:
+    """The pause is a person's stance; survivorship re-applies the source's and only that change is announced."""
+
+    owner = _person("pausing-owner")
+    project = _project(owner)
+    source = Source("pausing", authoritative=True)
+    source.state(project, "lifecycle", status=Project.ProjectStatus.OPEN)
+
+    with actor_context(owner):
+        Project.objects.get(pk=project.pk).pause()
+    project.refresh_from_db()
+    assert project.status == Project.ProjectStatus.OPEN
+    assert status_changes == [("paused", "open")]
+    assert _stance(project, "lifecycle", SourceKind.PERSON).stated_status == "paused"
+
+    # A plain stream ranks below the person, whose pause then stands.
+    SyncStream.objects.set_authoritative(source.stream, False)
+    project.refresh_from_db()
+    assert project.status == Project.ProjectStatus.PAUSED
+    assert status_changes == [("paused", "open"), ("open", "paused")]
+
+
+@pytest.mark.usefixtures("activity_catalog")
+@pytest.mark.parametrize("queued", [True, False])
+def test_a_record_task_completion_an_authoritative_source_reverts_posts_nothing(queued: bool) -> None:
+    """The completion post follows the surviving state: none when the source reopens, one when the person wins.
+
+    A task scheduled by a person lands in their personal queue (the work verbs); a system's stays queue-less.
+    """
+
+    owner = _person("record-closer")
+    project = _project(owner)
+    with actor_context(owner) if queued else system_context(reason="tests.projects.statements.schedule"):
+        task = Task.objects.schedule(Project.objects.get(pk=project.pk), title="Call the client", assignee=owner)
+    assert (task.queue_id is not None) == queued
+    source = Source("record-closer", authoritative=True)
+    source.state(task, "lifecycle", status=Task.TaskStatus.OPEN)
+    posts = Message._base_manager.filter(subtype__key="activity_done")
+
+    with actor_context(owner):
+        Task.objects.get(pk=task.pk).complete()
+    task.refresh_from_db()
+    assert task.status == Task.TaskStatus.OPEN and not posts.exists()
+
+    SyncStream.objects.set_authoritative(source.stream, False)
+    task.refresh_from_db()
+    assert task.status == Task.TaskStatus.DONE and posts.count() == 1
+
+
+@pytest.mark.usefixtures("activity_catalog")
+def test_a_stated_row_and_every_row_its_statements_name_are_retained() -> None:
+    """Deletion is refused with a reason, including a record's cascade onto its stated record task."""
+
+    owner = _person("retained-owner")
+    project = _project(owner)
+    task = _task(owner, project=project)
+    source = Source("retained")
+    source.state(task, "structure", project=project, milestone=None, parent=None)
+    stated = Task._base_manager.get(pk=task.pk)
+    assert stated.delete_blocker() == "This task carries source statements and is retained."
+    with actor_context(owner):
+        preview = DeletePreview.from_instance(stated, owner)
+    assert preview.has_blockers and preview.refusals == ["This task carries source statements and is retained."]
+    with system_context(reason="tests.projects.statements.delete"):
+        with pytest.raises(ProtectedError):
+            Task._base_manager.get(pk=task.pk).delete()
+        # The project carries no statement of its own; the task's structure stance names it.
+        assert Project._base_manager.get(pk=project.pk).delete_blocker() is None
+        with pytest.raises(ProtectedError):
+            Project._base_manager.get(pk=project.pk).delete()
+
+    with system_context(reason="tests.projects.statements.record"):
+        doc = ChatterDoc.objects.create(title="Stated record")
+        write_relationships([RelationshipTuple(to_object_ref(doc), "manager", to_subject_ref(owner))])
+    with actor_context(owner):
+        record_task = Task.objects.schedule(ChatterDoc.objects.get(pk=doc.pk), title="Follow up", assignee=owner)
+    source.state(record_task, "identity", title="Follow up, imported", note="")
+    with system_context(reason="tests.projects.statements.cascade"), pytest.raises(ProtectedError):
+        ChatterDoc._base_manager.get(pk=doc.pk).delete()
+
+
+def test_a_plain_streams_first_assertion_overwrites_an_earlier_local_edit() -> None:
+    """Known debt (backend guidelines): an unstated row holds no person stance, so a plain stream's first value wins."""
+
+    owner = _person("first-plain-owner")
+    task = _task(owner)
+    with actor_context(owner):
+        edited = Task.objects.get(pk=task.pk)
+        edited.title = "Mine"
+        edited.save()
+    Source("first-plain").state(task, "identity", title="Remote", note="")
+    assert task.title == "Remote"
+    assert not task.statements.model._base_manager.filter(subject=task, source_kind=SourceKind.PERSON).exists()
+
+
+def test_a_lifecycle_its_owner_refuses_is_not_recorded() -> None:
+    """A queue without a completed stage cannot hold a done task: the verb refuses and the statement rolls back."""
+
+    owner = _person("refused-owner")
+    with system_context(reason="tests.projects.statements.bare_queue"):
+        queue = Queue.objects.create(name="Bare", key="BAR", owner=owner, provision_stages=False)
+        todo = Stage.objects.create(queue=queue, name="Todo", category="unstarted", position=0)
+    task = _task(owner, queue=queue, stage=todo)
+    with pytest.raises(ValidationError, match="no completed stage"):
+        Source("refused").state(task, "lifecycle", status=Task.TaskStatus.DONE)
+    task.refresh_from_db()
+    assert task.status == Task.TaskStatus.OPEN and not task.carries_statements()
+
+
+def test_a_dismissed_lifecycle_reopens_the_task_and_stays_on_top() -> None:
+    owner = _person("dismissing-owner")
+    task = _task(owner)
+    source = Source("dismissed", authoritative=True)
+    source.state(task, "lifecycle", status=Task.TaskStatus.DONE)
+
+    task.with_actor(owner).dismiss(aspect="lifecycle")
+    task.refresh_from_db()
+    assert (task.status, task.done_at) == (Task.TaskStatus.OPEN, None)
+    assert _stance(task, "lifecycle", SourceKind.PERSON).is_dismissed
+
+    source.state(task, "lifecycle", status=Task.TaskStatus.DONE, done_at=timezone.now())
+    assert task.status == Task.TaskStatus.OPEN

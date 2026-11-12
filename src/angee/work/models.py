@@ -1287,7 +1287,8 @@ class TaskWork(StagedModelMixin[Stage], StateTransitionsMixin, Composable, exten
             self._reject_reserved_stage_transition(target=stage, manual=True, lock=True)
             self.stage = stage
             self.save(update_fields=("stage", "updated_at"))
-            self.post_completion(feedback)
+            if self.status == self.TaskStatus.DONE:  # survivorship may re-apply a source's stance in the save
+                self.post_completion(feedback)
             return self
 
     @transaction.atomic
