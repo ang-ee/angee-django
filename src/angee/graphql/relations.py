@@ -37,7 +37,7 @@ from angee.base.models.refs import RecordRefMixin
 from angee.base.permissions import relation_read_queryset
 from angee.base.prefetch import prefetched, prefetched_objects
 from angee.base.refs import RecordRef
-from angee.graphql.ids import PublicID, optional_public_id, to_public_id
+from angee.graphql.ids import PublicID, optional_public_id, require_public_id, to_public_id
 from angee.graphql.introspection import FieldPathError, fields_for_path, is_to_one_relation
 from angee.graphql.node import AngeeNode
 
@@ -396,6 +396,39 @@ def actor_scoped_to_many(field_name: str) -> Any:
     Without an actor, the native related queryset resolves ambient scope.
     """
 
+    return strawberry_django.field(
+        resolver=_actor_scoped_to_many_resolver(field_name),
+        field_name=field_name,
+        prefetch_related=[_guarded_relation_prefetch(field_name)],
+    )
+
+
+def actor_scoped_public_ids(field_name: str) -> Any:
+    """Return a to-many relation as the public ids of the rows the reader may read.
+
+    The many-valued counterpart of :func:`actor_scoped_public_id`: it shares
+    :func:`actor_scoped_to_many`'s guarded prefetch, prefetched-rows check and
+    per-row scoped fallback, and projects only each readable row's public id, the
+    value a console form's relation picker edits through the resource's write
+    backend.
+    """
+
+    resolve = _actor_scoped_to_many_resolver(field_name)
+
+    def resolve_public_ids(root: models.Model) -> list[PublicID]:
+        related_model = cast(type[models.Model], root._meta.get_field(field_name).related_model)
+        return [require_public_id(related_model, row.pk) for row in resolve(root)]
+
+    return strawberry_django.field(
+        resolver=resolve_public_ids,
+        field_name=field_name,
+        prefetch_related=[_guarded_relation_prefetch(field_name)],
+    )
+
+
+def _actor_scoped_to_many_resolver(field_name: str) -> Callable[[models.Model], Any]:
+    """Build the shared to-many resolver: actor-stamped prefetched rows, else a scoped read."""
+
     def resolve(root: models.Model) -> Any:
         field = root._meta.get_field(field_name)
         related_model = field.related_model
@@ -422,8 +455,4 @@ def actor_scoped_to_many(field_name: str) -> Any:
         # ordinary prefetch queryset; its evaluated cache cannot answer a new read.
         return related_queryset.with_action("read")
 
-    return strawberry_django.field(
-        resolver=resolve,
-        field_name=field_name,
-        prefetch_related=[_guarded_relation_prefetch(field_name)],
-    )
+    return resolve

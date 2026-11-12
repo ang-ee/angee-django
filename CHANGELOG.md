@@ -28,6 +28,21 @@ live in code docstrings.
   `storage/file` `read`, `write` or `share`. Operators re-sync the permission
   schema: storage revision 12, the messaging fragment 7, the projects fragment
   10 and the notes example fragment 4.
+- Stages: the `angee.base` stage primitive owns every user-named pipeline.
+  `Stage` gains `description`, `fold` (a board's default-collapsed lane, read as
+  `foldField`), `rotting_days`, `for_record` applicability, a
+  `validate_transition(previous, following, *, manual, admitted, adding)` admission
+  hook and idempotent `provision(container, rows, key=...)`; `StagedModelMixin`
+  gains `stage_entered_at`, `stage_transition`, `project_stage`, `writes_stage`, the
+  `validate_stored_row(persisted, stored)` hook and `save(admitted_stage=...)`. A
+  save reads the committed row once under its lock and judges a partial save on
+  the row it stores. `work` composes it (its private transition read and
+  provisioning loop are gone; `Stage.validate_transition` takes the new signature).
+  Projects run `makemigrations` for the new columns. Existing staged rows keep a
+  null `stage_entered_at` until their next move; a project that wants dwell time
+  at once authors an optional data migration setting `stage_entered_at` to
+  `updated_at` where `stage` is set (an approximation: the last write, not the
+  last move).
 - Native lists accept `relatedModels: readonly string[]` for columns and filter
   membership derived from related rows. Declared model changes refresh flat,
   client and grouped lists when `related_records` names any record of the list's
