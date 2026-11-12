@@ -73,6 +73,33 @@ record (``Aspect.priority``). A person's confirm or dismiss stays on top.
 """
 
 
+class StatedRecordMixin(StatementsMixin):
+    """A projects row a system of record states through the ``integrate.RecordLink`` naming it.
+
+    A local row stays an ordinary record: a person's edit becomes a stance only
+    once a source states it (``person_stances_once_stated``). A source is admitted
+    by ``write_statements`` alone, kept out of ``read`` and ``write`` so no row
+    inheriting them reaches a source. Statements protect a stated row and every
+    row they name, so deleting them is refused.
+    """
+
+    person_stances_once_stated = True
+    statement_write_permission = "write_statements"
+    record_links = RetainedGenericRelation(
+        "integrate.RecordLink", content_type_field="target_content_type", object_id_field="target_object_id"
+    )
+
+    class Meta:
+        abstract = True
+
+    def delete_blocker(self) -> str | None:
+        """Name the refusal the statement tables' protected key enforces on every delete path."""
+
+        if self.carries_statements():
+            return f"This {self._meta.verbose_name} carries source statements and is retained."
+        return cast(Any, super()).delete_blocker()
+
+
 class ProjectSetupState(StrEnum):
     """Readiness of persisted setup acts, independent of the project's lifecycle."""
 
@@ -603,7 +630,7 @@ class Project(
     ItemOwnershipMixin,
     OptimisticLockMixin,
     ThreadedModelMixin,
-    StatementsMixin,
+    StatedRecordMixin,
     HistoryMixin,
     AngeeDataModel,
     concrete=True,
@@ -698,12 +725,6 @@ class Project(
             self.status_changed_at = stated
             self.save(update_fields=("status_changed_at", "updated_at"))
 
-    # A system of record states this row through its RecordLink (``statement_source``);
-    # a person's edits are stances once it does, so local rows stay deletable.
-    person_stances_once_stated = True
-    record_links = RetainedGenericRelation(
-        "integrate.RecordLink", content_type_field="target_content_type", object_id_field="target_object_id"
-    )
     statements = StatementRecords(
         link="integrate.RecordLink",
         aspects={
@@ -906,12 +927,14 @@ class Project(
                 locked.unsudo()
                 if actor is not None:
                     locked.with_actor(actor)
-                project_status_changed.send(
-                    sender=type(locked),
-                    project=locked,
-                    previous_status=previous_status,
-                    status=status,
-                )
+                # Survivorship may re-apply a source's stance inside the save, and announces that change itself.
+                if locked.status == status:
+                    project_status_changed.send(
+                        sender=type(locked),
+                        project=locked,
+                        previous_status=previous_status,
+                        status=status,
+                    )
             self.refresh_from_db()
         return self
 
@@ -985,7 +1008,13 @@ class _MilestoneManager[MilestoneT: Milestone](_MilestoneManagerBase[MilestoneT]
 
 
 class Milestone(
-    StatementsMixin, HistoryMixin, OptimisticLockMixin, ImmutableFieldsMixin, AuditMixin, AngeeDataModel, concrete=True
+    StatedRecordMixin,
+    HistoryMixin,
+    OptimisticLockMixin,
+    ImmutableFieldsMixin,
+    AuditMixin,
+    AngeeDataModel,
+    concrete=True,
 ):
     """A named marker reached within one project."""
 
@@ -994,27 +1023,31 @@ class Milestone(
 
     objects = _MilestoneManager()
 
-    def apply_lifecycle(self, *, member: Mapping[str, Any], values: Mapping[str, Any], statement: Any | None) -> None:
-        """Stamp a stated receipt through ``mark_reached``; a stamped receipt is retained.
+    def lifecycle_candidates(self, rows: Sequence[Any]) -> Sequence[Any]:
+        """A stamped receipt is historical: only the stances stating it compete, so no other one applies."""
 
-        A receipt is historical: a later stance that the milestone is unreached,
-        or reached at another time, never rewrites it.
-        """
+        if self.reached_at is None:
+            return rows
+        return [row for row in rows if row.stated_value("reached_at") == self.reached_at]
+
+    def apply_lifecycle(self, *, member: Mapping[str, Any], values: Mapping[str, Any], statement: Any | None) -> None:
+        """Stamp a stated receipt through ``mark_reached``, at the stated time."""
 
         del member
         if statement is None or statement.snak != statement.StatementSnak.VALUE or values["reached_at"] is None:
             return
         self.mark_reached(at=values["reached_at"])
 
-    person_stances_once_stated = True
-    record_links = RetainedGenericRelation(
-        "integrate.RecordLink", content_type_field="target_content_type", object_id_field="target_object_id"
-    )
     statements = StatementRecords(
         link="integrate.RecordLink",
         aspects={
             "identity": Aspect(fields=("name", "description"), precedence=STATED_BY),
-            "lifecycle": Aspect(fields=("reached_at",), precedence=STATED_BY, apply=apply_lifecycle),
+            "lifecycle": Aspect(
+                fields=("reached_at",),
+                precedence=STATED_BY,
+                candidates=lifecycle_candidates,
+                apply=apply_lifecycle,
+            ),
             "schedule": Aspect(fields=("start_date", "target_date"), precedence=STATED_BY),
         },
         sqid_prefix="mss_",
@@ -1164,7 +1197,7 @@ class Task(
     OwnerMixin,
     OptimisticLockMixin,
     ThreadedModelMixin,
-    StatementsMixin,
+    StatedRecordMixin,
     HistoryMixin,
     AngeeDataModel,
     concrete=True,
@@ -1434,10 +1467,6 @@ class Task(
             setattr(self, stamp, values[stamp])
             self.save(update_fields=(stamp, "updated_at"))
 
-    person_stances_once_stated = True
-    record_links = RetainedGenericRelation(
-        "integrate.RecordLink", content_type_field="target_content_type", object_id_field="target_object_id"
-    )
     statements = StatementRecords(
         link="integrate.RecordLink",
         aspects={
@@ -1724,7 +1753,8 @@ class Task(
             cast(Any, self).dropped_reason = None
             self.dropped_at = None
             self.save(update_fields=("status", "done_at", "dropped_reason", "dropped_at", "updated_at"))
-            self.post_completion(feedback)
+            if self.status == self.TaskStatus.DONE:  # survivorship may re-apply a source's stance in the save
+                self.post_completion(feedback)
         return self
 
     def _lock_lifecycle(self) -> None:

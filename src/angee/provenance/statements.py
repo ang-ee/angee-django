@@ -11,6 +11,7 @@ from collections import defaultdict
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from copy import copy
 from dataclasses import dataclass
+from functools import cache
 from itertools import batched, groupby
 from typing import Any, ClassVar, Self, cast
 
@@ -543,7 +544,7 @@ class StatementManager[T: Statement](_StatementManagerBase[T]):
                     else next((row for row in ordered if row.snak == self.model.StatementSnak.VALUE), None)
                 )
                 values = {
-                    name: _statement_column(type(winner), declaration.column(name)).value_from_object(winner)
+                    name: winner.stated_value(name)
                     if winner is not None and winner.snak == self.model.StatementSnak.VALUE
                     else None
                     for name in declaration.fields
@@ -551,13 +552,12 @@ class StatementManager[T: Statement](_StatementManagerBase[T]):
                 if winner is not None and winner.snak == self.model.StatementSnak.VALUE and declaration.allow_fill:
                     for name, value in values.items():
                         if value in (None, ""):
-                            column = declaration.column(name)
                             values[name] = next(
                                 (
-                                    _statement_column(type(row), column).value_from_object(row)
+                                    row.stated_value(name)
                                     for row in ordered
                                     if row.snak == self.model.StatementSnak.VALUE
-                                    and _statement_column(type(row), column).value_from_object(row) not in (None, "")
+                                    and row.stated_value(name) not in (None, "")
                                 ),
                                 value,
                             )
@@ -871,6 +871,12 @@ class StatementsMixin(PersistenceMixin, HistoryDocumentMixin):
     """Subject-owned eligibility and application hooks for typed statements."""
 
     statements: HistoryDescriptor | None = None
+    statement_write_permission: ClassVar[str] = "write"
+    """The subject permission admitting a source's assertions (:meth:`require_statement_write`).
+
+    A subject whose ``write`` other rows inherit names a narrower permission, so a
+    system of record reaches only the rows it states, never what their access lends.
+    """
     person_stances_once_stated: ClassVar[bool] = False
     """Whether a person's save states aspects only on a row that already carries a statement.
 
@@ -1016,6 +1022,7 @@ class StatementsMixin(PersistenceMixin, HistoryDocumentMixin):
             previous = type(self)._base_manager.filter(pk=self.pk).first() if self.pk else None
             super().save(*args, **kwargs)
             resolved_fields: set[str] = set()
+            reloaded = False
             for manager in self.statement_managers():
                 for aspect, declaration in manager.model.statement_aspects.items():
                     fields = declaration.fields
@@ -1039,13 +1046,21 @@ class StatementsMixin(PersistenceMixin, HistoryDocumentMixin):
                         continue
                     manager.set(aspect=aspect, values=values, asserted_by=actor)
                     resolved_fields.update(fields if saved_fields is None else set(fields) & saved_fields)
-            if resolved_fields:
+                    # An aspect's own apply may write any column (a projected stage, say).
+                    reloaded = reloaded or declaration.apply is not None
+            if reloaded:
+                self.refresh_from_db()
+            elif resolved_fields:
                 self.refresh_from_db(fields=sorted(resolved_fields))
 
     def require_statement_write(self, actor: SubjectRef | None) -> None:
         """Admit assertions through the subject's native REBAC write scope."""
 
-        rows = require_rebac_queryset(type(self), actor=actor).filter(pk=self.pk).with_action("write")
+        rows = (
+            require_rebac_queryset(type(self), actor=actor)
+            .filter(pk=self.pk)
+            .with_action(self.statement_write_permission)
+        )
         if not rows.exists():
             raise PermissionDenied("The asserting source requires write on the subject.")
 
@@ -1265,7 +1280,7 @@ class Statement(MergeContractMixin, HistoryMixin, ChangesetHistory, SqidMixin, T
     def reserved_columns(cls) -> frozenset[str]:
         """Names the stance's own columns and relations hold on every statement model."""
 
-        return frozenset({field.name for field in Statement._meta.fields} | {"subject", "link", "id", "pk", "history"})
+        return _stance_columns()
 
     @classmethod
     def valid_column(cls, name: str, field: Any) -> bool:
@@ -1425,8 +1440,7 @@ class Statement(MergeContractMixin, HistoryMixin, ChangesetHistory, SqidMixin, T
     def confirm(self) -> Any:
         """Write the acting person's preferred statement for this stance's values."""
 
-        declaration = self.statement_aspects[self.aspect]
-        values = {name: getattr(self, declaration.column(name)) for name in declaration.fields}
+        values = {name: self.stated_value(name) for name in self.statement_aspects[self.aspect].fields}
         return self.subject.with_actor(instance_actor(self)).confirm(
             aspect=self.aspect, values=values, **self.member_values()
         )
@@ -1452,6 +1466,17 @@ class Statement(MergeContractMixin, HistoryMixin, ChangesetHistory, SqidMixin, T
         self.subject.require_access("read", actor)
         refs = [EvidenceReference.model_validate(value) for value in self.evidence[: self.EVIDENCE_LIMIT]]
         return readable_evidence(refs, actor)
+
+    @classmethod
+    def stated_field(cls, aspect: str, name: str) -> models.Field:
+        """The column holding subject field or member ``name`` on this model's ``aspect`` stances."""
+
+        return _statement_column(cls, cls.statement_aspects[aspect].column(name))
+
+    def stated_value(self, name: str) -> Any:
+        """The value this stance states for subject field or member ``name``; a version reads ``stated_field``."""
+
+        return self.stated_field(self.aspect, name).value_from_object(self)
 
     def same_values(self, other: Statement, names: Iterable[str]) -> bool:
         return all(
@@ -1497,6 +1522,13 @@ class Statement(MergeContractMixin, HistoryMixin, ChangesetHistory, SqidMixin, T
     @classmethod
     def merge_contract(cls, reference: Any, rows: Any, *, survivor: Any) -> None:
         cls.objects.merge(reference, rows, survivor=survivor)
+
+
+@cache
+def _stance_columns() -> frozenset[str]:
+    """The abstract stance's column and relation names, read once from its prepared metadata."""
+
+    return frozenset({field.name for field in Statement._meta.fields} | {"subject", "link", "id", "pk", "history"})
 
 
 class StatementPairQuerySet(TrashQuerySet, AngeeHistoryQuerySet):
