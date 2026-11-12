@@ -141,8 +141,11 @@ def test_system_creation_adopts_the_identity_the_ingress_resolved(iam_admin, per
     assert Person._base_manager.filter(user=user).count() == 1
 
 
-def test_an_adopted_persons_stated_name_stays_with_its_source(iam_admin, monkeypatch):
-    """The account's later rename leaves a Person whose name a source states."""
+@pytest.mark.parametrize(
+    ("kind", "expected"), [("system_of_record", "Ada Source"), ("person", "Ada Renamed")]
+)
+def test_an_adopted_persons_stated_name_stays_with_its_source(iam_admin, monkeypatch, kind, expected):
+    """The account's later rename leaves a Person whose name a source states; a person's own statement follows it."""
 
     from django.apps import apps  # noqa: PLC0415 - the statement source is this test's own fixture
 
@@ -151,7 +154,7 @@ def test_an_adopted_persons_stated_name_stays_with_its_source(iam_admin, monkeyp
     from angee.messaging.backends import ManualChannelBackend  # noqa: PLC0415
     from angee.provenance.statements import SourceKind  # noqa: PLC0415
 
-    monkeypatch.setattr(ManualChannelBackend, "source_kind", SourceKind.SYSTEM_OF_RECORD)
+    monkeypatch.setattr(ManualChannelBackend, "source_kind", SourceKind(kind))
     with system_context(reason="test.imported.contact"):
         contact = Person._base_manager.create(display_name="Ada Source")
     user = User.objects.create_person_as_system(
@@ -175,7 +178,7 @@ def test_an_adopted_persons_stated_name_stays_with_its_source(iam_admin, monkeyp
         )
         user.first_name, user.last_name = "Ada", "Renamed"
         user.save(update_fields=["first_name", "last_name"])
-    assert Person._base_manager.get(pk=contact.pk).display_name == "Ada Source"
+    assert Person._base_manager.get(pk=contact.pk).display_name == expected
 
 
 def test_system_creation_refuses_an_identity_another_account_holds(iam_admin):

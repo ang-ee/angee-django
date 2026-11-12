@@ -1574,6 +1574,7 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
         Runs within the caller's ``system_context``; a person already carrying
         the account's name is left untouched, and so is one whose name a source
         states (an adopted contact): the ``identity`` aspect's survivorship owns it.
+        A person's own statement of their name is no source: it follows the account.
         """
 
         name = _user_display_name(user)
@@ -1581,7 +1582,7 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
         party_model = apps.get_model("parties", "Party")
         stated = party_model.statements.model._base_manager.filter(
             aspect="identity", applied=True, superseded__isnull=True
-        )
+        ).exclude(source_kind=SourceKind.PERSON)
         people = person_model.objects.filter(user=user).exclude(display_name=name)
         for person in people.exclude(pk__in=stated.values("subject_id")):
             person.display_name = name
