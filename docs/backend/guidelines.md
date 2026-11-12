@@ -1280,7 +1280,9 @@ exception closes the rows as failed. Tests inherit a boundary from the root
   `save(admitted_stage=...)` and must write exactly that stage. A partial save is
   judged on the row it stores (written fields over the committed row), never on a
   stale instance; a consumer checks its own same-row invariants there through
-  `validate_stored_row(persisted, stored)`.
+  `validate_stored_row(persisted, stored)`, and copies the instance facts its rules
+  read outside the columns (a flag held for one write) onto that row through
+  `carry_instance_facts(stored)`.
   *Projection:* `project_stage(previous, following)` returns the fields a move
   writes and the save merges them into `update_fields`; a consumer extends it
   through `super()` to write its code-owned lifecycle through `StateTransitions`.

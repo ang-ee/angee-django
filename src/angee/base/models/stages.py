@@ -307,6 +307,15 @@ class StagedModelMixin[StageT: Stage = Stage](models.Model):
         self.stage_entered_at = timezone.now() if following is not None else None
         return {"stage_entered_at"}
 
+    def carry_instance_facts(self, stored: Self) -> None:
+        """Copy onto a partial save's stored-row snapshot the facts this instance holds outside its columns.
+
+        The snapshot is hydrated from columns only, before scope, applicability and
+        :meth:`validate_stored_row` read it. A record whose rules read an instance
+        fact (a flag held for one write, a value its locking read carried) copies it
+        here; the default copies nothing.
+        """
+
     def validate_stored_row(self, persisted: Self | None, stored: Self) -> None:
         """Validate the row this save stores, under the save's row lock; the default adds nothing.
 
@@ -390,7 +399,8 @@ class StagedModelMixin[StageT: Stage = Stage](models.Model):
         """Return the row a save writes: ``self``, or for a partial save a snapshot over ``persisted``.
 
         The snapshot is native hydration (``from_db``), so guarded state fields load
-        without a transition; it reuses ``self``'s cached relations whose ids agree.
+        without a transition; it reuses ``self``'s cached relations whose ids agree and
+        takes the instance facts :meth:`carry_instance_facts` copies.
         """
 
         if persisted is None or update_fields is None:
@@ -409,6 +419,7 @@ class StagedModelMixin[StageT: Stage = Stage](models.Model):
                 and self.__dict__.get(field.attname, models.DEFERRED) == getattr(stored, field.attname)
             ):
                 field.set_cached_value(stored, field.get_cached_value(self))
+        self.carry_instance_facts(stored)
         return stored
 
     def _admit_stage_move(
