@@ -89,6 +89,12 @@ on:
 permissions:
   contents: read
 
+env:
+  # uv runs its managed CPython, whose bundled SQLite the SQLite lanes need
+  # (docs/checks.md#sqlite-version); a runner image's system Python links the
+  # distribution's older library.
+  UV_PYTHON_PREFERENCE: only-managed
+
 jobs:
   python-quality:
     if: ${{ inputs.uv-enabled }}
