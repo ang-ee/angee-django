@@ -590,7 +590,7 @@ def test_related_is_distinct_cross_scope_and_excludes_unreadable_uses():
         Part._base_manager.create(created_by=owner, message=rows[0], role="quoted", fragment=fragment, position=1)
     with actor_context(owner):
         inbox = Message.objects.all().explorer()
-        related = inbox.related(f"fragment:{fragment.sqid}")
+        related = inbox.related(inbox.target_parts(f"fragment:{fragment.sqid}"))
         assert related.count == related.message_count == 2
         assert {row.pk for row in related.rows} == {row.pk for row in rows[:2]}
         shared = InboxResults(inbox, inbox.messages, InboxResultOptions(lens="text"))

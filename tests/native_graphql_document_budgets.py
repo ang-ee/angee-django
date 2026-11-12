@@ -338,14 +338,15 @@ BUDGETS = {
     # that answer wherever the arms' types read no model column, as on every read here, so each
     # actor pays one witness per distinct arm per request.
     ("admin", "inbox"): (18, 13),  # 0.31: 15 -> 14 statements (3 witnesses); 0.33.1: 13
-    ("admin", "transcript"): (3, 31),  # 0.31: 35 -> 32 statements (3 witnesses); 0.33.1: 31
+    # A loaded parts tree answers each part's parent from its own rows: 31 -> 27.
+    ("admin", "transcript"): (3, 27),  # 0.31: 35 -> 32 statements (3 witnesses); 0.33.1: 31
     ("admin", "person"): (2, 20),  # 0.31: 29 -> 20 statements (2 witnesses)
     ("admin", "projects"): (6, 10),  # 0.31: 15 -> 10 statements (2 witnesses)
     ("admin", "identity"): (1, 1),
     ("member", "inbox"): (9, 14),  # 0.31: 123 -> 14 statements (3 witnesses); id sets are CTEs
     # The feed reads its messages under ``read_inbox`` and the reply-parent fields read ``read``
     # through the relation guard; 0.31 compiles both graphs inline instead of deciding their sets.
-    ("member", "transcript"): (3, 32),  # 0.31: 250 -> 32 statements (3 witnesses)
+    ("member", "transcript"): (3, 28),  # 0.31: 250 -> 32 statements (3 witnesses); parts tree: 28
     # The PostgreSQL gate below additionally budgets the sum of SELECT allocations.
     # REBAC 0.33.1 decides constant arms inherited through field arrows in a witness statement;
     # the member person read has no own witness, so it pays that one first-read statement.
@@ -353,11 +354,11 @@ BUDGETS = {
     ("member", "projects"): (3, 10),
     ("member", "identity"): (1, 1),
     # The inbox's selected message, the attachment's connections and its Related target.
-    ("admin", "selected"): (7, 26),
-    ("admin", "connections"): (1, 17),
+    ("admin", "selected"): (7, 24),  # parts tree: 26 -> 24
+    ("admin", "connections"): (1, 15),  # the target is authorized once and its uses counted once: 17 -> 15
     ("admin", "related"): (1, 18),
-    ("member", "selected"): (7, 27),
-    ("member", "connections"): (1, 18),
+    ("member", "selected"): (7, 25),  # parts tree: 27 -> 25
+    ("member", "connections"): (1, 16),  # 18 -> 16
     ("member", "related"): (1, 19),
 }
 
@@ -373,9 +374,12 @@ PLANNER_BUDGETS = {
     "person": (19, 486),
     "projects": (10, 148),
     # The member's inbox selection reads plan the merged policy's non-admin id sets, the largest
-    # remaining planner cost: 1,325,377 / 764,084 / 731,636 KiB. Ratchet down as they fall.
-    "selected": (26, 1295),
-    "connections": (17, 747),
+    # remaining planner cost: 1,094,927 / 607,379 / 730,612 KiB. Ratchet down as they fall.
+    # The parts tree answers part parents without their two per-row reads: 26 SELECTs and
+    # 1,325,377 KiB before.
+    "selected": (24, 1070),
+    # The target file is authorized once: 17 SELECTs and 764,084 KiB before.
+    "connections": (15, 594),
     "related": (19, 715),
 }
 

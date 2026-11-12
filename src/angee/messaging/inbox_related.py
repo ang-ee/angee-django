@@ -167,7 +167,7 @@ class InboxRelated:
 
         window = InboxPage.window(page, size)
         if self.kind in ("file", "fragment"):
-            uses = self.inbox.related(self.target, text=text, oldest=oldest, page=page, size=size)
+            uses = self.inbox.related(self.parts, text=text, oldest=oldest, page=page, size=size)
             parts = self.parts.filter(message_id__in=[message.pk for message in uses.rows]).order_by("position", "pk")
             by_message: dict[int, Any] = {}
             for part in parts:

@@ -479,17 +479,10 @@ class NexusInboxQuery:
     ) -> InboxPage[MessageType]:
         """Exact file/shared-text uses, independent of the selected sender and coverage."""
 
+        inbox = Message.objects.all().explorer()
         return cast(
             InboxPage[MessageType],
-            Message.objects.all()
-            .explorer()
-            .related(
-                target,
-                text=text,
-                page=page,
-                size=size,
-                oldest=oldest,
-            ),
+            inbox.related(inbox.target_parts(target), text=text, page=page, size=size, oldest=oldest),
         )
 
 
