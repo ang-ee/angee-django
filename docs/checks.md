@@ -135,6 +135,17 @@ apply the PostgreSQL lane's settings to the full suite. PostgreSQL-only modules
 skip explicitly on SQLite. Report those skips separately from the PostgreSQL
 lane's executed coverage.
 
+### SQLite Version
+
+SQLite runs need SQLite 3.53 or newer. Earlier releases (3.51.2 and older were
+checked) reject a subquery whose `ORDER BY` names an outer query's column and report
+`no such column`; messaging's redirect-aware follower reads depend on that. Python
+reports its library as `uv run --locked python -c "import sqlite3; print(sqlite3.sqlite_version)"`.
+uv's managed CPython bundles a current SQLite, while a distribution's system Python
+links the distribution's library (Ubuntu 26.04 and Debian trixie ship 3.46.1). CI sets
+`UV_PYTHON_PREFERENCE: only-managed` for that reason; locally, pass `--managed-python`
+or set the same variable when the system Python is older.
+
 ### Local PostgreSQL Prerequisites
 
 PostgreSQL runs require the pgvector extension on the server. CI uses
