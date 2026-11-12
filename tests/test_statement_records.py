@@ -14,7 +14,15 @@ from django.db import models, transaction
 from django.test.utils import isolate_apps
 from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
-from rebac import RelationshipTuple, actor_context, system_context, to_object_ref, to_subject_ref, write_relationships
+from rebac import (
+    PermissionDenied,
+    RelationshipTuple,
+    actor_context,
+    system_context,
+    to_object_ref,
+    to_subject_ref,
+    write_relationships,
+)
 
 from angee.base.models.base import AngeeModel
 from angee.provenance.context import changeset
@@ -427,3 +435,24 @@ def test_person_stances_wait_until_a_statement_names_the_row(db: None) -> None:
     assert other.carries_statements()
     edit(other, "after")
     assert rows.filter(subject=other, source_kind=P).get().note == "after"
+
+
+def test_statements_admit_through_the_subjects_declared_permission(db: None) -> None:
+    """``statement_write_permission`` names what admits an assertion: a stater who cannot write the row states it."""
+
+    del db
+    stater, reader = create_user("stated-stater"), create_user("stated-reader")
+    with system_context(reason="test stated permission fixture"):
+        record = Stated.objects.create(status="draft")
+        write_relationships([
+            RelationshipTuple(to_object_ref(record), "stater", to_subject_ref(stater)),
+            RelationshipTuple(to_object_ref(record), "reader", to_subject_ref(reader)),
+        ])
+    assert Stated.statement_write_permission == "write_statements"
+    assert not record.with_actor(stater).has_access("write")
+    with actor_context(stater):
+        record.with_actor(stater).statements.set(aspect="state", values={"status": "closed", "note": ""})
+    record.refresh_from_db()
+    assert record.status == "closed"
+    with actor_context(reader), pytest.raises(PermissionDenied):
+        record.with_actor(reader).statements.set(aspect="state", values={"status": "open", "note": ""})
