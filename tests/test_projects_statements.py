@@ -302,7 +302,7 @@ def test_a_persons_edit_on_a_stated_row_is_a_stance_ranked_by_stream_authority()
     assert task.title == "Remote, renamed"
     assert _stance(task, "identity", SourceKind.PERSON).title == "Mine again"
 
-    task.with_actor(owner).confirm(aspect="identity", values={"title": "Decided", "note": ""})
+    task.with_actor(owner).confirm_statement(aspect="identity", values={"title": "Decided", "note": ""})
     task.refresh_from_db()
     assert task.title == "Decided"
 
@@ -498,7 +498,7 @@ def test_a_dismissed_lifecycle_reopens_the_task_and_stays_on_top() -> None:
     source = Source("dismissed", authoritative=True)
     source.state(task, "lifecycle", status=Task.TaskStatus.DONE)
 
-    task.with_actor(owner).dismiss(aspect="lifecycle")
+    task.with_actor(owner).dismiss_statement(aspect="lifecycle")
     task.refresh_from_db()
     assert (task.status, task.done_at) == (Task.TaskStatus.OPEN, None)
     assert _stance(task, "lifecycle", SourceKind.PERSON).is_dismissed

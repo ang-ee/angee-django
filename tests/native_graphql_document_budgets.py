@@ -472,7 +472,7 @@ class ConsoleDocumentBudgetTests(TransactionTestCase):
                 first_met_note="Met at a lecture.",
                 introduced_by=introducer,
             )
-            person.with_actor(actor).confirm(aspect="handle", handle=handles[0], values={})
+            person.with_actor(actor).confirm_statement(aspect="handle", handle=handles[0], values={})
             apps.get_model("parties", "Address").objects.create(
                 party=person,
                 label="home",

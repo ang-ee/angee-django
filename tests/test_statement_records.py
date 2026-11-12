@@ -423,7 +423,7 @@ def test_person_stances_wait_until_a_statement_names_the_row(db: None) -> None:
 
     other = _stated(writer)
     with actor_context(writer):
-        other.with_actor(writer).confirm(aspect="state", values={"status": "kept", "note": ""})
+        other.with_actor(writer).confirm_statement(aspect="state", values={"status": "kept", "note": ""})
     assert other.carries_statements()
     edit(other, "after")
     assert rows.filter(subject=other, source_kind=P).get().note == "after"

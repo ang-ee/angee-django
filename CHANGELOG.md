@@ -10,6 +10,12 @@ live in code docstrings.
 
 ## Unreleased — shared addon contracts, native embeddings and graph retrieval
 
+- `StatementsMixin`'s subject verbs are `confirm_statement(*, aspect, values, **members)`
+  and `dismiss_statement(*, aspect, **members)` (were `confirm` / `dismiss`), so a
+  subject's own `confirm` — a sales order's transition — no longer shadows or is
+  shadowed by the statement verb. `Statement.confirm()` / `dismiss()` (the stance
+  row's verbs) and every GraphQL mutation keep their names; callers of the subject
+  verbs move to the new names.
 - `EditableLineField.readOnlyWhen(row, parentRow)` locks one line cell per row
   from the row and its owning document, so a document's section and note rows
   read their commercial cells while their text and row actions stay editable.

@@ -218,7 +218,7 @@ class ChannelIntakeCaptureTests(TransactionTestCase):
                 value="customer@example.com",
                 created_by_id=self.actor.pk,
             )
-            party.with_actor(self.actor).confirm(aspect="handle", handle=handle, values={})
+            party.with_actor(self.actor).confirm_statement(aspect="handle", handle=handle, values={})
         task_model = apps.get_model("projects", "Task")
         with patch.object(
             task_model, "validate_record_access_subject", side_effect=RecordAccessSubjectRefused()
