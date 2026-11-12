@@ -480,7 +480,7 @@ def test_message_sender_and_participant_expose_resolved_party(db: None) -> None:
             display_name="Ada Envelope",
             created_by_id=admin.pk,
         )
-        party.with_actor(admin).confirm(aspect="handle", handle=handle, values={})
+        party.with_actor(admin).confirm_statement(aspect="handle", handle=handle, values={})
         message.sender = handle
         message.save(update_fields=("sender", "updated_at"))
         messaging_models.Participant.objects.create(
@@ -542,7 +542,7 @@ def test_inbox_sender_redacts_party_without_party_read(db: None) -> None:
             display_name="Ada Envelope",
             created_by_id=owner.pk,
         )
-        party.with_actor(owner).confirm(aspect="handle", handle=handle, values={})
+        party.with_actor(owner).confirm_statement(aspect="handle", handle=handle, values={})
         message.sender = handle
         message.save(update_fields=("sender", "updated_at"))
     _grant(message, "reader", reader)
@@ -747,7 +747,7 @@ def test_record_thread_sender_projection_omits_party_for_non_admin_reader(
             display_name="Ada Envelope",
             created_by_id=owner.pk,
         )
-        party.with_actor(owner).confirm(aspect="handle", handle=handle, values={})
+        party.with_actor(owner).confirm_statement(aspect="handle", handle=handle, values={})
         message.sender = handle
         message.save(update_fields=("sender", "updated_at"))
     _grant(doc, "reader", reader)

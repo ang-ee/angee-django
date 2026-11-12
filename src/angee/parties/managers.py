@@ -1523,7 +1523,8 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
             if left is None or right is None:
                 raise ValidationError({"pair": "Same_as pair references a missing party."})
             if action == "keep_separate":
-                self.model.same_as.for_pair(left.with_actor(actor), right).with_actor(actor).dismiss(aspect="same_as")
+                pair = self.model.same_as.for_pair(left.with_actor(actor), right).with_actor(actor)
+                pair.dismiss_statement(aspect="same_as")
                 return "dismissed"
             into, source = (
                 (left, right) if survivor == "left" else (right, left)

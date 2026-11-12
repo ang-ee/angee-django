@@ -996,8 +996,8 @@ class StatementsMixin(PersistenceMixin, HistoryDocumentMixin):
         restore over the owner's writes. A create states no group whose values are
         all empty: an empty field on insert is the absence of a fact, so it never
         outranks a later source. A subject declaring ``person_stances_once_stated``
-        states nothing until its row carries a statement. Explicit confirm and
-        dismiss stay available.
+        states nothing until its row carries a statement. Explicit
+        ``confirm_statement`` and ``dismiss_statement`` stay available.
         """
 
         if is_sudo():
@@ -1110,7 +1110,13 @@ class StatementsMixin(PersistenceMixin, HistoryDocumentMixin):
                 return manager.provenance(field)
         raise FieldDoesNotExist(f"No aspect owns {field!r}.")
 
-    def confirm(self, *, aspect: str, values: Mapping[str, Any], **members: Any) -> Any:
+    def confirm_statement(self, *, aspect: str, values: Mapping[str, Any], **members: Any) -> Any:
+        """Write the acting person's preferred statement of ``aspect``'s ``values`` on this subject.
+
+        Named for the statement, not the subject: a subject's own ``confirm``
+        (an order's transition, say) keeps its name.
+        """
+
         manager = self.statements_for(aspect)
         return manager.set(
             aspect=aspect,
@@ -1119,7 +1125,9 @@ class StatementsMixin(PersistenceMixin, HistoryDocumentMixin):
             **members,
         )
 
-    def dismiss(self, *, aspect: str, **members: Any) -> Any:
+    def dismiss_statement(self, *, aspect: str, **members: Any) -> Any:
+        """Write the acting person's preferred no-value statement of ``aspect`` on this subject."""
+
         manager = self.statements_for(aspect)
         return manager.set(
             aspect=aspect,
@@ -1445,14 +1453,15 @@ class Statement(MergeContractMixin, HistoryMixin, ChangesetHistory, SqidMixin, T
         """Write the acting person's preferred statement for this stance's values."""
 
         values = {name: self.stated_value(name) for name in self.statement_aspects[self.aspect].fields}
-        return self.subject.with_actor(instance_actor(self)).confirm(
+        return self.subject.with_actor(instance_actor(self)).confirm_statement(
             aspect=self.aspect, values=values, **self.member_values()
         )
 
     def dismiss(self) -> Any:
         """Write the acting person's preferred no-value statement for this stance."""
 
-        return self.subject.with_actor(instance_actor(self)).dismiss(aspect=self.aspect, **self.member_values())
+        subject = self.subject.with_actor(instance_actor(self))
+        return subject.dismiss_statement(aspect=self.aspect, **self.member_values())
 
     @property
     def evidence_truncated(self) -> bool:
