@@ -550,7 +550,7 @@ class RecordHistory:
             for name in (*declaration.fields, *declaration.members):
                 if name in redacted:
                     continue
-                field = statement_model._meta.get_field(name)
+                field = statement_model._meta.get_field(declaration.column(name))
                 assert isinstance(field, models.Field)
                 values[name] = _reference_value(field, field.value_from_object(version))
             projected.append(

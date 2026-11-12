@@ -44,8 +44,11 @@ class ProjectAccessTask(AbstractTask):
     delegate = standalone_relation(AbstractTask, "delegate")
     activity_type = standalone_relation(AbstractTask, "activity_type")
     project = models.ForeignKey(Scope, null=True, blank=True, on_delete=models.SET_NULL)
-    milestone = None
-    milestone_id = None
+    # The task's statement table copies its structure columns; no reverse accessor
+    # beside the production task's.
+    milestone = models.ForeignKey(
+        "projects.Milestone", null=True, blank=True, on_delete=models.SET_NULL, related_name="+"
+    )
     links = None
     file_attachments = None
     thread_attachments = None

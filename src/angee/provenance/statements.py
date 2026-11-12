@@ -387,7 +387,7 @@ class StatementManager[T: Statement](_StatementManagerBase[T]):
         if kind == SourceKind.PERSON:
             readable_records(refs, (source,))
         members = declaration.coerce_members(self.model, source, member_key, kind=SourceKind(kind))
-        defaults = {name: values.get(name) for name in declaration.fields}
+        defaults = {declaration.column(name): values.get(name) for name in declaration.fields}
         defaults.update(
             snak=snak,
             confidence=confidence,
@@ -543,7 +543,7 @@ class StatementManager[T: Statement](_StatementManagerBase[T]):
                     else next((row for row in ordered if row.snak == self.model.StatementSnak.VALUE), None)
                 )
                 values = {
-                    name: _statement_column(type(winner), name).value_from_object(winner)
+                    name: _statement_column(type(winner), declaration.column(name)).value_from_object(winner)
                     if winner is not None and winner.snak == self.model.StatementSnak.VALUE
                     else None
                     for name in declaration.fields
@@ -551,12 +551,13 @@ class StatementManager[T: Statement](_StatementManagerBase[T]):
                 if winner is not None and winner.snak == self.model.StatementSnak.VALUE and declaration.allow_fill:
                     for name, value in values.items():
                         if value in (None, ""):
+                            column = declaration.column(name)
                             values[name] = next(
                                 (
-                                    _statement_column(type(row), name).value_from_object(row)
+                                    _statement_column(type(row), column).value_from_object(row)
                                     for row in ordered
                                     if row.snak == self.model.StatementSnak.VALUE
-                                    and _statement_column(type(row), name).value_from_object(row) not in (None, "")
+                                    and _statement_column(type(row), column).value_from_object(row) not in (None, "")
                                 ),
                                 value,
                             )
@@ -780,6 +781,8 @@ class Aspect:
 
     ``member`` reuses a canonical field name or maps names to new Django fields.
     Shared members reuse one field. ``allow_fill`` fills missing winner values.
+    Value fields keep their subject names; :meth:`column` names their statement
+    column.
     """
 
     fields: tuple[str, ...] = ()
@@ -796,6 +799,16 @@ class Aspect:
         if isinstance(self.member, str):
             return (self.member,)
         return tuple(sorted(self.member or ()))
+
+    def column(self, name: str) -> str:
+        """The statement column holding this aspect's field or member ``name``.
+
+        A value field the stance already names a column after (a subject's own
+        ``status``, beside the stance's) is held as ``stated_<name>``; every other
+        field and member keeps its name.
+        """
+
+        return f"stated_{name}" if name in self.fields and name in Statement.reserved_columns() else name
 
     @property
     def admits_person(self) -> bool:
@@ -858,6 +871,14 @@ class StatementsMixin(PersistenceMixin, HistoryDocumentMixin):
     """Subject-owned eligibility and application hooks for typed statements."""
 
     statements: HistoryDescriptor | None = None
+    person_stances_once_stated: ClassVar[bool] = False
+    """Whether a person's save states aspects only on a row that already carries a statement.
+
+    Retained statements protect their subject and every row they name from
+    deletion. A subject whose local rows stay deletable sets this: a person's
+    edit on a row no source has stated is an ordinary save, and the row joins
+    survivorship with its first statement (:meth:`carries_statements`).
+    """
 
     class Meta:
         abstract = True
@@ -936,6 +957,13 @@ class StatementsMixin(PersistenceMixin, HistoryDocumentMixin):
                 subject.with_actor(actor)
             yield cast(StatementsMixin, subject).statements
 
+    def carries_statements(self) -> bool:
+        """Whether a statement table, a parent declaration's included, names this persisted row."""
+
+        return not self._state.adding and any(
+            model._base_manager.filter(subject_id=self.pk).exists() for model in self.statement_models()
+        )
+
     def statements_for(self, aspect: str) -> Any:
         """Return the single table declaring this aspect; conflicting owners refuse."""
 
@@ -957,14 +985,20 @@ class StatementsMixin(PersistenceMixin, HistoryDocumentMixin):
         as an ordinary save and records no statement that later resolution could
         restore over the owner's writes. A create states no group whose values are
         all empty: an empty field on insert is the absence of a fact, so it never
-        outranks a later source. Explicit confirm and dismiss stay available.
+        outranks a later source. A subject declaring ``person_stances_once_stated``
+        states nothing until its row carries a statement. Explicit confirm and
+        dismiss stay available.
         """
 
         if is_sudo():
             super().save(*args, **kwargs)
             return
         actor = instance_actor(self)
-        if actor is None or StatementSourceMixin.source_kind_for(actor) != SourceKind.PERSON:
+        if (
+            actor is None
+            or StatementSourceMixin.source_kind_for(actor) != SourceKind.PERSON
+            or (self.person_stances_once_stated and not self.carries_statements())
+        ):
             super().save(*args, **kwargs)
             return
         using = kwargs.get("using") or router.db_for_write(type(self), instance=self)
@@ -1228,12 +1262,17 @@ class Statement(MergeContractMixin, HistoryMixin, ChangesetHistory, SqidMixin, T
         )
 
     @classmethod
+    def reserved_columns(cls) -> frozenset[str]:
+        """Names the stance's own columns and relations hold on every statement model."""
+
+        return frozenset({field.name for field in Statement._meta.fields} | {"subject", "link", "id", "pk", "history"})
+
+    @classmethod
     def valid_column(cls, name: str, field: Any) -> bool:
         """The generator omits invalid columns; check() reports their declarations."""
 
-        reserved = {field.name for field in Statement._meta.fields} | {"subject", "link", "id", "pk", "history"}
         return (
-            name not in reserved
+            name not in cls.reserved_columns()
             and name.isidentifier()
             and isinstance(field, models.Field)
             and not field.primary_key
@@ -1272,14 +1311,15 @@ class Statement(MergeContractMixin, HistoryMixin, ChangesetHistory, SqidMixin, T
             if not key or len(key) > 64 or not isinstance(aspect, Aspect):
                 error(f"Invalid or conflicting aspect {key!r}; use a key of at most 64 characters.", "E040")
                 continue
-            if claimed.intersection(aspect.fields) or len(set(aspect.fields)) != len(aspect.fields):
+            value_columns = [aspect.column(name) for name in aspect.fields]
+            if claimed.intersection(value_columns) or len(set(value_columns)) != len(value_columns):
                 error("A value field belongs to exactly one aspect.", "E041")
-            claimed.update(aspect.fields)
+            claimed.update(value_columns)
             if len(set(aspect.precedence)) != len(aspect.precedence) or any(
                 kind not in SourceKind.values for kind in aspect.precedence
             ):
                 error(f"Invalid source precedence on {key!r}.", "E042")
-            columns = {name: cls.statement_subject_model._meta.get_field(name) for name in aspect.fields}
+            columns = {aspect.column(name): cls.statement_subject_model._meta.get_field(name) for name in aspect.fields}
             members = (
                 aspect.member
                 if isinstance(aspect.member, Mapping)
@@ -1385,7 +1425,8 @@ class Statement(MergeContractMixin, HistoryMixin, ChangesetHistory, SqidMixin, T
     def confirm(self) -> Any:
         """Write the acting person's preferred statement for this stance's values."""
 
-        values = {name: getattr(self, name) for name in self.statement_aspects[self.aspect].fields}
+        declaration = self.statement_aspects[self.aspect]
+        values = {name: getattr(self, declaration.column(name)) for name in declaration.fields}
         return self.subject.with_actor(instance_actor(self)).confirm(
             aspect=self.aspect, values=values, **self.member_values()
         )
@@ -1619,8 +1660,19 @@ class StatementRecords(HistoricalRecords):
         setattr(module, name, model)
         setattr(sender, self.manager_name, HistoryDescriptor(model, self.history_manager, self.historical_queryset))
 
+    def value_columns(self, model: Any) -> dict[str, str]:
+        """Each value field's statement column (:meth:`Aspect.column`), by subject field name."""
+
+        return {
+            name: aspect.column(name)
+            for aspect in self.aspects_for(model).values()
+            if isinstance(aspect, Aspect)
+            for name in aspect.fields
+        }
+
     def fields_included(self, model: Any) -> list[models.Field]:
         fields = {}
+        columns = self.value_columns(model)
         for aspect in self.aspects_for(model).values():
             if not isinstance(aspect, Aspect):
                 continue
@@ -1641,11 +1693,18 @@ class StatementRecords(HistoricalRecords):
         return [
             field
             for name, field in sorted(fields.items())
-            if name not in self.excluded_fields and Statement.valid_column(name, field)
+            if name not in self.excluded_fields and Statement.valid_column(columns.get(name, name), field)
         ]
 
     def copy_fields(self, model: Any) -> dict[str, models.Field]:
-        fields = super().copy_fields(model)
+        """Copy each statement column, a value field under its aspect's column name."""
+
+        columns = self.value_columns(model)
+        fields = {}
+        for name, field in super().copy_fields(model).items():
+            if (column := columns.get(name, name)) != name:
+                field.name, field.db_column = column, None
+            fields[column] = field
         for name, field in list(fields.items()):
             if isinstance(field, StatementField):
                 field = fields[name] = field.for_statement(fields)
