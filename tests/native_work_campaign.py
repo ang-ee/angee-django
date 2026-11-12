@@ -227,6 +227,16 @@ class WorkCampaignTests(TransactionTestCase):
         self.assertNotIn("provision_stages", schema.get_type("work_queues_set_input").fields)
         self.assertNotIn("provision_stages", schema.get_type("work_queues_bool_exp").fields)
 
+    def test_stage_entered_at_is_server_owned_on_tasks(self):
+        schema = GraphQLSchemas.from_discovery().build("public")._schema
+        self.assertIn("stage_entered_at", schema.get_type("TaskType").fields)
+        self.assertIn("stage_entered_at", schema.get_type("project_tasks_bool_exp").fields)
+        self.assertNotIn("stage_entered_at", schema.get_type("project_tasks_insert_input").fields)
+        self.assertNotIn("stage_entered_at", schema.get_type("project_tasks_set_input").fields)
+        stage_inputs = (schema.get_type("work_stages_insert_input"), schema.get_type("work_stages_set_input"))
+        for stage_input in stage_inputs:
+            self.assertTrue({"description", "fold", "rotting_days"} <= set(stage_input.fields))
+
     def test_project_reader_cannot_resolve_an_unreadable_team_relation(self):
         schema = GraphQLSchemas.from_discovery().build("public")
         with actor_context(self.actor):

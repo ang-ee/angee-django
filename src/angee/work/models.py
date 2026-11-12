@@ -293,15 +293,15 @@ class Queue(ImmutableFieldsMixin, Composable, metaclass=RebacModelBase, inherits
         if not self.provision_stages:
             return
         stage_model = apps.get_model("work", "Stage")
-        stages: dict[str, Stage] = {}
         with system_context(reason="work.queue.provision_workflow"):
-            for name, tone, position, category in self.PROVISIONED_STAGES:
-                stage, _created = stage_model.objects.get_or_create(
-                    queue=self,
-                    category=category,
-                    defaults={"name": name, "tone": tone, "position": position},
-                )
-                stages[category] = stage
+            stages = stage_model.provision(
+                self,
+                (
+                    {"category": category, "name": name, "tone": tone, "position": position}
+                    for name, tone, position, category in self.PROVISIONED_STAGES
+                ),
+                key="category",
+            )
             if self.default_stage_id is None:
                 self.default_stage = stages[stage_model.StageCategory.UNSTARTED]
                 super().save(update_fields=("default_stage", "updated_at"))
@@ -454,23 +454,31 @@ class Stage(RowLockMixin, StagePrimitive, AuditMixin, AngeeDataModel, concrete=T
     @classmethod
     def validate_transition(
         cls,
-        previous: Stage | None,
-        following: Stage | None,
+        previous: Self | None,
+        following: Self | None,
         *,
-        allow_system_entry: bool = False,
-        adding: bool = False,
+        manual: bool,
+        admitted: bool,
+        adding: bool,
     ) -> None:
-        """Validate a hand transition, independent of the caller's authorization context."""
+        """Admit a move against the queue's reservations, independent of the caller's authorization context.
+
+        A hand move (``manual``) never enters a rule-owned stage; a system stage
+        admits only its owning verb (``admitted``). The same rules answer a board
+        drop, a verb and a non-sudo write.
+        """
 
         if previous is not None and following is not None and previous.pk == following.pk:
             return
+        if manual and following is not None and not following.ordinary_entry_available:
+            raise ValidationError({"stage": "Hand verbs cannot enter a rule-owned stage."})
         if previous is not None and previous.exit_reserved:
             raise ValidationError({"stage": cls.EXIT_RESERVED_MESSAGE})
         if following is None or not following.entry_reserved:
             return
         if following.rule_owned:
             raise ValidationError({"stage": "Only a rule can move a task into a rule-owned stage."})
-        if allow_system_entry:
+        if admitted:
             return
         verb = "mark_duplicate"
         if following.category == cls.StageCategory.TRIAGE:
@@ -1022,7 +1030,8 @@ class TaskWorkManager[TaskT: TaskWork](_TaskWorkManagerBase[TaskT]):
 
         if not self.effective_actor(strict=True)[1]:
             raise PermissionDenied("System admission is required to capture ownerless triage work.")
-        triage = apps.get_model("work", "Stage")._base_manager.filter(queue_id=queue.pk, category="triage").first()
+        stage_model = apps.get_model("work", "Stage")
+        triage = stage_model.for_container(queue).filter(category=stage_model.StageCategory.TRIAGE).first()
         if triage is None:
             raise ValidationError({"queue": "The intake queue has no triage stage."})
         title_limit = self.model.title.field.max_length
@@ -1069,6 +1078,7 @@ class TaskWork(StagedModelMixin[Stage], StateTransitionsMixin, Composable, exten
     hasura_readable_fields: ClassVar[tuple[str, ...]] = (
         "queue",
         "stage",
+        "stage_entered_at",
         "cycle",
         "number",
         "estimate",
@@ -1084,6 +1094,7 @@ class TaskWork(StagedModelMixin[Stage], StateTransitionsMixin, Composable, exten
         "queue",
         "stage",
         "stage__position",
+        "stage_entered_at",
         "cycle",
         "number",
         "estimate",
@@ -1198,28 +1209,24 @@ class TaskWork(StagedModelMixin[Stage], StateTransitionsMixin, Composable, exten
         return value
 
     def clean(self) -> None:
-        """Project a stage before base lifecycle validation and enforce scope."""
+        """Default queue and stage and validate work policy; the stage owner projects and scopes."""
 
         self._validate_initial_status()
         self._apply_queue_and_stage_defaults(provision=False)
         self._validate_estimate()
-        previous, following = self._reject_reserved_stage_transition()
-        self._project_stage_lifecycle(previous, following)
         self.validate_cycle_scope()
         super().clean()
 
     def save(self, *args: Any, admitted_stage: Stage | None = None, **kwargs: Any) -> None:
-        """Persist stage projection and queue numbering in one transaction.
+        """Default queue and stage, number the task, then persist through the stage owner.
 
-        An owning verb passes its admitted system stage explicitly; hand-stage
-        reservations and scope validation still apply to the stored transition.
+        An owning verb passes its admitted system stage explicitly; the stage owner
+        admits, scopes and projects the stored transition in the same transaction.
         """
 
         self._validate_initial_status()
-        if admitted_stage is not None and (admitted_stage.pk is None or self.stage_id != admitted_stage.pk):
-            raise ValidationError({"stage": "Save must write the stage admitted by its owning verb."})
         update_fields = set(kwargs["update_fields"]) if kwargs.get("update_fields") is not None else None
-        stage_written = self._state.adding or update_fields is None or bool({"stage", "stage_id"} & update_fields)
+        stage_written = self.writes_stage(update_fields)
         using = kwargs.get("using") or router.db_for_write(type(self), instance=self)
         queue_field = type(self).queue.field
         previous_queue = queue_field.get_cached_value(self, default=None)
@@ -1229,12 +1236,7 @@ class TaskWork(StagedModelMixin[Stage], StateTransitionsMixin, Composable, exten
                 defaulted.update(self._validate_estimate(update_fields=update_fields))
                 if not stage_written:
                     defaulted.discard("stage")
-                previous, following = self._reject_reserved_stage_transition(
-                    lock=True, stage_written=stage_written, allow_system_entry=admitted_stage is not None,
-                )
-                self.validate_stage_scope()
                 self.validate_cycle_scope()
-                projected = self._project_stage_lifecycle(previous, following) if stage_written else set()
                 allocated = False
                 if self._state.adding and self.queue_id is not None and self.number is None:
                     queue = self.queue
@@ -1242,12 +1244,11 @@ class TaskWork(StagedModelMixin[Stage], StateTransitionsMixin, Composable, exten
                     self.number = queue.next_task_number()
                     allocated = True
                 if update_fields is not None:
-                    update_fields.update(projected)
                     update_fields.update(defaulted)
                     if allocated:
                         update_fields.add("number")
                     kwargs["update_fields"] = update_fields
-                super().save(*args, **kwargs)
+                super().save(*args, admitted_stage=admitted_stage, **kwargs)
         except BaseException:
             if previous_queue is not None and previous_queue.pk == self.queue_id:
                 queue_field.set_cached_value(self, previous_queue)
@@ -1262,13 +1263,15 @@ class TaskWork(StagedModelMixin[Stage], StateTransitionsMixin, Composable, exten
 
         if self.queue_id is None:
             return self
-        previous, _following = self._reject_reserved_stage_transition(manual=True, lock=True)
+        previous, _following = self.stage_transition(manual=True, lock=True)
         category = previous.category if previous is not None else None
         if category == "started":
             return self
         self.validate_action("start")
         stage = self._stage_for_category("started")
-        Stage.validate_transition(previous, stage)
+        self.stage_model().validate_transition(
+            previous, stage, manual=True, admitted=False, adding=self._state.adding
+        )
         self.stage = stage
         self.save(update_fields=("stage", "updated_at"))
         return self
@@ -1279,12 +1282,14 @@ class TaskWork(StagedModelMixin[Stage], StateTransitionsMixin, Composable, exten
         with transaction.atomic():
             if self.queue_id is None:
                 return super().complete(feedback=feedback)
-            previous, _following = self._reject_reserved_stage_transition(manual=True, lock=True)
+            previous, _following = self.stage_transition(manual=True, lock=True)
             if previous is not None and previous.category == "completed":
                 return self
             self.validate_action("complete")
             stage = self._stage_for_category("completed")
-            self._reject_reserved_stage_transition(target=stage, manual=True, lock=True)
+            self.stage_model().validate_transition(
+                previous, stage, manual=True, admitted=False, adding=self._state.adding
+            )
             self.stage = stage
             self.save(update_fields=("stage", "updated_at"))
             self.post_completion(feedback)
@@ -1303,9 +1308,7 @@ class TaskWork(StagedModelMixin[Stage], StateTransitionsMixin, Composable, exten
         self.validate_action("drop")
         category = "duplicate" if reason_member == self.TaskDroppedReason.DUPLICATE else "canceled"
         stage = self._stage_for_category(category)
-        self._reject_reserved_stage_transition(
-            target=stage, manual=True, allow_system_entry=category == "duplicate", lock=True
-        )
+        self.stage_transition(target=stage, manual=True, admitted=category == "duplicate", lock=True)
         self.stage = stage
         self.dropped_reason = reason_member
         self.save(
@@ -1324,7 +1327,7 @@ class TaskWork(StagedModelMixin[Stage], StateTransitionsMixin, Composable, exten
         stage = self.resolve_default_stage()
         if stage is None:
             raise ValidationError({"stage": "Queue has no default stage."})
-        self._reject_reserved_stage_transition(target=stage, manual=True, lock=True)
+        self.stage_transition(target=stage, manual=True, lock=True)
         self.stage = stage
         self.save(update_fields=("stage", "updated_at"))
         return self
@@ -1458,7 +1461,7 @@ class TaskWork(StagedModelMixin[Stage], StateTransitionsMixin, Composable, exten
             raise ValidationError({"stage": "Queue has no default stage."})
         if target.queue_id != self.queue_id:
             raise ValidationError({"stage": "Accepted stage must belong to the task's queue."})
-        self._reject_reserved_stage_transition(target=target, manual=True, lock=True)
+        self.stage_transition(target=target, manual=True, lock=True)
         if self.stage_id == target.pk:
             if (
                 self.status == self.TaskStatus.OPEN
@@ -1480,7 +1483,7 @@ class TaskWork(StagedModelMixin[Stage], StateTransitionsMixin, Composable, exten
 
         self.validate_action("return_to_triage")
         stage = self._stage_for_category("triage")
-        self._reject_reserved_stage_transition(target=stage, manual=True, allow_system_entry=True, lock=True)
+        self.stage_transition(target=stage, manual=True, admitted=True, lock=True)
         if self.stage_id == stage.pk:
             return self
         self.stage = stage
@@ -1504,7 +1507,7 @@ class TaskWork(StagedModelMixin[Stage], StateTransitionsMixin, Composable, exten
         if self.queue_id is None:
             raise ValidationError({"queue": "A queued task is required for triage."})
         target = self._stage_for_category("canceled")
-        previous, _following = self._reject_reserved_stage_transition(target=target, manual=True, lock=True)
+        previous, _following = self.stage_transition(target=target, manual=True, lock=True)
         if (
             self.stage_id == target.pk
             and self.status == self.TaskStatus.DROPPED
@@ -1564,9 +1567,7 @@ class TaskWork(StagedModelMixin[Stage], StateTransitionsMixin, Composable, exten
             if source.queue_id is None:
                 raise ValidationError({"queue": "A queued task is required for duplicate triage."})
             duplicate_stage = source._stage_for_category("duplicate")
-            source._reject_reserved_stage_transition(
-                target=duplicate_stage, manual=True, allow_system_entry=True, lock=True,
-            )
+            source.stage_transition(target=duplicate_stage, manual=True, admitted=True, lock=True)
             if source.stage is None or source.stage.category != source.stage_model().StageCategory.TRIAGE:
                 raise ValidationError({"stage": "Only a task in triage can be marked duplicate."})
             source.stage = duplicate_stage
@@ -1597,48 +1598,6 @@ class TaskWork(StagedModelMixin[Stage], StateTransitionsMixin, Composable, exten
         )
         if cycle_queue_id is None or cycle_queue_id != self.queue_id:
             raise ValidationError({"cycle": "Cycle must belong to the task's queue."})
-
-    def _reject_reserved_stage_transition(
-        self,
-        *,
-        target: Stage | None = None,
-        manual: bool = False,
-        allow_system_entry: bool = False,
-        lock: bool = False,
-        stage_written: bool = True,
-    ) -> tuple[Stage | None, Stage | None]:
-        """Read current stage facts and apply the Stage owner's reservation check.
-
-        Saves and hand verbs hold the task row lock until their transaction ends.
-        Only direct system writes and explicit rule writes bypass reservations;
-        hand verbs always validate, including when called under sudo. Partial
-        saves that omit stage keep the persisted stage as the projection target.
-        """
-
-        previous_id = None
-        if not self._state.adding:
-            rows = type(self).objects.sudo(reason="work.task.stage_transition")
-            if lock:
-                rows = rows.lock_if_supported()
-            previous_id = rows.values_list("stage_id", flat=True).get(pk=self.pk)
-        target_id = target.pk if target is not None else self.stage_id
-        if not stage_written:
-            target_id = previous_id
-        stage_ids = tuple(pk for pk in (previous_id, target_id) if pk is not None)
-        stages = {
-            stage.pk: stage
-            for stage in self.stage_model()._base_manager.filter(pk__in=stage_ids)
-        }
-        previous = stages.get(previous_id) if previous_id is not None else None
-        following = stages.get(target_id) if target_id is not None else None
-        changed = previous_id != target_id
-        if changed and manual and following is not None and not following.ordinary_entry_available:
-            raise ValidationError({"stage": "Hand verbs cannot enter a rule-owned stage."})
-        if manual or not is_sudo():
-            Stage.validate_transition(
-                previous, following, allow_system_entry=allow_system_entry, adding=self._state.adding
-            )
-        return previous, following
 
     def _apply_queue_and_stage_defaults(self, *, provision: bool) -> set[str]:
         """Infer queue from cycle/stage, then personal queue and default stage."""
@@ -1711,11 +1670,12 @@ class TaskWork(StagedModelMixin[Stage], StateTransitionsMixin, Composable, exten
             raise ValidationError({"estimate": "This queue does not allow a zero estimate."})
         return changed
 
-    def _project_stage_lifecycle(self, previous: Stage | None, following: Stage | None) -> set[str]:
-        """Project lifecycle fields from the stage facts read for this transition."""
+    def project_stage(self, previous: Stage | None, following: Stage | None) -> set[str]:
+        """Project the task lifecycle and triage stamps from the stage category, after the base stamp."""
 
+        fields = super().project_stage(previous, following)
         if following is None:
-            return set()
+            return fields
         category = following.category
         now = timezone.now()
         stage_changed = previous is None or previous.pk != following.pk
@@ -1748,7 +1708,7 @@ class TaskWork(StagedModelMixin[Stage], StateTransitionsMixin, Composable, exten
         else:
             raise ValidationError({"stage": f"Unknown work stage category {category!r}."})
 
-        fields = {"status", "done_at", "dropped_reason", "dropped_at"}
+        fields.update(("status", "done_at", "dropped_reason", "dropped_at"))
         if category == "triage" and stage_changed:
             self.started_triage_at = now
             self.triaged_at = None
