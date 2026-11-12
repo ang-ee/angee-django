@@ -1070,7 +1070,9 @@ classifies eligible sources; `set()` refuses missing or unknown classifications.
 Statements retain the assertion-time classification across source edits and
 deletion. The declaring addon passes `StatementRecords(link="integrate.RecordLink")`
 (and `model_name=` when `<Subject>Statement` is already a domain model; a money
-column copied without its currency column becomes a plain decimal on the statement);
+column copied without its currency column becomes a plain decimal on the statement;
+a value field named like a stance column, such as a subject's `status`, is held as
+`stated_<name>`, which `Aspect.column` names);
 the base declaration defaults to `None`, and the named model composes `StatementLinkMixin`: its
 `authoritative` fact (`SyncStream.authoritative`, read through `RecordLink.stream`)
 places a SYSTEM_OF_RECORD source ahead of PERSON in every aspect listing both
@@ -1083,7 +1085,19 @@ whose precedence admits a person, including separate MTI child tables; parent
 declarations keep their shared-pk owner. An aspect whose precedence leaves PERSON
 out belongs to its native owner: a person's save writes those fields as an ordinary
 save. A person's create states no group whose values are all empty; clearing a
-field later is an edit and is stated. Confirm or dismiss stay explicit.
+field later is an edit and is stated. Retained statements protect their subject and
+every row they name from deletion, so a subject whose local rows stay deletable sets
+`StatementsMixin.person_stances_once_stated`: a person's save states nothing until
+the row carries a statement (`carries_statements()`). Known debt: the first source
+assertion on such a row applies over its local values even from a plain stream,
+which contradicts "a plain stream ranks below people" for these rows; the owner-level
+cure is to seed PERSON stances from the row's history attribution when its first
+non-authoritative assertion arrives. A subject whose `write` other rows inherit names
+a narrower `statement_write_permission` (projects' `write_statements`), so admission
+lends a source nothing those rows reach (see [projects](../../src/angee/projects/README.md));
+`statement_source` stays out of every permission another row inherits, a record task's
+`*_as_subject` arms included.
+Confirm or dismiss stay explicit.
 Consumers contribute domain aspects through the descriptor's abstract donors: the
 subject source's own declaration finalizes the one statement table (bases, prefix,
 queryset, link) and every donor's aspects join it. `Aspect.precedence` owns source

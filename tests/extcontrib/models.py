@@ -7,6 +7,7 @@ from django.db import models
 from angee.base.fields.relations import RetainedGenericRelation
 from angee.base.models.base import AngeeDataModel
 from angee.base.models.roles import role_anchor
+from angee.provenance.contrib.angee.history import HistoryMixin
 from angee.provenance.statements import (
     Aspect,
     SourceKind,
@@ -84,3 +85,30 @@ class Claimed(ClaimedBilling, ClaimedSource):
         abstract = False
         db_table = "test_extcontrib_claimed"
         rebac_resource_type = "extcontrib/claimed"
+
+
+class Stated(StatementsMixin, HistoryMixin, AngeeDataModel):
+    """A subject whose ``status`` shares a stance column's name, recording person stances only once stated.
+
+    Its statements admit through ``write_statements``, which also holds a ``stater`` who cannot write the row.
+    """
+
+    sqid_prefix = "xst_"
+    person_stances_once_stated = True
+    statement_write_permission = "write_statements"
+    status = models.CharField(max_length=20, blank=True, default="")
+    note = models.CharField(max_length=40, blank=True, default="")
+    statements = StatementRecords(
+        aspects={
+            "state": Aspect(
+                fields=("status", "note"),
+                precedence=cast(tuple[SourceKind, ...], (SourceKind.PERSON, SourceKind.SYSTEM_OF_RECORD)),
+            ),
+        },
+        sqid_prefix="xss_",
+    )
+
+    class Meta(AngeeDataModel.Meta):
+        abstract = False
+        db_table = "test_extcontrib_stated"
+        rebac_resource_type = "extcontrib/stated"
