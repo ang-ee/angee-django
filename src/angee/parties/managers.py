@@ -1534,7 +1534,7 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
             into.merge(records=[source.public_id])
             return "already_merged" if already_merged else "merged"
 
-    def for_user(self, user: Any) -> Any:
+    def for_user(self, user: Any, *, adopt: Any = None) -> Any:
         """Return the :class:`Person` linked to ``user``, get-or-created on the ``user`` O2O.
 
         The single owner of the one-Person-per-user invariant: every identity-link
@@ -1542,14 +1542,30 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
         routes through here, so a user never grows two person rows. Targets the
         ``Person`` model explicitly, runs within the caller's ``system_context``, and
         stamps ``created_by``, so the user also owns their Person.
+
+        ``adopt`` is an existing Person a trusted ingress resolved as this user
+        (an imported contact, carried by IAM's person event): it becomes the user's
+        Person instead of a new row, keeping its identity and statements. A Person
+        already linked to another user, or a user already linked to another
+        Person, refuses rather than moving an identity.
         """
 
         person_model = apps.get_model("parties", "Person")
-        person, _created = person_model.objects.get_or_create(
-            user=user,
-            defaults={"display_name": _user_display_name(user), "created_by_id": user.pk},
-        )
-        return person
+        if adopt is None:
+            person, _created = person_model.objects.get_or_create(
+                user=user,
+                defaults={"display_name": _user_display_name(user), "created_by_id": user.pk},
+            )
+            return person
+        with transaction.atomic():
+            person = person_model._base_manager.filter(pk=adopt.pk).lock_if_supported().get()
+            linked = person_model._base_manager.filter(user=user).exclude(pk=person.pk).exists()
+            if linked or person.user_id not in (None, user.pk):
+                raise ValidationError({"user": "This person and this account already have other identities."})
+            if person.user_id is None:
+                person.user = user
+                person.save(update_fields=["user", "updated_at"])
+            return person
 
     def follow_user_name(self, user: Any) -> None:
         """Rename ``user``'s linked :class:`Person` after the account, as :meth:`for_user` names it.

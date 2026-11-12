@@ -123,6 +123,35 @@ def test_system_creation_has_no_actor_logs_named_reason_and_emits_once(iam_admin
     assert len(person_events) == 1
 
 
+def test_system_creation_adopts_the_identity_the_ingress_resolved(iam_admin, person_events):
+    """An imported contact becomes the account's Person: no second Person is created for the user."""
+
+    with system_context(reason="test.imported.contact"):
+        contact = Person._base_manager.create(display_name="Imported Contact")
+    before = Person._base_manager.count()
+    user = User.objects.create_person_as_system(
+        "imported", "imported@example.com", reason="test.channel.capture", identity=contact
+    )
+    assert Person._base_manager.count() == before
+    assert Person._base_manager.get(user=user).pk == contact.pk
+    assert Person._base_manager.get(pk=contact.pk).display_name == "Imported Contact"
+    assert person_events == [{"sender": User, "user": user, "atomic": True}]
+    # A replayed event adopts nothing new.
+    person_created.send(sender=User, instance=user, identity=contact)
+    assert Person._base_manager.filter(user=user).count() == 1
+
+
+def test_system_creation_refuses_an_identity_another_account_holds(iam_admin):
+    """Adoption never moves a Person between accounts; the refused account rolls back with it."""
+
+    holder = User.objects.create_person_as_system("holder", "holder@example.com", reason="test.channel.capture")
+    held = Person._base_manager.get(user=holder)
+    with pytest.raises(ValidationError, match="already have other identities"):
+        User.objects.create_person_as_system("taker", "taker@example.com", reason="test.channel.capture", identity=held)
+    assert not User._base_manager.filter(username="taker").exists()
+    assert Person._base_manager.get(pk=held.pk).user_id == holder.pk
+
+
 @pytest.mark.parametrize("reason", ["", " \t\n"])
 def test_system_creation_requires_a_named_reason(iam_admin, person_events, reason):
     with pytest.raises(ValueError, match="named reason"):
