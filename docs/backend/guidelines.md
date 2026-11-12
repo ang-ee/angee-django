@@ -236,7 +236,9 @@ Use these owners instead of maintaining another contract in an addon:
 - A foreign key that its row discloses whatever the reader may see of the target
   projects as [`public_id_field("relation", nullable=...)`](../../src/angee/graphql/ids.py),
   the stored key without a target read; a reference that target readability must
-  redact projects as [`actor_scoped_public_id`](../../src/angee/graphql/relations.py).
+  redact projects as [`actor_scoped_public_id`](../../src/angee/graphql/relations.py), and a
+  to-many relation a form edits by id as its many-valued counterpart
+  [`actor_scoped_public_ids`](../../src/angee/graphql/relations.py).
 - Management commands stay thin. They parse CLI arguments, load settings/context,
   and call the owner. Command modules should not contain reusable business logic,
   import generated runtime models directly, or duplicate resource/composer/schema
@@ -1280,7 +1282,9 @@ exception closes the rows as failed. Tests inherit a boundary from the root
   `save(admitted_stage=...)` and must write exactly that stage. A partial save is
   judged on the row it stores (written fields over the committed row), never on a
   stale instance; a consumer checks its own same-row invariants there through
-  `validate_stored_row(persisted, stored)`.
+  `validate_stored_row(persisted, stored)`, and copies the instance facts its rules
+  read outside the columns (a flag held for one write) onto that row through
+  `carry_instance_facts(stored)`.
   *Projection:* `project_stage(previous, following)` returns the fields a move
   writes and the save merges them into `update_fields`; a consumer extends it
   through `super()` to write its code-owned lifecycle through `StateTransitions`.

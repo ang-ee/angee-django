@@ -372,6 +372,10 @@ class StatementManager[T: Statement](_StatementManagerBase[T]):
         kind = StatementSourceMixin.source_kind_for(source)
         if kind is None:
             raise ValidationError("The source must declare a known per-row source_kind.")
+        if kind == SourceKind.PERSON and not declaration.admits_person:
+            # Its precedence leaves people out: the fields are the native owner's, and a person's
+            # stance at any rank (a preferred one outranks precedence) would displace the source's.
+            raise PermissionDenied("A person may not state an aspect whose precedence leaves people out.")
         rank = self.model.StatementRank.NORMAL if rank is None else rank
         snak = self.model.StatementSnak.VALUE if snak is None else snak
         if rank == self.model.StatementRank.PREFERRED and kind not in (

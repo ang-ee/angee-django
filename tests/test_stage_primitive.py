@@ -40,6 +40,8 @@ class PipelineStage(Stage):
 
     @classmethod
     def for_record(cls, record: StagedModelMixin[Any]) -> models.QuerySet[PipelineStage]:
+        if getattr(record, "every_kind", False):
+            return super().for_record(record)
         kind = getattr(record, "kind", "")
         return super().for_record(record).filter(models.Q(only_kind="") | models.Q(only_kind=kind))
 
@@ -72,8 +74,14 @@ class PipelineRecord(StagedModelMixin[PipelineStage], models.Model):
     stage = models.ForeignKey(PipelineStage, null=True, on_delete=models.SET_NULL)
     kind = models.CharField(max_length=20, default="task")
 
+    every_kind: bool = False
+    """An instance fact, not a column: this write may rest in a stage of any kind."""
+
     class Meta:
         app_label = "tests"
+
+    def carry_instance_facts(self, stored: PipelineRecord) -> None:
+        stored.every_kind = self.every_kind
 
 
 @pytest.fixture
@@ -201,6 +209,20 @@ def test_a_partial_save_judges_applicability_on_the_row_it_stores(pipeline: Any)
         stale.save(update_fields=("stage",))
     stored = PipelineRecord.objects.get(pk=record.pk)
     assert (stored.kind, stored.stage) == ("task", stages["New"]), "a stale kind admits nothing"
+
+
+def test_a_partial_save_carries_instance_facts_into_the_row_it_stores(pipeline: Any) -> None:
+    """Scope and applicability judge the snapshot with the facts the instance holds outside its columns."""
+
+    container, stages = pipeline
+    record = PipelineRecord.objects.create(container=container, kind="task", stage=stages["New"])
+    stale = PipelineRecord.objects.get(pk=record.pk)
+    stale.stage = stages["Bugs first"]
+    with pytest.raises(ValidationError, match="does not apply"):
+        stale.save(update_fields=("stage",))
+    stale.every_kind = True
+    stale.save(update_fields=("stage",))
+    assert PipelineRecord.objects.get(pk=record.pk).stage_id == stages["Bugs first"].pk
 
 
 def test_the_stage_owner_admits_every_move_with_its_facts(pipeline: Any) -> None:

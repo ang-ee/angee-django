@@ -114,6 +114,35 @@ def test_a_person_save_states_only_the_aspects_that_admit_a_person(db: None) -> 
         assert [statement.aspect for statement in record.statements.all()] == ["tax"]
 
 
+@pytest.mark.parametrize(
+    "stance",
+    [
+        pytest.param({"values": {"registry": "KRS 0000999999"}}, id="normal"),
+        pytest.param({"values": {"registry": "KRS 0000999999"}, "rank": "preferred"}, id="confirm"),
+        pytest.param({"values": {}, "rank": "preferred", "snak": "no_value"}, id="dismiss"),
+    ],
+)
+def test_a_person_never_states_an_aspect_whose_precedence_leaves_people_out(db: None, stance: dict[str, Any]) -> None:
+    """At any rank: a preferred stance outranks precedence, so admitting one would displace the source's."""
+
+    del db
+    writer = create_user("registry-person")
+    with system_context(reason="test registry fixture"):
+        record = Claimed.objects.create(name="Acme")
+        write_relationships([RelationshipTuple(to_object_ref(record), "writer", to_subject_ref(writer))])
+        source = Claimed.statements.model._base_manager.create(
+            subject=record, aspect="registry", asserted_by="src:krs", source_kind=SOR, registry="KRS 0000123456"
+        )
+        Claimed.statements.resolve(subject=record, aspect="registry")
+    with actor_context(writer), pytest.raises(PermissionDenied, match="leaves people out"):
+        record.with_actor(writer).statements.set(aspect="registry", **stance)
+    record.refresh_from_db()
+    source.refresh_from_db()
+    assert (record.registry, source.applied) == ("KRS 0000123456", True)
+    with system_context(reason="test registry read"):
+        assert not Claimed.statements.model._base_manager.filter(subject=record, source_kind=P).exists()
+
+
 def test_a_person_create_states_no_group_left_empty(db: None) -> None:
     """An empty field on create is no fact; clearing it later is an edit and is stated."""
 
