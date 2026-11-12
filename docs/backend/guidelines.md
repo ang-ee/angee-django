@@ -743,7 +743,12 @@ data through REBAC, never a queryset bypass.
   [`UserManager.create_person`](../../src/angee/iam/models.py), whose `create`
   permission owns admission; ingress without an actor uses
   `create_person_as_system` with a named reason, once its channel owner has
-  required channel `write` and account `create` to enable that ingress.
+  required channel `write` and account `create` to enable that ingress. An
+  ingress that already imported the person's contact passes it as `identity`;
+  `Party.objects.for_user(user, adopt=)` links that Person instead of creating a
+  second one and passes its ownership to the account; it refuses a Person another
+  account holds. A Person whose name a source states keeps that name when the
+  account is renamed.
   `create_user` stays the trusted bootstrap and OIDC path.
 - **Managed accounts change through IAM's account verbs.** `User.set_active`,
   `rename`, `issue_password` and `reset_password` lock the row, check their own

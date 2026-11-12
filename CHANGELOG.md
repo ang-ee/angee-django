@@ -19,6 +19,25 @@ live in code docstrings.
 - `EditableLineField.readOnlyWhen(row, parentRow)` locks one line cell per row
   from the row and its owning document, so a document's section and note rows
   read their commercial cells while their text and row actions stay editable.
+- An adopted Person (`Party.objects.for_user(user, adopt=)`) is owned by its
+  account, like a Person the account's creation makes, so the account reads and
+  edits its own private fields. `follow_user_name` no longer renames a Person
+  whose `identity` aspect a source states: survivorship keeps the source's name.
+- `UserManager.create_person_as_system(..., identity=)` carries an existing
+  identity record on `person_created`, and `Party.objects.for_user(user,
+  adopt=)` links that Person to the new account instead of creating another:
+  an integration that imported a person's contact provisions their account
+  onto it. Adopting a Person another account holds refuses and rolls the
+  account back.
+- A `workflows.workflowextension` row may declare `points` over its own nodes,
+  and a fragment composed after it may splice there with `at`: a dependent
+  addon's phase runs inside another addon's fragment (the Odoo sales and project
+  bridges before the accounting bridge's analytic lines). Base points splice
+  first, then fragment points in declaration order; a point used before its
+  declaring fragment, or declared twice, refuses the load. Published
+  contributions retain the declared points and the authored routes a splice
+  rewrote, so a narrow reload recomposes the same graph; documents without
+  fragment points keep their published shape and fingerprints.
 - The `composed_tables` test fixture is removed: a database test requests
   pytest-django's `db` or carries a `django_db` mark, and rolls back over the
   session baseline `angee.base.testing.fixtures` records. The

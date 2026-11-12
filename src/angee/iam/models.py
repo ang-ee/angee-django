@@ -456,12 +456,15 @@ class UserManager[UserT: User](_UserManagerBase[UserT], BaseUserManager[UserT]):
             reason="iam.person.create",
         )
 
-    def create_person_as_system(self, username: str, email: str, *, reason: str) -> UserT:
+    def create_person_as_system(self, username: str, email: str, *, reason: str, identity: Any = None) -> UserT:
         """Create a passwordless person for a channel-authorized system ingress.
 
         The channel owner must require channel write and account create when
         enabling this ingress. The caller supplies its named reason. Nested
         writes and the person event run in the library's system context.
+        ``identity`` is an existing identity record the ingress already resolved
+        for this person (an imported contact); the person event carries it so
+        the identity owner links it instead of creating another.
         """
 
         if not reason.strip():
@@ -477,6 +480,7 @@ class UserManager[UserT: User](_UserManagerBase[UserT], BaseUserManager[UserT]):
                 last_name="",
                 actor=None,
                 reason=reason,
+                identity=identity,
             )
         logger.info("Created person account %s as system: %s", user.pk, reason)
         return user
@@ -491,6 +495,7 @@ class UserManager[UserT: User](_UserManagerBase[UserT], BaseUserManager[UserT]):
         last_name: str,
         actor: SubjectRef | None,
         reason: str,
+        identity: Any = None,
     ) -> UserT:
         """Own validation, uniqueness, persistence and the transactional event."""
 
@@ -521,7 +526,7 @@ class UserManager[UserT: User](_UserManagerBase[UserT], BaseUserManager[UserT]):
                 user.with_actor(actor)
             else:
                 user.unsudo()
-            person_created.send(sender=self.model, instance=user)
+            person_created.send(sender=self.model, instance=user, identity=identity)
         return user
 
     def create_user(
