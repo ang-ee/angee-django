@@ -1,6 +1,7 @@
 import { createNamespaceT } from "@angee/ui/i18n";
 
 export const enWorkMessages: Record<string, string> = {
+  "project.team": "Team",
   "access.manager": "Manager",
   "common.category": "Category",
   "common.completed": "Completed",

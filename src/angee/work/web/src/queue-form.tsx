@@ -1,4 +1,4 @@
-import { Button, ErrorBanner, useUiT, Chip, Field, Form, Group, useEnumOptions, type ContainerEntry, type EditableLineField, type EditableLineSupplementalColumn, type FormProps } from "@angee/ui";
+import { Button, ErrorBanner, useUiT, Chip, Field, Form, Group, registerForm, useEnumOptions, type ContainerEntry, type EditableLineField, type EditableLineSupplementalColumn, type FormProps } from "@angee/ui";
 import * as React from "react";
 
 import { useWorkT } from "./i18n";
@@ -36,7 +36,7 @@ export const QUEUE_FORM_SECTIONS: ContainerEntry<React.ReactNode> = {
   "work.queue-triage": {
     sequence: 20,
     content: (
-      <Group label={<WorkText id="queue.group.triage" />} columns={2}>
+      <Group label={<WorkText id="queue.group.triage" />} columns={2} pane="triage">
         <Field name="triage_enabled" />
         <Field name="default_stage" />
         <Field name="auto_archive_months" />
@@ -47,7 +47,7 @@ export const QUEUE_FORM_SECTIONS: ContainerEntry<React.ReactNode> = {
   "work.queue-cadence": {
     sequence: 30,
     content: (
-      <Group label={<WorkText id="queue.group.cadence" />} columns={2}>
+      <Group label={<WorkText id="queue.group.cadence" />} columns={2} pane="cadence">
         <Field name="cycles_enabled" />
         <Field name="cycle_weeks" />
         <Field name="cycle_cooldown_weeks" />
@@ -59,7 +59,7 @@ export const QUEUE_FORM_SECTIONS: ContainerEntry<React.ReactNode> = {
   "work.queue-estimates": {
     sequence: 40,
     content: (
-      <Group label={<WorkText id="queue.group.estimates" />} columns={2}>
+      <Group label={<WorkText id="queue.group.estimates" />} columns={2} pane="estimates">
         <Field name="estimate_scale" />
         <Field name="estimate_allow_zero" />
         <Field name="default_estimate" />
@@ -138,3 +138,5 @@ export function useQueueFormDeclaration(props: Omit<FormProps, "resource" | "chi
 export function QueueSettingsForm(props: Omit<FormProps, "resource" | "children">): React.ReactElement {
   return useQueueFormDeclaration(props);
 }
+
+export const queueForm = registerForm(QUEUE_MODEL, QueueSettingsForm);

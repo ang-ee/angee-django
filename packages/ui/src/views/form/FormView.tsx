@@ -2,7 +2,10 @@ import * as React from "react";
 import { useModelMetadata } from "@angee/metadata";
 
 import { Button } from "../../ui/button";
-import { Tabs } from "../../ui/tabs";
+import { Tabs, tabsVariants } from "../../ui/tabs";
+import { DropdownMenu } from "../../ui/dropdown-menu";
+import { useOverflowCount } from "../../lib/use-overflow-count";
+import { useUiT } from "../../i18n";
 import { useBreadcrumbLeafLabel } from "../../chrome/Breadcrumb";
 import { renderGlyph } from "../../chrome/Glyph";
 import { ControlBandProvider } from "../../layouts/ControlBand";
@@ -216,11 +219,11 @@ function FormViewContent({ surface, ...props }: FormViewProps & {
     ? declaredActions.filter((action) => action.run || action.submit)
     : declaredActions;
   useBreadcrumbLeafLabel(
-    titleText(
+    isCreate ? t("resourceToolbar.create") : titleText(
       recordRepresentationValue(displayRecord, surface.modelMetadata),
       "",
     ) || null,
-    publishBreadcrumbLabel && !isCreate,
+    publishBreadcrumbLabel,
   );
   const awaitingRecord = !isCreate && displayRecord == null && loading;
   if (!isCreate && !awaitingRecord && displayRecord == null) {
@@ -274,12 +277,8 @@ function FormViewContent({ surface, ...props }: FormViewProps & {
         {recordExtras(recordPanelContext)}
       </div>
     ) : null;
-  const paneStrip = tabbed ? <Tabs.List>
-    {panes.map((pane) => <Tabs.Tab key={pane.id} value={pane.id} icon={renderGlyph(pane.icon)}>
-      <SectionHeading as="span" label={resolveTabLabel(pane.label, i18n)}
-        count={pane.badge != null ? <Tabs.Count>{pane.badge}</Tabs.Count> : undefined} />
-    </Tabs.Tab>)}
-  </Tabs.List> : lonePane ? <SectionHeading label={resolveTabLabel(lonePane.label, i18n)} count={lonePane.badge}
+  const paneStrip = tabbed ? <FormPaneStrip panes={panes} value={activeRecordTab} onChange={setActiveRecordTab} />
+    : lonePane ? <SectionHeading label={resolveTabLabel(lonePane.label, i18n)} count={lonePane.badge}
     className="border-b border-border-subtle pb-1" /> : null;
   const paneContent = (pane: FormViewPane): React.ReactNode => {
     if (awaitingRecord || recordTabPending) return null;
@@ -432,4 +431,46 @@ function FormViewContent({ surface, ...props }: FormViewProps & {
     {paneRegions}
     {recordExtrasPanel}
   </Tabs>;
+}
+
+/** Form panes share the app menu's measured overflow; the selected pane stays visible. */
+function FormPaneStrip({ panes, value, onChange }: {
+  panes: readonly FormViewPane[];
+  value: string | undefined;
+  onChange: (value: string) => void;
+}): React.ReactElement {
+  const t = useUiT();
+  const { i18n } = useAppRuntime();
+  const [containerRef, measurementRef, visible, overflow] = useOverflowCount(panes, panes.findIndex((pane) => pane.id === value));
+  const styles = tabsVariants({ variant: "card" });
+  const label = (pane: FormViewPane) => <>{renderGlyph(pane.icon)}{resolveTabLabel(pane.label, i18n)}
+    {pane.badge != null ? <Tabs.Count>{pane.badge}</Tabs.Count> : null}</>;
+  return <div ref={containerRef} className="relative min-w-0 overflow-hidden">
+    <div ref={measurementRef} inert aria-hidden="true"
+      className="pointer-events-none invisible absolute left-0 top-0 flex w-max">
+      {panes.map((pane) => <span key={pane.id} className={styles.tab()}>{label(pane)}</span>)}
+      <span className={styles.tab()}>{t("chrome.more")}{renderGlyph("chevron-down")}</span>
+    </div>
+    <Tabs.List>
+      {visible.map((index) => {
+        const pane = panes[index]!;
+        return <Tabs.Tab key={pane.id} value={pane.id}>{label(pane)}</Tabs.Tab>;
+      })}
+      {overflow.length ? <DropdownMenu.Root modal={false}>
+        <DropdownMenu.Trigger className={styles.tab({ className: "min-w-0" })} aria-label={t("form.moreSections")}>
+          {t("chrome.more")}{renderGlyph("chevron-down")}
+        </DropdownMenu.Trigger>
+        <DropdownMenu.Portal>
+          <DropdownMenu.Positioner side="bottom" align="end" sideOffset={4}>
+            <DropdownMenu.Content>
+              {overflow.map((index) => {
+                const pane = panes[index]!;
+                return <DropdownMenu.Item key={pane.id} onClick={() => onChange(pane.id)}>{label(pane)}</DropdownMenu.Item>;
+              })}
+            </DropdownMenu.Content>
+          </DropdownMenu.Positioner>
+        </DropdownMenu.Portal>
+      </DropdownMenu.Root> : null}
+    </Tabs.List>
+  </div>;
 }
