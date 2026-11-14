@@ -1931,6 +1931,15 @@ reused by tests sets `angeeOwnRuntime: true` and passes
 `appearance={storyAppearance(context.globals)}` into the same owner. Each story
 has one provider stack — appearance, data, toasts and modals.
 
+Full-product workshops use `ComposedRuntimeFixture` from `@angee/storybook/testing`.
+It mounts the real `createApp` composition with native memory history and requires
+fixture transports with live queries disabled. The `@angee/storybook/host` entry
+exposes the stack's emitted addons and schema loader; it adds no product registry.
+`resourceSnapshotOperations` supplies small read-only sample collections through
+metadata-owned filters, relations and grouping. Product packages own their sample
+records, authored report handlers and named CSF stories. Their page maps should
+derive from those stories and check coverage against the addon declarations.
+
 ### Developer mode
 
 Developer mode's composition dialog lists container narrowing (each layer's
