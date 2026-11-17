@@ -3,9 +3,9 @@ build-system = { requires = ["hatch-angee>=1.1,<2"], build-backend = "hatch_ange
 [project]
 name = "angee-scheduling"
 version = "3.0.0"
-description = "RFC-5545 recurrence (RRULE) parsing and bounded, timezone-aware occurrence expansion."
-keywords = ["scheduling", "recurrence", "rrule", "rfc-5545", "calendar"]
-dependencies = ["angee-graphql>=3,<4", "python-dateutil>=2.9"]
+description = "Time as values: RFC-5545 recurrence, due rules from named anchors, and named time zones."
+keywords = ["scheduling", "recurrence", "rrule", "rfc-5545", "calendar", "due date", "deadline", "time zone"]
+dependencies = ["angee-base>=3,<4", "angee-graphql>=3,<4", "python-dateutil>=2.9"]
 dynamic = ["entry-points"]
 
 [tool.angee]
