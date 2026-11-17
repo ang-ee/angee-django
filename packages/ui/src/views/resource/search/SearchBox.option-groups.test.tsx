@@ -44,7 +44,7 @@ test("a relation facet declaring an option group lists its options under the rel
     .toEqual(["Segment", "Relationship", "Other"]);
   expect(related.calls).toContainEqual(expect.objectContaining({
     filters: [{ field: "id", operator: "in", value: ["tag-loose", "tag-partner", "tag-enterprise"] }],
-    optionGroupField: "category.name", optionGroupOrderField: "category.position",
+    pageSize: 3, optionGroupField: "category.name", optionGroupOrderField: "category.position",
   }));
   fireEvent.click(within(segment).getByRole("button", { name: "Enterprise" }));
   expect(search.toggleFacetOption).toHaveBeenCalledWith("tags", 'tags:"tag-enterprise"');

@@ -335,6 +335,8 @@ function GroupedFacetOptions({ facet, relation, optionGroupField, search }: {
   const related = useRelationOptions(relation, {
     enabled: ids.length > 0,
     filters: [{ field: "id", operator: "in", value: ids }],
+    // One page holds exactly the facet's options.
+    pageSize: Math.max(ids.length, 1),
     optionGroupField,
     optionGroupOrderField: facet.optionGroupOrderField,
   });
