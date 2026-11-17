@@ -62,6 +62,8 @@ class MountBackendType:
     label: str
     requires_credential: bool
     oauth_client: strawberry.ID | None
+    oauth_scopes: list[str]
+    """The scopes an account must grant for the backend to read with it; connecting one requests them."""
     accounts: list[ConnectedCredentialType]
 
 
@@ -143,6 +145,7 @@ class StorageIntegrateQuery:
             label=str(impl.label),
             requires_credential=impl.requires_credential,
             oauth_client=strawberry.ID(registration.public_id) if registration is not None else None,
+            oauth_scopes=list(impl.oauth_scopes),
             accounts=cast(list[ConnectedCredentialType], list(accounts)),
         )
 

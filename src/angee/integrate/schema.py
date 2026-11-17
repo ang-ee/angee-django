@@ -788,8 +788,14 @@ class ConnectionMutation:
         id: PublicID,
         redirect_uri: str,
         next: str = "/",
+        scopes: list[str] | None = None,
     ) -> OAuthStartPayload:
-        """Start an authenticated OAuth account-connect flow."""
+        """Start an authenticated OAuth account-connect flow.
+
+        ``scopes`` are the scopes the consumer the account is connected for reads
+        with (its ``oauth_scopes``): the client's catalogue must offer them
+        (``OAuthClient.requested_scopes``) and the grant must cover them.
+        """
 
         user = _session_user(info)
         request = get_request(info)
@@ -802,6 +808,7 @@ class ConnectionMutation:
                 user_id=str(user.pk),
                 next_path=flow.coerce_next_path(next, request),
                 flow=state.StateFlow.CONNECT,
+                oauth_scopes=tuple(scopes or ()),
             )
         except OAuthFlowError as error:
             return OAuthStartPayload(error=error.public_message, error_code=error.code)

@@ -633,11 +633,12 @@ def test_graphql_lists_accounts_browses_and_connects_with_the_session_users_acco
         execute_schema(
             schema,
             'query { mount_backend(backend_class: "google_drive") '
-            "{ requires_credential oauth_client accounts { id display_name } } }",
+            "{ requires_credential oauth_client oauth_scopes accounts { id display_name } } }",
             user=admin,
         )
     )["mount_backend"]
     assert accounts["requires_credential"] is True
+    assert accounts["oauth_scopes"] == ["https://www.googleapis.com/auth/drive.readonly"]
     assert accounts["oauth_client"] == str(drive_env.google.public_id)
     assert [account["id"] for account in accounts["accounts"]] == [str(drive_env.credential.public_id)]
     others = result_data(
