@@ -139,6 +139,7 @@ class Decision(OptimisticLockMixin, AppendOnlyModel, AngeeDataModel, concrete=Tr
         # Cleanup must still close a retired principal's retained questions.
         actor = actor if actor is not None else current_actor()
         withdrawing = _user(actor, active=False) if actor is not None else None
+        context = DecisionContext(reason=reason.strip()).model_dump(mode="json") if reason.strip() else None
         rows = type(self).objects
         with transaction.atomic(), system_context(reason="decisions.withdraw"):
             row = rows.filter(pk=self.pk).lock_if_supported().get()
@@ -147,7 +148,7 @@ class Decision(OptimisticLockMixin, AppendOnlyModel, AngeeDataModel, concrete=Tr
                     verdict=[],
                     answered_by=withdrawing,
                     answered_at=Now(),
-                    verdict_context=DecisionContext(reason=reason).model_dump(mode="json") if reason.strip() else None,
+                    verdict_context=context,
                     superseded_by=superseded_by,
                     revision=F("revision") + 1,
                     updated_at=Now(),
@@ -207,7 +208,8 @@ class Decision(OptimisticLockMixin, AppendOnlyModel, AngeeDataModel, concrete=Tr
         try:
             answered_for = TypeAdapter(DecisionRecordReference | None).validate_python(on_behalf_of)
             answer_context = DecisionContext(
-                reason=note, references=TypeAdapter(tuple[DecisionRecordReference, ...]).validate_python(evidence),
+                reason=note.strip(),
+                references=TypeAdapter(tuple[DecisionRecordReference, ...]).validate_python(evidence),
             )
         except ValueError as error:
             raise ValidationError({"evidence": str(error)}) from error
