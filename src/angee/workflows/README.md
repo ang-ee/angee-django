@@ -80,16 +80,24 @@ The run console's **Incidents** view lists the runs held on `error` or `run`.
 
 A [`Schedule`](triggers.py) trigger (`source: schedule`) names a recurrence instead of a
 model and condition: `recurrence` (an RRULE that `angee.scheduling` expands),
-`recurrence_start` and `recurrence_zone`; its workflow declares no subject model.
-The workflow tick records each enabled schedule's occurrences after the later of its
-`enabled_at` and its last recorded occurrence, then drains them. The latest due
-occurrence becomes a `TriggerEvent` keyed by `(trigger, occurs_at)` and starts one run
-with no subject and the request key `trigger:<trigger>:<occurrence>`. Earlier ones,
-missed while workers were down, are recorded with `skipped_at` and never run, as is
-any older occurrence still pending. Occurrences while a trigger is disabled are never
-recorded. A schedule contributes no source grant: its runs act as the workflow
-principal with the reach it already has. Expansion uses the project `TIME_ZONE`, so
-the zone must stay blank.
+`recurrence_start` (its DTSTART, which supplies the parts the rule omits, so write
+`BYMINUTE=0;BYSECOND=0` for a round hour) and `recurrence_zone`, the wall clock the
+rule unrolls in, blank for the project `TIME_ZONE`. Its workflow declares no subject
+model. Enabling refuses a schedule with no occurrence after now (a past one-off start,
+an ended or never-matching rule) and one whose workflow rejects the input it would
+start with. An enabled schedule keeps its next occurrence in `next_occurrence_at`;
+the workflow tick reads only schedules that cursor has reached, records at most
+1,000 occurrences per schedule per pass, moves the cursor in the same transaction,
+then drains. The latest due occurrence becomes a `TriggerEvent` keyed by
+`(trigger, occurs_at)` and starts one run with no subject and the request key
+`trigger:<trigger>:<occurrence>`; earlier ones, missed while workers were down, are
+recorded with `skipped_at` and never run. Disabling skips the schedule's pending
+occurrences and clears its cursor, and admission refuses an occurrence older than the
+current enablement. Trigger hooks of a schedule receive `record=None` and the keyword
+`occurrence`. A schedule contributes no source grant: its runs act as the workflow
+principal with the reach it already has. An hourly or finer rule follows the wall
+clock through a DST change: the missing hour in spring lands on the next instant,
+which runs once, and the repeated hour in autumn runs once.
 
 `TriggerSource.watch_only` declares an observation that wakes `StepWatch` rows
 without contributing trigger scope or permissions. Its `model_label` and
@@ -178,7 +186,7 @@ appear. The console shows this disclosure before it confirms enablement.
 Grant listings identify each target by its model noun and disclose its record
 label only while the reader retains access to that target.
 Retention prunes a cited run only after its continuations and reprocesses are
-pruned. An admitted event survives pruning of its run, and retained events
+pruned. An admitted record event survives pruning of its run, and retained events
 protect their trigger; the purge preview blocks deleting that trigger.
 IO bodies run after their claim commits, without a transaction. Their result is
 fenced by the attempt counter and deadline. IO timeouts leave a settlement window
@@ -229,10 +237,9 @@ dispatch recovery, but has no owner for an overall run budget
 or deadline. Workflows that need an aggregate time, page or resource budget still
 need that engine contract; step bounds do not establish a run-wide limit.
 
-**Named gap: occurrence ledger retention.** Trigger events are retained after their
-runs are pruned, so a frequent schedule grows the ledger by one row per occurrence.
-No owner prunes old occurrence events, although only the latest per trigger is
-needed to open the next window.
+Occurrence events past `ANGEE_WORKFLOW_RETENTION_DAYS` are pruned by the tick in
+bounded batches once they were skipped, or evaluated and their run is pruned. Record
+events stay, and a schedule's window lives on its cursor, so pruning never reopens it.
 
 Resource rows supply `key`, `name`, `subject_model`, `draft` and `publish`.
 `subject_model` accepts a Django model label and stores the model's canonical

@@ -6,17 +6,18 @@ import logging
 from collections.abc import Hashable, Sequence
 from contextvars import Context
 from dataclasses import dataclass, field, replace
-from datetime import datetime
+from datetime import datetime, timedelta
 from inspect import getattr_static
 from typing import TYPE_CHECKING, Any, ClassVar, cast
 
 from django.apps import apps
+from django.conf import settings
 from django.contrib.contenttypes.models import ContentType
 from django.core import checks
 from django.core.exceptions import FieldDoesNotExist, ImproperlyConfigured, PermissionDenied, ValidationError
 from django.db import DatabaseError, transaction
 from django.db.models import F, Model, Q
-from django.db.models.functions import Coalesce, Now
+from django.db.models.functions import Now
 from django.db.models.signals import post_save
 from django.utils import timezone
 from django.utils.text import capfirst
@@ -56,6 +57,10 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 TRIGGER_DRAIN_LIMIT = 100
 """One drain examines at most 100 ledger candidates, each in its own transaction."""
+SCHEDULE_PAGE_LIMIT = 1000
+"""One pass records at most 1,000 occurrences of a schedule; a longer catch-up continues next tick."""
+OCCURRENCE_PRUNE_LIMIT = 1000
+"""One prune deletes at most 1,000 occurrence rows."""
 
 
 class PublisherAuthorityDenied(PermissionDenied):
@@ -435,11 +440,11 @@ class RecordChanged(TriggerSource):
 class Schedule(TriggerSource):
     """The trigger's own recurrence: one run per due occurrence, about no record.
 
-    The workflow tick records each enabled schedule's occurrences after the later
-    of its enablement and its last recorded occurrence. Only the latest due one is
-    admitted; earlier ones, missed while workers were down, are recorded as skipped.
-    The schedule grants the workflow principal nothing: its runs reach what the
-    principal already may.
+    An enabled schedule keeps its next occurrence on ``Trigger.next_occurrence_at``.
+    The workflow tick records the occurrences that cursor has reached, in pages, and
+    moves it on. Only the latest due one is admitted; earlier ones, missed while
+    workers were down, are recorded as skipped. The schedule grants the workflow
+    principal nothing: its runs reach what the principal already may.
     """
 
     key = "schedule"
@@ -529,24 +534,45 @@ class TriggerEventManager[T: TriggerEvent](_TriggerEventManagerBase[T]):
             except Exception:
                 logger.exception("Workflow trigger capture failed.")
 
-    def record_occurrences(self, trigger: Any, occurrences: Sequence[datetime]) -> int:
-        """Retain a schedule's due occurrences; only the latest awaits admission.
+    def record_occurrences(self, trigger: Any, occurrences: Sequence[datetime], *, supersede_before: datetime) -> int:
+        """Retain a schedule's due occurrences; skip every pending one before ``supersede_before``.
 
-        After downtime only the latest missed occurrence runs: every older one still
-        pending is skipped, whether recorded now, by an earlier tick, or before the
-        trigger's current enablement. The ``(trigger, occurs_at)`` identity makes
-        repeated recording a no-op. Return how many occurrences this call was given.
+        After downtime only the latest missed occurrence runs: the caller supersedes
+        everything before it, or everything it records when a later occurrence is
+        already due. The ``(trigger, occurs_at)`` identity makes repeated recording a
+        no-op. Run inside the caller's elevated context; return how many rows were
+        recorded.
         """
-        rows = self.system_context(reason="workflows.schedule")
-        if occurrences:
-            rows.bulk_create(
-                [self.model(trigger=trigger, occurs_at=moment) for moment in sorted(set(occurrences))],
-                ignore_conflicts=True,
+        existing = set(self.filter(trigger=trigger, occurs_at__in=occurrences).values_list("occurs_at", flat=True))
+        missing = sorted(set(occurrences) - existing)
+        if missing:
+            self.bulk_create(
+                [self.model(trigger=trigger, occurs_at=moment) for moment in missing], ignore_conflicts=True,
             )
-        current = max(occurrences, default=trigger.enabled_at)
-        if current is not None:
-            rows.filter(trigger=trigger, occurs_at__lt=current).pending().update(skipped_at=Now())
-        return len(occurrences)
+            self.filter(trigger=trigger, occurs_at__lt=supersede_before).pending().update(skipped_at=Now())
+        return len(missing)
+
+    def skip_pending_occurrences(self, trigger: Any) -> int:
+        """Skip a schedule's pending occurrences when it stops: a re-enabled schedule never runs them."""
+        rows = self.system_context(reason="workflows.schedule_stop")
+        return rows.filter(trigger=trigger, occurs_at__isnull=False).pending().update(skipped_at=Now())
+
+    def prune(self) -> int:
+        """Delete a bounded batch of occurrence rows past retention that no run cites.
+
+        A row goes once its occurrence is older than ``ANGEE_WORKFLOW_RETENTION_DAYS``
+        and it was skipped, or evaluated (admitted or rejected) and its run is pruned.
+        Record events and pending occurrences stay; the schedule's window lives on the
+        trigger, so pruning its newest row never reopens it.
+        """
+        with system_context(reason="workflows.retention"):
+            stale = self.filter(
+                Q(skipped_at__isnull=False) | Q(evaluated_at__isnull=False),
+                occurs_at__lt=Now() - timedelta(days=settings.ANGEE_WORKFLOW_RETENTION_DAYS),
+                started_run__isnull=True,
+            )
+            ids = list(stale.order_by("pk").values_list("pk", flat=True)[:OCCURRENCE_PRUNE_LIMIT])
+            return self.filter(pk__in=ids).delete()[0] if ids else 0
 
 
 class TriggerQuerySet[T: Trigger](AngeeQuerySet[T]):
@@ -612,12 +638,19 @@ class TriggerManager[T: Trigger](_TriggerManagerBase[T]):
             self.model.system_queryset().filter(pk=trigger.pk).update(granted_targets=stored)
             trigger.granted_targets = stored
 
-    def _enable_targets(self, trigger: Any, actor: Any) -> tuple[TriggerGrantTarget, ...]:
-        """Use one permission and source check for preview and enablement."""
+    def _enable_targets(
+        self, trigger: Any, actor: Any, moment: datetime,
+    ) -> tuple[tuple[TriggerGrantTarget, ...], datetime | None]:
+        """Use one permission, source and schedule check for preview and enablement.
+
+        Return the source's grant targets and, for a schedule, its first occurrence
+        after ``moment``.
+        """
         trigger.workflow.require_access("write", actor)
         trigger.validate_configuration()
         if not trigger.workflow.published_id:
             raise ValidationError("Publish the workflow before enabling its trigger.")
+        first = trigger.validate_enablement(moment)
         trigger.source_class.check_access(trigger, actor)
         targets = tuple(trigger.source_class.grant_targets(trigger))
         if not targets and not trigger.source_class.scheduled:
@@ -626,14 +659,14 @@ class TriggerManager[T: Trigger](_TriggerManagerBase[T]):
             raise ValidationError("The trigger source declared a duplicate grant target.")
         for target in targets:
             target.require_grant_access(actor)
-        return targets
+        return targets, first
 
     def enable_preview(self, trigger: Any, *, actor: Any) -> TriggerEnablePreview | None:
         """Disclose source grants and workflow run readers only to eligible enablers."""
         if actor is None:
             return None
         try:
-            targets = self._enable_targets(trigger, actor)
+            targets, _first = self._enable_targets(trigger, actor, timezone.now())
         except (PermissionDenied, ValidationError, ImproperlyConfigured):
             return None
         resource = to_object_ref(trigger.workflow)
@@ -658,15 +691,18 @@ class TriggerManager[T: Trigger](_TriggerManagerBase[T]):
         if actor is None:
             raise PermissionDenied("Enabling a trigger requires an acting user.")
         trigger.workflow.require_access("write", actor)
+        moment = timezone.now()
         with transaction.atomic(), actor_context(actor):
             self.lock_grants(trigger.workflow_id)
             current = self.model.system_queryset().filter(pk=trigger.pk).lock_if_supported(no_key=True).get()
             current.with_actor(actor)
-            targets = self._enable_targets(current, actor)
+            targets, first = self._enable_targets(current, actor, moment)
             self.reconcile_grants(current, targets)
-            self.model.system_queryset().filter(pk=current.pk).update(
-                enabled=True, disabled_reason="", enabled_at=Coalesce(F("enabled_at"), Now()),
-            )
+            values: dict[str, Any] = {"enabled": True, "disabled_reason": ""}
+            if not current.enabled:
+                # A repair of an enabled trigger keeps its enablement and schedule cursor.
+                values.update(enabled_at=moment, next_occurrence_at=first)
+            self.model.system_queryset().filter(pk=current.pk).update(**values)
             current.refresh_from_db()
             return current
 
@@ -715,9 +751,11 @@ class TriggerManager[T: Trigger](_TriggerManagerBase[T]):
             return current
 
     def _disable(self, trigger: Any, reason: str) -> None:
+        """Stop admission, release grants and skip a schedule's pending occurrences."""
         self.model.system_queryset().filter(pk=trigger.pk).update(
-            enabled=False, disabled_reason=reason, enabled_at=None,
+            enabled=False, disabled_reason=reason, enabled_at=None, next_occurrence_at=None,
         )
+        apps.get_model("workflows", "TriggerEvent").objects.skip_pending_occurrences(trigger)
         self.reconcile_grants(trigger, ())
 
     def admit(self, event: Any) -> bool:
@@ -771,10 +809,13 @@ class TriggerManager[T: Trigger](_TriggerManagerBase[T]):
                 with transaction.atomic(), actor_context(principal):
                     trigger.with_actor(principal)
                     record = None
+                    occurrence = current.occurs_at
                     if model is None:
-                        if current.occurs_at is None:
+                        if occurrence is None:
                             raise ValidationError("A schedule admits only its own occurrences.")
-                        identity = current.occurs_at.isoformat()
+                        if trigger.enabled_at is None or occurrence < trigger.enabled_at:
+                            raise ValidationError("The occurrence predates the schedule's current enablement.")
+                        identity = occurrence.isoformat()
                     else:
                         if current.record_content_type_id != ContentType.objects.get_for_model(model).pk:
                             raise ValidationError("The source model changed after this event was recorded.")
@@ -784,9 +825,10 @@ class TriggerManager[T: Trigger](_TriggerManagerBase[T]):
                             raise PermissionDenied("The record is inaccessible or no longer matches the condition.")
                         identity = public_id_of(record)
                     trigger.source_class.check_access(trigger, principal, record)
-                    trigger.admit_record(record, actor=principal)
+                    trigger.admit_record(record, actor=principal, occurrence=occurrence)
                     apps.get_model("workflows", "WorkflowRun").objects.start(
-                        trigger.workflow, actor=principal, subject=record, input=trigger.admission_input(record),
+                        trigger.workflow, actor=principal, subject=record,
+                        input=trigger.admission_input(record, occurrence=occurrence),
                         request_key=f"trigger:{public_id_of(trigger)}:{identity}",
                         trigger_event=current,
                     )
@@ -816,29 +858,42 @@ class TriggerManager[T: Trigger](_TriggerManagerBase[T]):
             return True
 
     def record_occurrences(self) -> int:
-        """Record every enabled schedule's due occurrences, each trigger under its own lock.
+        """Record the occurrences each enabled schedule's cursor has reached, in one elevated pass.
 
-        The tick calls this before :meth:`drain`, so a due occurrence is admitted in
-        the same tick. A trigger another transaction holds waits for the next tick;
-        one broken schedule cannot stop the others. Return how many occurrences
-        were recorded.
+        Only schedules whose ``next_occurrence_at`` has passed are read, so idle
+        schedules cost nothing. Each due one is locked (``skip_locked``), records at
+        most :data:`SCHEDULE_PAGE_LIMIT` occurrences and moves its cursor in the same
+        transaction; one broken schedule cannot stop the others. The tick calls this
+        before :meth:`drain`, so a due occurrence is admitted in the same tick.
+        Return how many occurrences were recorded.
         """
         keys = [source.key for source in TriggerSource.registered() if source.scheduled]
-        candidates = list(
-            self.model.system_queryset().filter(enabled=True, source__in=keys)
-            .order_by("pk").values_list("pk", flat=True)
-        ) if keys else []
-        events = apps.get_model("workflows", "TriggerEvent").objects
+        if not keys:
+            return 0
+        now = timezone.now()
         recorded = 0
-        for pk in candidates:
-            try:
-                with transaction.atomic(), system_context(reason="workflows.schedule"):
-                    trigger = (self.model.system_queryset().filter(pk=pk, enabled=True)
-                               .lock_if_supported(no_key=True, skip_locked=True).first())
-                    if trigger is not None:
-                        recorded += events.record_occurrences(trigger, trigger.due_occurrences(timezone.now()))
-            except Exception:
-                logger.exception("Workflow schedule capture failed for trigger %s.", pk)
+        with system_context(reason="workflows.schedule"):
+            rows = self.system_context(reason="workflows.schedule")
+            due = rows.filter(enabled=True, source__in=keys, next_occurrence_at__lte=now)
+            events = apps.get_model("workflows", "TriggerEvent").objects
+            for pk in list(due.order_by("next_occurrence_at", "pk").values_list("pk", flat=True)):
+                try:
+                    with transaction.atomic():
+                        trigger = due.filter(pk=pk).lock_if_supported(no_key=True, skip_locked=True).first()
+                        if trigger is None:
+                            continue
+                        occurrences = trigger.due_occurrences(now)
+                        following = trigger.next_occurrence(occurrences[-1] if occurrences else now)
+                        if occurrences:
+                            # A later occurrence already due supersedes this whole page.
+                            behind = following is not None and following <= now
+                            recorded += events.record_occurrences(
+                                trigger, occurrences,
+                                supersede_before=following if following is not None and behind else occurrences[-1],
+                            )
+                        rows.filter(pk=pk).update(next_occurrence_at=following)
+                except Exception:
+                    logger.exception("Workflow schedule capture failed for trigger %s.", pk)
         return recorded
 
     def drain(self) -> int:

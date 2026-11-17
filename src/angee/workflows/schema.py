@@ -489,6 +489,7 @@ class TriggerType(AngeeNode):
     recurrence_zone: auto
     enabled: auto
     enabled_at: auto
+    next_occurrence_at: auto
     disabled_reason: auto
 
     @strawberry_django.field

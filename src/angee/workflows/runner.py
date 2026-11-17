@@ -254,13 +254,15 @@ class Runner:
         """Wake waits, reap expired claims and recover missing deliveries in bounded batches.
 
         Schedules record their due occurrences before the trigger ledger drains, so
-        a due occurrence is admitted in the same tick.
+        a due occurrence is admitted in the same tick. Occurrence rows past retention
+        are pruned after the runs that cited them.
         """
         triggers = apps.get_model("workflows", "Trigger").objects
         return {"woken": self.wake(), "reaped": self.reap(), "redispatched": self.redispatch(),
                 "decisions": self.wake_decisions(), "runs": self.wake_runs(), "records": self.wake_records(),
                 "scheduled": triggers.record_occurrences(), "drained": triggers.drain(),
-                "pruned": self.run_model.objects.prune()}
+                "pruned": self.run_model.objects.prune(),
+                "pruned_occurrences": apps.get_model("workflows", "TriggerEvent").objects.prune()}
 
     def wake_runs(self, run_id: Any = None) -> int:
         """After-commit delivery and tick recovery share the existing wake transition."""
