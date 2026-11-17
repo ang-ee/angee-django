@@ -86,6 +86,7 @@ INSTALLED_APPS = [
     "angee.messaging_integrate_imap",
     "angee.operator",
     "angee.parties_integrate_carddav",
+    "angee.calendar_integrate_ics",
     "angee.platform_integrate_operator",
     "angee.resources.testing",
     "angee.provenance.testing",

@@ -98,6 +98,32 @@ and neither do a cancelled master's moved instances.
   REBAC save gates admitted the write, so a save the actor may not make is refused
   for its permission before any other event is read.
 
+## Sources
+
+A `CalendarSource` is a connected calendar account or a subscribed feed: an
+`integrate.Integration` child, selected by `backend_class` from
+`ANGEE_CALENDAR_SOURCE_BACKEND_CLASSES`. It mirrors the remote calendar it serves as
+a calendar whose `source` names it, on its owner's person, and syncs that
+calendar's events through integrate's pull streams. Remote event ids live only in
+the stream's `RecordLink` rows: a master's key is its UID, an instance's its UID
+and `RECURRENCE-ID`. A removed master or single event is cancelled; a removed
+instance is deleted, which restores the master's occurrence.
+
+- **Writability.** A backend declares whether it takes writes. A local calendar
+  always takes edits; a source's calendar only when its backend writes. On a
+  read-only subscription, creating, editing, rescheduling or deleting an event or an
+  attendee is refused ("This calendar is a read-only subscription"), and its
+  occurrences cannot be dragged. Only its source's sync writes its events.
+- **Removal.** A source's calendar goes with its source row, never on its own;
+  a source that has synced is disconnected through integrate's operator verbs.
+- **One calendar per source.** A source mirrors one calendar, as an ICS feed is one.
+- **ICS.** `calendar_integrate_ics` subscribes to a public feed (`webcal://` reads
+  as `https://`) and polls it hourly with a conditional GET. Each fetched feed is a
+  full snapshot; its module docstring lists the properties it maps.
+
+The sources page lists them with their sync status. Source addons add their
+subscribe or connect verb to its `calendar.sources#toolbar` container.
+
 ## Access
 
 A calendar is the access root of its events.

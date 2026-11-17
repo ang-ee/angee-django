@@ -56,6 +56,21 @@ definition calendar/event {
     permission see_busy = calendar->see_busy + admin->member
 }
 
+// A calendar source is an integrate.Integration child (a subscribed feed or a
+// connected account), so its access derives from the parent integration the way
+// parties/directory does; platform admins reach all. Its calendar keeps the
+// calendar's own access: the source's owner holds it as the person it belongs to.
+definition calendar/calendar_source {
+    relation integration: integrate/integration // rebac:field=integration_ptr
+    relation admin: angee/role // rebac:const=admin
+
+    permission create = admin->member
+    permission read   = integration->read + admin->member
+    permission write  = integration->write + admin->member
+    permission delete = integration->write + admin->member
+    permission write__owner = integration->transfer
+}
+
 // An attendee rides its event, the way an order line rides its order; the handle
 // is a data reference, not a subject.
 definition calendar/event_attendee {

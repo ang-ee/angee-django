@@ -15,6 +15,7 @@ export function CalendarsPage(): React.ReactElement {
       <List resource={CALENDAR_MODEL}>
         <Column field="name" />
         <Column field="party" />
+        <Column field="source" />
         <Column field="overlap_policy" />
         <Column field="updated_at" />
       </List>

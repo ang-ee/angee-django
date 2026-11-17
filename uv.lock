@@ -20,6 +20,7 @@ members = [
     "angee-appearance-integrate",
     "angee-base",
     "angee-calendar",
+    "angee-calendar-integrate-ics",
     "angee-dashboards",
     "angee-decisions",
     "angee-extraction",
@@ -139,6 +140,7 @@ dependencies = [
     { name = "angee-appearance-integrate" },
     { name = "angee-base" },
     { name = "angee-calendar" },
+    { name = "angee-calendar-integrate-ics" },
     { name = "angee-dashboards" },
     { name = "angee-decisions" },
     { name = "angee-extraction" },
@@ -245,6 +247,7 @@ requires-dist = [
     { name = "angee-appearance-integrate", editable = "src/angee/appearance_integrate" },
     { name = "angee-base", editable = "src/angee/base" },
     { name = "angee-calendar", editable = "src/angee/calendar" },
+    { name = "angee-calendar-integrate-ics", editable = "src/angee/calendar_integrate_ics" },
     { name = "angee-dashboards", editable = "src/angee/dashboards" },
     { name = "angee-decisions", editable = "src/angee/decisions" },
     { name = "angee-extraction", editable = "src/angee/extraction" },
@@ -556,6 +559,7 @@ dependencies = [
     { name = "angee-base" },
     { name = "angee-graphql" },
     { name = "angee-iam" },
+    { name = "angee-integrate" },
     { name = "angee-messaging" },
     { name = "angee-parties" },
     { name = "angee-provenance" },
@@ -570,6 +574,7 @@ requires-dist = [
     { name = "angee-base", editable = "src/angee/base" },
     { name = "angee-graphql", editable = "src/angee/graphql" },
     { name = "angee-iam", editable = "src/angee/iam" },
+    { name = "angee-integrate", editable = "src/angee/integrate" },
     { name = "angee-messaging", editable = "src/angee/messaging" },
     { name = "angee-parties", editable = "src/angee/parties" },
     { name = "angee-provenance", editable = "src/angee/provenance" },
@@ -577,6 +582,33 @@ requires-dist = [
     { name = "angee-scheduling", editable = "src/angee/scheduling" },
     { name = "angee-tags", editable = "src/angee/tags" },
     { name = "angee-web", editable = "src/angee/web" },
+]
+
+[[package]]
+name = "angee-calendar-integrate-ics"
+version = "3.0.0"
+source = { editable = "src/angee/calendar_integrate_ics" }
+dependencies = [
+    { name = "angee-base" },
+    { name = "angee-calendar" },
+    { name = "angee-graphql" },
+    { name = "angee-iam" },
+    { name = "angee-integrate" },
+    { name = "angee-scheduling" },
+    { name = "angee-web" },
+    { name = "vobject" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "angee-base", editable = "src/angee/base" },
+    { name = "angee-calendar", editable = "src/angee/calendar" },
+    { name = "angee-graphql", editable = "src/angee/graphql" },
+    { name = "angee-iam", editable = "src/angee/iam" },
+    { name = "angee-integrate", editable = "src/angee/integrate" },
+    { name = "angee-scheduling", editable = "src/angee/scheduling" },
+    { name = "angee-web", editable = "src/angee/web" },
+    { name = "vobject", specifier = ">=0.9.9" },
 ]
 
 [[package]]

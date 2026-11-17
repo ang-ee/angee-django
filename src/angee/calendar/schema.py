@@ -14,6 +14,12 @@ read. Sharing is the generic record-access surface over each calendar's
 dispatches to :meth:`~angee.calendar.models.CalendarEvent.reschedule`, which owns
 the refusals (a recurring master, an inverted interval, an overlap); the shared
 ``action_guard`` projects them to an in-band ``ActionResult``.
+
+:class:`~angee.calendar.models.CalendarSource` is a read-only console resource
+(``calendar_sources``), like ``parties.directories``: a source addon's connect
+verb creates it, and integrate's operator verbs sync, pause and remove it. A
+calendar projects its ``source`` and ``is_writable``; a read-only subscription
+refuses event writes in the model.
 """
 
 from __future__ import annotations
@@ -44,10 +50,12 @@ from angee.graphql.node import NODE_DISPLAY_NAME_DESCRIPTION, AngeeNode
 from angee.graphql.relations import actor_scoped_to_one
 from angee.graphql.subscriptions import changes
 from angee.iam.schema import UserType
+from angee.integrate.schema import BridgeTypeMixin
 from angee.parties.schema import HandleType, PartyType
 from angee.tags.schema import TaggedNode, tags_input_extensions
 
 Calendar = apps.get_model("calendar", "Calendar")
+CalendarSource = apps.get_model("calendar", "CalendarSource")
 # The composed model, typed by the source contract it composes (its manager and occurrence read).
 CalendarEvent = cast("type[CalendarEventSource]", apps.get_model("calendar", "CalendarEvent"))
 EventAttendee = apps.get_model("calendar", "EventAttendee")
@@ -60,9 +68,24 @@ Handle = apps.get_model("parties", "Handle")
 # ---------------------------------------------------------------------------
 
 
+@strawberry_django.type(CalendarSource)
+class CalendarSourceType(BridgeTypeMixin, AngeeNode):
+    """Projection of a connected calendar source, such as a subscribed ICS feed."""
+
+    poll_interval: auto
+
+
 @strawberry_django.type(Calendar)
 class CalendarType(AngeeNode):
     """Projection of one calendar and whose it is."""
+
+    source: CalendarSourceType | None = actor_scoped_to_one("source")
+
+    @strawberry_django.field(select_related=["source"])
+    def is_writable(self) -> bool:
+        """Whether the calendar takes local edits: a read-only subscription does not."""
+
+        return bool(cast(Any, self).is_writable)
 
     display_name: str = strawberry_django.field(
         resolver=AngeeNode.display_name, only=["name"], description=NODE_DISPLAY_NAME_DESCRIPTION
@@ -312,7 +335,29 @@ class CalendarEventActionMutation:
         return ActionResult(ok=True, message="Event rescheduled.", id=event.sqid)
 
 
-_RESOURCES = (_CALENDAR_RESOURCE, _EVENT_RESOURCE, _ATTENDEE_RESOURCE)
+_SOURCE_RESOURCE = hasura_model_resource(
+    CalendarSourceType,
+    model=CalendarSource,
+    name="calendar_sources",
+    filterable=[
+        "id",
+        "display_name",
+        "backend_class",
+        "lifecycle",
+        "runtime_status",
+        "sync_stage",
+        "last_sync_completed_at",
+        "updated_at",
+    ],
+    sortable=["display_name", "backend_class", "lifecycle", "runtime_status", "last_sync_completed_at", "updated_at"],
+    aggregatable=["id", "last_sync_items"],
+    groupable=["backend_class", "lifecycle", "runtime_status", "sync_stage"],
+    insert=False,
+    update=False,
+    delete=False,
+)
+
+_RESOURCES = (_CALENDAR_RESOURCE, _EVENT_RESOURCE, _ATTENDEE_RESOURCE, _SOURCE_RESOURCE)
 
 schemas = {
     "console": {
@@ -322,12 +367,14 @@ schemas = {
             changes(Calendar, field="calendarChanged"),
             changes(CalendarEvent, field="calendarEventChanged", read_gate=FreeBusyChangeReadGate),
             changes(EventAttendee, field="eventAttendeeChanged"),
+            changes(CalendarSource, field="calendarSourceChanged"),
         ],
         "types": [
             CalendarType,
             CalendarEventType,
             EventAttendeeType,
             EventOccurrenceType,
+            CalendarSourceType,
             *[type_ for resource in _RESOURCES for type_ in resource.types],
         ],
         "input_extensions": tags_input_extensions(_EVENT_RESOURCE),
