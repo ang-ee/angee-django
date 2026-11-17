@@ -5,6 +5,7 @@ import { Inbox, Mail, MessagesSquare, Send } from "lucide-react";
 
 import { AccessFollowers } from "./AccessFollowers";
 import { enMessagingMessages } from "./i18n";
+import { messagingPreviews } from "./previews";
 import { channelForm } from "./ChannelForm";
 import { messageForm } from "./MessageForm";
 import { MessagingOverviewContribution } from "./MessagingOverviewContribution";
@@ -111,6 +112,8 @@ export const defineMessagingAddon = ({ submitKey = "enter" }: MessagingAddonOpti
   // Channel pairing states on the composed status vocabulary: the overview and lists share them.
   statusTones: { paired: "success", logged_out: "danger", duplicate_account: "danger", awaiting_scan: "info", awaiting_password: "warning" },
   forms: { "messaging.Channel": channelForm, "messaging.Message": messageForm },
+  // An email file (message/rfc822) previews as its message in `PreviewPane`.
+  previews: messagingPreviews,
   containers: {
     "iam#access-roles": {
       "messaging.followers": { content: { kind: "people", render: AccessFollowers } },

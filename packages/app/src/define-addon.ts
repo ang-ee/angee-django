@@ -114,6 +114,8 @@ export interface AppDeclaration {
   brand?: RuntimeBrand;
   /** An installed theme id. */
   theme?: string;
+  /** This app's `theme` wins over the person's own theme choice while it is selected; needs `theme` beside it. */
+  themeLocked?: boolean;
   /** A route name inside the rail. */
   home?: string;
   /** Desktop rail expansion until the person chooses otherwise; inherits the first root's default. */

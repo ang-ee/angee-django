@@ -17,7 +17,7 @@ export interface RuntimeBrand {
 }
 
 /** A field of the selected app; each records where it came from. */
-export type RuntimeSelectionField = "app" | "rail" | "brand" | "theme" | "home" | "railExpanded";
+export type RuntimeSelectionField = "app" | "rail" | "brand" | "theme" | "themeLocked" | "home" | "railExpanded";
 
 /**
  * The app the deployment selected, by `?app=` or by hostname: the roots its rail
@@ -31,6 +31,8 @@ export interface RuntimeSelection {
   brand: RuntimeBrand | null;
   /** The theme a person who chose none sees; unset keeps the build default. */
   theme?: string;
+  /** The selected theme wins over the person's own theme choice; set only beside `theme`. */
+  themeLocked?: boolean;
   /** The route name `/` lands on; unset lands on the rail's first app. */
   home?: string;
   /** Desktop rail expansion until the person chooses otherwise; unset defaults to expanded. */

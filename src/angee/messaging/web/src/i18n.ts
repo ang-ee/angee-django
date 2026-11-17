@@ -250,6 +250,15 @@ export const enMessagingMessages: Record<string, string> = {
   "overview.channels.empty": "No messaging channels are connected.",
   "overview.channels.neverSynced": "Never synced",
   "overview.channels.needsAttention": "Needs attention",
+
+  "email.noSubject": "(no subject)",
+  "email.from": "From {address}",
+  "email.to": "To {addresses}",
+  "email.format": "Email format",
+  "email.html": "HTML",
+  "email.text": "Plain text",
+  "email.htmlBody": "HTML email body",
+  "email.noBody": "This email has no body.",
 };
 
 // A translator bound to the `messaging` namespace: resolves against the host

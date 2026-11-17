@@ -13,7 +13,7 @@ import { type ErrorReportingInput, startErrorReporting } from "./error-reporting
 export { assertShellSettings } from "./shell-settings.mjs";
 
 /** A top-level menu root as selection reads it; its label and icon stand in for a brand it does not declare. */
-export type SelectableRoot = Pick<ChromeMenuNode, "id" | "displayLabel" | "iconName" | "home" | "brand" | "theme" | "railExpanded">;
+export type SelectableRoot = Pick<ChromeMenuNode, "id" | "displayLabel" | "iconName" | "home" | "brand" | "theme" | "themeLocked" | "railExpanded">;
 
 /** What selects the app: the page's `?app=` and hostname, `ANGEE_UI.shell` and the composed menu roots. */
 export interface SelectAppInput {
@@ -61,7 +61,8 @@ export function selectApp({ search, hostname, shell = {}, roots }: SelectAppInpu
  * The app `key` names, selected `by` a selector: a menu root id is the one-root
  * app, an `ANGEE_UI.shell.apps` name its declared rail. Unset facts come from
  * the first rail root, whose brand defaults to its label and icon; an unset
- * theme falls back to the shell's. Undefined when `key` names neither.
+ * theme falls back to the shell's. A theme lock travels with the theme it is
+ * declared beside. Undefined when `key` names neither.
  * @kind null
  * @reason Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.
  */
@@ -82,6 +83,8 @@ export function appSelection(
   const first = rootOf(rail[0]!)!;
   const inherited = `menu root "${first.id}"`;
   const theme = app?.theme ?? first.theme ?? shell.theme;
+  // The lock belongs to the declaration that supplied the theme; the shell's theme has none.
+  const themeLocked = app?.theme !== undefined ? app.themeLocked : first.theme !== undefined ? first.themeLocked : undefined;
   const home = app?.home ?? first.home;
   const railExpanded = app?.railExpanded ?? first.railExpanded;
   const sources: Partial<Record<RuntimeSelectionField, string>> = {
@@ -90,6 +93,7 @@ export function appSelection(
     brand: app?.brand ? declared : first.brand ? inherited : `${inherited} label and icon`,
   };
   if (theme !== undefined) sources.theme = app?.theme !== undefined ? declared : first.theme !== undefined ? inherited : "ANGEE_UI.shell.theme";
+  if (themeLocked) sources.themeLocked = sources.theme!;
   if (home !== undefined) sources.home = app?.home !== undefined ? declared : inherited;
   if (railExpanded !== undefined) sources.railExpanded = app?.railExpanded !== undefined ? declared : inherited;
   return {
@@ -97,6 +101,7 @@ export function appSelection(
     rail,
     brand: app?.brand ?? first.brand ?? { name: first.displayLabel, mark: first.iconName },
     ...(theme !== undefined ? { theme } : {}),
+    ...(themeLocked ? { themeLocked } : {}),
     ...(home !== undefined ? { home } : {}),
     ...(railExpanded !== undefined ? { railExpanded } : {}),
     sources,

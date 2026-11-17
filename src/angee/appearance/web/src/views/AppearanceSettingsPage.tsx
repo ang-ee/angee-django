@@ -15,7 +15,7 @@ export function AppearanceSettingsPage(): ReactElement {
   const selectedScheme = appearance.currentPreferences.colorScheme ?? HOST_VALUE;
   const OptionsEditor = appearance.theme?.optionsEditor;
   const readOnly = !appearance.editable;
-  const { openDraft, discard, saving } = appearance;
+  const { openDraft, discard, saving, themeLocked } = appearance;
   const dirty = useLatestRef(appearance.dirty);
   useUnsavedChangesNavigationGuard({ isDirty: appearance.dirty, isDirtyNow: () => dirty.current, readOnly });
   // Opening is idempotent; commands that close the draft leave the page ready
@@ -33,14 +33,15 @@ export function AppearanceSettingsPage(): ReactElement {
     </ControlBand>
     <SettingsShell maxWidth="1100" gap="8">
     <PageHeader title={t("title")} description={t("description")} />
+    {themeLocked ? <Alert tone="info" title={t("locked")} /> : null}
     {appearance.notice ? <Alert tone={appearance.notice === "theme-unavailable" ? "warning" : "danger"} title={appearance.notice === "theme-unavailable" ? t("unavailable") : appearance.notice === "options-invalid" ? t("invalidOptions") : t("unsupported")} /> : null}
     <ErrorBanner title={t("saveFailed")} description={appearance.error?.message ?? null} />
     <SettingsSection title={t("theme.title")} description={t("theme.description")}>
       <RadioGroupRoot value={selectedTheme} onValueChange={(value) => void appearance.setTheme(value === HOST_VALUE ? undefined : value)} className="grid gap-3 md:grid-cols-2">
-        <RadioGroupItem disabled={readOnly || saving} variant="card" value={HOST_VALUE} label={t("theme.followHost")} description={t("theme.followHostDescription")}>
+        <RadioGroupItem disabled={readOnly || saving || themeLocked} variant="card" value={HOST_VALUE} label={t("theme.followHost")} description={t("theme.followHostDescription")}>
           <ThemeSpecimen theme={appearance.hostTheme} options={appearance.hostOptions} />
         </RadioGroupItem>
-        {runtime.themes.map((theme) => <RadioGroupItem disabled={readOnly || saving} key={theme.definition.id} variant="card" value={theme.definition.id} label={themeT(theme.definition.labelKey)} description={themeT(theme.definition.descriptionKey)}>
+        {runtime.themes.map((theme) => <RadioGroupItem disabled={readOnly || saving || themeLocked} key={theme.definition.id} variant="card" value={theme.definition.id} label={themeT(theme.definition.labelKey)} description={themeT(theme.definition.descriptionKey)}>
           <ThemeSpecimen theme={theme} />
         </RadioGroupItem>)}
       </RadioGroupRoot>
@@ -50,13 +51,14 @@ export function AppearanceSettingsPage(): ReactElement {
         {[HOST_VALUE, "system", "light", "dark"].map((value) => <RadioGroupItem disabled={readOnly || saving} key={value} value={value} label={value === HOST_VALUE ? t("scheme.host") : t(`scheme.${value}`)} />)}
       </RadioGroupRoot>
     </SettingsSection>
-    {OptionsEditor ? <SettingsSection title={t("options.title")} description={t("options.description")}>
+    {OptionsEditor && !themeLocked ? <SettingsSection title={t("options.title")} description={t("options.description")}>
       <OptionsEditor definition={appearance.theme!.definition} value={appearance.currentPreferences.options} disabled={saving || readOnly} onChange={(options) => { void appearance.setOptions(options); }} />
     </SettingsSection> : null}
     {appearance.theme ? <SettingsSection title={t("preview.title")} description={t("preview.description")}>
-      <div className="grid gap-4 lg:grid-cols-2">{(["light", "dark"] as const).map((scheme) => <FullThemePreview key={scheme} theme={appearance.theme!} scheme={scheme} options={appearance.currentPreferences.options} />)}</div>
+      <div className="grid gap-4 lg:grid-cols-2">{(["light", "dark"] as const).map((scheme) => <FullThemePreview key={scheme} theme={appearance.theme!} scheme={scheme} options={appearance.effectiveOptions} />)}</div>
     </SettingsSection> : null}
-    {tools.length && !readOnly ? <SettingsSection title={t("tools.title")}><ContainerOutlet entries={tools} /></SettingsSection> : null}
+    {/* Tools edit the person's theme, which a locked app does not apply. */}
+    {tools.length && !readOnly && !themeLocked ? <SettingsSection title={t("tools.title")}><ContainerOutlet entries={tools} /></SettingsSection> : null}
     </SettingsShell>
   </>;
 }

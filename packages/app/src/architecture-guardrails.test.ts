@@ -4,7 +4,7 @@ import { basename, dirname, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import ts from "typescript";
 
-import { MIME_KINDS, RecordIssues, SaveDiscardActions, baseIcons, dirtyControlBandClassName } from "@angee/ui";
+import { CALENDAR_VIEW_MODES, MIME_KINDS, RecordIssues, SaveDiscardActions, baseIcons, dirtyControlBandClassName } from "@angee/ui";
 import { FILTER_OPERATORS } from "@angee/metadata";
 
 import {
@@ -220,7 +220,7 @@ const UI_DYNAMIC_I18N_KEY_FAMILIES: readonly DynamicI18nKeyFamily[] = [
     namespace: "ui",
     owner: "@angee/ui CalendarViewMode",
     prefix: "calendar.mode.",
-    values: ["month", "week", "day"],
+    values: [...CALENDAR_VIEW_MODES],
   },
   {
     namespace: "ui",

@@ -347,11 +347,12 @@ export function createApp(input: CreateAppInput): AngeeApp {
       return definition.id;
     })),
   });
-  // The selected app's theme is the default until the person picks their own; the build's
-  // theme options belong to the build's theme.
-  const appearance = selection.theme === undefined || selection.theme === input.appearance?.themeId
+  // The selected app's theme is the default until the person picks their own, unless the app
+  // locks it; the build's theme options belong to the build's theme.
+  const selectedAppearance = selection.theme === undefined || selection.theme === input.appearance?.themeId
     ? input.appearance
     : { ...input.appearance, themeId: selection.theme, options: undefined };
+  const appearance = selection.themeLocked ? { ...selectedAppearance, themeLocked: true } : selectedAppearance;
   // Optional links (`maybe`, record destinations) skip unavailable pages; authored links still build.
   const runtimeRouteHref = unavailable.size
     ? createRouteHref(routeDescriptors, { unavailable: new Set(unavailable.keys()) })
@@ -1016,8 +1017,9 @@ function validateContainerConditions(
 /**
  * Every app the deployment can select, selected or not: each menu root, each
  * `ANGEE_UI.shell.apps` entry and each `hosts` entry. Its rail lists top-level
- * roots, its home lies inside the rail, its brand mark is a registered glyph and
- * its theme is installed; a misconfigured app fails at boot, not on its host.
+ * roots, its home lies inside the rail, its brand mark is a registered glyph,
+ * its theme is installed and a theme lock has its theme beside it; a
+ * misconfigured app fails at boot, not on its host.
  */
 function validateSelections(
   shell: ShellSettings,
@@ -1030,12 +1032,15 @@ function validateSelections(
     themes: ReadonlySet<string>;
   },
 ): void {
-  const checkFacts = (where: string, declared: { brand?: RuntimeBrand; theme?: string }): void => {
+  const checkFacts = (where: string, declared: { brand?: RuntimeBrand; theme?: string; themeLocked?: boolean }): void => {
     if (declared.brand && !getIcon(known.icons, declared.brand.mark)) {
       throw new Error(`${where} brand mark "${declared.brand.mark}" is not a registered icon.`);
     }
     if (declared.theme !== undefined && !known.themes.has(declared.theme)) {
       throw new Error(`${where} theme "${declared.theme}" is not installed.`);
+    }
+    if (declared.themeLocked && declared.theme === undefined) {
+      throw new Error(`${where} sets themeLocked without a theme beside it.`);
     }
   };
   checkFacts("ANGEE_UI.shell", shell);

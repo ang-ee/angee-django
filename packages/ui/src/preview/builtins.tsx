@@ -13,61 +13,68 @@ import {
 // react-markdown (and remark-gfm) loads on first markdown preview, not at boot.
 const MarkdownPreviewBody = lazy(() => import("./MarkdownPreviewBody"));
 
-/** Fetch a text file's body for the text-based renderers. */
-function useFileText(url: string): {
-  text: string;
-  loading: boolean;
-  error: Error | null;
-} {
-  const [state, setState] = useState<{
-    text: string;
-    loading: boolean;
-    error: Error | null;
-  }>({ text: "", loading: true, error: null });
+type PreviewFileState<T> =
+  | { status: "loading" }
+  | { status: "ready"; content: T }
+  | { status: "error"; error: Error };
+
+/** Fetch a preview file and read its response for the fetching renderers. */
+function usePreviewFileContent<T>(
+  url: string,
+  read: (response: Response) => Promise<T>,
+): PreviewFileState<T> {
+  const [state, setState] = useState<PreviewFileState<T>>({ status: "loading" });
 
   useEffect(() => {
     let live = true;
-    setState({ text: "", loading: true, error: null });
+    setState({ status: "loading" });
     fetch(url)
       .then((response) => {
         if (!response.ok) throw new Error(`Preview fetch failed (${response.status})`);
-        return response.text();
+        return read(response);
       })
-      .then((text) => live && setState({ text, loading: false, error: null }))
+      .then((content) => live && setState({ status: "ready", content }))
       .catch(
         (error: unknown) =>
           live &&
           setState({
-            text: "",
-            loading: false,
+            status: "error",
             error: error instanceof Error ? error : new Error("Preview failed"),
           }),
       );
     return () => {
       live = false;
     };
-  }, [url]);
+  }, [url, read]);
 
   return state;
 }
 
-/**
- * Fetch a text file and own its loading/error surfaces, so a text-based renderer
- * only describes its happy path: it receives the resolved body via the render prop.
- */
-function FileText({
-  url,
-  children,
-}: {
+export interface PreviewFileContentProps<T> {
   url: string;
-  children: (text: string) => ReactElement;
-}): ReactElement {
-  const t = useUiT();
-  const { text, loading, error } = useFileText(url);
-  if (loading) return <PreviewSkeleton label={t("preview.loading")} variant="text" />;
-  if (error) return <EmptyState title={t("preview.loadError")} description={error.message} />;
-  return children(text);
+  /**
+   * Reads the fetched response: its text, its bytes, or a parse of either. Keep it
+   * stable (a module-level function); a new function refetches. A rejection shows
+   * the load-error surface.
+   */
+  read: (response: Response) => Promise<T>;
+  children: (content: T) => ReactElement;
 }
+
+/**
+ * Fetch a preview file and own its loading and error surfaces, so a renderer only
+ * describes its happy path: it receives what `read` resolved via the render prop.
+ * @owner PreviewPane
+ */
+export function PreviewFileContent<T>({ url, read, children }: PreviewFileContentProps<T>): ReactElement {
+  const t = useUiT();
+  const state = usePreviewFileContent(url, read);
+  if (state.status === "loading") return <PreviewSkeleton label={t("preview.loading")} variant="text" />;
+  if (state.status === "error") return <EmptyState title={t("preview.loadError")} description={state.error.message} />;
+  return children(state.content);
+}
+
+const readText = (response: Response): Promise<string> => response.text();
 
 export interface ImagePreviewSurfaceProps {
   src: string;
@@ -107,21 +114,21 @@ function ImagePreview({ file }: PreviewProviderProps): ReactElement {
 
 function TextPreview({ file, mime }: PreviewProviderProps): ReactElement {
   return (
-    <FileText url={file.url}>
+    <PreviewFileContent url={file.url} read={readText}>
       {(text) => (
         <pre className="h-full whitespace-pre-wrap break-words overflow-auto bg-sheet p-4 font-mono text-13 leading-relaxed text-fg-2">
           {isJsonMime(mime) ? prettyJson(text) : text}
         </pre>
       )}
-    </FileText>
+    </PreviewFileContent>
   );
 }
 
 function MarkdownPreview({ file }: PreviewProviderProps): ReactElement {
   return (
-    <FileText url={file.url}>
+    <PreviewFileContent url={file.url} read={readText}>
       {(text) => <MarkdownPreviewBody text={text} />}
-    </FileText>
+    </PreviewFileContent>
   );
 }
 

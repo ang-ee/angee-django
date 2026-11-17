@@ -27,6 +27,7 @@ const EXPOSED_TOKENS = [
 ] as const satisfies readonly ThemeTokenName[];
 
 const accepted = [
+  ["display font family", "--font-family-display", '"Fraunces", Georgia, serif'],
   ["typography weight", "--fw-semibold", "400"],
   ["font size", "--fs-15", "15px"],
   ["line height", "--lh-18", "26px"],

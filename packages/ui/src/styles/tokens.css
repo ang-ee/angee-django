@@ -251,6 +251,9 @@
   --font-family-sans: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
                       "Helvetica Neue", Arial, sans-serif;
   --font-family-mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  /* Headings and date tiles. It follows the sans family until a theme names a
+     display face, so a theme that sets only --font-family-sans changes both. */
+  --font-family-display: var(--font-family-sans);
 
   /* Every step is bridged to a utility in index.css (text-2xs, text-12, text-13,
      text-sm, text-15, text-base, text-lg, text-22, text-28, text-34) and public to

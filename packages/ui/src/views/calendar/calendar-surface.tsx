@@ -3,6 +3,7 @@ import FullCalendar from "@fullcalendar/react";
 import dayGridPlugin from "@fullcalendar/daygrid";
 import timeGridPlugin from "@fullcalendar/timegrid";
 import interactionPlugin from "@fullcalendar/interaction";
+import listPlugin from "@fullcalendar/list";
 import allLocales from "@fullcalendar/core/locales-all";
 
 import { useAppRuntime } from "../../runtime";
@@ -19,9 +20,10 @@ const FC_VIEW: Record<CalendarViewMode, string> = {
   month: "dayGridMonth",
   week: "timeGridWeek",
   day: "timeGridDay",
+  list: "listMonth",
 };
 
-const PLUGINS = [dayGridPlugin, timeGridPlugin, interactionPlugin];
+const PLUGINS = [dayGridPlugin, timeGridPlugin, listPlugin, interactionPlugin];
 
 /** Pill tone by occurrence kind: an all-day agenda marker reads soft, a timed
  *  event solid; a marker with a route target is click-interactive. */

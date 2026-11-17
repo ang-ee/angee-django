@@ -58,6 +58,11 @@ export interface HostAppearanceDefaults {
   colorScheme?: ColorSchemePreference;
   options?: ThemeOptionsEnvelope;
   fingerprint?: string;
+  /**
+   * The selected app locks `themeId`: it and its `options` win over the person's
+   * theme and options, which stay saved for other apps. Their color scheme still applies.
+   */
+  themeLocked?: boolean;
 }
 
 export interface AppearanceState {
@@ -73,6 +78,8 @@ export interface AppearanceState {
   hostTheme: ThemeContribution | null;
   hostOptions?: ThemeOptionsEnvelope;
   effectiveOptions?: ThemeOptionsEnvelope;
+  /** The app's theme is locked here; the person's theme choice is kept but not applied. */
+  themeLocked: boolean;
   available: boolean;
   editable: boolean;
   resolvingIdentity: boolean;
@@ -134,6 +141,7 @@ export function AppearanceProvider({ children, host = DEFAULT_HOST }: { children
   const system = useSystemColorScheme();
   const hostThemeId = host.themeId ?? null;
   const hostTheme = hostThemeId ? catalogue.get(hostThemeId) ?? null : null;
+  const themeLocked = host.themeLocked === true && hostThemeId !== null;
   const savedAppearance = resolveAppearance(preferences, saved.notice, catalogue, host, system);
   const { effectiveThemeId, effectiveTheme, colorSchemePreference, colorScheme, effectiveTokens, effectiveOptions, notice } =
     draft ? resolveAppearance(draft, null, catalogue, host, system) : savedAppearance;
@@ -281,6 +289,7 @@ export function AppearanceProvider({ children, host = DEFAULT_HOST }: { children
     hostTheme,
     hostOptions,
     effectiveOptions,
+    themeLocked,
     available: userPreferences.available,
     editable: saved.writable,
     resolvingIdentity,
@@ -294,21 +303,23 @@ export function AppearanceProvider({ children, host = DEFAULT_HOST }: { children
     save,
     discard,
     reset,
-  }), [preferences, currentPreferences, dirty, effectiveThemeId, colorSchemePreference, colorScheme, effectiveTheme, hostTheme, hostOptions, effectiveOptions, userPreferences.available, saved.writable, resolvingIdentity, saving, error, notice, setTheme, setColorScheme, setOptions, openDraft, save, discard, reset]);
+  }), [preferences, currentPreferences, dirty, effectiveThemeId, colorSchemePreference, colorScheme, effectiveTheme, hostTheme, hostOptions, effectiveOptions, themeLocked, userPreferences.available, saved.writable, resolvingIdentity, saving, error, notice, setTheme, setColorScheme, setOptions, openDraft, save, discard, reset]);
   return <AppearanceContext.Provider value={value}>{children}</AppearanceContext.Provider>;
 }
 
 /** Resolve both live appearance and the saved-only boot cache through one path. */
 function resolveAppearance(preferences: AppearancePreferences, notice: AppearanceState["notice"], catalogue: ReadonlyMap<string, ThemeContribution>, host: HostAppearanceDefaults, system: ColorScheme) {
   const hostTheme = host.themeId ? catalogue.get(host.themeId) : undefined;
-  const selectedThemeId = preferences.themeId ?? host.themeId;
+  // A locked app theme replaces the person's theme and its options, never their scheme.
+  const locked = host.themeLocked === true && Boolean(host.themeId);
+  const selectedThemeId = locked ? host.themeId : preferences.themeId ?? host.themeId;
   const selectedTheme = selectedThemeId ? catalogue.get(selectedThemeId) : undefined;
   if (selectedThemeId && !selectedTheme) notice ??= "theme-unavailable";
   const effectiveTheme = selectedTheme ?? hostTheme ?? null;
   const effectiveThemeId = effectiveTheme?.definition.id ?? null;
   const colorSchemePreference = preferences.colorScheme ?? host.colorScheme ?? "system";
   const colorScheme = colorSchemePreference === "system" ? system : colorSchemePreference;
-  const requestedOptions = preferences.themeId === undefined ? host.options : preferences.options;
+  const requestedOptions = locked || preferences.themeId === undefined ? host.options : preferences.options;
   let tokenLayers: ThemeTokenLayers = { shared: {}, light: {}, dark: {} };
   let effectiveOptions: ThemeOptionsEnvelope | undefined;
   if (effectiveTheme) {
