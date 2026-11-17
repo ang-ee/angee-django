@@ -19,7 +19,7 @@ import { useIamT } from "./i18n";
 const USER_MODEL = "iam.User";
 
 /** Account verbs the server projects per user row, spelled as their Zed permissions. */
-export type UserAccountAction = "set_active" | "rename" | "reset_password" | "issue_password";
+export type UserAccountAction = "set_active" | "rename" | "reset_password" | "issue_password" | "issue_sign_in_link";
 
 /** Fields every account verb reads from the open user record. */
 export const ACCOUNT_ACTION_FIELDS = ["account_actions", "revision", "username"] as const;
@@ -93,6 +93,18 @@ export function useResetPasswordAction(): ActionDescriptor {
   };
 }
 
+/** Email a person a single-use sign-in link; the link goes to their email and is never shown here. */
+export function useIssueSignInLinkAction(): ActionDescriptor {
+  const t = useIamT();
+  const [issueLink] = useActionResultMutation<ActionFieldName>("issue_user_sign_in_link", { invalidateModels: [USER_MODEL] });
+  const run = useRecordAction((id) => issueLink(id));
+  return {
+    id: "send-sign-in-link", label: t("users.sendSignInLink"), run,
+    confirm: { title: t("users.sendSignInLink.confirmTitle"), body: t("users.sendSignInLink.confirmBody") },
+    visibleWhen: (record) => offersAccountAction(record, "issue_sign_in_link"),
+  };
+}
+
 /** Deactivate and reactivate, each confirmed and offered by the row's server projection. */
 export function useSetActiveActions(): readonly ActionDescriptor[] {
   const t = useIamT();
@@ -161,6 +173,12 @@ export function RenameRecordAction(): React.ReactElement | null {
 /** `iam.User#actions-menu` child: give the open account its first password. */
 export function IssuePasswordRecordAction(): React.ReactElement | null {
   const action = useIssuePasswordAction();
+  return <AccountActionBar actions={[action]} />;
+}
+
+/** `iam.User#actions-menu` child: email the open account a sign-in link. */
+export function IssueSignInLinkRecordAction(): React.ReactElement | null {
+  const action = useIssueSignInLinkAction();
   return <AccountActionBar actions={[action]} />;
 }
 
