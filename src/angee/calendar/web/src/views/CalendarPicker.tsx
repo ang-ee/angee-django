@@ -1,6 +1,5 @@
 import * as React from "react";
-import type { ActionFieldName } from "@angee/gql/console/actions";
-import { useActionMutation, useAuthoredQuery } from "@angee/refine";
+import { extractActionOutcome, useAuthoredMutation, useAuthoredQuery } from "@angee/refine";
 import {
   Button,
   RelationFieldWidget,
@@ -12,7 +11,7 @@ import {
   type WidgetRenderProps,
 } from "@angee/ui";
 
-import { WritableCalendarsDocument } from "../documents.console";
+import { EnsurePersonalCalendarDocument, WritableCalendarsDocument } from "../documents.console";
 import { useCalendarT } from "../i18n";
 import { CALENDAR_MODEL } from "../resources";
 
@@ -62,8 +61,7 @@ function CalendarPickerEdit(props: WidgetRenderProps): React.ReactElement {
   const { value, onChange, onCommit, readOnly, disabled, controlRef } = props;
   const t = useCalendarT();
   const writable = useWritableCalendarIds();
-  const [ensurePersonal, ensuring] = useActionMutation<ActionFieldName>("ensure_personal_calendar", {
-    idArgument: null,
+  const [ensurePersonal, ensuring] = useAuthoredMutation(EnsurePersonalCalendarDocument, {
     invalidateModels: CALENDAR_MODELS,
   });
   const settle = useActionResultRun();
@@ -72,7 +70,7 @@ function CalendarPickerEdit(props: WidgetRenderProps): React.ReactElement {
     onCommit?.();
   }, [onChange, onCommit]);
   const startOwn = React.useCallback(async () => {
-    const outcome = await settle(() => ensurePersonal(""));
+    const outcome = await settle(async () => extractActionOutcome(await ensurePersonal({}), "ensure_personal_calendar"));
     if (outcome?.ok && outcome.id) choose(outcome.id);
   }, [choose, ensurePersonal, settle]);
   const locked = Boolean(readOnly || disabled);

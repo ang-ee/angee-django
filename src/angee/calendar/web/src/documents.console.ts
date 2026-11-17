@@ -42,3 +42,16 @@ export const WritableCalendarsDocument = graphql(`
     }
   }
 `);
+
+// The viewer's own calendar, created on first use. A verb without arguments is not a
+// derived action (codegen derives only those with arguments), so it stays authored.
+export const EnsurePersonalCalendarDocument = graphql(`
+  mutation EnsurePersonalCalendar {
+    ensure_personal_calendar {
+      ok
+      message
+      id
+      validation_errors
+    }
+  }
+`);
