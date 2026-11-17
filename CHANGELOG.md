@@ -53,7 +53,9 @@ live in code docstrings.
   ```python
   def mark_holds(apps, schema_editor):
       tasks = apps.get_model("projects", "Task")._base_manager.using(schema_editor.connection.alias)
-      held = tasks.filter(snoozed_until__isnull=False)
+      # Historical models keep Meta.ordering on ``sqid``, which migration state does not
+      # carry, so a joined update must clear the ordering.
+      held = tasks.filter(snoozed_until__isnull=False).order_by()
       held.filter(stage__category="triage").update(snoozed_at=models.F("updated_at"))
       held.exclude(stage__category="triage").update(snoozed_until=None, snoozed_by=None)
   ```
@@ -258,37 +260,6 @@ live in code docstrings.
   `decisions_reminder_due` index), re-sync the permission schema (decisions
   revision 8) and restart the whole application.
 
-- A triage task's hold may carry a wake date, an awaited user, both or neither:
-  `TaskWork.snooze(until=None, *, awaiting=None, expected_revision=None)` takes the
-  write and revision check accept and decline take, and reads the persisted stage
-  under the row lock. `TaskWork.wake(reason="manual", *, message=None,
-  expected_revision=None)` ends a hold and sends `angee.work.events.task_woken`
-  (`task`, `reason` of `due`, `reply` or `manual`, `message`), so a consumer asks
-  its review again there. New columns `snoozed_at` (set exactly while held; the
-  triage inbox filters by it) and `snoozed_awaiting` (the awaited user). The due
-  job and the chatter listener wake row by row through
-  `TaskWorkQuerySet.wake_each`, with history and a revision bump, where they used
-  bulk updates; `wake_from_chatter_thread` is replaced by `wake_on_chatter_reply`,
-  which wakes only a hold awaiting the message's author, so the reviewer's own
-  comment and a hold awaiting nobody are no longer woken by chatter. Leaving
-  triage ends a hold. GraphQL `snooze_task(task, until, expected_revision)` makes
-  `until` optional; `wake_task(task, expected_revision)` is new, with its MCP
-  tool. Upgrade: a host authors the migration for the two columns, then a data
-  migration over its historical models that marks existing holds and clears holds
-  left outside triage, for example
-  `Task.objects.filter(snoozed_until__isnull=False, stage__category="triage").update(snoozed_at=F("updated_at"))`
-  and `Task.objects.filter(snoozed_until__isnull=False).exclude(stage__category="triage").update(snoozed_until=None, snoozed_by=None)`.
-- Intake asks a requester to clarify a request: `Task.clarify(question, *, to=None,
-  reply_by=None, expected_revision=None)` (GraphQL `clarify_task`) posts the
-  question as a task comment, also replies on the request's source message when
-  the requester has no admitted account and the request came by email on a
-  channel with an outbound sender (the reviewer needs the channel's `reply`), and
-  holds the task awaiting the requester. A requester's inbound message on a
-  conversation intake already captured is that request's reply: it files no new
-  request and task, and wakes the task's hold. `intake_requester_domains =
-  ["*"]` gives every claimed webform address a passwordless account on capture.
-  The intake Task donor `TaskIntakeFilters` is renamed `TaskIntake`.
-
 - A record-visibility file takes its access from its attached records, its
   direct viewers and admins. Its owner (the uploader, by default) holds it while
   the upload is a draft, which the record edge needs, and once it is published
@@ -311,7 +282,9 @@ live in code docstrings.
   reach them as owner. Upgrade: such a record owner contributes the arm, and a
   host releases the owners existing chatter threads carry with a data migration
   over its historical models, for example
-  `Thread.objects.filter(attachments__role="chatter").exclude(owner=None).update(owner=None)`.
+  `Thread.objects.filter(attachments__role="chatter").exclude(owner=None).order_by().update(owner=None)`
+  (historical models keep `Meta.ordering` on `sqid`, which migration state does
+  not carry, so a joined update clears the ordering).
 - `ThreadedModelMixin.thread_moderate_access` (default `write`) names the record
   permission chatter moderation requires: editing and deleting other people's
   comments, trashing and restoring comments, listing the removed ones and managing
