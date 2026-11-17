@@ -18,8 +18,9 @@ _ModelT = TypeVar("_ModelT", bound=models.Model)
 class _AppendOnlyWritesMixin(ClosedUpdateQuerySet[_ModelT]):
     """The closed collection-write policy shared by the scoped and base querysets.
 
-    ``owner_update`` and ``owner_bulk_create`` are public, framework-protected
-    APIs for domain owners that have already validated fields and predicates.
+    ``owner_update``, ``owner_bulk_create`` and ``owner_delete`` are public,
+    framework-protected APIs for domain owners that have already validated
+    fields and predicates.
     They skip this class's guard only, preserving every downstream guard.
     """
 
@@ -51,6 +52,14 @@ class _AppendOnlyWritesMixin(ClosedUpdateQuerySet[_ModelT]):
         """Reject deletion through the collection."""
 
         raise self.immutable_error("delete")
+
+    def owner_delete(self) -> int:
+        """Protected API: delete owner-checked rows in one statement, without the collector or its signals.
+
+        The owner deletes the rows' dependents first and publishes each change itself.
+        """
+
+        return super()._raw_delete(self.db)
 
     def _raw_delete(self, using: str | None) -> int:
         """Reject direct SQL deletion through the queryset."""
