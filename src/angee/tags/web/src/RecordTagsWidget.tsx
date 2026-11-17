@@ -2,7 +2,8 @@ import * as React from "react";
 import { holdsPermission, rowPublicId, useModelMetadata, useResourceInvalidates, type Row } from "@angee/metadata";
 import { useAuthoredMutation } from "@angee/refine";
 import {
-  FieldRoot, FieldLabel, RelationMultiFieldWidget, SectionEyebrow, relationFieldInfoForResource, relationIdList,
+  FieldDescription, FieldRoot, FieldLabel, RelationMultiFieldWidget, SectionEyebrow, relationFieldInfoForResource,
+  relationIdList,
   relationValueId, useBusyRun, useRecordChromeContext, useRelationOptions, useRuntimeViewAs,
   type RelationCreateConfig, type WidgetDefinition, type WidgetRenderProps,
 } from "@angee/ui";
@@ -46,8 +47,10 @@ function categoryFromRow(row: Row | null | undefined): Category | null {
  *
  * Each held tag's category is read once and kept, so a refetch never regroups the
  * pickers, and a tag picked from a group joins it at once. A held tag's category
- * gets its picker even when the category list stops short of it. A category with a
- * maximum shows it; at a maximum of one, a new pick replaces the held tag, untagging
+ * gets its picker even when the category list stops short of it. Each picker's one
+ * name is its visible label, which the field wires as `aria-labelledby`; a category's
+ * maximum is its description (`aria-describedby`). At a maximum of one, a new pick
+ * replaces the held tag, untagging
  * before tagging. Otherwise the server judges the maximum and its refusal reaches
  * the error toast.
  */
@@ -137,13 +140,12 @@ function RecordTagsWidget({ readOnly }: WidgetRenderProps): React.ReactElement |
     !group ? undefined : relation.canCreate ? { resource: TAG_MODEL, defaultValues: { category: group.id } } : null;
   const picker = (group: Category | null, label: string): React.ReactElement => (
     <FieldRoot key={group?.id ?? "uncategorised"}>
-      <FieldLabel id={`${labelId}-${group?.id ?? "uncategorised"}`} nativeLabel={false} render={<span />}
-        {...(group?.maximum != null ? { meta: t("record.maximum", { count: group.maximum }) } : {})}>
-        {label}
-      </FieldLabel>
+      <FieldLabel nativeLabel={false} render={<span />}>{label}</FieldLabel>
+      {/* The picker always carries an aria-label; it repeats the field's label so no second name differs. */}
       <RelationMultiFieldWidget relation={relation} value={held(group?.id ?? "")} aria-label={label}
         {...(groups.length ? { where: { category: group ? { _eq: group.id } : { _is_null: true } } } : {})}
         create={create(group)} readOnly={Boolean(disabled)} onChange={(next) => void change(group, next)} />
+      {group?.maximum != null ? <FieldDescription>{t("record.maximum", { count: group.maximum })}</FieldDescription> : null}
     </FieldRoot>
   );
   if (!groups.length) return settled ? picker(null, t("record.label")) : null;
