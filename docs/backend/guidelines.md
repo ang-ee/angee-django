@@ -2301,7 +2301,8 @@ bridge advisory lock as polling and delivery settlement.
   planning, and retry replans from all retained rows.
   Reprocessing records its predecessor and uses the requesting actor on the
   current publication; reprocessing from a node keeps the predecessor's version,
-  reuses the settled steps the node cannot reach and runs the rest again.
+  reuses the steps outside the node's reach that settled with a routed result and
+  runs the rest again. A run with an open replacement refuses another.
   Artifacts reference actor-readable records without
   granting access to them. Admission retains the subject and each declared
   record-reference input as shared `DerivedFrom` evidence, after checking the

@@ -52,7 +52,6 @@ from angee.workflows.states import (
     ERROR_OUTCOME,
     AttemptResult,
     NodeKey,
-    NoteTone,
     RunOrigin,
     RunRelation,
     RunStatus,
@@ -607,8 +606,8 @@ class WorkflowRunManager[T: WorkflowRun](_WorkflowRunManagerBase[T]):
         """Insert the pinned version, origin and sole cause together, or replay the same request.
 
         A reprocess ``from_node`` runs on the reprocessed run's version and starts
-        with copies of the steps that node cannot reach (``Definition.reusable_rows``),
-        each noting its reuse; the first plan then readies the node.
+        with copies of the rows ``Definition.reprocess_plan`` reuses; the first plan
+        then readies the node and every other row that runs again.
         """
 
         actor = workflow.require_access("start", actor)
@@ -675,7 +674,7 @@ class WorkflowRunManager[T: WorkflowRun](_WorkflowRunManagerBase[T]):
                 if version.pk != reprocess_of.version_id:
                     raise ValidationError("A reprocess from a node runs on the reprocessed run's version.")
                 prior = reprocess_of.step_runs.system_context(reason="workflows.start")
-                reused = version.definition.reusable_rows(prior.order_by("rank", "map_index", "pk"), from_node)
+                reused, _again = version.definition.reprocess_plan(prior.order_by("rank", "map_index", "pk"), from_node)
             principal_workflow = (
                 apps.get_model("workflows", "Workflow").system_queryset().filter(user_id=principal_id).first()
                 if principal_id is not None else None
@@ -710,10 +709,9 @@ class WorkflowRunManager[T: WorkflowRun](_WorkflowRunManagerBase[T]):
             )
             if reused:
                 steps = run.step_runs.system_context(reason="workflows.start")
-                reuse = {"tone": str(NoteTone.INFO), "message": f"Reused from {reprocess_of}."}
                 steps.bulk_create([steps.model(
                     run=run, node_key=row.node_key, map_index=row.map_index, rank=row.rank, status=row.status,
-                    outcome=row.outcome, input=row.input, output=row.output, notes=[*row.notes, reuse],
+                    outcome=row.outcome, input=row.input, output=row.output, notes=row.notes,
                 ) for row in reused])
             with self.lock_run(run.pk) as locked:
                 locked.admit_subject()
@@ -770,20 +768,29 @@ class WorkflowRunManager[T: WorkflowRun](_WorkflowRunManagerBase[T]):
                 raise ValidationError("The run is still running; retry cancellation.") from error
             raise
 
-    def reprocess(self, run: Any, *, actor: Any = None, from_node: str | None = None) -> Any:
+    def reprocess(
+        self, run: Any, *, actor: Any = None, from_node: str | None = None, accept_duplicate: bool = False,
+    ) -> Any:
         """Reprocess a terminal run as its requesting operator; the retained run never changes.
 
         The replacement runs on the current publication. From a node, it runs on the
-        retained run's version instead: that node and every node it reaches run
-        again, and the settled steps it cannot reach are reused. The node must be a
-        declared step of the run that ran.
+        retained run's version instead, under ``Definition.reprocess_plan``: the node,
+        every node it reaches and every unsettled row outside that reach run again,
+        and the other settled rows are reused. The node must be a declared step of
+        the run that ran; a rerun row outside its reach that may already have made an
+        external effect requires ``accept_duplicate``. A run with an open replacement
+        refuses another, so a repeated request cannot start two.
         """
 
         actor = run.require_access("write", actor)
+        if accept_duplicate and actor is None:
+            raise PermissionDenied("A duplicate-effect acknowledgement requires an actor.")
         with self.lock_run(run.pk) as retained:
             with system_context(reason="workflows.reprocess"):
                 if not retained.is_terminal:
                     raise ValidationError("Only terminal runs can be reprocessed.")
+                if self.filter(reprocess_of=retained).exclude(status__in=RunStatus.terminal_values()).exists():
+                    raise ValidationError("A replacement of this run is still open; let it finish or stop it first.")
                 workflow = retained.version.workflow
                 model = retained.subject_model_class
                 subject = model.system_queryset().get(pk=retained.subject_object_id) if model is not None else None
@@ -792,6 +799,12 @@ class WorkflowRunManager[T: WorkflowRun](_WorkflowRunManagerBase[T]):
                     step = retained.step_runs.filter(node_key=from_node, map_index=0).first()
                     if step is None or not step.starts_reprocess:
                         raise ValidationError("A reprocess starts at a step of the run that ran.")
+                    step.run = retained
+                    if step.reprocess_requires_duplicate_acknowledgement and not accept_duplicate:
+                        raise ValidationError(
+                            "A step that runs again may already have made an external effect; "
+                            "accept a possible duplicate to reprocess from here."
+                        )
                     version = retained.version
             return self.start(
                 workflow, actor=actor, subject=subject, input=retained.input, reprocess_of=retained,

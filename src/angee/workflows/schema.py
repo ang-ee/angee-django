@@ -308,6 +308,16 @@ class StepRunType(AngeeNode):
         """Project the same model rule checked by the reprocess-from-step action."""
         return bool(cast(Any, self).can_reprocess_from(get_current_user(info)))
 
+    @strawberry_django.field(only=["status", "node_key", "run_id"], prefetch_related=_STEP_POLICY_VERSION)
+    def reprocess_reruns(self) -> list[str]:
+        """Name the steps a reprocess from this step runs again, for the confirmation."""
+        return list(cast(Any, self).reprocess_reruns)
+
+    @strawberry_django.field(only=["status", "node_key", "run_id"], prefetch_related=_STEP_POLICY_VERSION)
+    def reprocess_requires_duplicate_acknowledgement(self) -> bool:
+        """Project whether reprocessing from this step must accept a possible duplicate effect."""
+        return bool(cast(Any, self).reprocess_requires_duplicate_acknowledgement)
+
     @strawberry_django.field(
         only=["node_key", "page_index", "run_id"],
         annotate={"_effect_started": lambda info: StepRun.effect_started_expression()},
@@ -801,6 +811,17 @@ class WorkflowActionMutation:
         run = authorized_action_target(info, WorkflowRun, step_run.run.sqid, "write")
         replacement = WorkflowRun.objects.reprocess(run, actor=get_current_user(info), from_node=step_run.node_key)
         return ActionResult(ok=True, message="Run reprocessed from the step.", id=replacement.sqid)
+
+    @strawberry.mutation
+    @action_guard("Reprocess run failed.")
+    def reprocess_workflow_run_from_step_accepting_duplicate(self, info: strawberry.Info, id: PublicID) -> ActionResult:
+        """Explicitly acknowledge a possible duplicate effect before reprocessing from a step."""
+        step_run = authorized_permission_target(info, StepRun, id, "read")
+        run = authorized_action_target(info, WorkflowRun, step_run.run.sqid, "write")
+        replacement = WorkflowRun.objects.reprocess(
+            run, actor=get_current_user(info), from_node=step_run.node_key, accept_duplicate=True,
+        )
+        return ActionResult(ok=True, message="Run reprocessed with duplicate risk acknowledged.", id=replacement.sqid)
 
     @strawberry.mutation
     @action_guard("Retry step failed.")

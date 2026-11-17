@@ -49,7 +49,7 @@ from angee.resources.mixins import ResourceLoadMixin
 from angee.scheduling.fields import RecurrenceField, TimeZoneField
 from angee.scheduling.recurrence import Recurrence
 from angee.scheduling.zones import validate_zone_name
-from angee.workflows.definition import MAP_BODY_SUFFIX, Definition, GraphEdge, GraphNode
+from angee.workflows.definition import MAP_BODY_SUFFIX, Definition, GraphEdge, GraphNode, declared_node_key
 from angee.workflows.managers import (
     StepAttemptQuerySet,
     StepRecordManager,
@@ -848,6 +848,15 @@ class WorkflowRun(RecordRefMixin, AngeeDataModel, concrete=True):
         if self.pk == observer.pk:
             raise ValidationError("A run cannot await itself.")
 
+    def reprocess_plan(self, from_node: str) -> tuple[list[StepRun], list[StepRun]]:
+        """Split this run's step rows for a reprocess from ``from_node`` (``Definition.reprocess_plan``).
+
+        Return the rows the replacement reuses, then the rows outside the node's
+        reach that run again. The rows are read elevated.
+        """
+        rows = self.step_runs.system_context(reason="workflows.reprocess_plan").order_by("rank", "map_index", "pk")
+        return self.policy_version.definition.reprocess_plan(rows, from_node)
+
     def can_reprocess(self, actor: Any) -> bool:
         """Reprocessing needs terminal execution, run write and workflow start access."""
         if not self.is_terminal or not self._write_access(actor):
@@ -1217,6 +1226,33 @@ class StepRun(AngeeDataModel, concrete=True):
     def can_reprocess_from(self, actor: Any) -> bool:
         """Whether ``actor`` may reprocess this row's run from its node."""
         return self.starts_reprocess and self.run.can_reprocess(actor)
+
+    @property
+    def reprocess_reruns(self) -> list[str]:
+        """The labels of the nodes a reprocess from this row's node runs again, in execution order.
+
+        That is the node, every node it reaches, and each node outside its reach whose
+        row is not reused; empty when no reprocess can start here.
+        """
+        if not self.starts_reprocess:
+            return []
+        definition = self.run.policy_version.definition
+        _reused, again = self.run.reprocess_plan(self.node_key)
+        nodes = definition.descendants(self.node_key) | {declared_node_key(row.node_key) for row in again}
+        return [definition.node_label(key) for key in sorted(nodes, key=definition.ranks.__getitem__)]
+
+    @property
+    def reprocess_requires_duplicate_acknowledgement(self) -> bool:
+        """Whether a step outside this node's reach that runs again may already have made an external effect.
+
+        The node and what it reaches run again by the operator's choice; a row outside
+        that reach reruns only because it never settled, so its possible duplicate
+        effect needs the same acknowledgement a retry does.
+        """
+        if not self.starts_reprocess:
+            return False
+        _reused, again = self.run.reprocess_plan(self.node_key)
+        return any(row.requires_duplicate_acknowledgement for row in again)
 
     class Meta:
         """Django options for node identity, fences and tick predicates."""

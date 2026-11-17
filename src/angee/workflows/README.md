@@ -223,14 +223,23 @@ terminal status, outcome, output and error.
 Delivery is at least once; step implementations must tolerate repeated execution.
 
 `WorkflowRun.objects.reprocess(run, from_node=key)` starts the replacement at a node
-instead of the entry. It runs on the retained run's version and begins with copies
-of every settled step the node cannot reach ([`Definition.reusable_rows`](definition.py)),
-each noting its reuse; the node and every node it reaches run again. The node must be
-a declared step of the run that ran. The retained run never changes and the
-replacement's `reprocess_of` names it. Copies carry no attempts, decision link, awaited
-run, checkpoint or evidence, so a reused decision step grants the new run's actor
-nothing. The step console offers this as **Reprocess from this step**
-(`reprocess_workflow_run_from_step`) under the same authority as reprocessing.
+instead of the entry, on the retained run's version, as
+[`Definition.reprocess_plan`](definition.py) splits the retained rows. The node and
+every node it reaches run again. Outside that reach a row is reused when it settled
+with a routed result (succeeded, skipped, or failed through a declared error route),
+and a map item only with its reused map; every other row outside the reach (one that
+never settled, an unrouted failure, an item of a map planned afresh) runs again too.
+The node must be a declared step of the run that ran. Copies keep their status,
+outcome, input, output and notes, and carry no attempts, decision link, awaited run,
+checkpoint or evidence, so a reused decision step grants the new run's actor nothing;
+the replacement's `reprocess_of` names the retained run, which never changes. A run
+with an open replacement refuses another reprocess, whole or from a step, so a repeated
+request cannot start two. The step console's **Reprocess from this step**
+(`reprocess_workflow_run_from_step`) lists the steps that run again
+(`StepRun.reprocess_reruns`), under the same authority as reprocessing. When a step
+outside the node's reach runs again after its attempt may already have made an
+external effect, the operator must accept a possible duplicate
+(`reprocess_workflow_run_from_step_accepting_duplicate`).
 
 **Named gap: run budgets.** The rebuilt engine bounds individual attempts,
 dispatch recovery, but has no owner for an overall run budget
