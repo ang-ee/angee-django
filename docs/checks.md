@@ -79,7 +79,9 @@ covers workflow definition, publication, execution,
 [settlement recovery](../tests/test_workflows_fix_round.py), authorization, concurrency,
 test-harness and composed-consumer contracts, plus decision
 [lifecycle](../tests/test_decisions_lifecycle.py) and
-[concurrency](../tests/test_decisions_concurrency.py). This named file selection
+[concurrency](../tests/test_decisions_concurrency.py), and the
+[checklist status rule](../tests/test_checklists.py), whose derived input has a
+PostgreSQL branch. This named file selection
 also covers [review waiters](../tests/test_workflows_review.py), their
 [locking races](../tests/test_workflows_review_concurrency.py),
 [execution links](../tests/test_workflows_review_graphql.py), and

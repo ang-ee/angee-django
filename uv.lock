@@ -19,6 +19,7 @@ members = [
     "angee-appearance",
     "angee-appearance-integrate",
     "angee-base",
+    "angee-checklists",
     "angee-dashboards",
     "angee-decisions",
     "angee-extraction",
@@ -136,6 +137,7 @@ dependencies = [
     { name = "angee-appearance" },
     { name = "angee-appearance-integrate" },
     { name = "angee-base" },
+    { name = "angee-checklists" },
     { name = "angee-dashboards" },
     { name = "angee-decisions" },
     { name = "angee-extraction" },
@@ -240,6 +242,7 @@ requires-dist = [
     { name = "angee-appearance", editable = "src/angee/appearance" },
     { name = "angee-appearance-integrate", editable = "src/angee/appearance_integrate" },
     { name = "angee-base", editable = "src/angee/base" },
+    { name = "angee-checklists", editable = "src/angee/checklists" },
     { name = "angee-dashboards", editable = "src/angee/dashboards" },
     { name = "angee-decisions", editable = "src/angee/decisions" },
     { name = "angee-extraction", editable = "src/angee/extraction" },
@@ -541,6 +544,29 @@ requires-dist = [
     { name = "tomlkit", marker = "extra == 'testing'", specifier = ">=0.13" },
 ]
 provides-extras = ["testing"]
+
+[[package]]
+name = "angee-checklists"
+version = "3.0.0"
+source = { editable = "src/angee/checklists" }
+dependencies = [
+    { name = "angee-base" },
+    { name = "angee-graphql" },
+    { name = "angee-iam" },
+    { name = "angee-provenance" },
+    { name = "angee-timeline" },
+    { name = "angee-web" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "angee-base", editable = "src/angee/base" },
+    { name = "angee-graphql", editable = "src/angee/graphql" },
+    { name = "angee-iam", editable = "src/angee/iam" },
+    { name = "angee-provenance", editable = "src/angee/provenance" },
+    { name = "angee-timeline", editable = "src/angee/timeline" },
+    { name = "angee-web", editable = "src/angee/web" },
+]
 
 [[package]]
 name = "angee-dashboards"

@@ -26,6 +26,7 @@ from angee.agents.backends import InferenceBackend, InferenceModelSpec
 from angee.agents.testing import models as agents_models  # noqa: F401 -- register shared FK targets
 from angee.base.testing.fixtures import installed_app_registry as installed_app_registry
 from angee.base.testing.packages import write_addon_distribution
+from angee.checklists.testing import models as checklists_models  # noqa: F401 -- register checklist results
 from angee.decisions.testing import models as decisions_models  # noqa: F401 -- register shared FK targets
 from angee.graphql.schema import SCHEMA_PART_KEYS, GraphQLSchemas
 from angee.graphql.testing.documents import execute_schema, result_data

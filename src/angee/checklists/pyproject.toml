@@ -1,0 +1,14 @@
+build-system = { requires = ["hatch-angee>=1.1,<2"], build-backend = "hatch_angee" }
+
+[project]
+name = "angee-checklists"
+version = "3.0.0"
+description = "Checklists a model declares, with results recorded per item and gated by their evidence."
+keywords = ["checklists", "checks", "review", "readiness"]
+dependencies = ["angee-base>=3,<4", "angee-provenance>=3,<4", "angee-iam>=3,<4", "angee-graphql>=3,<4", "angee-timeline>=3,<4", "angee-web>=3,<4"]
+dynamic = ["entry-points"]
+
+[tool.angee]
+
+[tool.angee.platform]
+category = "Foundation"
