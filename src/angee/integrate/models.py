@@ -19,7 +19,7 @@ from __future__ import annotations
 import json
 import logging
 import secrets
-from collections.abc import Collection, Iterable, Iterator, Mapping
+from collections.abc import Callable, Collection, Iterable, Iterator, Mapping
 from contextlib import contextmanager
 from copy import copy, deepcopy
 from dataclasses import replace
@@ -132,9 +132,17 @@ from angee.resources.mixins import ResourceLoadMixin
 
 logger = logging.getLogger(__name__)
 
-# Renew an OAuth access token this far ahead of its expiry, so a consumer about to
-# use it (e.g. provisioning) gets a token with life left rather than one about to lapse.
-_OAUTH_REFRESH_MARGIN = timedelta(minutes=5)
+# Renew an access token this far ahead of its expiry, so a consumer about to use it
+# (e.g. provisioning) gets a token with life left rather than one about to lapse. A
+# minted token renews at the earlier of this margin and half its lifetime.
+_TOKEN_RENEWAL_MARGIN = timedelta(minutes=5)
+# A minted token whose response omits ``expires_in`` is assumed to live five minutes:
+# short enough that, renewed at half its lifetime, it is replaced after 150 seconds,
+# well inside the shortest lifetimes token endpoints issue, so an unknown expiry is
+# never outlived; long enough that a steady consumer still mints only every few minutes.
+_DEFAULT_TOKEN_LIFETIME = timedelta(minutes=5)
+# The material key under which a kind that mints per scope set caches its tokens.
+_SCOPED_TOKENS = "scoped_tokens"
 _UNSET = object()
 _INTEGRATION_FAILURE_MESSAGE = INTEGRATION_FAILURE_MESSAGE
 _WEBHOOK_FAILURE_MESSAGE = "Webhook delivery failed."
@@ -866,6 +874,12 @@ class ExternalAccount(OwnerMixin, AngeeDataModel, concrete=True):
         return email
 
 
+def _records_permanent_refusal(error: Exception) -> bool:
+    """Return whether a renewal refusal marks the credential failed: any refusal that is not transient."""
+
+    return not is_transient_failure(error)
+
+
 class CredentialQuerySet[CredentialT: Credential](AngeeHistoryQuerySet[CredentialT]):
     """REBAC-scoped reads for credential health and connected accounts."""
 
@@ -1181,9 +1195,9 @@ class CredentialManager[CredentialT: Credential](_CredentialManagerBase[Credenti
         material: dict[str, Any],
         fields: dict[str, Any],
     ) -> tuple[dict[str, Any], dict[str, Any]]:
-        """Return ``(operation_values, update_values)`` for both create paths."""
+        """Return ``(operation_values, update_values)`` for both create paths from the handler's cleaned material."""
 
-        handler.validate(material)
+        material = handler.clean(material)
         if owned := self.operation_fields & fields.keys():
             names = ", ".join(sorted(owned))
             raise ValueError(f"Credential field(s) are owned by the manager: {names}")
@@ -1275,7 +1289,8 @@ class Credential(AuditMixin, AngeeDataModel, concrete=True):
 
     @property
     def is_reconnect_required(self) -> bool:
-        """Require consent only for inactive, failed-refresh or unrenewable expired grants."""
+        """Require new consent or key material only for an inactive credential, a failed refresh or
+        mint (``last_refresh_status="failed"``), or an unrenewable expired grant."""
 
         return (
             self.status != CredentialStatus.ACTIVE
@@ -1349,6 +1364,13 @@ class Credential(AuditMixin, AngeeDataModel, concrete=True):
         extra keys remain permitted here.
         """
 
+        self._merge_material(changes)
+
+    def _merge_material(self, changes: Mapping[str, Any], fields: Mapping[str, Any] | None = None) -> None:
+        """Merge ``changes`` into the material and set ``fields`` on the row in one locked save."""
+
+        assigned = dict(fields or {})
+        updated = ["material", *assigned, "updated_at"]
         with system_context(reason="integrate.credential.material"):
             with transaction.atomic():
                 row: Credential = type(self).objects.lock_if_supported().get(pk=self.pk)
@@ -1360,27 +1382,134 @@ class Credential(AuditMixin, AngeeDataModel, concrete=True):
                         material[key] = value
                 # EncryptedField's descriptor is not modeled by django-stubs.
                 row.material = self.encode_material(material)
-                row.save(update_fields=["material", "updated_at"])
-            self.refresh_from_db(fields=["material", "updated_at"])
+                for name, value in assigned.items():
+                    setattr(row, name, value)
+                row.save(update_fields=updated)
+            self.refresh_from_db(fields=updated)
 
     def replace_material(self, material: Mapping[str, Any]) -> None:
         """Re-enter this credential's secret(s) under the kind handler's validation.
 
         The operator's "the password changed" path: ``material`` carries the
-        kind's own input fields (the handler names them), is validated exactly
-        as at creation, then lands through :meth:`update_material` under the row
-        lock — the row, its kind, and its owner stay as they are, so every
-        integration attached to it keeps working without re-attachment.
+        kind's own input fields (the handler names them), is cleaned exactly
+        as at creation, then merges under the row lock with the fields the handler
+        derives from it (:meth:`CredentialKindHandler.upsert_fields`) in the same
+        save — the row, its kind, and its owner stay as they are, so every
+        integration attached to it keeps working without re-attachment. Tokens
+        minted from the replaced material are dropped with it.
         """
 
-        replacement = dict(material)
-        self.handler.validate(replacement)
-        self.update_material(**replacement)
+        handler = self.handler
+        replacement = handler.clean(material)
+        self._merge_material({**replacement, _SCOPED_TOKENS: None}, fields=handler.upsert_fields(replacement))
 
-    def auth_headers(self) -> dict[str, str]:
-        """Return authorization headers through the kind handler."""
+    def auth_headers(self, *, scopes: Collection[str] = ()) -> dict[str, str]:
+        """Return authorization headers through the kind handler.
 
-        return self.handler.auth_headers(self)
+        ``scopes`` names the access a consumer needs from a kind that mints one
+        token per scope set (:meth:`scoped_access_token`); a kind whose token was
+        fixed when it was granted ignores it.
+        """
+
+        return self.handler.auth_headers(self, scopes=scopes)
+
+    def scoped_access_token(self, scopes: Collection[str]) -> str:
+        """Return a live access token for ``scopes`` from a kind that mints one per scope set.
+
+        ``scopes`` is a collection of scope names; each element is split on
+        whitespace (RFC 6749 §3.3), order and repeats do not matter, and one bare
+        string is refused. Tokens are cached in the encrypted material, one per
+        scope set, and renewed at the earlier of ``_TOKEN_RENEWAL_MARGIN`` and half
+        their lifetime before expiry. The call needs autocommit, cached or not,
+        because a miss mints over the network; a kind that does not mint is refused
+        before any request. An inactive credential fails closed: it serves no token,
+        cached or minted (:meth:`require_active`), judged on this instance, on the
+        row re-read under the lock, and again after a mint.
+        Concurrent consumers serialize in :meth:`_renew_locked`: one mints and the
+        others adopt its persisted token. A refusal the kind handler attributes to
+        the key or identity (:meth:`CredentialKindHandler.records_failure`) records
+        ``last_refresh_status="failed"``, so :attr:`is_reconnect_required` asks
+        for a new key; every refusal is raised, and an empty token is never returned.
+        """
+
+        if isinstance(scopes, str):
+            raise TypeError("Pass the scopes as a collection of scope names, not one string.")
+        handler = self.handler
+        if not handler.mints_per_scope:
+            raise ValueError(f"{self.kind} credentials do not mint access tokens per scope set.")
+        if connection.in_atomic_block:
+            raise RuntimeError("A scoped access token requires autocommit.")
+        scope = " ".join(sorted({part for item in scopes for part in str(item).split()}))
+        if not scope:
+            raise ValueError("A scoped access token needs at least one scope.")
+        self.require_active()
+        if token := self._scoped_token(scope):
+            return token
+        live = ""
+
+        def due(current: Self) -> bool:
+            nonlocal live
+            current.require_active()
+            live = current._scoped_token(scope)
+            return not live
+
+        minted = self._renew_locked(
+            due=due,
+            exchange=lambda current: handler.mint_access_token(current, scope),
+            apply=lambda locked, response: locked._store_scoped_token(scope, response),
+            records_failure=handler.records_failure,
+        )
+        if minted is None:
+            return live
+        # A key edit, reconnect or deactivation during the exchange keeps the minted
+        # token out of the cache; the caller still receives it while the row is active.
+        self.require_active()
+        return str(minted["access_token"])
+
+    def require_active(self) -> None:
+        """Refuse a credential that is not active: no scoped token, cached or minted, and no internal MCP key."""
+
+        if self.status != CredentialStatus.ACTIVE:
+            raise ValueError("This credential is not active, so it serves no tokens.")
+
+    def _scoped_token(self, scope: str) -> str:
+        """Return the cached token for ``scope`` until its renewal time, else ``""``."""
+
+        entry = self.reveal().get(_SCOPED_TOKENS, {}).get(scope)
+        if entry is None or entry["renew_at"] <= timezone.now().timestamp():
+            return ""
+        return str(entry["access_token"])
+
+    def _store_scoped_token(self, scope: str, response: Mapping[str, Any]) -> None:
+        """Cache one minted token on this locked row, pruning expired scope sets, and record success.
+
+        The renewal time is the earlier of ``_TOKEN_RENEWAL_MARGIN`` and half the
+        token's lifetime before expiry; a response without a positive ``expires_in``
+        is given ``_DEFAULT_TOKEN_LIFETIME``.
+        """
+
+        now = timezone.now()
+        issued = now.timestamp()
+        expires_in = response["expires_in"]
+        positive = expires_in is not None and expires_in > 0
+        lifetime = float(expires_in) if positive else _DEFAULT_TOKEN_LIFETIME.total_seconds()
+        margin = min(_TOKEN_RENEWAL_MARGIN.total_seconds(), lifetime / 2)
+        material = self.reveal()
+        cached = {key: entry for key, entry in material.get(_SCOPED_TOKENS, {}).items() if entry["expires_at"] > issued}
+        material[_SCOPED_TOKENS] = {
+            **cached,
+            scope: {
+                "access_token": response["access_token"],
+                "scope": response["scope"],
+                "expires_at": int(issued + lifetime),
+                "renew_at": int(issued + lifetime - margin),
+            },
+        }
+        self.material = self.encode_material(material)
+        self.last_refresh_at = now
+        self.last_refresh_status = "ok"
+        with system_context(reason="integrate.credential.mint"):
+            self.save(update_fields=["material", "last_refresh_at", "last_refresh_status", "updated_at"])
 
     def secret_value(self) -> str:
         """Return the primary secret value through the kind handler."""
@@ -1429,7 +1558,7 @@ class Credential(AuditMixin, AngeeDataModel, concrete=True):
         provider exchange is network I/O, so call it in autocommit.
         """
 
-        if self.expires_at is None or self.expires_at > timezone.now() + _OAUTH_REFRESH_MARGIN:
+        if self.expires_at is None or self.expires_at > timezone.now() + _TOKEN_RENEWAL_MARGIN:
             return
         if not self.refreshable:
             return
@@ -1481,63 +1610,95 @@ class Credential(AuditMixin, AngeeDataModel, concrete=True):
         )
 
     def _refresh_locked(self, *, force: bool = False) -> None:
-        """Exchange the refresh grant outside any transaction, then persist it under a fence.
+        """Exchange the refresh grant through :meth:`_renew_locked`, so a rotated refresh token is never replayed.
 
-        A blocking advisory lock serializes exchanges across workers: a second
-        consumer waits for the holder, re-reads the row and adopts the token it
-        persisted, so a rotated refresh token is never replayed. ``force`` renews
-        regardless of expiry for an explicit refresh, and raises ``ValueError`` when
-        the row it reads is inactive or cannot refresh; the lazy path leaves an
-        inactive row's token alone. The provider call holds no
-        transaction; a short row lock then applies the result, or records a
-        permanent refusal, only while :attr:`refresh_fence` still names the grant
-        that was exchanged, so a reconnect, revocation or material edit during the
-        exchange wins. The instance reloads the persisted row either way.
+        ``force`` renews regardless of expiry for an explicit refresh, and raises
+        ``ValueError`` when the row it reads is inactive or cannot refresh; the lazy
+        path leaves an inactive row's token alone.
+        """
+
+        def due(current: Self) -> bool:
+            stale = current.expires_at is not None and current.expires_at <= timezone.now() + _TOKEN_RENEWAL_MARGIN
+            active = current.status == CredentialStatus.ACTIVE
+            if not (force or (active and stale)):
+                return False
+            if not (active and current.refreshable):
+                raise ValueError("This credential cannot be refreshed; reconnect the account.")
+            return True
+
+        def exchange(current: Self) -> dict[str, Any]:
+            refresh_value = str(current.reveal().get("refresh_token") or "")
+            oauth_client = current.oauth_client
+            assert oauth_client is not None  # ``refreshable`` requires the OAuth client.
+            tokens = OAuthClientProtocol(oauth_client).refresh_token(refresh_token=refresh_value)
+            # The response fully describes the new token; a provider that does not
+            # rotate keeps the stored refresh token, so a one-time token is not dropped.
+            renewed = dict(tokens)
+            renewed.setdefault("refresh_token", refresh_value)
+            return renewed
+
+        def apply(locked: Self, renewed: dict[str, Any]) -> None:
+            type(self).objects.upsert_for_user(
+                locked.user,
+                locked.oauth_client,
+                CredentialKind.OAUTH,
+                renewed,
+                external_account=locked.external_account,
+                reconnect=False,
+            )
+
+        self._renew_locked(due=due, exchange=exchange, apply=apply)
+
+    def _renew_locked[T](
+        self,
+        *,
+        due: Callable[[Self], bool],
+        exchange: Callable[[Self], T],
+        apply: Callable[[Self, T], None],
+        records_failure: Callable[[Exception], bool] = _records_permanent_refusal,
+    ) -> T | None:
+        """Run one grant exchange outside any transaction, then persist it under a fence.
+
+        The shared renewal skeleton of the OAuth refresh and the scoped mint. A
+        blocking advisory lock serializes exchanges across workers: a second
+        consumer waits for the holder, re-reads the row and adopts what it
+        persisted, so no grant is exchanged twice. ``due`` decides on that re-read
+        row and may raise to refuse. The ``exchange`` holds no transaction; a short
+        row lock then runs ``apply``, or records a refusal ``records_failure``
+        admits (by default every refusal that is not transient) as
+        ``last_refresh_status="failed"``, only while :attr:`refresh_fence` still
+        names the material that was exchanged, so a reconnect, revocation or
+        material edit during the exchange wins. Every refusal propagates. The
+        instance reloads the persisted row either way. Returns the exchange
+        result, or ``None`` when the re-read row was no longer due.
         """
 
         if connection.in_atomic_block:
-            raise RuntimeError("Credential refresh requires autocommit.")
-        rows = type(self).objects.sudo(reason="integrate.credential.refresh")
+            raise RuntimeError("Credential renewal requires autocommit.")
+        rows = type(self).objects.sudo(reason="integrate.credential.renewal")
         with task_lock(record_lock_key(self._meta.label_lower, self.pk, "refresh"), blocking=True):
             current = rows.select_related("oauth_client").get(pk=self.pk)
-            stale = current.expires_at is not None and current.expires_at <= timezone.now() + _OAUTH_REFRESH_MARGIN
-            active = current.status == CredentialStatus.ACTIVE
-            if not (force or (active and stale)):
+            if not due(current):
                 self.refresh_from_db()
-                return
-            if not (active and current.refreshable):
-                raise ValueError("This credential cannot be refreshed; reconnect the account.")
-            refresh_value = str(current.reveal().get("refresh_token") or "")
+                return None
             fence = current.refresh_fence
-            oauth_client = current.oauth_client
-            assert oauth_client is not None  # ``refreshable`` requires the OAuth client.
             try:
-                tokens = OAuthClientProtocol(oauth_client).refresh_token(refresh_token=refresh_value)
+                result = exchange(current)
             except (IntegrationError, ValueError) as error:
-                if not (isinstance(error, IntegrationError) and error.transient):
-                    with system_context(reason="integrate.credential.refresh.failed"), transaction.atomic():
+                if records_failure(error):
+                    with system_context(reason="integrate.credential.renewal.failed"), transaction.atomic():
                         locked = rows.lock_if_supported().get(pk=self.pk)
                         if locked.refresh_fence == fence:
                             locked.last_refresh_status = "failed"
                             locked.save(update_fields=["last_refresh_status", "updated_at"])
                 self.refresh_from_db()
                 raise
-            # The response fully describes the new token; a provider that does not
-            # rotate keeps the stored refresh token, so a one-time token is not dropped.
-            renewed = dict(tokens)
-            renewed.setdefault("refresh_token", refresh_value)
             with transaction.atomic():
                 locked = rows.lock_if_supported().get(pk=self.pk)
                 if locked.refresh_fence == fence:
-                    type(self).objects.upsert_for_user(
-                        locked.user,
-                        locked.oauth_client,
-                        CredentialKind.OAUTH,
-                        renewed,
-                        external_account=locked.external_account,
-                        reconnect=False,
-                    )
+                    apply(locked, result)
         self.refresh_from_db()
+        return result
 
 
 def _validated_manager_values(
@@ -2320,15 +2481,20 @@ class Integration(StatementSourceMixin, ImplDefaultsMixin, OwnerMixin, AngeeData
     def probe_credential(self) -> str:
         """Prove the attached credential is usable; raise :class:`IntegrationError` when not.
 
-        The credential-only connection test: no vendor round-trip, just the kind
-        handler producing authorization material. Returns the operator message.
+        The credential-only connection test: no vendor round-trip. It fails closed for
+        every kind: a credential that needs reconnecting
+        (:attr:`Credential.is_reconnect_required`) is refused before the kind handler's
+        :meth:`~CredentialKindHandler.probe` proves its material. Returns the operator
+        message.
         """
 
         credential = self.credential
         if credential is None:
             raise IntegrationError("No credential is attached.")
+        if credential.is_reconnect_required:
+            raise IntegrationError("Reconnect this account.")
         try:
-            credential.auth_headers()
+            credential.handler.probe(credential)
         except Exception as error:  # noqa: BLE001 — handler diagnostics stay outside the operator message.
             raise IntegrationError("Credential is not usable.") from error
         return "Credential is usable."

@@ -10,6 +10,43 @@ live in code docstrings.
 
 ## Unreleased — shared addon contracts, native embeddings and graph retrieval
 
+- `MCPServer.authorization_for(agent)` owns the whole `Authorization` value an MCP
+  server receives, for the in-process transport and the provisioned `.mcp.json`
+  alike. Breaking for consumers and provisioned agents:
+  - the container env var is renamed `ANGEE_MCP_BEARER_<sqid>` →
+    `ANGEE_MCP_AUTHORIZATION_<sqid>` and now carries the whole header value
+    (`Bearer …` or `Basic …`); `.mcp.json` renders `"Authorization": "${VAR}"`;
+  - `Agent.mcp_bearer_env` is renamed `Agent.mcp_authorization_env`, and
+    `MCPServer.config_entry(bearer_env=…)` takes `authorization_env=…`;
+  - `MCPServer.bearer_for` mints only an internal server's per-agent bearer and
+    refuses other placements, which receive `authorization_for`;
+  - an external server sends its credential's own header: a basic-auth credential
+    sends `Basic`, and a static token or OAuth sends `Bearer` (refreshed first);
+    before, every kind's secret was sent as `Bearer`;
+  - MCP credential kinds are restricted, and `MCPServer.clean` enforces it at save.
+    External servers take a static token, OAuth or basic auth. An internal server
+    takes only an active static token of at least 32 characters (stripped) that no
+    other server, agent or integration references; an external server may not hold an
+    internal key;
+  - the internal HMAC now binds the server's sqid, an empty or weak key mints and
+    verifies nothing (no `<sqid>.<HMAC("", sqid)>` forgery), and revoking the key cuts
+    every agent bearer off.
+
+  Reprovision every agent with MCP servers. Reprovision now re-renders the
+  workspace's `.mcp.json` (`OperatorDaemon.update_workspace`, `PATCH /workspaces/{name}`)
+  and refuses a locally modified one rather than overwriting it. The demo internal
+  server's key is generated at load by the `agents.mcpserverkey` resource kind; the
+  committed `demo-mcp-bearer-token` credential row is gone (an existing database keeps it
+  orphaned until deleted).
+- `integrate` gains the `jwt_bearer` credential kind: a pasted provider key file (a
+  Google service-account key is one accepted vocabulary) minting per-scope access
+  tokens through the RFC 7523 JWT bearer grant, via `Credential.auth_headers(scopes=…)`
+  or `Credential.scoped_access_token(scopes)`. `CredentialKindHandler` gains `clean`,
+  `probe`, `mint_access_token` and `records_failure`. A `jwt_bearer` credential's
+  `secret_value()` is empty, so its signing key is never revealed or sent as a bearer.
+  `Integration.probe_credential()` refuses any credential that needs reconnecting
+  ("Reconnect this account.") before the kind's probe.
+
 - `Message.objects.compose_reply` composes an email reply as a complete envelope:
   addressed to the parent's `Reply-To` when it carries one, else its sender (RFC
   5322 §3.6.2; `Message.reply_addresses(actor=)` is the one reader of `Reply-To`:

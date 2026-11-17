@@ -811,6 +811,7 @@ dependencies = [
     { name = "django-compose" },
     { name = "httpcore2" },
     { name = "httpx2" },
+    { name = "joserfc" },
     { name = "qrcode", extra = ["pil"] },
 ]
 
@@ -828,6 +829,7 @@ requires-dist = [
     { name = "django-compose", specifier = ">=0.1.0.dev10,<0.2" },
     { name = "httpcore2", specifier = ">=2.10,<3" },
     { name = "httpx2", specifier = ">=2.10,<3" },
+    { name = "joserfc", specifier = ">=1.6.8" },
     { name = "qrcode", extras = ["pil"], specifier = ">=8.2" },
 ]
 

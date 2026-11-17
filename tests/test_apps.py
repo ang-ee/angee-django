@@ -236,13 +236,14 @@ def test_agents_config_owns_builtin_mcp_demo_seed() -> None:
     manifest = resource_manifest_for(config)
 
     assert [item["path"] for item in manifest["demo"]] == [
-        "resources/demo/010_integrate.credential.yaml",
         "resources/demo/020_agents.mcpserver.yaml",
+        "resources/demo/030_agents.mcpserverkey.yaml",
     ]
-    assert manifest["demo"][0]["adopt"] == ("user", "name")
-    assert manifest["demo"][1]["adopt"] == "name"
+    assert manifest["demo"][0]["adopt"] == "name"
+    assert manifest["demo"][1]["kind"] == "agents.mcpserverkey"
+    # No key is committed: the server declares none and the load generates one.
     mcp_rows = _resource_rows(config, "demo", "resources/demo/020_agents.mcpserver.yaml")
-    assert mcp_rows["mcp_angee"]["credential"] == "agents.cred_mcp_angee"
+    assert mcp_rows["mcp_angee"]["credential"] is None
 
 
 def test_anthropic_addon_owns_install_provider_and_demo_models() -> None:

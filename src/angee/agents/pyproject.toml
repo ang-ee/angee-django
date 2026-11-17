@@ -11,14 +11,13 @@ dynamic = ["entry-points"]
 [tool.angee]
 
 [[tool.angee.resources.demo]]
-path = "demo/010_integrate.credential.yaml"
-depends_on = "iam:demo/010_iam.user.yaml"
-adopt = ["user", "name"]
+path = "demo/020_agents.mcpserver.yaml"
+adopt = "name"
 
 [[tool.angee.resources.demo]]
-path = "demo/020_agents.mcpserver.yaml"
-depends_on = "demo/010_integrate.credential.yaml"
-adopt = "name"
+path = "demo/030_agents.mcpserverkey.yaml"
+kind = "agents.mcpserverkey"
+depends_on = ["demo/020_agents.mcpserver.yaml", "iam:demo/010_iam.user.yaml"]
 
 [tool.angee.platform]
 category = "Agents"

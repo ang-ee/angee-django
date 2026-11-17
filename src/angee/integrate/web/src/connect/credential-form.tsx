@@ -70,6 +70,7 @@ export function CredentialForm({
           kind: String(data.kind ?? ""),
           api_key: String(data.api_key ?? ""),
           private_key: String(data.private_key ?? ""),
+          key_file: String(data.key_file ?? ""),
         },
       } as DocumentVariables<typeof IntegrateCreateCredential>;
       const result = await createCredential(variables);
@@ -90,6 +91,7 @@ export function CredentialForm({
             options={[
               { value: "static_token", label: t("credentials.create.kind.staticToken") },
               { value: "ssh_key", label: t("credentials.create.kind.sshKey") },
+              { value: "jwt_bearer", label: t("credentials.create.kind.jwtBearer") },
             ]}
           />
           <Field
@@ -107,6 +109,14 @@ export function CredentialForm({
             kind="string"
             placeholder={t("credentials.create.privateKeyPlaceholder")}
             showWhen={(values) => values.kind === "ssh_key"}
+          />
+          <Field
+            name="key_file"
+            label={t("credentials.create.keyFile")}
+            widget="textarea"
+            kind="string"
+            placeholder={t("credentials.create.keyFilePlaceholder")}
+            showWhen={(values) => values.kind === "jwt_bearer"}
           />
         </>
       ) : (
