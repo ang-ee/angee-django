@@ -50,14 +50,18 @@ export function ConnectMountAction({
   const [connect] = useAuthoredMutation(ConnectMount, {
     invalidateModels: [MOUNT_MODEL],
   });
-  const facts = useAuthoredQuery(MountBackendFacts, { backendClass }).data?.mount_backend;
+  // The backend's accounts are the user's credentials; a connected account joins them.
+  const factsQuery = useAuthoredQuery(MountBackendFacts, { backendClass }, { models: ["integrate.Credential"] });
+  const facts = factsQuery.data?.mount_backend;
+  const refetchFacts = factsQuery.refetch;
   const targets = useAuthoredQuery(MountCopyTargets).data?.backends;
   const requiresCredential = facts?.requires_credential === true;
   const accountControl = React.useCallback(
     (props: DescriptorFieldControlProps) => (
-      <MountAccountPicker {...props} accounts={facts?.accounts ?? []} oauthClientId={facts?.oauth_client ?? null} />
+      <MountAccountPicker {...props} accounts={facts?.accounts ?? []} oauthClientId={facts?.oauth_client ?? null}
+        oauthScopes={facts?.oauth_scopes ?? []} onConnected={() => { void refetchFacts(); }} />
     ),
-    [facts],
+    [facts, refetchFacts],
   );
   const sourceControl = React.useCallback(
     (props: DescriptorFieldControlProps) => {

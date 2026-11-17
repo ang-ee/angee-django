@@ -1,6 +1,6 @@
+import { ConnectAccountButton } from "@angee/integrate";
 import {
   InlineEmpty,
-  NavLink,
   PaneRow,
   PaneRows,
   mutationDialogValueCodecs,
@@ -21,16 +21,22 @@ export interface MountAccountPickerProps extends DescriptorFieldControlProps {
   accounts: readonly MountAccount[];
   /** The OAuth client another account connects through, when one is ready. */
   oauthClientId: string | null;
+  /** The scopes an account must grant for the backend to read with it (`MountBackend.oauth_scopes`). */
+  oauthScopes: readonly string[];
+  /** Called once an account connected in place (a manual-code provider), so the accounts reload. */
+  onConnected?: () => void;
 }
 
 /**
  * Bare MutationDialog control choosing which of the user's accounts a credential
- * mount backend reads with. Connecting another account is the OAuth client's own
- * Connect account action.
+ * mount backend reads with, and connecting another one through the backend's OAuth
+ * client with the scopes it reads with. A redirect-back provider returns to Mounts.
  */
 export function MountAccountPicker({
   accounts,
   oauthClientId,
+  oauthScopes,
+  onConnected,
   readOnly,
   invalid,
   describedBy,
@@ -64,9 +70,11 @@ export function MountAccountPicker({
         </PaneRows>
       )}
       {oauthClientId ? (
-        <NavLink href={routeHref("integrate.provider", { id: oauthClientId })} variant="inline">
-          {t("mount.account.connect")}
-        </NavLink>
+        <div>
+          <ConnectAccountButton oauthClientId={oauthClientId} scopes={oauthScopes}
+            next={routeHref("storage-integrate.mounts")} label={t("mount.account.connect")}
+            onConnected={onConnected} disabled={readOnly} />
+        </div>
       ) : null}
     </div>
   );

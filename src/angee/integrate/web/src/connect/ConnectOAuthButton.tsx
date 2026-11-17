@@ -7,14 +7,17 @@ import { ConnectIntegration } from "../documents";
 import { useIntegrateT } from "../i18n";
 import { INTEGRATION_CONNECTION_FIELDS } from "../IntegrationLifecycleActions";
 import { connectCallbackRedirectUri } from "./redirects";
-import { useOAuthAuthorization } from "./use-oauth-authorization";
+import { useOAuthAuthorization, type OAuthAuthorizationStart } from "./use-oauth-authorization";
 
 export type OAuthConnectPayload = NonNullable<
   DocumentType<typeof ConnectIntegration>["connect_integration"]
 >;
 
+/** What a connect start answers: the authorization facts, a refusal, or an integration attached without one. */
+export type ConnectStartPayload = OAuthAuthorizationStart & { error?: string | null; attached?: boolean | null };
+
 type RedirectInput = { redirectUri: string; next: string };
-type StartResult = Promise<OAuthConnectPayload | null | undefined>;
+type StartResult = Promise<ConnectStartPayload | null | undefined>;
 type ConnectLabels = {
   next: string;
   label?: string;

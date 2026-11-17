@@ -36,6 +36,7 @@ export const MountBackendFacts = graphql(`
       key
       requires_credential
       oauth_client
+      oauth_scopes
       accounts {
         id
         display_name

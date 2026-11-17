@@ -1,10 +1,9 @@
-import { useAuthoredMutation } from "@angee/refine";
 import * as React from "react";
 import { Action, Column, ResourceList, Field, Form, Group, List, useEnumOptions, useImplPrefill, useRecordAction, useRecordActionMutation, useRouteHref, type RecordActionRunner } from "@angee/ui";
 import type { ActionFieldName } from "@angee/gql/console/actions";
 
 import { useIntegrateT } from "../../i18n";
-import { IntegrateConnectAccountStart } from "../documents.public";
+import { useConnectAccountStart } from "../ConnectAccountButton";
 import { connectCallbackRedirectUri } from "../redirects";
 import { useOAuthAuthorization } from "../use-oauth-authorization";
 
@@ -34,7 +33,7 @@ function fieldString(value: unknown): string {
 export function ProvidersPage(): React.ReactElement {
   const t = useIntegrateT();
   const routeHref = useRouteHref();
-  const [connectAccountStart] = useAuthoredMutation(IntegrateConnectAccountStart);
+  const connectAccountStart = useConnectAccountStart();
   const { authorize } = useOAuthAuthorization();
   // Fill and persist transport endpoints from the client's discovery URL.
   const [discover] = useRecordActionMutation<ActionFieldName>(
@@ -45,12 +44,11 @@ export function ProvidersPage(): React.ReactElement {
   const connectById = React.useCallback<RecordActionRunner>(
     async (id, ctx) => {
       if (typeof window === "undefined") return;
-      const result = await connectAccountStart({
+      const payload = await connectAccountStart({
         id,
         redirectUri: connectCallbackRedirectUri(),
         next: routeHref("integrate.accounts"),
       });
-      const payload = result?.connect_account_start;
       if (!payload?.authorize_url) {
         throw new Error(payload?.error ?? t("providers.connect.startError"));
       }
