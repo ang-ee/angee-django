@@ -71,7 +71,8 @@ the offered kinds per model with `only`, `except` and `hide`. See
 `?mode=` is `month`, `week`, `day` or `list`, which lists a month's occurrences
 under their day headers. A page source declaring a `key` and a `label` gets a
 toolbar toggle when the calendar has more than one source; a hidden source pauses
-its fetch and leaves the grid. The hidden keys ride `?hiddenSources=` beside
+its fetch and leaves the grid. Only a toggled source can be hidden (a URL key for
+any other is ignored), and hiding every source shows a note that offers them back. The hidden keys ride `?hiddenSources=` beside
 `?mode=` and `?anchor=`, and shipped views and favourites may name them
 (`hiddenSources: ["agenda"]`).
 Dashboard widget titles link to the source collection, and table rows use the

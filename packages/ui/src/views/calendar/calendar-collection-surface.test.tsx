@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 
 import * as React from "react";
-import { act, fireEvent, render, screen, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { beforeEach, describe, expect, test, vi } from "vitest";
 
 import type { CalendarViewProps, Occurrence } from "./CalendarView";
@@ -133,6 +133,32 @@ describe("CalendarCollectionSurface", () => {
     );
     expect(screen.getByRole("button", { name: "Agenda" }).getAttribute("aria-pressed")).toBe("false");
     expect(screen.getByRole("button", { name: "Events" }).getAttribute("aria-pressed")).toBe("true");
+  });
+
+  test("a hidden key without a toggle is ignored; hiding every source says so and offers them back", () => {
+    const events = { ...SOURCE, key: "events", label: "Events" } as AnyCalendarWindowSource;
+    const agenda = { ...SOURCE, key: "agenda", label: "Agenda" } as AnyCalendarWindowSource;
+    const lone = { ...SOURCE, key: "lone", label: "Lone" } as AnyCalendarWindowSource;
+    const renderWith = (sources: AnyCalendarWindowSource[], hiddenSources: string[]) => render(
+      <ResourceViewProvider scope="local" resource="calendar.Event"
+        initialState={{ view: "calendar", anchor: "2026-06-15", hiddenSources }}>
+        <Harness spec={surfaceProps({ sources })} />
+      </ResourceViewProvider>,
+    );
+    mocks.resultFor = (source) => ({
+      ...mocks.result,
+      occurrences: [{ ...OCC_NO_ROUTE, occurrence_id: source.key ?? "", title: source.key ?? "" }],
+    });
+    // A lone source has no toggle, so a URL naming it cannot hide it.
+    renderWith([lone], ["lone"]);
+    expect(mocks.calendarProps?.occurrences.map((occurrence) => occurrence.occurrence_id)).toEqual(["lone"]);
+    expect(screen.queryByText("Every source is hidden, so the calendar shows nothing.")).toBeNull();
+    cleanup();
+    renderWith([events, agenda], ["events", "agenda"]);
+    expect(screen.getByText("Every source is hidden, so the calendar shows nothing.")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Show all" }));
+    expect(screen.getByRole("button", { name: "Agenda" }).getAttribute("aria-pressed")).toBe("true");
+    expect(screen.queryByText("Every source is hidden, so the calendar shows nothing.")).toBeNull();
   });
 
   test("source toggles need unique keys a URL carries; one source gets none", () => {

@@ -447,6 +447,8 @@ export const enUiMessages: Record<string, string> = {
   "calendar.mode.week": "Week",
   "calendar.mode.day": "Day",
   "calendar.mode.list": "List",
+  "calendar.allSourcesHidden": "Every source is hidden, so the calendar shows nothing.",
+  "calendar.showAllSources": "Show all",
   "dateTile.pending": "Date pending",
   "textDiff.removals_one": "{count} removal",
   "textDiff.removals_other": "{count} removals",

@@ -4,6 +4,7 @@ import { useNavigate } from "@tanstack/react-router";
 import { useInAppNavigator } from "../../lib/in-app-link";
 import { useUiT } from "../../i18n";
 import { ErrorBanner } from "../../fragments/ErrorBanner";
+import { Alert } from "../../ui/alert";
 import { Button } from "../../ui/button";
 import type { PagerState } from "../../ui/pager";
 import type { ResourceToolbarViewControls } from "../../toolbars";
@@ -75,7 +76,13 @@ export function CalendarCollectionSurface({
   const navigateInApp = useInAppNavigator();
   const { mode, anchor, hiddenSources } = resourceView.state;
   const toggles = React.useMemo(() => calendarSourceToggles(calendar.sources), [calendar.sources]);
-  const hidden = React.useMemo(() => new Set(hiddenSources), [hiddenSources]);
+  // Only a source with a toggle can be hidden: a key the URL names for a lone or
+  // unlabelled source is ignored, so nothing hides without a way back.
+  const hidden = React.useMemo(
+    () => new Set(toggles.flatMap((toggle) => hiddenSources.includes(toggle.value) ? [toggle.value] : [])),
+    [toggles, hiddenSources],
+  );
+  const allHidden = hidden.size > 0 && hidden.size === calendar.sources.length;
   const anchorDate = React.useMemo(() => calendarAnchorToDate(anchor), [anchor]);
   // `CalendarView` positions the grid from `range.start`; the fetch window is the
   // padded window the grid reports back (`onRangeChange`), so the two are distinct.
@@ -145,6 +152,18 @@ export function CalendarCollectionSurface({
           toolbar={toolbar}
           loadingFooter={fetched.fetching && !fetched.error}
         >
+          {allHidden ? (
+            <Alert
+              tone="info"
+              actions={
+                <Button type="button" variant="secondary" size="sm" onClick={() => resourceView.setHiddenSources([])}>
+                  {t("calendar.showAllSources")}
+                </Button>
+              }
+            >
+              {t("calendar.allSourcesHidden")}
+            </Alert>
+          ) : null}
           <ErrorBanner
             description={fetched.error ? t("calendar.loadFailed") : null}
             actions={
