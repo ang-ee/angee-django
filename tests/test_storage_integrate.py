@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import importlib
+import json
 import os
 from datetime import timedelta
 from pathlib import Path
@@ -14,11 +15,13 @@ import pytest
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
 from django.db import DataError
+from django.test import RequestFactory
 from django.utils import timezone
 from rebac import system_context
 
 from angee.graphql.testing.documents import execute_schema, result_data
 from angee.integrate.models import IntegrationLifecycle, IntegrationRuntimeStatus
+from angee.storage import views as storage_views
 from angee.storage_integrate.models import MountMode
 from angee.storage_integrate.mounts import LocalFolderMountBackend
 from tests.conftest import (
@@ -234,12 +237,21 @@ def test_connect_copy_stores_in_a_chosen_writable_backend_the_actor_reads(
             backend_config={"root": str(reference_root)},
             created_by=mount_env.owner,
         )
+        retired = Backend._base_manager.create(
+            slug="retired",
+            label="Retired",
+            backend_class="local",
+            backend_config={"root": str(archive_root)},
+            is_archived=True,
+            created_by=mount_env.owner,
+        )
     source = mount_env.tmp_path / "copy-target"
     _write(source / "kept.txt", b"kept", mtime_ns=BASE_MTIME_NS)
 
     for mode, target, field in (
         (MountMode.REFERENCE, archive, "copy_backend"),
         (MountMode.COPY, read_only, "copy_backend"),
+        (MountMode.COPY, retired, "copy_backend"),
     ):
         with pytest.raises(ValidationError) as refused:
             _provision(mount_env, str(source), mode=mode, name="Refused", copy_backend=target)
@@ -273,6 +285,25 @@ def test_storage_backends_project_whether_they_take_new_objects(
     with system_context(reason="test projected backend slug"):
         external = mount.drive.backend.slug
     assert {row["slug"]: row["writable"] for row in listed} == {"managed": True, external: False}
+
+
+def test_a_reference_file_changed_since_the_sync_is_refused_rather_than_truncated(
+    mount_env: SimpleNamespace,
+    queued_mounts: list[Any],
+) -> None:
+    """A download whose source no longer has the indexed size answers 502 instead of a cut-short body."""
+
+    root = mount_env.tmp_path / "changing"
+    _write(root / "grown.txt", b"short", mtime_ns=BASE_MTIME_NS)
+    mount = _connect(mount_env, root, mode=MountMode.REFERENCE, name="Changing")
+    assert _run_sync(mount) == 1
+    row = _file_map(mount.drive)["grown.txt"]
+    token = row.issue_download_token(mount_env.owner)
+    request = RequestFactory().get(f"/storage/download/grown.txt?token={token}")
+
+    (root / "grown.txt").write_bytes(b"much longer than when it was indexed")
+    refused = storage_views.download(request, row.filename)
+    assert (refused.status_code, json.loads(refused.content)["code"]) == (502, "unavailable")
 
 
 def test_connect_refusals_are_field_keyed_for_unsafe_or_duplicate_roots(

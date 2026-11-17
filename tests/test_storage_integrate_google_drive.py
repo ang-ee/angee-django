@@ -501,6 +501,13 @@ def test_shared_drive_mount_reads_its_own_corpus(drive_env: SimpleNamespace, que
     assert listing["supportsAllDrives"] == "true"
     assert listing["includeItemsFromAllDrives"] == "true"
 
+    fake.listings.clear()
+    folder = _connect(drive_env, "f-team-docs", name="Team docs")
+    assert _run_sync(folder) == 1
+    [per_folder] = fake.listings
+    assert per_folder["q"] == "'f-team-docs' in parents and trashed = false"
+    assert per_folder["driveId"] == "0ATeam"
+
 
 def test_a_file_without_a_drive_checksum_is_hashed_from_one_download(
     drive_env: SimpleNamespace, queued_mounts: list[Any]
@@ -775,6 +782,14 @@ def test_a_refused_download_answers_a_clean_status(drive_env: SimpleNamespace, q
         refused = download(key)
         assert (refused.status_code, json.loads(refused.content)["code"]) == (status, code)
 
+    def unreachable_host(request: httpx2.Request) -> httpx2.Response:
+        raise httpx2.ConnectError("Google is unreachable.", request=request)
+
+    fake.refusal = unreachable_host
+    unreachable = download("x-fine")
+    assert (unreachable.status_code, json.loads(unreachable.content)["code"]) == (502, "unavailable")
+    fake.refusal = None
+
     with system_context(reason="test Google Drive download of a disconnected mount"):
         mount.disconnect()
     denied = download("x-fine")
@@ -791,8 +806,10 @@ def test_serving_opens_eagerly_and_refuses_a_trashed_or_changed_file(
     fake.file("x-eager", "eager.txt", b"eager", parent="f-open")
     fake.file("x-trashed", "trashed.txt", b"trashed", parent="f-open")
     fake.file("x-changed", "changed.txt", b"changed", parent="f-open")
+    fake.file("x-resized", "resized.txt", b"no checksum", parent="f-open", checksum=False)
     mount = _connect(drive_env, "f-open", name="Open")
-    assert _run_sync(mount) == 3
+    assert _run_sync(mount) == 4
+    fake.downloads.clear()
     storage = _storage_of(mount)
 
     with system_context(reason="test Google Drive eager open"):
@@ -802,8 +819,16 @@ def test_serving_opens_eagerly_and_refuses_a_trashed_or_changed_file(
 
     fake.items["x-trashed"].trashed = True
     fake.items["x-changed"].content = b"changed since"
-    for key in ("x-trashed", "x-changed", "x-missing"):
-        with pytest.raises(OSError):
+    fake.items["x-resized"].content = b"no checksum, longer"
+    fake.file("x-unindexed", "later.txt", b"added after the sync", parent="f-open")
+    for key, refusal in (
+        ("x-trashed", FileNotFoundError),
+        ("x-changed", OSError),
+        ("x-resized", OSError),
+        ("x-unindexed", FileNotFoundError),
+        ("x-missing", FileNotFoundError),
+    ):
+        with pytest.raises(refusal):
             _read(storage, key)
     assert fake.downloads == ["x-eager"]
 

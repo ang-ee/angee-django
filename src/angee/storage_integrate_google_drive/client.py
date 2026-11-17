@@ -31,7 +31,7 @@ import httpx2
 from django.utils import timezone
 
 from angee.integrate.errors import IntegrationError
-from angee.integrate.http import HttpClient
+from angee.integrate.http import HttpClient, ResponseTooLargeError
 
 DRIVE_API = "https://www.googleapis.com/drive/v3"
 FOLDER_MIME = "application/vnd.google-apps.folder"
@@ -49,7 +49,7 @@ _JSON_MAX_BYTES = 8 * 1024 * 1024
 _MEDIA_CHUNK_BYTES = 256 * 1024
 _ERROR_BODY_MAX_BYTES = 16 * 1024
 _RATE_LIMIT_REASONS = frozenset({"rateLimitExceeded", "userRateLimitExceeded"})
-_SCOPE_REFUSALS = frozenset({"insufficientPermissions", "ACCESS_TOKEN_SCOPE_INSUFFICIENT"})
+_SCOPE_REFUSALS = frozenset({"insufficientPermissions"})
 _FILE_REFUSALS = frozenset(
     {"cannotDownloadFile", "cannotDownloadAbusiveFile", "downloadQuotaExceeded", "insufficientFilePermissions"}
 )
@@ -213,9 +213,9 @@ class GoogleDriveClient:
         """GET one Drive JSON resource, renewing a rejected token once."""
 
         url = f"{DRIVE_API}/{path}?{urlencode(params)}"
-        response = self.http.request("GET", url, headers=self._headers(), max_bytes=_JSON_MAX_BYTES)
+        response = self._request_json(url)
         if response.status_code == 401 and self._renew():
-            response = self.http.request("GET", url, headers=self._headers(), max_bytes=_JSON_MAX_BYTES)
+            response = self._request_json(url)
         self._raise_for_status(response, response.content, per_file=path.startswith("files/"))
         try:
             data = response.json()
@@ -224,6 +224,16 @@ class GoogleDriveClient:
         if not isinstance(data, dict):
             raise GoogleDriveError("Google Drive returned an unreadable response.", transient=True)
         return data
+
+    def _request_json(self, url: str) -> httpx2.Response:
+        """Send one JSON GET; a transport failure or an oversized answer is a transient Drive refusal."""
+
+        try:
+            return self.http.request("GET", url, headers=self._headers(), max_bytes=_JSON_MAX_BYTES)
+        except httpx2.TransportError as error:
+            raise GoogleDriveError("Google Drive could not be reached.", transient=True) from error
+        except ResponseTooLargeError as error:
+            raise GoogleDriveError("Google Drive returned an oversized response.", transient=True) from error
 
     def _headers(self) -> dict[str, str]:
         """Return a fresh bearer header for the next request."""

@@ -4,24 +4,21 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, BinaryIO
+from typing import Any, BinaryIO
 
 from django.core.exceptions import ImproperlyConfigured, SuspiciousFileOperation
 
 from angee.integrate_iphone.backup import BackupError, IosBackup, split_logical_key
 from angee.storage_integrate.backends import ExternalStorageBackend
 
-if TYPE_CHECKING:
-    from django.db.models import Model
-
 
 class IphoneBackupStorageBackend(ExternalStorageBackend):
     """Map logical ``domain/relativePath`` keys to content-addressed blobs."""
 
-    def __init__(self, *, backend_config: Mapping[str, Any] | None = None, backend_row: Model | None = None) -> None:
+    def __init__(self, *, backend_config: Mapping[str, Any] | None = None) -> None:
         """Bind the backup root without retaining a thread-affine connection."""
 
-        super().__init__(backend_config=backend_config, backend_row=backend_row)
+        super().__init__(backend_config=backend_config)
         root = str(self.backend_config.get("root") or "").strip()
         if not root:
             raise ImproperlyConfigured(

@@ -86,10 +86,10 @@ class BackendType(AngeeNode):
 
     @strawberry_django.field(only=["backend_class"])
     def writable(self) -> bool:
-        """Whether new objects may be stored here: the selected ``StorageBackend``'s ``writable``."""
+        """Whether new objects may be stored here (``Backend.writable``); an unknown class stores none."""
 
         try:
-            return bool(cast(Any, self).get_backend_class_impl().writable)
+            return bool(cast(Any, self).writable)
         except ImproperlyConfigured:
             return False
 

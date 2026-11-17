@@ -291,7 +291,7 @@ class MountManager[MountT: Mount](_MountManagerBase[MountT]):
     def _check_copy_backend(
         user: AbstractBaseUser, *, mode: MountMode, copy_backend: Backend | None, backend_model: Any
     ) -> None:
-        """Admit a chosen copy target only for a copy mount, writable and readable by ``user``."""
+        """Admit a chosen copy target only for a copy mount: readable by ``user``, unarchived and writable."""
 
         if copy_backend is None:
             return
@@ -299,7 +299,9 @@ class MountManager[MountT: Mount](_MountManagerBase[MountT]):
             raise ValidationError({"copy_backend": "Only a copy mount stores its files in a chosen backend."})
         if not backend_model.objects.with_actor(user).filter(pk=copy_backend.pk).exists():
             raise ValidationError({"copy_backend": "You cannot use this storage backend."})
-        if not copy_backend.storage.writable:
+        if copy_backend.is_archived:
+            raise ValidationError({"copy_backend": "This storage backend is archived."})
+        if not copy_backend.writable:
             raise ValidationError({"copy_backend": "Copied files need a writable storage backend."})
 
     @staticmethod

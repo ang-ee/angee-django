@@ -214,12 +214,21 @@ class Backend(AuditMixin, ArchiveMixin, AngeeDataModel, concrete=True):
         return {key: expand(item) for key, item in dict(self.backend_config or {}).items()}
 
     @property
+    def writable(self) -> bool:
+        """Whether new objects may be stored here: the selected ``StorageBackend`` class's ``writable``.
+
+        Read from the class, so answering builds no backend instance.
+        """
+
+        return bool(self.get_backend_class_impl().writable)
+
+    @property
     def storage(self) -> StorageBackend:
         """Return the resolved backend instance, cached per row, implementation and config.
 
         The cache key includes the resolved config, so rotating an env-backed
         credential takes effect on the next lookup without a worker restart.
-        The instance is built with this row (``StorageBackend.backend_row``).
+        The instance carries this row's identity (``StorageBackend.backend_row``).
         """
 
         config = self.resolved_config()
@@ -229,7 +238,9 @@ class Backend(AuditMixin, ArchiveMixin, AngeeDataModel, concrete=True):
         if cached is not None:
             self._storage_cache[key] = cached
             return cached
-        instance = backend_class(backend_config=config, backend_row=self)
+        instance = backend_class(backend_config=config)
+        # The cache outlives this row instance: hand the backend the row's identity only.
+        instance.backend_row = cast("Backend", type(self).from_db(self._state.db, [self._meta.pk.attname], [self.pk]))
         self._storage_cache[key] = instance
         while len(self._storage_cache) > _STORAGE_CACHE_MAX_SIZE:
             self._storage_cache.popitem(last=False)

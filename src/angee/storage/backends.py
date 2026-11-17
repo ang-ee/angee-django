@@ -25,7 +25,7 @@ from django.conf import settings
 from django.core.files.storage import FileSystemStorage, Storage
 
 if TYPE_CHECKING:
-    from django.db.models import Model
+    from angee.storage.models import Backend
 
 logger = logging.getLogger(__name__)
 
@@ -55,17 +55,20 @@ class StorageBackend(Storage):
     writable: ClassVar[bool] = True
     """Whether callers may create new objects through this backend."""
 
-    def __init__(self, *, backend_config: Mapping[str, Any] | None = None, backend_row: Model | None = None) -> None:
-        """Store the resolved per-row backend config and the ``storage.Backend`` row it was built for.
+    backend_row: Backend | None = None
+    """The ``storage.Backend`` row this instance serves, as an identity only.
 
-        ``Backend.storage`` passes its own row, so a backend serving on behalf of
-        something bound to that row (a mount's drive) finds it by identity, never
-        by matching configuration; an instance built elsewhere has none. Only
-        the row's identity is meant: a cached instance keeps the row it was built with.
-        """
+    ``Backend.storage`` assigns it after construction: a deferred instance
+    carrying the row's primary key, whose other fields load fresh when read, so
+    a cached backend never holds stale row state. A backend serving on behalf of
+    something bound to that row (a mount's drive) finds it by this identity,
+    never by matching configuration. An instance built elsewhere has none.
+    """
+
+    def __init__(self, *, backend_config: Mapping[str, Any] | None = None) -> None:
+        """Store the resolved per-row backend config."""
 
         self.backend_config = dict(backend_config or {})
-        self.backend_row = backend_row
 
     def presigned_get(self, key: str, *, expires_in: int) -> str | None:
         """Return a time-limited download URL, or ``None`` to use ``url(key)``."""
@@ -96,13 +99,13 @@ class LocalBackend(FileSystemStorage, StorageBackend):
     defaulting to Django's ``MEDIA_ROOT`` / ``MEDIA_URL``.
     """
 
-    def __init__(self, *, backend_config: Mapping[str, Any] | None = None, backend_row: Model | None = None) -> None:
+    def __init__(self, *, backend_config: Mapping[str, Any] | None = None) -> None:
         """Bind the filesystem location and public base URL.
 
         Directories are created lazily by ``FileSystemStorage`` on save.
         """
 
-        StorageBackend.__init__(self, backend_config=backend_config, backend_row=backend_row)
+        StorageBackend.__init__(self, backend_config=backend_config)
         root = Path(self.backend_config.get("root") or settings.MEDIA_ROOT)
         base_url = str(self.backend_config.get("base_url") or settings.MEDIA_URL)
         FileSystemStorage.__init__(self, location=str(root), base_url=base_url)

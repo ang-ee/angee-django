@@ -19,6 +19,7 @@ from asgiref.sync import async_to_sync
 from django.contrib.auth import get_user_model
 from django.contrib.auth.models import AnonymousUser
 from django.core.exceptions import SuspiciousFileOperation, ValidationError
+from django.core.signals import request_finished
 from django.db import close_old_connections, connection, connections, models, transaction
 from django.db.models.signals import post_save
 from django.db.utils import OperationalError
@@ -1434,6 +1435,51 @@ def test_a_download_streams_its_first_block_before_reading_the_rest(
     assert reads_at_first == [views.DOWNLOAD_BLOCK_BYTES]
     assert len(first) == views.DOWNLOAD_BLOCK_BYTES
     assert first + rest == payload
+
+
+def test_closing_a_download_closes_its_stream_unread(drive: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Django closes the download body with the response, so an abandoned download releases its stream."""
+
+    from angee.storage import views
+
+    row = _proxy_upload(drive, PNG_BYTES)
+    closed: list[bool] = []
+    opened = File.open_stream
+
+    class TrackedStream:
+        """Record that the stored stream was closed."""
+
+        def __init__(self, stream: Any) -> None:
+            self.stream = stream
+
+        def read(self, size: int = -1) -> bytes:
+            return self.stream.read(size)
+
+        def close(self) -> None:
+            closed.append(True)
+            self.stream.close()
+
+    monkeypatch.setattr(File, "open_stream", lambda self: TrackedStream(opened(self)))
+    with actor_context(drive.alice):
+        token = row.issue_download_token()
+    response = views.download(RequestFactory().get(f"/storage/download/{row.filename}?token={token}"), row.filename)
+    # A request's end closes old database connections; this test's transaction must outlive it.
+    request_finished.disconnect(close_old_connections)
+    try:
+        response.close()
+    finally:
+        request_finished.connect(close_old_connections)
+    assert closed == [True]
+
+
+def test_a_cached_backend_knows_its_row_by_identity_only(drive: Any) -> None:
+    """``Backend.storage`` hands its instance the row's identity, never row state that could go stale."""
+
+    with system_context(reason="test storage backend row identity"):
+        backend = Backend._base_manager.get(pk=drive.backend_id)
+        storage = backend.storage
+    assert storage.backend_row == backend
+    assert {"slug", "backend_config"} <= storage.backend_row.get_deferred_fields()
 
 
 SANDBOXED = "default-src 'none'; style-src 'unsafe-inline'; sandbox"

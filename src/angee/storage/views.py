@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import os
 from collections.abc import AsyncIterator, Collection
 from typing import IO, Any, Literal
 
@@ -98,8 +99,9 @@ def download(request: HttpRequest, filename: str) -> HttpResponseBase:
     :data:`DOWNLOAD_CSP`, and all of them ``nosniff`` from Django's
     ``SecurityMiddleware``. The bytes stream as an async iterator reading one
     block at a time in a worker thread, so a slow or remote backend never blocks
-    the event loop nor buffers the whole file; the row's size is the length. A
-    backend that refuses to open the bytes is answered 404, 403 or 502
+    the event loop nor buffers the whole file; the row's size is the length,
+    and a stored file whose real size differs is refused rather than truncated.
+    A backend that refuses to open the bytes is answered 404, 403 or 502
     (:func:`_storage_refusal`), never 500.
     """
 
@@ -118,10 +120,10 @@ def download(request: HttpRequest, filename: str) -> HttpResponseBase:
     if conditional := get_conditional_response(request, etag=etag):
         return _download_cache_response(conditional, etag, content_type)
     try:
-        stream = row.open_stream()
+        body = _StoredBytes.open(row)
     except OSError as error:
         return _storage_refusal(row, error)
-    response = StreamingHttpResponse(_stream_blocks(stream), content_type=content_type)
+    response = StreamingHttpResponse(body, content_type=content_type)
     response["Content-Length"] = str(row.size_bytes)
     disposition = content_disposition_header(not renders_inline(content_type), row.filename)
     if disposition:
@@ -148,15 +150,51 @@ def _storage_refusal(row: Any, error: OSError) -> JsonResponse:
     return JsonResponse({"error": message, "code": code}, status=status)
 
 
-async def _stream_blocks(stream: IO[bytes]) -> AsyncIterator[bytes]:
-    """Yield stored bytes block by block from a worker thread, closing the stream however the response ends."""
+class _StoredBytes:
+    """A download body: a row's stored bytes, read block by block off the event loop.
 
-    read = sync_to_async(stream.read, thread_sensitive=False)
-    try:
-        while block := await read(DOWNLOAD_BLOCK_BYTES):
-            yield block
-    finally:
-        await sync_to_async(stream.close, thread_sensitive=False)()
+    Django registers its ``close`` as a response closer, so the stream closes
+    when the response does, read or not; finishing the read closes it too.
+    """
+
+    def __init__(self, stream: IO[bytes]) -> None:
+        """Hold one open stream of stored bytes."""
+
+        self.stream = stream
+
+    @classmethod
+    def open(cls, row: Any) -> _StoredBytes:
+        """Open ``row``'s bytes, refusing a stream whose real size is not the size it was indexed with.
+
+        A reference mount's source can change between syncs; serving it under the
+        indexed length would truncate the response. A stream that cannot report
+        its size (a remote reader) is trusted to its backend's own checks.
+        """
+
+        stream = row.open_stream()
+        try:
+            size = os.fstat(stream.fileno()).st_size
+        except AttributeError, OSError:
+            return cls(stream)
+        if size != row.size_bytes:
+            stream.close()
+            raise OSError("The stored file changed since the last sync.")
+        return cls(stream)
+
+    async def __aiter__(self) -> AsyncIterator[bytes]:
+        """Yield the bytes block by block from a worker thread, then close the stream."""
+
+        read = sync_to_async(self.stream.read, thread_sensitive=False)
+        try:
+            while block := await read(DOWNLOAD_BLOCK_BYTES):
+                yield block
+        finally:
+            await sync_to_async(self.close, thread_sensitive=False)()
+
+    def close(self) -> None:
+        """Close the stream; closing twice is harmless."""
+
+        self.stream.close()
 
 
 def _download_cache_response(response: HttpResponseBase, etag: str, content_type: str) -> HttpResponseBase:

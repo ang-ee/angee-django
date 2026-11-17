@@ -179,9 +179,8 @@ class GoogleDriveMountBackend(MountBackend):
     def _walked(self) -> _DriveWalk:
         """Walk the mounted folder once per sync, depth first with siblings in name order.
 
-        A shared drive is listed whole in one paged pass and its tree built from
-        each item's parents; My Drive is listed folder by folder, since its
-        corpus is every file the account can see.
+        A whole shared drive is listed in one paged pass and its tree built from
+        each item's parents; any other root is listed folder by folder.
         """
 
         if self._walk is not None:
@@ -228,9 +227,13 @@ class GoogleDriveMountBackend(MountBackend):
         return walk
 
     def _listed_children(self, root: DriveItem) -> Callable[[DriveItem], list[DriveItem]]:
-        """Return how to list a folder's children: from one listing of a shared drive, else per folder."""
+        """Return how to list a folder's children: from one listing when the root is a whole shared drive.
 
-        if not root.drive_id:
+        A folder inside a shared drive, or in My Drive, is listed folder by
+        folder, so mounting a small folder never lists its whole drive.
+        """
+
+        if not root.drive_id or root.id != root.drive_id:
             return lambda folder: list(self.client.children(folder))
         by_parent: dict[str, list[DriveItem]] = {}
         for item in self.client.drive_items(root.drive_id):
