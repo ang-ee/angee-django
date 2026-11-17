@@ -279,6 +279,7 @@ jobs:
             tests/test_storage_access_campaign.py::test_download_urls_are_window_aligned_and_expire_from_the_window_start \
             tests/test_storage_access_campaign.py::test_download_url_changes_for_new_content_inside_one_window \
             tests/test_system_queryset.py::test_system_queryset_emits_for_update_on_postgresql \
+            tests/test_tags_categories_concurrency.py \
             tests/test_task_locks.py \
             tests/test_transitions.py::test_a_guarded_transition_holds_its_row_lock_until_commit \
             tests/test_task_rank_allocation.py tests/test_projects_record_tasks.py \
