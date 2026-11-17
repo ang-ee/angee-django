@@ -10,23 +10,21 @@ live in code docstrings.
 
 ## Unreleased — shared addon contracts, native embeddings and graph retrieval
 
-- `angee.scheduling` owns due rules. A `DueRule` (`angee.scheduling.due`) names
-  due anchors the subject supplies later and labelled terms measured from them:
-  calendar offsets (elapsed minutes and hours; wall-calendar days to years in the
-  anchor's zone), counter offsets in the counter's own unit, alignment (period
-  edges, weekdays, a local time in a named zone), `earliest`/`latest`
-  combination, warn and grace windows, repeat from the completion or on an RRULE,
-  and a forecast from a counter's rate. A consumer stores it in a `DueRuleField`
-  beside its own date or instant column; the pure `DueRule.resolve` returns a
-  `Due` whose point and stable `basis` the consumer writes, and `Due.status` is
-  computed on read and never stored. No consumer composes it yet.
-- `angee.scheduling.fields.TimeZoneField` stores an IANA zone name (blank is the
-  project `TIME_ZONE`) and `angee.scheduling.zones.ZoneName` is the same rule for
-  Pydantic inputs; `zone_info` returns the zone. `Recurrence.occurrences` takes a
-  keyword `zone` (blank keeps the project `TIME_ZONE`), and `Recurrence.after`
-  returns the next occurrence after a moment. `angee-scheduling` now declares
-  `angee-base`, which it reached through `angee-graphql` before. Follow-up: the
-  zone strings in `arp.hr`, `messaging` and `posts` compose the new owner.
+- `angee.scheduling` owns due rules: a `DueRule` (`angee.scheduling.due`) names due
+  anchors the subject supplies later and labelled terms measured from them; the
+  [scheduling README](src/angee/scheduling/README.md) lists what a rule expresses.
+  A consumer stores it in a `DueRuleField` beside its own date or instant column;
+  the pure `DueRule.resolve` returns a `Due` whose point and canonical JSON basis
+  the consumer writes, and `Due.get_status` is computed on read and never stored.
+  No consumer composes it yet.
+- `angee.scheduling.fields.TimeZoneField` stores an IANA zone name and
+  `angee.scheduling.zones.ZoneName` is the same rule for Pydantic inputs; a blank
+  zone takes its context's zone and finally the project `TIME_ZONE`, which
+  `get_zone_info` returns. `Recurrence.occurrences` takes a keyword `zone` (blank
+  keeps the project `TIME_ZONE`), and `Recurrence.get_occurrence_after` returns the
+  next occurrence after a moment. `angee-scheduling` now declares `angee-base`,
+  which it reached through `angee-graphql` before. Follow-up: the zone strings in
+  `arp.hr`, `messaging` and `posts` compose the new owner.
 - A record-visibility file takes its access from its attached records, its
   direct viewers and admins. Its owner (the uploader, by default) holds it while
   the upload is a draft, which the record edge needs, and once it is published

@@ -41,14 +41,12 @@ class SchedulingConfig(AppConfig):
     :data:`~angee.scheduling.zones.ZoneName`), never as a ``tzinfo``.
 
     **Due-rule face — built.** Scheduling owns "when is this due":
-    :class:`~angee.scheduling.due.DueRule` (named due anchors, calendar and counter
-    offsets, alignment, ``earliest``/``latest`` terms, warn and grace windows,
-    repeat) stored in a :class:`~angee.scheduling.fields.DueRuleField`. Its pure
-    ``resolve`` returns a :class:`~angee.scheduling.due.Due` whose point the
-    consumer writes into its own date or instant column and whose ``basis`` it
-    stores beside it; ``Due.status`` is computed on read and never stored. The
-    subject's owner supplies the anchors, counters and rates; scheduling holds
-    none.
+    :class:`~angee.scheduling.due.DueRule`, stored on a consumer row in a
+    :class:`~angee.scheduling.fields.DueRuleField`. Its pure ``resolve`` returns a
+    :class:`~angee.scheduling.due.Due` whose point the consumer writes into its own
+    column and whose JSON it stores as the basis; ``Due.get_status`` is computed on
+    read and never stored. The subject's owner supplies the anchors, counters and
+    rates; scheduling holds none. The addon README lists what a rule expresses.
 
     **Working-time / resource-calendar face — owned here, not yet built.**
     Scheduling is also the single future owner of *working time*: a

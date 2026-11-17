@@ -5,7 +5,7 @@
 questions a caller has about it: *is this rule well-formed?*
 (:meth:`Recurrence.validate`), *which concrete moments does it produce in a
 window?* (:meth:`Recurrence.occurrences`) and *which moment comes next?*
-(:meth:`Recurrence.after`). It holds no state beyond the rule and touches no
+(:meth:`Recurrence.get_occurrence_after`). It holds no state beyond the rule and touches no
 database — recurrence is a value, not a record.
 
 Parsing and expansion are delegated to ``python-dateutil`` (``rrulestr``), the
@@ -22,7 +22,7 @@ from dateutil.parser import parse
 from dateutil.rrule import rrule, rruleset, rrulestr
 from django.core.exceptions import ValidationError
 
-from angee.scheduling.zones import require_aware, zone_info
+from angee.scheduling.zones import get_zone_info, require_aware
 
 _VALIDATION_ANCHOR = datetime(2000, 1, 1, tzinfo=UTC)
 """A fixed aware anchor for grammar-only validation; its date never affects validity."""
@@ -97,7 +97,7 @@ class Recurrence:
         """
 
         require_aware(dtstart=dtstart, window_start=window_start, window_end=window_end)
-        tz = zone_info(zone)
+        tz = get_zone_info(zone)
         after = window_start.astimezone(tz)
         before = window_end.astimezone(tz)
         anchor = dtstart.astimezone(tz)
@@ -111,7 +111,7 @@ class Recurrence:
             if after <= moment < before
         ]
 
-    def after(self, dtstart: datetime, moment: datetime, *, zone: str = "") -> datetime | None:
+    def get_occurrence_after(self, dtstart: datetime, moment: datetime, *, zone: str = "") -> datetime | None:
         """Return the first occurrence strictly after ``moment`` as aware UTC, or ``None`` once the rule ends.
 
         The series starts at ``dtstart`` and unrolls in ``zone`` (blank: the project
@@ -122,7 +122,7 @@ class Recurrence:
         """
 
         require_aware(dtstart=dtstart, moment=moment)
-        tz = zone_info(zone)
+        tz = get_zone_info(zone)
         anchor = dtstart.astimezone(tz)
         if not self.rule:
             following: datetime | None = anchor if anchor > moment else None
