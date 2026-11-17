@@ -359,6 +359,7 @@ export const enUiMessages: Record<string, string> = {
   "resourceToolbar.unpinFavorite": "Unpin favorite",
   "resourceToolbar.renameFavorite": "Rename favorite",
   "resourceToolbar.viewSwitcher": "View switcher",
+  "resourceToolbar.calendarSources": "Shown sources",
   "resourceToolbar.listView": "List view",
   "resourceToolbar.gridView": "Grid view",
   "resourceToolbar.boardView": "Board view",

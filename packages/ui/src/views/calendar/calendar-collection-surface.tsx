@@ -26,6 +26,7 @@ import {
   type ResourceViewKind,
 } from "../resource/resource-view-model";
 import type { CalendarViewSpec } from "../resource/resource-view-types";
+import { isCalendarSourceKey } from "../resource/model/search";
 import { ResourceListFrame } from "../resource/ResourceListFrame";
 import { useResourceSearch } from "../resource/search/use-resource-search";
 import { useSearchCatalog } from "../resource/search/catalog";
@@ -72,7 +73,9 @@ export function CalendarCollectionSurface({
   const t = useUiT();
   const navigate = useNavigate();
   const navigateInApp = useInAppNavigator();
-  const { mode, anchor } = resourceView.state;
+  const { mode, anchor, hiddenSources } = resourceView.state;
+  const toggles = React.useMemo(() => calendarSourceToggles(calendar.sources), [calendar.sources]);
+  const hidden = React.useMemo(() => new Set(hiddenSources), [hiddenSources]);
   const anchorDate = React.useMemo(() => calendarAnchorToDate(anchor), [anchor]);
   // `CalendarView` positions the grid from `range.start`; the fetch window is the
   // padded window the grid reports back (`onRangeChange`), so the two are distinct.
@@ -109,8 +112,14 @@ export function CalendarCollectionSurface({
       onPrev: () => resourceView.setAnchor(shiftCalendarAnchor(mode, anchor, -1)),
       onToday: () => resourceView.setAnchor(todayCalendarAnchor()),
       onNext: () => resourceView.setAnchor(shiftCalendarAnchor(mode, anchor, 1)),
+      ...(toggles.length > 0 ? { sources: {
+        options: toggles,
+        visible: toggles.flatMap((toggle) => hidden.has(toggle.value) ? [] : [toggle.value]),
+        onVisibleChange: (visible: readonly string[]) => resourceView.setHiddenSources(
+          toggles.flatMap((toggle) => visible.includes(toggle.value) ? [] : [toggle.value])),
+      } } : {}),
     }),
-    [mode, anchor, t, resourceView.setMode, resourceView.setAnchor],
+    [mode, anchor, t, toggles, hidden, resourceView.setMode, resourceView.setAnchor, resourceView.setHiddenSources],
   );
 
   const catalog = useSearchCatalog({ resourceView, columns: [], rows: [], modelMetadata: null, inferOptions: false, textFilterField: null });
@@ -129,7 +138,7 @@ export function CalendarCollectionSurface({
   };
 
   return (
-    <CalendarWindowSources sources={calendar.sources} range={fetchWindow} enabled={settled}>
+    <CalendarWindowSources sources={calendar.sources} hidden={hidden} range={fetchWindow} enabled={settled}>
       {(fetched) => (
         <ResourceListFrame
           className={className}
@@ -182,6 +191,33 @@ const EMPTY_CALENDAR_FETCH: CalendarWindowFetch = {
 };
 
 /**
+ * The toolbar toggles for a page's labelled sources, after checking every key:
+ * keys are unique source ids a URL can carry, and a label needs a key. One
+ * source alone gets no toggle; hiding it would leave an empty grid.
+ * @kind null
+ * @reason Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.
+ */
+export function calendarSourceToggles(
+  sources: readonly AnyCalendarWindowSource[],
+): readonly { value: string; label: React.ReactNode }[] {
+  const keys = new Set<string>();
+  const toggles: { value: string; label: React.ReactNode }[] = [];
+  for (const source of sources) {
+    if (source.key === undefined) {
+      if (source.label !== undefined) throw new Error("A calendar source with a label needs a key.");
+      continue;
+    }
+    if (!isCalendarSourceKey(source.key)) {
+      throw new Error(`Calendar source key "${source.key}" may hold only letters, digits, "_", "-" and ".".`);
+    }
+    if (keys.has(source.key)) throw new Error(`Two calendar sources share the key "${source.key}".`);
+    keys.add(source.key);
+    if (source.label !== undefined) toggles.push({ value: source.key, label: source.label });
+  }
+  return sources.length > 1 ? toggles : [];
+}
+
+/**
  * Fetch a page-declared set of occurrence sources over one window and hand the
  * merged result to `children`. The sources are a stable, page-declared set, so a
  * fetcher-per-source render chain (never a hook in a loop) keeps the hook order
@@ -189,11 +225,13 @@ const EMPTY_CALENDAR_FETCH: CalendarWindowFetch = {
  */
 function CalendarWindowSources({
   sources,
+  hidden,
   range,
   enabled,
   children,
 }: {
   sources: readonly AnyCalendarWindowSource[];
+  hidden: ReadonlySet<string>;
   range: CalendarWindow;
   enabled: boolean;
   children: (fetched: CalendarWindowFetch) => React.ReactElement;
@@ -204,6 +242,7 @@ function CalendarWindowSources({
     <CalendarWindowSourceNode
       source={source}
       rest={rest}
+      hidden={hidden}
       range={range}
       enabled={enabled}
       render={children}
@@ -214,25 +253,30 @@ function CalendarWindowSources({
 function CalendarWindowSourceNode({
   source,
   rest,
+  hidden,
   range,
   enabled,
   render,
 }: {
   source: AnyCalendarWindowSource;
   rest: readonly AnyCalendarWindowSource[];
+  hidden: ReadonlySet<string>;
   range: CalendarWindow;
   enabled: boolean;
   render: (fetched: CalendarWindowFetch) => React.ReactElement;
 }): React.ReactElement {
+  // A hidden source pauses its fetch and leaves the grid, keeping the hook order.
+  const shown = source.key === undefined || !hidden.has(source.key);
   // The surface's settled gate composes with the source's own opt-in; memoised so
   // the fetch key (and its occurrence projection) stay referentially stable.
   const fetchSource = React.useMemo<AnyCalendarWindowSource>(
-    () => ({ ...source, enabled: enabled && (source.enabled ?? true) }),
-    [source, enabled],
+    () => ({ ...source, enabled: enabled && shown && (source.enabled ?? true) }),
+    [source, enabled, shown],
   );
-  const head = useCalendarWindow(fetchSource, range);
+  const fetched = useCalendarWindow(fetchSource, range);
+  const head = shown ? fetched : EMPTY_CALENDAR_FETCH;
   return (
-    <CalendarWindowSources sources={rest} range={range} enabled={enabled}>
+    <CalendarWindowSources sources={rest} hidden={hidden} range={range} enabled={enabled}>
       {(tail) => <CalendarWindowMerge head={head} tail={tail} render={render} />}
     </CalendarWindowSources>
   );

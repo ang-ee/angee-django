@@ -1902,6 +1902,10 @@ and presets and favourites name it. Whether a built-in kind can run on a page
 capability check; whether a
 kind is offered is the container's, so layers narrow kinds per model with
 `only`, `except` and `hide`. See [resource view kinds](../../packages/ui/src/views/resource/resource-view-kinds.tsx).
+The calendar filters by the sources its page declares, never by a wire field: a
+source with a `key` and a `label` gets a toolbar toggle, and the hidden keys are
+view state carried in the URL (`?hiddenSources=`) beside `?mode=` and `?anchor=`,
+so shipped views, favourites and deep links reproduce the calendar.
 
 `resource#search` has model inheritance and accepts page-declared `page.*`
 extras alongside contributed typed shortcuts. `only`/`except` reach both;

@@ -19,6 +19,7 @@ import { ToolbarRoot } from "../ui/toolbar";
 import { textRoleVariants } from "../ui/text";
 import {
   SegmentedControl,
+  ToggleGroup,
   type SegmentedControlOption,
 } from "../ui/toggle-group";
 import type {
@@ -98,6 +99,12 @@ export interface ResourceToolbarViewControls {
   onPrev: () => void;
   onToday: () => void;
   onNext: () => void;
+  /** One toggle per labelled occurrence source; a pressed source shows on the grid. */
+  sources?: {
+    options: readonly { value: string; label: ReactNode }[];
+    visible: readonly string[];
+    onVisibleChange: (visible: readonly string[]) => void;
+  };
 }
 
 export interface ResourceToolbarGroupOption {
@@ -306,6 +313,7 @@ function ResourceViewControls({
   onPrev,
   onToday,
   onNext,
+  sources,
 }: ResourceToolbarViewControls): ReactElement {
   const t = useUiT();
   return (
@@ -343,6 +351,20 @@ function ResourceViewControls({
         onValueChange={onModeChange}
         aria-label={t("resourceToolbar.periodMode")}
       />
+      {sources ? (
+        <ToggleGroup
+          multiple
+          variant="pills"
+          size="sm"
+          value={[...sources.visible]}
+          onValueChange={(visible) => sources.onVisibleChange(visible)}
+          aria-label={t("resourceToolbar.calendarSources")}
+        >
+          {sources.options.map((option) => (
+            <ToggleGroup.Item key={option.value} value={option.value}>{option.label}</ToggleGroup.Item>
+          ))}
+        </ToggleGroup>
+      ) : null}
     </div>
   );
 }
