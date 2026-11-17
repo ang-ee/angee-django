@@ -418,10 +418,10 @@ def test_counts_group_every_record_in_one_actor_scoped_statement(world: Any) -> 
         summary, attention = ChecklistResult.objects.counts(rows)
     assert summary == [("conflict", 1), ("not_checked", 1)]
     assert ("identity", "Identity", "conflict", 1) in attention and len(attention) == len(CATEGORIES) * 3
-    # REBAC 0.34: schema-revision guards for the rows, for the assessment's read proof and for
-    # each scope it compiles (the record's target_read, the evidence exclusion), and the one
-    # aggregate statement; each further checklist expression in a statement adds its two scopes.
-    assert len(captured) <= 5
+    # REBAC 0.34 pins one policy snapshot for the statement's fetch: its one revision guard
+    # serves the rows, the read proof and every scope the checklist expressions build as they
+    # compile. Then the one aggregate statement; further checklist expressions add nothing.
+    assert len(captured) <= 2
     assert len([query for query in captured if "COUNT(" in query["sql"].upper()]) == 1
     assert ChecklistResult.objects.counts(rows.none()) == (
         [],
@@ -467,8 +467,8 @@ def test_records_still_blocked_are_one_actor_scoped_query(world: Any) -> None:
             .values_list("name", "next_blocking")
         )
     assert blocked == [("Harbour crane", "totals")]
-    # REBAC 0.34: the guards above (rows, proof, two scopes) and the one data statement.
-    assert len(captured) <= 5
+    # REBAC 0.34: the fetch's one revision guard (above) and the one data statement.
+    assert len(captured) <= 2
     assert len([query for query in captured if "test_checklistdemo_inspection" in query["sql"]]) == 1
     assert unseen.pk not in rows.values_list("pk", flat=True)
 
@@ -600,7 +600,10 @@ def test_the_node_projection_reads_a_page_in_a_flat_statement_budget(world: Any)
 
     _record(world, "owner", "passed")
     measure_graphql_document(_schema(), _DOCUMENT, {}, actor=world.writer)
-    assert page(1) == page(25)
+    bare = measure_graphql_document(_schema(), "query { inspections { name } }", {}, actor=world.writer)
+    # The status cells compile inside the page's own statement and policy pin; the latest
+    # results' prefetch is the one statement the checklist adds.
+    assert page(1) == page(25) == bare.statements + 1
 
 
 def test_the_timeline_lists_results_as_their_reader_reads_them(world: Any) -> None:

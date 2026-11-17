@@ -23,6 +23,7 @@ from collections.abc import Callable, Iterable, Mapping, Sequence
 from contextvars import ContextVar
 from dataclasses import dataclass
 from datetime import datetime
+from functools import cached_property
 from typing import TYPE_CHECKING, Any, Literal, Self, cast
 
 from django.apps import apps
@@ -141,34 +142,79 @@ def read_decomposes() -> bool:
     return target_read is not None and record_backed(target_read)
 
 
-_decomposed: ContextVar[bool | None] = ContextVar("checklists_read_decomposed", default=None)
-"""The proof an assessment reads once as it compiles, shared by the read gates it nests."""
+class _Scopes:
+    """The result scopes one assessment reads, built as its statement compiles.
+
+    Built inside the statement's fetch, they share the policy snapshot REBAC pins
+    for it, so the proof and the scopes read no revision of their own; each is
+    built only when a gate needs it.
+    """
+
+    def __init__(self, actor: Any) -> None:
+        self.actor = actor
+
+    @cached_property
+    def decomposed(self) -> bool:
+        return read_decomposes()
+
+    @cached_property
+    def target_read(self) -> models.QuerySet[Any] | None:
+        return _holding(self.actor, "target_read")
+
+    @cached_property
+    def evidence_hidden(self) -> models.QuerySet[Any] | None:
+        return _holding(self.actor, "evidence_hidden")
+
+    @cached_property
+    def read(self) -> models.QuerySet[Any] | None:
+        return _holding(self.actor, "read")
+
+
+_compiling: ContextVar[_Scopes | None] = ContextVar("checklists_compiling", default=None)
+"""The scopes of the assessment compiling now, shared by the read gates it nests."""
 
 
 class _ReadGate(models.Expression):
-    """Compile ``proved`` while the effective policy decomposes a result's read, else ``fallback``.
+    """Whether the reader may read a record's results (``"record"``) or one result row (``"result"``).
 
-    Building it reads nothing; the proof is read when the statement compiles.
+    While :func:`read_decomposes` holds, a record checks ``target_read`` once and
+    a result checks only ``evidence_hidden``; otherwise a record admits every row
+    and each result checks ``read``. Under a named system context both admit.
+    Building it reads nothing: the gate resolves its scope as it compiles.
     """
 
     conditional = True
 
-    def __init__(self, proved: Any, fallback: Any) -> None:
+    def __init__(self, actor: Any, gate: Literal["record", "result"], record_type: tuple[str, str | None]) -> None:
         super().__init__(output_field=models.BooleanField())
-        self.proved = proved
-        self.fallback = fallback
+        self.actor = actor
+        self.gate = gate
+        self.record_type = record_type
 
-    def get_source_expressions(self) -> list[Any]:
-        return [self.proved, self.fallback]
-
-    def set_source_expressions(self, exprs: Sequence[Any]) -> None:
-        self.proved, self.fallback = exprs
+    def _condition(self, scopes: _Scopes) -> Any:
+        admitted = models.Value(True, output_field=models.BooleanField())
+        if self.gate == "record":
+            if not scopes.decomposed or scopes.target_read is None:
+                return admitted
+            app_label, model_name = self.record_type
+            return models.Exists(
+                scopes.target_read.filter(
+                    content_type__app_label=app_label,
+                    content_type__model=model_name,
+                    object_id=models.OuterRef("pk"),
+                )
+            )
+        if scopes.decomposed:
+            hidden = scopes.evidence_hidden
+            return admitted if hidden is None else ~models.Exists(hidden.filter(pk=models.OuterRef("pk")))
+        read = scopes.read
+        return admitted if read is None else models.Exists(read.filter(pk=models.OuterRef("pk")))
 
     def as_sql(self, compiler: SQLCompiler, connection: BaseDatabaseWrapper) -> _AsSqlType:
-        decomposed = _decomposed.get()
-        if decomposed is None:
-            decomposed = read_decomposes()
-        return compiler.compile(self.proved if decomposed else self.fallback)
+        scopes = _compiling.get()
+        if scopes is None or scopes.actor != self.actor:
+            scopes = _Scopes(self.actor)
+        return compiler.compile(self._condition(scopes).resolve_expression(compiler.query))
 
 
 class _InputColumn(models.Expression):
@@ -215,9 +261,7 @@ class ChecklistStatuses(models.Func):
         self.select = select
         target = canonical_model(model) or model
         self.record_type = (target._meta.app_label, target._meta.model_name)
-        self.target_read = _holding(actor, "target_read")
-        self.evidence_hidden = _holding(actor, "evidence_hidden")
-        self.read = _holding(actor, "read")
+        self.actor = actor
         self.items = self.checklist.category_items(select[1]) if isinstance(select, tuple) else self.checklist.items
         self.retired = select in ("status", "vector", "projection")
         self.projection = select == "projection"
@@ -251,36 +295,16 @@ class ChecklistStatuses(models.Func):
         )
 
     def _record_readable(self) -> models.Expression:
-        """Whether the reader holds the record's ``target_read``: every result of a record shares it.
+        """Whether the reader may read the record's results: every result of a record shares it."""
 
-        Unproved (:func:`read_decomposes`), or under a named system context, each
-        result's own check decides alone.
-        """
-
-        if self.target_read is None:
-            return models.Value(True, output_field=models.BooleanField())
-        app_label, model_name = self.record_type
-        held = models.Exists(
-            self.target_read.filter(
-                content_type__app_label=app_label,
-                content_type__model=model_name,
-                object_id=models.OuterRef("pk"),
-            )
-        )
-        return _ReadGate(held, models.Value(True, output_field=models.BooleanField()))
+        return _ReadGate(self.actor, "record", self.record_type)
 
     def _shown(self) -> models.Q:
-        """A result row the reader may read: the record is readable and no evidence link hides the row."""
+        """A result row the reader may read: the record's results are readable and the row itself is."""
 
-        shown = models.Q(_InputColumn(_INPUT, _READABLE, models.BooleanField()))
-        if self.evidence_hidden is not None and self.read is not None:
-            shown &= models.Q(
-                _ReadGate(
-                    ~models.Exists(self.evidence_hidden.filter(pk=models.OuterRef("pk"))),
-                    models.Exists(self.read.filter(pk=models.OuterRef("pk"))),
-                )
-            )
-        return shown
+        return models.Q(_InputColumn(_INPUT, _READABLE, models.BooleanField())) & models.Q(
+            _ReadGate(self.actor, "result", self.record_type)
+        )
 
     def _fresh(self) -> models.Q:
         """Recorded against the record's current token; a NULL token is never current."""
@@ -436,11 +460,11 @@ class ChecklistStatuses(models.Func):
         arg_joiner: str | None = None,
         **extra_context: Any,
     ) -> _AsSqlType:
-        token = _decomposed.set(read_decomposes())
+        token = _compiling.set(_Scopes(self.actor))
         try:
             return self._compiled(compiler, connection)
         finally:
-            _decomposed.reset(token)
+            _compiling.reset(token)
 
     def _compiled(self, compiler: SQLCompiler, connection: BaseDatabaseWrapper) -> _AsSqlType:
         quote = connection.ops.quote_name
