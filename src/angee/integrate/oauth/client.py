@@ -44,6 +44,7 @@ from angee.integrate.oauth.errors import (
     CLIENT_NOT_CONFIGURED,
     INVALID_ID_TOKEN,
     MISSING_ENDPOINT,
+    PROVIDER_UNAVAILABLE,
     TOKEN_EXCHANGE_FAILED,
     OAuthFlowError,
 )
@@ -81,6 +82,8 @@ _ALLOWED_JWT_ALGORITHMS = (
     "RS256",
     "ES256",
 )
+_ID_TOKEN_LEEWAY_SECONDS = 60
+"""Clock skew tolerated on an ID token's ``iat`` and ``exp``."""
 
 
 def oauth_get_json(url: str, *, headers: dict[str, str] | None = None) -> Any:
@@ -187,9 +190,12 @@ class OAuthClientProtocol:
         """Verify one OIDC ID token against this client's issuer and JWKS, and return its claims.
 
         A blank issuer or JWKS URI is discovered first. The token must be signed by
-        a key the JWKS publishes, name this client as audience and this issuer, and
-        carry ``exp`` and ``iat``. ``nonce`` is checked when the flow sent one (OIDC
-        Core §3.1.3.7); connect sends none, login always does.
+        a key the JWKS publishes, name this client as audience (and as ``azp`` when
+        it has several audiences) and an issuer form the provider accepts
+        (``OAuthProviderType.issuers``), and carry ``exp`` and ``iat``, within
+        ``_ID_TOKEN_LEEWAY_SECONDS`` of clock skew. ``nonce`` is checked when the
+        flow sent one (OIDC Core §3.1.3.7); connect sends none, login always does. An
+        unreachable JWKS is a transient ``provider_unavailable``.
         """
 
         if not id_token:
@@ -199,22 +205,46 @@ class OAuthClientProtocol:
         issuer, jwks_uri = self.oauth_client.issuer, self.oauth_client.jwks_uri
         if not issuer or not jwks_uri:
             raise OAuthFlowError(MISSING_ENDPOINT, 400)
+        client_id = self.oauth_client.client_id
         try:
             signing_key = _jwks_client(jwks_uri).get_signing_key_from_jwt(id_token)
+        except PyJWKClientConnectionError as exc:
+            raise OAuthFlowError(PROVIDER_UNAVAILABLE, 503) from exc
+        except (PyJWKClientError, PyJWTError, ValueError, TypeError) as exc:
+            raise OAuthFlowError(INVALID_ID_TOKEN, 400) from exc
+        try:
             claims = jwt.decode(
                 id_token,
                 signing_key.key,
                 algorithms=_ALLOWED_JWT_ALGORITHMS,
-                audience=self.oauth_client.client_id,
-                issuer=issuer,
+                audience=client_id,
+                issuer=self.oauth_client.provider.issuers(issuer),
+                leeway=_ID_TOKEN_LEEWAY_SECONDS,
                 options={"require": ["exp", "iat"], "verify_exp": True, "verify_iss": True, "verify_aud": True},
             )
-        except (PyJWKClientError, PyJWTError, ValueError, TypeError) as exc:
+        except (PyJWTError, ValueError, TypeError) as exc:
             raise OAuthFlowError(INVALID_ID_TOKEN, 400) from exc
         if not isinstance(claims, dict):
             raise OAuthFlowError(INVALID_ID_TOKEN, 400)
+        audiences = claims.get("aud")
+        if isinstance(audiences, list) and len(audiences) > 1 and claims.get("azp") != client_id:
+            raise OAuthFlowError(INVALID_ID_TOKEN, 400)
         if nonce is not None and claims.get("nonce") != nonce:
             raise OAuthFlowError(INVALID_ID_TOKEN, 400)
+        return claims
+
+    def verified_claims(
+        self, id_token: str, userinfo: Mapping[str, Any], *, nonce: str | None = None,
+    ) -> dict[str, Any]:
+        """Return the verified ID-token claims, enriched by userinfo about the same subject.
+
+        OIDC Core §5.3.2: userinfo describes only the verified token's subject, and
+        never overrides a verified claim.
+        """
+
+        claims = self.verify_id_token(id_token, nonce=nonce)
+        if userinfo.get("sub") and userinfo["sub"] == claims.get("sub"):
+            return {**userinfo, **claims}
         return claims
 
     def fetch_userinfo(self, access_token: str, *, params: Mapping[str, str] | None = None) -> dict[str, Any]:

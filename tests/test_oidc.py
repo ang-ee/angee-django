@@ -53,6 +53,7 @@ from angee.integrate.oauth.errors import (
     EXTERNAL_ACCOUNT_RESOLUTION_FAILED,
     INVALID_ID_TOKEN,
     INVALID_STATE,
+    PROVIDER_UNAVAILABLE,
     TOKEN_EXCHANGE_FAILED,
     OAuthFlowError,
 )
@@ -565,7 +566,7 @@ def test_jwks_is_fetched_once_per_uri_through_the_oauth_get_policy() -> None:
 
 
 @pytest.mark.parametrize("failure", ["transport", "http", "json"])
-def test_jwks_fetch_failure_refuses_the_id_token(failure: str) -> None:
+def test_jwks_fetch_failure_is_a_transient_provider_outage(failure: str) -> None:
     def respond(request: httpx2.Request) -> httpx2.Response:
         if failure == "transport":
             raise httpx2.ConnectError("unavailable", request=request)
@@ -575,7 +576,35 @@ def test_jwks_fetch_failure_refuses_the_id_token(failure: str) -> None:
     oidc = _stub_login_oauth_client(issuer=provider.issuer, jwks_uri=provider.metadata["jwks_uri"])
     with mock_transport(respond), pytest.raises(OAuthFlowError) as refused:
         OAuthClientOidcProtocol(oidc).verify_id_token(provider.id_token(sub="s", nonce="n"), nonce="n")
+    assert (refused.value.code, refused.value.transient) == (PROVIDER_UNAVAILABLE, True)
+
+
+def test_verify_id_token_tolerates_clock_skew_and_checks_azp_for_several_audiences() -> None:
+    provider = OidcProvider(issuer="https://skew.example")
+    client = _stub_login_oauth_client(issuer=provider.issuer, jwks_uri=provider.metadata["jwks_uri"])
+    protocol = OAuthClientProtocol(client)
+    now = int(time.time())
+    several = [provider.client_id, "another-client"]
+    with mock_transport(provider):
+        assert protocol.verify_id_token(provider.id_token(sub="skewed", iat=now + 30))["sub"] == "skewed"
+        assert protocol.verify_id_token(provider.id_token(sub="lapsed", exp=now - 30))["sub"] == "lapsed"
+        shared = provider.id_token(sub="shared", aud=several, azp=provider.client_id)
+        assert protocol.verify_id_token(shared)["sub"] == "shared"
+        with pytest.raises(OAuthFlowError) as refused:
+            protocol.verify_id_token(provider.id_token(sub="foreign", aud=several, azp="another-client"))
     assert refused.value.code == INVALID_ID_TOKEN
+
+
+def test_verified_claims_take_userinfo_only_about_the_same_subject() -> None:
+    provider = OidcProvider(issuer="https://merge.example")
+    client = _stub_login_oauth_client(issuer=provider.issuer, jwks_uri=provider.metadata["jwks_uri"])
+    protocol = OAuthClientProtocol(client)
+    with mock_transport(provider):
+        token = provider.id_token(sub="subject", email="verified@example.com")
+        same = protocol.verified_claims(token, {"sub": "subject", "email": "userinfo@example.com", "name": "N"})
+        other = protocol.verified_claims(token, {"sub": "someone-else", "name": "Other"})
+    assert (same["email"], same["name"]) == ("verified@example.com", "N")
+    assert "name" not in other
 
 
 def test_resolver_existing_external_account_returns_owner(

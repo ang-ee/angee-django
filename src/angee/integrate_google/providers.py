@@ -24,6 +24,12 @@ class GoogleType(OAuthProviderType):
     icon = "google"
 
     @classmethod
+    def issuers(cls, issuer: str) -> tuple[str, ...]:
+        """Google signs ID tokens as ``https://accounts.google.com`` or ``accounts.google.com``."""
+
+        return tuple(dict.fromkeys((issuer, issuer.removeprefix("https://"))))
+
+    @classmethod
     def authorize_params(cls, flow: StateFlow, configured: Mapping[str, str], *, consent: bool) -> dict[str, str]:
         """Let a connect choose among the user's Google accounts, and ask for consent on request.
 

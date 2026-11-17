@@ -4,8 +4,7 @@
 # registrations acquire app credentials from host settings. Vendor addons seed
 # their own registrations (Google's live in integrate_google); the OIDC login
 # policy for login-capable providers is owned and seeded by the iam_integrate_oidc
-# addon. A row's content is its ledger hash: editing a row re-applies all of its
-# fields to existing installations.
+# addon.
 - xref: oauth_grok
   slug: grok
   environment: prod

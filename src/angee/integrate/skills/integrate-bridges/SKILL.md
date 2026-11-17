@@ -109,7 +109,7 @@ source addon contributes one adapter class, its registry key and its tests. Refe
    `credential.auth_headers()` or the handler's secret (`src/angee/integrate/models.py`); kinds are
    `CredentialKind` handlers (`src/angee/integrate/credentials.py`). If the vendor already has a client
    (Google's `google` row from `src/angee/integrate_google/providers.py`) → set `oauth_client` to its slug and
-   declare the adapter's extra scopes in `oauth_scopes` (`IntegrationImpl` in `src/angee/integrate/impl.py`).
+   declare the adapter's extra scopes in `oauth_scopes` (`OAuthConnectIntent` in `src/angee/integrate/impl.py`).
    If the vendor needs an OAuth preset → subclass `OAuthProviderType` with a unique `key` and contribute
    `"ANGEE_OAUTH_PROVIDER_TYPE_CLASSES.<key>"` (`src/angee/integrate/README.md`, `RefiningProvider` and `ContributedProvider` in `tests/integrate_fixtures.py`). If the
    connection must locate a remote resource first → `requires_connection_discovery = True` with

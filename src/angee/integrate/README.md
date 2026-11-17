@@ -122,19 +122,14 @@ Product presets and registrations belong to their capability addons; a vendor
 whose one client serves several capabilities has its own addon
 ([`integrate_google`](../integrate_google/__init__.py)).
 
-One client serves every consumer of a provider. An implementation names its
-client with `IntegrationImpl.oauth_client` and the scopes it needs beyond the
-client's defaults with `IntegrationImpl.oauth_scopes`; connect requests
-`OAuthClient.requested_scopes`, which refuses a scope outside the client's
-`scopes_catalogue`. Each external account has its own credential, keyed
-`(user, oauth_client, external_account)`, so one user connects several accounts
-through one client. Connect sends `prompt=select_account` and hints the account
-an integration is connected as; it reuses only that account's live credential,
-and only when its granted scopes cover the implementation's. An integration
-connected as one account is never re-pointed at another
-(`account_switch_refused`). A grant that cannot read userinfo identifies its
-account from the ID token, which `OAuthClientProtocol.verify_id_token` checks
-against the client's `issuer` and `jwks_uri`.
+One client serves every consumer of a provider: a capability declares its client
+and scopes once (`OAuthConnectIntent` in [`impl.py`](impl.py)). The owners of the
+connect rules are `OAuthClient.requested_scopes` (scopes),
+`CredentialManager.upsert_for_user` (one credential per external account and the
+grant checks), `Integration.attach_connection` (the account binding),
+`OAuthProviderType.authorize_params` (the prompt) and
+[`connect.complete_account_connect`](connect.py) (account identity and the consent
+restart).
 
 Connection adapters declare `IntegrationImpl.requires_connection_discovery = True`
 to opt into asynchronous `discover_connection`/`apply_discovery`. Manual and

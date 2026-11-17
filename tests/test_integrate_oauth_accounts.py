@@ -347,6 +347,21 @@ def test_connect_identifies_the_account_from_the_id_token_without_userinfo() -> 
     assert refused.value.code == INVALID_ID_TOKEN
 
 
+def test_token_response_identity_precedes_the_id_token_for_a_client_without_an_issuer() -> None:
+    bridge, client = _bridge("token-identity", issuer="", jwks_uri="", external_id_claim="account.uuid")
+    provider = OidcProvider(
+        issuer=ISSUER, client_id=client.client_id,
+        token={"access_token": "a", "refresh_token": "r", "account": {"uuid": "token-account"}},
+        id_claims={"sub": "unverifiable-without-an-issuer"},
+    )
+    state_token, _record = state.issue(client, REDIRECT, user_id=str(bridge.owner.pk), flow=state.StateFlow.CONNECT)
+
+    with mock_transport(provider):
+        result = connect.complete_account_connect(client, code="code", state_token=state_token, redirect_uri=REDIRECT)
+
+    assert result.account.external_id == "token-account"
+
+
 def _race(*calls: Any) -> list[Any]:
     """Run each call on its own thread and database connection, released together."""
 

@@ -25,9 +25,11 @@ from rebac import system_context
 from angee.integrate.oauth import flow
 from angee.integrate.oauth.client import OAuthClientProtocol
 from angee.integrate.oauth.errors import (
+    ACCOUNT_ALREADY_LINKED,
     CONSENT_REQUIRED,
     EXTERNAL_ACCOUNT_RESOLUTION_FAILED,
     INVALID_STATE,
+    REDIRECT_URI_REQUIRED,
     ConsentRequired,
     OAuthFlowError,
 )
@@ -49,25 +51,23 @@ def connect_integration_target(
 ) -> flow.OAuthStart | None:
     """Attach the bound account's live credential, or start the owner's OAuth flow.
 
-    The flow requests the client's default scopes plus the capability's own
-    (``OAuthClient.requested_scopes``) and those the bound account already
-    granted, so a new consumer never narrows the grant others use. The account
-    the integration is connected as hints the flow; only its credential is
-    reused, and only when it holds the capability's scopes. An integration not
-    yet connected as an account always starts the flow. None means attachment
-    completed. OAuthStart is the existing native browser flow contract;
-    transports own authentication/exposure and result projection.
+    Only the credential of the account the integration is connected as is
+    reused, and only when it holds the capability's ``oauth_scopes``; that
+    account hints the flow, whose scopes keep what its grant already holds. An
+    integration not yet connected as an account always starts the flow. None
+    means attachment completed. OAuthStart is the existing native browser flow
+    contract; transports own authentication/exposure and result projection.
     """
 
     integration.require_connect(user)
     oauth_client.require_configured()
-    consumer_scopes = integration.connection_oauth_scopes
-    account = integration.bound_account(oauth_client)
+    oauth_scopes = integration.connection_oauth_scopes
+    account = integration.bound_account(oauth_client.pk)
     granted: tuple[str, ...] = ()
     if account is not None:
         credential_model = cast("type[CredentialModel]", apps.get_model("integrate", "Credential"))
         credential = credential_model.objects.live_oauth_for_user(
-            user, oauth_client, external_account=account, scopes=consumer_scopes,
+            user, oauth_client, external_account=account, oauth_scopes=oauth_scopes,
         )
         if credential is not None:
             integration.attach_credential(credential)
@@ -75,9 +75,8 @@ def connect_integration_target(
         with system_context(reason="integrate.oauth.connect.granted_scopes"):
             bound_credential = account.credential
         granted = () if bound_credential is None else tuple(bound_credential.granted_scopes or ())
-    scopes = oauth_client.requested_scopes(consumer_scopes, granted=granted)
     if not redirect_uri:
-        raise OAuthFlowError("redirect_uri_required", 400, "OAuth redirect URI is required.")
+        raise OAuthFlowError(REDIRECT_URI_REQUIRED, 400, "OAuth redirect URI is required.")
     return flow.start(
         request,
         oauth_client,
@@ -86,7 +85,8 @@ def connect_integration_target(
         next_path=flow.coerce_next_path(next_path, request),
         flow=StateFlow.CONNECT,
         integration_id=str(integration.sqid),
-        scopes=scopes,
+        oauth_scopes=oauth_scopes,
+        granted_scopes=granted,
         login_hint="" if account is None else account.email,
     )
 
@@ -114,12 +114,10 @@ def complete_account_connect(
 
     The connecting user is the one captured in state when the flow started; the
     account is labelled from the provider userinfo and its OAuth credential stored
-    under ``(user, provider, account)``. A grant scoped to one resource may be
-    unable to read userinfo; the account then comes from the ID token the code
-    exchange returned, verified against the client's issuer and JWKS. The grant
-    must cover the scopes the flow asked for beyond the client's defaults, and,
-    on a refreshable client, hold a refresh token: a first attempt without one
-    raises ``ConsentRequired`` so the flow restarts asking for consent; a
+    under ``(user, provider, account)``. A grant that cannot read userinfo
+    identifies its account from token-response metadata or the code exchange's
+    verified ID token. The upsert checks the grant (``CredentialManager.upsert_for_user``);
+    a first attempt that lacks a refresh token raises ``ConsentRequired``, and a
     consent attempt stores what the provider gave.
     """
 
@@ -138,11 +136,6 @@ def complete_account_connect(
         state=state_token,
     )
     external_id = oauth_client.external_id_from_claims(claims)
-    if not external_id and id_token:
-        # OIDC Core §5.3.2: userinfo describes the verified token's subject, so the
-        # verified claims win over anything userinfo returned.
-        claims = {**claims, **protocol.verify_id_token(id_token)}
-        external_id = oauth_client.external_id_from_claims(claims)
     if not external_id:
         # Restricted tokens may be unable to call userinfo. Anthropic's one-year
         # inference-only exchange returns the stable ``account`` mapping in the
@@ -152,6 +145,9 @@ def complete_account_connect(
         external_id = oauth_client.external_id_from_claims(token_claims)
         if external_id:
             claims = {**token_claims, **claims}
+    if not external_id and id_token:
+        claims = protocol.verified_claims(id_token, claims)
+        external_id = oauth_client.external_id_from_claims(claims)
     if not external_id:
         raise OAuthFlowError(EXTERNAL_ACCOUNT_RESOLUTION_FAILED, 400)
     defaults = set(oauth_client.default_scope_values)
@@ -202,8 +198,8 @@ def complete_external_account_link(
             required_scopes=required_scopes,
         )
     except ValidationError as error:
-        if error.code == "account_already_linked":
-            raise OAuthFlowError("account_already_linked", 409) from error
+        if error.code == ACCOUNT_ALREADY_LINKED:
+            raise OAuthFlowError(ACCOUNT_ALREADY_LINKED, 409) from error
         raise
     return AccountConnectCompletion(
         account=cast(models.Model, account),

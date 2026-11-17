@@ -1,7 +1,6 @@
 # Google OAuth client seeds (install tier). Model inferred from the
 # `integrate.oauthclient` filename; adopted by (slug, environment) so a
-# pre-existing row is linked, not duplicated. A row's content is its ledger hash:
-# editing a row re-applies all of its fields to existing installations.
+# pre-existing row is linked, not duplicated.
 #
 # `google` is the deployment's own Google client: Google forbids publishing
 # client credentials, so every deployment registers one in its Google Cloud

@@ -15,6 +15,7 @@ from rebac import system_context
 from angee.iam_integrate_oidc import identity
 from angee.integrate.oauth import state
 from angee.integrate.oauth.client import OAuthClientProtocol
+from angee.integrate.oauth.errors import OAuthFlowError
 from angee.integrate.testing.http import mock_transport
 from angee.integrate.testing.oidc import OidcProvider
 from angee.integrate_google.compose_migrations.integrate.align_google_clients import (
@@ -69,6 +70,23 @@ def test_google_client_takes_the_preset_profile_endpoint_on_create() -> None:
         claims = OAuthClientProtocol(client).fetch_userinfo("fake")
     assert [str(request.url) for request in requests] == [endpoint]
     assert client.external_id_from_claims(claims) == "provider-subject"
+
+
+def test_google_id_tokens_verify_with_either_issuer_form_and_the_connect_prompt_is_googles() -> None:
+    client = OAuthClient(
+        provider_type="google", client_id="google-client", issuer="https://accounts.google.com",
+        jwks_uri="https://www.googleapis.com/oauth2/v3/certs",
+    )
+    provider = OidcProvider(issuer="https://accounts.google.com", client_id="google-client")
+    protocol = OAuthClientProtocol(client)
+    with mock_transport(provider):
+        for issuer in ("https://accounts.google.com", "accounts.google.com"):
+            assert protocol.verify_id_token(provider.id_token(sub="google-subject", iss=issuer))["iss"] == issuer
+        with pytest.raises(OAuthFlowError):
+            protocol.verify_id_token(provider.id_token(sub="google-subject", iss="https://elsewhere.example"))
+
+    assert GoogleType.authorize_params(state.StateFlow.CONNECT, {}, consent=False) == {"prompt": "select_account"}
+    assert GoogleType.authorize_params(state.StateFlow.LOGIN, {}, consent=False) == {}
 
 
 def test_google_seeds_the_deployment_client_bare_and_keeps_the_released_gemini_row() -> None:

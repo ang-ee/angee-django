@@ -84,17 +84,19 @@ from angee.integrate.errors import (
     transient_retry_delay,
 )
 from angee.integrate.events import EventKind
-from angee.integrate.impl import BridgeImpl, IntegrationImpl, LiveBridgeImpl
+from angee.integrate.impl import BridgeImpl, IntegrationImpl, LiveBridgeImpl, OAuthConnectIntent
 from angee.integrate.live import PairingProjection, PairingState, armed_material_key
 from angee.integrate.mixins import SyncStateMixin
 from angee.integrate.net import validate_public_url
 from angee.integrate.oauth.client import OAuthClientProtocol
 from angee.integrate.oauth.discovery import discovery_document as oidc_metadata_document
 from angee.integrate.oauth.errors import (
+    ACCOUNT_ALREADY_LINKED,
     ACCOUNT_SWITCH_REFUSED,
     CLIENT_NOT_CONFIGURED,
     CONSENT_REQUIRED,
     INVALID_STATE,
+    OAUTH_CLIENT_NOT_CONNECTABLE,
     SCOPE_NOT_GRANTED,
     SCOPE_NOT_IN_CATALOGUE,
     OAuthFlowError,
@@ -471,19 +473,18 @@ class OAuthClient(ImplDefaultsMixin, AuditMixin, AngeeDataModel, concrete=True):
 
         return self._string_list(self.scopes_catalogue)
 
-    def requested_scopes(self, consumer_scopes: Iterable[str] = (), *, granted: Iterable[str] = ()) -> list[str]:
-        """Return this client's default scopes followed by the extra scopes a consumer needs.
+    def requested_scopes(self, oauth_scopes: Iterable[str] = (), *, granted: Iterable[str] = ()) -> list[str]:
+        """Return this client's default scopes followed by a consumer's ``oauth_scopes``.
 
-        One registration serves every consumer of a provider, so each consumer
-        (``IntegrationImpl.oauth_scopes``) adds its own scopes to the defaults. A
-        consumer may ask only for scopes the registration offers in
+        One registration serves every consumer of a provider (``OAuthConnectIntent``).
+        A consumer may ask only for scopes the registration offers in
         ``scopes_catalogue``; anything else is refused before the provider redirect.
         ``granted`` are the scopes the account's current grant holds; the offered
         ones are asked for again, so one consumer never narrows another's grant.
         """
 
         defaults = self.default_scope_values
-        requested = list(dict.fromkeys([*defaults, *consumer_scopes]))
+        requested = list(dict.fromkeys([*defaults, *oauth_scopes]))
         offered = {*defaults, *self.scopes_catalogue_values}
         if missing := [scope for scope in requested if scope not in offered]:
             raise OAuthFlowError(
@@ -772,7 +773,7 @@ class ExternalAccountManager[ExternalAccountT: ExternalAccount](_ExternalAccount
             )
             if owner is not None and instance.owner_id not in (None, owner.pk):
                 raise ValidationError(
-                    "This external account is already linked to another user.", code="account_already_linked",
+                    "This external account is already linked to another user.", code=ACCOUNT_ALREADY_LINKED,
                 )
             if not created:
                 for name, value in update_values.items():
@@ -1037,12 +1038,11 @@ class CredentialManager[CredentialT: Credential](_CredentialManagerBase[Credenti
             ).delete()
 
     def live_oauth_for_user(
-        self, user: Any, oauth_client: Any, *, external_account: Any, scopes: Iterable[str] = (),
+        self, user: Any, oauth_client: Any, *, external_account: Any, oauth_scopes: Iterable[str] = (),
     ) -> Any | None:
-        """Return the account's OAuth credential when it needs no fresh consent and holds ``scopes``.
+        """Return the account's OAuth credential when it needs no fresh consent and holds ``oauth_scopes``.
 
-        ``scopes`` are what a consumer needs beyond the client's defaults, checked
-        against the scopes the provider reported granting.
+        The consumer's scopes are checked against the scopes the provider reported granting.
         """
 
         with system_context(reason="integrate.connections.credential.live"):
@@ -1051,7 +1051,7 @@ class CredentialManager[CredentialT: Credential](_CredentialManagerBase[Credenti
             ).first()
         if row is None or row.is_reconnect_required:
             return None
-        return row if set(scopes) <= set(row.granted_scopes or ()) else None
+        return row if set(oauth_scopes) <= set(row.granted_scopes or ()) else None
 
     def upsert_for_user(
         self,
@@ -2062,19 +2062,23 @@ class Integration(StatementSourceMixin, ImplDefaultsMixin, OwnerMixin, AngeeData
         raise ImproperlyConfigured(f"{cls._meta.label} has no capability implementation field.")
 
     @property
-    def capability_impl_class(self) -> type[Any]:
-        """Resolve the selected implementation without opening its transport."""
+    def capability_impl_class(self) -> type[OAuthConnectIntent]:
+        """Resolve the selected implementation without opening its transport.
+
+        Every capability implementation base composes ``OAuthConnectIntent``.
+        """
 
         model = self.declared_concrete_model() or type(self)
         field = model.capability_impl_field()
         key = self.__dict__.get("_connection_impl_key")
-        return field.resolve_class(key) if key is not None else field.resolve_for(self.concrete_capability())
+        impl = field.resolve_class(key) if key is not None else field.resolve_for(self.concrete_capability())
+        return cast("type[OAuthConnectIntent]", impl)
 
     @property
     def capability_impl(self) -> Any:
         """Construct the runtime selected by this concrete capability."""
 
-        return self.capability_impl_class(self)
+        return cast(Any, self.capability_impl_class)(self)
 
     @property
     def oauth_client_hint(self) -> str:
@@ -2098,8 +2102,8 @@ class Integration(StatementSourceMixin, ImplDefaultsMixin, OwnerMixin, AngeeData
         credential = self._credential_health() if scopes else None
         return credential is not None and not set(scopes) <= set(credential.granted_scopes or ())
 
-    def bound_account(self, oauth_client: Any) -> ExternalAccount | None:
-        """Return the external account this integration is connected as at ``oauth_client`` (a row or pk)."""
+    def bound_account(self, oauth_client_pk: int) -> ExternalAccount | None:
+        """Return the external account this integration is connected as at one OAuth client."""
 
         if self.account_id is None:
             return None
@@ -2107,7 +2111,7 @@ class Integration(StatementSourceMixin, ImplDefaultsMixin, OwnerMixin, AngeeData
             return cast(
                 "ExternalAccount | None",
                 apps.get_model("integrate", "ExternalAccount")
-                .objects.filter(pk=self.account_id, oauth_client=oauth_client)
+                .objects.filter(pk=self.account_id, oauth_client_id=oauth_client_pk)
                 .first(),
             )
 
@@ -2117,7 +2121,7 @@ class Integration(StatementSourceMixin, ImplDefaultsMixin, OwnerMixin, AngeeData
         hint = str(self.oauth_client_hint or "").strip()
         if not hint:
             raise OAuthFlowError(
-                "oauth_client_not_connectable",
+                OAUTH_CLIENT_NOT_CONNECTABLE,
                 400,
                 f"{owner_label or self._meta.label} has no OAuth client.",
             )
@@ -2130,7 +2134,7 @@ class Integration(StatementSourceMixin, ImplDefaultsMixin, OwnerMixin, AngeeData
         with system_context(reason="integrate.integration.connect_oauth_client"):
             oauth_client = apps.get_model("integrate", "OAuthClient").objects.enabled_for_slug(slug)
         if oauth_client is None:
-            raise OAuthFlowError("oauth_client_not_connectable", 400, f"{owner_label} has no enabled OAuth client.")
+            raise OAuthFlowError(OAUTH_CLIENT_NOT_CONNECTABLE, 400, f"{owner_label} has no enabled OAuth client.")
         return oauth_client
 
     @classmethod
@@ -3845,7 +3849,8 @@ class Bridge(Composable, metaclass=RebacModelBase, demands="integrate.Integratio
 
         if not any(isinstance(field, ImplClassField) for field in self._meta.fields):
             return False
-        return self.capability_impl_class.requires_connection_discovery
+        impl = self.capability_impl_class
+        return issubclass(impl, IntegrationImpl) and impl.requires_connection_discovery
 
     def discover_connection(self, credential: Credential) -> ConnectionDiscovery:
         """Invoke the adapter's read-only remote hook outside a transaction."""

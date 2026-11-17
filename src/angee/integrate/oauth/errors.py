@@ -27,6 +27,9 @@ SCOPE_NOT_IN_CATALOGUE = "scope_not_in_catalogue"
 ACCOUNT_SWITCH_REFUSED = "account_switch_refused"
 CONSENT_REQUIRED = "consent_required"
 SCOPE_NOT_GRANTED = "scope_not_granted"
+REDIRECT_URI_REQUIRED = "redirect_uri_required"
+OAUTH_CLIENT_NOT_CONNECTABLE = "oauth_client_not_connectable"
+ACCOUNT_ALREADY_LINKED = "account_already_linked"
 
 _PUBLIC_MESSAGES = {
     INVALID_STATE: "The authorization request is invalid or has expired.",
@@ -41,9 +44,9 @@ _PUBLIC_MESSAGES = {
     ACCOUNT_SWITCH_REFUSED: "This integration is connected to another account; add a new integration for this one.",
     CONSENT_REQUIRED: "The provider must be asked for consent again to keep this connection working.",
     SCOPE_NOT_GRANTED: "The provider did not grant all the access this connection needs; connect again and allow it.",
-    "redirect_uri_required": "An OAuth redirect URI is required.",
-    "oauth_client_not_connectable": "This connection is not available.",
-    "account_already_linked": "This account is already linked.",
+    REDIRECT_URI_REQUIRED: "An OAuth redirect URI is required.",
+    OAUTH_CLIENT_NOT_CONNECTABLE: "This connection is not available.",
+    ACCOUNT_ALREADY_LINKED: "This account is already linked.",
 }
 
 

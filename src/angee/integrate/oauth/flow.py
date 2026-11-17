@@ -54,7 +54,8 @@ def issue_flow(
     next_path: str = "/",
     flow: state.StateFlow = state.StateFlow.CONNECT,
     integration_id: str = "",
-    scopes: Sequence[str] | None = None,
+    oauth_scopes: Sequence[str] = (),
+    granted_scopes: Sequence[str] = (),
     login_hint: str = "",
     consent: bool = False,
 ) -> tuple[str, state.StateRecord, str, str]:
@@ -62,9 +63,8 @@ def issue_flow(
 
     Returns ``(state_token, record, effective_redirect_uri, mode)``. The client
     owns whether the browser-proposed redirect works or a manual paste is needed;
-    the effective redirect is what we issue, sign, and exchange. ``scopes`` are
-    the flow's requested scopes (``OAuthClient.requested_scopes``); omitted, the
-    client's default scopes are requested.
+    the effective redirect is what we issue, sign, and exchange. The record asks
+    for ``OAuthClient.requested_scopes(oauth_scopes, granted=granted_scopes)``.
     """
 
     oauth_client.require_configured()
@@ -76,7 +76,7 @@ def issue_flow(
         next_path=next_path,
         flow=flow,
         integration_id=integration_id,
-        scopes=tuple(oauth_client.default_scope_values if scopes is None else scopes),
+        scopes=tuple(oauth_client.requested_scopes(oauth_scopes, granted=granted_scopes)),
         login_hint=login_hint,
         consent=consent,
     )
@@ -95,7 +95,8 @@ def start(
     next_path: str = "/",
     flow: state.StateFlow = state.StateFlow.CONNECT,
     integration_id: str = "",
-    scopes: Sequence[str] | None = None,
+    oauth_scopes: Sequence[str] = (),
+    granted_scopes: Sequence[str] = (),
     login_hint: str = "",
     consent: bool = False,
     authorize_url_builder: Callable[[OAuthClient, str, state.StateRecord, str], str] | None = None,
@@ -114,7 +115,8 @@ def start(
         next_path=next_path,
         flow=flow,
         integration_id=integration_id,
-        scopes=scopes,
+        oauth_scopes=oauth_scopes,
+        granted_scopes=granted_scopes,
         login_hint=login_hint,
         consent=consent,
     )
@@ -143,7 +145,7 @@ def restart_with_consent(request: HttpRequest, oauth_client: OAuthClient, record
         next_path=record.next_path or "/",
         flow=record.flow,
         integration_id=record.integration_id,
-        scopes=record.scopes,
+        oauth_scopes=record.scopes,
         login_hint=record.login_hint,
         consent=True,
     )

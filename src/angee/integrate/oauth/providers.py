@@ -33,6 +33,12 @@ class OAuthProviderType(ImplBase):
         return dict(configured)
 
     @classmethod
+    def issuers(cls, issuer: str) -> tuple[str, ...]:
+        """Return the ID-token ``iss`` values that name this client's configured ``issuer``."""
+
+        return (issuer,)
+
+    @classmethod
     def token_params(cls, grant_type: str, configured: Mapping[str, Any]) -> dict[str, Any]:
         """Return this provider's configured extra parameters for the selected grant."""
 
