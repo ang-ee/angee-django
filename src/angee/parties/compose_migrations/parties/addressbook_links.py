@@ -12,17 +12,23 @@ partition = the href) names that link as its container. No folder, contact,
 contact link or cursor changes, so nothing is downloaded again. The adopted link
 carries no observation yet, so the next sync applies each listed address book
 once, which states its name on the folder. Running it again adopts nothing twice.
+A folder whose href is longer than a link's external key could never have synced
+(its contacts stream could not exist): it is skipped and reported, never refused.
 The reverse restores ``source_href`` from the adopted links' external keys.
 
 Historical models keep ``Meta.ordering`` on ``sqid``, which migration state does
 not carry, so every update clears the ordering.
 """
 
+import logging
+
 from django.db import migrations
 from django.db.backends.base.schema import BaseDatabaseSchemaEditor
 from django.db.migrations.state import StateApps
 
 ADDRESSBOOKS = "addressbooks"
+
+logger = logging.getLogger(__name__)
 
 
 def adopt_addressbooks(apps: StateApps, schema_editor: BaseDatabaseSchemaEditor) -> None:
@@ -32,12 +38,20 @@ def adopt_addressbooks(apps: StateApps, schema_editor: BaseDatabaseSchemaEditor)
     folders = apps.get_model("parties", "Folder")._base_manager.using(alias)
     streams = apps.get_model("integrate", "SyncStream")._base_manager.using(alias)
     links = apps.get_model("integrate", "RecordLink")._base_manager.using(alias)
+    longest = links.model._meta.get_field("external_key").max_length
     folder_type, _ = (
         apps.get_model("contenttypes", "ContentType")
         ._base_manager.using(alias)
         .get_or_create(app_label="parties", model="folder")
     )
     for folder in folders.exclude(source_href="").filter(directory_id__isnull=False).order_by("pk"):
+        if len(folder.source_href) > longest:
+            logger.warning(
+                "Folder %s keeps no address-book link: its href is longer than %s characters and never synced.",
+                folder.pk,
+                longest,
+            )
+            continue
         parent = (
             streams.filter(integration_id=folder.directory_id, key=ADDRESSBOOKS, partition="")
             .order_by("-generation")

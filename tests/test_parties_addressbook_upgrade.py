@@ -32,6 +32,7 @@ pytestmark = pytest.mark.django_db(transaction=True)
 
 _STALE = f"{_BASE}books/stale/"
 _OTHER = f"{_BASE}books/other/"
+_LONG = f"{_BASE}books/{'x' * 600}/"
 _NAME = "0099_addressbook_links"
 
 
@@ -54,18 +55,21 @@ def _legacy_state() -> ProjectState:
     return state
 
 
-def _todays_rows() -> dict[str, Any]:
+def _todays_rows(config: dict[str, Any]) -> dict[str, Any]:
     """Two directories as the previous release left them: folders found by href, contacts streams without containers."""
 
     one, two = (
         make_integration(
-            f"carddav-upgrade-{name}", model=Directory, backend_class="carddav", config={"server_url": _BASE}
+            f"carddav-upgrade-{name}",
+            model=Directory,
+            backend_class="carddav",
+            config={"server_url": _BASE, **config},
         )
         for name in ("one", "two")
     )
     folders = {
         name: Folder._base_manager.create(name=name.title(), directory=directory, created_by=directory.owner)
-        for name, directory in (("contacts", one), ("stale", one), ("other", two), ("manual", one))
+        for name, directory in (("contacts", one), ("stale", one), ("other", two), ("manual", one), ("long", one))
     }
     # The synced book's contacts reach a delta cursor through a scaffold container, then lose it.
     scaffold = current_stream(one, "addressbooks", kind=StreamKind.RECORD_REPLICA)
@@ -91,16 +95,16 @@ def _snapshot(rows: dict[str, Any]) -> tuple[Any, ...]:
     )
 
 
-def _upgrade_round_trip() -> None:
+def _upgrade_round_trip(caplog: pytest.LogCaptureFixture, config: dict[str, Any]) -> None:
     server = FakeDav()
     executor = MigrationExecutor(connection)
     migration = addressbook_links.Migration(_NAME, "parties")
     with system_context(reason="test address-book upgrade"), mock_transport(server.handle_request):
-        rows = _todays_rows()
+        rows = _todays_rows(config)
         before = _legacy_state()
         legacy_columns = True
         try:
-            hrefs = {"contacts": _BOOK, "stale": _STALE, "other": _OTHER}
+            hrefs = {"contacts": _BOOK, "stale": _STALE, "other": _OTHER, "long": _LONG}
             legacy = before.apps.get_model("parties", "Folder")
             for name, href in hrefs.items():
                 legacy._base_manager.filter(pk=rows["folders"][name].pk).update(source_href=href)
@@ -121,12 +125,18 @@ def _upgrade_round_trip() -> None:
                 for href, link in links.items():
                     held = SyncStream._base_manager.filter(integration_id=directory.pk, key="contacts", partition=href)
                     assert set(held.values_list("container_id", flat=True)) == {link.pk}
-            assert not RecordLink.objects.filter(target_object_id=str(rows["folders"]["manual"].pk)).exists()
+            for unadopted in ("manual", "long"):
+                assert not RecordLink.objects.filter(target_object_id=str(rows["folders"][unadopted].pk)).exists()
+            long_folder = rows["folders"]["long"].pk
+            assert any(
+                f"Folder {long_folder} keeps no address-book link" in record.getMessage() for record in caplog.records
+            )
             assert _snapshot(rows) == kept
 
             server.requests.clear()
             assert sync_bridge(rows["one"]) == 1  # The listed book states its name once; no card is fetched.
             assert not [request for request in server.requests if "addressbook-multiget" in request[3]]
+            assert not [request for request in server.requests if request[1].startswith(_STALE)]
             stale = RecordLink.objects.get(stream__key="addressbooks", external_key=_STALE)
             stale_contacts = SyncStream.objects.current_for_bridge(rows["one"], "contacts").get(partition=_STALE)
             assert (stale.status, stale.absence_count, stale_contacts.state) == (
@@ -147,6 +157,7 @@ def _upgrade_round_trip() -> None:
                 "Stale": _STALE,
                 "Other": _OTHER,
                 "Manual": "",
+                "Long": "",
             }
         finally:
             if legacy_columns:
@@ -154,14 +165,14 @@ def _upgrade_round_trip() -> None:
             MigrationRecorder(connection).record_unapplied("parties", _NAME)
 
 
-def test_the_address_book_template_upgrades_todays_rows_and_reverses() -> None:
-    """Two directories, a stale book, a folder without an href, a second run and the reverse."""
+def test_the_address_book_template_upgrades_todays_rows_and_reverses(caplog: pytest.LogCaptureFixture) -> None:
+    """Two directories, a stale book, a folder without an href, an over-long href, a second run and the reverse."""
 
-    _upgrade_round_trip()
+    _upgrade_round_trip(caplog, {})
 
 
 @pytest.mark.skipif(connection.vendor != "postgresql", reason="Runs on the PostgreSQL lane.")
-def test_the_address_book_template_upgrades_in_one_postgresql_migration() -> None:
-    """The data step and the folder's DDL share one atomic migration without pending trigger events."""
+def test_the_address_book_template_upgrades_in_one_postgresql_migration(caplog: pytest.LogCaptureFixture) -> None:
+    """One atomic migration without pending trigger events, then first syncs on the parallel partition pool."""
 
-    _upgrade_round_trip()
+    _upgrade_round_trip(caplog, {"sync_parallelism": 4})

@@ -61,9 +61,12 @@ Projects author data upgrades as ordinary Django migrations with explicit
 dependencies, historical models and the schema editor's database alias, copying an
 addon's migration template from `compose_migrations/<app_label>/` and pinning their
 own dependencies ([project migration history](composer.md#project-migration-history)).
-Compose preserves those files. A template's test applies its `Migration` through
-Django's `MigrationExecutor` against migration state, never live models, forwards
-and back (the [address-book template test](../tests/test_parties_addressbook_upgrade.py)).
+Compose preserves those files. Ruff and mypy check templates like any source. A
+template's test adds the legacy schema to a `ProjectState` derived from the
+installed models and to the table, then applies and unapplies the template's
+`Migration` through Django's `MigrationExecutor`, so its callables run on
+historical models; fixtures and assertions may use live models (the
+[address-book template test](../tests/test_parties_addressbook_upgrade.py)).
 The [native-history tests](../tests/test_native_initial_history.py)
 cover initial authoring, project data operations and preservation across rebuilds;
 the [migration-policy tests](../tests/test_runtime_migrations.py) cover Resources'

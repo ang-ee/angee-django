@@ -120,6 +120,8 @@ class StreamDefinition:
     authoritative: bool = False
     mapping_version: int = 1
     """Increase when mapping changes require a fresh baseline of existing records."""
+    holds_containers: bool = False
+    """Whether this stream's records are containers of other partitions; a changed value updates the stream."""
     container: RecordLink | None = None
     """The parent stream's link whose record this partition belongs to.
 

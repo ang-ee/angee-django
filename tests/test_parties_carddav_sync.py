@@ -2623,10 +2623,8 @@ def test_a_removed_address_book_pauses_its_contacts_then_retires_them_once_its_a
     book = RecordLink.objects.get(stream=replica.addressbooks, external_key=_BOOK)
     work = f"{_BASE}books/work/"
     replica.server.books[work] = "Work"  # The listing stays non-empty, so the missing book is evidence.
-    # Sequential waves apply the book's absence before its contacts would open; parallel
-    # PostgreSQL waves may still drain them in the cycle of the first miss.
-    replica.directory.config = {**replica.directory.config, "sync_parallelism": 1}
     sync_bridge(replica.directory)
+    asserted = Folder.statements.model.StatementStatus.ASSERTED
     del replica.server.books[_BOOK]
 
     for confirmed in (False, True):
@@ -2647,6 +2645,9 @@ def test_a_removed_address_book_pauses_its_contacts_then_retires_them_once_its_a
                 StreamState.OPEN,
             )
             assert link.status == LinkStatus.CURRENT
+            assert Folder.statements.filter(subject=folder, link=book, status=asserted).current().exists()
+    # A confirmed removal withdraws the book's statements, as a read tombstone does.
+    assert not Folder.statements.filter(subject=folder, link=book, status=asserted).current().exists()
     assert (book.status, replica.stream.state, replica.stream.reconcile_state) == (
         LinkStatus.TOMBSTONE,
         StreamState.RETIRED,

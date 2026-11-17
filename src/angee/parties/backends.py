@@ -233,7 +233,7 @@ class DirectoryBackend(BridgeImpl, HttpClientMixin):
     def addressbooks_stream(self) -> StreamDefinition:
         """Declare the pull-only listing whose records are the directory's address books."""
 
-        return StreamDefinition(ADDRESSBOOKS, kind=StreamKind.RECORD_REPLICA)
+        return StreamDefinition(ADDRESSBOOKS, kind=StreamKind.RECORD_REPLICA, holds_containers=True)
 
     def contacts_stream(self, addressbook: Any) -> StreamDefinition:
         """Declare the contacts stream an address-book link holds, writing nothing.
@@ -317,7 +317,8 @@ class DirectoryBackend(BridgeImpl, HttpClientMixin):
         (a statement), never a local change.
         """
 
-        links = {link.external_key: link for link in stream.links.with_sync_evidence().order_by("pk")}
+        rows = stream.links.select_related("applied_base").defer("applied_base__source_payload").order_by("pk")
+        links = {link.external_key: link for link in rows}
         listed = {book.href: book for book in books}
         baseline = stream.phase == StreamPhase.BASELINE
         changes = []
@@ -570,6 +571,17 @@ class DirectoryBackend(BridgeImpl, HttpClientMixin):
             target=target,
             mapped_payload=projection,
         )
+
+    def on_absent(self, stream: Any, links: Sequence[Any]) -> None:
+        """A confirmed address-book removal withdraws the statements its link made, as a read tombstone does.
+
+        An unavailable book keeps them; contacts keep the sweep's existing absence behaviour.
+        """
+
+        if stream.key == ADDRESSBOOKS:
+            for link in links:
+                if link.status == LinkStatus.TOMBSTONE:
+                    link.withdraw_statements()
 
     def local_changes(self, stream: Any, *, keys: frozenset[str] | None = None) -> Iterable[LocalChange]:
         """Compare selected local projections to their bases, including deletions."""

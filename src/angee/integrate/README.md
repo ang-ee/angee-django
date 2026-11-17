@@ -87,10 +87,10 @@ A declared snapshot with no reconciliation interval closes after its baseline;
 explicit resync opens a new generation. Missing cadence alone never means read-once.
 
 A [container](../../../docs/glossary.md#backend) (an address book, a
-calendar) is a record of a parent stream and the partition of a child stream,
-whose declaration names the container's link
-([`StreamDefinition.container`](states.py)). The container row is created on the
-parent's apply path like any record. A container is live, and its child
+calendar) is a record of a parent stream, declared with
+[`holds_containers`](states.py), and the partition of a child stream whose
+declaration names the container's link (`StreamDefinition.container`). The
+container row is created on the parent's apply path like any record. A container is live, and its child
 declared, only while
 [`RecordLinkQuerySet.live_containers`](models.py) admits it: a container whose
 absence is being counted pauses its child, and one that stops observing retires

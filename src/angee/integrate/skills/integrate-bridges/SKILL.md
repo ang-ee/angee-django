@@ -97,7 +97,8 @@ source addon contributes one adapter class, its registry key and its tests. Refe
    `streams()` declares each partition once with its `StreamDefinition` knobs (`kind`, `direction`, `cursor`,
    `reconcile_interval`, `absence_threshold`, `tombstone_retention`, `snapshot`, `authoritative`, `mapping_version`, `config`,
    `container`; `StreamDefinition` in `src/angee/integrate/states.py`). If a partition is itself a record of another
-   stream (an address book, a calendar) → declare that parent stream, create the container row in its `apply_record`,
+   stream (an address book, a calendar) → declare that parent stream with `holds_containers=True`, create the
+   container row in its `apply_record`,
    report a complete listing's misses as `StreamPage.absent`, and declare one child per
    `RecordLink.objects.containers_of(bridge, key)` link with `container=<link>` and `partition=<link external key>`
    (`DirectoryBackend.streams` in `src/angee/parties/backends.py`); the driver pauses the child of an unavailable
