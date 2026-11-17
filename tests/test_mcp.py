@@ -7,6 +7,7 @@ import hmac
 from typing import Any
 
 import pytest
+from django.apps import apps
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ImproperlyConfigured, ValidationError
 from django.test import override_settings
@@ -265,6 +266,129 @@ def test_an_mcp_server_accepts_only_credentials_that_send_scope_free_authorizati
             with pytest.raises(ValidationError) as refused:
                 server.full_clean()
             assert set(refused.value.message_dict) == {"credential"}
+
+
+INTERNAL_KEY = "k" * 40
+"""An internal key comfortably above ``MCPServer.internal_key_min_length``."""
+
+
+def test_revoking_the_internal_key_cuts_every_agent_bearer_off(db: None) -> None:
+    """A bearer verifies only while its server's key credential is active."""
+
+    owner = User.objects.create_user(username="mcp-revoked-owner", email="mcp-revoked@example.com")
+    with system_context(reason="test.mcp.actor.revoked"):
+        credential = _static_credential(owner, name="revoked-key", token=INTERNAL_KEY)
+        server = MCPServer.objects.create(
+            name="revoked", url="http://x/mcp/revoked/", credential=credential, placement=MCPPlacement.INTERNAL
+        )
+        agent = _provisioned_agent(owner, name="Revoked key agent")
+        agent.mcp_servers.add(server)
+        bearer = server.bearer_for(agent)
+    assert resolve_actor(bearer) == agent.principal_subject()
+
+    with system_context(reason="test.mcp.actor.revoke"):
+        credential.status = "revoked"
+        credential.save(update_fields=["status", "updated_at"])
+
+    assert resolve_actor(bearer) is None
+    with system_context(reason="test.mcp.actor.revoked.mint"), pytest.raises(ValidationError, match="not active"):
+        MCPServer.objects.get(pk=server.pk).bearer_for(agent)
+
+
+@pytest.mark.parametrize(
+    ("kind", "material", "placement", "refusal"),
+    [
+        pytest.param(CredentialKind.STATIC_TOKEN, {"api_key": INTERNAL_KEY}, "internal", None, id="internal-static"),
+        pytest.param(CredentialKind.STATIC_TOKEN, {"api_key": f"  {INTERNAL_KEY}  "}, "internal", None,
+                     id="internal-key-is-stripped"),
+        pytest.param(CredentialKind.STATIC_TOKEN, {"api_key": "k" * 31}, "internal", "at least 32", id="weak-key"),
+        pytest.param(CredentialKind.STATIC_TOKEN, {"api_key": f"  {'k' * 31}  "}, "internal", "at least 32",
+                     id="padding-does-not-count"),
+        pytest.param(CredentialKind.BASIC_AUTH, {"username": "u", "password": INTERNAL_KEY}, "internal",
+                     "static token", id="internal-basic-auth"),
+        pytest.param(CredentialKind.BASIC_AUTH, {"username": "u", "password": "p"}, "external", None,
+                     id="external-basic-auth"),
+    ],
+)
+def test_an_internal_server_keys_bearers_only_with_a_strong_static_token(
+    db: None, kind: str, material: dict[str, str], placement: str, refusal: str | None,
+) -> None:
+    """Rotating or provider-known credentials never key bearers; a weak key is refused at save."""
+
+    owner = User.objects.create_user(username="mcp-key-owner", email="mcp-key@example.com")
+    with system_context(reason="test.mcp.server.internal_kind"):
+        credential = Credential.objects.create_local_credential(owner, kind=kind, name="key", material=material)
+        server = MCPServer(name="keyed", url="https://mcp.example.test/", credential=credential, placement=placement)
+        if refusal is None:
+            server.full_clean()
+        else:
+            with pytest.raises(ValidationError, match=refusal):
+                server.full_clean()
+
+
+@pytest.mark.parametrize("other", ["internal-server", "external-server", "agent-inference"])
+def test_an_internal_key_belongs_to_its_server_alone(db: None, other: str) -> None:
+    """A key another record references is refused for an internal server, and vice versa."""
+
+    owner = User.objects.create_user(username=f"mcp-shared-{other}", email=f"mcp-shared-{other}@example.com")
+    with system_context(reason="test.mcp.server.shared"):
+        key = _static_credential(owner, name="shared-key", token=INTERNAL_KEY)
+        if other == "agent-inference":
+            Agent.objects.create(name="Inference user", owner=owner, inference_credential=key)
+        else:
+            MCPServer.objects.create(
+                name="holder", url="https://holder.example.test/", credential=key,
+                placement=MCPPlacement.INTERNAL if other == "internal-server" else MCPPlacement.EXTERNAL,
+            )
+        internal = MCPServer(name="internal", url="https://mcp.example.test/", credential=key, placement="internal")
+        with pytest.raises(ValidationError, match="must be its own"):
+            internal.full_clean()
+        if other == "internal-server":
+            external = MCPServer(name="leak", url="https://elsewhere.example.test/", credential=key)
+            with pytest.raises(ValidationError, match="another MCP server's internal key"):
+                external.full_clean()
+
+
+def test_internal_servers_never_accept_each_others_bearers(db: None) -> None:
+    """The digest binds the server's sqid, so one key on two servers still mints distinct bearers."""
+
+    owner = User.objects.create_user(username="mcp-bound-owner", email="mcp-bound@example.com")
+    with system_context(reason="test.mcp.actor.bound"):
+        key = _static_credential(owner, name="bound-key", token=INTERNAL_KEY)
+        # Created past ``clean``, which would refuse the shared key.
+        first, second = (
+            MCPServer.objects.create(
+                name=name, url=f"http://x/mcp/{name}/", credential=key, placement=MCPPlacement.INTERNAL
+            )
+            for name in ("first", "second")
+        )
+        agent = _provisioned_agent(owner, name="Bound agent")
+        agent.mcp_servers.add(second)
+        foreign, own = first.bearer_for(agent), second.bearer_for(agent)
+
+    assert foreign != own
+    assert resolve_actor(foreign) is None
+    assert resolve_actor(own) == agent.principal_subject()
+
+
+def test_the_demo_internal_server_key_is_generated_at_load_and_kept_on_reload(db: None) -> None:
+    """No key is committed: the load generates one, and a reload keeps it."""
+
+    resource_model = apps.get_model("resources", "Resource")
+    addons = (apps.get_app_config("iam"), apps.get_app_config("agents"))
+    resource_model.objects.load_addons(addons, tiers=[resource_model.Tier.DEMO], allow_non_dev=True)
+    with system_context(reason="test.mcp.demo_key"):
+        server = MCPServer.objects.select_related("credential").get(name="angee-demo")
+        key = server.credential.secret_value()
+        server.full_clean()
+
+    assert server.credential.kind == CredentialKind.STATIC_TOKEN
+    assert len(key) >= MCPServer.internal_key_min_length
+    assert key != "demo-mcp-bearer-token"
+
+    resource_model.objects.load_addons(addons, tiers=[resource_model.Tier.DEMO], allow_non_dev=True)
+    with system_context(reason="test.mcp.demo_key.reload"):
+        assert MCPServer.objects.select_related("credential").get(name="angee-demo").credential.secret_value() == key
 
 
 def test_mcp_bearer_from_server_the_agent_lacks_is_declined(db: None) -> None:

@@ -328,8 +328,8 @@ def _bounded_tool_result(value: Any) -> Any:
 def _transport_for(server: Any, agent: Any) -> Any:
     """Return the owner-native HTTP transport ``agent`` uses for one MCP server row.
 
-    The server owns the ``Authorization`` it receives (``MCPServer.authorization_for``),
-    the same value the provisioned ``.mcp.json`` sends.
+    The server owns the ``Authorization`` it receives, freshness included
+    (``MCPServer.authorization_for``), the same value the provisioned ``.mcp.json`` sends.
     """
 
     url = str(server.resolved_url or "").strip()
@@ -337,7 +337,6 @@ def _transport_for(server: Any, agent: Any) -> Any:
         raise ValueError(f"MCP server {server.name!r} has no addressable URL.")
     headers: dict[str, str] | None = None
     if server.credential_id:
-        server.credential.ensure_fresh()
         headers = {"Authorization": server.authorization_for(agent)}
     return StreamableHttpTransport(url, headers=headers)
 

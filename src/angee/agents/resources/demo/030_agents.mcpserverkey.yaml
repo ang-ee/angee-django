@@ -1,0 +1,5 @@
+# The demo internal MCP server's HMAC key is generated at load, never committed
+# (`angee.agents.resources.MCPServerKeyResourceKind`): a server without a credential gets
+# a fresh random static-token key owned by `user`, and a server that has one keeps it.
+- server: angee-demo
+  user: iam.user_admin

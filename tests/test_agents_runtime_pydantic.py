@@ -48,7 +48,7 @@ from rebac import (
 )
 
 from angee.agents.context import render_view_context
-from angee.agents.models import AgentLifecycle, RuntimeStatus, SessionStatus, TurnStatus
+from angee.agents.models import AgentLifecycle, MCPPlacement, RuntimeStatus, SessionStatus, TurnStatus
 from angee.agents.runtimes import ANTHROPIC_OAUTH_CLIENT_HEADERS, ANTHROPIC_OAUTH_SYSTEM_PREAMBLE
 from angee.agents.tasks import run_session
 from angee.agents.testing.models import Agent, AgentSession, MCPServer
@@ -273,6 +273,32 @@ def test_external_mcp_transport_sends_the_same_authorization_as_the_provisioned_
     assert transport.headers == {"Authorization": authorization}
     assert provisioned == authorization
     assert rendered == {"Authorization": f"${{{agent.mcp_authorization_env(server)}}}"}
+
+
+def test_internal_mcp_transport_sends_the_per_agent_bearer() -> None:
+    """A non-builtin internal server receives the agent's derived bearer in process, never the raw key."""
+
+    owner = create_platform_admin("mcp-transport-internal")
+    key = "k" * 40
+    with system_context(reason="test.mcp.transport.internal"):
+        credential = Credential.objects.create_local_credential(
+            owner, kind=CredentialKind.STATIC_TOKEN, name="internal-key", material={"api_key": key}
+        )
+        server = MCPServer(
+            name="internal", url="http://internal.test/mcp", credential=credential, placement=MCPPlacement.INTERNAL
+        )
+        server.full_clean()
+        server.save()
+        agent = Agent.objects.create(name="Internal transport agent", owner=owner)
+        agent.mcp_servers.add(server)
+        transport = _transport_for(server, agent)
+        provisioned = agent.mcp_secrets()[agent.mcp_secret_name(server)]
+        bearer = server.bearer_for(agent)
+
+    assert server.builtin == ""
+    assert transport.headers == {"Authorization": f"Bearer {bearer}"}
+    assert provisioned == transport.headers["Authorization"]
+    assert bearer.startswith(f"{agent.sqid}.") and key not in bearer
 
 
 def test_usage_limits_allow_a_multi_request_tool_turn(db: Any) -> None:

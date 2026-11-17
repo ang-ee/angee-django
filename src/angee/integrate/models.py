@@ -1467,7 +1467,7 @@ class Credential(AuditMixin, AngeeDataModel, concrete=True):
         return str(minted["access_token"])
 
     def require_active(self) -> None:
-        """Refuse a scoped token, cached or minted, or a probe, from a credential that is not active."""
+        """Refuse a credential that is not active: no scoped token, cached or minted, and no internal MCP key."""
 
         if self.status != CredentialStatus.ACTIVE:
             raise ValueError("This credential is not active, so it serves no tokens.")
@@ -2481,14 +2481,18 @@ class Integration(StatementSourceMixin, ImplDefaultsMixin, OwnerMixin, AngeeData
     def probe_credential(self) -> str:
         """Prove the attached credential is usable; raise :class:`IntegrationError` when not.
 
-        The credential-only connection test: no vendor round-trip, just the kind
-        handler's :meth:`~CredentialKindHandler.probe` of its material. Returns the
-        operator message.
+        The credential-only connection test: no vendor round-trip. It fails closed for
+        every kind: a credential that needs reconnecting
+        (:attr:`Credential.is_reconnect_required`) is refused before the kind handler's
+        :meth:`~CredentialKindHandler.probe` proves its material. Returns the operator
+        message.
         """
 
         credential = self.credential
         if credential is None:
             raise IntegrationError("No credential is attached.")
+        if credential.is_reconnect_required:
+            raise IntegrationError("Reconnect this account.")
         try:
             credential.handler.probe(credential)
         except Exception as error:  # noqa: BLE001 — handler diagnostics stay outside the operator message.

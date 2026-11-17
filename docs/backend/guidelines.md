@@ -2227,11 +2227,22 @@ bridge advisory lock as polling and delivery settlement.
   [`OperatorDaemonConflict`](../../src/angee/operator/daemon.py) whose `kind` and
   `name` come from the daemon's error body; never parse the message or re-derive
   the name.
-- **MCP bearers are per agent and derived from the server credential.**
-  `MCPServer.bearer_for()` mints `<agent sqid>.<hmac>` for an internal server; rotating
-  the credential (or changing placement) invalidates every provisioned agent's bearer
-  until reprovision. The verifier logs each decline with its reason; FastMCP's 401 text
-  about "expired" tokens is boilerplate.
+- **One owner sends an MCP server's authorization.**
+  [`MCPServer.authorization_for(agent)`](../../src/angee/agents/models.py) returns the
+  whole `Authorization` value, for the in-process transport and the provisioned
+  `.mcp.json` alike (its env var `ANGEE_MCP_AUTHORIZATION_<sqid>` carries that value).
+  An external server receives the credential's own authorization, freshened first:
+  a static token, OAuth or basic auth only, so key-only and per-scope minting kinds are
+  refused, as are an inactive credential and an empty secret.
+- **MCP bearers are per agent and derived from the internal server's key.**
+  `MCPServer.bearer_for()` mints `<agent sqid>.<hmac>` for an internal server, keyed by
+  an active static token of at least 32 characters that no other record references and
+  binding the server's own sqid, so servers never accept each other's bearers. An empty,
+  weak, inactive or refused key mints and verifies nothing; `MCPServer.clean` refuses it
+  at save. The key is never freshened. Rotating it (or changing placement) invalidates
+  every provisioned agent's bearer until reprovision, and revoking it cuts them off. The
+  verifier logs each decline with its reason; FastMCP's 401 text about "expired" tokens is
+  boilerplate.
 
 ### Workflow contracts
 

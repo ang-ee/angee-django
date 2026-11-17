@@ -373,14 +373,10 @@ class JwtBearerCredentialHandler(CredentialKindHandler):
     def probe(self, credential: Any) -> None:
         """Sign one assertion locally, proving the stored key loads and signs, without a request.
 
-        Fails closed: an inactive credential and one whose key was refused
-        (``Credential.is_reconnect_required``) are not usable until their key file is
-        re-entered, whatever the local signature proves.
+        ``Integration.probe_credential`` has already refused a credential that needs
+        reconnecting (inactive, or its key refused), for every kind.
         """
 
-        credential.require_active()
-        if credential.is_reconnect_required:
-            raise IntegrationError("The key file was refused; re-enter it.")
         material = credential.reveal()
         try:
             JWTBearerGrant.sign(

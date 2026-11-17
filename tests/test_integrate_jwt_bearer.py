@@ -521,7 +521,7 @@ def test_the_connection_test_fails_closed_for_a_refused_or_inactive_credential(s
     with system_context(reason="test jwt bearer probe"), pytest.raises(IntegrationError) as refused:
         integration.refresh_from_db()
         integration.probe_credential()
-    assert refused.value.public_message == "Credential is not usable."
+    assert refused.value.public_message == "Reconnect this account."
 
 
 @pytest.mark.django_db(transaction=True)

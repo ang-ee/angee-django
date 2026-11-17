@@ -886,12 +886,13 @@ class MCPServer(ResourceLoadMixin, AuditMixin, AngeeDataModel, concrete=True):
     placement = StateField(choices_enum=MCPPlacement, default=MCPPlacement.EXTERNAL)
     transport = StateField(choices_enum=MCPTransport, default=MCPTransport.HTTP)
     url = models.URLField(blank=True)
-    # Expected to be a non-rotating credential (e.g. a static token) of one of the
-    # ``credential_kinds`` (``clean`` refuses the rest). For an internal server this
-    # credential's secret is the HMAC key from which each agent's per-agent bearer is
-    # derived (see ``bearer_for``); the raw secret never leaves the platform. Rotating
-    # the credential re-keys the derivation, so every provisioned agent's bearer stops
-    # verifying and its MCP calls 401 until reprovisioned.
+    # An external server takes a credential of ``credential_kinds``. For an internal
+    # server this credential is the HMAC key from which each agent's per-agent bearer is
+    # derived (see ``bearer_for``): an active static token of at least
+    # ``internal_key_min_length`` characters that nothing else references (``clean``
+    # refuses the rest); the raw secret never leaves the platform. Rotating it re-keys the
+    # derivation, so every provisioned agent's bearer stops verifying and its MCP calls 401
+    # until reprovisioned; revoking it cuts every bearer off at once.
     credential = models.ForeignKey(
         "integrate.Credential",
         on_delete=models.SET_NULL,
@@ -904,9 +905,15 @@ class MCPServer(ResourceLoadMixin, AuditMixin, AngeeDataModel, concrete=True):
     credential_kinds: ClassVar[frozenset[str]] = frozenset(
         {CredentialKind.STATIC_TOKEN, CredentialKind.OAUTH, CredentialKind.BASIC_AUTH}
     )
-    """Credential kinds whose ``auth_headers()`` yield an ``Authorization`` header without
-    scopes. An MCP server declares no scopes, so key-only kinds (``ssh_key``, ``app_keys``)
-    and per-scope minting kinds (``jwt_bearer``) are refused."""
+    """Credential kinds an external server accepts: those whose ``auth_headers()`` yield an
+    ``Authorization`` header without scopes. An MCP server declares no scopes, so key-only
+    kinds (``ssh_key``, ``app_keys``) and per-scope minting kinds (``jwt_bearer``) are refused."""
+    internal_credential_kinds: ClassVar[frozenset[str]] = frozenset({CredentialKind.STATIC_TOKEN})
+    """Credential kinds an ``INTERNAL`` server's HMAC key may be: a static token only. An OAuth
+    token is known to its provider and rotates, which would re-key every agent bearer, so the
+    internal key is never freshened."""
+    internal_key_min_length: ClassVar[int] = 32
+    """The shortest ``INTERNAL`` key accepted, counted after surrounding whitespace is stripped."""
 
     objects = MCPServerManager()
 
@@ -923,11 +930,49 @@ class MCPServer(ResourceLoadMixin, AuditMixin, AngeeDataModel, concrete=True):
         return self.name
 
     def clean(self) -> None:
-        """Refuse a credential whose kind cannot authorize an MCP request (:attr:`credential_kinds`)."""
+        """Refuse a credential that cannot authorize this server.
+
+        Every placement needs an active credential of its kinds (:attr:`credential_kinds`,
+        :attr:`internal_credential_kinds`). An ``INTERNAL`` key must also be at least
+        :attr:`internal_key_min_length` characters and this server's alone: no other
+        server, agent or integration may reference it. An external server may not hold
+        another server's internal key, which it would send to its own host.
+        """
 
         super().clean()
-        if self.credential_id is not None:
-            self._authorizing_credential()
+        if self.credential_id is None:
+            return
+        self._authorizing_credential()
+        if self.placement == MCPPlacement.INTERNAL:
+            minimum = self.internal_key_min_length
+            if len(self._internal_key()) < minimum:
+                raise ValidationError({"credential": f"An internal MCP key needs at least {minimum} characters."})
+            if self._credential_is_shared():
+                raise ValidationError(
+                    {"credential": "An internal MCP server's key must be its own; another record uses this credential."}
+                )
+            return
+        with system_context(reason="agents.mcp_server.internal_key"):
+            internal_elsewhere = (
+                type(self)._base_manager.filter(credential_id=self.credential_id, placement=MCPPlacement.INTERNAL)
+                .exclude(pk=self.pk)
+                .exists()
+            )
+        if internal_elsewhere:
+            raise ValidationError({"credential": "This credential is another MCP server's internal key."})
+
+    def _credential_is_shared(self) -> bool:
+        """Whether any other server, agent or integration references this server's credential."""
+
+        credential_id = self.credential_id
+        assert credential_id is not None  # ``clean`` asks only of a credentialed server.
+        with system_context(reason="agents.mcp_server.internal_key"):
+            servers = type(self)._base_manager.filter(credential_id=credential_id).exclude(pk=self.pk)
+            agents = apps.get_model("agents", "Agent")._base_manager.filter(inference_credential_id=credential_id)
+            integrations = apps.get_model("integrate", "Integration")._base_manager.filter(
+                models.Q(credential_id=credential_id) | models.Q(discovery_credential_id=credential_id)
+            )
+            return servers.exists() or agents.exists() or integrations.exists()
 
     @property
     def builtin(self) -> str:
@@ -993,17 +1038,20 @@ class MCPServer(ResourceLoadMixin, AuditMixin, AngeeDataModel, concrete=True):
 
         The one owner of what a server receives, for the in-process transport and the
         provisioned ``.mcp.json`` alike. An ``INTERNAL`` server gets the per-agent bearer
-        (:meth:`bearer_for`); any other gets the credential's own authorization
-        (``integrate.Credential.auth_headers``), so a static or OAuth token is sent as
-        ``Bearer`` and a basic-auth pair as ``Basic``. A kind outside
-        :attr:`credential_kinds` and an empty secret are refused. Callers refresh the
-        credential (``ensure_fresh()``) first, as :meth:`Agent.mcp_secrets` does.
+        (:meth:`bearer_for`), whose key is never freshened. Any other placement gets the
+        credential's own authorization (``integrate.Credential.auth_headers``), freshened
+        first (``ensure_fresh()``, which renews an expiring OAuth token), so a static or
+        OAuth token is sent as ``Bearer`` and a basic-auth pair as ``Basic``. An inactive
+        credential, a kind the placement refuses and an empty secret are refused.
         """
 
         if self.placement == MCPPlacement.INTERNAL:
             return f"Bearer {self.bearer_for(agent)}"
-        self._credential_secret()
-        return self.require_credential().auth_headers()["Authorization"]
+        credential = self._authorizing_credential()
+        credential.ensure_fresh()
+        if not credential.secret_value():
+            raise ValidationError({"credential": "This MCP server's credential has an empty secret."})
+        return credential.auth_headers()["Authorization"]
 
     def bearer_for(self, agent: Agent) -> str:
         """Return the per-agent bearer ``agent`` presents to this ``INTERNAL`` server.
@@ -1040,31 +1088,46 @@ class MCPServer(ResourceLoadMixin, AuditMixin, AngeeDataModel, concrete=True):
         return hmac.compare_digest(expected, digest)
 
     def _bearer_digest(self, agent: Agent) -> str:
-        """Return the HMAC digest binding ``agent`` to this server's credential.
+        """Return the HMAC digest binding ``agent`` to this server and its key.
 
         The single home of the derivation, so minting (:meth:`bearer_for`) and verifying
-        (:meth:`accepts_bearer_digest`) cannot drift: the credential secret keys an
-        HMAC-SHA256 over the agent's stable public sqid. An empty secret is refused.
+        (:meth:`accepts_bearer_digest`) cannot drift: the internal key
+        (:meth:`_internal_key`) keys an HMAC-SHA256 over ``"<server sqid>.<agent sqid>"``,
+        so one internal server never accepts another's bearer.
         """
 
-        return hmac.new(self._credential_secret().encode(), agent.sqid.encode(), hashlib.sha256).hexdigest()
+        message = f"{self.sqid}.{agent.sqid}".encode()
+        return hmac.new(self._internal_key().encode(), message, hashlib.sha256).hexdigest()
 
-    def _credential_secret(self) -> str:
-        """Return the allowed credential's secret, refusing an empty one: it would key or send nothing."""
+    def _internal_key(self) -> str:
+        """Return this server's HMAC key, stripped, refusing an empty one.
 
-        secret = str(self._authorizing_credential().secret_value())
-        if not secret:
-            raise ValidationError({"credential": "This MCP server's credential has an empty secret."})
-        return secret
+        Read from an active static token and never freshened. An empty key would let
+        anyone forge a bearer, so it mints and verifies nothing; :meth:`clean` also
+        refuses one shorter than :attr:`internal_key_min_length` at save.
+        """
+
+        key = str(self._authorizing_credential().secret_value()).strip()
+        if not key:
+            raise ValidationError({"credential": "This MCP server's key is empty."})
+        return key
 
     def _authorizing_credential(self) -> Credential:
-        """Return the credential, refusing a kind that sends no scope-free HTTP authorization."""
+        """Return the active credential, refusing a kind this placement does not accept."""
 
         credential = self.require_credential()
-        if credential.kind not in self.credential_kinds:
-            raise ValidationError(
-                {"credential": "An MCP server authenticates with a static token, OAuth or basic-auth credential."}
+        internal = self.placement == MCPPlacement.INTERNAL
+        if credential.kind not in (self.internal_credential_kinds if internal else self.credential_kinds):
+            refusal = (
+                "An internal MCP server keys its bearers with a static token."
+                if internal
+                else "An MCP server authenticates with a static token, OAuth or basic-auth credential."
             )
+            raise ValidationError({"credential": refusal})
+        try:
+            credential.require_active()
+        except ValueError as error:
+            raise ValidationError({"credential": "This MCP server's credential is not active."}) from error
         return credential
 
     @staticmethod
@@ -2048,7 +2111,6 @@ class Agent(ServiceUserMixin, ResourceLoadMixin, OwnerMixin, HistoryMixin, Angee
         for server, secret_name in self._addressable_mcp_servers():
             if not secret_name:
                 continue
-            server.require_credential().ensure_fresh()
             secrets[secret_name] = server.authorization_for(self)
         return secrets
 
