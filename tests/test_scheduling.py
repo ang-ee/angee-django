@@ -251,6 +251,52 @@ def test_legacy_until_retains_local_clock_across_dst(until, last_day, hour):
     assert result == [_local("America/New_York", 2026, 3, day, hour) for day in range(7, last_day + 1)]
 
 
+@override_settings(TIME_ZONE="UTC")
+def test_named_zone_drives_expansion_instead_of_the_project_zone() -> None:
+    """A venue-time 09:00 daily rule stays 09:00 in its zone across DST while the project runs in UTC."""
+
+    ny = ZoneInfo("America/New_York")
+    occurrences = Recurrence("FREQ=DAILY").occurrences(
+        _local("America/New_York", 2026, 3, 6, 9),
+        window_start=_local("America/New_York", 2026, 3, 6),
+        window_end=_local("America/New_York", 2026, 3, 11),
+        zone="America/New_York",
+    )
+    assert [occ.astimezone(ny).time() for occ in occurrences] == [time(9, 0)] * 5
+    assert occurrences[0].hour == 14 and occurrences[-1].hour == 13  # EST, then EDT
+    with pytest.raises(ValidationError):
+        Recurrence("FREQ=DAILY").occurrences(occurrences[0], occurrences[0], occurrences[-1], zone="Nowhere/Town")
+
+
+@override_settings(TIME_ZONE="UTC")
+@pytest.mark.parametrize(
+    ("rule", "moment", "expected"),
+    [
+        pytest.param("FREQ=WEEKLY", _utc(2026, 7, 6, 9), _utc(2026, 7, 13, 9), id="strictly-after-an-occurrence"),
+        pytest.param("FREQ=WEEKLY", _utc(2026, 7, 8), _utc(2026, 7, 13, 9), id="between-occurrences"),
+        pytest.param("FREQ=WEEKLY", _utc(2026, 7, 1), _utc(2026, 7, 6, 9), id="before-the-start"),
+        pytest.param("FREQ=WEEKLY;UNTIL=20260713T090000Z", _utc(2026, 7, 13, 9), None, id="series-ended"),
+        pytest.param("", _utc(2026, 7, 1), _utc(2026, 7, 6, 9), id="single-before"),
+        pytest.param("", _utc(2026, 7, 6, 9), None, id="single-passed"),
+    ],
+)
+def test_after_returns_the_first_occurrence_strictly_after_a_moment(
+    rule: str, moment: datetime, expected: datetime | None
+) -> None:
+    assert Recurrence(rule).after(_utc(2026, 7, 6, 9), moment) == expected
+
+
+@override_settings(TIME_ZONE="UTC")
+def test_after_unrolls_in_the_named_zone() -> None:
+    """Monthly on the 31st, in a zone: the next occurrence keeps the local clock and skips short months."""
+
+    pr = ZoneInfo("America/Puerto_Rico")
+    start = datetime(2026, 1, 31, 14, tzinfo=pr)
+    following = Recurrence("FREQ=MONTHLY").after(start, start, zone="America/Puerto_Rico")
+    assert following == datetime(2026, 3, 31, 14, tzinfo=pr)
+    assert following is not None and following.tzinfo is UTC
+
+
 @pytest.mark.parametrize("name", ["America/Puerto_Rico", "UTC", ""])
 def test_time_zone_field_admits_listed_and_blank_names(name: str) -> None:
     assert TimeZoneField().clean(name, None) == name

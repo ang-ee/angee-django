@@ -1,11 +1,12 @@
 """Recurrence: the RFC-5545 rule value object for the scheduling addon.
 
 :class:`Recurrence` wraps the RRULE string a
-:class:`~angee.scheduling.fields.RecurrenceField` stores and answers the two
+:class:`~angee.scheduling.fields.RecurrenceField` stores and answers the
 questions a caller has about it: *is this rule well-formed?*
-(:meth:`Recurrence.validate`) and *which concrete moments does it produce in a
-window?* (:meth:`Recurrence.occurrences`). It holds no state beyond the rule and
-touches no database — recurrence is a value, not a record.
+(:meth:`Recurrence.validate`), *which concrete moments does it produce in a
+window?* (:meth:`Recurrence.occurrences`) and *which moment comes next?*
+(:meth:`Recurrence.after`). It holds no state beyond the rule and touches no
+database — recurrence is a value, not a record.
 
 Parsing and expansion are delegated to ``python-dateutil`` (``rrulestr``), the
 stack's owner of RFC-5545. The timezone/window contract is documented on
@@ -20,9 +21,8 @@ from datetime import UTC, datetime
 from dateutil.parser import parse
 from dateutil.rrule import rrule, rruleset, rrulestr
 from django.core.exceptions import ValidationError
-from django.utils import timezone
 
-from angee.scheduling.zones import require_aware
+from angee.scheduling.zones import require_aware, zone_info
 
 _VALIDATION_ANCHOR = datetime(2000, 1, 1, tzinfo=UTC)
 """A fixed aware anchor for grammar-only validation; its date never affects validity."""
@@ -77,6 +77,8 @@ class Recurrence:
         dtstart: datetime,
         window_start: datetime,
         window_end: datetime,
+        *,
+        zone: str = "",
     ) -> list[datetime]:
         """Return the occurrences within ``[window_start, window_end)`` as aware UTC.
 
@@ -84,17 +86,18 @@ class Recurrence:
         UTC); the returned occurrences are aware UTC. A **naive** ``dtstart`` or
         window bound is rejected with :class:`~django.core.exceptions.ValidationError`
         rather than silently reinterpreted in the project timezone — "what day is
-        it" has one owner and it will not guess an offset. Expansion runs in the
-        project's ``TIME_ZONE``: the rule is unrolled against the local wall-clock
-        projection of ``dtstart``, so a 09:00 event stays 09:00 local across a DST
-        shift and an all-day event (local-midnight ``dtstart``) steps by calendar
-        date in that timezone. The window is **half-open** — ``window_start`` is
-        included, ``window_end`` excluded. An empty rule yields the single
-        ``dtstart`` when it falls in the window.
+        it" has one owner and it will not guess an offset. Expansion runs in
+        ``zone``, an IANA name (a venue's or a schedule's), or in the project's
+        ``TIME_ZONE`` when it is blank: the rule is unrolled against the local
+        wall-clock projection of ``dtstart`` in that zone, so a 09:00 event stays
+        09:00 local across a DST shift and an all-day event (local-midnight
+        ``dtstart``) steps by calendar date in that zone. The window is
+        **half-open** — ``window_start`` is included, ``window_end`` excluded. An
+        empty rule yields the single ``dtstart`` when it falls in the window.
         """
 
         require_aware(dtstart=dtstart, window_start=window_start, window_end=window_end)
-        tz = timezone.get_default_timezone()
+        tz = zone_info(zone)
         after = window_start.astimezone(tz)
         before = window_end.astimezone(tz)
         anchor = dtstart.astimezone(tz)
@@ -107,6 +110,25 @@ class Recurrence:
             for moment in candidates
             if after <= moment < before
         ]
+
+    def after(self, dtstart: datetime, moment: datetime, *, zone: str = "") -> datetime | None:
+        """Return the first occurrence strictly after ``moment`` as aware UTC, or ``None`` once the rule ends.
+
+        The series starts at ``dtstart`` and unrolls in ``zone`` (blank: the project
+        ``TIME_ZONE``), exactly as :meth:`occurrences` expands it; ``moment`` need
+        not be an occurrence. An empty rule is the single ``dtstart``. This is
+        dateutil's native ``rrule.after``, so a rule with no ``UNTIL`` or ``COUNT``
+        never ends.
+        """
+
+        require_aware(dtstart=dtstart, moment=moment)
+        tz = zone_info(zone)
+        anchor = dtstart.astimezone(tz)
+        if not self.rule:
+            following: datetime | None = anchor if anchor > moment else None
+        else:
+            following = self._compile(anchor).after(moment.astimezone(tz), inc=False)
+        return following.astimezone(UTC) if following is not None else None
 
     def _compile(self, anchor: datetime) -> rrule | rruleset:
         """Parse the rule anchored at an aware local ``anchor`` (a dateutil rrule/rruleset)."""

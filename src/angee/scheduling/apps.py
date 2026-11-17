@@ -27,13 +27,16 @@ class SchedulingConfig(AppConfig):
       turns a stored rule into concrete occurrences.
 
     **Timezone / window contract** (the owner of "what day is it"):
-    ``Recurrence.occurrences(dtstart, window_start, window_end)`` takes and returns
-    timezone-aware **UTC** datetimes (Django ``USE_TZ``), computes the expansion in
-    the project's ``TIME_ZONE``, and bounds it to the **half-open** window
+    ``Recurrence.occurrences(dtstart, window_start, window_end, zone=...)`` takes
+    and returns timezone-aware **UTC** datetimes (Django ``USE_TZ``), computes the
+    expansion in the named IANA ``zone`` or, when it is blank, the project's
+    ``TIME_ZONE``, and bounds it to the **half-open** window
     ``[window_start, window_end)`` (start inclusive, end exclusive). An all-day
-    event — whose ``dtstart`` is midnight in ``TIME_ZONE`` stored as UTC —
-    therefore expands **by calendar date in the project timezone**, DST included.
-    An empty rule yields the single ``dtstart``.
+    event — whose ``dtstart`` is local midnight stored as UTC — therefore expands
+    **by calendar date in its zone**, DST included. An empty rule yields the
+    single ``dtstart``. A zone is stored and exchanged as its IANA name
+    (:class:`~angee.scheduling.fields.TimeZoneField`,
+    :data:`~angee.scheduling.zones.ZoneName`), never as a ``tzinfo``.
 
     **Working-time / resource-calendar face — owned here, not yet built.**
     Scheduling is also the single future owner of *working time*: a
