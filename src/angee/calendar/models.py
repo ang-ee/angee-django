@@ -12,7 +12,7 @@ attendee whose ``role`` is ``organizer``.
 
 **Occurrences.** :meth:`CalendarEventQuerySet.occurrences` turns a row set into
 the :class:`EventOccurrence` wire shape the calendar renders, composing
-:meth:`Recurrence.occurrences` for the moments in the calendar's zone. An override
+:meth:`Recurrence.occurrences` for the moments in each event's expansion zone. An override
 replaces the moment at its ``original_start`` and keeps that instance's id, a
 cancelled override drops it, and a cancelled event shows nothing. A recurring
 master's occurrences are not draggable (drag-rescheduling moves a single row); a
@@ -24,19 +24,19 @@ cancelled events never conflict. :meth:`CalendarEvent.clean` reports it to a
 form, and :meth:`CalendarEvent.save` checks it again under the calendar's row
 lock on every save path.
 
-**A series owns its overrides.** When a master's schedule or its calendar's zone
+**A series owns its overrides.** When a master's schedule or the zone it follows
 changes, :meth:`CalendarEvent.rebase_overrides` carries each override along.
 """
 
 from __future__ import annotations
 
 from collections import defaultdict
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, time, timedelta
 from typing import Any, ClassVar, Self, cast
 
-from django.core.exceptions import ObjectDoesNotExist, ValidationError
+from django.core.exceptions import ValidationError
 from django.db import models, router, transaction
 from django.db.models import F, Q, Value
 from django.db.models.functions import Coalesce, NullIf
@@ -48,6 +48,7 @@ from angee.base.fields.text import ColorField
 from angee.base.models.audit import AuditMixin
 from angee.base.models.base import AngeeDataModel
 from angee.base.models.locks import ImmutableFieldsMixin
+from angee.base.models.merge_references import EdgeReference, references
 from angee.base.models.ownership import OwnerMixin
 from angee.base.models.timestamps import update_fields_with_auto_now
 from angee.messaging.models import ThreadedModelMixin
@@ -166,6 +167,12 @@ def _nearest_midnight(moment: datetime, tz: Any) -> datetime:
     return timezone.make_aware(datetime.combine(day, time.min), tz)
 
 
+def _same_local_day(moment: datetime, old_tz: Any, new_tz: Any) -> datetime:
+    """The midnight in ``new_tz`` on the local date ``moment`` has in ``old_tz``: an all-day bound keeps its date."""
+
+    return timezone.make_aware(datetime.combine(moment.astimezone(old_tz).date(), time.min), new_tz)
+
+
 def _intervals_meet(left: Sequence[tuple[datetime, datetime]], right: Sequence[tuple[datetime, datetime]]) -> bool:
     """Whether any half-open interval of ``left`` meets one of ``right``; both sorted by start, swept once."""
 
@@ -189,8 +196,8 @@ class Calendar(OwnerMixin, HistoryMixin, AngeeDataModel, concrete=True):
     person it belongs to), and the users and groups it is shared with as
     ``reader``, ``editor`` or ``free_busy``; a ``free_busy`` grantee sees the
     calendar's busy time and nothing else. A blank ``timezone`` expands recurrence
-    in the project ``TIME_ZONE``; changing it carries every series' overrides onto
-    the new wall clock (:meth:`CalendarEvent.rebase_overrides`). History keeps
+    in the project ``TIME_ZONE``; changing it carries the events without a zone of
+    their own onto the new wall clock (:meth:`_follow_zone`). History keeps
     ``party``, so reverting a merge of the owning parties restores whose calendar
     it was.
     """
@@ -219,26 +226,49 @@ class Calendar(OwnerMixin, HistoryMixin, AngeeDataModel, concrete=True):
         return self.name
 
     def save(self, *args: Any, **kwargs: Any) -> None:
-        """Persist, then rebase every series' overrides when the time zone changed.
+        """Persist, and carry the events that follow this calendar's zone onto a changed zone.
 
-        The zone is the wall clock recurrence expands on, so an override's
-        ``original_start`` follows it in the same transaction.
+        The calendar row is locked before its previous zone is read, so two saves
+        cannot both rebase from the same zone. When the zone changed, the events
+        without a zone of their own follow it in the same transaction
+        (:meth:`_follow_zone`).
         """
 
-        previous_zone: str | None = None
-        if not self._state.adding and self.pk is not None:
-            previous_zone = type(self)._base_manager.filter(pk=self.pk).values_list("timezone", flat=True).first()
         using = kwargs.get("using") or router.db_for_write(type(self), instance=self)
         with transaction.atomic(using=using):
+            previous_zone = None if self._state.adding or self.pk is None else self.lock_subject().timezone
             super().save(*args, **kwargs)
-            if previous_zone is None or previous_zone == self.timezone:
-                return
-            events = cast("type[CalendarEvent]", self._meta.get_field("events").related_model)._base_manager
-            # A series that keeps its own zone does not follow the calendar's.
-            masters = events.filter(calendar_id=self.pk, series__isnull=True, timezone="", overrides__isnull=False)
-            masters = masters.distinct()
-            for master in masters.order_by("pk"):
-                master.rebase_overrides(previous_start=master.start, previous_zone=previous_zone)
+            if previous_zone is not None and previous_zone != self.timezone:
+                self._follow_zone(previous_zone)
+
+    def _follow_zone(self, previous_zone: str) -> None:
+        """Carry the events that keep this calendar's zone from ``previous_zone`` onto the current one.
+
+        An all-day event (a single row, a master or an override) keeps its local
+        dates: its ``start`` and ``end`` move to the same midnights on the new wall
+        clock. Every series derives its ``series_end`` again, and then each master
+        rebases its overrides from its previous start and zone. This is the
+        calendar's own derived work, written without the event save path.
+        """
+
+        model = cast("type[CalendarEvent]", self._meta.get_field("events").related_model)
+        rows = model._base_manager.filter(calendar_id=self.pk, timezone="")
+        old_tz, new_tz = get_zone_info(previous_zone), get_zone_info(self.timezone)
+        previous_starts: dict[Any, datetime] = {}
+        for event in rows.filter(Q(all_day=True) | ~Q(recurrence="")).order_by("pk"):
+            previous_starts[event.pk] = event.start
+            if event.all_day:
+                event.start = _same_local_day(event.start, old_tz, new_tz)
+                event.end = _same_local_day(event.end, old_tz, new_tz)
+            event.calendar = self
+            model._base_manager.filter(pk=event.pk).update(
+                start=event.start, end=event.end, series_end=event._derive_series_end()
+            )
+        masters = rows.filter(series__isnull=True, overrides__isnull=False).distinct().order_by("pk")
+        for master in masters:
+            master.calendar = self
+            previous_start = previous_starts.get(master.pk, master.start)
+            master.rebase_overrides(previous_start=previous_start, previous_zone=previous_zone)
 
 
 class CalendarEventQuerySet(AngeeHistoryQuerySet[Any]):
@@ -249,7 +279,7 @@ class CalendarEventQuerySet(AngeeHistoryQuerySet[Any]):
 
         A moment meets the window when it starts before ``window_end`` and ends
         after ``window_start`` (a zero-length moment at ``window_start`` counts). A
-        recurring master unrolls its rule in its calendar's zone, minus the moments
+        recurring master unrolls its rule in its expansion zone, minus the moments
         its overrides replace; an override is a single row; a cancelled row yields
         nothing, so a cancelled override drops the moment it replaces, and a
         cancelled master takes its moved instances with it. Overrides are read
@@ -359,7 +389,10 @@ CalendarEventManager = AngeeHistoryManager.from_queryset(CalendarEventQuerySet)
 OVERLAP_MESSAGE = "This calendar is already busy at this time."
 """The overlap refusal: it names no other event, whoever asks."""
 
-_TIME_FIELDS = frozenset({"start", "end", "all_day", "recurrence", "timezone", "status", "transparency"})
+_SCHEDULE_FIELDS = frozenset({"start", "end", "all_day", "recurrence", "timezone"})
+"""The columns that place a row's instances in time."""
+
+_TIME_FIELDS = _SCHEDULE_FIELDS | {"status", "transparency"}
 """The columns whose change can make a row's busy time meet another's."""
 
 
@@ -369,16 +402,17 @@ class CalendarEvent(
     """An event on one calendar, with optional recurrence, overrides and attendees.
 
     ``start``/``end`` are timezone-aware UTC datetimes; an all-day event stores
-    ``start`` as local midnight in its calendar's zone and expands by calendar date.
+    ``start`` as local midnight in its expansion zone and expands by calendar date.
     A master carries the RRULE; an override carries ``series`` and
     ``original_start`` and no rule. Containment is set once: ``calendar``,
     ``series`` and ``original_start`` never change after insert, except when the
     series itself rebases its overrides (:meth:`rebase_overrides`).
     :meth:`reschedule` moves a single row and
     :class:`~angee.provenance.contrib.angee.history.HistoryMixin` records the move in
-    the current changeset. :meth:`clean` owns the rules a constraint cannot express
-    (an override's series, the calendar's overlap policy), and :meth:`save` checks
-    the overlap policy again under the calendar's row lock, whichever path saves.
+    the current changeset. :meth:`clean` owns the row's own rules a constraint
+    cannot express (the all-day bounds, an override's series); :meth:`save` owns
+    what reads other rows (the overlap policy, the rebase), under the calendar's
+    row lock, whichever path saves.
     """
 
     sqid_prefix = "cev_"
@@ -398,7 +432,7 @@ class CalendarEvent(
     start = models.DateTimeField(db_index=True)
     end = models.DateTimeField()
     all_day = models.BooleanField(default=False)
-    recurrence = RecurrenceField()
+    recurrence = RecurrenceField(finest_frequency="HOURLY")
     timezone = TimeZoneField()
     """The wall clock this event keeps; blank: its calendar's.
 
@@ -476,15 +510,14 @@ class CalendarEvent(
         return self.timezone or self.calendar.timezone
 
     def clean(self) -> None:
-        """Validate the interval, all-day bounds, an override's series, and the calendar's overlap policy.
+        """Validate the interval, the all-day bounds and an override's series; this row alone.
 
-        An all-day event's ``start`` and ``end`` are midnights in its zone,
-        a whole number of days apart. An override created at the default visibility
-        and transparency takes its master's.
+        An all-day event's ``start`` and ``end`` are midnights in its expansion zone,
+        a whole number of days apart. The overlap policy reads other rows, so
+        :meth:`save` checks it, after the write, under the calendar's lock.
         """
 
         super().clean()
-        self._inherit_series_defaults()
         errors: dict[str, str] = {}
         if self.end is not None and self.start is not None and self.end < self.start:
             errors["end"] = "The event end must not be before its start."
@@ -497,7 +530,6 @@ class CalendarEvent(
             errors.update(self._override_errors())
         if errors:
             raise ValidationError(errors)
-        self._refuse_overlap()
 
     def _override_errors(self) -> dict[str, str]:
         """Return why this override does not fit its series, if it does not."""
@@ -530,17 +562,24 @@ class CalendarEvent(
             return {"end": "An all-day event lasts at least one day."}
         return {}
 
-    def _inherit_series_defaults(self) -> None:
-        """Give a new override its master's visibility and transparency when it was created at the defaults."""
+    def _held_by_record_edges(self) -> bool:
+        """Whether a live record edge outside this row (a sync's record link) still names it.
 
-        if not self._state.adding or self.series_id is None:
-            return
-        series = self.series
-        assert series is not None
-        if self.visibility == EventVisibility.DEFAULT:
-            self.visibility = series.visibility
-        if self.transparency == EventTransparency.BUSY:
-            self.transparency = series.transparency
+        Such a row belongs to that edge's owner: its sync removes or rewrites it
+        through its own stream, so the calendar neither deletes nor detaches it.
+        Which edge rows are live and blocking is each edge's own policy
+        (:meth:`~angee.base.models.merge_references.Reference.live_rows`).
+        """
+
+        return any(
+            isinstance(reference, EdgeReference) and reference.live_rows(self).exists()
+            for reference in references(type(self))
+        )
+
+    def series_defaults(self) -> dict[str, str]:
+        """The values an override of this master takes when its insert omits them: visibility and transparency."""
+
+        return {"visibility": self.visibility, "transparency": self.transparency}
 
     def _derive_series_end(self) -> datetime | None:
         """Return where this series' last instance ends, or ``None`` for an open-ended rule or a single row."""
@@ -561,45 +600,74 @@ class CalendarEvent(
         return moment in Recurrence(self.recurrence).occurrences(self.start, moment, moment + instant, zone=zone)
 
     def save(self, *args: Any, **kwargs: Any) -> None:
-        """Persist under the calendar's overlap rule, and carry a changed series' overrides along.
+        """Persist under the calendar's lock: write, carry a changed series' overrides along, then check overlap.
 
-        On a ``refuse`` calendar a save that can change this row's busy time locks
-        the calendar row first and checks the overlap policy again under that lock,
-        so two concurrent saves cannot both take the same time, and the rule holds on
-        every save path (a form, a drag, a sync). A saved master whose ``start``,
-        ``all_day``, ``recurrence`` or ``timezone`` changed rebases its overrides in the same
-        transaction (:meth:`rebase_overrides`). ``series_end`` is derived here.
+        A save that can change this row's time (an insert, or ``update_fields`` naming
+        a time column) locks the calendar row first, on any overlap policy, then this
+        row, and only then reads what it changes:
+
+        - an override's series is read and validated again under the lock, so it cannot commit
+          naming a time that is no longer an instance;
+        - the master's previous schedule is read, and after the write its overrides
+          rebase onto the new one (:meth:`rebase_overrides`);
+        - last, on a ``refuse`` calendar, :meth:`_refuse_overlap` judges the stored
+          result; a refusal rolls the whole save back.
+
+        The rule frequency floor and ``series_end`` are enforced and derived here, so
+        every save path (a form, a drag, a sync) keeps them.
         """
 
         update_fields = kwargs.get("update_fields")
-        self._inherit_series_defaults()
-        self.series_end = self._derive_series_end()
-        if update_fields is not None and {"start", "end", "all_day", "recurrence", "timezone"} & set(update_fields):
-            kwargs["update_fields"] = update_fields = [*update_fields, "series_end"]
+        schedule_changes = update_fields is None or bool(_SCHEDULE_FIELDS & set(update_fields))
+        takes_time = update_fields is None or bool(_TIME_FIELDS & set(update_fields))
+        if schedule_changes:
+            self._validate_rule()
+            self.series_end = self._derive_series_end()
+            if update_fields is not None:
+                kwargs["update_fields"] = [*update_fields, "series_end"]
         using = kwargs.get("using") or router.db_for_write(type(self), instance=self)
         with transaction.atomic(using=using):
-            previous = self._previous_schedule()
-            takes_time = update_fields is None or bool(_TIME_FIELDS & set(update_fields))
-            if takes_time and self.calendar_id is not None and self.calendar.overlap_policy == OverlapPolicy.REFUSE:
+            previous = None
+            if takes_time and self.calendar_id is not None:
                 self.calendar = self.calendar.lock_subject()
-                self._refuse_overlap()
+                if not self._state.adding and self.pk is not None:
+                    super().lock_subject()
+                if self.series_id is not None:
+                    # A series loaded before the lock (by full_clean) may predate a move it now waits on.
+                    self.series = type(self)._base_manager.get(pk=self.series_id)
+                    if errors := self._override_errors():
+                        raise ValidationError(errors)
+                if schedule_changes:
+                    previous = self._previous_schedule()
             super().save(*args, **kwargs)
-            if previous is not None and previous != (self.start, self.all_day, self.recurrence, self.timezone):
-                previous_zone = previous[3] or self.calendar.timezone
-                self.rebase_overrides(previous_start=previous[0], previous_zone=previous_zone)
+            if previous is not None and previous[:4] != (self.start, self.all_day, self.recurrence, self.timezone):
+                self.rebase_overrides(previous_start=previous[0], previous_zone=previous[3] or previous[4])
+            if takes_time and self.calendar_id is not None:
+                self._refuse_overlap()
 
-    def _previous_schedule(self) -> tuple[datetime, bool, str, str] | None:
-        """The stored ``(start, all_day, recurrence, timezone)`` of a saved master that has overrides, else ``None``."""
+    def _validate_rule(self) -> None:
+        """Refuse a rule its field refuses (a malformed, unbounded-count or too-frequent rule) on every save."""
+
+        try:
+            self._meta.get_field("recurrence").validate(self.recurrence, self)
+        except ValidationError as error:
+            raise ValidationError({"recurrence": error.messages}) from None
+
+    def _previous_schedule(self) -> tuple[datetime, bool, str, str, str] | None:
+        """The stored ``(start, all_day, recurrence, timezone, calendar zone)`` of a master with overrides.
+
+        ``None`` for a new row, an override, or a master without overrides.
+        """
 
         if self._state.adding or self.pk is None or self.series_id is not None:
             return None
-        rows = type(self)._base_manager.filter(pk=self.pk)
         if not type(self)._base_manager.filter(series_id=self.pk).exists():
             return None
-        return rows.values_list("start", "all_day", "recurrence", "timezone").first()
+        rows = type(self)._base_manager.filter(pk=self.pk)
+        return rows.values_list("start", "all_day", "recurrence", "timezone", "calendar__timezone").first()
 
-    def lock_subject(self, members: Any = None) -> Self:
-        """Lock the calendar before this event: the calendar row serializes its overlap rule."""
+    def lock_subject(self, members: Mapping[str, Any] | None = None) -> Self:
+        """Lock the calendar, then this event: the calendar row serializes its schedule and overlap rule."""
 
         self.calendar.lock_subject()
         return super().lock_subject(members)
@@ -608,11 +676,13 @@ class CalendarEvent(
         """Carry this master's overrides onto its changed schedule, in the caller's transaction.
 
         Each ``original_start`` moves by the master's local wall-clock change, from
-        ``previous_start`` in ``previous_zone`` to the current ``start`` in the
-        calendar's zone. An override that still names an instance keeps it; one that
+        ``previous_start`` in ``previous_zone`` to the current ``start`` in its
+        expansion zone. An override that still names an instance keeps it; one that
         no longer does is detached as a standalone event when it carries edits, so
         nothing is lost, and deleted when it is a cancellation. Overrides move in the
-        shift's direction, so two never claim the same instance at once.
+        shift's direction, so two never claim the same instance at once. An override a
+        sync still links (a protecting record edge names it) is left to that sync,
+        neither detached nor deleted: a stranded one suppresses no instance.
         """
 
         old_tz, zone = get_zone_info(previous_zone), self.expansion_zone
@@ -632,6 +702,9 @@ class CalendarEvent(
                 override.original_start = moved
                 override.allow_immutable_save("original_start")
                 override.save(update_fields=["original_start", "updated_at"])
+            elif override._held_by_record_edges():
+                # A synced row: its sync tombstones the old instance through its own stream.
+                continue
             elif override.status == EventStatus.CANCELLED:
                 override.delete()
             else:
@@ -639,33 +712,17 @@ class CalendarEvent(
                 override.allow_immutable_save("series_id", "original_start")
                 override.save(update_fields=["series", "original_start", "updated_at"])
 
-    def _overlap_rows(self) -> CalendarEventQuerySet:
-        """The rows an overlap is judged against, read only as far as this save may see.
-
-        Every row, as system work, when nothing pins an actor or a bypass is in
-        effect, or once the library's public save check (``check_save``) admits this
-        save; otherwise the actor's own read scope, so a refused save learns nothing
-        it could not read.
-        """
-
-        actor, unscoped = self.effective_actor()
-        if unscoped or actor is None:
-            return type(self).system_queryset()
-        try:
-            admitted = self.check_save().allowed
-        except (ObjectDoesNotExist, TypeError, ValidationError, ValueError):
-            admitted = False
-        return type(self).system_queryset() if admitted else type(self).objects.with_actor(actor)
-
     def _refuse_overlap(self) -> None:
         """Refuse this busy event when any of its instances meets another busy occurrence on a ``refuse`` calendar.
 
         Every instance is checked: a single row's ``[start, end)``, or each instance
-        of a series up to its rule's end, or :attr:`overlap_horizon` from its start
-        for an open-ended rule, minus the instances its own overrides replace. Both
-        sides are sorted and swept once. This row's stored copy, a master's own
-        overrides, and the instance an override replaces are not others. The refusal
-        names no other event.
+        of a series up to its stored ``series_end``, or :attr:`overlap_horizon` from
+        its start for an open-ended rule, minus the instances its own overrides
+        replace. Both sides are sorted and swept once. This row's stored copy, a
+        master's own overrides, and the instance an override replaces are not
+        others. :meth:`save` calls it after the write it judges, which the REBAC save
+        gates have admitted (a rehearsed save never reaches it), so every row is read
+        as system work; the refusal names no other event.
         """
 
         if self.calendar_id is None or self.start is None or self.end is None or self.end <= self.start:
@@ -674,10 +731,12 @@ class CalendarEvent(
             return
         if self.calendar.overlap_policy != OverlapPolicy.REFUSE:
             return
+        if self.series_id is not None and self.series is not None and self.series.status == EventStatus.CANCELLED:
+            return
         mine = self._own_instances()
         if not mine:
             return
-        rows = self._overlap_rows().filter(calendar_id=self.calendar_id)
+        rows = type(self).system_queryset().filter(calendar_id=self.calendar_id)
         theirs = sorted(
             (moment.start, moment.end)
             for moment in rows.moments(mine[0][0], max(end for _start, end in mine))
@@ -687,13 +746,13 @@ class CalendarEvent(
             raise ValidationError({"start": OVERLAP_MESSAGE})
 
     def _own_instances(self) -> list[tuple[datetime, datetime]]:
-        """This row's instances, sorted: itself, or its series up to its end or the overlap horizon."""
+        """This row's instances, sorted: itself, or its series to ``series_end`` (open-ended: the overlap horizon)."""
 
         if not self.recurrence:
             return [(self.start, self.end)]
         zone = self.expansion_zone
-        horizon = self.start + self.overlap_horizon
-        starts = Recurrence(self.recurrence).occurrences(self.start, self.start, horizon, zone=zone)
+        stop = self.series_end or self.start + self.overlap_horizon
+        starts = Recurrence(self.recurrence).occurrences(self.start, self.start, stop, zone=zone)
         replaced: set[datetime] = set()
         if self.pk is not None:
             stored = type(self)._base_manager.filter(series_id=self.pk)
@@ -735,6 +794,8 @@ class CalendarEvent(
         """
 
         if self.series_id is not None and self.original_start is not None:
+            if not series:
+                raise ValueError("An override's occurrence id needs its master's public id.")
             return f"{series}:{_basic(self.original_start)}"
         if not self.recurrence:
             return self.sqid
@@ -745,10 +806,10 @@ class CalendarEvent(
 
         A recurring master refuses: its occurrences are dragged one instance at a
         time through an override, and the series itself is edited through the
-        event form. An all-day event lands on the nearest midnights in its
-        calendar's zone, since a drag carries the viewer's own midnight. The moved
-        fields are validated before the write (:meth:`clean`: the interval, the
-        series and the overlap policy), so an invalid move surfaces as a
+        event form. An all-day event lands on the nearest midnights in its expansion
+        zone, since a drag carries the viewer's own midnight. The moved
+        fields are validated before the write (:meth:`clean`: the interval and the
+        series) and the overlap policy by the save, so an invalid move surfaces as a
         ``ValidationError``, never an ``IntegrityError``. The ordinary save joins the
         caller's changeset, so provenance owns the resulting field delta and reason.
         """

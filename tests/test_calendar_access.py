@@ -87,9 +87,9 @@ def test_the_calendar_decision_table(world: SimpleNamespace) -> None:
         (w.calendar, "share", "holder editor admin", "reader viewer stranger"),
         (w.calendar, "delete", "holder admin", "reader editor viewer stranger"),
         (w.calendar, "transfer", "holder admin", "reader editor viewer stranger"),
-        # An ownerless calendar: its holder writes and deletes it, but sharing takes an owner.
+        # An ownerless calendar (system work created it): its holder still writes, deletes and shares it.
         (w.held, "write", "holder admin", "reader editor viewer stranger"),
-        (w.held, "share", "admin", "holder reader editor viewer stranger"),
+        (w.held, "share", "holder admin", "reader editor viewer stranger"),
         (w.held, "transfer", "admin", "holder reader editor viewer stranger"),
         (w.default, "read", "holder reader editor admin", "viewer stranger"),
         (w.private, "read", "holder editor admin", "reader viewer stranger"),
@@ -204,6 +204,41 @@ def test_free_busy_viewers_learn_only_that_busy_time_changed(world: SimpleNamesp
     bare = delivered("viewer")
     assert (bare.id, bare.changed_fields, bare.changed_values) == (w.default.sqid, None, None)
     assert delivered("stranger") is None
+    # A free event is never busy time: free/busy viewers never hear of it.
+    with system_context(reason="tests.calendar.access.change"):
+        payload = ChangePayload.from_instance(w.free, action="update", update_fields=("title",))
+    assert delivered("viewer") is None
+    assert delivered("reader") is not None
+    # Turning an event free takes a busy block away, so that change still reaches them.
+    with system_context(reason="tests.calendar.access.change"):
+        payload = ChangePayload.from_instance(w.free, action="update", update_fields=("transparency",))
+    assert delivered("viewer").changed_fields is None
+
+
+_INSERT_OVERRIDE = """
+mutation ($calendar: ID!, $series: ID!, $original: DateTime!, $start: DateTime!, $end: DateTime!) {
+  insert_calendar_events_one(object: {
+    calendar: $calendar, series: $series, original_start: $original, title: "Moved", start: $start, end: $end
+  }) { id visibility transparency }
+}
+"""
+
+
+def test_an_override_inserted_without_visibility_or_transparency_takes_its_masters(world: SimpleNamespace) -> None:
+    w = world
+    with system_context(reason="tests.calendar.access.setup"):
+        master = CalendarEvent.objects.create(
+            calendar=w.calendar, title="Weekly", recurrence="FREQ=WEEKLY", visibility=EventVisibility.PRIVATE,
+            transparency=EventTransparency.FREE, start=_utc(20, 9), end=_utc(20, 10),
+        )
+    variables = {
+        "calendar": w.calendar.sqid, "series": master.sqid, "original": _utc(27, 9).isoformat(),
+        "start": _utc(27, 10).isoformat(), "end": _utc(27, 11).isoformat(),
+    }
+
+    inserted = result_data(execute_schema(_console(), _INSERT_OVERRIDE, variables, user=w.holder))
+    assert inserted["insert_calendar_events_one"]["visibility"] == "PRIVATE"
+    assert inserted["insert_calendar_events_one"]["transparency"] == "FREE"
 
 
 _INSERT = """

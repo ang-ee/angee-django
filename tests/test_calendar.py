@@ -18,6 +18,8 @@ from django.db.models import Q
 from rebac import actor_context, system_context
 
 from angee.calendar.testing.models import Calendar, CalendarEvent, EventAttendee
+from angee.integrate.models import IntegrationLifecycle
+from angee.integrate.states import StreamDirection, StreamKind
 from angee.messaging.testing.models import Handle, Person
 from angee.provenance.context import changeset
 from angee.resources.testing.models import Resource
@@ -176,6 +178,9 @@ def test_overrides_replace_and_drop_their_instances_across_a_dst_change(dst_seri
         (f"{master.sqid}:20260323T130000Z", master.sqid, _utc(2026, 3, 23, 13)),
     ]
     assert [o.editable for o in occurrences] == [False, True, False]
+    # An override's id is its master's instance id, so it cannot be formed without the master's.
+    with pytest.raises(ValueError):
+        moved.occurrence_id(moved.start)
 
 
 def test_a_moved_instance_leaves_its_original_window_and_shows_in_its_new_one(dst_series: tuple[Any, ...]) -> None:
@@ -311,7 +316,7 @@ def test_a_cancelled_master_hides_its_moved_instances_from_the_calendar_and_from
     _save(master, status="cancelled")
 
     assert _occurrences(calendar, _utc(2026, 7, 1), _utc(2026, 7, 31)) == []
-    _clean(calendar, _utc(2026, 7, 14, 9), _utc(2026, 7, 14, 10))
+    _place(calendar, _utc(2026, 7, 14, 9), _utc(2026, 7, 14, 10))
 
 
 def test_an_event_stays_on_its_calendar_series_and_instance(dst_series: tuple[Any, ...]) -> None:
@@ -335,9 +340,14 @@ def test_an_event_stays_on_its_calendar_series_and_instance(dst_series: tuple[An
 # --- overlap -----------------------------------------------------------------
 
 
-def _clean(calendar: Any, start: datetime, end: datetime, **fields: Any) -> None:
-    with system_context(reason="tests.calendar.validate"):
-        CalendarEvent(calendar=calendar, title="New", start=start, end=end, **fields).full_clean()
+def _place(calendar: Any, start: datetime, end: datetime, **fields: Any) -> None:
+    """Validate and save a candidate event as the write path does, then roll it back."""
+
+    with system_context(reason="tests.calendar.place"), transaction.atomic():
+        event = CalendarEvent(calendar=calendar, title="New", start=start, end=end, **fields)
+        event.full_clean()
+        event.save()
+        transaction.set_rollback(True)
 
 
 @pytest.mark.parametrize(
@@ -360,10 +370,10 @@ def test_a_refuse_calendar_rejects_an_overlap_of_busy_time(
 
     if refused:
         with pytest.raises(ValidationError) as raised:
-            _clean(calendar, _utc(2026, 7, 13, 10, 30), _utc(2026, 7, 13, 11, 30), **candidate)
+            _place(calendar, _utc(2026, 7, 13, 10, 30), _utc(2026, 7, 13, 11, 30), **candidate)
         assert "start" in raised.value.message_dict
     else:
-        _clean(calendar, _utc(2026, 7, 13, 10, 30), _utc(2026, 7, 13, 11, 30), **candidate)
+        _place(calendar, _utc(2026, 7, 13, 10, 30), _utc(2026, 7, 13, 11, 30), **candidate)
 
 
 def test_an_accept_calendar_takes_an_overlap_and_adjacent_slots_never_overlap(db: None) -> None:
@@ -372,8 +382,8 @@ def test_an_accept_calendar_takes_an_overlap_and_adjacent_slots_never_overlap(db
     for calendar in (accepting, refusing):
         _event(calendar, start=_utc(2026, 7, 13, 10), end=_utc(2026, 7, 13, 11))
 
-    _clean(accepting, _utc(2026, 7, 13, 10, 30), _utc(2026, 7, 13, 11, 30))
-    _clean(refusing, _utc(2026, 7, 13, 11), _utc(2026, 7, 13, 12))
+    _place(accepting, _utc(2026, 7, 13, 10, 30), _utc(2026, 7, 13, 11, 30))
+    _place(refusing, _utc(2026, 7, 13, 11), _utc(2026, 7, 13, 12))
 
 
 def test_an_override_does_not_conflict_with_the_instance_it_replaces(db: None) -> None:
@@ -400,10 +410,10 @@ def test_a_new_series_is_checked_instance_by_instance_up_to_the_horizon(db: None
 
     # The third weekly instance meets the one-off.
     with pytest.raises(ValidationError):
-        _clean(calendar, _utc(2026, 7, 6, 9), _utc(2026, 7, 6, 10), recurrence="FREQ=WEEKLY")
+        _place(calendar, _utc(2026, 7, 6, 9), _utc(2026, 7, 6, 10), recurrence="FREQ=WEEKLY")
     # A series ending before it does not; an open-ended one is checked two years out only.
-    _clean(calendar, _utc(2026, 7, 6, 9), _utc(2026, 7, 6, 10), recurrence="FREQ=WEEKLY;COUNT=2")
-    _clean(calendar, _utc(2026, 7, 7, 9), _utc(2026, 7, 7, 10), recurrence="FREQ=WEEKLY")
+    _place(calendar, _utc(2026, 7, 6, 9), _utc(2026, 7, 6, 10), recurrence="FREQ=WEEKLY;COUNT=2")
+    _place(calendar, _utc(2026, 7, 7, 9), _utc(2026, 7, 7, 10), recurrence="FREQ=WEEKLY")
 
 
 def test_an_event_zone_keeps_its_wall_clock_on_a_calendar_in_another_zone(db: None) -> None:
@@ -428,6 +438,125 @@ def test_an_event_zone_keeps_its_wall_clock_on_a_calendar_in_another_zone(db: No
     _save(calendar, timezone="Europe/London")
     after = _occurrences(calendar, _utc(2026, 3, 1), _utc(2026, 4, 7))
     assert [o.start for o in after] == [o.start for o in occurrences]
+
+
+def test_an_event_rule_repeats_at_most_hourly_on_every_save_path(db: None) -> None:
+    calendar = _calendar()
+
+    with pytest.raises(ValidationError) as raised:
+        _place(calendar, _utc(2026, 7, 6, 9), _utc(2026, 7, 6, 10), recurrence="FREQ=SECONDLY")
+    assert "recurrence" in raised.value.message_dict
+    # A sync's plain ORM save is refused too.
+    with system_context(reason="tests.calendar.sync"), pytest.raises(ValidationError), transaction.atomic():
+        CalendarEvent.objects.create(
+            calendar=calendar, title="Ticker", start=_utc(2026, 7, 6, 9), end=_utc(2026, 7, 6, 9, 1),
+            recurrence="FREQ=MINUTELY",
+        )
+
+
+def test_a_bounded_series_is_checked_to_its_end_past_the_horizon(db: None) -> None:
+    del db
+    calendar = _calendar(zone="UTC", overlap_policy="refuse")
+    # The 140th week of a 150-week series falls beyond the two-year horizon.
+    _event(calendar, title="Late one-off", start=_utc(2029, 3, 5, 9), end=_utc(2029, 3, 5, 10))
+
+    with pytest.raises(ValidationError):
+        _place(calendar, _utc(2026, 7, 6, 9), _utc(2026, 7, 6, 10), recurrence="FREQ=WEEKLY;COUNT=150")
+
+
+def test_moving_a_master_is_judged_after_its_overrides_rebase(db: None) -> None:
+    """An instance moved elsewhere is not the master's any more once the move rebases it."""
+
+    del db
+    calendar = _calendar(overlap_policy="refuse")
+    master = _event(calendar, start=_utc(2026, 7, 6, 9), end=_utc(2026, 7, 6, 10), recurrence="FREQ=WEEKLY")
+    _event(
+        calendar, series=master, original_start=_utc(2026, 7, 13, 9), title="Moved",
+        start=_utc(2026, 7, 13, 14), end=_utc(2026, 7, 13, 15),
+    )
+    _event(calendar, title="One-off", start=_utc(2026, 7, 13, 10), end=_utc(2026, 7, 13, 11))
+
+    # The 13 July instance moved to 14:00, so 10:00 is free that day.
+    _save(master, start=_utc(2026, 7, 6, 10), end=_utc(2026, 7, 6, 11))
+
+    assert [o.title for o in _occurrences(calendar, _utc(2026, 7, 13), _utc(2026, 7, 14))] == ["One-off", "Moved"]
+
+
+def test_an_override_is_judged_against_its_series_as_stored_when_it_saves(db: None) -> None:
+    """A series validated earlier (as full_clean does) and moved since cannot admit a removed instance."""
+
+    del db
+    calendar = _calendar(zone="UTC")
+    master = _event(calendar, start=_utc(2026, 7, 6, 9), end=_utc(2026, 7, 6, 10), recurrence="FREQ=WEEKLY")
+    with system_context(reason="tests.calendar.validate"):
+        override = CalendarEvent(
+            calendar=calendar, series=master, original_start=_utc(2026, 7, 20, 9), title="Moved",
+            start=_utc(2026, 7, 21, 9), end=_utc(2026, 7, 21, 10),
+        )
+        override.full_clean()
+        moving = CalendarEvent.objects.get(pk=master.pk)
+    _save(moving, start=_utc(2026, 7, 6, 10), end=_utc(2026, 7, 6, 11))
+
+    with system_context(reason="tests.calendar.save"), pytest.raises(ValidationError) as raised:
+        override.save()
+    assert "original_start" in raised.value.message_dict
+
+
+def test_a_save_that_names_no_schedule_field_leaves_the_overrides(dst_series: tuple[Any, ...]) -> None:
+    _calendar_, master, moved, _cancelled = dst_series
+
+    with system_context(reason="tests.calendar.edit"):
+        master.title, master.start = "Renamed", _ny(2026, 3, 2, 11)
+        master.save(update_fields=["title", "updated_at"])
+    _refreshed(master, moved)
+
+    assert (master.title, master.start, moved.original_start) == ("Renamed", _ny(2026, 3, 2, 9), _ny(2026, 3, 9, 9))
+
+
+def test_a_calendar_zone_change_keeps_all_day_events_on_their_local_dates(db: None) -> None:
+    del db
+    calendar = _calendar(zone="America/New_York")
+    holiday = _event(calendar, title="Holiday", all_day=True, start=_ny(2026, 7, 7), end=_ny(2026, 7, 8))
+    weekly = _event(
+        calendar, title="Rest day", all_day=True, start=_ny(2026, 7, 5), end=_ny(2026, 7, 6),
+        recurrence="FREQ=WEEKLY;COUNT=3",
+    )
+
+    _save(calendar, timezone="Europe/London")
+    _refreshed(holiday, weekly)
+    london = ZoneInfo("Europe/London")
+
+    assert (holiday.start, holiday.end) == (
+        datetime(2026, 7, 7, tzinfo=london).astimezone(UTC), datetime(2026, 7, 8, tzinfo=london).astimezone(UTC),
+    )
+    assert weekly.series_end == datetime(2026, 7, 20, tzinfo=london).astimezone(UTC)
+    # A later edit of another field still passes the all-day rule.
+    _save(holiday, title="Bank holiday")
+
+
+def test_a_synced_override_is_left_to_its_sync_when_its_instance_goes(dst_series: tuple[Any, ...]) -> None:
+    calendar, master, _moved, cancelled = dst_series
+    with system_context(reason="tests.calendar.sync"):
+        owner = create_user("cal_sync_owner")
+        vendor = apps.get_model("integrate", "Vendor").objects.create(slug="calendar-feed", display_name="Feed")
+        channel = apps.get_model("messaging", "Channel").objects.create(
+            vendor=vendor, owner=owner, backend_class="manual", lifecycle=IntegrationLifecycle.CONNECTED,
+            display_name="Feed",
+        )
+        stream = apps.get_model("integrate", "SyncStream").objects.create(
+            integration=channel.integration_ptr, key="events",
+            kind=StreamKind.RECORD_REPLICA, direction=StreamDirection.PULL,
+        )
+        links = apps.get_model("integrate", "RecordLink").objects
+        links.bind_target(links.create(stream=stream, external_key="standup/20260316"), cancelled)
+
+    # Repeating on Tuesdays strands the cancelled Monday: its sync tombstones it, not the calendar.
+    _save(master, recurrence="FREQ=WEEKLY;BYDAY=TU")
+    _refreshed(cancelled)
+
+    assert (cancelled.series_id, cancelled.original_start) == (master.pk, _ny(2026, 3, 16, 9))
+    tuesdays = [o.start.astimezone(NEW_YORK).day for o in _occurrences(calendar, _ny(2026, 3, 1), _ny(2026, 3, 25))]
+    assert 17 in tuesdays
 
 
 # --- bounds ------------------------------------------------------------------
@@ -461,9 +590,9 @@ def test_an_all_day_event_starts_and_ends_at_local_midnight(db: None) -> None:
 
     # A UTC-midnight client sends 20:00 the evening before, in New York.
     with pytest.raises(ValidationError) as raised:
-        _clean(calendar, _utc(2026, 7, 7), _utc(2026, 7, 8), all_day=True)
+        _place(calendar, _utc(2026, 7, 7), _utc(2026, 7, 8), all_day=True)
     assert "start" in raised.value.message_dict
-    _clean(calendar, _ny(2026, 7, 7), _ny(2026, 7, 8), all_day=True)
+    _place(calendar, _ny(2026, 7, 7), _ny(2026, 7, 8), all_day=True)
 
 
 def test_dragging_an_all_day_event_lands_on_the_nearest_local_midnights(db: None) -> None:
@@ -480,7 +609,9 @@ def test_dragging_an_all_day_event_lands_on_the_nearest_local_midnights(db: None
 # --- override defaults -------------------------------------------------------
 
 
-def test_an_override_takes_its_masters_visibility_and_transparency_by_default(db: None) -> None:
+def test_an_override_saved_with_its_values_keeps_them(db: None) -> None:
+    """Defaults come from the master only when an insert omits them (the resource decides); a sync's values stand."""
+
     calendar = _calendar()
     master = _event(
         calendar, start=_utc(2026, 7, 6, 9), end=_utc(2026, 7, 6, 10), recurrence="FREQ=WEEKLY",
@@ -489,10 +620,11 @@ def test_an_override_takes_its_masters_visibility_and_transparency_by_default(db
 
     override = _event(
         calendar, series=master, original_start=_utc(2026, 7, 13, 9), start=_utc(2026, 7, 13, 10),
-        end=_utc(2026, 7, 13, 11),
+        end=_utc(2026, 7, 13, 11), visibility="default", transparency="busy",
     )
 
-    assert (override.visibility, override.transparency) == ("private", "free")
+    assert (override.visibility, override.transparency) == ("default", "busy")
+    assert master.series_defaults() == {"visibility": "private", "transparency": "free"}
 
 
 # --- rescheduling ------------------------------------------------------------

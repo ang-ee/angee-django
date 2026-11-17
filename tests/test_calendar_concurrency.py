@@ -49,3 +49,57 @@ def test_a_second_overlapping_save_waits_for_the_first_and_is_refused() -> None:
 
     with system_context(reason="tests.calendar.concurrency.read"):
         assert list(CalendarEvent.objects.filter(calendar=calendar).values_list("title", flat=True)) == ["First"]
+
+
+@pytest.mark.parametrize(
+    ("policy", "contender_fields"),
+    [
+        # Item 2: the calendar lock is taken on any policy, and the series is read again under it.
+        pytest.param(
+            "accept",
+            {"title": "Moved", "original_start": datetime(2026, 7, 20, 9, tzinfo=UTC),
+             "start": datetime(2026, 7, 21, 9, tzinfo=UTC), "end": datetime(2026, 7, 21, 10, tzinfo=UTC)},
+            id="override-of-a-removed-instance",
+        ),
+        # Overlap after save and rebase: judged against the committed move, not the series it replaced.
+        pytest.param(
+            "refuse",
+            {"title": "One-off", "start": datetime(2026, 7, 20, 10, 30, tzinfo=UTC),
+             "end": datetime(2026, 7, 20, 11, 30, tzinfo=UTC)},
+            id="one-off-meeting-the-moved-series",
+        ),
+    ],
+)
+def test_a_save_waits_for_a_series_move_and_is_judged_against_the_moved_series(
+    policy: str, contender_fields: dict[str, object],
+) -> None:
+    """A concurrent save reads the series only after the move commits, so it cannot pass on the old schedule."""
+
+    with system_context(reason="tests.calendar.concurrency.setup"):
+        person = Person.objects.create(display_name="Planner")
+        calendar = Calendar.objects.create(party=person, name="Planning", overlap_policy=policy)
+        master = CalendarEvent.objects.create(
+            calendar=calendar, title="Weekly", recurrence="FREQ=WEEKLY", start=_utc(9), end=_utc(10),
+        )
+    series = {"series_id": master.pk} if "original_start" in contender_fields else {}
+
+    def contend() -> str:
+        with system_context(reason="tests.calendar.concurrency.contender"):
+            try:
+                # The write path's order: validated first, then saved (which waits on the move).
+                event = CalendarEvent(calendar_id=calendar.pk, **series, **contender_fields)
+                event.full_clean()
+                event.save()
+            except ValidationError:
+                return "refused"
+            return "saved"
+
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        with system_context(reason="tests.calendar.concurrency.mover"), transaction.atomic():
+            moving = CalendarEvent.objects.get(pk=master.pk)
+            moving.start, moving.end = _utc(10), _utc(11)
+            moving.save()
+            contender, pid = submit(pool, contend)
+            wait_for_lock(pid, contender)
+        # Once the move commits, 09:00 is no instance and 10:00 is the series' time.
+        assert contender.result(timeout=10) == "refused"

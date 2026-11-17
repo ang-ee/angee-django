@@ -24,9 +24,15 @@ scheduling never guesses an offset.
 [`Recurrence`](recurrence.py) expands it: `occurrences(dtstart, start, end,
 zone=…)` over a half-open window, `get_occurrence_after(dtstart, moment,
 zone=…)` for the next occurrence, and `get_last_occurrence(dtstart, zone=…)` for
-where a rule with `UNTIL` or `COUNT` ends (`None` for one that never does).
-Expansion runs on the wall clock of the named zone (a venue's), or of the project
-zone when it is blank.
+where a series ends (`None` when any rule it parses to has neither `UNTIL` nor
+`COUNT`). Expansion runs on the wall clock of the named zone (a venue's), or of
+the project zone when it is blank.
+
+Recurrence is bounded. A `COUNT` over `Recurrence.OCCURRENCE_LIMIT` is invalid,
+and an expansion that would yield more occurrences than the limit is refused with
+a `ValidationError`, never truncated. A consumer whose rows must not repeat too
+often declares `RecurrenceField(finest_frequency=…)` (a calendar event refuses
+minutely and secondly rules); other consumers keep every frequency.
 
 ## Due rules
 

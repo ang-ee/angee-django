@@ -16,7 +16,9 @@ stack's owner of RFC-5545. The timezone/window contract is documented on
 from __future__ import annotations
 
 import re
+from collections.abc import Iterable
 from datetime import UTC, datetime
+from itertools import islice, takewhile
 
 from dateutil.parser import parse
 from dateutil.rrule import rrule, rruleset, rrulestr
@@ -27,8 +29,23 @@ from angee.scheduling.zones import get_zone_info, require_aware
 _VALIDATION_ANCHOR = datetime(2000, 1, 1, tzinfo=UTC)
 """A fixed aware anchor for grammar-only validation; its date never affects validity."""
 
-_ENDS = re.compile(r"(?im)(?<![A-Z])(UNTIL|COUNT)=")
-"""The RRULE parts that end a series; a rule without either repeats for ever."""
+
+def _rules(compiled: rrule | rruleset) -> list[rrule]:
+    """The rules a parsed recurrence holds: itself, or every rule of a set (dateutil keeps them in ``_rrule``)."""
+
+    return list(compiled._rrule) if isinstance(compiled, rruleset) else [compiled]
+
+
+def _capped(moments: Iterable[datetime]) -> list[datetime]:
+    """Collect ``moments``, refusing more than :attr:`Recurrence.OCCURRENCE_LIMIT` rather than truncating."""
+
+    limit = Recurrence.OCCURRENCE_LIMIT
+    collected = list(islice(moments, limit + 1))
+    if len(collected) > limit:
+        raise ValidationError(
+            f"This recurrence yields more than {limit} occurrences.", code="too_many_occurrences"
+        )
+    return collected
 
 
 class Recurrence:
@@ -56,24 +73,39 @@ class Recurrence:
 
         self.rule = (rule or "").strip()
 
-    def validate(self) -> None:
-        """Raise :class:`~django.core.exceptions.ValidationError` unless the rule parses.
+    FREQUENCIES = ("YEARLY", "MONTHLY", "WEEKLY", "DAILY", "HOURLY", "MINUTELY", "SECONDLY")
+    """RFC 5545 frequencies, coarsest first (python-dateutil's own order)."""
+
+    OCCURRENCE_LIMIT = 50_000
+    """The most occurrences one expansion yields; past it the expansion refuses rather than truncate."""
+
+    def validate(self, *, finest: str | None = None) -> None:
+        """Raise :class:`~django.core.exceptions.ValidationError` unless the rule parses and stays bounded.
 
         A blank rule is valid (non-recurring). Otherwise the rule is parsed for its
         grammar alone, anchored at a fixed date and the result discarded — validity
         is ``dtstart``-agnostic, so no start date is required to reject a malformed
-        rule.
+        rule. ``finest`` (one of :attr:`FREQUENCIES`) refuses rules that repeat more
+        often, and a ``COUNT`` over :attr:`OCCURRENCE_LIMIT` is refused.
         """
 
         if not self.rule:
             return
         try:
-            self._compile(_VALIDATION_ANCHOR)
+            rules = _rules(self._compile(_VALIDATION_ANCHOR))
         except (ValueError, TypeError) as exc:
             raise ValidationError(
                 "Enter a valid RFC-5545 recurrence rule (RRULE).",
                 code="invalid",
             ) from exc
+        if finest is not None and any(rule._freq > self.FREQUENCIES.index(finest) for rule in rules):
+            raise ValidationError(
+                f"Choose a rule that repeats at most {finest.lower()}.", code="too_frequent"
+            )
+        if any(rule._count is not None and rule._count > self.OCCURRENCE_LIMIT for rule in rules):
+            raise ValidationError(
+                f"A rule repeats at most {self.OCCURRENCE_LIMIT} times.", code="too_many_occurrences"
+            )
 
     def occurrences(
         self,
@@ -96,7 +128,9 @@ class Recurrence:
         09:00 local across a DST shift and an all-day event (local-midnight
         ``dtstart``) steps by calendar date in that zone. The window is
         **half-open** — ``window_start`` is included, ``window_end`` excluded. An
-        empty rule yields the single ``dtstart`` when it falls in the window.
+        empty rule yields the single ``dtstart`` when it falls in the window. A
+        window holding more than :attr:`OCCURRENCE_LIMIT` occurrences is refused
+        with a ``ValidationError``, never truncated.
         """
 
         require_aware(dtstart=dtstart, window_start=window_start, window_end=window_end)
@@ -105,7 +139,8 @@ class Recurrence:
         before = window_end.astimezone(tz)
         anchor = dtstart.astimezone(tz)
         if self.rule:
-            candidates = self._compile(anchor).between(after, before, inc=True)
+            upcoming = self._compile(anchor).xafter(after, inc=True)
+            candidates = _capped(takewhile(lambda moment: moment < before, upcoming))
         else:
             candidates = [anchor]
         return [
@@ -136,10 +171,11 @@ class Recurrence:
     def get_last_occurrence(self, dtstart: datetime, *, zone: str = "") -> datetime | None:
         """Return the series' last occurrence as aware UTC, or ``None`` when the rule never ends.
 
-        A rule ends when it carries ``UNTIL`` or ``COUNT``; one without either
-        repeats for ever. An empty rule is the single ``dtstart``. The series unrolls
-        in ``zone`` (blank: the project ``TIME_ZONE``), as :meth:`occurrences`
-        expands it.
+        A rule ends when every rule it parses to carries ``UNTIL`` or ``COUNT``; a
+        set with one rule that has neither repeats for ever. An empty rule is the
+        single ``dtstart``. The series unrolls in ``zone`` (blank: the project
+        ``TIME_ZONE``), as :meth:`occurrences` expands it. A series of more than
+        :attr:`OCCURRENCE_LIMIT` occurrences is refused with a ``ValidationError``.
         """
 
         require_aware(dtstart=dtstart)
@@ -147,12 +183,11 @@ class Recurrence:
         anchor = dtstart.astimezone(tz)
         if not self.rule:
             return anchor.astimezone(UTC)
-        if not _ENDS.search(self.rule):
+        compiled = self._compile(anchor)
+        if not all(rule._count is not None or rule._until is not None for rule in _rules(compiled)):
             return None
-        last: datetime | None = None
-        for last in self._compile(anchor):
-            pass
-        return last.astimezone(UTC) if last is not None else None
+        series = _capped(compiled)
+        return series[-1].astimezone(UTC) if series else None
 
     def _compile(self, anchor: datetime) -> rrule | rruleset:
         """Parse the rule anchored at an aware local ``anchor`` (a dateutil rrule/rruleset)."""

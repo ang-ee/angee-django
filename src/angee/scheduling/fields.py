@@ -27,24 +27,37 @@ class RecurrenceField(models.CharField):
     ``full_clean`` (and therefore the Hasura create/update path, which
     ``full_clean``\\ s its input) rejects a malformed rule via
     :meth:`Recurrence.validate`. The column defaults to blank-allowed so
-    "non-recurring" is the natural, zero-ceremony state.
+    "non-recurring" is the natural, zero-ceremony state. ``finest_frequency``
+    (one of :attr:`Recurrence.FREQUENCIES`) refuses rules that repeat more often,
+    for a consumer whose rows must not (a calendar event refuses minutely).
     """
 
     description = "RFC-5545 recurrence rule (RRULE)"
 
-    def __init__(self, *args: Any, **kwargs: Any) -> None:
+    def __init__(self, *args: Any, finest_frequency: str | None = None, **kwargs: Any) -> None:
         """Default to a blank-allowed rule column so 'no recurrence' needs no opt-in."""
 
+        if finest_frequency is not None and finest_frequency not in Recurrence.FREQUENCIES:
+            raise ValueError(f"finest_frequency must be one of {', '.join(Recurrence.FREQUENCIES)}.")
+        self.finest_frequency = finest_frequency
         kwargs.setdefault("max_length", _DEFAULT_MAX_LENGTH)
         kwargs.setdefault("blank", True)
         kwargs.setdefault("default", "")
         super().__init__(*args, **kwargs)
 
+    def deconstruct(self) -> Any:
+        """Keep the frequency floor in the field's reconstruction."""
+
+        name, path, args, kwargs = super().deconstruct()
+        if self.finest_frequency is not None:
+            kwargs["finest_frequency"] = self.finest_frequency
+        return name, path, args, kwargs
+
     def validate(self, value: Any, model_instance: Any) -> None:
-        """Run ``CharField`` validation, then reject a value that is not a parseable RRULE."""
+        """Run ``CharField`` validation, then reject a value that is not a parseable, bounded RRULE."""
 
         super().validate(value, model_instance)
-        Recurrence(value).validate()
+        Recurrence(value).validate(finest=self.finest_frequency)
 
 
 class TimeZoneField(models.CharField):

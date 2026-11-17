@@ -3,7 +3,7 @@
 :class:`Calendar`, :class:`CalendarEvent` and :class:`EventAttendee` are writable
 console resources (list, by_pk, insert, update, delete). Auto-CRUD lists return
 stored rows (an event list returns masters and overrides); the authored
-``event_occurrences(window_start, window_end, calendars)`` query returns what a
+``event_occurrences(window_start, window_end)`` query returns what a
 calendar shows, expanded server-side through
 :meth:`~angee.calendar.models.CalendarEventQuerySet.occurrences` over the actor's
 ``see_busy`` scope, with busy-only occurrences for the events the actor may not
@@ -29,15 +29,17 @@ from django.apps import apps
 from django.db import transaction
 from rebac import ObjectRef
 from rebac.field_visibility import check_field_access
+from rebac.resources import resource_id_attr
 from strawberry import auto
 
-from angee.calendar.models import CalendarEventQuerySet
+from angee.calendar.models import CalendarEvent as CalendarEventSource
+from angee.calendar.models import EventOccurrence, EventTransparency
 from angee.graphql.access import ChangeReadGate
 from angee.graphql.actions import ActionResult, action_guard, authorized_action_target, session_user
 from angee.graphql.capabilities import permissions_field
 from angee.graphql.data.hasura import AngeeHasuraWriteBackend, hasura_model_resource, public_pk_decoder
 from angee.graphql.events import ChangeEvent, ChangePayload
-from angee.graphql.ids import PublicID
+from angee.graphql.ids import PublicID, require_instance_for_id
 from angee.graphql.node import NODE_DISPLAY_NAME_DESCRIPTION, AngeeNode
 from angee.graphql.relations import actor_scoped_to_one
 from angee.graphql.subscriptions import changes
@@ -46,7 +48,8 @@ from angee.parties.schema import HandleType, PartyType
 from angee.tags.schema import TaggedNode, tags_input_extensions
 
 Calendar = apps.get_model("calendar", "Calendar")
-CalendarEvent = apps.get_model("calendar", "CalendarEvent")
+# The composed model, typed by the source contract it composes (its manager and occurrence read).
+CalendarEvent = cast("type[CalendarEventSource]", apps.get_model("calendar", "CalendarEvent"))
 EventAttendee = apps.get_model("calendar", "EventAttendee")
 Party = apps.get_model("parties", "Party")
 Handle = apps.get_model("parties", "Handle")
@@ -142,7 +145,8 @@ class FreeBusyChangeReadGate(ChangeReadGate):
 
     A subscriber who may ``see_busy`` an event but not ``read`` it gets the change
     with no changed fields, values or related records: enough to refetch its
-    occurrences, which the occurrence read redacts.
+    occurrences, which the occurrence read redacts. A free event is hidden from them
+    as the occurrence read hides it, unless the partial save names its transparency.
     """
 
     def filter(self, payload: Mapping[str, Any] | ChangePayload) -> ChangeEvent | None:
@@ -156,7 +160,34 @@ class FreeBusyChangeReadGate(ChangeReadGate):
         busy = check_field_access(self.active_backend, subject=self.actor, action="see_busy", resource=resource)
         if not busy.allowed:
             return None
+        # A free event is no busy time, so free/busy viewers hear of it no more than the occurrence read shows it;
+        # a partial save that names its transparency still reaches them, since a busy block may have gone.
+        stored = self.model._base_manager.filter(**{resource_id_attr(self.model): change.resource_identifier})
+        flipped = "transparency" in (change.changed_fields or ())
+        if not flipped and stored.filter(transparency=EventTransparency.FREE).exists():
+            return None
         return ChangeEvent.from_payload(replace(change, changed_fields=None, changed_values=None, related_records=()))
+
+
+class CalendarEventWriteBackend(AngeeHasuraWriteBackend):
+    """Insert an override with its master's visibility and transparency when the input omits them.
+
+    Omission is a fact of the input, so it is decided here; a value the input or a
+    sync supplies is kept as given (:meth:`CalendarEvent.series_defaults`).
+    """
+
+    def insert(self, info: strawberry.Info, data: dict[str, Any]) -> Any:
+        """Fill the omitted override defaults from the master the actor reads, then insert."""
+
+        omitted = [
+            name for name in ("visibility", "transparency") if data.get(name, strawberry.UNSET) is strawberry.UNSET
+        ]
+        series = data.get("series")
+        if series and omitted:
+            readable = CalendarEvent.objects.with_actor(session_user(info))
+            defaults = require_instance_for_id(CalendarEvent, str(series), queryset=readable).series_defaults()
+            data = {**data, **{name: defaults[name] for name in omitted}}
+        return super().insert(info, data)
 
 
 # ---------------------------------------------------------------------------
@@ -211,7 +242,7 @@ _EVENT_RESOURCE = hasura_model_resource(
         "calendar": public_pk_decoder(Calendar),
         "series": public_pk_decoder(CalendarEvent),
     },
-    write_backend=AngeeHasuraWriteBackend(CalendarEvent, public_id_fields=("calendar", "series")),
+    write_backend=CalendarEventWriteBackend(CalendarEvent, public_id_fields=("calendar", "series")),
     id_column="sqid",
 )
 
@@ -244,21 +275,20 @@ _ATTENDEE_RESOURCE = hasura_model_resource(
 class CalendarQuery:
     """The occurrences a calendar shows, expanded server-side."""
 
-    @strawberry.field
+    @strawberry.field(graphql_type=list[EventOccurrenceType])
     def event_occurrences(
         self,
         info: strawberry.Info,
         window_start: datetime,
         window_end: datetime,
-    ) -> list[EventOccurrenceType]:
+    ) -> list[EventOccurrence]:
         """Return the actor's occurrences in ``[window_start, window_end)``.
 
         Aware UTC bounds, start inclusive and end exclusive, at most 400 days apart;
-        every occurrence that meets the window is returned, in each calendar's zone.
+        every occurrence that meets the window is returned, in each event's expansion zone.
         """
 
-        scoped = cast(CalendarEventQuerySet, CalendarEvent.objects.with_actor(session_user(info)))
-        return cast(list[EventOccurrenceType], scoped.occurrences(window_start, window_end))
+        return CalendarEvent.objects.with_actor(session_user(info)).occurrences(window_start, window_end)
 
 
 @strawberry.type
