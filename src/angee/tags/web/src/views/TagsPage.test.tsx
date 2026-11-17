@@ -53,9 +53,9 @@ describe("TagsPage", () => {
   test("declares the shared base vocabulary shape", () => {
     const { listChildren, formChildren } = pageDeclarationChildren();
 
-    expect(parsePageFacets(listChildren)).toEqual([]);
-    expect(parsePageColumns(listChildren).map((column) => column.field)).toEqual(["name", "color", "attention", "updated_at"]);
-    expect(parsePageFields(formChildren).map((field) => field.name)).toEqual(["name", "color", "attention", "is_archived"]);
+    expect(parsePageFacets(listChildren).map((facet) => facet.field)).toEqual(["category"]);
+    expect(parsePageColumns(listChildren).map((column) => column.field)).toEqual(["name", "category", "color", "attention", "updated_at"]);
+    expect(parsePageFields(formChildren).map((field) => field.name)).toEqual(["name", "category", "color", "attention", "is_archived"]);
   });
 
   test("places scope contributions from tags.tags#columns and #fields beside the base declarations", () => {
@@ -64,7 +64,7 @@ describe("TagsPage", () => {
       "tags.tags#fields": { "test.scope": { content: <Field name="scope" /> } },
     });
 
-    expect(parsePageColumns(listChildren).map((column) => column.field)).toEqual(["name", "color", "attention", "scope", "updated_at"]);
-    expect(parsePageFields(formChildren).map((field) => field.name)).toEqual(["name", "color", "attention", "scope", "is_archived"]);
+    expect(parsePageColumns(listChildren).map((column) => column.field)).toEqual(["name", "category", "color", "attention", "scope", "updated_at"]);
+    expect(parsePageFields(formChildren).map((field) => field.name)).toEqual(["name", "category", "color", "attention", "scope", "is_archived"]);
   });
 });
