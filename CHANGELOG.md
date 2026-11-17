@@ -10,6 +10,41 @@ live in code docstrings.
 
 ## Unreleased — shared addon contracts, native embeddings and graph retrieval
 
+- An `angee.integrate` stream names its container: `StreamDefinition.container`,
+  persisted as `SyncStream.container` (a `PROTECT` key to `integrate.RecordLink`,
+  `related_name="child_streams"`), is the parent stream's link whose record
+  holds the partition; the partition is its external key and never changes.
+  `BridgeImpl.streams` declares from local state and writes nothing.
+  `sync_bridge` drains a parent stream before its children in one cycle and
+  declares again after a wave of replicas applied records; partitions without a
+  declared parent keep their order and parallelism. A tombstoned container
+  retires its children (`StreamState.RETIRED`,
+  `SyncStreamManager.retire_children`): a retired generation is not drained and
+  its links are marked absent once, with `on_absent`; the container's revival
+  reopens the child as a new baseline. New `RecordLinkQuerySet.observing()` and
+  `SyncStreamQuerySet.latest_generations()`. A page of a superseded generation
+  is refused as a "superseded stream generation".
+- `angee.parties` address books are records of the directory's `addressbooks`
+  stream: each book's link targets its `Folder` (`FolderManager.ingest_addressbook`)
+  and holds its contacts stream (`Directory.contacts_stream(addressbook)`). The
+  folder's name is an `identity` statement, so a person's rename outranks a
+  remote one; `Folder` composes statements and history, and
+  `parties/folder#write_statements` admits the directory (parties revision 20).
+  A book missing from the listing retires its contacts stream. Removed:
+  `Folder.source_href` and `uq_folder_directory_source`,
+  `FolderManager.sync_addressbook`, `Directory.addressbook_stream`, GraphQL
+  `ContactFolderType.source_href`, and the `folder` argument of
+  `PartyManager.ingest_contact`, which finds its folder through
+  `link.stream.container.target`. A source backend implements `discover`,
+  `extract_contacts` and `read_contacts`. Upgrade: a host runs
+  `makemigrations integrate` for the container column, then authors a parties
+  migration from the upgrade asset
+  `angee.parties.compose_migrations.parties.addressbook_links` (`adopt_addressbooks`,
+  then removing the constraint and the column), then `makemigrations` for the
+  folder's history and statement tables, and re-syncs the permission schema.
+  Every folder, contact and link is kept and nothing is downloaded again; the
+  next sync states each address book's name once.
+
 - `angee.scheduling` owns due rules: a `DueRule` (`angee.scheduling.due`) names due
   anchors the subject supplies later and labelled terms measured from them; the
   [scheduling README](src/angee/scheduling/README.md) lists what a rule expresses.

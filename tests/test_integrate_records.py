@@ -374,11 +374,11 @@ def test_page_records_and_cursor_roll_back_together(replica: Any) -> None:
     assert not RecordLink.objects.filter(stream=replica).exists()
 
 
-def test_retired_epoch_rejects_late_page_before_records(replica: Any) -> None:
+def test_superseded_epoch_rejects_late_page_before_records(replica: Any) -> None:
     SyncStream.objects.bump_generation(replica)
-    with pytest.raises(RuntimeError, match="retired stream generation"):
+    with pytest.raises(RuntimeError, match="superseded stream generation"):
         RecordLink.objects.observe(replica, "person:late")
-    with pytest.raises(RuntimeError, match="retired stream generation"):
+    with pytest.raises(RuntimeError, match="superseded stream generation"):
         SyncStream.objects.advance(replica, {"late": True})
     assert not RecordLink.objects.exists()
 

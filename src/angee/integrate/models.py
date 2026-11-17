@@ -4203,12 +4203,19 @@ class SyncStreamQuerySet[SyncStreamT: SyncStream](AngeeHistoryQuerySet[SyncStrea
         rows = self.sudo(reason="integrate.stream.current_for_bridge").filter(integration_id=bridge.pk)
         if key is not None:
             rows = rows.filter(key=key)
+        return rows.latest_generations().order_by("key", "partition")
+
+    def latest_generations(self) -> Self:
+        """Keep each selected partition's current epoch, whatever its state."""
+
         latest = (
-            rows.filter(key=OuterRef("key"), partition=OuterRef("partition"))
+            self.model._base_manager.filter(
+                integration_id=OuterRef("integration_id"), key=OuterRef("key"), partition=OuterRef("partition")
+            )
             .order_by("-generation")
             .values("generation")[:1]
         )
-        return rows.filter(generation=Subquery(latest)).order_by("key", "partition")
+        return self.filter(generation=Subquery(latest))
 
 
 _SyncStreamManagerBase = AngeeHistoryManager.from_queryset(SyncStreamQuerySet)
@@ -4220,7 +4227,7 @@ class SyncStreamManager[SyncStreamT: SyncStream](_SyncStreamManagerBase[SyncStre
     def lock_current(self, stream: Any, *, fenced_to: Any = None) -> Any:
         """Fence one page against epoch changes inside the caller's transaction.
 
-        The stream row lock is shared with epoch retirement. A stale extracted
+        The stream row lock is shared with epoch changes. A stale extracted
         page must fail before any domain records or cursor state are applied.
         """
 
@@ -4234,7 +4241,7 @@ class SyncStreamManager[SyncStreamT: SyncStream](_SyncStreamManagerBase[SyncStre
                 partition=locked.partition,
                 generation__gt=locked.generation,
             ).exists():
-                raise RuntimeError("The extracted page belongs to a retired stream generation.")
+                raise RuntimeError("The extracted page belongs to a superseded stream generation.")
             if fenced_to is not None and locked.operation_fence != fenced_to.operation_fence:
                 raise RuntimeError("Stream state changed during external work; retry the operation.")
             return locked
@@ -4260,6 +4267,10 @@ class SyncStreamManager[SyncStreamT: SyncStream](_SyncStreamManagerBase[SyncStre
         ``authoritative`` is the declaration's fact: a changed declaration flips the
         current generation through :meth:`set_authoritative`, so an adapter never
         flips it from inside a page.
+        A child stream's ``container`` is a link of a stream of the same bridge whose
+        external key is the partition; like kind, it never changes. A retired
+        generation reopens as a new baseline once its container observes its
+        target again; while the container stays tombstoned it is returned as is.
         """
 
         if definition.absence_threshold < 1:
@@ -4269,8 +4280,14 @@ class SyncStreamManager[SyncStreamT: SyncStream](_SyncStreamManagerBase[SyncStre
         integration_model = self.model.integration.field.related_model
         if bridge._meta.proxy or integration_model not in bridge._meta.get_parent_list():
             raise ValidationError("A stream bridge must be a concrete Integration child.")
+        container = definition.container
+        links = self.model.container.field.related_model.objects
         with system_context(reason="integrate.stream.current"), transaction.atomic():
             cast(Any, bridge).lock_capability()
+            if container is not None and not links.filter(
+                pk=container.pk, external_key=definition.partition, stream__integration_id=bridge.pk
+            ).exists():
+                raise ValidationError("A child stream's partition is the external key of its bridge's container link.")
             identity = {
                 "integration_id": bridge.pk,
                 "key": definition.key,
@@ -4281,6 +4298,8 @@ class SyncStreamManager[SyncStreamT: SyncStream](_SyncStreamManagerBase[SyncStre
                 return self.create(integration_id=bridge.pk, **definition.stream_fields())
             if stream.kind != definition.kind:
                 raise ValidationError("A stream's kind cannot change between declarations.")
+            if stream.container_id != (container.pk if container is not None else None):
+                raise ValidationError("A stream's container cannot change between declarations.")
             if stream.mapping_version is None:
                 applied_version = stream.links.filter(applied_at__isnull=False).aggregate(
                     version=models.Min("mapping_version"),
@@ -4291,6 +4310,11 @@ class SyncStreamManager[SyncStreamT: SyncStream](_SyncStreamManagerBase[SyncStre
                 stream.direction != definition.direction
                 or stream.snapshot != definition.snapshot
                 or definition.mapping_version > stream.mapping_version
+                or (
+                    stream.state == StreamState.RETIRED
+                    and stream.container_id is not None
+                    and links.filter(pk=stream.container_id).observing().exists()
+                )
             ):
                 stream = self.bump_generation(
                     stream,
@@ -4315,8 +4339,9 @@ class SyncStreamManager[SyncStreamT: SyncStream](_SyncStreamManagerBase[SyncStre
     ) -> Any:
         """Create one new baseline while retaining identities and history.
 
-        Concurrent requests against a retired epoch return its successor. Links
-        follow the current epoch without changing their verification marker.
+        Concurrent requests against a superseded epoch return its successor. Links
+        follow the current epoch without changing their verification marker. An
+        open predecessor closes; a retired one stays retired.
         """
 
         with system_context(reason="integrate.stream.bump_generation"), transaction.atomic():
@@ -4338,7 +4363,8 @@ class SyncStreamManager[SyncStreamT: SyncStream](_SyncStreamManagerBase[SyncStre
                 inbound=deepcopy(latest.inbound),
             )
             latest.links.model.objects.filter(stream=latest).update(stream=successor)
-            latest.state = StreamState.CLOSED
+            if latest.state == StreamState.OPEN:
+                latest.state = StreamState.CLOSED
             latest.inbound = []
             latest.save(update_fields=["state", "inbound", "updated_at"])
             return successor
@@ -4415,8 +4441,8 @@ class SyncStreamManager[SyncStreamT: SyncStream](_SyncStreamManagerBase[SyncStre
 
         with system_context(reason="integrate.stream.advance"), transaction.atomic():
             locked = self.lock_current(stream)
-            if locked.state == StreamState.CLOSED:
-                raise ValidationError("A closed stream requires a new generation before advancement.")
+            if locked.state != StreamState.OPEN:
+                raise ValidationError("A closed or retired stream requires a new generation before advancement.")
             locked.cursor = cursor
             locked.cursor_expires_at = cursor_expires_at
             locked.last_advanced_at = timezone.now()
@@ -4430,6 +4456,47 @@ class SyncStreamManager[SyncStreamT: SyncStream](_SyncStreamManagerBase[SyncStre
                 setattr(stream, field, getattr(locked, field))
             return stream
 
+    def retire_children(self, stream: Any) -> list[tuple[Any, tuple[Any, ...]]]:
+        """Retire the current child streams of ``stream``'s tombstoned containers.
+
+        A retired generation is no longer drained. Each of its links is marked
+        absent once under the child's own absence policy, roots before compound
+        children, so its target follows the normal absence or tombstone path;
+        nothing is deleted. Children whose containers that tombstones retire in
+        turn. Returns each retired stream with the links whose status changed,
+        for the adapter's ``on_absent`` hook. Runs inside the caller's page
+        transaction, as the parent's tombstone does.
+        """
+
+        retired: list[tuple[Any, tuple[Any, ...]]] = []
+        links = self.model.container.field.related_model.objects
+        with system_context(reason="integrate.stream.retire_children"), transaction.atomic():
+            children = (
+                self.filter(container__stream=stream, container__tombstoned_at__isnull=False)
+                .exclude(state=StreamState.RETIRED)
+                .latest_generations()
+                .order_by("key", "partition")
+            )
+            for child in children:
+                locked = self.lock_current(child)
+                locked.state = StreamState.RETIRED
+                locked.save(update_fields=["state", "updated_at"])
+                rows = links.filter(stream=locked).order_by("pk")
+                previous = dict(rows.values_list("pk", "status"))
+                for roots in (True, False):
+                    keys = list(rows.filter(parent__isnull=roots).values_list("external_key", flat=True))
+                    for batch in batched(keys, 500):
+                        links.mark_absent(locked, batch)
+                absent = tuple(
+                    link
+                    for link in rows
+                    if link.status != previous[link.pk]
+                    and link.status in (LinkStatus.UNAVAILABLE, LinkStatus.TOMBSTONE)
+                )
+                retired.append((locked, absent))
+                retired.extend(self.retire_children(locked))
+        return retired
+
 
 class SyncStream(SyncStateMixin, AuditMixin, AngeeDataModel, concrete=True):
     """An epoch's opaque progress and adapter-owned policy for one partition."""
@@ -4438,6 +4505,14 @@ class SyncStream(SyncStateMixin, AuditMixin, AngeeDataModel, concrete=True):
     integration = models.ForeignKey("integrate.Integration", on_delete=models.PROTECT, related_name="sync_streams")
     key = models.CharField(max_length=160)
     partition = models.CharField(max_length=255, blank=True)
+    container = models.ForeignKey(
+        "integrate.RecordLink", null=True, blank=True, on_delete=models.PROTECT, related_name="child_streams"
+    )
+    """The parent stream's link whose record holds this partition (an address book, a calendar).
+
+    Its external key is the partition. The driver drains the parent stream first;
+    the container's tombstone retires this stream (:meth:`SyncStreamManager.retire_children`).
+    """
     kind = StateField(choices_enum=StreamKind)
     direction = StateField(choices_enum=StreamDirection)
     snapshot = models.BooleanField(default=False)
@@ -4596,6 +4671,15 @@ class RecordLinkQuerySet[RecordLinkT: RecordLink](AngeeHistoryQuerySet[RecordLin
         """Rows a sweep's enumeration did not observe since it started."""
 
         return self.filter(Q(last_seen_at__isnull=True) | Q(last_seen_at__lt=started))
+
+    def observing(self) -> Self:
+        """Identities that still observe their target: neither tombstoned nor withdrawn.
+
+        A container link is live while it observes; only then does its adapter
+        declare the child stream it holds.
+        """
+
+        return self.filter(tombstoned_at__isnull=True).exclude(status__in=(LinkStatus.TOMBSTONE, LinkStatus.WITHDRAWN))
 
     def absence_candidates(self, *, started: datetime, children: bool) -> Self:
         """Select a sweep's unseen roots, or the children of the roots it found missing."""
@@ -5052,13 +5136,10 @@ class RecordLink(
         ]
         observing = (
             type(self)
-            ._base_manager.filter(
-                target_content_type_id=self.target_content_type_id,
-                target_object_id=self.target_object_id,
-                tombstoned_at__isnull=True,
-            )
+            .objects.sudo(reason="integrate.link_evidence_siblings")
+            .filter(target_content_type_id=self.target_content_type_id, target_object_id=self.target_object_id)
+            .observing()
             .exclude(pk=self.pk)
-            .exclude(status__in=(LinkStatus.TOMBSTONE, LinkStatus.WITHDRAWN))
             .select_related("stream__integration")
             .order_by("pk")
         )

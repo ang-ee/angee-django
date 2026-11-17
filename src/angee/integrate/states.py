@@ -48,10 +48,15 @@ class StreamPhase(models.TextChoices):
 
 
 class StreamState(models.TextChoices):
-    """Reopening a closed generation starts a fresh baseline."""
+    """Reopening a closed generation starts a fresh baseline.
+
+    A retired generation's container link was tombstoned, so it is no longer
+    drained; a later declaration of its revived container reopens it.
+    """
 
     OPEN = "open", "Open"
     CLOSED = "closed", "Closed"
+    RETIRED = "retired", "Retired"
 
 
 class LinkStatus(models.TextChoices):
@@ -114,17 +119,29 @@ class StreamDefinition:
     authoritative: bool = False
     mapping_version: int = 1
     """Increase when mapping changes require a fresh baseline of existing records."""
+    container: RecordLink | None = None
+    """The parent stream's link whose record this partition belongs to.
+
+    The partition is the container's external key. The driver drains the parent
+    stream before this one, and the container's tombstone retires this stream.
+    """
 
     @classmethod
     def from_stream(cls, stream: SyncStream) -> StreamDefinition:
         """Read declaration facts from a persisted generation without another field inventory."""
 
-        return cls(**{item.name: deepcopy(getattr(stream, item.name)) for item in fields(cls)})
+        return cls(**{item.name: _independent(getattr(stream, item.name)) for item in fields(cls)})
 
     def stream_fields(self) -> dict[str, Any]:
         """Return independent values suitable for creating a stream generation."""
 
-        return {item.name: deepcopy(getattr(self, item.name)) for item in fields(self)}
+        return {item.name: _independent(getattr(self, item.name)) for item in fields(self)}
+
+
+def _independent(value: Any) -> Any:
+    """Copy a declaration value; a row such as the container keeps its identity."""
+
+    return value if isinstance(value, models.Model) else deepcopy(value)
 
 
 class SyncFailure(BaseModel):

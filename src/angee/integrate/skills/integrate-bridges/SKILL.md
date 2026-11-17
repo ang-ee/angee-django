@@ -95,8 +95,12 @@ source addon contributes one adapter class, its registry key and its tests. Refe
    ```
 
    `streams()` declares each partition once with its `StreamDefinition` knobs (`kind`, `direction`, `cursor`,
-   `reconcile_interval`, `absence_threshold`, `tombstone_retention`, `snapshot`, `authoritative`, `mapping_version`, `config`;
-   `StreamDefinition` in `src/angee/integrate/states.py`). `extract` returns one page and the cursor that covers it; the
+   `reconcile_interval`, `absence_threshold`, `tombstone_retention`, `snapshot`, `authoritative`, `mapping_version`, `config`,
+   `container`; `StreamDefinition` in `src/angee/integrate/states.py`). If a partition is itself a record of another
+   stream (an address book, a calendar) → declare that parent stream, create the container row in its `apply_record`,
+   and declare one child per observing container link with `container=<link>` and `partition=<link external key>`
+   (`DirectoryBackend.streams` in `src/angee/parties/backends.py`); the driver drains parents first and retires the
+   children of a tombstoned container. `extract` returns one page and the cursor that covers it; the
    driver commits both. If the source is a mutable replica → return `RecordChange` rows and implement
    `enumerate_keys`, `read_keys` (set `supports_identity_reads = True`) and, for two-way, `local_changes` +
    `write_back` (`src/angee/integrate/impl.py`). If the capability base already applies →
@@ -150,6 +154,7 @@ source addon contributes one adapter class, its registry key and its tests. Refe
 ## Do not
 
 - A private cursor table, checkpoint column or `last_synced_at` on the bridge: `SyncStream.cursor` and its generation own position ([Integration and worker contracts](../../../../../docs/backend/guidelines.md#integration-and-worker-contracts) "The cursor commits with the records it covers").
+- A container's remote id in a column (`source_href`, `external_ref`) or a container row created in `streams()`: the parent stream's `RecordLink` owns its identity and its apply path creates the row; the child names it as `container` (`BridgeImpl.streams` in `src/angee/integrate/impl.py`, the container paragraph of `src/angee/integrate/README.md`).
 - Persisting the cursor, promoting a link or writing credential material inside an adapter: the driver and credential manager own those (`BridgeImpl.apply_record` in `src/angee/integrate/impl.py`, `src/angee/integrate/README.md`).
 - Choosing a winner on divergent edits or a remote tombstone against a local edit: conflicts await explicit resolution ([Integration and worker contracts](../../../../../docs/backend/guidelines.md#integration-and-worker-contracts) "Compare both mapped sides with their pinned applied base").
 - Running `extract`/`enumerate_keys` inside an enclosing transaction, or network IO inside `prepare_page`/`apply_record`: extraction runs outside the page transaction and may read the row (the IMAP adapter reloads credentials per page through `fresh_credential`, `ImapChannelBackend._load_credentials` in `src/angee/messaging_integrate_imap/backend.py`, `src/angee/integrate/models.py`); the driver refuses extraction in an atomic block (`advance_stream` in `src/angee/integrate/streams.py`) and application does database work only (`src/angee/integrate/impl.py`; [Integration and worker contracts](../../../../../docs/backend/guidelines.md#integration-and-worker-contracts) "The cursor commits with the records it covers").

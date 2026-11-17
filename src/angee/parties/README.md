@@ -1,8 +1,15 @@
 # Directory synchronization
 
-A Directory composes the [record-sync driver](../integrate/README.md). Each
-address book maps to a Folder and contacts stream; RecordLink owns external
-identity and wire payloads. Party rows remain independent of any one directory.
+A Directory composes the [record-sync driver](../integrate/README.md). Its
+`addressbooks` stream mirrors each discovered address book as a Folder: the
+book's RecordLink targets the folder and is the container of that book's
+`contacts` stream, whose partition is the book's href. The directory states the
+folder's name through that link ([FolderManager.ingest_addressbook](managers.py)),
+so a person's rename outranks a remote one. A book missing from the listing is a
+tombstone that retires its contacts stream and marks its contacts absent; folders
+and parties stay. `streams()` declares from local state only. RecordLink owns
+external identity and wire payloads. Party rows remain independent of any one
+directory.
 
 The [CardDAV backend](../parties_integrate_carddav/backend.py) compares the shared
 [contact projection](backends.py); wire properties outside that projection stay

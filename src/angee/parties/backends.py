@@ -1,14 +1,16 @@
 """Directory replica mapping; integrate owns the loop and parties owns the fields.
 
-Transport backends discover collections and extract neutral contacts. Both sides
+Transport backends discover collections and extract neutral contacts. The
+``addressbooks`` stream mirrors each discovered collection as a folder, and each
+address book's link is the container of its ``contacts`` stream. Both sides
 compare the same deterministic projection; all inbound writes compose the parties
-ingest owner. The manual backend declares no streams.
+ingest owners. The manual backend declares no streams.
 """
 
 from __future__ import annotations
 
 import hashlib
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import asdict, dataclass, replace
 from datetime import date
 from typing import Any
@@ -21,9 +23,12 @@ from django.db.models.functions import Coalesce
 
 from angee.base.serialization import canonical_json_sha256
 from angee.integrate.http import HttpClientMixin
-from angee.integrate.impl import BridgeImpl
-from angee.integrate.states import StreamDefinition
-from angee.integrate.streams import ApplyResult, LocalChange, RecordChange, SemanticError
+from angee.integrate.impl import AdapterContractError, BridgeImpl
+from angee.integrate.states import LinkStatus, StreamDefinition, StreamKind, StreamPhase
+from angee.integrate.streams import ApplyResult, LocalChange, RecordChange, SemanticError, StreamPage
+
+ADDRESSBOOKS = "addressbooks"
+"""The stream whose records are a directory's address books; each targets its folder."""
 
 
 @dataclass(frozen=True)
@@ -183,7 +188,12 @@ def contact_from_projection(projection: Mapping[str, Any]) -> ParsedContact:
 
 
 class DirectoryBackend(BridgeImpl, HttpClientMixin):
-    """One replica stream per address book, mapped through Party.ingest_contact."""
+    """An address-book stream, and one contacts replica per address book mapped through Party.ingest_contact.
+
+    A source backend implements ``discover`` for the address books and
+    ``extract_contacts``/``read_contacts`` for one book's contacts; this base
+    routes the ``addressbooks`` stream itself.
+    """
 
     registry_setting = "ANGEE_DIRECTORY_BACKEND_CLASSES"
 
@@ -207,16 +217,96 @@ class DirectoryBackend(BridgeImpl, HttpClientMixin):
         raise NotImplementedError("DirectoryBackend subclasses must implement discover().")
 
     def streams(self, *, deadline: float | None = None) -> Iterable[StreamDefinition]:
-        """Discover folders and seed per-collection policy on their first epoch."""
+        """Declare the address-book listing and the contacts of each live address book.
 
-        for book in sorted(self.discover(), key=lambda item: item.href):
-            yield self.bridge.addressbook_stream(book)
+        Local state only: an address book is known once the ``addressbooks`` stream
+        applied it, and its folder is created on that stream's apply path.
+        """
 
-    def _folder(self, stream: Any) -> Any:
-        return apps.get_model("parties", "Folder").objects.get(
-            directory_id=self.bridge.pk,
-            source_href=stream.partition,
+        yield StreamDefinition(ADDRESSBOOKS, kind=StreamKind.RECORD_REPLICA)
+        # Links follow their stream's current generation, so the key alone selects them.
+        addressbooks = (
+            apps.get_model("integrate", "RecordLink")
+            .objects.filter(
+                stream__integration_id=self.bridge.pk, stream__key=ADDRESSBOOKS, target_object_id__isnull=False
+            )
+            .observing()
+            .select_related("stream")
+            .order_by("external_key")
         )
+        for addressbook in addressbooks:
+            yield self.bridge.contacts_stream(addressbook)
+
+    def extract(self, stream: Any, page_bound: int, *, deadline: float | None = None) -> StreamPage:
+        """Compare the complete address-book listing with its links; contacts page through the source."""
+
+        if stream.key != ADDRESSBOOKS:
+            return self.extract_contacts(stream, page_bound, deadline=deadline)
+        changes = self._addressbook_changes(stream, self.discover())
+        return StreamPage(changes[:page_bound], {}, exhausted=len(changes) <= page_bound)
+
+    def read_keys(self, stream: Any, keys: Sequence[str]) -> Iterable[RecordChange]:
+        """Read address books from the listing, or one book's contacts through the source."""
+
+        if stream.key != ADDRESSBOOKS:
+            return self.read_contacts(stream, keys)
+        return self._addressbook_changes(stream, self.discover(), keys=keys)
+
+    def extract_contacts(self, stream: Any, page_bound: int, *, deadline: float | None = None) -> StreamPage:
+        """Fetch one bounded page of an address book's contacts outside transactions."""
+
+        raise NotImplementedError("DirectoryBackend subclasses must implement extract_contacts().")
+
+    def read_contacts(self, stream: Any, keys: Sequence[str]) -> Iterable[RecordChange]:
+        """Read each requested contact identity of one address book, including tombstones."""
+
+        raise AdapterContractError("This directory backend does not support identity reads.")
+
+    def _addressbook_changes(
+        self, stream: Any, books: Iterable[ParsedAddressbook], *, keys: Sequence[str] | None = None
+    ) -> list[RecordChange]:
+        """Map the listing to address-book records, or to the requested identities.
+
+        A listing is complete: a book no longer listed is a tombstone. A baseline
+        re-reads each listed book once per generation; later, only a new, renamed
+        or revived book is a record. The local side is the name the link states,
+        so a person's rename is not a local change of this pull-only stream.
+        """
+
+        links = {link.external_key: link for link in stream.links.order_by("pk")}
+        listed = {book.href: book for book in books}
+        folders = apps.get_model("parties", "Folder").objects
+        baseline = stream.phase == StreamPhase.BASELINE
+        changes = []
+        for href in sorted(set(listed) | set(links)) if keys is None else keys:
+            book, link = listed.get(href), links.get(href)
+            payload = {"href": href} if book is None else {"href": href, "name": book.name}
+            if keys is None and (
+                (book is None and (link is None or link.status == LinkStatus.TOMBSTONE))
+                or (
+                    book is not None
+                    and link is not None
+                    and link.status != LinkStatus.TOMBSTONE
+                    and link.source_payload == payload
+                    and (not baseline or link.last_verified_generation == stream.generation)
+                )
+            ):
+                continue
+            target = link.target if link is not None else None
+            projection = folders.stated_addressbook(link) if link is not None else None
+            changes.append(
+                RecordChange(href, payload, "", tombstone=True, target=target, projection=projection)
+                if book is None
+                else RecordChange(
+                    href,
+                    payload,
+                    canonical_json_sha256(payload),
+                    mapped_payload={"name": book.name},
+                    target=target,
+                    projection=projection,
+                )
+            )
+        return changes
 
     def _source_payload(self, link: Any) -> dict[str, Any]:
         return dict(link.source_payload)
@@ -385,12 +475,23 @@ class DirectoryBackend(BridgeImpl, HttpClientMixin):
         return key
 
     def apply_record(self, stream: Any, record: RecordChange) -> ApplyResult:
-        """Revalidate under domain locks, then use the single contact ingest verb.
+        """Revalidate under domain locks, then use the single folder or contact ingest verb.
 
-        The fixed contact projection has no dependency digest. The driver stamps
-        the observation's mapping version independently of the apply result.
+        An address book states its folder's name, and its tombstone withdraws that
+        statement while the folder stays. The fixed contact projection has no
+        dependency digest. The driver stamps the observation's mapping version
+        independently of the apply result.
         """
 
+        if stream.key == ADDRESSBOOKS:
+            links = apps.get_model("integrate", "RecordLink").objects
+            link = links.get(stream=stream, external_key=record.external_key)
+            if record.tombstone:
+                link.withdraw_statements()
+                return ApplyResult(mapped_payload=None)
+            name = record.mapped_payload["name"]
+            folder = apps.get_model("parties", "Folder").objects.ingest_addressbook(link, name=name)
+            return ApplyResult(target=folder, mapped_payload={"name": name})
         parties = apps.get_model("parties", "Party").objects
         if record.source_payload.get("error"):
             raise SemanticError(record.source_payload["error"])
@@ -416,7 +517,6 @@ class DirectoryBackend(BridgeImpl, HttpClientMixin):
             assert parsed is not None  # Only tombstones omit the parsed contact.
             target = parties.ingest_contact(
                 parsed,
-                folder=self._folder(stream),
                 target=target,
                 created_by_id=self.bridge.owner_id,
                 link=apps.get_model("integrate", "RecordLink").objects.get(
@@ -459,3 +559,8 @@ class ManualDirectoryBackend(DirectoryBackend):
         """Return no address books — a manual directory is populated by hand."""
 
         return []
+
+    def streams(self, *, deadline: float | None = None) -> Iterable[StreamDefinition]:
+        """Declare nothing: a manual directory has no source to sync."""
+
+        return ()

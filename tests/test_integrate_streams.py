@@ -10,6 +10,7 @@ from threading import Barrier, Lock
 from typing import Any, ClassVar
 
 import pytest
+from django.core.exceptions import ValidationError
 from django.db import (
     DataError,
     OperationalError,
@@ -1640,7 +1641,6 @@ def test_both_changed_conflict_requires_resolution_before_pull_or_push(stream_br
     assert stream.generation == 1
     assert AppliedRecord.objects.get(key="person:1").payload == {"name": "local edit"}
     assert applied_history().count() == 1
-    from django.core.exceptions import ValidationError
 
     with pytest.raises(ValidationError, match="requires keeping"):
         failure.resolve()
@@ -2281,3 +2281,123 @@ def test_reconcile_pulse_rejects_a_checkpoint_changed_during_transport(stream_br
     assert stream.reconcile_state == {"newer": True}
     assert not RecordLink.objects.filter(stream=stream).exists()
     assert not AppliedRecord.objects.exists()
+
+
+@dataclass
+class ShelfAdapter(BridgeImpl):
+    """A ``shelves`` stream whose links are the containers of one ``books`` stream each.
+
+    A baseline re-reads the remote's complete state, a delta only what changed;
+    the local side never changes, so a record's projection is its applied base.
+    """
+
+    channel: Any = None
+    shelves: dict[str, list[str]] = field(default_factory=dict)
+    extracted: list[tuple[str, str]] = field(default_factory=list)
+    absent: list[tuple[str, tuple[str, ...]]] = field(default_factory=list)
+
+    def streams(self, *, deadline: float | None = None) -> Iterable[StreamDefinition]:
+        yield StreamDefinition("shelves", kind=StreamKind.RECORD_REPLICA)
+        parents = SyncStream.objects.current_for_bridge(self.channel, "shelves")
+        for shelf in RecordLink.objects.filter(stream__in=parents).observing().select_related("stream"):
+            yield StreamDefinition("books", shelf.external_key, kind=StreamKind.RECORD_REPLICA, container=shelf)
+
+    def extract(self, stream: Any, page_bound: int, *, deadline: float | None = None) -> StreamPage:
+        self.extracted.append((stream.key, stream.partition))
+        links = {link.external_key: link for link in stream.links.with_sync_evidence()}
+        bases = {key: link.applied_base.mapped_payload if link.applied_base else None for key, link in links.items()}
+        if stream.key == "books":
+            remote = {f"{stream.partition}/{book}": {"book": book} for book in self.shelves.get(stream.partition, ())}
+        else:
+            remote = {shelf: {"shelf": shelf} for shelf in self.shelves}
+        baseline = stream.phase == StreamPhase.BASELINE
+        records = [
+            RecordChange(key, payload, key, mapped_payload=payload, projection=bases.get(key))
+            for key, payload in sorted(remote.items())
+            if baseline or key not in links or links[key].status == LinkStatus.TOMBSTONE or bases[key] != payload
+        ]
+        records += [
+            RecordChange(key, {}, "", tombstone=True, projection=bases[key])
+            for key, link in sorted(links.items())
+            if key not in remote and link.status != LinkStatus.TOMBSTONE
+        ]
+        return StreamPage(records, {})
+
+    def apply_record(self, stream: Any, record: Any) -> ApplyResult:
+        if record.tombstone:
+            return ApplyResult(mapped_payload=None)
+        row, _ = AppliedRecord.objects.update_or_create(
+            key=record.external_key, defaults={"payload": record.source_payload}
+        )
+        return ApplyResult(target=row, mapped_payload=record.mapped_payload)
+
+    def on_absent(self, stream: Any, links: Sequence[Any]) -> None:
+        self.absent.append((stream.partition, tuple(link.external_key for link in links)))
+
+
+def test_sync_bridge_drains_a_container_stream_before_the_streams_it_holds(
+    stream_bridge: Channel, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``books`` sorts before ``shelves``, so only the container ordering puts the shelves first."""
+
+    adapter = ShelfAdapter(stream_bridge, shelves={"a": ["x"], "b": ["y"]})
+    monkeypatch.setattr(Channel, "capability_impl", property(lambda self: adapter))
+    assert sync_bridge(stream_bridge) == 4  # Each new shelf's books drain in the cycle that created it.
+    assert adapter.extracted[0] == ("shelves", "") and sorted(adapter.extracted[1:]) == [("books", "a"), ("books", "b")]
+    held = SyncStream.objects.current_for_bridge(stream_bridge, "books")
+    assert {(stream.partition, stream.container.stream.key) for stream in held} == {("a", "shelves"), ("b", "shelves")}
+
+    adapter.extracted.clear()
+    adapter.shelves["a"].append("z")
+    assert sync_bridge(stream_bridge) == 1
+    assert adapter.extracted[0] == ("shelves", "") and sorted(adapter.extracted[1:]) == [("books", "a"), ("books", "b")]
+
+
+def test_a_child_stream_names_an_unchanging_container_of_its_own_bridge(stream_bridge: Channel) -> None:
+    shelf = RecordLink.objects.observe(current_stream(stream_bridge, "shelves", kind=StreamKind.RECORD_REPLICA), "a")
+    other = make_integration("stream-protocol-other", model=Channel)
+    for bridge, partition in ((stream_bridge, "b"), (other, "a")):
+        with pytest.raises(ValidationError, match="external key"):
+            current_stream(bridge, "books", partition, kind=StreamKind.RECORD_REPLICA, container=shelf)
+    books = current_stream(stream_bridge, "books", "a", kind=StreamKind.RECORD_REPLICA, container=shelf)
+    assert SyncStream.objects.get(pk=books.pk).container_id == shelf.pk
+    with pytest.raises(ValidationError, match="container cannot change"):
+        current_stream(stream_bridge, "books", "a", kind=StreamKind.RECORD_REPLICA)
+
+
+def test_a_tombstoned_container_retires_its_streams_and_its_revival_reopens_them(
+    stream_bridge: Channel, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    adapter = ShelfAdapter(stream_bridge, shelves={"a": ["x", "y"], "b": ["w"]})
+    monkeypatch.setattr(Channel, "capability_impl", property(lambda self: adapter))
+    sync_bridge(stream_bridge)
+    held = SyncStream.objects.current_for_bridge(stream_bridge, "books").get(partition="a")
+    removed = adapter.shelves.pop("a")
+    adapter.extracted.clear()
+
+    assert sync_bridge(stream_bridge) == 1
+    held.refresh_from_db()
+    assert held.state == StreamState.RETIRED
+    assert ("books", "a") not in adapter.extracted
+    assert list(RecordLink.objects.filter(stream=held).order_by("pk").values_list("status", "absence_count")) == [
+        (LinkStatus.UNAVAILABLE, 1),
+        (LinkStatus.UNAVAILABLE, 1),
+    ]
+    assert adapter.absent == [("a", ("a/x", "a/y"))]
+    assert AppliedRecord.objects.filter(key__in=("a/x", "a/y")).count() == 2
+    assert SyncStream.objects.current_for_bridge(stream_bridge, "books").get(partition="b").state == StreamState.OPEN
+    assert advance_stream(held, adapter).exhausted and ("books", "a") not in adapter.extracted
+
+    adapter.shelves["a"] = removed
+    sync_bridge(stream_bridge)
+    reopened = SyncStream.objects.current_for_bridge(stream_bridge, "books").get(partition="a")
+    held.refresh_from_db()
+    assert (reopened.generation, reopened.state, reopened.container_id) == (
+        held.generation + 1,
+        StreamState.OPEN,
+        held.container_id,
+    )
+    assert held.state == StreamState.RETIRED
+    assert set(RecordLink.objects.filter(stream=reopened).values_list("status", "absence_count")) == {
+        (LinkStatus.CURRENT, 0)
+    }

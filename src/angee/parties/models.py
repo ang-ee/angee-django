@@ -59,7 +59,7 @@ from angee.base.permissions import actor_user_id, instance_actor, reader_queryse
 from angee.base.prefetch import prefetched
 from angee.integrate.models import Bridge, IntegrationCreateMode
 from angee.integrate.states import StreamDefinition, StreamDirection, StreamKind
-from angee.parties.backends import DirectoryBackend, ParsedAddressbook
+from angee.parties.backends import DirectoryBackend
 from angee.parties.connections import ConnectionHandle
 from angee.parties.fields import CountryCodeField
 from angee.parties.managers import (
@@ -1139,20 +1139,38 @@ class Address(TrashMixin, PartyAspectMixin, HistoryMixin, AuditMixin, AngeeDataM
         return ", ".join(part for part in (self.street, self.city, self.country) if part)
 
 
-class Folder(OwnerMixin, AngeeDataModel, concrete=True):
+class Folder(StatementsMixin, HistoryMixin, OwnerMixin, AngeeDataModel, concrete=True):
     """A group of parties — the local mirror of a synced address book.
 
     The contacts counterpart of storage's ``Drive``/``Folder`` and knowledge's
     ``Vault`` container idea, kept to exactly what sync needs today: the directory
-    it mirrors, the collection ``source_href`` (one folder per ``(directory,
-    source_href)`` makes the folder upsert idempotent). Sync progress belongs to
-    ``integrate.SyncStream``. Owned through its transferable ``owner``, which a
-    sync's insert takes from the directory owner it stamps as ``created_by``;
-    deleting a folder leaves its linked parties. Manual creation and a folder
-    tree (``parent``) are deferred until a create path lands to exercise them.
+    it mirrors and its name. The address book's identity is the
+    ``integrate.RecordLink`` of the directory's ``addressbooks`` stream that targets
+    this folder; that link is the container of the address book's contacts stream.
+    The source states the name through that link, so a person's rename outranks a
+    remote one. Owned through its transferable ``owner``, which a sync's insert
+    takes from the directory owner it stamps as ``created_by``. A folder no source
+    has stated stays an ordinary row (``person_stances_once_stated``). Manual
+    creation and a folder tree (``parent``) are deferred until a create path lands
+    to exercise them.
     """
 
     sqid_prefix = "fol_"
+    person_stances_once_stated = True
+    statement_write_permission = "write_statements"
+    record_links = RetainedGenericRelation(
+        "integrate.RecordLink", content_type_field="target_content_type", object_id_field="target_object_id"
+    )
+    statements = StatementRecords(
+        link="integrate.RecordLink",
+        aspects={
+            "identity": Aspect(
+                fields=("name",),
+                precedence=cast(tuple[SourceKind, ...], (SourceKind.PERSON, SourceKind.DIRECTORY)),
+            ),
+        },
+        sqid_prefix="fos_",
+    )
     name = models.CharField(max_length=200)
     directory = models.ForeignKey(
         "parties.Directory",
@@ -1161,7 +1179,6 @@ class Folder(OwnerMixin, AngeeDataModel, concrete=True):
         on_delete=models.CASCADE,
         related_name="folders",
     )
-    source_href = models.CharField(max_length=1024, blank=True, default="")
 
     objects = FolderManager()
 
@@ -1171,13 +1188,6 @@ class Folder(OwnerMixin, AngeeDataModel, concrete=True):
         abstract = True
         ordering = ("name", "sqid")
         rebac_resource_type = "parties/folder"
-        constraints = (
-            models.UniqueConstraint(
-                fields=("directory", "source_href"),
-                condition=~models.Q(source_href=""),
-                name="uq_folder_directory_source",
-            ),
-        )
 
     def __str__(self) -> str:
         """Return the folder name for Django displays."""
@@ -1596,17 +1606,17 @@ class Directory(Bridge, inherits="integrate.Integration"):
         verbose_name_plural = "directories"
         rebac_resource_type = "parties/directory"
 
-    def addressbook_stream(self, book: ParsedAddressbook) -> StreamDefinition:
-        """Mirror a discovered address book as a folder and declare its contacts stream.
+    def contacts_stream(self, addressbook: Any) -> StreamDefinition:
+        """Declare the contacts stream an address-book link holds, writing nothing.
 
-        The stream's deletion policy seeds from this directory's per-collection config.
+        The partition is the address book's href, the link's external key. The
+        stream's deletion policy seeds from this directory's per-collection config.
         """
 
-        apps.get_model("parties", "Folder").objects.sync_addressbook(self, book)
         policy = {
             "local_delete": "conflict",
             "remote_delete": "retain",
-            **self.config.get("streams", {}).get("contacts", {}).get(book.href, {}),
+            **self.config.get("streams", {}).get("contacts", {}).get(addressbook.external_key, {}),
         }
         if policy["local_delete"] not in {"conflict", "propagate"} or policy["remote_delete"] not in {
             "retain",
@@ -1615,11 +1625,12 @@ class Directory(Bridge, inherits="integrate.Integration"):
             raise ValueError("Unknown Directory deletion policy.")
         return StreamDefinition(
             "contacts",
-            partition=book.href,
+            partition=addressbook.external_key,
             kind=StreamKind.RECORD_REPLICA,
             direction=StreamDirection.BIDIRECTIONAL,
             reconcile_interval=timedelta(days=1),
             config=policy,
+            container=addressbook,
         )
 
     @property

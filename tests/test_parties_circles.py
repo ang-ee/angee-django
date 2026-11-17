@@ -61,6 +61,16 @@ def _user(username: str) -> Any:
     return User.objects.create_user(username=username, password="x")
 
 
+def _contacts_stream(directory: Any, owner: Any) -> Any:
+    """An address book's folder, its link in the directory's address-book stream, and the contacts it holds."""
+
+    href = "https://dav.example/books/contacts/"
+    folder = Folder._base_manager.create(name="Contacts", directory=directory, created_by=owner)
+    addressbooks = current_stream(directory, "addressbooks", kind=StreamKind.RECORD_REPLICA)
+    addressbook = RecordLink.objects.observe(addressbooks, href, target=folder)
+    return current_stream(directory, "contacts", href, kind=StreamKind.RECORD_REPLICA, container=addressbook)
+
+
 def test_manual_contact_is_unconfirmed_and_dismissed_link_stays_dismissed(
     db: None,
 ) -> None:
@@ -1306,8 +1316,7 @@ def test_ingest_contact_upserts_carddav_employment_in_place(db: None) -> None:
         directory = make_integration(
             owner.username + "-directory", model=Directory, backend_class="carddav", owner=owner
         )
-        folder = Folder._base_manager.create(name="Contacts", directory=directory, created_by=owner)
-        stream = current_stream(directory, "contacts", kind=StreamKind.RECORD_REPLICA)
+        stream = _contacts_stream(directory, owner)
         link = RecordLink.objects.observe(stream, "contact-1")
         employee = RelationshipKind._base_manager.create(
             slug="employee",
@@ -1324,7 +1333,7 @@ def test_ingest_contact_upserts_carddav_employment_in_place(db: None) -> None:
             role="Programmer",
         )
 
-        person = Party.objects.ingest_contact(parsed, folder=folder, created_by_id=owner.pk, link=link)
+        person = Party.objects.ingest_contact(parsed, created_by_id=owner.pk, link=link)
         synced = Relationship._base_manager.get(
             party=person,
             kind=employee,
@@ -1341,7 +1350,7 @@ def test_ingest_contact_upserts_carddav_employment_in_place(db: None) -> None:
             created_by=owner,
         )
 
-        again = Party.objects.ingest_contact(parsed, folder=folder, created_by_id=owner.pk, link=link)
+        again = Party.objects.ingest_contact(parsed, created_by_id=owner.pk, link=link)
         unchanged = Relationship._base_manager.get(
             party=again,
             kind=employee,
@@ -1356,7 +1365,7 @@ def test_ingest_contact_upserts_carddav_employment_in_place(db: None) -> None:
             title="Principal Mathematician",
             role="Research lead",
         )
-        Party.objects.ingest_contact(changed, folder=folder, created_by_id=owner.pk, link=link, target=person)
+        Party.objects.ingest_contact(changed, created_by_id=owner.pk, link=link, target=person)
         refreshed = Relationship._base_manager.get(pk=first_pk)
         backend = ManualDirectoryBackend(directory)
         local = backend._local_states(stream, ("contact-1",), links=(RecordLink.objects.get(pk=link.pk),))
@@ -1373,7 +1382,7 @@ def test_ingest_contact_upserts_carddav_employment_in_place(db: None) -> None:
         with pytest.raises(ValidationError, match="Party"):
             Party.objects.ingest_contact(
                 replace(parsed, uid="foreign-contact", display_name="Wrong identity"),
-                folder=folder, created_by_id=owner.pk, link=foreign_link,
+                created_by_id=owner.pk, link=foreign_link,
             )
         with pytest.raises(ValidationError, match="Party"):
             backend._local_states(stream, ("foreign-contact",), links=(foreign_link,))
@@ -1410,12 +1419,11 @@ def test_a_card_pass_keeps_its_addresses_local_facts(db: None) -> None:
         directory = make_integration(
             owner.username + "-directory", model=Directory, backend_class="carddav", owner=owner
         )
-        folder = Folder._base_manager.create(name="Contacts", directory=directory, created_by=owner)
-        stream = current_stream(directory, "contacts", kind=StreamKind.RECORD_REPLICA)
+        stream = _contacts_stream(directory, owner)
         link = RecordLink.objects.observe(stream, "contact-4")
         RelationshipKind._base_manager.create(slug="employee", name="Employee", other_party_kind="organization")
         card = ParsedContact(uid="contact-4", display_name="Ada Lovelace", addresses=(home, work, work))
-        person = Party.objects.ingest_contact(card, folder=folder, created_by_id=owner.pk, link=link)
+        person = Party.objects.ingest_contact(card, created_by_id=owner.pk, link=link)
         assert Address._base_manager.filter(party=person, label="work").count() == 2
         located = Address._base_manager.get(party=person, label="home")
         located.latitude, located.longitude, located.is_primary = 39.8, -89.6, True
@@ -1425,7 +1433,6 @@ def test_a_card_pass_keeps_its_addresses_local_facts(db: None) -> None:
         office = ParsedAddress(label="office", street="3 Far Rd", city="Ogdenville", country="US")
         Party.objects.ingest_contact(
             replace(card, addresses=(moved, work, office)),
-            folder=folder,
             created_by_id=owner.pk,
             link=link,
             target=person,
@@ -1451,13 +1458,12 @@ def test_ingest_contact_requires_employee_relationship_kind(db: None) -> None:
         directory = make_integration(
             owner.username + "-directory", model=Directory, backend_class="carddav", owner=owner
         )
-        folder = Folder._base_manager.create(name="Contacts", directory=directory, created_by=owner)
-        stream = current_stream(directory, "contacts", kind=StreamKind.RECORD_REPLICA)
+        stream = _contacts_stream(directory, owner)
         link = RecordLink.objects.observe(stream, "contact-2")
         parsed = ParsedContact(uid="contact-2", display_name="Grace", organization="Navy")
 
         with pytest.raises(ValidationError, match="employee.*RelationshipKind"):
-            Party.objects.ingest_contact(parsed, folder=folder, created_by_id=owner.pk, link=link)
+            Party.objects.ingest_contact(parsed, created_by_id=owner.pk, link=link)
 
     assert not Person._base_manager.filter(display_name="Grace").exists()
 
