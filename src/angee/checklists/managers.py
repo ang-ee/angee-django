@@ -22,17 +22,19 @@ from __future__ import annotations
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from contextvars import ContextVar
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime
 from functools import cached_property
 from typing import TYPE_CHECKING, Any, Literal, Self, cast
 
 from django.apps import apps
+from django.conf import settings
 from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import PermissionDenied, ValidationError
-from django.db import models, transaction
+from django.db import models, router, transaction
 from django.db.models.fields.json import KeyTextTransform, KeyTransform
 from django.db.models.functions import Coalesce, JSONObject
 from django.db.models.lookups import Exact, In, IsNull
+from django.utils import timezone
 from rebac import current_actor, generic_target, system_context
 from rebac.actors import is_sudo
 from rebac.field_backing import canonical_model
@@ -43,7 +45,7 @@ from angee.base.expressions import JSONArraySubquery
 from angee.base.managers import AngeeManager
 from angee.base.models.append_only import AppendOnlyQuerySet
 from angee.base.models.identity import public_id_for
-from angee.base.permissions import _arrows, effective_rebac_definition, reader_queryset, require_rebac_queryset
+from angee.base.permissions import _arrows, effective_rebac_definition, require_rebac_queryset
 from angee.base.prefetch import InstancePrefetch
 from angee.base.querysets import AngeeQuerySet
 from angee.checklists.contracts import ATTENTION_STATUSES, PASSING_STATUSES, Checklist, ChecklistStatus
@@ -211,6 +213,71 @@ class _ReadGate(models.Expression):
         if scopes is None or scopes.actor != self.actor:
             scopes = _Scopes(self.actor)
         return compiler.compile(self._condition(scopes).resolve_expression(compiler.query))
+
+
+class _LatestReadable(models.Expression):
+    """A record row's latest readable result per item, with its evidence links, as one JSON array.
+
+    Like the read gates, it resolves the reader's ``read`` scope as it compiles,
+    inside the policy snapshot of the statement's fetch, so it reads no revision of
+    its own. Each element carries the result's columns and its ``evidence`` links;
+    :func:`_latest_from_json` turns it back into a :class:`LatestResult`.
+    """
+
+    output_field = models.JSONField()
+
+    def __init__(self, actor: Any, record_type: tuple[str, str | None]) -> None:
+        super().__init__()
+        self.actor = actor
+        self.record_type = record_type
+
+    def as_sql(self, compiler: SQLCompiler, connection: BaseDatabaseWrapper) -> _AsSqlType:
+        model = _result_model()
+        app_label, model_name = self.record_type
+        record = {"content_type__app_label": app_label, "content_type__model": model_name}
+        # Each row's own record's structurally latest result per key, before the reader's scope applies.
+        latest = model._base_manager.filter(**record, object_id=models.OuterRef("object_id")).first_per_group(
+            "key", order_by=LATEST_ORDER, limit=1
+        )
+        scopes = _compiling.get()
+        if scopes is None or scopes.actor != self.actor:
+            scopes = _Scopes(self.actor)
+        readable = model._base_manager.all() if scopes.read is None else scopes.read
+        links = (
+            _evidence_model()
+            ._base_manager.filter(result_id=models.OuterRef("pk"))
+            .order_by("pk")
+            .values(_item=JSONObject(content_type=models.F("content_type_id"), object_id=models.F("object_id")))
+        )
+        columns = {field.attname: models.F(field.attname) for field in model._meta.concrete_fields}
+        rows = (
+            readable.filter(**record, object_id=models.OuterRef("pk"), pk__in=latest.values("pk"))
+            .order_by("pk")
+            .values(_item=JSONObject(**columns, evidence=JSONArraySubquery(links)))
+        )
+        return compiler.compile(JSONArraySubquery(rows).resolve_expression(compiler.query))
+
+
+def _latest_from_json(item: Mapping[str, Any]) -> LatestResult:
+    """Load one element of :class:`_LatestReadable` as the result row it was read from.
+
+    JSON carries a datetime as text: PostgreSQL's with its offset, SQLite's as the
+    naive UTC value Django stores there.
+    """
+
+    model = _result_model()
+    fields = model._meta.concrete_fields
+    values = []
+    for field in fields:
+        value = item[field.attname]
+        if value is not None:
+            value = field.to_python(value)
+            if isinstance(value, datetime) and settings.USE_TZ and timezone.is_naive(value):
+                value = timezone.make_aware(value, UTC)
+        values.append(value)
+    result = model.from_db(router.db_for_read(model), [field.attname for field in fields], values)
+    assert isinstance(result, model)
+    return LatestResult(result=result, evidence=_references(item["evidence"]))
 
 
 class _InputColumn(models.Expression):
@@ -791,44 +858,35 @@ class ChecklistResultManager[ResultT: ChecklistResult](_ChecklistResultManagerBa
         """The latest readable result per item of each listed record, with its evidence, in one read.
 
         The latest row is selected structurally, then the reader's scope applies,
-        so an item whose latest result the reader cannot read has none.
+        so an item whose latest result the reader cannot read has none
+        (:class:`_LatestReadable`, which :meth:`assess` reads in its own statement).
         """
 
-        content_type = _target_content_type(model)
-        latest = self.model._base_manager.filter(content_type=content_type, object_id__in=record_ids).first_per_group(
-            "object_id",
-            "key",
-            order_by=LATEST_ORDER,
-            limit=1,
-        )
-        links = (
-            _evidence_model()
-            ._base_manager.filter(result_id=models.OuterRef("pk"))
-            .order_by("pk")
-            .values(_item=JSONObject(content_type=models.F("content_type_id"), object_id=models.F("object_id")))
-        )
-        rows = (
-            reader_queryset(self.model, actor)
-            .filter(pk__in=latest.values("pk"))
-            .annotate(_evidence=JSONArraySubquery(links))
-            .order_by("pk")
-        )
-        return [LatestResult(result=row, evidence=_references(cast(Any, row)._evidence)) for row in rows]
+        target = canonical_model(model) or model
+        latest = _LatestReadable(actor, (target._meta.app_label, target._meta.model_name))
+        rows = model._base_manager.filter(pk__in=record_ids).order_by("pk").annotate(_latest=latest)
+        return [_latest_from_json(item) for read in rows.values_list("_latest", flat=True) for item in read or []]
 
     def assess(self, record: ChecklistMixin) -> ChecklistAssessment:
-        """Assess one record for the ambient actor through the same rule its list reads."""
+        """Assess one record for the ambient actor through the same rule its list reads.
+
+        One statement reads the record's statuses and its latest readable results,
+        under the one policy snapshot of the record's fetch.
+        """
 
         model = type(record)
         rows = model._default_manager.filter(pk=record.pk)
-        statuses = (
-            rows.annotate(_statuses=ChecklistStatuses.for_rows(rows, "projection"))
-            .values_list(
-                "_statuses",
-                flat=True,
+        target = canonical_model(model) or model
+        read = (
+            rows.annotate(
+                _statuses=ChecklistStatuses.for_rows(rows, "projection"),
+                _latest=_LatestReadable(relation_actor(rows), (target._meta.app_label, target._meta.model_name)),
             )
+            .values_list("_statuses", "_latest")
             .first()
         )
-        return assessment(model.checklist(), statuses or {}, self.latest_readable(model, [record.pk], current_actor()))
+        statuses, latest = read if read is not None else ({}, [])
+        return assessment(model.checklist(), statuses or {}, [_latest_from_json(item) for item in latest or []])
 
     def counts(
         self,
