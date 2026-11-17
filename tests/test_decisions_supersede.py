@@ -59,11 +59,7 @@ def test_escalation_replaces_the_question_and_links_it_in_one_step(asked):
         decision_answered.disconnect(collect)
     replaced = Decision.system_queryset().get(pk=question.pk)
     assert replaced.verdict == [] and replaced.superseded_by_id == replacement.pk
-    assert replaced.answered_by_id == requester.pk and replaced.verdict_context == {
-        "reason": "Escalated",
-        "facts": [],
-        "references": [],
-    }
+    assert replaced.answered_by_id == requester.pk and replaced.withdrawal_reason == "Escalated"
     assert replaced.verdict_label == "Superseded"
     assert announced == [(question.pk, [], replacement.pk)]
     assert list(Decision.system_queryset().open().values_list("pk", flat=True)) == [replacement.pk]

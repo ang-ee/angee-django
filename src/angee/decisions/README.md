@@ -23,7 +23,8 @@ through that query path. Deleting the source preserves these retained links.
 and `read` derives from it. A consumer whose outside audience reads the question asked
 of them, such as a represented party's admitted user, unions that arm into
 `read_granted` from its own `permissions.extends.zed`; it reaches the question and its
-concern links and nothing else.
+concern links and nothing else; the answer's referenced records still show only to
+their own readers.
 
 `DecisionProposal` is the Pydantic contract for the stored JSON:
 
@@ -54,15 +55,21 @@ Non-workflow askers apply there, so refusal rolls the verdict back. Workflow
 subscribers schedule their wake after commit and apply when the step resumes. The Python revision is optional; the card's
 GraphQL mutation requires its observed revision. Invalid choices write nothing.
 An answer may be given for a represented record of any model, such as a party who
-answered by phone: `decide(..., on_behalf_of=DecisionRecordReference.of(record),
-evidence=(DecisionRecordReference.of(file),), note="...")` stores `answered_for` and
-`verdict_context` (a `DecisionContext` whose `reason` is the note and whose
-`references` are the evidence). `answered_by` stays the actor and `act` still decides;
-the represented record grants nothing. Every participant (the answerer, requester and
-active assignees) must read each reference, as asking requires of the question's
-context, or the answer is refused.
+answered by phone: `decide(..., on_behalf_of=EvidenceReference.of(record),
+evidence=(EvidenceReference.of(file),), note="...")`. The references name a model, a
+public id and an optional pointer, nothing more. Every participant (the answerer,
+requester and active assignees) must read each record, as asking requires of the
+question's context, or the answer is refused; `answered_for` and `answer_evidence` are
+then rebuilt from the resolved records, so no caller-written label is stored.
+`answer_note` keeps the note. `answered_by` stays the actor and `act` still decides; the
+represented record grants nothing. Each malformed argument is refused under its own key.
+GraphQL shows `answered_for` and each `answer_evidence` reference only to a reader who
+may read that record (`provenance.evidence.readable_evidence`), so a later reader of the
+question learns nothing about records it cannot read.
 `decision.withdraw(actor=actor, reason="...")` closes a question with an empty verdict
-in the asking owner's system context and keeps the reason as `verdict_context.reason`.
+in the asking owner's system context and keeps the reason as `withdrawal_reason`.
+Decisions cannot tell askers apart: any named system context counts as the asking
+owner's, for `withdraw` and `supersede` alike.
 `Decision.objects.supersede(decision, request, actor=actor, reason="...")` replaces an
 open question in one transaction, again only in the asking owner's system context: it
 asks `request`, withdraws the old question with the reason and links the replacement as

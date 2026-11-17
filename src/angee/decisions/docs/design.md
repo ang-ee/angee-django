@@ -42,9 +42,9 @@ How the ontology maps to this addon.
 - **One model, `Decision`:** `kind`, `requester`, `assignees` (users or agents who may answer), `records`,
   `proposal`, `context` (evidence shown on the card), the asker's `due_at` and `remind_after`, and the verdict:
   `verdict` (the chosen alternative keys), `verdict_values` (supplied values by record public id and field),
-  `answered_by`, `answered_at`, `answered_for` (the record an answer was given for), `verdict_context` (the
-  answer's note and evidence, or a withdrawal's reason) and `superseded_by` (a withdrawn question's
-  replacement). `reminded_at` records the one reminder.
+  `answered_by`, `answered_at`, `answered_for` (the record an answer was given for), `answer_evidence` and
+  `answer_note` (how the answer was obtained), `withdrawal_reason` and `superseded_by` (a withdrawn question's
+  reason and replacement). `reminded_at` records the one reminder.
   A decision is open while it has no verdict. There is no group, no policy, no
   round, no separate list of answer options and no answer form: a value the answerer supplies is a `choose`
   action on a field, rendered by that field's own widget.
@@ -98,7 +98,8 @@ How the ontology maps to this addon.
   workflow steps apply on resume and expose failure as an error hold.
   Someone may answer for a represented record (a party who answered elsewhere) with
   `on_behalf_of`, `evidence` and a `note`; the answerer still needs `act`, and every participant must read
-  each reference.
+  each record. Stored references are rebuilt from the records, never taken from the caller, and each reader
+  sees only the referenced records it may read.
 - **Gate:** `Decision.objects.open_for(record)` is the one call other owners use.
 - **Withdrawing:** the asker closes its own open decision with an empty verdict, recorded with who stopped it.
   `verdict_values` is null while open and when withdrawn, enforced by the verdict consistency constraint.

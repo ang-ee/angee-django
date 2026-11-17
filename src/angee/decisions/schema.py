@@ -83,8 +83,8 @@ class DecisionType(AngeeNode):
     verdict_label: str = strawberry_django.field(only=["verdict", "proposal", "superseded_by"])
     answered_by: UserType | None = actor_scoped_to_one("answered_by")
     answered_at: auto
-    answered_for: JSON | None
-    verdict_context: JSON | None
+    answer_note: auto
+    withdrawal_reason: auto
     superseded_by: DecisionType | None = actor_scoped_to_one("superseded_by")
     due_at: auto
     remind_after: auto
@@ -95,6 +95,16 @@ class DecisionType(AngeeNode):
     display_name: str = strawberry_django.field(resolver=AngeeNode.display_name, only=["kind"])
     is_open: bool = strawberry_django.field(only=["verdict"])
     permissions = permissions_field(("act",))
+
+    @strawberry_django.field(only=["answered_for"])
+    def answered_for(self, info: strawberry.Info) -> JSON | None:
+        """The record the answer was given for, shown only to a reader of that record."""
+        return cast(Any, self).readable_answered_for(get_current_user(info))
+
+    @strawberry_django.field(only=["answer_evidence"])
+    def answer_evidence(self, info: strawberry.Info) -> list[JSON]:
+        """The answer's evidence references whose records this reader may read."""
+        return cast(Any, self).readable_answer_evidence(get_current_user(info))
 
     @strawberry_django.field(only=["id"], prefetch_related=[_concern_records])
     def concerns_label(self, info: strawberry.Info) -> str:
