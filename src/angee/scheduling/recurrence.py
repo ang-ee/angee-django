@@ -22,6 +22,8 @@ from dateutil.rrule import rrule, rruleset, rrulestr
 from django.core.exceptions import ValidationError
 from django.utils import timezone
 
+from angee.scheduling.zones import require_aware
+
 _VALIDATION_ANCHOR = datetime(2000, 1, 1, tzinfo=UTC)
 """A fixed aware anchor for grammar-only validation; its date never affects validity."""
 
@@ -91,7 +93,7 @@ class Recurrence:
         ``dtstart`` when it falls in the window.
         """
 
-        _require_aware(dtstart=dtstart, window_start=window_start, window_end=window_end)
+        require_aware(dtstart=dtstart, window_start=window_start, window_end=window_end)
         tz = timezone.get_default_timezone()
         after = window_start.astimezone(tz)
         before = window_end.astimezone(tz)
@@ -120,20 +122,3 @@ class Recurrence:
 
         rule = re.sub(r"(?im)(?<![A-Z])UNTIL=([^;\s]+)", local_until, self.rule)
         return rrulestr(rule, dtstart=anchor)
-
-
-def _require_aware(**moments: datetime) -> None:
-    """Raise :class:`~django.core.exceptions.ValidationError` if any moment is naive.
-
-    Expansion projects each bound into the project timezone; a naive datetime has
-    no offset to project, so accepting one would silently reinterpret it in the
-    system zone. Reject it at the door instead, naming the offending argument.
-    """
-
-    naive = [name for name, moment in moments.items() if timezone.is_naive(moment)]
-    if naive:
-        raise ValidationError(
-            f"Recurrence expansion needs timezone-aware datetimes; {', '.join(sorted(naive))} "
-            "is naive.",
-            code="naive_datetime",
-        )
