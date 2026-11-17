@@ -6,12 +6,13 @@ Requests go through ``angee.integrate.http.HttpClient`` (SSRF-pinned) with the
 credential's bearer token, freshened by ``Credential.ensure_fresh`` before each
 request. No Google client library is involved.
 
-Refusals map onto integrate's error vocabulary: a missing file is
-``FileNotFoundError``; a rate limit or a server outage is a transient
-:class:`GoogleDriveError`, which a sync records as a retryable failure; a token
-Google no longer accepts is renewed once through ``Credential.refresh_now`` and
-otherwise refused, leaving the credential's ``is_reconnect_required`` to the
-credential owner.
+Refusals keep their reach. One file's refusal (not found, not downloadable, a
+broken download) is an ``OSError`` (:class:`DriveFileError`,
+``FileNotFoundError``), which a sync counts against that file and moves past.
+An account-wide refusal is a :class:`GoogleDriveError`: a rate limit or an
+outage is transient (with Google's ``Retry-After`` when sent); a token Google no
+longer accepts is renewed once through ``Credential.refresh_now`` and otherwise
+asks for a reconnect, as does a token without Drive access.
 """
 
 from __future__ import annotations
@@ -21,11 +22,13 @@ import io
 from collections.abc import Iterator, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from email.utils import parsedate_to_datetime
 from typing import Any, BinaryIO
 from urllib.parse import quote, urlencode
 
 import httpx2
 from django.core.exceptions import ValidationError
+from django.utils import timezone
 
 from angee.integrate.credentials import CredentialKind
 from angee.integrate.errors import IntegrationError
@@ -38,17 +41,27 @@ GOOGLE_APPS_MIME_PREFIX = "application/vnd.google-apps."
 MY_DRIVE = "root"
 """Drive's alias for the account's My Drive root folder."""
 
-_FILE_FIELDS = "id,name,mimeType,size,modifiedTime,createdTime,sha256Checksum,parents,driveId,trashed"
+_FILE_FIELDS = (
+    "id,name,mimeType,size,modifiedTime,createdTime,sha256Checksum,parents,driveId,trashed,capabilities(canDownload)"
+)
 _LIST_FIELDS = f"nextPageToken,files({_FILE_FIELDS})"
 _PAGE_SIZE = 1000
 _JSON_MAX_BYTES = 8 * 1024 * 1024
 _MEDIA_CHUNK_BYTES = 256 * 1024
 _RATE_LIMIT_REASONS = frozenset({"rateLimitExceeded", "userRateLimitExceeded"})
+_SCOPE_REFUSALS = frozenset({"insufficientPermissions", "ACCESS_TOKEN_SCOPE_INSUFFICIENT"})
+_FILE_REFUSALS = frozenset(
+    {"cannotDownloadFile", "cannotDownloadAbusiveFile", "downloadQuotaExceeded", "insufficientFilePermissions"}
+)
 _EPOCH = datetime(1970, 1, 1, tzinfo=UTC)
 
 
 class GoogleDriveError(IntegrationError):
-    """A Google Drive refusal whose message is safe to show an operator."""
+    """An account-wide Google Drive refusal whose message is safe to show an operator."""
+
+
+class DriveFileError(OSError):
+    """One Drive file was refused or could not be read; the rest of the drive is unaffected."""
 
 
 @dataclass(frozen=True)
@@ -65,11 +78,13 @@ class DriveItem:
     parents: tuple[str, ...] = ()
     drive_id: str = ""
     trashed: bool = False
+    can_download: bool = True
 
     @classmethod
     def from_api(cls, data: Mapping[str, Any]) -> DriveItem:
         """Read one ``files`` resource as returned for :data:`_FILE_FIELDS`."""
 
+        capabilities = data.get("capabilities")
         return cls(
             id=str(data.get("id") or ""),
             name=str(data.get("name") or ""),
@@ -81,6 +96,7 @@ class DriveItem:
             parents=tuple(str(parent) for parent in data.get("parents") or ()),
             drive_id=str(data.get("driveId") or ""),
             trashed=bool(data.get("trashed")),
+            can_download=bool(capabilities.get("canDownload", True)) if isinstance(capabilities, Mapping) else True,
         )
 
     @property
@@ -151,10 +167,18 @@ class GoogleDriveClient:
             drive_id = str(drive.get("id") or "")
             yield DriveItem(id=drive_id, name=str(drive.get("name") or ""), mime_type=FOLDER_MIME, drive_id=drive_id)
 
-    def open_media(self, file_id: str) -> BinaryIO:
-        """Return a reader of one file's bytes that requests them on its first read."""
+    def open_media(self, file_id: str, *, eager: bool = False) -> BinaryIO:
+        """Return a reader of one file's bytes.
 
-        return io.BufferedReader(_MediaStream(self, file_id), buffer_size=_MEDIA_CHUNK_BYTES)
+        Lazily, the request goes out on the first read, so a reader closed unread
+        (a copy that deduplicated) downloads nothing. ``eager`` sends it now, so
+        a refusal surfaces before a response starts.
+        """
+
+        stream = _MediaStream(self, file_id)
+        if eager:
+            stream.open()
+        return io.BufferedReader(stream, buffer_size=_MEDIA_CHUNK_BYTES)
 
     def media_chunks(self, file_id: str, stack: contextlib.ExitStack) -> Iterator[bytes]:
         """Open ``files.get?alt=media`` inside ``stack`` and return its byte chunks."""
@@ -166,7 +190,7 @@ class GoogleDriveClient:
             response = stack.enter_context(self.http.stream("GET", url, headers=self._headers()))
         if not response.is_success:
             response.read()
-            self._raise_for_status(response)
+            self._raise_for_status(response, per_file=True)
         return response.iter_bytes(chunk_size=_MEDIA_CHUNK_BYTES)
 
     def _pages(self, path: str, params: Mapping[str, str], items_key: str) -> Iterator[Mapping[str, Any]]:
@@ -187,7 +211,7 @@ class GoogleDriveClient:
         response = self.http.request("GET", url, headers=self._headers(), max_bytes=_JSON_MAX_BYTES)
         if response.status_code == 401 and self._renew():
             response = self.http.request("GET", url, headers=self._headers(), max_bytes=_JSON_MAX_BYTES)
-        self._raise_for_status(response)
+        self._raise_for_status(response, per_file=path.startswith("files/"))
         try:
             data = response.json()
         except ValueError as error:
@@ -219,8 +243,12 @@ class GoogleDriveClient:
         return True
 
     @staticmethod
-    def _raise_for_status(response: httpx2.Response) -> None:
-        """Map a Drive refusal onto the integrate error vocabulary."""
+    def _raise_for_status(response: httpx2.Response, *, per_file: bool) -> None:
+        """Map a Drive refusal onto the error of its reach.
+
+        ``per_file`` marks a request about one file, whose refusals other than
+        the account-wide ones are that file's.
+        """
 
         status = response.status_code
         if response.is_success:
@@ -229,18 +257,24 @@ class GoogleDriveClient:
             raise FileNotFoundError("Google Drive item not found.")
         reason = _error_reason(response)
         if status == 429 or (status == 403 and reason in _RATE_LIMIT_REASONS):
-            raise GoogleDriveError("Google Drive is rate limiting this account; the sync will retry.", transient=True)
+            raise GoogleDriveError(
+                "Google Drive is rate limiting this account; try the sync again later.",
+                transient=True,
+                retry_after=_retry_after(response),
+            )
         if status == 401:
             raise GoogleDriveError("Google Drive no longer accepts this account; reconnect the Google account.")
-        if status == 403:
-            raise GoogleDriveError("Google Drive refused access; reconnect the Google account with Drive access.")
+        if status == 403 and reason in _SCOPE_REFUSALS:
+            raise GoogleDriveError("This Google account has not granted Drive access; reconnect it with Drive access.")
         if status >= 500:
             raise GoogleDriveError("Google Drive is temporarily unavailable.", transient=True)
+        if status == 416 or reason in _FILE_REFUSALS or per_file:
+            raise DriveFileError(f"Google Drive refused this file ({reason or status}).")
         raise GoogleDriveError("Google Drive refused the request.")
 
 
 class _MediaStream(io.RawIOBase):
-    """A raw reader that opens one file's media on its first read and closes it with itself."""
+    """A raw reader of one file's media, opened on demand and closed with itself."""
 
     def __init__(self, client: GoogleDriveClient, file_id: str) -> None:
         """Remember what to read without sending anything yet."""
@@ -257,16 +291,28 @@ class _MediaStream(io.RawIOBase):
 
         return True
 
-    def readinto(self, buffer: Any) -> int:
-        """Fill ``buffer`` from the media response, opening it first if needed."""
+    def open(self) -> None:
+        """Send the media request, if it has not gone out yet."""
 
         if self._chunks is None:
-            self._chunks = self._client.media_chunks(self._file_id, self._stack)
-        while not self._pending:
-            chunk = next(self._chunks, None)
-            if chunk is None:
-                return 0
-            self._pending = chunk
+            try:
+                self._chunks = self._client.media_chunks(self._file_id, self._stack)
+            except httpx2.TransportError as error:
+                raise DriveFileError("The Google Drive download could not start.") from error
+
+    def readinto(self, buffer: Any) -> int:
+        """Fill ``buffer`` from the media response; a broken transfer is this file's error."""
+
+        self.open()
+        assert self._chunks is not None  # open() set it or raised.
+        try:
+            while not self._pending:
+                chunk = next(self._chunks, None)
+                if chunk is None:
+                    return 0
+                self._pending = chunk
+        except httpx2.TransportError as error:
+            raise DriveFileError("The Google Drive download was interrupted.") from error
         view = memoryview(buffer).cast("B")
         size = min(len(view), len(self._pending))
         view[:size] = self._pending[:size]
@@ -311,3 +357,16 @@ def _error_reason(response: httpx2.Response) -> str:
         return str(errors[0].get("reason") or "") if errors else str(error.get("status") or "")
     except (ValueError, AttributeError, IndexError, TypeError):
         return ""
+
+
+def _retry_after(response: httpx2.Response) -> timedelta | None:
+    """Return Google's ``Retry-After`` (seconds or an HTTP date) as a positive delay, if sent."""
+
+    value = response.headers.get("Retry-After", "").strip()
+    if value.isdecimal():
+        return timedelta(seconds=int(value)) if int(value) > 0 else None
+    try:
+        delay = parsedate_to_datetime(value) - timezone.now()
+    except (TypeError, ValueError):
+        return None
+    return delay if delay > timedelta(0) else None

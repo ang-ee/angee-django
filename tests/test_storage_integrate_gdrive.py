@@ -8,6 +8,7 @@ import re
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
+from datetime import timedelta
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -50,6 +51,7 @@ MY_DRIVE_ID = "0AMyDriveRoot"
 DOC_MIME = "application/vnd.google-apps.document"
 SHORTCUT_MIME = "application/vnd.google-apps.shortcut"
 TOKEN_ENDPOINT = "https://accounts.example/token"
+DRIVE_SCOPE = "https://www.googleapis.com/auth/drive.readonly"
 
 
 @dataclass
@@ -66,6 +68,8 @@ class FakeItem:
     drive_id: str = ""
     trashed: bool = False
     checksum: bool = True
+    can_download: bool = True
+    refused: str = ""
 
     def resource(self) -> dict[str, Any]:
         """Return the ``files`` resource Drive v3 answers for this item."""
@@ -78,6 +82,7 @@ class FakeItem:
             "createdTime": self.created,
             "trashed": self.trashed,
             "parents": [self.parent] if self.parent else [],
+            "capabilities": {"canDownload": self.can_download},
         }
         if self.drive_id:
             data["driveId"] = self.drive_id
@@ -100,6 +105,8 @@ class FakeDrive:
         self.listings: list[dict[str, str]] = []
         self.refusal: Callable[[httpx2.Request], httpx2.Response | None] | None = None
         self.token_response = httpx2.Response(400, json={"error": "invalid_grant"})
+        self.tokens = {TOKEN}
+        self.bearers: list[str] = []
 
     def folder(self, item_id: str, name: str, parent: str = MY_DRIVE_ID) -> FakeItem:
         """Add a folder under ``parent``, in its drive."""
@@ -130,7 +137,9 @@ class FakeDrive:
         if str(request.url) == TOKEN_ENDPOINT:
             return self.token_response
         assert request.url.host == "www.googleapis.com"
-        assert request.headers["authorization"] == f"Bearer {TOKEN}"
+        bearer = request.headers["authorization"].removeprefix("Bearer ")
+        assert bearer in self.tokens
+        self.bearers.append(bearer)
         if self.refusal is not None and (refused := self.refusal(request)) is not None:
             return refused
         params = dict(request.url.params)
@@ -159,6 +168,8 @@ class FakeDrive:
         if item is None:
             return httpx2.Response(404, json={"error": {"code": 404, "errors": [{"reason": "notFound"}]}})
         if params.get("alt") == "media":
+            if item.refused:
+                return httpx2.Response(403, json={"error": {"code": 403, "errors": [{"reason": item.refused}]}})
             self.downloads.append(item.id)
             return httpx2.Response(200, content=item.content)
         return httpx2.Response(200, json=item.resource())
@@ -180,7 +191,7 @@ def _connect_account(oauth_client: Any, user: Any, external_id: str, **tokens: A
         oauth_client,
         user=user,
         external_id=external_id,
-        tokens={"access_token": TOKEN, "token_type": "Bearer", **tokens},
+        tokens={"access_token": TOKEN, "token_type": "Bearer", "scope": f"openid email {DRIVE_SCOPE}", **tokens},
         claims={"sub": external_id, "email": f"{external_id}@example.com"},
     )
     return account.credential
@@ -367,7 +378,7 @@ def test_reference_mount_indexes_drive_checksums_streams_on_open_and_refuses_wri
     with system_context(reason="test Google Drive mount provisioning"):
         assert mount.vendor.slug == "google"
         assert mount.drive.backend.backend_class == "google_drive"
-        assert mount.drive.backend.backend_config == {"credential": str(drive_env.credential.public_id)}
+        assert mount.drive.backend.backend_config == {"root": "f-projects"}
 
     assert _run_sync(mount) == 2
     assert fake.downloads == []
@@ -528,7 +539,7 @@ def test_rate_limit_fails_the_sync_as_retryable_without_trashing(
     assert refused.value.transient
     mount.refresh_from_db()
     assert mount.sync_stage == mount.SyncStage.FAILED
-    assert mount.sync_error == "Google Drive is rate limiting this account; the sync will retry."
+    assert mount.sync_error == "Google Drive is rate limiting this account; try the sync again later."
     assert not _rows(mount.drive)["x-kept"].is_trashed
 
 
@@ -653,3 +664,214 @@ def test_graphql_lists_accounts_browses_and_connects_with_the_session_users_acco
     assert connected["mode"] == "REFERENCE"
     assert connected["lifecycle"] == "CONNECTED"
     assert connected["id"] == str(queued_mounts[0].sqid)
+
+
+def _storage_of(mount: Any) -> Any:
+    """Return the storage backend serving a reference mount's drive."""
+
+    with system_context(reason="test Google Drive mount storage"):
+        return mount.drive.storage
+
+
+def _read(storage: Any, key: str) -> bytes:
+    """Open and read one stored object."""
+
+    with system_context(reason="test Google Drive mount read"):
+        stream = storage.open(key)
+        try:
+            return stream.read()
+        finally:
+            stream.close()
+
+
+def test_serving_reads_with_the_mounts_own_credential_while_it_is_connected(
+    drive_env: SimpleNamespace, queued_mounts: list[Any]
+) -> None:
+    """Bytes are read with the Mount's credential as it is now; a disconnected Mount or a forged backend serves none."""
+
+    fake = drive_env.drive
+    fake.folder("f-served", "Served")
+    fake.file("x-served", "served.txt", b"served", parent="f-served")
+    mount = _connect(drive_env, "f-served", name="Served")
+    assert _run_sync(mount) == 1
+    storage = _storage_of(mount)
+
+    fake.bearers.clear()
+    assert _read(storage, "x-served") == b"served"
+    assert set(fake.bearers) == {TOKEN}
+
+    fake.tokens.add("rotated-token")
+    drive_env.credential.update_material(access_token="rotated-token")
+    fake.bearers.clear()
+    assert _read(storage, "x-served") == b"served"
+    assert set(fake.bearers) == {"rotated-token"}
+
+    stranger = get_user_model().objects.create_user(username="drive-lender", email="drive-lender@example.com")
+    fake.tokens.add("lender-token")
+    lender = _connect_account(drive_env.google, stranger, "google-lender", access_token="lender-token")
+    with system_context(reason="test Google Drive mount re-pointed"):
+        mount.attach_credential(lender)
+    fake.bearers.clear()
+    assert _read(storage, "x-served") == b"served"
+    assert set(fake.bearers) == {"lender-token"}
+
+    with system_context(reason="test Google Drive forged backends"):
+        forged_elsewhere = Backend._base_manager.create(
+            slug="forged-elsewhere", label="Forged", backend_class="google_drive", backend_config={"root": "f-none"},
+            created_by=drive_env.owner,
+        )
+        with pytest.raises(OSError):
+            _read(forged_elsewhere.storage, "x-served")
+        twin = Backend._base_manager.create(
+            slug="forged-twin", label="Twin", backend_class="google_drive", backend_config={"root": "f-served"},
+            created_by=drive_env.owner,
+        )
+        with pytest.raises(OSError):
+            _read(twin.storage, "x-served")
+        with pytest.raises(OSError):
+            _read(storage, "x-served")
+        twin.delete()
+    assert _read(storage, "x-served") == b"served"
+
+    with system_context(reason="test Google Drive mount disconnected"):
+        mount.disconnect()
+    with pytest.raises(OSError):
+        _read(storage, "x-served")
+
+
+def test_serving_opens_eagerly_and_refuses_a_trashed_or_changed_file(
+    drive_env: SimpleNamespace, queued_mounts: list[Any]
+) -> None:
+    """Opening sends the media request at once and refuses what the last sync did not index."""
+
+    fake = drive_env.drive
+    fake.folder("f-open", "Open")
+    fake.file("x-eager", "eager.txt", b"eager", parent="f-open")
+    fake.file("x-trashed", "trashed.txt", b"trashed", parent="f-open")
+    fake.file("x-changed", "changed.txt", b"changed", parent="f-open")
+    mount = _connect(drive_env, "f-open", name="Open")
+    assert _run_sync(mount) == 3
+    storage = _storage_of(mount)
+
+    with system_context(reason="test Google Drive eager open"):
+        stream = storage.open("x-eager")
+        assert fake.downloads == ["x-eager"]
+        stream.close()
+
+    fake.items["x-trashed"].trashed = True
+    fake.items["x-changed"].content = b"changed since"
+    for key in ("x-trashed", "x-changed", "x-missing"):
+        with pytest.raises(OSError):
+            _read(storage, key)
+    assert fake.downloads == ["x-eager"]
+
+
+def test_one_refused_file_is_counted_and_the_rest_sync(drive_env: SimpleNamespace, queued_mounts: list[Any]) -> None:
+    """A file Drive will not serve is that file's error; a file it marks undownloadable is skipped in copy mode."""
+
+    fake = drive_env.drive
+    fake.folder("f-mixed", "Mixed")
+    fake.file("x-ok-1", "one.txt", b"one", parent="f-mixed")
+    fake.file("x-ok-2", "two.txt", b"two", parent="f-mixed")
+    fake.file("x-refused", "refused.txt", b"refused", parent="f-mixed", refused="cannotDownloadAbusiveFile")
+    fake.file("x-locked", "locked.txt", b"locked", parent="f-mixed", can_download=False)
+    mount = _connect(drive_env, "f-mixed", mode=MountMode.COPY, name="Mixed")
+
+    assert _run_sync(mount) == 2
+    assert mount.sync_stage == mount.SyncStage.COMPLETED
+    assert _details(mount)["errors"] == 1
+    assert _details(mount)["skipped"] == 1
+    assert sorted(fake.downloads) == ["x-ok-1", "x-ok-2"]
+
+    fake.folder("f-legacy", "Legacy")
+    fake.file("x-plain", "plain.txt", b"plain", parent="f-legacy", checksum=False)
+    fake.file("x-unhashable", "unhashable.txt", b"no", parent="f-legacy", checksum=False, refused="cannotDownloadFile")
+    reference = _connect(drive_env, "f-legacy", name="Legacy")
+    assert _run_sync(reference) == 1
+    assert _details(reference)["errors"] == 1
+    assert set(_rows(reference.drive)) == {"x-plain"}
+
+
+def test_a_rate_limit_carries_googles_retry_after(drive_env: SimpleNamespace, queued_mounts: list[Any]) -> None:
+    """A 429 keeps Google's Retry-After on the transient failure."""
+
+    fake = drive_env.drive
+    fake.folder("f-throttled", "Throttled")
+    mount = _connect(drive_env, "f-throttled", name="Throttled")
+    fake.refusal = lambda request: httpx2.Response(429, headers={"Retry-After": "120"}, json={"error": {"code": 429}})
+
+    with pytest.raises(GoogleDriveError) as refused:
+        _run_sync(mount)
+    assert refused.value.transient
+    assert refused.value.retry_after == timedelta(seconds=120)
+
+
+def test_a_source_refusal_keeps_its_reason_in_the_sync_failure(
+    drive_env: SimpleNamespace, queued_mounts: list[Any]
+) -> None:
+    """A mounted folder that disappears fails the sync with Drive's reason, not a generic configuration error."""
+
+    fake = drive_env.drive
+    fake.folder("f-gone", "Gone")
+    mount = _connect(drive_env, "f-gone", name="Gone")
+    del fake.items["f-gone"]
+
+    with pytest.raises(GoogleDriveError):
+        _run_sync(mount)
+    mount.refresh_from_db()
+    assert mount.sync_error == "The Google Drive folder is no longer available to the account."
+
+
+def test_accounts_without_the_drive_scope_are_neither_offered_nor_admitted(
+    drive_env: SimpleNamespace, queued_mounts: list[Any]
+) -> None:
+    """Only an account whose grant covers the backend's scopes reads its source."""
+
+    drive_env.drive.folder("f-scoped", "Scoped")
+    narrow = _connect_account(drive_env.google, drive_env.owner, "google-owner", scope="openid email")
+    with system_context(reason="test Google Drive scoped accounts"):
+        assert not Mount.objects.connectable_credentials(drive_env.owner, "google_drive").exists()
+    with pytest.raises(ValidationError) as refused:
+        _connect(drive_env, "f-scoped", credential=narrow)
+    assert set(refused.value.message_dict) == {"credential"}
+
+
+def test_copy_mode_keeps_a_renamed_or_moved_file_by_its_drive_id(
+    drive_env: SimpleNamespace, queued_mounts: list[Any]
+) -> None:
+    """A copy row follows its Drive file through a rename and a move without copying again."""
+
+    fake = drive_env.drive
+    fake.folder("f-copies", "Copies")
+    fake.folder("f-moved", "Moved", parent="f-copies")
+    fake.file("x-copied", "draft.txt", b"copied once", parent="f-copies")
+    mount = _connect(drive_env, "f-copies", mode=MountMode.COPY, name="Copies")
+    assert _run_sync(mount) == 1
+    [before] = _rows(mount.drive).values()
+
+    fake.items["x-copied"].name = "final.txt"
+    fake.items["x-copied"].parent = "f-moved"
+    assert _run_sync(mount) == 1
+    [after] = _rows(mount.drive).values()
+    assert after.pk == before.pk
+    assert after.filename == "final.txt"
+    assert after.folder.name == "Moved"
+    assert after.metadata["mount"] == {
+        "source_path": "Moved/final.txt",
+        "mtime_ns": before.metadata["mount"]["mtime_ns"],
+        "storage_key": "x-copied",
+    }
+    assert _details(mount)["vanished"] == 0
+    assert fake.downloads == ["x-copied"]
+
+
+def test_an_alias_root_is_normalized_before_the_mounted_check(
+    drive_env: SimpleNamespace, queued_mounts: list[Any]
+) -> None:
+    """My Drive mounted as ``root`` is the same root as its id."""
+
+    mount = _connect(drive_env, "root", name="Whole drive")
+    assert mount.config["root"] == MY_DRIVE_ID
+    with pytest.raises(ValidationError) as again:
+        _connect(drive_env, MY_DRIVE_ID, name="Again")
+    assert set(again.value.message_dict) == {"path"}

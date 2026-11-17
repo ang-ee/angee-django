@@ -10,8 +10,9 @@ from typing import Any, BinaryIO, ClassVar
 
 from django.core.exceptions import ValidationError
 
+from angee.storage_integrate.models import MountMode
 from angee.storage_integrate.mounts import MountBackend, MountBrowseResult, MountEntry, MountLocation
-from angee.storage_integrate_gdrive.client import MY_DRIVE, DriveItem, GoogleDriveClient
+from angee.storage_integrate_gdrive.client import MY_DRIVE, DriveItem, GoogleDriveClient, GoogleDriveError
 
 _TAG_LENGTH = 8
 """Characters of a file id that tag a duplicate sibling name."""
@@ -31,10 +32,11 @@ class GoogleDriveMountBackend(MountBackend):
     """Mirror a Google Drive folder (My Drive, a folder in it, or a shared drive) read with the connecting account.
 
     Each file's storage key is its Drive file id, so a reference mount reads
-    bytes by id and a rename or a move inside the mount keeps its indexed row.
-    Paths come from the parent chain; siblings sharing a name are told apart by
-    a tag from their file id. Google-native documents and shortcuts carry no
-    bytes and are skipped, and counted as such. Reads only: the reference storage
+    bytes by id and a rename or a move inside the mount keeps its row in either
+    mode. Paths come from the parent chain; siblings sharing a name are told
+    apart by a tag from their file id. Google-native documents and shortcuts
+    carry no bytes and are skipped, as are, in copy mode, files Drive does not
+    let the account download; each is counted. Reads only: the reference storage
     backend refuses writes.
     """
 
@@ -81,7 +83,7 @@ class GoogleDriveMountBackend(MountBackend):
             )
         try:
             folder = client.get(raw_token)
-        except FileNotFoundError as error:
+        except OSError as error:
             raise ValidationError({"token": "This Google Drive folder is not available to the account."}) from error
         if not folder.is_folder or folder.trashed:
             raise ValidationError({"token": "This Google Drive item is not a folder."})
@@ -112,18 +114,32 @@ class GoogleDriveMountBackend(MountBackend):
         return self._client
 
     def check_source(self) -> None:
-        """Require the configured root to be a folder the account still reads."""
+        """Require the configured root to be a folder the account still reads; refusals keep their reason."""
 
         root_id = str(self.bridge.config.get("root") or "").strip()
         if not root_id:
-            raise ValidationError("Choose a Google Drive folder to mount.")
+            raise GoogleDriveError("Choose a Google Drive folder to mount.")
         try:
             root = self.client.get(root_id)
-        except FileNotFoundError as error:
-            raise ValidationError("The Google Drive folder is no longer available to the account.") from error
+        except OSError as error:
+            raise GoogleDriveError("The Google Drive folder is no longer available to the account.") from error
         if not root.is_folder or root.trashed:
-            raise ValidationError("The mounted Google Drive item is not a folder.")
+            raise GoogleDriveError("The mounted Google Drive item is not a folder.")
         self._root = root
+
+    def source_root(self) -> str:
+        """Return the folder's own id, so an alias (``root`` for My Drive) and the id are one root."""
+
+        self.check_source()
+        return self._checked_root().id
+
+    def _checked_root(self) -> DriveItem:
+        """Return the root folder this instance checked, checking it first if needed."""
+
+        if self._root is None:
+            self.check_source()
+        assert self._root is not None  # check_source sets it or raises.
+        return self._root
 
     def iter_directories(self) -> Iterator[str]:
         """Yield every folder beneath the root, empty ones included, parents first."""
@@ -152,27 +168,31 @@ class GoogleDriveMountBackend(MountBackend):
         return self.client.open_media(entry.storage_key)
 
     def storage_backend_spec(self) -> tuple[str, dict[str, Any]]:
-        """Serve reference bytes from Drive with this Mount's credential."""
+        """Serve reference bytes from Drive through the Mount rooted here, with its own credential."""
 
         # This key belongs to ANGEE_STORAGE_BACKEND_CLASSES, not the Mount registry.
-        return "google_drive", {"credential": str(self.client.credential.public_id)}
+        return "google_drive", {"root": self._checked_root().id}
 
     def _walked(self) -> _DriveWalk:
         """Walk the mounted folder once per sync, depth first with siblings in name order."""
 
         if self._walk is not None:
             return self._walk
-        if self._root is None:
-            self.check_source()
-        assert self._root is not None  # check_source sets it or raises.
+        root = self._checked_root()
+        copying = self.bridge.mode == MountMode.COPY
         walk = _DriveWalk()
-        seen = {self._root.id}
-        pending: list[tuple[str, DriveItem]] = [("", self._root)]
+        seen = {root.id}
+        pending: list[tuple[str, DriveItem]] = [("", root)]
         while pending:
             prefix, folder = pending.pop()
             children = list(self.client.children(folder))
-            self.skipped_entries += sum(1 for child in children if child.is_google_native)
-            files = [child for child in children if not child.is_folder and not child.is_google_native]
+            unmirrored = {
+                child.id
+                for child in children
+                if child.is_google_native or (copying and not child.is_folder and not child.can_download)
+            }
+            self.skipped_entries += len(unmirrored)
+            files = [child for child in children if not child.is_folder and child.id not in unmirrored]
             for item, name in _sibling_names(files, keep_suffix=True):
                 if item.id in seen:
                     continue

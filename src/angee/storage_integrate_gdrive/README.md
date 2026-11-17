@@ -22,8 +22,16 @@ The connect dialog asks for three things:
    - **Copy files** (copy mode) copies the bytes into the default storage, or
      into another writable storage backend chosen in the dialog.
 
-One Google Drive folder is one mount: a folder some mount already uses is
-offered as already mounted.
+One Google Drive folder is one mount, whoever connects it: a folder some mount
+already uses, under its id or an alias such as My Drive's, is offered as already
+mounted, even to another user who can read it with their own account. Share the
+existing mount's drive instead.
+
+**A reference mount delegates its owner's read access.** Everyone who may read
+the mount's Angee drive reads its indexed files through the mount owner's Google
+account, whether or not Google Drive shares the file with them. Grant the drive
+only to people who may see what the owner sees in that folder. A copy mount is
+an ordinary Angee drive of copies, with the same caution.
 
 ## Syncing
 
@@ -34,7 +42,7 @@ that checksum is streamed once to hash it. A copy sync downloads only files
 whose bytes are not yet stored.
 
 Each file keeps its Angee identity through renames and moves inside the mounted
-folder. When one folder holds several items of the same name, the earliest keeps
+folder, in either mode. When one folder holds several items of the same name, the earliest keeps
 the name and each later one is shown with the start of its file id, for example
 `report (1AbCdEfG).pdf`. A file removed from the folder or moved to the Google
 Drive trash is moved to the Angee trash by a reference sync; a copy mount keeps
@@ -45,17 +53,27 @@ Skipped and counted as **skipped** in the sync result:
 - Google-native documents (Docs, Sheets, Slides, Forms, Drawings and every other
   `application/vnd.google-apps.*` type except folders), which have no bytes to
   mirror;
-- shortcuts.
+- shortcuts;
+- in copy mode, files Google Drive does not let the account download.
 
-A rate limit or a Google outage fails the sync as retryable; the worker retries
-it. When Google no longer accepts the account, the sync fails and the account
-asks to be reconnected.
+A file Google refuses to serve, or whose download breaks, is counted as an error
+and the rest of the sync goes on. A rate limit or a Google outage fails the whole
+sync as retryable, with Google's `Retry-After` when it sends one. Nothing
+reschedules a failed sync of a mount that does not poll yet: run **Sync now**
+again later. A polling mount (`poll_enabled` in its config) retries at its next
+poll, no earlier than Google asked. When Google no longer accepts the account,
+or the account has not granted Drive access, the sync fails and the account asks
+to be reconnected.
+
+Opening a file of a reference mount reads it from Google Drive with the mount's
+own account, while the mount is connected. A file moved to the Google Drive
+trash, or changed since the last sync, is refused until the next sync.
 
 ## Scope
 
 The backend reads with the `https://www.googleapis.com/auth/drive.readonly`
-scope (`GoogleDriveMountBackend.oauth_scopes`); the connected account must have
-granted it. Google classifies `drive.readonly` as a **restricted** scope: an
+scope (`GoogleDriveMountBackend.oauth_scopes`); only connected accounts that
+granted it are offered. Google classifies `drive.readonly` as a **restricted** scope: an
 app that requests it from users outside its own Google Workspace organization
 needs Google's OAuth verification, including a security assessment. An
 internal app (a Workspace organization's own users only) does not.

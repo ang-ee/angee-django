@@ -5,11 +5,8 @@ from __future__ import annotations
 from typing import Any
 
 from django.apps import apps
-from django.core.exceptions import ValidationError
 
-from angee.integrate_iphone.backup import BackupError, IosBackup
 from angee.storage_integrate.models import MountMode
-from angee.storage_integrate.mounts import validate_local_folder_root
 from angee.storage_integrate_iphone.mounts import IphoneBackupMountBackend
 
 
@@ -20,22 +17,12 @@ def create_iphone_backup_mount(
     path: str,
     mode: MountMode,
 ) -> Any:
-    """Validate and provision one unencrypted iPhone-backup Mount."""
+    """Provision one unencrypted iPhone-backup Mount; the backend canonicalizes and opens the backup."""
 
-    try:
-        root = validate_local_folder_root(path)
-        backup = IosBackup(root)
-    except (BackupError, ValidationError) as error:
-        # Django ValidationError has error_dict only for field-keyed errors.
-        if isinstance(error, ValidationError) and hasattr(error, "error_dict"):
-            raise
-        messages = error.messages if isinstance(error, ValidationError) else [str(error)]
-        raise ValidationError({"path": messages}) from error
-    backup.close()
     return apps.get_model("storage_integrate", "Mount").objects.provision(
         user,
         name=name,
-        root=root,
+        root=path,
         mode=mode,
         backend_class=IphoneBackupMountBackend.key,
         already_mounted_message="This iPhone backup is already mounted.",

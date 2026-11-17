@@ -80,6 +80,8 @@ class MountBackend(BridgeImpl):
     """Whether the source is read with the connecting user's credential, which provisioning attaches."""
     vendor_slug: ClassVar[str] = "local"
     """The integrate catalogue vendor a Mount of this backend points at; ``oauth_client`` expands from it."""
+    oauth_scopes: ClassVar[tuple[str, ...]] = ()
+    """OAuth scopes a credential backend reads with; only accounts that granted all of them are offered."""
 
     @classmethod
     def browse(
@@ -106,16 +108,17 @@ class MountBackend(BridgeImpl):
 
         return cls.oauth_client.format(vendor=cls.vendor_slug)
 
-    @classmethod
-    def source_root(cls, token: str) -> str:
-        """Return the root a Mount persists for a browsed or typed ``token``.
+    def source_root(self) -> str:
+        """Validate the configured source and return the canonical root a Mount persists for it.
 
-        A backend whose tokens are already canonical keeps them; one that accepts
-        several spellings of one source returns the canonical one, so one source
-        is one root (``MountQuerySet.for_roots``). Raises :class:`ValidationError`.
+        A browsed or typed root may be one of several spellings of one source (a
+        relative step, an alias); the canonical one makes one source one root
+        (``MountQuerySet.for_roots``), so provisioning stores it before checking
+        what is already mounted. Raises like :meth:`check_source`.
         """
 
-        return token
+        self.check_source()
+        return str(self.bridge.config.get("root") or "")
 
     def __init__(self, integration: Any) -> None:
         """Bind the Mount row and initialize per-run MIME observations."""
@@ -237,11 +240,10 @@ class LocalFolderMountBackend(MountBackend):
             supports_manual_token=True,
         )
 
-    @classmethod
-    def source_root(cls, token: str) -> str:
+    def source_root(self) -> str:
         """Persist the resolved absolute folder, so one folder is one root however it was typed."""
 
-        return str(validate_local_folder_root(token))
+        return str(self.root)
 
     def __init__(self, integration: Any) -> None:
         """Bind the Mount and reserve its per-instance validated-root cache."""

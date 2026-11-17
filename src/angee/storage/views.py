@@ -2,15 +2,16 @@
 
 from __future__ import annotations
 
-from collections.abc import Collection
-from typing import Literal
+from collections.abc import AsyncIterator, Collection
+from typing import IO, Literal
 
+from asgiref.sync import sync_to_async
 from django.apps import apps
-from django.http import FileResponse, HttpRequest, JsonResponse
+from django.http import HttpRequest, JsonResponse, StreamingHttpResponse
 from django.http.response import HttpResponseBase
 from django.utils.cache import get_conditional_response, patch_cache_control, patch_vary_headers
 from django.utils.csp import CSP, build_policy
-from django.utils.http import quote_etag
+from django.utils.http import content_disposition_header, quote_etag
 from django.views.decorators.csp import csp_override
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_http_methods
@@ -36,6 +37,9 @@ DOWNLOAD_CSP: dict[str, Collection[str] | str | Literal[True]] = {
 ``sandbox`` gives the document an opaque origin; the inline style a browser's own
 image page uses is all it allows. A page embedding the file is unaffected.
 """
+
+DOWNLOAD_BLOCK_BYTES = 64 * 1024
+"""Bytes read from storage per streamed download block."""
 
 VIEWER_CSP = {"default-src": [CSP.NONE], "media-src": [CSP.SELF], "style-src": [CSP.UNSAFE_INLINE]}
 """The policy on a type the browser opens in its own viewer (PDF, text, audio, video).
@@ -89,7 +93,9 @@ def download(request: HttpRequest, filename: str) -> HttpResponseBase:
     (:func:`~angee.storage.uploads.renders_inline`); every other type downloads as
     an attachment. A viewer type carries :data:`VIEWER_CSP`, every other response
     :data:`DOWNLOAD_CSP`, and all of them ``nosniff`` from Django's
-    ``SecurityMiddleware``.
+    ``SecurityMiddleware``. The bytes stream as an async iterator reading one
+    block at a time in a worker thread, so a slow or remote backend never blocks
+    the event loop nor buffers the whole file; the row's size is the length.
     """
 
     del filename  # cosmetic save-as name; the token identifies the file
@@ -107,10 +113,23 @@ def download(request: HttpRequest, filename: str) -> HttpResponseBase:
     if conditional := get_conditional_response(request, etag=etag):
         return _download_cache_response(conditional, etag, content_type)
     stream = row.open_stream()
-    response = FileResponse(
-        stream, filename=row.filename, content_type=content_type, as_attachment=not renders_inline(content_type)
-    )
+    response = StreamingHttpResponse(_stream_blocks(stream), content_type=content_type)
+    response["Content-Length"] = str(row.size_bytes)
+    disposition = content_disposition_header(not renders_inline(content_type), row.filename)
+    if disposition:
+        response["Content-Disposition"] = disposition
     return _download_cache_response(response, etag, content_type)
+
+
+async def _stream_blocks(stream: IO[bytes]) -> AsyncIterator[bytes]:
+    """Yield stored bytes block by block from a worker thread, closing the stream however the response ends."""
+
+    read = sync_to_async(stream.read, thread_sensitive=False)
+    try:
+        while block := await read(DOWNLOAD_BLOCK_BYTES):
+            yield block
+    finally:
+        await sync_to_async(stream.close, thread_sensitive=False)()
 
 
 def _download_cache_response(response: HttpResponseBase, etag: str, content_type: str) -> HttpResponseBase:

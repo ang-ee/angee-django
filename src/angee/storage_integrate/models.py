@@ -90,18 +90,23 @@ class MountManager[MountT: Mount](_MountManagerBase[MountT]):
     def connectable_credentials(self, user: Any, backend_class: str) -> Any:
         """Return ``user``'s connected OAuth credentials a backend may read its source with.
 
-        Only a backend that requires a credential has any, and only of its own
-        OAuth registration, so one vendor's token is never sent to another's API.
+        Only a backend that requires a credential has any: only of its own OAuth
+        registration, so one vendor's token is never sent to another's API, and
+        only those whose grant covers the backend's ``oauth_scopes``.
         """
 
         impl = self.backend_impl(backend_class)
         credential_model = apps.get_model("integrate", "Credential")
         if not impl.requires_credential:
             return credential_model.objects.none()
-        return credential_model.objects.connected_for(user).filter(
+        accounts = credential_model.objects.connected_for(user).filter(
             kind=CredentialKind.OAUTH,
             oauth_client__slug=impl.oauth_slug(),
         )
+        required = set(impl.oauth_scopes)
+        # JSON containment is not portable to SQLite; a user's accounts are few.
+        granted = [pk for pk, scopes in accounts.values_list("pk", "granted_scopes") if required <= set(scopes or ())]
+        return accounts.filter(pk__in=granted)
 
     def browse_source(self, backend_class: str, *, credential: Any | None = None, token: str = "") -> MountBrowseResult:
         """List one bounded level of a configured mount backend's source tree, before a Mount exists.
@@ -139,9 +144,9 @@ class MountManager[MountT: Mount](_MountManagerBase[MountT]):
         """Provision one external-source Mount and its drive, then queue its first sync.
 
         ``root`` is the backend's source token (what ``browse`` offers); the
-        backend's ``source_root`` canonicalizes it and its ``check_source``
-        validates it on the unsaved row, so a refusal is keyed to ``path`` before
-        anything is created. A backend that requires a credential reads with
+        backend's ``source_root`` validates it on the unsaved row and returns its
+        canonical root, which the already-mounted check and the Mount use, so a
+        refusal is keyed to ``path`` before anything is created. A backend that requires a credential reads with
         ``credential``, one of ``user``'s :meth:`connectable_credentials`,
         attached through the integration's own attach verb; the Mount points at
         the backend's vendor. A reference mount gets its own storage backend
@@ -161,10 +166,9 @@ class MountManager[MountT: Mount](_MountManagerBase[MountT]):
         self._check_copy_backend(user, mode=mode, copy_backend=copy_backend, backend_model=backend_model)
         storage_backend_spec: tuple[str, dict[str, Any]] | None = None
         try:
-            mount_config = {"root": impl.source_root(str(root))}
-            source = self.model(backend_class=backend_class, config=mount_config, credential=credential)
+            source = self.model(backend_class=backend_class, config={"root": str(root)}, credential=credential)
             with contextlib.closing(source.backend) as backend:
-                backend.check_source()
+                mount_config = {"root": backend.source_root()}
                 if mode == MountMode.REFERENCE:
                     storage_backend_spec = backend.storage_backend_spec()
         except IntegrationError as error:
@@ -359,9 +363,8 @@ class Mount(Bridge, inherits="integrate.Integration"):
 
         for entry in backend.iter_entries():
             counts["scanned"] += 1
-            source_key = self._source_key(entry)
-            seen_keys.add(source_key)
-            prior = previous.get(source_key)
+            seen_keys.add(entry.storage_key)
+            prior = previous.get(entry.storage_key)
             if self._entry_unchanged(entry, prior):
                 counts["unchanged"] += 1
                 self._report_batch(counts)
@@ -385,11 +388,14 @@ class Mount(Bridge, inherits="integrate.Integration"):
                         size_bytes=entry.size_bytes,
                         mime_type=backend.entry_mime(entry),
                         folder=folder,
-                        metadata={"mount": self._reference_metadata(entry)},
+                        metadata={"mount": self._mount_metadata(entry)},
                         mime_cache=mime_cache,
                         existing_pk=prior.pk if prior is not None else None,
                         owner_id=self.owner_id,
                     )
+                elif prior is not None and not prior.is_trashed and prior.content_hash == digest:
+                    # The copied bytes are current; the source only moved, renamed or touched.
+                    self._place_copy(file_model, prior.pk, entry=entry, folder=folder)
                 else:
                     with contextlib.closing(backend.open_entry(entry)) as reader:
                         file_model.objects.ingest_stream(
@@ -397,12 +403,7 @@ class Mount(Bridge, inherits="integrate.Integration"):
                             filename=PurePosixPath(entry.path).name,
                             content_hash=digest,
                             size_bytes=entry.size_bytes,
-                            metadata={
-                                "mount": {
-                                    "source_path": entry.path,
-                                    "mtime_ns": entry.mtime_ns,
-                                }
-                            },
+                            metadata={"mount": self._mount_metadata(entry)},
                             owner_id=self.owner_id,
                             drive_id=str(drive.public_id),
                             folder_id=str(folder.public_id) if folder is not None else "",
@@ -438,25 +439,55 @@ class Mount(Bridge, inherits="integrate.Integration"):
         self._report_progress(counts, complete=True)
         return counts["changed"]
 
-    def _source_key(self, entry: MountEntry) -> str:
-        """Key ``entry`` as its File row records it: by storage key in reference mode, by source path in copy mode."""
+    def _mount_metadata(self, entry: MountEntry) -> dict[str, Any]:
+        """Return the mount facts a row records for ``entry``: its mtime, source path and storage key.
 
-        return entry.storage_key if self.mode == MountMode.REFERENCE else entry.path
-
-    @staticmethod
-    def _reference_metadata(entry: MountEntry) -> dict[str, Any]:
-        """Return a reference row's mount facts: its mtime, and its path when the key is not the path.
-
-        A source keyed by stable ids can move or rename a file without touching
-        its size or mtime; the recorded path lets freshness see the new placement.
+        A reference row's storage path is its key, and a copy row always records
+        its source path. A source keyed by stable ids can move or rename a file
+        without touching its size or mtime, so a row of such a source also
+        records what its storage path does not: the path, or the key. A
+        path-keyed source records nothing more than it always did.
         """
 
-        if entry.path == entry.storage_key:
-            return {"mtime_ns": entry.mtime_ns}
-        return {"mtime_ns": entry.mtime_ns, "path": entry.path}
+        keyed_by_path = entry.storage_key == entry.path
+        if self.mode == MountMode.REFERENCE:
+            placement = {} if keyed_by_path else {"source_path": entry.path}
+            return {"mtime_ns": entry.mtime_ns, **placement}
+        return {
+            "source_path": entry.path,
+            "mtime_ns": entry.mtime_ns,
+            **({} if keyed_by_path else {"storage_key": entry.storage_key}),
+        }
+
+    def _place_copy(self, file_model: Any, pk: Any, *, entry: MountEntry, folder: Any | None) -> None:
+        """Move and rename a copied row to its source's new place and record the source's facts.
+
+        The bytes are unchanged, so nothing is copied; the row keeps its identity
+        under its storage key. Placement follows ``File.validate_placement``.
+        """
+
+        filename = PurePosixPath(entry.path).name
+        with system_context(reason="storage_integrate.mount.place_copy"):
+            row = file_model.objects.get(pk=pk)
+            moved = [
+                field
+                for field, value in (("folder_id", folder.pk if folder is not None else None), ("filename", filename))
+                if getattr(row, field) != value
+            ]
+            if moved:
+                if folder is not None:
+                    file_model.validate_placement(folder, row.drive_id)
+                row.folder_id = folder.pk if folder is not None else None
+                row.filename = filename
+                row.save(update_fields=[field.removesuffix("_id") for field in moved] + ["updated_at"])
+            row.merge_metadata({"mount": self._mount_metadata(entry)})
 
     def _freshness_map(self, file_model: Any) -> dict[str, _MountFileState]:
-        """Load this drive's File-owned mount freshness in one streamed query, by :meth:`_source_key`."""
+        """Load this drive's File-owned mount freshness in one streamed query, by storage key.
+
+        A reference row's key is its storage path; a copy row's is the key it
+        recorded, or its source path, which a path-keyed source's key is.
+        """
 
         freshness: dict[str, _MountFileState] = {}
         with system_context(reason="storage_integrate.mount.freshness"):
@@ -475,25 +506,27 @@ class Mount(Bridge, inherits="integrate.Integration"):
             for pk, storage_path, content_hash, size_bytes, is_trashed, metadata in rows.iterator(chunk_size=2000):
                 mount_metadata = metadata.get("mount") if isinstance(metadata, Mapping) else None
                 mount_values = mount_metadata if isinstance(mount_metadata, Mapping) else {}
-                source_path = (
-                    str(storage_path)
-                    if self.mode == MountMode.REFERENCE
-                    else str(mount_values.get("source_path") or "")
-                )
-                if not source_path:
+                recorded_path = str(mount_values.get("source_path") or "")
+                if self.mode == MountMode.REFERENCE:
+                    storage_key = str(storage_path)
+                    source_path = recorded_path or storage_key
+                else:
+                    storage_key = str(mount_values.get("storage_key") or recorded_path)
+                    source_path = recorded_path
+                if not storage_key:
                     continue
                 raw_mtime_ns = mount_values.get("mtime_ns")
                 try:
                     mtime_ns = int(raw_mtime_ns) if raw_mtime_ns is not None else None
                 except TypeError, ValueError:
                     mtime_ns = None
-                freshness[source_path] = _MountFileState(
+                freshness[storage_key] = _MountFileState(
                     pk=pk,
                     content_hash=str(content_hash),
                     size_bytes=int(size_bytes),
                     is_trashed=bool(is_trashed),
                     mtime_ns=mtime_ns,
-                    path=str(mount_values.get("path") or source_path),
+                    path=source_path,
                 )
         return freshness
 
