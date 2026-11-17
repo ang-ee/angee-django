@@ -9,6 +9,7 @@ by overriding ``TIME_ZONE`` per case.
 from __future__ import annotations
 
 from datetime import UTC, datetime, time
+from time import perf_counter
 from zoneinfo import ZoneInfo
 
 import pytest
@@ -24,7 +25,7 @@ from pydantic import TypeAdapter
 from pydantic import ValidationError as PydanticValidationError
 
 from angee.scheduling.fields import RecurrenceField, TimeZoneField
-from angee.scheduling.recurrence import Recurrence
+from angee.scheduling.recurrence import MAX_OCCURRENCES, Recurrence
 from angee.scheduling.zones import ZoneName, get_zone_info
 
 with isolate_apps("angee.scheduling"):
@@ -309,8 +310,7 @@ def test_a_rule_set_with_one_open_ended_member_never_ends() -> None:
 
 @override_settings(TIME_ZONE="UTC")
 def test_recurrence_refuses_more_occurrences_than_its_limit_and_never_truncates() -> None:
-    limit = Recurrence.OCCURRENCE_LIMIT
-    huge = Recurrence(f"FREQ=DAILY;COUNT={limit + 1}")
+    huge = Recurrence(f"FREQ=DAILY;COUNT={MAX_OCCURRENCES + 1}")
 
     with pytest.raises(ValidationError):
         huge.validate()
@@ -336,6 +336,50 @@ def test_an_expansion_past_the_representable_dates_is_refused_never_overflowed()
         Recurrence("FREQ=DAILY").occurrences(_utc(2026, 1, 1), end_of_time, end_of_time, zone="Pacific/Kiritimati")
 
     assert refused.value.code == "out_of_range"
+
+
+def test_a_rule_that_never_matches_a_day_is_refused_at_once() -> None:
+    february_thirtieth = Recurrence("FREQ=DAILY;BYMONTH=2;BYMONTHDAY=30")
+
+    began = perf_counter()
+    with pytest.raises(ValidationError) as refused:
+        february_thirtieth.validate(dtstart=_utc(2026, 1, 1, 9))
+
+    assert refused.value.code == "never_occurs"
+    assert perf_counter() - began < 1
+
+
+@pytest.mark.parametrize(
+    "rule",
+    [
+        pytest.param("FREQ=WEEKLY;INTERVAL=2;BYDAY=TU", id="every-other-tuesday"),
+        pytest.param("FREQ=YEARLY;BYMONTH=2;BYMONTHDAY=29", id="leap-day"),
+    ],
+)
+def test_a_rule_that_occurs_within_thirty_years_of_its_start_is_valid(rule: str) -> None:
+    Recurrence(rule).validate(dtstart=_utc(2026, 3, 2, 9))
+
+
+def test_a_rule_whose_interval_skips_every_matching_day_never_occurs_and_is_probed_fast() -> None:
+    # Every seventh day from a Monday is a Monday: the Tuesday filter never matches.
+    began = perf_counter()
+
+    assert Recurrence("FREQ=DAILY;INTERVAL=7;BYDAY=TU").never_occurs(_utc(2026, 3, 2, 9), zone="UTC")
+    assert perf_counter() - began < 1
+
+
+def test_a_rule_ending_before_its_first_match_never_occurs() -> None:
+    assert Recurrence("FREQ=YEARLY;BYMONTH=12;UNTIL=20260601T000000Z").never_occurs(_utc(2026, 1, 1), zone="UTC")
+
+
+def test_an_open_daily_series_twenty_years_on_still_expands_and_one_past_the_cap_refuses() -> None:
+    daily = Recurrence("FREQ=DAILY")
+    start = _utc(2026, 1, 1, 9)
+
+    assert daily.occurrences(start, _utc(2046, 1, 1), _utc(2046, 1, 2), zone="UTC") == [_utc(2046, 1, 1, 9)]
+    with pytest.raises(ValidationError) as refused:
+        daily.occurrences(start, _utc(2200, 1, 1), _utc(2200, 1, 2), zone="UTC")
+    assert refused.value.code == "series_too_long"
 
 
 @pytest.mark.parametrize(

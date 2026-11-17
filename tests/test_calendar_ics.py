@@ -13,6 +13,7 @@ import logging
 from collections.abc import Iterator
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta, tzinfo
+from time import perf_counter
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -20,6 +21,7 @@ import httpx2
 import pytest
 from django.core.cache import caches
 from django.core.exceptions import ValidationError
+from django.db import transaction
 from django.db.models import ProtectedError
 from rebac import actor_context, system_context
 
@@ -32,7 +34,7 @@ from angee.calendar.models import (
     AttendeeResponse,
     AttendeeRole,
 )
-from angee.calendar.tasks import purge_source
+from angee.calendar.tasks import purge_source, purge_unsubscribed_sources
 from angee.calendar.testing.models import Calendar, CalendarEvent, CalendarSource, EventAttendee
 from angee.calendar_integrate_ics import backend as ics_backend
 from angee.calendar_integrate_ics.backend import FEED_KEY, IcsCalendarBackend, IcsError
@@ -44,6 +46,7 @@ from angee.integrate.testing.http import mock_transport
 from angee.integrate.testing.models import RecordLink, SyncStream
 from angee.jobs.celery import app as celery_app
 from angee.messaging.testing.models import Handle, Person
+from angee.scheduling.zones import get_zone_info
 from tests.conftest import Credential, create_user
 
 pytestmark = pytest.mark.django_db(transaction=True)
@@ -415,7 +418,7 @@ def test_unsubscribing_disconnects_now_and_the_purge_job_removes_the_replica(
         assert not Credential.objects.filter(pk=credential_id).exists()
 
 
-def test_a_sync_in_flight_after_unsubscribing_refuses_to_bring_events_back(subscription: Subscription) -> None:
+def test_a_drain_in_flight_after_unsubscribing_ends_quietly_and_writes_nothing(subscription: Subscription) -> None:
     subscription.poll()
     source = subscription.source
     subscription.feed.etags = False
@@ -424,15 +427,35 @@ def test_a_sync_in_flight_after_unsubscribing_refuses_to_bring_events_back(subsc
     with system_context(reason="tests.ics"):
         # A drain already running holds the feed it fetched before the unsubscribe.
         backend.read_keys(events, ["launch@example.test"])
+        page = backend.extract(subscription.stream(), 100)
         CalendarSource.objects.filter(pk=source.pk).update(lifecycle="disconnected")
         source.refresh_from_db()
         assert source.purge() == 6
 
-        # Its next page waits on the calendar lock the purge took, then writes nothing.
-        with pytest.raises(IntegrationError, match="unsubscribed"):
-            advance_stream(subscription.stream(), backend)
+        # Its next extraction ends the drain quietly.
+        settled = advance_stream(subscription.stream(), backend)
+        assert (settled.count, settled.exhausted) == (0, True)
+        # A page it extracted before the unsubscribe is refused under the stream and calendar locks.
+        with pytest.raises(IntegrationError, match="unsubscribed"), transaction.atomic():
+            backend.prepare_page(subscription.stream(), page)
 
     assert not CalendarEvent.system_queryset().filter(calendar=subscription.calendar).exists()
+
+
+def test_the_reconciler_finishes_a_purge_the_unsubscribe_job_never_ran(
+    subscription: Subscription, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    subscription.poll()
+    monkeypatch.setattr(celery_app, "send_task", lambda name, **options: None)
+    with system_context(reason="tests.ics"):
+        CalendarSource.objects.get(pk=subscription.source.pk).unsubscribe()
+
+    assert purge_unsubscribed_sources() == 6
+    assert purge_unsubscribed_sources() == 0
+    with system_context(reason="tests.ics"):
+        source = CalendarSource.objects.get(pk=subscription.source.pk)
+        assert source.credential_id is None
+        assert not CalendarEvent.objects.filter(calendar=subscription.calendar).exists()
 
 
 # --- polling -----------------------------------------------------------------
@@ -856,7 +879,7 @@ END:VEVENT"""
     assert subscription.events()["forever@example.test"].series_end == _utc(9999, 1, 5, 10, zone=NEW_YORK)
 
 
-def test_a_far_future_event_lands_on_a_refusing_calendar_beside_an_open_series_ahead_of_utc(
+def test_a_far_future_event_lands_on_a_refusing_calendar_beside_an_open_yearly_series_ahead_of_utc(
     subscription: Subscription,
 ) -> None:
     subscription.poll()
@@ -866,13 +889,13 @@ def test_a_far_future_event_lands_on_a_refusing_calendar_beside_an_open_series_a
 UID:early@example.test
 DTSTART;TZID=Europe/Berlin:20260401T070000
 DTEND;TZID=Europe/Berlin:20260401T073000
-RRULE:FREQ=DAILY
+RRULE:FREQ=YEARLY
 SUMMARY:Early
 END:VEVENT"""
     far = """BEGIN:VEVENT
 UID:far@example.test
-DTSTART:99991231T220000Z
-DTEND:99991231T230000Z
+DTSTART:99991228T220000Z
+DTEND:99991228T230000Z
 SUMMARY:Far
 END:VEVENT"""
     subscription.feed.body = _feed(STANDUP, MOVED, HOLIDAY, BERLIN_EVENT, LAUNCH, early, far)
@@ -954,6 +977,164 @@ def test_a_handle_merge_leaves_the_replica_converged_with_its_feed(subscription:
     assert subscription.failures() == {}
 
 
+def test_a_rule_that_never_occurs_is_refused_at_parse_at_once(subscription: Subscription) -> None:
+    never = """BEGIN:VEVENT
+UID:never@example.test
+DTSTART;TZID=America/New_York:20260101T090000
+DTEND;TZID=America/New_York:20260101T100000
+RRULE:FREQ=DAILY;BYMONTH=2;BYMONTHDAY=30
+EXDATE;TZID=America/New_York:99990101T090000
+SUMMARY:February 30
+END:VEVENT"""
+    subscription.feed.body = _feed(STANDUP, MOVED, HOLIDAY, BERLIN_EVENT, LAUNCH, never)
+
+    began = perf_counter()
+    subscription.poll()
+
+    assert subscription.failures() == {"never@example.test": ["invalid_event"]}
+    assert perf_counter() - began < 30
+
+
+def test_a_far_recurrence_id_on_an_open_daily_series_is_refused_instead_of_walked(subscription: Subscription) -> None:
+    daily = """BEGIN:VEVENT
+UID:daily@example.test
+DTSTART:20260401T080000Z
+DTEND:20260401T081500Z
+RRULE:FREQ=DAILY
+SUMMARY:Daily
+END:VEVENT"""
+    far = """BEGIN:VEVENT
+UID:daily@example.test
+RECURRENCE-ID:22000401T080000Z
+DTSTART:22000401T090000Z
+DTEND:22000401T091500Z
+SUMMARY:Far instance
+END:VEVENT"""
+    subscription.feed.body = _feed(STANDUP, MOVED, HOLIDAY, BERLIN_EVENT, LAUNCH, daily, far)
+
+    subscription.poll()
+
+    # The instance check walks at most the owner's cap from the series' start, then refuses.
+    assert subscription.failures() == {"daily@example.test#22000401T080000Z": ["invalid_record"]}
+    assert "daily@example.test" in subscription.events()
+
+
+@pytest.mark.parametrize(
+    "event",
+    [
+        pytest.param(
+            "UID:edge@example.test\nDTSTART;VALUE=DATE:99991230\nRRULE:FREQ=DAILY;COUNT=2\nSUMMARY:Edge",
+            id="daily-at-the-end-of-time",
+        ),
+        pytest.param(
+            "UID:edge@example.test\nDTSTART;VALUE=DATE:20261228\nDTEND;VALUE=DATE:20270104\n"
+            "RRULE:FREQ=YEARLY;UNTIL=99991231\nSUMMARY:Edge",
+            id="yearly-seven-days",
+        ),
+        pytest.param(
+            "UID:edge@example.test\nDTSTART;VALUE=DATE:00010101\nSUMMARY:Edge",
+            id="year-one",
+        ),
+    ],
+)
+def test_an_event_past_the_representable_dates_is_refused_on_a_refusing_calendar(
+    subscription: Subscription, event: str
+) -> None:
+    subscription.poll()
+    with system_context(reason="tests.ics"):
+        Calendar.objects.filter(pk=subscription.calendar.pk).update(overlap_policy="refuse")
+    subscription.feed.body = _feed(STANDUP, MOVED, HOLIDAY, BERLIN_EVENT, LAUNCH, f"BEGIN:VEVENT\n{event}\nEND:VEVENT")
+
+    subscription.poll()
+
+    assert list(subscription.failures()) == ["edge@example.test"]
+    assert "launch@example.test" in subscription.events()
+
+
+def test_a_handle_a_refused_record_created_is_never_reused_by_the_next(subscription: Subscription) -> None:
+    subscription.poll()
+    long_address = "x" * 600 + "@example.test"
+    refused = (
+        "BEGIN:VEVENT\nUID:a-refused@example.test\nDTSTART:20260402T080000Z\nDTEND:20260402T090000Z\n"
+        f"SUMMARY:Refused\nATTENDEE:mailto:fresh@example.test\nATTENDEE:mailto:{long_address}\nEND:VEVENT"
+    )
+    landed = (
+        "BEGIN:VEVENT\nUID:b-landed@example.test\nDTSTART:20260402T100000Z\nDTEND:20260402T110000Z\n"
+        "SUMMARY:Landed\nATTENDEE:mailto:fresh@example.test\nEND:VEVENT"
+    )
+    subscription.feed.body = _feed(STANDUP, MOVED, HOLIDAY, BERLIN_EVENT, LAUNCH, refused, landed)
+
+    subscription.poll()
+
+    assert subscription.failures() == {"a-refused@example.test": ["invalid_record"]}
+    with system_context(reason="tests.ics"):
+        [row] = EventAttendee.objects.filter(event=subscription.events()["b-landed@example.test"])
+        assert Handle.objects.filter(pk=row.handle_id, value="fresh@example.test").exists()
+
+
+def test_a_feed_zone_built_in_unbounded_memory_falls_back_to_the_calendars_zone(subscription: Subscription) -> None:
+    runaway = """BEGIN:VTIMEZONE
+TZID:Runaway
+BEGIN:STANDARD
+DTSTART:19700101T000000
+TZOFFSETFROM:+0100
+TZOFFSETTO:+0100
+RRULE:FREQ=SECONDLY
+END:STANDARD
+END:VTIMEZONE"""
+    event = """BEGIN:VEVENT
+UID:runaway@example.test
+DTSTART;TZID=Runaway:20260701T090000
+DTEND;TZID=Runaway:20260701T100000
+SUMMARY:Runaway
+END:VEVENT"""
+    zone = runaway.replace("\n", "\r\n") + "\r\n"
+    subscription.feed.body = _feed(event, zone="").replace("END:VTIMEZONE\r\n", "END:VTIMEZONE\r\n" + zone, 1)
+
+    subscription.poll()
+
+    # Without an X-WR-TIMEZONE, an unbuilt feed zone reads in the calendar's zone (here the project's).
+    calendar_zone = get_zone_info(subscription.calendar.timezone)
+    assert subscription.events()["runaway@example.test"].start == _utc(2026, 7, 1, 9, zone=calendar_zone)
+
+
+def test_a_parameterised_begin_line_counts_against_the_time_zone_cap(
+    subscription: Subscription, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(ics_backend, "_TIMEZONES_PER_FEED", 0)
+    subscription.feed.body = subscription.feed.body.replace("BEGIN:VTIMEZONE", "BEGIN;X-NOTE=1:VTIMEZONE")
+
+    with pytest.raises(BridgeSyncError) as refused:
+        subscription.poll()
+
+    assert "more than 0 time zones" in str(refused.value)
+
+
+def test_a_handle_merge_converges_whichever_attendee_the_feed_lists_first(subscription: Subscription) -> None:
+    carol_first = STANDUP.replace(
+        "ATTENDEE;CN=Bob;PARTSTAT=ACCEPTED;ROLE=REQ-PARTICIPANT:mailto:bob@example.test\n"
+        "ATTENDEE;PARTSTAT=TENTATIVE;ROLE=OPT-PARTICIPANT:MAILTO:Carol@Example.test",
+        "ATTENDEE;PARTSTAT=TENTATIVE;ROLE=OPT-PARTICIPANT:MAILTO:Carol@Example.test\n"
+        "ATTENDEE;CN=Bob;PARTSTAT=ACCEPTED;ROLE=REQ-PARTICIPANT:mailto:bob@example.test",
+    )
+    subscription.feed.body = _feed(carol_first, MOVED, HOLIDAY, BERLIN_EVENT, LAUNCH)
+    subscription.poll()
+    with system_context(reason="tests.ics"):
+        bob = Handle.objects.get(normalized_value="bob@example.test")
+        bob.fold([Handle.objects.get(normalized_value="carol@example.test")])
+
+    # Carol comes first, yet the projection collapses the pair exactly as the merge did.
+    subscription.feed.body = _feed(
+        carol_first, MOVED, HOLIDAY, BERLIN_EVENT, LAUNCH.replace("SUMMARY:Launch", "SUMMARY:Launch review")
+    )
+    assert subscription.poll() == 2
+    subscription.feed.etags = False
+    assert subscription.poll() == 0
+    subscription.sweep()
+    assert subscription.poll() == 0
+    assert subscription.failures() == {}
+
+
 # --- poison input --------------------------------------------------------------
 
 
@@ -975,8 +1156,8 @@ SUMMARY:Broken
 END:VEVENT"""
     far = """BEGIN:VEVENT
 UID:far@example.test
-DTSTART:99991231T220000Z
-DTEND:99991231T230000Z
+DTSTART:99991228T220000Z
+DTEND:99991228T230000Z
 SUMMARY:Far
 END:VEVENT"""
     with system_context(reason="tests.ics"):

@@ -197,17 +197,23 @@ def event_projection(event: ParsedEvent, identities: Mapping[str, str] | None = 
 
     Attendees compare as a set of ``(identity, role, response)``
     (:func:`attendee_identity`): ``identities`` maps each remote address to its
-    identity, and a stored attendee's address already is one. Of two addresses on
-    one handle the first is kept, as ingest keeps it. Display names belong to the
-    handle. The series key stays out of it: an instance's own key already names
-    its series.
+    identity, and a stored attendee's address already is one. Two addresses on one
+    handle collapse into one invitation (``EventAttendee.collapse``), as ingest and
+    a merge collapse them. Display names belong to the handle. The series key
+    stays out of it: an instance's own key already names its series.
     """
 
-    attendees: dict[str, list[str]] = {}
+    collapse = apps.get_model("calendar", "EventAttendee").collapse
+    attendees: dict[str, tuple[str, str]] = {}
     for attendee in event.attendees:
         identity = identities[attendee.address] if identities is not None else attendee.address
-        attendees.setdefault(identity, [identity, attendee.role, attendee.response])
-    return {**_columns(event), "attendees": sorted(attendees.values())}
+        seen = attendees.get(identity)
+        invitation = (attendee.role, attendee.response)
+        attendees[identity] = invitation if seen is None else collapse(seen, invitation)
+    return {
+        **_columns(event),
+        "attendees": sorted([identity, role, response] for identity, (role, response) in attendees.items()),
+    }
 
 
 def event_payload(event: ParsedEvent) -> dict[str, Any]:
@@ -251,6 +257,8 @@ class _EventsPage:
     """One events page's locked work: its calendar, the rows its links name, and its attendees' handles.
 
     Rows and links are by external key; handles by the address the source gave.
+    All were read before any record applied, so nothing a record's savepoint may
+    roll back is ever added to them.
     """
 
     calendar: Any
@@ -353,8 +361,15 @@ class CalendarBackend(BridgeImpl, HttpClientMixin):
             yield self.bridge.events_stream(remote)
 
     def extract(self, stream: Any, page_bound: int, *, deadline: float | None = None) -> StreamPage:
-        """Extract the calendars stream here; an events stream through the backend's :meth:`extract_events`."""
+        """Extract the calendars stream here; an events stream through the backend's :meth:`extract_events`.
 
+        A source unsubscribed while its sync runs yields an empty last page, so the
+        drain ends quietly; its purge removes what is left (:meth:`_require_subscribed`
+        guards a page extracted before).
+        """
+
+        if not self._subscribed():
+            return StreamPage((), dict(stream.cursor or {}))
         if stream.key != CALENDARS_STREAM:
             return self.extract_events(stream, page_bound, deadline=deadline)
         cursor = dict(stream.cursor or {})
@@ -526,6 +541,8 @@ class CalendarBackend(BridgeImpl, HttpClientMixin):
         """
 
         self._page = None
+        if not page.records:
+            return
         if stream.key == CALENDARS_STREAM:
             self._require_subscribed()
             return
@@ -572,7 +589,8 @@ class CalendarBackend(BridgeImpl, HttpClientMixin):
         parsed = event_from_payload(record.source_payload)
         series = None
         if parsed.series:
-            series = page.rows.get(parsed.series) or events.linked(stream, (parsed.series,)).get(parsed.series)
+            # Read as committed: a master this page applied or refused is never a stale object.
+            series = events.linked(stream, (parsed.series,)).get(parsed.series)
             if series is None:
                 raise SemanticError("series_unavailable", kind=SyncFailureKind.MISSING_DEPENDENCY)
         event = events.ingest(
@@ -584,7 +602,6 @@ class CalendarBackend(BridgeImpl, HttpClientMixin):
             handles=page.handles,
             created_by_id=self.bridge.owner_id,
         )
-        page.rows[key] = event
         return ApplyResult(target=event, mapped_payload=self._projection(event))
 
     def on_absent(self, stream: Any, links: Sequence[Any]) -> None:
@@ -613,15 +630,24 @@ class CalendarBackend(BridgeImpl, HttpClientMixin):
             if (event := rows.get(link.external_key)) is not None:
                 event.withdraw(link)
 
-    def _require_subscribed(self) -> None:
-        """Refuse writing for a source unsubscribed since its sync started.
-
-        Read under the calendar's lock, which the purge takes first, so a page
-        already in flight never re-creates what the purge removed.
-        """
+    def _subscribed(self) -> bool:
+        """Whether this source is still subscribed, read fresh from its row."""
 
         rows = type(self.bridge)._base_manager.filter(pk=self.bridge.pk)
-        if rows.values_list("lifecycle", flat=True).first() in (None, IntegrationLifecycle.DISCONNECTED):
+        return rows.values_list("lifecycle", flat=True).first() not in (None, IntegrationLifecycle.DISCONNECTED)
+
+    def _require_subscribed(self) -> None:
+        """Refuse a page extracted before its source was unsubscribed.
+
+        Called once the page holds its stream's lock (the driver's) and, for an
+        events page, its calendar's: the purge takes the events stream first, so a
+        page waiting on it reads the disconnect the purge committed and writes
+        nothing. Extraction ends a drain quietly (:meth:`extract`); this guards only
+        the page already extracted, and fails it rather than revalidate links onto
+        rows the purge removed.
+        """
+
+        if not self._subscribed():
             raise IntegrationError("This calendar source is unsubscribed.")
 
     def _projection(self, event: Any | None) -> dict[str, Any] | None:

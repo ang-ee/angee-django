@@ -29,7 +29,11 @@ retiring the record would drop them, and no merge moves them yet.
 
 Every merge shares one system fold, :meth:`MergeableMixin._fold`: its refusals, the
 moves (and the identity copies they drop) as named system work, and the merge
-changeset. :meth:`MergeableMixin.merge` calls it once it has authorized the
+changeset. While its moves run, :func:`merge_maintenance` is true, for a user's
+merge and a system fold alike: a model whose rows refuse ordinary writes by a rule
+of their own (a calendar source's replicas) reads it to admit the merge's moves,
+collapses and drops, which re-point identity and edit nothing.
+:meth:`MergeableMixin.merge` calls it once it has authorized the
 actor, whose own delete retires each merged record; under an actor REBAC only
 deletes and recreates an edge, which would cost a row its identity. A model's own
 system verb that folds a duplicate has no actor to authorize and calls it directly.

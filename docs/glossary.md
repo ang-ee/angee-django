@@ -291,6 +291,13 @@ retain it, otherwise deleted. A resource's `mergeable` says the verb serves it.
 An actor merges through `merge`; system work folds through `fold`, inside the
 caller's changeset.
 
+**Merge maintenance** — the moves a fold makes, with the collapses and drops of
+identity copies they bring (`merge_maintenance()`, set only by
+`MergeableMixin._fold` around its moves). A merge re-points identity and edits
+nothing, so a model whose rows refuse ordinary writes by a rule of their own (a
+calendar source's replicas, which only their source writes) admits it by reading
+this fact rather than carrying its own copy of the move.
+
 **Canonical record** — the operational survivor a redirect resolves to
 (`MergeableMixin.canonical()`, `objects.canonical()`): the one row readers,
 writers and counts address once its duplicates are merged. A merged record stays

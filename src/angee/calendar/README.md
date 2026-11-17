@@ -71,9 +71,11 @@ expanded server-side in each calendar's zone.
   write. `reschedule_event` drags it.
 - **Bounds:** each series stores where it ends (`series_end`, when every rule it
   holds carries `UNTIL` or `COUNT`), so reads skip series that ended before their
-  window. An event's rule repeats at most hourly, and one expansion yields at most
-  `Recurrence.OCCURRENCE_LIMIT` occurrences: past it the save or read is refused,
-  never truncated.
+  window. An event's rule repeats at most daily and occurs within about 30 years
+  of its start. An expansion counts every occurrence from the series' start, not
+  only those in its window, against `MAX_OCCURRENCES` (10,000, scheduling's one
+  cap): past it the save or read is refused, never truncated. An event's moments,
+  and every occurrence's end, stay within the dates the calendar can reach.
 - **Live updates:** `changes(CalendarEvent)` sends readers the change as usual, and
   sends free/busy viewers only that an event's busy time changed, so they refetch
   the redacted occurrences. A free event reaches them only through a partial save
@@ -136,8 +138,9 @@ missing retries on the next cycle.
   changed calendar zone re-reads the source's events instead of moving them.
 - **Lifecycle.** The source's owner syncs it now and unsubscribes it. Unsubscribing
   disconnects the source at once; a job then removes its events, archives its
-  calendar and deletes its credential. A sync already running stops at its next
-  page instead of bringing events back. A source's calendar is never deleted on
+  calendar and retires its credential, and an hourly reconciler retries a purge
+  that failed. A sync already running ends quietly at its next page instead of
+  bringing events back. A source's calendar is never deleted on
   its own. How many sources one user keeps, and how
   fast they add them, are bounded (`ANGEE_CALENDAR_SOURCES_PER_OWNER`,
   `ANGEE_CALENDAR_SUBSCRIBE_RATE`).

@@ -114,6 +114,12 @@ SOURCE_CALENDAR_DELETE = "This calendar mirrors a subscription; unsubscribe to s
 PURGE_SOURCE_TASK = "calendar.purge_source"
 """The job that purges an unsubscribed source (:meth:`CalendarSource.purge`)."""
 
+PURGE_UNSUBSCRIBED_TASK = "calendar.purge_unsubscribed_sources"
+"""The periodic job that retries unfinished purges (:meth:`CalendarSource.purge_unsubscribed`)."""
+
+_EARLIEST = datetime.min.replace(tzinfo=UTC) + timedelta(days=2)
+"""The earliest instant calendar arithmetic reaches; a day's margin keeps local conversions in range."""
+
 _LATEST = datetime.max.replace(tzinfo=UTC) - timedelta(days=2)
 """The latest instant calendar arithmetic reaches; a day's margin keeps local conversions in range."""
 
@@ -175,6 +181,22 @@ def _same_local_day(moment: datetime, old_tz: Any, new_tz: Any) -> datetime:
     """The midnight in ``new_tz`` on the local date ``moment`` has in ``old_tz``: an all-day bound keeps its date."""
 
     return timezone.make_aware(datetime.combine(moment.astimezone(old_tz).date(), time.min), new_tz)
+
+
+OUT_OF_RANGE_MESSAGE = "Choose a date the calendar can reach (years 1 to 9999)."
+"""The refusal of a moment, or an occurrence's end, outside the representable range."""
+
+
+def _clamped(moment: datetime) -> datetime:
+    """Return ``moment`` clamped to the range calendar arithmetic reaches."""
+
+    return min(max(moment, _EARLIEST), _LATEST)
+
+
+def _earlier(moment: datetime, span: timedelta) -> datetime:
+    """Return ``moment - span``, or the earliest reachable instant when that falls before it."""
+
+    return moment - span if moment - _EARLIEST > span else _EARLIEST
 
 
 def _intervals_meet(left: Sequence[tuple[datetime, datetime]], right: Sequence[tuple[datetime, datetime]]) -> bool:
@@ -419,6 +441,9 @@ class CalendarEventQuerySet(AngeeHistoryQuerySet[Any]):
         ``series_end`` is at or before it. An open-ended series is always read.
         """
 
+        window_start, window_end = _clamped(window_start), _clamped(window_end)
+        if window_end <= window_start:
+            return []
         rows = list(
             self.annotate(
                 occurrence_zone=Coalesce(NullIf(F("timezone"), Value("")), F("calendar__timezone")),
@@ -441,7 +466,7 @@ class CalendarEventQuerySet(AngeeHistoryQuerySet[Any]):
         if masters:
             for series_id, original_start in self.filter(
                 series__in=[row.pk for row in masters],
-                original_start__gte=window_start - lookback,
+                original_start__gte=_earlier(window_start, lookback),
                 original_start__lt=window_end,
             ).values_list("series_id", "original_start"):
                 replaced[series_id].add(original_start)
@@ -452,9 +477,8 @@ class CalendarEventQuerySet(AngeeHistoryQuerySet[Any]):
                 continue
             zone = row.occurrence_zone
             if row.recurrence:
-                starts = Recurrence(row.recurrence).occurrences(
-                    row.start, window_start - (row.end - row.start) - timedelta(days=1), window_end, zone=zone
-                )
+                lower = _earlier(window_start, row.end - row.start + timedelta(days=1))
+                starts = Recurrence(row.recurrence).occurrences(row.start, lower, window_end, zone=zone)
                 starts = [start for start in starts if start not in replaced[row.pk]]
             else:
                 starts = [row.start]
@@ -549,7 +573,8 @@ class CalendarEventManager(_CalendarEventManagerBase):
         Text is trimmed and cut to its column, an untitled event takes
         :data:`UNTITLED_EVENT`, a conference URL that is not a web address is
         dropped, and attendees are deduplicated on the handle owner's normalized
-        address (the organizer's row wins) and capped at :data:`ATTENDEES_PER_EVENT`.
+        address, collapsed by :meth:`EventAttendee.collapse`, and capped at
+        :data:`ATTENDEES_PER_EVENT`, the organizer first.
         Each attendee keeps the address the source gave; only dedup and the projection
         read its normalized form.
         """
@@ -568,9 +593,16 @@ class CalendarEventManager(_CalendarEventManagerBase):
         for attendee in parsed.attendees:
             address = attendee.address.strip()
             normalized = normalized_address(address)
-            if not normalized or (normalized in attendees and attendee.role != AttendeeRole.ORGANIZER):
+            if not normalized:
                 continue
-            attendees[normalized] = replace(attendee, address=address)
+            first = attendees.get(normalized)
+            if first is None:
+                attendees[normalized] = replace(attendee, address=address)
+                continue
+            role, response = EventAttendee.collapse((first.role, first.response), (attendee.role, attendee.response))
+            attendees[normalized] = replace(
+                first, role=role, response=response, display_name=first.display_name or attendee.display_name
+            )
         kept = sorted(attendees.values(), key=lambda row: row.role != AttendeeRole.ORGANIZER)
         return replace(
             parsed,
@@ -584,18 +616,14 @@ class CalendarEventManager(_CalendarEventManagerBase):
     def attendee_handles(self, addresses: Iterable[str]) -> dict[str, Any]:
         """Return the canonical handle each address lands on, for the addresses that have one.
 
-        Each distinct address resolves once, through the handle owner
-        (``HandleManager.find_identity``), as ingest lands it; a caller resolves a
-        whole page at once.
+        The whole batch resolves in one read through the handle owner
+        (``HandleManager.find_identities``), the rule ingest lands each address by.
         """
 
         handles = cast(Any, apps.get_model("parties", "Handle")).objects
-        found = {}
-        for address in sorted(set(addresses)):
-            handle = handles.find_identity(platform=handles.model.Platform.for_value(address), value=address)
-            if handle is not None:
-                found[address] = handle
-        return found
+        identities = {address: (handles.model.Platform.for_value(address), address) for address in set(addresses)}
+        found = handles.find_identities(identities.values())
+        return {address: found[identity] for address, identity in identities.items() if identity in found}
 
     def linked(self, stream: Any, keys: Iterable[str], *, lock: bool = False) -> dict[str, CalendarEvent]:
         """Return the events ``stream``'s links name, by external key, as system work.
@@ -673,16 +701,17 @@ class CalendarEventManager(_CalendarEventManagerBase):
     ) -> None:
         """Make the event's attendee rows the observed set, promoting the organizer last.
 
-        Each address lands on its canonical handle (``handles``, else resolved
-        here); a new one is created, and the mapping keeps it for the page's next
-        events. A source names only the handles it creates: an existing handle keeps
-        its display name, whatever the source calls it. Of two addresses on one
-        handle the first is kept, as the event's projection keeps it.
+        Each address lands on its canonical handle (the page's ``handles``, else
+        resolved here); a new one is created and kept for this event alone, since
+        this record's savepoint may still roll it back. A source names only the
+        handles it creates: an existing handle keeps its display name, whatever the
+        source calls it. Two addresses on one handle collapse into one invitation
+        (:meth:`EventAttendee.collapse`), as the event's projection collapses them.
         """
 
         handles_owner = cast(Any, apps.get_model("parties", "Handle")).objects
         through = cast(Any, apps.get_model("calendar", "EventAttendee"))
-        known = handles if handles is not None else self.attendee_handles(row.address for row in attendees)
+        known = dict(handles) if handles is not None else self.attendee_handles(row.address for row in attendees)
         wanted: dict[Any, tuple[str, str]] = {}
         for attendee in attendees:
             handle = known.get(attendee.address)
@@ -693,8 +722,13 @@ class CalendarEventManager(_CalendarEventManagerBase):
                     created_by_id=created_by_id,
                     display_name=attendee.display_name,
                 )
-            wanted.setdefault(handle.pk, (attendee.role, attendee.response))
+            seen = wanted.get(handle.pk)
+            invitation = (attendee.role, attendee.response)
+            wanted[handle.pk] = invitation if seen is None else EventAttendee.collapse(seen, invitation)
         rows = {row.handle_id: row for row in through.system_queryset().filter(event=event)}
+        for row in rows.values():
+            # The event in hand answers each row's writability: no read per attendee.
+            row.event = event
         for handle_id, row in rows.items():
             if handle_id not in wanted:
                 row.delete()
@@ -755,7 +789,7 @@ class CalendarEvent(
     start = models.DateTimeField(db_index=True)
     end = models.DateTimeField()
     all_day = models.BooleanField(default=False)
-    recurrence = RecurrenceField(finest_frequency="HOURLY")
+    recurrence = RecurrenceField(finest_frequency="DAILY")
     timezone = TimeZoneField()
     """The wall clock this event keeps; blank: its calendar's.
 
@@ -835,13 +869,21 @@ class CalendarEvent(
     def clean(self) -> None:
         """Validate the interval, the all-day bounds and an override's series; this row alone.
 
-        An all-day event's ``start`` and ``end`` are midnights in its expansion zone,
-        a whole number of days apart. The overlap policy reads other rows, so
-        :meth:`save` checks it, after the write, under the calendar's lock.
+        Its moments lie within the representable range calendar arithmetic needs
+        (two days inside Python's). An all-day event's ``start`` and ``end`` are
+        midnights in its expansion zone, a whole number of days apart. The overlap
+        policy reads other rows, so :meth:`save` checks it, after the write, under
+        the calendar's lock.
         """
 
         super().clean()
         errors: dict[str, str] = {}
+        for name in ("start", "end"):
+            moment = getattr(self, name)
+            if moment is not None and not _EARLIEST <= moment <= _LATEST:
+                errors[name] = OUT_OF_RANGE_MESSAGE
+        if errors:
+            raise ValidationError(errors)
         if self.end is not None and self.start is not None and self.end < self.start:
             errors["end"] = "The event end must not be before its start."
         if self.all_day and self.calendar_id is not None and self.start is not None and self.end is not None:
@@ -977,7 +1019,7 @@ class CalendarEvent(
         schedule_changes = update_fields is None or bool(_SCHEDULE_FIELDS & set(update_fields))
         takes_time = update_fields is None or bool(_TIME_FIELDS & set(update_fields))
         if schedule_changes:
-            self._validate_rule()
+            self.validate_rule()
             self.series_end = self._derive_series_end()
             if update_fields is not None:
                 kwargs["update_fields"] = [*update_fields, "series_end"]
@@ -1005,13 +1047,23 @@ class CalendarEvent(
             if takes_time and self.calendar_id is not None:
                 self._refuse_overlap()
 
-    def _validate_rule(self) -> None:
-        """Refuse a rule its field refuses (a malformed, unbounded-count or too-frequent rule) on every save."""
+    def validate_rule(self, *, zone: str | None = None) -> None:
+        """Refuse a rule its field refuses, or one with no occurrence near this row's start, on every save.
+
+        The field refuses a malformed rule, one finer than daily and a ``COUNT``
+        past the cap; the recurrence owner then refuses a rule that never occurs
+        within about 30 years of ``start`` (``never_occurs``), expanded in ``zone``
+        (this row's expansion zone). A source's parse calls it on an unsaved row.
+        """
 
         try:
-            self._meta.get_field("recurrence").validate(self.recurrence, self)
+            self._meta.get_field("recurrence").clean(self.recurrence, self)
+            if self.recurrence and self.start is not None:
+                Recurrence(self.recurrence).validate(
+                    dtstart=self.start, zone=self.expansion_zone if zone is None else zone
+                )
         except ValidationError as error:
-            raise ValidationError({"recurrence": error.messages}) from None
+            raise ValidationError({"recurrence": error.error_list}) from None
 
     def _previous_schedule(self) -> tuple[datetime, bool, str, str, str] | None:
         """The stored ``(start, all_day, recurrence, timezone, calendar zone)`` of a master with overrides.
@@ -1139,16 +1191,20 @@ class CalendarEvent(
         spans a whole number of **calendar days** in the zone: the row's local
         day-count is added to the occurrence's local start date and converted back
         to UTC, so a one-day all-day event ends the next local midnight, not one hour
-        off after a spring-forward. A blank zone is the project ``TIME_ZONE``.
+        off after a spring-forward. A blank zone is the project ``TIME_ZONE``. An
+        end past the representable dates is refused (``out_of_range``).
         """
 
-        if not self.all_day:
-            return start + (self.end - self.start)
-        tz = get_zone_info(zone)
-        day_span = (self.end.astimezone(tz).date() - self.start.astimezone(tz).date()).days
-        end_local_date = start.astimezone(tz).date() + timedelta(days=day_span)
-        end_local = datetime.combine(end_local_date, time.min)
-        return timezone.make_aware(end_local, tz).astimezone(UTC)
+        try:
+            if not self.all_day:
+                return start + (self.end - self.start)
+            tz = get_zone_info(zone)
+            day_span = (self.end.astimezone(tz).date() - self.start.astimezone(tz).date()).days
+            end_local_date = start.astimezone(tz).date() + timedelta(days=day_span)
+            end_local = datetime.combine(end_local_date, time.min)
+            return timezone.make_aware(end_local, tz).astimezone(UTC)
+        except OverflowError as error:
+            raise ValidationError({"end": OUT_OF_RANGE_MESSAGE}, code="out_of_range") from error
 
     def occurrence_id(self, start: datetime, *, series: str = "") -> str:
         """Return the stable id of this row's occurrence at ``start`` (see :class:`EventOccurrence`).
@@ -1261,23 +1317,36 @@ class EventAttendee(ImmutableFieldsMixin, AuditMixin, HistoryMixin, AngeeDataMod
 
         return f"{self.event_id}:{self.handle_id}"
 
-    def merge_collapse(self, duplicate: Any) -> bool:
-        """Keep one invitation covering both: the organizer role, else the stronger role, and the stronger answer.
+    @staticmethod
+    def collapse(first: tuple[str, str], second: tuple[str, str]) -> tuple[str, str]:
+        """Return the one ``(role, response)`` two invitations of one attendee make.
 
-        An answer outranks none, and a definite answer a tentative one, with
-        acceptance first: ``accepted`` > ``declined`` > ``tentative`` > ``needs_action``.
+        The stronger role, the organizer first (``organizer`` > ``required`` >
+        ``optional``), and the stronger answer: an answer outranks none, and a
+        definite answer a tentative one, with acceptance first (``accepted`` >
+        ``declined`` > ``tentative`` > ``needs_action``). It is order-free, so a merge,
+        ingest, a source's projection and its stored form agree whichever came first.
+        """
+
+        return (
+            min(first[0], second[0], key=_ROLE_RANK.index),
+            max(first[1], second[1], key=_RESPONSE_RANK.index),
+        )
+
+    def merge_collapse(self, duplicate: Any) -> bool:
+        """Keep one invitation covering both (:meth:`collapse`).
+
         The duplicate gives up the organizer role first, since one event has one
         organizer and the duplicate goes only after this row is saved. A handle merge
         and an event merge reach it through the merge owner's default move.
         """
 
-        role = min((self.role, duplicate.role), key=_ROLE_RANK.index)
-        response = max((self.response, duplicate.response), key=_RESPONSE_RANK.index)
+        role, response = self.collapse((self.role, self.response), (duplicate.role, duplicate.response))
         if role == AttendeeRole.ORGANIZER and duplicate.role == AttendeeRole.ORGANIZER:
             duplicate.role = AttendeeRole.REQUIRED
             duplicate.save(update_fields=update_fields_with_auto_now(duplicate, {"role"}))
         dirty = {name for name, value in (("role", role), ("response", response)) if getattr(self, name) != value}
-        self.role, self.response = role, response
+        self.role, self.response = cast(Any, role), cast(Any, response)
         if dirty:
             self.save(update_fields=update_fields_with_auto_now(self, dirty))
         return True
@@ -1451,23 +1520,25 @@ class CalendarSource(Bridge, inherits="integrate.Integration"):
             enqueue_task(PURGE_SOURCE_TASK, kwargs={"pk": self.pk})
 
     def purge(self) -> int:
-        """Purge an unsubscribed source: delete its events, archive its calendars, delete its credential.
+        """Purge an unsubscribed source: delete its events, archive its calendars, retire its credential.
 
-        Returns how many events went. Runs as the ``calendar.purge_source`` job, as
-        this source's own work (:meth:`Calendar.takes_write`). Each calendar is
-        locked first, in the one lock order (calendar, then event); its events'
-        stream links are released in bulk (``RecordLinkManager.release_targets``)
-        and the events deleted. A sync page still in flight waits on that lock and
-        then finds the source disconnected (``CalendarBackend.prepare_page``), so
-        nothing it extracted re-creates an event. The feed credential is detached
-        and deleted through its owners. The calendars stay, archived, with their
-        history and statements; deleting the source row itself needs an integrate
-        stream teardown, which does not exist yet. A source that is connected again
-        is not purged.
+        Returns how many events went. Runs as the ``calendar.purge_source`` job, and
+        again from the reconciler while anything is left (:meth:`purge_unsubscribed`),
+        as this source's own work (:meth:`Calendar.takes_write`), in the driver's lock
+        order: the source's events streams first, by primary key, then each calendar,
+        then their links and events. A sync page still in flight waits on its stream
+        and then finds the source disconnected (``CalendarBackend.prepare_page``), so
+        nothing it extracted re-creates an event. Each calendar's writability is read
+        once; its events' links are released in bulk (``RecordLinkManager.release_targets``)
+        and the events deleted. The feed credential is detached and retired
+        through its owner (``CredentialManager.retire``). The calendars stay, archived,
+        with their history and statements; deleting the source row itself needs an
+        integrate stream teardown, which does not exist yet. A source that is
+        connected again is not purged.
         """
 
         links = apps.get_model("integrate", "RecordLink").objects
-        credentials = apps.get_model("integrate", "Credential").objects
+        streams = apps.get_model("integrate", "SyncStream")
         calendars = apps.get_model("calendar", "Calendar")
         events = apps.get_model("calendar", "CalendarEvent")
         with (
@@ -1475,13 +1546,18 @@ class CalendarSource(Bridge, inherits="integrate.Integration"):
             system_context(reason="calendar.source.purge"),
             transaction.atomic(),
         ):
-            source = type(self).system_queryset(lock=("self",)).get(pk=self.pk)
+            list(
+                streams.system_queryset(lock=("self",)).filter(integration_id=self.pk, key=EVENTS_STREAM).order_by("pk")
+            )
+            source = type(self).system_queryset().get(pk=self.pk)
             if source.lifecycle != IntegrationLifecycle.DISCONNECTED:
                 return 0
             owned = [
                 calendar.lock_subject()
                 for calendar in calendars.system_queryset().filter(source_id=self.pk).order_by("pk")
             ]
+            if not all(calendar.takes_write() for calendar in owned):
+                raise ValidationError(READ_ONLY_CALENDAR)
             links.release_targets(links.filter(stream__integration_id=self.pk, stream__key=EVENTS_STREAM))
             _deleted, per_model = events.system_queryset().filter(calendar__in=owned).delete()
             for calendar in owned:
@@ -1491,9 +1567,24 @@ class CalendarSource(Bridge, inherits="integrate.Integration"):
             credential = source.credential
             if credential is not None:
                 source.attach_credential(None)
-                credentials.prepare_disconnect(credential)
-                credentials.filter(pk=credential.pk).delete()
+                apps.get_model("integrate", "Credential").objects.retire(credential)
         return per_model.get(events._meta.label, 0)
+
+    @classmethod
+    def purge_unsubscribed(cls) -> int:
+        """Purge every unsubscribed source that still holds a replica; return how many events went.
+
+        The reconciler behind :meth:`purge`: a purge job that failed, or never ran,
+        is retried until nothing is left. A replica is an event on the source's
+        calendars, or a feed credential still attached.
+        """
+
+        events = apps.get_model("calendar", "CalendarEvent")
+        replicas = Q(credential__isnull=False) | Q(
+            pk__in=events.system_queryset().values("calendar__source_id")
+        )
+        pending = cls.system_queryset().filter(lifecycle=IntegrationLifecycle.DISCONNECTED).filter(replicas)
+        return sum(source.purge() for source in pending.order_by("pk"))
 
     def calendars_stream(self) -> StreamDefinition:
         """Declare the stream of the remote calendars this source serves: one record per calendar.

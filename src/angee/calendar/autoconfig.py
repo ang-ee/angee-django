@@ -10,6 +10,7 @@ _Settings = TypedDict(
         "ANGEE_CALENDAR_SOURCE_BACKEND_CLASSES": dict[str, str],
         "ANGEE_CALENDAR_SOURCES_PER_OWNER": int,
         "ANGEE_CALENDAR_SUBSCRIBE_RATE": tuple[int, int],
+        "CELERY_BEAT_SCHEDULE:append": dict[str, dict[str, object]],
     },
 )
 
@@ -25,5 +26,12 @@ SETTINGS: _Settings = {
     "ANGEE_CALENDAR_SOURCES_PER_OWNER": 25,
     # How often one user may connect a calendar: (burst, window in seconds).
     "ANGEE_CALENDAR_SUBSCRIBE_RATE": (10, 3600),
+    # Retry, hourly, every purge an unsubscribe left unfinished.
+    "CELERY_BEAT_SCHEDULE:append": {
+        "calendar.purge_unsubscribed_sources": {
+            "task": "calendar.purge_unsubscribed_sources",
+            "schedule": 3600.0,
+        },
+    },
 }
 """Django settings contributed when the calendar addon is installed."""

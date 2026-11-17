@@ -19,7 +19,7 @@ from __future__ import annotations
 import json
 import logging
 import secrets
-from collections.abc import Collection, Iterable, Iterator, Mapping
+from collections.abc import Callable, Collection, Iterable, Iterator, Mapping
 from contextlib import contextmanager
 from copy import copy, deepcopy
 from dataclasses import replace
@@ -937,9 +937,9 @@ class CredentialManager[CredentialT: Credential](_CredentialManagerBase[Credenti
     def disconnect_account(self, user: Any, external_account_sqid: str) -> bool:
         """Release this user's account and delete its credential in one admitted transaction.
 
-        prepare_disconnect owns vetoes, derived releases and after-commit remote
-        revocation; native owner release and selected credential deletion retain
-        their own persistence contracts. An absent user/account link is false.
+        :meth:`retire` owns vetoes, derived releases, after-commit remote
+        revocation and the delete; the account's native owner release runs between
+        them. An absent user/account link is false.
         """
 
         candidates = self.select_related("oauth_client", "external_account").select_for_update(of=("self",))
@@ -953,9 +953,33 @@ class CredentialManager[CredentialT: Credential](_CredentialManagerBase[Credenti
                 return False
             account = credential.external_account
             assert account is not None
+            return self.retire(
+                credential,
+                rows=self.with_action("delete"),
+                before_delete=lambda: type(account).objects.filter(pk=account.pk).release(user),
+            )
+
+    def retire(
+        self,
+        credential: Any,
+        *,
+        rows: models.QuerySet[Any] | None = None,
+        before_delete: Callable[[], object] | None = None,
+    ) -> bool:
+        """Retire one credential: prepare its disconnect, then delete it; return whether a row went.
+
+        The one way a credential goes. :meth:`prepare_disconnect` owns vetoes,
+        derived releases and after-commit remote revocation; ``before_delete`` runs
+        the caller's own release between the two (an account's), and ``rows`` scopes
+        the delete (an actor's ``with_action("delete")``). A credential an
+        integration still attaches directly keeps its ``PROTECT``: detach it first.
+        """
+
+        with system_context(reason="integrate.credential.retire"), transaction.atomic():
             self.prepare_disconnect(credential)
-            type(account).objects.filter(pk=account.pk).release(user)
-            deleted, _details = self.filter(pk=credential.pk).with_action("delete").delete()
+            if before_delete is not None:
+                before_delete()
+            deleted, _details = (rows if rows is not None else self.all()).filter(pk=credential.pk).delete()
         return deleted > 0
 
     def prepare_disconnect(self, credential: Any) -> None:
@@ -4751,12 +4775,10 @@ class RecordLinkManager[RecordLinkT: RecordLink](_RecordLinkManagerBase[RecordLi
         this is not a withdrawal, the identity is still current.
         """
 
-        with system_context(reason="integrate.record.release_target"), transaction.atomic():
-            locked = self.filter(pk=link.pk).lock_if_supported().get()
-            self._set_target(locked, None)
-            locked.save(update_fields=["target_content_type_id", "target_object_id", "updated_at"])
-            link.target_content_type_id = link.target_object_id = None
-            return locked
+        self.release_targets(self.filter(pk=link.pk))
+        link.target_content_type_id = link.target_object_id = None
+        link.target = None
+        return link
 
     def release_targets(self, links: models.QuerySet[Any]) -> int:
         """Let every row ``links`` binds go at once, as :meth:`release_target` lets one go; return how many.

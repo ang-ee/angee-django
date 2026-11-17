@@ -58,11 +58,11 @@ from __future__ import annotations
 
 import hashlib
 import ipaddress
-import re
 from collections import Counter
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
 from datetime import UTC, date, datetime, time, timedelta, tzinfo
+from time import monotonic
 from typing import Any
 from urllib.parse import urlsplit
 
@@ -70,6 +70,7 @@ import icalendar
 from django.apps import apps
 from django.core.exceptions import ValidationError
 from django.utils import timezone
+from icalendar.parser import Contentlines
 from icalendar.timezone.windows_to_olson import WINDOWS_TO_OLSON
 
 from angee.calendar.backends import (
@@ -104,8 +105,8 @@ _EVENTS_PER_FEED = 10_000
 _TIMEZONES_PER_FEED = 100
 """The most VTIMEZONEs a feed may define; a larger feed fails its poll before it is parsed."""
 
-_BEGIN = re.compile(r"^BEGIN:(VEVENT|VTIMEZONE)[ \t]*\r?$", re.IGNORECASE | re.MULTILINE)
-"""A component's opening line, counted before the feed is parsed."""
+_TRANSITIONS_PER_ZONE = 1_000
+"""The most transitions (observances and their ``RDATE`` values) one feed-defined VTIMEZONE may name."""
 
 _CONFERENCE_PROPERTIES = (
     "CONFERENCE",
@@ -209,7 +210,7 @@ class IcsCalendarBackend(CalendarBackend):
             result = self._fetch({} if baseline else cursor)
             if result.status_code == 304:
                 return StreamPage((), cursor)
-            held = self._snapshot = self._read_snapshot(stream, result)
+            held = self._snapshot = self._read_snapshot(stream, result, deadline=deadline)
         elif not baseline and any(held.validators.values()) and held.validators == _validators(cursor):
             return StreamPage((), cursor)
         return self.page(stream, held.payloads, page_bound, after=None, cursor=held.validators)
@@ -238,12 +239,16 @@ class IcsCalendarBackend(CalendarBackend):
             self._snapshot = self._read_snapshot(stream, self._fetch({}))
         return self._snapshot
 
-    def _read_snapshot(self, stream: Any, result: DownloadResult) -> _Snapshot:
-        """Parse a fetched feed into its snapshot, kept with the validators it was served with."""
+    def _read_snapshot(self, stream: Any, result: DownloadResult, *, deadline: float | None = None) -> _Snapshot:
+        """Parse a fetched feed into its snapshot, kept with the validators it was served with.
+
+        ``deadline`` is the sync's (a monotonic instant): a parse that reaches it
+        stops, and the next sync reads the feed again.
+        """
 
         return _Snapshot(
             {"etag": result.headers.get("etag", ""), "last_modified": result.headers.get("last-modified", "")},
-            self._observe_feed(_read(result.content), zone=self.get_calendar(stream).timezone),
+            self._observe_feed(_read(result.content), zone=self.get_calendar(stream).timezone, deadline=deadline),
         )
 
     # --- transport ---
@@ -292,7 +297,7 @@ class IcsCalendarBackend(CalendarBackend):
 
     # --- snapshot ---
 
-    def _observe_feed(self, feed: Any, *, zone: str) -> dict[str, dict[str, Any]]:
+    def _observe_feed(self, feed: Any, *, zone: str, deadline: float | None = None) -> dict[str, dict[str, Any]]:
         """Return each event's retained payload by key; an unmappable event is a quarantine payload under its own key.
 
         A ``RECURRENCE-ID`` instance overrides its series when the feed carries the
@@ -300,7 +305,8 @@ class IcsCalendarBackend(CalendarBackend):
         moment; an instance whose master the feed lacks is a single event. Of two
         copies of one key, the higher ``SEQUENCE`` wins. Every produced record,
         cancelled instances included, counts against :data:`_EVENTS_PER_FEED`.
-        ``zone`` is the calendar's.
+        ``zone`` is the calendar's; a parse that reaches the sync's ``deadline`` stops
+        as a transient refusal.
         """
 
         components = list(feed.walk("VEVENT"))
@@ -311,6 +317,8 @@ class IcsCalendarBackend(CalendarBackend):
         exceptions: dict[str, dict[str, Any]] = {}
         events: dict[str, tuple[int, dict[str, Any]]] = {}
         for component in components:
+            if deadline is not None and monotonic() > deadline:
+                raise IcsError("The calendar feed took too long to read; the next sync reads it again.", transient=True)
             uid = _text(component, "UID")
             if not uid:
                 digest = hashlib.sha256(component.to_ical()).hexdigest()
@@ -361,7 +369,9 @@ class _Zones:
     IANA name (``/vendor/Europe/Berlin``) resolves to its IANA zone. Any other
     TZID falls back to the feed's ``X-WR-TIMEZONE`` (``feed_zone``), and without
     one to this feed's own ``VTIMEZONE`` (``Timezone.to_tz`` without lookup), which
-    has no IANA name.
+    has no IANA name. A definition built in unbounded memory (a transition rule
+    finer than yearly, or more than :data:`_TRANSITIONS_PER_ZONE` transitions) is
+    never built: its moments read in the calendar's zone.
     """
 
     def __init__(self, feed: Any) -> None:
@@ -377,13 +387,29 @@ class _Zones:
             name = _iana_name(tzid) or self.feed_zone
             zone: tzinfo | None = get_zone_info(name) if name else None
             component = self._components.get(tzid.strip())
-            if zone is None and component is not None:
+            if zone is None and component is not None and _bounded_definition(component):
                 try:
                     zone = component.to_tz(lookup_tzid=False)
                 except Exception:  # noqa: BLE001 — an unusable definition leaves the zone unknown.
                     zone = None
             self._resolved[tzid] = (name, zone)
         return self._resolved[tzid]
+
+
+def _bounded_definition(component: Any) -> bool:
+    """Whether a feed-defined VTIMEZONE builds in bounded memory: yearly rules, and few transitions.
+
+    ``Timezone.to_tz`` unrolls every observance's rule and ``RDATE`` into
+    transitions, so a secondly rule would exhaust memory before it returned.
+    """
+
+    transitions = 0
+    for observance in component.subcomponents:
+        for rule in _values(observance, "RRULE"):
+            if [str(freq).upper() for freq in rule.get("FREQ", [])] != ["YEARLY"]:
+                return False
+        transitions += 1 + sum(len(rdate.dts) for rdate in _values(observance, "RDATE"))
+    return transitions <= _TRANSITIONS_PER_ZONE
 
 
 def _iana_name(tzid: str) -> str:
@@ -405,6 +431,26 @@ def _iana_name(tzid: str) -> str:
     return ""
 
 
+def _components(text: str) -> Counter[str]:
+    """Count the components a body opens, by name, on icalendar's own line grammar.
+
+    ``Contentlines`` unfolds and splits the body as the parser will, so a folded,
+    blank-line-separated or parameterised ``BEGIN`` counts as the parser sees it.
+    """
+
+    counts: Counter[str] = Counter()
+    for line in Contentlines.from_ical(text):
+        if line[:5].upper() != "BEGIN":
+            continue
+        try:
+            name, _params, value = line.parts()
+        except ValueError:
+            continue
+        if name.upper() == "BEGIN":
+            counts[str(value).strip().upper()] += 1
+    return counts
+
+
 def _read(content: bytes) -> Any:
     """Parse one iCalendar body without NUL characters, refusing anything that is not a ``VCALENDAR``.
 
@@ -414,8 +460,7 @@ def _read(content: bytes) -> Any:
     """
 
     text = content.decode("utf-8-sig", errors="replace").replace("\x00", "")
-    # Unfold continuation lines (RFC 5545 3.1), so a folded opening line still counts.
-    counts = Counter(name.upper() for name in _BEGIN.findall(re.sub(r"\r?\n[ \t]", "", text)))
+    counts = _components(text)
     if counts["VEVENT"] > _EVENTS_PER_FEED:
         raise IcsError(f"The calendar feed has more than {_EVENTS_PER_FEED} events.")
     if counts["VTIMEZONE"] > _TIMEZONES_PER_FEED:
@@ -436,10 +481,12 @@ def _events(
 
     ``master`` is the series' master VEVENT when the feed carries it. An instance
     that states no ``TRANSP`` or ``CLASS`` takes its master's. A rule is validated
-    by the event's own field first (its frequency floor and ``COUNT`` bound), so an
-    invalid rule makes the master an invalid event before anything expands it.
-    The series then expands once, through the bounded recurrence owner, up to its
-    latest ``EXDATE``, in the zone the stored series uses: an ``EXDATE`` that is
+    by the event's own owner first (``CalendarEvent.validate_rule``: its daily
+    floor, its ``COUNT`` bound, and an occurrence within about 30 years of its
+    start), so an invalid rule makes the master an invalid event before anything
+    expands it. The series then expands once, through the recurrence owner that
+    counts every occurrence from its start, up to its latest ``EXDATE``, in the
+    zone the stored series uses: an ``EXDATE`` that is
     no instance is dropped, and a cancelled instance ends where the event owner's
     arithmetic puts it (``CalendarEvent.occurrence_end``: an all-day instance spans
     local days). ``calendar_zone`` is the calendar's.
@@ -451,9 +498,14 @@ def _events(
     end = _end(component, start_prop.dt, start, all_day=all_day, zones=zones, zone=zone)
     rid = component.get("RECURRENCE-ID")
     recurrence = "" if rid is not None else _rule(component)
-    model: Any = apps.get_model("calendar", "CalendarEvent")
+    event_zone = _event_zone(start_prop, zones, feed_zone)
+    expansion = event_zone or calendar_zone
+    # The unsaved row only lends its owner's rule checks and occurrence arithmetic; nothing writes it.
+    series: Any = apps.get_model("calendar", "CalendarEvent")(
+        start=start, end=end, all_day=all_day, recurrence=recurrence, timezone=event_zone
+    )
     if recurrence:
-        model._meta.get_field("recurrence").clean(recurrence, None)
+        series.validate_rule(zone=expansion)
     original_start = _instant(rid.dt, _param(rid, "TZID"), zones, zone) if rid is not None else None
     override = original_start is not None and master is not None and master is not component
     series_master = master if override else None
@@ -465,7 +517,7 @@ def _events(
         end=end,
         all_day=all_day,
         recurrence=recurrence,
-        timezone=_event_zone(start_prop, zones, feed_zone),
+        timezone=event_zone,
         series=series_key(uid) if override else "",
         original_start=original_start if override else None,
         status=_STATUSES.get(_text(component, "STATUS").upper(), EventStatus.CONFIRMED),
@@ -495,11 +547,8 @@ def _events(
         }
     )
     if excluded:
-        expansion = event.timezone or calendar_zone
         until = excluded[-1] + timedelta(microseconds=1)
         instances = set(Recurrence(recurrence).occurrences(start, start, until, zone=expansion))
-        # The unsaved row only lends its owner's occurrence arithmetic; nothing writes it.
-        series = model(start=start, end=end, all_day=all_day, recurrence=recurrence)
         observed.extend(
             (
                 instance_key(uid, moment),
