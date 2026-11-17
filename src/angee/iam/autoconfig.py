@@ -32,13 +32,19 @@ SETTINGS = {
     # IAM calls REBAC actions directly and deliberately omits Django's optional
     # has_perm/codename bridge; its absence is not a configuration defect here.
     "SILENCED_SYSTEM_CHECKS:append": ["rebac.W001"],
-    # The origin system-issued links are built from (`https://host`, no path); the
-    # ANGEE_PUBLIC_ORIGIN environment variable the stack sets reaches it. Empty
-    # leaves sign-in links unavailable.
-    "ANGEE_PUBLIC_ORIGIN": "",
     # Seconds a sign-in link stays valid: Django's default for an emailed
     # password-reset link, since the person cannot request a fresh one.
     "ANGEE_IAM_SIGN_IN_LINK_TTL": 259_200,
+    # Seconds before an account may be sent another sign-in link.
+    "ANGEE_IAM_SIGN_IN_LINK_COOLDOWN": 60,
+    # IAM's login throttling policy (django-axes): a lockout lifts after an
+    # hour, and a successful sign-in clears that client's failures.
+    "AXES_COOLOFF_TIME": 1,
+    "AXES_RESET_ON_SUCCESS": True,
+    # A sign-in link is throttled under its account's public id, never pooled
+    # in a null username; a genuine but spent link is not a guess.
+    "AXES_USERNAME_CALLABLE": "angee.iam.auth.axes_username",
+    "AXES_WHITELIST_CALLABLE": "angee.iam.auth.spent_sign_in_link",
 }
 """Django settings contributed when IAM is installed."""
 

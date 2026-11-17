@@ -743,7 +743,10 @@ data through REBAC, never a queryset bypass.
   link redeems through [`SignInLinkBackend`](../../src/angee/iam/auth.py) under
   the same throttle. Name a credential keyword so Django's cleanser masks it
   (`token`, `key`, `secret`, `password`) before `user_login_failed` receivers
-  see it.
+  see it, and pass the account it names unmasked so axes keys the attempt by
+  account. IAM's autoconfig owns the axes policy (cool-off, reset on success,
+  the username and whitelist callables); a refusal of a genuine but spent
+  credential is not a guess.
 - **Person accounts have one factory.** Actor-requested accounts go through
   [`UserManager.create_person`](../../src/angee/iam/models.py), whose `create`
   permission owns admission; ingress without an actor uses

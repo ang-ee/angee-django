@@ -105,37 +105,69 @@ definition iam/protected {
 A person can sign in without a password through an emailed link that works once.
 `User.issue_sign_in_link()` is an account verb like `issue_password`: it locks
 the row, checks the `issue_sign_in_link` permission (admin by default, unioned
-into `active_account` and `nonstaff_account`) and refuses protected, inactive,
-service and emailless accounts. It stores a `SignInLink` row with a keyed digest
-of the token, bound to the account and its email, never the token itself. Once
-that row commits, the link goes to the account's `email` through Django's
-default mailer as plain text. The row then records `sent_at`, and
-`sign_in_link_sent` fires with the account and the row. The issuer never sees
-the link, and `created_by` records who issued it. System callers issue under
-`system_context`, which leaves `created_by` empty. The console mutation is
-`issue_user_sign_in_link` (an `ActionResult`), offered through
-`account_actions` as `issue_sign_in_link`.
+into `active_account` and `nonstaff_account`) and refuses protected, inactive
+and service accounts and any account without a valid email. It also refuses a
+second link within `ANGEE_IAM_SIGN_IN_LINK_COOLDOWN` seconds (60 by default).
+It stores a `SignInLink` row with a keyed digest of the token, never the token
+itself, and a digest of the account facts the link is bound to. Once that row
+commits, the link goes to the account's `email` through Django's default mailer
+as plain text. The row then records `sent_at`, and `sign_in_link_sent` fires with
+the account and the row. The issuer never sees the link, and `created_by`
+records who issued it. System callers issue under `system_context`, which leaves
+`created_by` empty; an automatic invitation must follow an approval a person
+reviewed, never an unreviewed request. The console mutation is
+`issue_user_sign_in_link` (an `ActionResult`), offered through `account_actions`
+as `issue_sign_in_link`.
 
-Only the account's newest link signs in, so issuing again retires older links;
-rows stay as the issue record. A link expires after `ANGEE_IAM_SIGN_IN_LINK_TTL`
-seconds (three days by default). It stops working if the account's email
-changes, or if the account becomes inactive, staff, a superuser or otherwise
-protected. Redemption is Django's
-`authenticate(request, sign_in_token=...)` through `SignInLinkBackend`, so
-django-axes counts and locks out failed links as it does passwords. Django
-masks the credential before `user_login_failed` receivers see it. The public
-mutation `redeem_sign_in_link(token)` signs the person in; every refusal is the
-same `ok: false`.
+Only the newest link the mailer accepted signs in. Issuing again retires the
+older ones once the new email is sent, and a failed send leaves the previous
+link working. A link expires after `ANGEE_IAM_SIGN_IN_LINK_TTL` seconds (three
+days by default). Like Django's password-reset tokens, it is bound to the
+account's email, password and last sign-in: a new address, a password set or
+changed, or any sign-in retires it. Saving the account inactive (`set_active`
+or an administrative update) retires it for good, so reactivation revives none. It never signs in a protected account.
+Rotating `SECRET_KEY` voids every outstanding link, because `salted_hmac`
+ignores `SECRET_KEY_FALLBACKS`. Whoever may change an account's email
+(`write__email`, administrators by default) can then send its links to the new
+address. Nothing notifies the previous address.
 
-Links open `ANGEE_PUBLIC_ORIGIN` + `/sign-in-link#token=...`. The token rides
-the fragment, which no request, access log or referrer carries. IAM's public
-`/sign-in-link` route renders the login page, with the link as its sign-in
-method. It clears the token from the address bar and redeems it only when the
-person clicks, so a mail scanner that opens the link does not spend it. The
-password form stays below it as the fallback. A deployment without a usable
-`ANGEE_PUBLIC_ORIGIN` (`https://host`, no path) or a `MAILERS["default"]`
-mailer offers no link and refuses the verb. Turn off the email provider's click
-tracking for these messages: a tracking redirect would record the link.
+Redemption is Django's `authenticate()` with the credentials of
+`angee.iam.auth.sign_in_credentials`, through `SignInLinkBackend`, so
+django-axes throttles links as it does passwords. Django masks the token before
+`user_login_failed` receivers see it. IAM owns the axes policy in its
+autoconfig: `AXES_COOLOFF_TIME` lifts a lockout after an hour, and
+`AXES_RESET_ON_SUCCESS` clears a client's failures when it signs in.
+`AXES_USERNAME_CALLABLE` keys each link attempt under the account public id the
+token names, so a deployment that locks out by username throttles each account
+and never pools link failures in an empty username. `AXES_WHITELIST_CALLABLE`
+exempts a genuine link that is spent (used, expired, replaced or retired, or for
+an account that can no longer sign in): its holder had the real link and made
+no guess. The exemption covers only the attempt that raised it. A project that
+sets its own whitelist callable loses that exemption. The public mutation
+`redeem_sign_in_link(token)` signs the person in and returns them; every refusal
+is the same `ok: false`.
+
+Links open `ANGEE_PUBLIC_ORIGIN` + `/sign-in-link#token=...`. Base owns that
+setting, which also joins the CSRF trusted origins. Links are built only from an
+`https` origin (`http` only under `DEBUG`) with no user info or path, and only
+when `DEFAULT_FROM_EMAIL` is a valid address and `MAILERS["default"]` exists.
+Otherwise no link is offered and the verb refuses. The token rides the
+fragment, which no browser request, access log or referrer carries, and
+Angee's browser error reporting strips fragments from what it records. IAM's
+public `/sign-in-link` route renders the login page, with the link as its
+sign-in method. It clears the token from the address bar through the router
+and redeems it only when the person clicks, so a mail scanner that opens the
+link does not spend it. After sign-in it shows who is now signed in before
+continuing. The password form stays below it as the fallback.
+
+The token still leaves the server inside the email. The provider's message
+store, a database-backed mail queue and webmail link wrappers can keep it, and
+so does a click-tracking redirect. Click tracking is set per provider account
+or message stream, not per message, so send these emails through a stream with
+tracking off. Until the commit sends it, the token also lives in the on-commit
+callback (`partial(link.send, token)`). An error reporter that records frame
+locals would see it there. Angee's Sentry setup records none, and the functions
+holding the token are marked `sensitive_variables` for Django's own reports.
 One-time passwords remain the path for an account that cannot receive email.
 
 ## Presence

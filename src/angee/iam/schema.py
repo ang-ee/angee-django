@@ -60,6 +60,7 @@ from angee.graphql.node import AngeeNode
 from angee.graphql.sharing import authorized_record_access
 from angee.graphql.subscriptions import changes
 from angee.graphql.view_as import ViewAs
+from angee.iam.auth import sign_in_credentials
 from angee.iam.identity import user_display_label, user_label
 from angee.iam.models import VISIBLE_PEOPLE_DEFAULT_LIMIT, UserAccountAction
 from angee.iam.models import Group as GroupModel
@@ -978,14 +979,14 @@ class IAMMutation:
         """Sign in with a single-use sign-in link and bind the person to the session.
 
         The token authenticates through ``authenticate()``, so django-axes
-        throttles failed links as it does passwords. Every refusal is the same
-        ``ok: false``, whatever the reason.
+        throttles failed links as it does passwords, per account. Every refusal
+        is the same ``ok: false``, whatever the reason.
         """
 
         request = get_request(info)
         # As for passwords: the anonymous request's sign-in writes are the system work it sanctions.
         with system_context(reason="iam.sign_in_link.redeem"):
-            user = authenticate(request, sign_in_token=token)
+            user = authenticate(request, **sign_in_credentials(token))
             if user is None:
                 return LoginPayload(ok=False)
             auth_login(request, user)
