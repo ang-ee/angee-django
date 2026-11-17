@@ -92,13 +92,16 @@ test("each category holds its own labelled picker with its maximum, before the u
   expect(within(field("Other tags")).getByText("Loose")).toBeTruthy();
   expect(within(field("Relationship tags")).queryByText("Loose")).toBeNull();
   // Category pickers come first, in category order; the uncategorised tags close the group.
-  expect(within(group).getAllByText(/ tags$/, { selector: "span" }).map((label) => label.childNodes[0]?.textContent))
+  expect(within(group).getAllByText(/ tags$/, { selector: "span" }).map((label) => label.textContent))
     .toEqual(["Relationship tags", "Other tags"]);
 });
 
 test("a pick at a maximum of one replaces the held tag, untagging before tagging", async () => {
   const f = categorisedFixture({ permissions: ["write"], readOnly: false });
-  const picker = await screen.findByRole("combobox", { name: "Relationship tags" });
+  // One name per picker, its visible label; the maximum is its description, not part of the name.
+  const picker = await screen.findByRole("combobox", { name: "Relationship tags", description: "At most 1 tag" });
+  expect(picker.getAttribute("aria-labelledby")).toBe(screen.getByText("Relationship tags", { selector: "span" }).id);
+  expect(screen.getByRole("combobox", { name: "Other tags" }).getAttribute("aria-describedby")).toBeNull();
   fireEvent.input(picker, { target: { value: "cal" }, inputType: "insertText" });
   fireEvent.click(await screen.findByRole("option", { name: "Calm" }));
   await waitFor(() => expect(f.custom).toHaveBeenCalledTimes(2));
