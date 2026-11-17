@@ -1226,8 +1226,12 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
   paths, as `optionDescriptionField` is) group the offered rows under headings: on
   `RelationMultiFieldWidget` and on a relation `Facet`, whose panel reads its
   options' related rows once while it is open. Options carry `group` and
-  `groupOrder`, and `groupOptions` orders them, ungrouped last; tags group by
-  `category.name` in `category.position` order.
+  `groupOrder`, and [`optionGroups`](../../packages/ui/src/lib/option-groups.ts) is
+  the one grouping rule for every picker (`Select`, the search panel's filter
+  sections and facets, the relation multi-picker): ordered groups first, then the
+  rest, the ungrouped options included, in first-appearance order. The tags addon's
+  categories provide this contract: a tag's `category.name` heads its group and
+  `category.position` orders the groups, so uncategorised tags list last.
 - **Tags show only where an owner places them, never as a chatter tab, and save
   with the record.** An owner composes the backend's `TaggedModel` on the model
   and declares its type's `tags/tag_assignment` relation, `TaggedNode` on its

@@ -19,7 +19,9 @@ import type {
   SelectValueProps as BaseSelectValueProps,
 } from "@base-ui/react/select";
 import { Glyph } from "../chrome/Glyph";
+import { useUiT } from "../i18n";
 import { cn } from "../lib/cn";
+import { optionGroups } from "../lib/option-groups";
 import { tv, type VariantProps } from "../lib/variants";
 import { POPUP_BASE, PORTALED_CONTROL_LAYER } from "./popover";
 import { sectionEyebrowVariants } from "./section-eyebrow";
@@ -95,8 +97,10 @@ export interface SelectChoice {
   value: string;
   label: React.ReactNode;
   disabled?: boolean;
-  /** Optional native option-group label. Choices retain declaration order. */
+  /** The option-group heading the choice lists under (`optionGroups`); choices keep declaration order. */
   group?: string;
+  /** Orders the groups (lower first); choices of one group share it. */
+  groupOrder?: number;
 }
 
 export type SelectRootProps<
@@ -469,16 +473,8 @@ export const Select = function Select({
     () => new Map(options.map((option) => [option.value, option.label])),
     [options],
   );
-  const groups = React.useMemo(() => {
-    const result = new Map<string, SelectChoice[]>();
-    for (const option of options) {
-      const key = option.group ?? "";
-      const choices = result.get(key) ?? [];
-      choices.push(option);
-      result.set(key, choices);
-    }
-    return [...result];
-  }, [options]);
+  const t = useUiT();
+  const groups = React.useMemo(() => optionGroups(options), [options]);
 
   function handleValueChange(
     nextValue: string | null,
@@ -522,9 +518,9 @@ export const Select = function Select({
         <SelectPositioner sideOffset={4}>
           <SelectContent size={size} className={contentClassName}>
             <SelectList>
-              {groups.map(([label, choices]) => (
-                <SelectGroup key={label}>
-                  {label ? <SelectLabel>{label}</SelectLabel> : null}
+              {groups.map(({ label, options: choices }, index) => (
+                <SelectGroup key={label ?? ""}>
+                  {label || index > 0 ? <SelectLabel>{label ?? t("options.otherGroup")}</SelectLabel> : null}
                   {choices.map((option) => (
                     <SelectItem
                       key={option.value}

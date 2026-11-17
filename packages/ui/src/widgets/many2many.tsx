@@ -7,8 +7,8 @@ import { chipInputVariants } from "../ui/input";
 import { SelectPrimitive, SelectValue, SelectIcon, SelectList, SelectItem, SelectItemText, SelectItemIndicator } from "../ui/select";
 import { widgetControlPresentationProps } from "../ui/widget-control";
 import { widgetLabel } from "./label";
+import { optionGroups } from "../lib/option-groups";
 import {
-  groupOptions,
   optionLabel,
   optionTextLabel,
   relationIdList,
@@ -84,7 +84,7 @@ function Many2ManyChipsEdit({
   const exact = options.some((option) => labelText(option).trim().toLocaleLowerCase() === needle);
   const creatable = text !== "" && !exact;
   // Grouped options list under their headings in group order; the create items close the list.
-  const groups = groupOptions(matches);
+  const groups = optionGroups(matches);
   const grouped = groups.some((group) => group.label !== null);
   const createItems = [
     ...(onCreate && creatable ? [CREATE_ITEM] : []),
@@ -136,8 +136,8 @@ function Many2ManyChipsEdit({
       <Combobox.Popup anchor={boxRef} size={sizing.size}>
         <Combobox.List>
           {grouped ? <>
-            {groups.map((group) => <Combobox.Group key={group.label ?? ""} items={group.options.map((option) => option.value)}>
-              <Combobox.GroupLabel>{group.label ?? t("options.otherGroup")}</Combobox.GroupLabel>
+            {groups.map((group, index) => <Combobox.Group key={group.label ?? ""} items={group.options.map((option) => option.value)}>
+              {group.label || index > 0 ? <Combobox.GroupLabel>{group.label ?? t("options.otherGroup")}</Combobox.GroupLabel> : null}
               <Combobox.Collection>{renderItem}</Combobox.Collection>
             </Combobox.Group>)}
             {createItems.length ? <Combobox.Group items={createItems}>
