@@ -1458,6 +1458,30 @@ replay stay co-located with the live model. Explicit `False` is refused. Generic
 [`angee.provenance.history.ModelHistory`](../../src/angee/provenance/history.py)
 retains its native routing contract.
 
+### Due rules and time zones
+
+- **"When is this due" has one owner.** [`angee.scheduling.due`](../../src/angee/scheduling/due.py)
+  owns due rules as values: named due anchors, calendar and counter offsets,
+  alignment, `earliest`/`latest` terms, warn and grace windows, repeat and
+  forecasts. A consumer row stores a `DueRuleField` beside its own date or instant
+  column and a JSON basis column, resolves with `DueRule.resolve`, and writes the
+  point and `Due.basis`. Do not add anchor, offset or alignment columns to a
+  consumer model, or a resolver of its own.
+- **The subject owns its anchors.** The model that learns a date (a project's
+  start, a completion, a reading) supplies it by name; scheduling owns no anchors,
+  counters or rates. An unknown anchor leaves the rule pending, with no point.
+- **Status is computed on read, never stored.** `Due.status(now=…, counters=…)`
+  reads the stored basis; a stored status goes stale as time passes. A set-level
+  read, such as an overdue list, compares the stored date column in a queryset.
+- **Counter amounts stay in the counter's unit.** A rule never converts units; the
+  consumer reads its counter through `angee.uom`'s `Uom.convert` when units differ.
+- **A time zone is stored as its IANA name.** A model composes
+  [`TimeZoneField`](../../src/angee/scheduling/fields.py) and a Pydantic input
+  annotates `ZoneName` ([zones](../../src/angee/scheduling/zones.py)); blank means
+  the project `TIME_ZONE`, and `zone_info` returns the `tzinfo`. Do not check zone
+  strings against a private `available_timezones()` copy or call `ZoneInfo` on
+  unchecked input.
+
 ### Migration history
 
 - **Each project owns durable native Django migration history.** After compose,
