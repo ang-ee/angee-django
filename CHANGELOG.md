@@ -10,6 +10,19 @@ live in code docstrings.
 
 ## Unreleased — shared addon contracts, native embeddings and graph retrieval
 
+- `Message.objects.compose_reply` composes an email reply as a complete envelope:
+  addressed to the parent's `Reply-To` when it carries one, else its sender (RFC
+  5322 §3.6.2), titled `Re: <thread title>` without stacking prefixes, and
+  identified by a Message-ID (`make_msgid(domain=DNS_NAME)`, as Django mints one) as
+  its external id. The email transport renders the parent's Message-ID as
+  `In-Reply-To` and `References`, so the answer threads onto the same conversation
+  instead of opening a new one. Replying to an email with neither a Reply-To nor a
+  sender is refused; replies of other kinds are unchanged. Header parts named
+  `message-id`, `in-reply-to` or `references` no longer render beside the
+  transport's own. Email replies composed earlier keep their old envelope, which had
+  no recipient and could not be delivered. The unread
+  `ChannelBackend.message_platform` attribute is removed.
+
 - Failed or retried tool calls are now recorded as failed. pydantic-ai reports
   them as a `ToolReturnPart` whose `outcome` is not `success` (`retried` for a
   tool raising `ModelRetry`, as built-in tools do on every error), which the

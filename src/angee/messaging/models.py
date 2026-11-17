@@ -1390,9 +1390,9 @@ class Message(
             ),
             # Receipt scans and mark-read walk (thread, id > anchor) directly.
             models.Index(fields=("thread", "id"), name="ix_message_thread_id"),
-            # In-Reply-To / References resolution is platform-wide (a reply through
-            # account B must find the parent account A ingested), which the
-            # channel-led unique index cannot serve — this digest probe can.
+            # Cross-channel identity reads (an email's copies in other accounts, a
+            # platform's post ids) span channels, which the channel-led unique index
+            # cannot serve — this digest probe can. Reply threading stays channel-scoped.
             models.Index(
                 MD5("external_id"),
                 name="ix_message_external_id_md5",
