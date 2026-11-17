@@ -1,11 +1,9 @@
 import {
-  useCallback,
   useEffect,
   useRef,
   useState,
   type ReactNode,
 } from "react";
-import { useNavigate } from "@tanstack/react-router";
 import { AngeeLogoCube, PRESETS } from "@angee/logo-react";
 import "@angee/logo-react/style.css";
 import { useContainer, useRuntimeBrand, type CoreContainer } from "@angee/ui/runtime";
@@ -15,7 +13,7 @@ import { AnimatedThemeLogo, ThemeLogo } from "@angee/ui/theme";
 import { useUiT } from "@angee/ui/i18n";
 import { cn } from "@angee/ui/lib/cn";
 import { ContainerOutlet, containerHasContent } from "@angee/ui/lib/container-outlet";
-import { safeRedirectPath } from "./safe-redirect";
+import { useSignInRedirect } from "./sign-in-redirect";
 import { UsernamePasswordForm } from "./UsernamePasswordForm";
 
 /** The login page's containers: sign-in methods and password help.
@@ -62,19 +60,7 @@ export function LoginPage({
   showAtmosphere,
   backgroundImageUrl,
 }: LoginPageProps): ReactNode {
-  const navigate = useNavigate();
-  const onSuccess = useCallback(() => {
-    const next =
-      typeof window === "undefined"
-        ? null
-        : new URLSearchParams(window.location.search).get("next");
-    const target = safeRedirectPath(next) ?? safeRedirectPath(redirectTo) ?? "/";
-    if (typeof window === "undefined") {
-      void navigate({ href: target });
-      return;
-    }
-    window.location.assign(target);
-  }, [navigate, redirectTo]);
+  const onSuccess = useSignInRedirect(redirectTo);
   const t = useUiT();
   const runtimeBrand = useRuntimeBrand();
   const branded = brand != null || runtimeBrand !== null;

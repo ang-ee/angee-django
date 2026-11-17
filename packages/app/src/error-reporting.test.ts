@@ -42,6 +42,8 @@ test("starts Sentry with the DSN and environment and reports every React root er
   expect(sentry.init).toHaveBeenCalledExactlyOnceWith({
     dsn: "https://key@sentry.example.invalid/1",
     environment: "production",
+    beforeBreadcrumb: expect.any(Function),
+    beforeSend: expect.any(Function),
   });
   expect(options).toEqual({
     onUncaughtError: sentry.handler,
@@ -67,7 +69,32 @@ test("omits an empty environment so the SDK keeps its default", async () => {
 
   await startErrorReporting({ dsn: "https://key@sentry.example.invalid/1", environment: "" });
 
-  expect(sentry.init).toHaveBeenCalledExactlyOnceWith({ dsn: "https://key@sentry.example.invalid/1" });
+  expect(sentry.init).toHaveBeenCalledExactlyOnceWith({
+    dsn: "https://key@sentry.example.invalid/1",
+    beforeBreadcrumb: expect.any(Function),
+    beforeSend: expect.any(Function),
+  });
+});
+
+test("leaves URL fragments, which can carry a sign-in token, out of breadcrumbs and events", async () => {
+  const startErrorReporting = await load();
+  await startErrorReporting({ dsn: "https://key@sentry.example.invalid/1" });
+  const [options] = sentry.init.mock.calls[0] ?? [];
+  const { beforeBreadcrumb, beforeSend } = options as {
+    beforeBreadcrumb: (breadcrumb: object) => { data?: Record<string, unknown> };
+    beforeSend: (event: object) => { request?: { url?: string; method?: string } };
+  };
+
+  expect(beforeBreadcrumb({
+    category: "navigation",
+    data: { from: "/sign-in-link#token=usr_abc.secret", to: "/sign-in-link" },
+  }).data).toEqual({ from: "/sign-in-link", to: "/sign-in-link" });
+  expect(beforeBreadcrumb({ category: "fetch", data: { url: "/graphql/public/", method: "POST" } }).data)
+    .toEqual({ url: "/graphql/public/", method: "POST" });
+  expect(beforeBreadcrumb({ category: "console", message: "kept" })).toEqual({ category: "console", message: "kept" });
+  expect(beforeSend({ request: { url: "https://app.example.test/sign-in-link#token=usr_abc.secret", method: "GET" } }).request)
+    .toEqual({ url: "https://app.example.test/sign-in-link", method: "GET" });
+  expect(beforeSend({ message: "no request" })).toEqual({ message: "no request" });
 });
 
 test("boots without reporting when the SDK cannot start", async () => {
