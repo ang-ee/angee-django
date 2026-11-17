@@ -247,13 +247,22 @@ def test_outbound_email_predicate_is_lazy_and_chainable() -> None:
 
 
 def _mail(
-    *, message_id: str, subject: str, sender: str | None, body: str, in_reply_to: str = "", references: str = ""
+    *,
+    message_id: str,
+    subject: str,
+    sender: str | None,
+    body: str,
+    reply_to: str = "",
+    in_reply_to: str = "",
+    references: str = "",
 ) -> bytes:
     """Write a plain RFC 822 message to the desk the way a mail client sends it."""
 
     message = EmailMessage()
     if sender is not None:
         message["From"] = sender
+    if reply_to:
+        message["Reply-To"] = reply_to
     message["To"] = "Desk <desk@example.test>"
     message["Subject"] = subject
     message["Message-ID"] = message_id
@@ -344,7 +353,7 @@ def test_an_email_reply_is_addressed_titled_and_threaded_so_the_answer_lands_on_
     assert follow_up.thread_id == request.thread_id
 
 
-def test_an_email_reply_requires_a_parent_sender_to_address(mail_desk):
+def test_an_email_reply_requires_a_parent_reply_to_or_sender_to_address(mail_desk):
     channel, _request, desk = mail_desk
     unsigned = _receive(
         channel,
@@ -356,9 +365,32 @@ def test_an_email_reply_requires_a_parent_sender_to_address(mail_desk):
         ),
         uid=4,
     )
-    with pytest.raises(ValidationError, match="parent sender"):
+    with pytest.raises(ValidationError, match="Reply-To or sender"):
         Message.objects.compose_reply(unsigned, body="Who are you?", sender=desk, actor=channel.owner)
     assert not Message._base_manager.filter(parent=unsigned).exists()
+
+
+def test_an_email_reply_goes_to_the_parents_reply_to_over_its_sender(mail_desk):
+    channel, _request, desk = mail_desk
+    relayed = _receive(
+        channel,
+        _mail(
+            message_id="<relayed@example.test>",
+            subject="Form submission",
+            sender="Forms Relay <relay@example.test>",
+            reply_to="Applicant <Applicant@Example.test>",
+            body="Submitted on behalf of the applicant.",
+        ),
+        uid=5,
+    )
+    reply = Message.objects.compose_reply(relayed, body="Thanks, which start date?", sender=desk, actor=channel.owner)
+    with system_context(reason="tests.messaging.email_reply.reply_to"):
+        (addressee,) = Handle.objects.filter(participations__message=reply, participations__role="to")
+        wire = channel.backend.email_message(reply).message()
+    # The address lands on the same handle a received message from it would use.
+    assert (addressee.value, addressee.display_name) == ("applicant@example.test", "Applicant")
+    assert addressee.pk != relayed.sender_id
+    assert wire["To"] == "Applicant <applicant@example.test>"
 
 
 def test_retained_identity_and_threading_header_parts_never_render_beside_the_owned_ones(mail_desk):

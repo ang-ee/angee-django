@@ -42,10 +42,11 @@ events while retaining native content history and counter updates.
 `Message.objects.compose_reply(parent, *, body, sender, actor, ...)` writes a reply
 on its parent's thread and channel under the channel's `reply` grant; the reply's
 `parent` is its In-Reply-To. An email reply (the parent's kind is `email`) is a
-complete envelope: a `to` participant naming the handle the parent was sent from,
-the subject `Re: <thread title>` (the title is the normalized subject, so prefixes
-never stack), and a Message-ID minted as Django mints one, stored bare as its
-external id like a received email's. A parent without a sender is refused. The
+complete envelope: `to` participants naming the parent's `Reply-To` addresses
+when it carries any, else the handle it was sent from (RFC 5322 §3.6.2); the
+subject `Re: <thread title>` (the title is the normalized subject, so prefixes
+never stack); and a Message-ID minted as Django mints one, stored bare as its
+external id like a received email's. A parent with neither is refused. The
 email transport renders that id as `Message-ID` and the parent's as `In-Reply-To`
 and `References`, so an answer threads back onto the conversation through
 `In-Reply-To`, through `References` when a provider rewrote the reply's
