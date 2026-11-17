@@ -114,6 +114,14 @@ streams:
   instance's its UID and `RECURRENCE-ID`. A removed master or single event is
   cancelled; a removed instance is deleted, which restores the master's occurrence.
 
+Both streams use integrate's absence sweep, at most once per poll interval. A
+record the source stops serving is unavailable after one sweep and tombstoned
+after the stream's absence threshold (two sweeps); a tombstoned calendar
+withdraws the identity its source stated. A source's event takes the event
+owner's stored form: an untitled event is "(No title)", and at most 500
+attendees are kept, the organizer first. An attendee lands on a handle by the
+address the source gave, and a source never renames a handle that already exists.
+
 `CalendarSource.calendar_for_partition` resolves an events partition to its
 calendar through the calendars-stream link. Partitions drain in key order, so a
 calendar is mirrored before its events land.

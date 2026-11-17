@@ -23,8 +23,10 @@ from django.core.exceptions import ValidationError
 from django.db.models import ProtectedError
 from rebac import actor_context, system_context
 
+from angee.calendar import models as calendar_models
 from angee.calendar.models import READ_ONLY_CALENDAR, SOURCE_CALENDAR_DELETE, AttendeeResponse, AttendeeRole
 from angee.calendar.testing.models import Calendar, CalendarEvent, CalendarSource, EventAttendee
+from angee.calendar_integrate_ics import backend as ics_backend
 from angee.calendar_integrate_ics.backend import FEED_KEY, IcsCalendarBackend, IcsError
 from angee.calendar_integrate_ics.connect import subscribe_calendar
 from angee.integrate.states import LinkStatus
@@ -212,6 +214,20 @@ class Subscription:
             return {link.external_key: [row.code for row in link.failures(open_only=True)] for link in links
                     if link.failures(open_only=True)}
 
+    def statuses(self, *keys: str) -> dict[str, str]:
+        """Return the events stream's link status of each key."""
+
+        links = RecordLink.objects.sudo(reason="tests.ics").filter(stream=self.stream(), external_key__in=keys)
+        return {link.external_key: link.status for link in links}
+
+    def sweep(self) -> int:
+        """Make the absence sweep due, as a poll interval passing does, then poll."""
+
+        SyncStream.objects.sudo(reason="tests.ics").filter(integration_id=self.source.pk).update(
+            last_reconciled_at=None
+        )
+        return self.poll()
+
 
 def _poll(source: Any) -> int:
     with system_context(reason="tests.ics.poll"):
@@ -323,7 +339,10 @@ def test_the_pinned_transport_refuses_a_feed_host_that_resolves_privately() -> N
     assert "address is not allowed" in str(refused.value)
 
 
-@pytest.mark.parametrize(("status", "body", "message"), [(404, "", "HTTP 404"), (200, "not a calendar", "iCalendar")])
+@pytest.mark.parametrize(
+    ("status", "body", "message"),
+    [(404, "", "HTTP 404"), (503, "", "HTTP 503"), (200, "not a calendar", "iCalendar")],
+)
 def test_the_first_sync_reports_an_unreadable_feed(status: int, body: str, message: str) -> None:
     feed = FakeFeed(body, status=status, etags=False)
     with mock_transport(feed):
@@ -420,23 +439,26 @@ def test_a_changed_summary_or_time_updates_the_event(subscription: Subscription)
     assert (updated.title, updated.start, updated.end) == ("Launch review", _utc(2026, 4, 1, 14), _utc(2026, 4, 1, 15))
 
 
-def test_a_removed_uid_is_tombstoned_and_a_removed_instance_restores_its_occurrence(
+def test_the_absence_sweep_tombstones_a_dropped_uid_and_a_dropped_instance_restores_its_occurrence(
     subscription: Subscription,
 ) -> None:
     subscription.poll()
     berlin = subscription.events()["berlin@example.test"]
     moved_key = "standup@example.test#20260309T130000Z"
     moved = subscription.events()[moved_key]
+    dropped = ("berlin@example.test", moved_key)
 
+    # The extraction pages what the feed serves; the sweep, due once per poll interval, finds what it dropped.
     subscription.feed.body = _feed(STANDUP, HOLIDAY, LAUNCH)
-    assert subscription.poll() == 2
+    assert subscription.poll() == 0
+    assert subscription.statuses(*dropped) == dict.fromkeys(dropped, LinkStatus.CURRENT)
+    subscription.sweep()
+    assert subscription.statuses(*dropped) == dict.fromkeys(dropped, LinkStatus.UNAVAILABLE)
+    berlin.refresh_from_db()
+    assert berlin.status == "tentative"
+    subscription.sweep()
+    assert subscription.statuses(*dropped) == dict.fromkeys(dropped, LinkStatus.TOMBSTONE)
 
-    links = {link.external_key: link for link in RecordLink.objects.sudo(reason="tests.ics").filter(
-        stream=subscription.stream(), external_key__in=["berlin@example.test", moved_key])}
-    assert {key: link.status for key, link in links.items()} == {
-        "berlin@example.test": LinkStatus.TOMBSTONE,
-        moved_key: LinkStatus.TOMBSTONE,
-    }
     berlin.refresh_from_db()
     assert berlin.status == "cancelled"
     assert not CalendarEvent.system_queryset().filter(pk=moved.pk).exists()
@@ -446,10 +468,11 @@ def test_a_removed_uid_is_tombstoned_and_a_removed_instance_restores_its_occurre
     assert starts == [_utc(2026, 3, 9, 9, zone=NEW_YORK)]
 
 
-def test_pages_hold_the_pending_events_and_commit_the_validators_last(subscription: Subscription) -> None:
+def test_pages_carry_only_the_last_key_and_commit_the_validators_last(subscription: Subscription) -> None:
     backend = IcsCalendarBackend(CalendarSource.objects.sudo(reason="tests.ics").get(pk=subscription.source.pk))
     calendars, events = list(backend.streams())
     assert (calendars.key, calendars.partition, events.key, events.partition) == ("calendars", "", "events", FEED_KEY)
+    assert events.reconcile_interval == timedelta(hours=1)
     with system_context(reason="tests.ics"):
         mirrored = advance_stream(SyncStream.objects.current(backend.bridge, calendars), backend)
         stream = SyncStream.objects.current(backend.bridge, events)
@@ -457,14 +480,14 @@ def test_pages_hold_the_pending_events_and_commit_the_validators_last(subscripti
 
     first = advance_stream(stream, backend, page_bound=4)
     assert not first.exhausted
-    assert set(first.stream.cursor) == {"next", "pending"}
-    # Keys sort, so a series' master lands before its instances.
-    assert [key for key, _payload in first.stream.cursor["pending"]] == [
-        "standup@example.test#20260309T130000Z",
-        "standup@example.test#20260316T130000Z",
-    ]
+    # Keys sort, so a series' master lands before its instances; the cursor holds no payload.
+    assert first.stream.cursor == {
+        "after": "standup@example.test",
+        "next": {"etag": subscription.feed.etag, "last_modified": ""},
+    }
     subscription.feed.requests.clear()
     last = advance_stream(first.stream, backend, page_bound=4)
+    # The adapter's later pages read the snapshot its first page fetched.
     assert last.exhausted and not subscription.feed.requests
     assert last.stream.cursor == {"etag": subscription.feed.etag, "last_modified": ""}
     assert len(subscription.events()) == 6
@@ -611,6 +634,112 @@ def test_attendees_become_handles_with_one_organizer(subscription: Subscription)
     }
 
 
+def test_feed_shapes_take_the_event_owners_stored_form(subscription: Subscription) -> None:
+    weekly = """BEGIN:VEVENT
+UID:offsite@example.test
+DTSTART;VALUE=DATE:20260301
+DTEND;VALUE=DATE:20260302
+RRULE:FREQ=WEEKLY;COUNT=3
+EXDATE;VALUE=DATE:20260308
+EXDATE;VALUE=DATE:20260310
+END:VEVENT"""
+    subscription.feed.body = _feed(weekly)
+    subscription.poll()
+
+    events = subscription.events()
+    master = events["offsite@example.test"]
+    excluded = events["offsite@example.test#20260308T050000Z"]
+    # An untitled event takes the owner's default title; its cancelled instance follows it.
+    assert (master.title, excluded.title, excluded.status) == ("(No title)", "(No title)", "cancelled")
+    # 10 March is no instance of the rule: its EXDATE is dropped at parse.
+    assert set(events) == {"offsite@example.test", "offsite@example.test#20260308T050000Z"}
+    # The 8 March all-day instance is the spring-forward day: its local day lasts 23 hours.
+    assert (excluded.start, excluded.end) == (_utc(2026, 3, 8, zone=NEW_YORK), _utc(2026, 3, 9, zone=NEW_YORK))
+    assert excluded.end - excluded.start == timedelta(hours=23)
+
+
+def test_attendees_land_on_handles_by_their_given_address_and_never_rename_one(
+    subscription: Subscription, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    with system_context(reason="tests.ics"):
+        bob = Handle.objects.upsert(platform="email", value="bob@example.test", display_name="Robert")
+    monkeypatch.setattr(calendar_models, "ATTENDEES_PER_EVENT", 2)
+
+    subscription.poll()
+
+    with system_context(reason="tests.ics"):
+        master = subscription.events()["standup@example.test"]
+        rows = list(EventAttendee.objects.filter(event=master).select_related("handle").order_by("role"))
+        bob.refresh_from_db()
+        carol = Handle.objects.filter(normalized_value="carol@example.test").first()
+    # The organizer first, then the feed's order, cut at the cap: Carol is not kept.
+    assert sorted((row.handle.normalized_value, row.role) for row in rows) == [
+        ("alice@example.test", AttendeeRole.ORGANIZER),
+        ("bob@example.test", AttendeeRole.REQUIRED),
+    ]
+    assert carol is None
+    assert bob.display_name == "Robert"
+
+
+def test_attendees_keep_the_address_the_feed_gave(subscription: Subscription) -> None:
+    subscription.poll()
+
+    with system_context(reason="tests.ics"):
+        carol = Handle.objects.get(normalized_value="carol@example.test")
+    assert carol.value == "Carol@Example.test"
+
+
+def test_a_feed_over_the_event_cap_fails_its_poll(subscription: Subscription, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(ics_backend, "_EVENTS_PER_FEED", 2)
+
+    with pytest.raises(BridgeSyncError) as refused:
+        subscription.poll()
+
+    assert "more than 2 events" in str(refused.value)
+
+
+def test_a_feed_rule_beyond_the_owners_bounds_is_a_record_failure(subscription: Subscription) -> None:
+    minutely = LAUNCH.replace("launch@example.test", "minutely@example.test") + "\n"
+    minutely = minutely.replace("SUMMARY:Launch", "SUMMARY:Minutely\nRRULE:FREQ=MINUTELY;COUNT=5")
+    endless = LAUNCH.replace("launch@example.test", "endless@example.test").replace(
+        "SUMMARY:Launch", "SUMMARY:Endless\nRRULE:FREQ=DAILY;COUNT=60000"
+    )
+    subscription.feed.body = _feed(STANDUP, MOVED, HOLIDAY, BERLIN_EVENT, LAUNCH, minutely.strip(), endless)
+
+    subscription.poll()
+
+    with system_context(reason="tests.ics"):
+        refused = {
+            key: [(row.code, row.details.get("fields")) for row in RecordLink.objects.get(
+                stream=subscription.stream(), external_key=key).failures(open_only=True)]
+            for key in ("minutely@example.test", "endless@example.test")
+        }
+    assert refused == {
+        "minutely@example.test": [("invalid_record", ["recurrence"])],
+        "endless@example.test": [("invalid_record", ["recurrence"])],
+    }
+    assert "launch@example.test" in subscription.events()
+
+
+def test_a_status_only_change_derives_no_series_end(
+    subscription: Subscription, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    subscription.poll()
+    series_end = subscription.events()["standup@example.test"].series_end
+
+    def refuse(self: Any) -> None:
+        raise AssertionError("a status-only save derived the series end")
+
+    monkeypatch.setattr(CalendarEvent, "_derive_series_end", refuse)
+    subscription.feed.body = _feed(
+        STANDUP.replace("SUMMARY:Standup", "SUMMARY:Standup\nSTATUS:TENTATIVE"), MOVED, HOLIDAY, BERLIN_EVENT, LAUNCH
+    )
+    assert subscription.poll() == 1
+
+    master = subscription.events()["standup@example.test"]
+    assert (master.status, master.series_end) == ("tentative", series_end)
+
+
 # --- poison input --------------------------------------------------------------
 
 
@@ -740,6 +869,11 @@ def test_a_source_moving_a_series_resends_its_instances_under_new_keys(subscript
     ).replace("DTSTART;TZID=America/New_York:20260309T100000", "DTSTART;TZID=America/New_York:20260309T110000")
     subscription.feed.body = _feed(later, instance, HOLIDAY, BERLIN_EVENT, LAUNCH)
     subscription.poll()
+    old_keys = ("standup@example.test#20260309T130000Z", "standup@example.test#20260316T130000Z")
+    # The new keys land at once; the old ones go when the absence sweep tombstones them.
+    assert {"standup@example.test#20260309T140000Z", *old_keys} <= set(subscription.events())
+    subscription.sweep()
+    subscription.sweep()
 
     events = subscription.events()
     master = events["standup@example.test"]
@@ -775,6 +909,12 @@ def test_a_source_shortening_a_series_with_an_exdate_keeps_the_page(subscription
     assert subscription.failures() == {}
     assert subscription.events()["standup@example.test"].recurrence == "FREQ=WEEKLY;COUNT=2;BYDAY=MO"
     assert starts == [_utc(2026, 3, 2, 9, zone=NEW_YORK), _utc(2026, 3, 9, 10, zone=NEW_YORK)]
+    # The 16 March EXDATE is no instance of the shortened rule: the feed parse drops it, and the sweep its row.
+    excluded = "standup@example.test#20260316T130000Z"
+    subscription.sweep()
+    subscription.sweep()
+    assert subscription.statuses(excluded) == {excluded: LinkStatus.TOMBSTONE}
+    assert excluded not in subscription.events()
 
 
 def test_a_zone_change_on_a_subscribed_calendar_resyncs_instead_of_moving_replicas(subscription: Subscription) -> None:

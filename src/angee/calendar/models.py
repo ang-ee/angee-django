@@ -43,7 +43,7 @@ from __future__ import annotations
 from collections import defaultdict
 from collections.abc import Iterable, Mapping, Sequence
 from contextvars import ContextVar
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime, time, timedelta
 from types import NotImplementedType
 from typing import Any, ClassVar, Self, cast
@@ -52,6 +52,7 @@ from django.apps import apps
 from django.conf import settings
 from django.core.cache import caches
 from django.core.exceptions import ValidationError
+from django.core.validators import URLValidator
 from django.db import models, router, transaction
 from django.db.models import F, Q, Value, prefetch_related_objects
 from django.db.models.functions import Coalesce, NullIf
@@ -77,6 +78,7 @@ from angee.calendar.backends import (
     ParsedAttendee,
     ParsedCalendar,
     ParsedEvent,
+    normalized_address,
 )
 from angee.integrate.models import Bridge, IntegrationCreateMode, IntegrationLifecycle
 from angee.integrate.states import StreamDefinition, StreamDirection, StreamKind
@@ -153,6 +155,12 @@ SOURCE_CALENDAR_DELETE = "This calendar mirrors a subscription; unsubscribe to s
 
 _LATEST = datetime.max.replace(tzinfo=UTC) - timedelta(days=2)
 """The latest instant calendar arithmetic reaches; a day's margin keeps local conversions in range."""
+
+UNTITLED_EVENT = "(No title)"
+"""The title a source's event takes when the source gives none."""
+
+ATTENDEES_PER_EVENT = 500
+"""The most attendees a source's event keeps, the organizer first; a source stating more is cut there."""
 
 _SOURCE_FIELDS = (
     "title",
@@ -572,12 +580,13 @@ _CalendarEventManagerBase = AngeeHistoryManager.from_queryset(CalendarEventQuery
 
 
 class CalendarEventManager(_CalendarEventManagerBase):
-    """Own the source write path of events: ingest, withdrawal and the stored projection a source compares."""
+    """Own the source write path of events: the stored form, ingest, and the stored projection a source compares."""
 
     def parsed(self, events: Iterable[CalendarEvent]) -> dict[Any, ParsedEvent]:
         """Project stored events, with their attendees, into the neutral shape a source compares.
 
         The series key stays blank: a source names an instance's series by its own key.
+        Attendees carry their handle's normalized address.
         """
 
         rows = list(events)
@@ -594,64 +603,122 @@ class CalendarEventManager(_CalendarEventManagerBase):
             for event in rows
         }
 
+    def prepare(self, parsed: ParsedEvent) -> ParsedEvent:
+        """Return ``parsed`` in the form a source's event is stored, so it projects as it was observed.
+
+        Text is trimmed and cut to its column, an untitled event takes
+        :data:`UNTITLED_EVENT`, a conference URL that is not a web address is
+        dropped, and attendees are deduplicated on the handle owner's normalized
+        address (the organizer's row wins) and capped at :data:`ATTENDEES_PER_EVENT`.
+        Each attendee keeps the address the source gave; only dedup and the projection
+        read its normalized form.
+        """
+
+        def cut(name: str, value: str) -> str:
+            field = self.model._meta.get_field(name)
+            assert isinstance(field, models.Field)
+            return value[: field.max_length] if field.max_length else value
+
+        url = parsed.conference_url.strip()
+        try:
+            URLValidator(schemes=("http", "https"))(url)
+        except ValidationError:
+            url = ""
+        attendees: dict[str, ParsedAttendee] = {}
+        for attendee in parsed.attendees:
+            address = attendee.address.strip()
+            normalized = normalized_address(address)
+            if not normalized or (normalized in attendees and attendee.role != AttendeeRole.ORGANIZER):
+                continue
+            attendees[normalized] = replace(attendee, address=address)
+        kept = sorted(attendees.values(), key=lambda row: row.role != AttendeeRole.ORGANIZER)
+        return replace(
+            parsed,
+            title=cut("title", parsed.title.strip()) or UNTITLED_EVENT,
+            location=cut("location", parsed.location.strip()),
+            description=parsed.description.strip(),
+            conference_url=cut("conference_url", url),
+            attendees=tuple(kept[:ATTENDEES_PER_EVENT]),
+        )
+
+    def linked(self, stream: Any, keys: Iterable[str], *, lock: bool = False) -> dict[str, CalendarEvent]:
+        """Return the events ``stream``'s links name, by external key, as system work.
+
+        ``lock`` row-locks them in primary-key order, inside the caller's transaction;
+        a caller that also writes the calendar locks it first (calendar, then event).
+        """
+
+        bound = dict(
+            stream.links.filter(external_key__in=list(keys), target_object_id__isnull=False).values_list(
+                "external_key", "target_object_id"
+            )
+        )
+        model = cast("type[CalendarEvent]", self.model)
+        rows = model.system_queryset(lock=("self",) if lock else None).filter(pk__in=list(bound.values()))
+        by_pk = {str(row.pk): row for row in rows.order_by("pk")}
+        return {key: by_pk[pk] for key, pk in bound.items() if pk in by_pk}
+
     def ingest(
         self,
         calendar: Calendar,
         parsed: ParsedEvent,
         *,
+        link: Any,
         target: CalendarEvent | None = None,
         series: CalendarEvent | None = None,
         created_by_id: Any = None,
     ) -> CalendarEvent:
-        """Write one event its source observed, with its attendees; a source's sync is the only caller.
+        """Write the event a source's ``link`` observes, with its attendees; a source's sync is the only caller.
 
-        The row validates and saves as every write does; a read-only calendar takes it
-        because the caller is its source's stream page (:meth:`Calendar.takes_write`). An event's place
-        in a series (``series``, ``original_start``) is set when it is inserted; the
-        caller passes no ``target`` whose place changed. Attendee addresses land on
-        handles through ``HandleManager.upsert``; the organizer is the attendee whose
-        role is ``organizer``.
+        ``link`` names the row: its bound event (``target`` when the caller holds it
+        locked already), else a new one. An event's place in a series (``series``,
+        ``original_start``) is set when it is inserted, so a row whose place changed
+        is withdrawn from ``link`` and a new row takes its place. Only the changed
+        columns are saved: a status-only change derives no series end. The row
+        validates and saves as every write does; a read-only calendar takes it because
+        the caller is its source's stream page (:meth:`Calendar.takes_write`).
+        Attendee addresses land on handles through the handle owner
+        (:meth:`_ingest_attendees`).
         """
 
+        if target is None and link is not None:
+            target = self.linked(link.stream, (link.external_key,), lock=True).get(link.external_key)
+        place = (series.pk, parsed.original_start) if series is not None else (None, None)
+        if target is not None and (target.series_id, target.original_start) != place:
+            target.withdraw(link, remove=True)
+            target = None
         event: Any = target if target is not None else self.model(calendar=calendar, created_by_id=created_by_id)
-        for name in _SOURCE_FIELDS:
+        changed = [name for name in _SOURCE_FIELDS if getattr(event, name) != getattr(parsed, name)]
+        for name in changed:
             setattr(event, name, getattr(parsed, name))
         if target is None:
             event.series = series
             event.original_start = parsed.original_start if series is not None else None
         event.full_clean()
-        event.save()
+        if target is None:
+            event.save()
+        elif changed:
+            event.save(update_fields=update_fields_with_auto_now(event, set(changed)))
         self._ingest_attendees(event, parsed.attendees, created_by_id=created_by_id)
-        return event
-
-    def withdraw(self, event: CalendarEvent, *, remove: bool = False) -> CalendarEvent | None:
-        """Apply its source's removal of an event: cancel it and keep it, or with ``remove`` delete it.
-
-        A source cancels a master or a single event, which keeps its chatter and
-        tags. It removes an instance once no stream link retains it: the master's
-        own occurrence then shows again, which a cancelled override would drop.
-        Returns the kept row, or ``None`` once it is deleted.
-        """
-
-        if remove:
-            event.delete()
-            return None
-        if event.status != EventStatus.CANCELLED:
-            event.status = EventStatus.CANCELLED
-            event.save(update_fields=["status", "updated_at"])
         return event
 
     def _ingest_attendees(
         self, event: CalendarEvent, attendees: Iterable[ParsedAttendee], *, created_by_id: Any
     ) -> None:
-        """Make the event's attendee rows the observed set, promoting the organizer last."""
+        """Make the event's attendee rows the observed set, promoting the organizer last.
+
+        A source names only the handles it creates: an existing handle keeps its
+        display name, whatever the source calls it.
+        """
 
         handles = cast(Any, apps.get_model("parties", "Handle")).objects
         through = cast(Any, apps.get_model("calendar", "EventAttendee"))
         wanted: dict[Any, tuple[str, str]] = {}
         for attendee in attendees:
-            handle = handles.upsert(
-                platform=handles.model.Platform.for_value(attendee.address),
+            platform = handles.model.Platform.for_value(attendee.address)
+            known = handles.find_identity(platform=platform, value=attendee.address)
+            handle = known or handles.upsert(
+                platform=platform,
                 value=attendee.address,
                 created_by_id=created_by_id,
                 display_name=attendee.display_name,
@@ -1151,6 +1218,25 @@ class CalendarEvent(
         self.save(update_fields=["start", "end", "updated_at"])
         return self
 
+    def withdraw(self, link: Any, *, remove: bool = False) -> Self | None:
+        """Apply its source's removal through ``link``: cancel a master or single event, remove an instance.
+
+        A cancelled master or single event keeps its chatter and tags. An instance,
+        or with ``remove`` any row (one whose place in its series changed), is
+        released from ``link`` first, since a link retains its target, then deleted:
+        the master's own occurrence shows again, which a cancelled override would
+        drop. Returns the kept row, or ``None`` once it is deleted.
+        """
+
+        if remove or self.series_id is not None:
+            apps.get_model("integrate", "RecordLink").objects.release_target(link)
+            self.delete()
+            return None
+        if self.status != EventStatus.CANCELLED:
+            self.status = EventStatus.CANCELLED
+            self.save(update_fields=["status", "updated_at"])
+        return self
+
 
 class EventAttendee(ImmutableFieldsMixin, AuditMixin, HistoryMixin, AngeeDataModel, concrete=True):
     """One handle invited to an event: the ``through`` row of :attr:`CalendarEvent.attendees`.
@@ -1438,9 +1524,13 @@ class CalendarSource(Bridge, inherits="integrate.Integration"):
                 calendar.save(update_fields=["is_archived", "updated_at"])
 
     def calendars_stream(self) -> StreamDefinition:
-        """Declare the stream of the remote calendars this source serves: one record per calendar."""
+        """Declare the stream of the remote calendars this source serves: one record per calendar.
 
-        return StreamDefinition(CALENDARS_STREAM, kind=StreamKind.RECORD_REPLICA, direction=StreamDirection.PULL)
+        Like each events stream, it sweeps for absent records once per poll
+        interval (:meth:`_replica`).
+        """
+
+        return self._replica(CALENDARS_STREAM)
 
     def calendar_stream(self, remote: ParsedCalendar) -> StreamDefinition:
         """Declare the events stream of one remote calendar, partitioned by its key.
@@ -1449,6 +1539,20 @@ class CalendarSource(Bridge, inherits="integrate.Integration"):
         takes writes makes its calendar writable; it does not change the stream.
         """
 
+        return self._replica(EVENTS_STREAM, partition=remote.key)
+
+    def _replica(self, key: str, *, partition: str = "") -> StreamDefinition:
+        """A pull-only record replica whose removals integrate's absence sweep finds.
+
+        The sweep runs at most once per poll interval: a record the source stops
+        serving is unavailable after one sweep and tombstoned after the stream's
+        absence threshold (:meth:`CalendarBackend.on_absent` applies it).
+        """
+
         return StreamDefinition(
-            EVENTS_STREAM, partition=remote.key, kind=StreamKind.RECORD_REPLICA, direction=StreamDirection.PULL
+            key,
+            partition=partition,
+            kind=StreamKind.RECORD_REPLICA,
+            direction=StreamDirection.PULL,
+            reconcile_interval=timedelta(seconds=self.poll_interval),
         )

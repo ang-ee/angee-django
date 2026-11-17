@@ -6,15 +6,17 @@ the ``events`` stream partitioned by that key. The feed address is a secret (a
 private feed's token rides in it): it is the source credential's material, read
 only here, and the source's ``config`` keeps a redacted label (:func:`feed_label`).
 
-Every poll fetches the feed through integrate's SSRF-pinned client, public
-addresses only, with the stream cursor's ETag and Last-Modified as a conditional
-GET: a 304 means no work. ``webcal://`` is fetched as ``https://``.
-python-icalendar parses the iCalendar; the calendar's base backend owns the event
-projection and every write. Each fetched feed is a full snapshot: events whose
-payload differs from their link's last observation are applied, and keys the
-feed no longer carries are tombstoned, so an unchanged feed applies nothing. The
-external key is the UID (its digest when too long), plus the ``RECURRENCE-ID``
-instant for an instance.
+Every poll fetches the feed through integrate's SSRF-pinned bounded download
+(public addresses only; 16 MiB, five redirects and a minute in total), with the
+stream cursor's ETag and Last-Modified as a conditional GET: a 304 means no
+work. ``webcal://`` is fetched as ``https://``. python-icalendar parses the
+iCalendar; the calendar's base backend owns the event projection and every
+write. A changed feed is paged in key order, and the driver applies only the
+events whose projection changed. A key the feed stopped serving is found by
+integrate's absence sweep, once per poll interval: unavailable first, then
+tombstoned. One sync reads the feed once for its pages, identity reads and
+sweep. The external key is the UID (its digest when too long), plus the
+``RECURRENCE-ID`` instant for an instance; a feed carries at most 10,000 events.
 
 **Zones are resolved per parse.** icalendar's parser caches each feed-defined
 ``VTIMEZONE`` in a process-wide registry, so a resolved value can carry another
@@ -57,6 +59,7 @@ from typing import Any
 from urllib.parse import urlsplit
 
 import icalendar
+from django.apps import apps
 from django.core.exceptions import ValidationError
 from django.utils import timezone
 from icalendar.timezone.windows_to_olson import WINDOWS_TO_OLSON
@@ -72,16 +75,23 @@ from angee.calendar.backends import (
 )
 from angee.calendar.models import AttendeeResponse, AttendeeRole, EventStatus, EventTransparency, EventVisibility
 from angee.integrate.errors import IntegrationError
-from angee.integrate.http import ResponseTooLargeError
+from angee.integrate.http import DownloadResult, OutboundBudget
 from angee.integrate.net import AddressNotAllowedError, AddressResolutionError, is_unsafe_address, parse_http_url
+from angee.integrate.states import StreamPhase
 from angee.integrate.streams import StreamPage
 from angee.scheduling.zones import get_zone_info, get_zone_names
 
 FEED_KEY = "feed"
 """The key of an ICS source's one remote calendar: its feed (the calendars record and events partition)."""
 
-_FEED_CAP = 16 * 1024 * 1024
-"""The largest decoded feed body read; a larger feed fails its poll with an operator message."""
+_FEED_BUDGET = OutboundBudget(requests=6, redirects=5, bytes=16 * 1024 * 1024, deadline_seconds=60.0)
+"""One feed fetch's bounds: a 16 MiB decoded body, five redirects, and a minute in total."""
+
+_REPORTED_STATUSES = frozenset({304, *range(400, 600)})
+"""The statuses a fetch reports itself: a conditional GET's 304, and a refusal named to the operator."""
+
+_EVENTS_PER_FEED = 10_000
+"""The most VEVENTs a feed may carry; a larger feed fails its poll with an operator message."""
 
 _CONFERENCE_PROPERTIES = (
     "CONFERENCE",
@@ -159,37 +169,56 @@ class IcsCalendarBackend(CalendarBackend):
     icon = "calendar"
     defaults = {"vendor": "ics", "poll_interval": 3600}
 
+    _snapshot: dict[str, dict[str, Any]] | None = None
+
     def discover(self) -> list[ParsedCalendar]:
         """Return the feed, the source's one remote calendar, named as subscribed."""
 
         return [ParsedCalendar(key=FEED_KEY, name=self.bridge.display_name)]
 
     def extract_events(self, stream: Any, page_bound: int, *, deadline: float | None = None) -> StreamPage:
-        """Fetch a changed feed once and page its differences; the validators commit with the last page.
+        """Page the feed's events in key order; the feed's validators commit with the last page.
 
-        A fresh cursor (a baseline) applies every event; a later poll applies the
-        events whose payload changed and tombstones the keys the feed dropped.
+        A delta poll asks conditionally on the committed validators, and a 304 is no
+        work; a baseline (a new or resynced stream) fetches unconditionally. While
+        pages remain the cursor carries only the last key, and a later page reads the
+        same snapshot (:meth:`_events_now`). A key the feed stopped serving is
+        integrate's absence sweep's to find (:meth:`event_keys`).
         """
 
         cursor = dict(stream.cursor or {})
-        if "pending" in cursor:
-            return self.page(stream, cursor["pending"], page_bound, cursor=cursor["next"])
-        response = self._fetch(cursor)
-        if response.status_code == 304:
+        if "after" in cursor:
+            payloads = self._events_now(stream)
+            return self.page(stream, payloads, page_bound, after=cursor["after"], cursor=cursor["next"])
+        result = self._fetch(cursor if stream.phase != StreamPhase.BASELINE else {})
+        if result.status_code == 304:
             return StreamPage((), cursor)
-        validators = {
-            "etag": response.headers.get("etag", ""),
-            "last_modified": response.headers.get("last-modified", ""),
-        }
-        payloads = self._observe_feed(_read(response.content), zone=self.calendar(stream).timezone)
-        pending = self.snapshot(stream, payloads, baseline="etag" not in cursor)
-        return self.page(stream, pending, page_bound, cursor=validators)
+        validators = {"etag": result.headers.get("etag", ""), "last_modified": result.headers.get("last-modified", "")}
+        self._snapshot = self._observe_feed(_read(result.content), zone=self.calendar(stream).timezone)
+        return self.page(stream, self._snapshot, page_bound, after=None, cursor=validators)
 
     def read_events(self, stream: Any, keys: Sequence[str]) -> dict[str, dict[str, Any] | None]:
-        """Read the requested keys from one fresh fetch of the feed; a key it no longer carries is ``None``."""
+        """Read the requested keys from the feed's snapshot; a key it no longer carries is ``None``."""
 
-        payloads = self._observe_feed(_read(self._fetch({}).content), zone=self.calendar(stream).timezone)
+        payloads = self._events_now(stream)
         return {key: payloads.get(key) for key in keys}
+
+    def event_keys(self, stream: Any) -> list[str]:
+        """Return every key the feed's snapshot carries."""
+
+        return list(self._events_now(stream))
+
+    def _events_now(self, stream: Any) -> dict[str, dict[str, Any]]:
+        """Return the feed's events as this adapter last read them, fetching the feed once when it has not.
+
+        One adapter serves one sync of the feed's partition, so its pages, identity
+        reads and absence sweep share one snapshot. A later sync's adapter reads the
+        feed afresh.
+        """
+
+        if self._snapshot is None:
+            self._snapshot = self._observe_feed(_read(self._fetch({}).content), zone=self.calendar(stream).timezone)
+        return self._snapshot
 
     # --- transport ---
 
@@ -202,8 +231,12 @@ class IcsCalendarBackend(CalendarBackend):
             raise IcsError("This subscription has no feed address.")
         return feed_url(address)
 
-    def _fetch(self, validators: Mapping[str, Any]) -> Any:
-        """GET the feed from a public address, conditionally on ``validators``; a 304 returns as is."""
+    def _fetch(self, validators: Mapping[str, Any]) -> DownloadResult:
+        """GET the feed from a public address within :data:`_FEED_BUDGET`, conditionally on ``validators``.
+
+        A 304 to a conditional request returns as is; a 429 or 5xx is a transient
+        refusal that keeps the server's ``Retry-After``.
+        """
 
         headers = {"Accept": "text/calendar, */*;q=0.1"}
         if validators.get("etag"):
@@ -211,31 +244,25 @@ class IcsCalendarBackend(CalendarBackend):
         if validators.get("last_modified"):
             headers["If-Modified-Since"] = str(validators["last_modified"])
         try:
-            response = self.http.request(
-                "GET",
-                self._url(),
-                headers=headers,
-                allow_private=False,
-                follow_redirects=True,
-                max_bytes=_FEED_CAP,
+            result = self.http.download_bounded(
+                self._url(), budget=_FEED_BUDGET, headers=headers, allow_private=False, statuses=_REPORTED_STATUSES
             )
-        except ResponseTooLargeError as error:
-            raise IcsError("The calendar feed exceeds the size limit.") from error
         except AddressNotAllowedError as error:
             raise IcsError("The calendar feed address is not allowed.") from error
         except AddressResolutionError as error:
             raise IcsError("The calendar feed host could not be found.") from error
-        if response.status_code == 304 and headers.keys() - {"Accept"}:
-            return response
-        if response.status_code == 429 or response.status_code >= 500:
+        if result is None:
+            raise IcsError("The calendar feed could not be read within its size, time and redirect limits.")
+        status = result.status_code
+        if status == 304 and len(headers) > 1:
+            return result
+        if status == 429 or status >= 500:
             raise IcsError(
-                f"The calendar feed returned HTTP {response.status_code}.",
-                transient=True,
-                retry_after=_retry_after(response),
+                f"The calendar feed returned HTTP {status}.", transient=True, retry_after=_retry_after(result.headers)
             )
-        if not response.is_success:
-            raise IcsError(f"The calendar feed returned HTTP {response.status_code}.")
-        return response
+        if not 200 <= status < 300:
+            raise IcsError(f"The calendar feed returned HTTP {status}.")
+        return result
 
     # --- snapshot ---
 
@@ -248,10 +275,12 @@ class IcsCalendarBackend(CalendarBackend):
         copies of one key, the higher ``SEQUENCE`` wins. ``zone`` is the calendar's.
         """
 
+        components = list(feed.walk("VEVENT"))
+        if len(components) > _EVENTS_PER_FEED:
+            raise IcsError(f"The calendar feed has more than {_EVENTS_PER_FEED} events.")
         zones = _Zones(feed)
         feed_zone = zones.resolve(_text(feed, "X-WR-TIMEZONE"))[0] if _text(feed, "X-WR-TIMEZONE") else ""
         local = feed_zone or zone
-        components = list(feed.walk("VEVENT"))
         masters = {_text(component, "UID"): component for component in components if "RECURRENCE-ID" not in component}
         exceptions: dict[str, dict[str, Any]] = {}
         events: dict[str, tuple[int, dict[str, Any]]] = {}
@@ -264,7 +293,13 @@ class IcsCalendarBackend(CalendarBackend):
             sequence = _sequence(component)
             try:
                 observed = _events(
-                    component, uid=uid, zones=zones, zone=local, feed_zone=feed_zone, master=masters.get(uid)
+                    component,
+                    uid=uid,
+                    zones=zones,
+                    zone=local,
+                    feed_zone=feed_zone,
+                    calendar_zone=zone,
+                    master=masters.get(uid),
                 )
             except Exception:  # noqa: BLE001 — the driver quarantines semantic input per record.
                 events.setdefault(_own_key(component, uid, zones, local), (sequence, {"error": "invalid_event"}))
@@ -333,12 +368,16 @@ def _read(content: bytes) -> Any:
 
 
 def _events(
-    component: Any, *, uid: str, zones: _Zones, zone: str, feed_zone: str, master: Any
+    component: Any, *, uid: str, zones: _Zones, zone: str, feed_zone: str, calendar_zone: str, master: Any
 ) -> list[tuple[str, ParsedEvent]]:
     """Map one VEVENT to its keyed event, then a master's cancelled ``EXDATE`` instances.
 
     ``master`` is the series' master VEVENT when the feed carries it. An instance
-    that states no ``TRANSP`` or ``CLASS`` takes its master's.
+    that states no ``TRANSP`` or ``CLASS`` takes its master's. An ``EXDATE`` that
+    is no instance of the rule is dropped, and a cancelled instance ends where the
+    event owner's arithmetic puts it (``CalendarEvent.occurrence_end``: an all-day
+    instance spans local days), both expanded in the zone the stored series uses.
+    ``calendar_zone`` is the calendar's.
     """
 
     start_prop = component["DTSTART"]
@@ -380,16 +419,23 @@ def _events(
     )
     observed = [(instance_key(uid, original_start) if original_start is not None else series_key(uid), event)]
     if rid is None and event.recurrence:
+        # The unsaved row only lends its owner's rule arithmetic; nothing writes it.
+        series: Any = apps.get_model("calendar", "CalendarEvent")(
+            start=start, end=end, all_day=all_day, recurrence=event.recurrence
+        )
+        expansion = event.timezone or calendar_zone
         for exdate in _values(component, "EXDATE"):
             for value in exdate.dts:
                 moment = _instant(value.dt, _param(exdate, "TZID"), zones, zone)
+                if not series.is_instance(moment, zone=expansion):
+                    continue
                 observed.append(
                     (
                         instance_key(uid, moment),
                         replace(
                             event,
                             start=moment,
-                            end=moment + (end - start),
+                            end=series.occurrence_end(moment, zone=expansion),
                             recurrence="",
                             series=series_key(uid),
                             original_start=moment,
@@ -552,8 +598,8 @@ def _sequence(component: Any) -> int:
     return int(text) if text.isdecimal() else 0
 
 
-def _retry_after(response: Any) -> timedelta | None:
+def _retry_after(headers: Mapping[str, str]) -> timedelta | None:
     """Return a bounded ``Retry-After`` horizon in seconds, when the feed gives one."""
 
-    hint = response.headers.get("retry-after", "")
+    hint = headers.get("retry-after", "")
     return timedelta(seconds=int(hint)) if hint.isdecimal() and 0 < int(hint) <= 86400 else None
