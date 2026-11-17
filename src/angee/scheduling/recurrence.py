@@ -12,10 +12,10 @@ beyond the rule and touches no database — recurrence is a value, not a record.
 Every expansion is bounded. ``dateutil`` checks a rule's end only at a candidate, so
 a rule whose day filters can never match (``BYMONTH=2;BYMONTHDAY=30``) would scan to
 year 9999; such a rule is recognised once, in one Gregorian cycle, and expands to
-nothing. :meth:`Recurrence.occurrences` and :meth:`Recurrence.get_last_occurrence`
-refuse more than :attr:`Recurrence.OCCURRENCE_LIMIT` occurrences, and
-:meth:`Recurrence.occurrences_after` refuses to return more than
-:data:`MAX_OCCURRENCES` unless the caller pages with ``limit``.
+nothing. One cap, :data:`MAX_OCCURRENCES`, bounds every expansion and every ``COUNT``:
+:meth:`Recurrence.occurrences` and :meth:`Recurrence.get_last_occurrence` refuse more,
+and :meth:`Recurrence.occurrences_after` refuses more unless the caller pages with
+``limit``.
 
 Parsing and expansion are delegated to ``python-dateutil`` (``rrulestr``), the
 stack's owner of RFC-5545. The timezone/window contract is documented on
@@ -40,7 +40,8 @@ _VALIDATION_ANCHOR = datetime(2000, 1, 1, tzinfo=UTC)
 """A fixed aware anchor for grammar-only validation; its date never affects validity."""
 
 MAX_OCCURRENCES = 10_000
-"""The most occurrences :meth:`Recurrence.occurrences_after` returns; more raises unless the caller pages."""
+"""The most occurrences one expansion yields and a rule's ``COUNT`` may name; past it the
+expansion refuses rather than truncate (:meth:`Recurrence.occurrences_after` lets a caller page)."""
 
 _CYCLE_ANCHOR = datetime(datetime.max.year - 400, 1, 1, tzinfo=UTC)
 """The start of the last full Gregorian cycle (400 years) dateutil iterates before its year limit."""
@@ -76,13 +77,12 @@ def _rules(compiled: rrule | rruleset) -> list[rrule]:
 
 
 def _capped(moments: Iterable[datetime]) -> list[datetime]:
-    """Collect ``moments``, refusing more than :attr:`Recurrence.OCCURRENCE_LIMIT` rather than truncating."""
+    """Collect ``moments``, refusing more than :data:`MAX_OCCURRENCES` rather than truncating."""
 
-    limit = Recurrence.OCCURRENCE_LIMIT
-    collected = list(islice(moments, limit + 1))
-    if len(collected) > limit:
+    collected = list(islice(moments, MAX_OCCURRENCES + 1))
+    if len(collected) > MAX_OCCURRENCES:
         raise ValidationError(
-            f"This recurrence yields more than {limit} occurrences.", code="too_many_occurrences"
+            f"This recurrence yields more than {MAX_OCCURRENCES} occurrences.", code="too_many_occurrences"
         )
     return collected
 
@@ -115,9 +115,6 @@ class Recurrence:
     FREQUENCIES = ("YEARLY", "MONTHLY", "WEEKLY", "DAILY", "HOURLY", "MINUTELY", "SECONDLY")
     """RFC 5545 frequencies, coarsest first (python-dateutil's own order)."""
 
-    OCCURRENCE_LIMIT = 50_000
-    """The most occurrences one expansion yields; past it the expansion refuses rather than truncate."""
-
     def validate(self, *, finest: str | None = None) -> None:
         """Raise :class:`~django.core.exceptions.ValidationError` unless the rule parses and stays bounded.
 
@@ -125,7 +122,7 @@ class Recurrence:
         grammar alone, anchored at a fixed date and the result discarded — validity
         is ``dtstart``-agnostic, so no start date is required to reject a malformed
         rule. ``finest`` (one of :attr:`FREQUENCIES`) refuses rules that repeat more
-        often, and a ``COUNT`` over :attr:`OCCURRENCE_LIMIT` is refused.
+        often, and a ``COUNT`` over :data:`MAX_OCCURRENCES` is refused.
         """
 
         if not self.rule:
@@ -141,9 +138,9 @@ class Recurrence:
             raise ValidationError(
                 f"Choose a rule that repeats at most {finest.lower()}.", code="too_frequent"
             )
-        if any(rule._count is not None and rule._count > self.OCCURRENCE_LIMIT for rule in rules):
+        if any(rule._count is not None and rule._count > MAX_OCCURRENCES for rule in rules):
             raise ValidationError(
-                f"A rule repeats at most {self.OCCURRENCE_LIMIT} times.", code="too_many_occurrences"
+                f"A rule repeats at most {MAX_OCCURRENCES} times.", code="too_many_occurrences"
             )
 
     def occurrences(
@@ -168,7 +165,7 @@ class Recurrence:
         ``dtstart``) steps by calendar date in that zone. The window is
         **half-open** — ``window_start`` is included, ``window_end`` excluded. An
         empty rule yields the single ``dtstart`` when it falls in the window. A
-        window holding more than :attr:`OCCURRENCE_LIMIT` occurrences is refused
+        window holding more than :data:`MAX_OCCURRENCES` occurrences is refused
         with a ``ValidationError``, never truncated.
         """
 
@@ -272,7 +269,7 @@ class Recurrence:
         single ``dtstart``, and a rule that never occurs (:meth:`never_occurs`) has
         no last occurrence. The series unrolls in ``zone`` (blank: the project
         ``TIME_ZONE``), as :meth:`occurrences` expands it. A series of more than
-        :attr:`OCCURRENCE_LIMIT` occurrences is refused with a ``ValidationError``.
+        :data:`MAX_OCCURRENCES` occurrences is refused with a ``ValidationError``.
         """
 
         require_aware(dtstart=dtstart)

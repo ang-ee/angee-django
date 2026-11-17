@@ -79,8 +79,8 @@ expanded server-side in each calendar's zone.
 - **Bounds:** each series stores where it ends (`series_end`, when every rule it
   holds carries `UNTIL` or `COUNT`), so reads skip series that ended before their
   window. An event's rule repeats at most hourly, and one expansion yields at most
-  `Recurrence.OCCURRENCE_LIMIT` occurrences: past it the save or read is refused,
-  never truncated.
+  `MAX_OCCURRENCES` (10,000, scheduling's one cap) occurrences: past it the save or
+  read is refused, never truncated.
 - **Live updates:** `changes(CalendarEvent)` sends readers the change as usual, and
   sends free/busy viewers only that an event's busy time changed, so they refetch
   the redacted occurrences. A free event reaches them only through a partial save

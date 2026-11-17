@@ -54,7 +54,7 @@ live in code docstrings.
   projects no longer depends on a calendar.
   `Recurrence.get_last_occurrence` returns where a series ends, `None` when any
   rule it holds is open-ended. Recurrence is bounded for every consumer: a `COUNT`
-  over `Recurrence.OCCURRENCE_LIMIT` is invalid and an expansion past the limit
+  over `MAX_OCCURRENCES` (10,000) is invalid and an expansion past it
   raises `ValidationError` instead of running on; `RecurrenceField(finest_frequency=…)`
   refuses finer rules (a calendar event repeats at most hourly).
   **Host upgrade:** the `calendar` app label carries the deleted `arp.calendar`'s

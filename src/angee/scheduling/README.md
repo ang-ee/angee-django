@@ -33,12 +33,11 @@ counts once, and the repeated hour in autumn runs once.
 
 Expansion is bounded. A rule whose day filters can never match
 (`BYMONTH=2;BYMONTHDAY=30`) is recognised in one 400-year calendar cycle and expands
-to nothing, instead of letting dateutil scan to year 9999. A `COUNT` over
-`Recurrence.OCCURRENCE_LIMIT` is invalid, and `occurrences` or `get_last_occurrence`
-refuses an expansion that would yield more occurrences than that limit with a
-`ValidationError`, never truncated. `occurrences_after` refuses a window holding
-more than `MAX_OCCURRENCES` unless the caller pages with `limit` and resumes after
-the last occurrence it got. A consumer whose rows must not repeat too often
+to nothing, instead of letting dateutil scan to year 9999. One cap,
+`MAX_OCCURRENCES` (10,000), bounds every rule: a `COUNT` over it is invalid,
+`occurrences` and `get_last_occurrence` refuse an expansion that would yield more
+with a `ValidationError`, never truncated, and `occurrences_after` refuses more
+unless the caller pages with `limit` and resumes after the last occurrence it got. A consumer whose rows must not repeat too often
 declares `RecurrenceField(finest_frequency=…)` (a calendar event refuses minutely
 and secondly rules); other consumers keep every frequency.
 

@@ -310,8 +310,7 @@ def test_a_rule_set_with_one_open_ended_member_never_ends() -> None:
 
 @override_settings(TIME_ZONE="UTC")
 def test_recurrence_refuses_more_occurrences_than_its_limit_and_never_truncates() -> None:
-    limit = Recurrence.OCCURRENCE_LIMIT
-    huge = Recurrence(f"FREQ=DAILY;COUNT={limit + 1}")
+    huge = Recurrence(f"FREQ=DAILY;COUNT={MAX_OCCURRENCES + 1}")
 
     with pytest.raises(ValidationError):
         huge.validate()
