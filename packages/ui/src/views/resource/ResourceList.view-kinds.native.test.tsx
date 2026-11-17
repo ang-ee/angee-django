@@ -72,7 +72,8 @@ test("the switcher offers the model's contributed kinds among the framework's, i
   renderCollection(composed());
   await screen.findByText("First note");
   // Calendar and Gantt need page-declared sources; the dashboard needs the aggregate root, which this model has.
-  expect(await switcherLabels()).toEqual(["List view", "Graph", "Board view", "Grid view", "Dashboard view"]);
+  // The gallery needs a card to draw, and this list declares none.
+  expect(await switcherLabels()).toEqual(["List view", "Graph", "Board view", "Dashboard view"]);
   expect(screen.queryByRole("button", { name: "Timeline" })).toBeNull();
 });
 
@@ -90,13 +91,23 @@ test("layers narrow the offered kinds: only, except and hide, each where its con
   renderCollection(composed([{ layer: "notes", only: ["list", "nexus.graph"] }]));
   await waitFor(async () => expect(await switcherLabels()).toEqual(["List view", "Graph"]));
   cleanup();
-  renderCollection(composed([{ layer: "notes", except: ["board", "gallery", "dashboard"] }, { layer: "product", hide: ["nexus.graph"] }]));
+  renderCollection(composed([{ layer: "notes", except: ["board", "dashboard"] }, { layer: "product", hide: ["nexus.graph"] }]));
   await screen.findByText("First note");
   // A single remaining kind needs no switcher.
   expect(screen.queryByRole("group", { name: "View switcher" })).toBeNull();
   cleanup();
   renderCollection(composed([{ layer: "notes", when: { route: "notes.board" }, only: ["list"] }]));
-  await waitFor(async () => expect(await switcherLabels()).toEqual(["List view", "Graph", "Board view", "Grid view", "Dashboard view"]));
+  await waitFor(async () => expect(await switcherLabels()).toEqual(["List view", "Graph", "Board view", "Dashboard view"]));
+});
+
+test("a page card or the model's registered card offers the gallery beside list and board", async () => {
+  renderCollection(composed(), { renderCard: (row) => <span>{String(row.title)}</span> });
+  await screen.findByText("First note");
+  expect(await switcherLabels()).toEqual(["List view", "Graph", "Board view", "Grid view", "Dashboard view"]);
+  cleanup();
+  renderCollection(composed([], { "notes.Note#card": { "skin.note": { content: noteCard } } }));
+  await screen.findByText("First note");
+  expect(await switcherLabels()).toContain("Grid view");
 });
 
 test("the gallery kind pages the records as cards with one renderer and the shared selection", async () => {
@@ -113,7 +124,7 @@ test("the gallery kind pages the records as cards with one renderer and the shar
   await waitFor(() => expect(screen.getByRole("checkbox", { name: "Select First note" }).getAttribute("aria-checked")).toBe("true"));
 });
 
-test("with no card declared, the gallery draws the list's column card in an inset frame", async () => {
+test("a page opening on the gallery keeps it with no card declared, drawing the list's column card", async () => {
   renderCollection(composed(), { defaultView: "gallery" });
   expect(await screen.findByText("Second note")).toBeTruthy();
   const cards = document.querySelectorAll("[data-slot='gallery-card']");

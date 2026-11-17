@@ -1886,7 +1886,10 @@ independently of the record aside. See the
 framework declares the built-in kinds under the bare ids URLs and saved views
 already carry: `list`, `board`, `gallery`, `calendar`, `gantt` and `dashboard`.
 The `gallery` kind pages the collection's records as cards with the list's search,
-presets, selection, bulk actions and record links; it never groups. Board and
+presets, selection, bulk actions and record links; it never groups. It is offered
+where the list has a card to draw (a page `renderCard`, declared `gallery` fields
+or the model's registered card) and wherever a page's `defaultView`, a shipped
+view, a favourite or the URL opens on it. Board and
 gallery share one card seam: `renderCard(row, context)` draws a card on either
 (the context names the surface, lane, drag and selection state), `cardFrame`
 picks the `inset` or `flush` frame, `boardCard` and `gallery` declare default
@@ -1905,7 +1908,7 @@ contributes a kind as a `<model>#views` child with a namespaced id. Its
 `render`, a component receiving `{ resource }` that reads the collection's
 filter and state through `useResourceView()`. `?view=` selects a kind by id,
 and presets and favourites name it. Whether a built-in kind can run on a page
-(calendar, Gantt and dashboard need declared sources) stays the kind's
+(calendar, Gantt and dashboard need declared sources, the gallery a card) stays the kind's
 capability check; whether a
 kind is offered is the container's, so layers narrow kinds per model with
 `only`, `except` and `hide`. See [resource view kinds](../../packages/ui/src/views/resource/resource-view-kinds.tsx).

@@ -293,6 +293,7 @@ describe("resource-view model", () => {
       pagination: true,
       columns: false,
       filter: true,
+      requiresSources: true,
     });
     // list/board applicability is unchanged (both keep filter + pager + group-by).
     expect(RESOURCE_VIEW_KIND_CAPABILITIES.list.filter).toBe(true);
@@ -309,20 +310,20 @@ describe("resource-view model", () => {
   });
 
   test("offers the calendar kind only where sources are declared", () => {
-    expect(availableResourceViewKinds()).toEqual(["list", "board", "gallery"]);
-    expect(availableResourceViewKinds({ calendar: false })).toEqual(["list", "board", "gallery"]);
+    expect(availableResourceViewKinds()).toEqual(["list", "board"]);
+    expect(availableResourceViewKinds({ calendar: false })).toEqual(["list", "board"]);
     expect(availableResourceViewKinds({ calendar: true })).toEqual([
       "list",
       "board",
-      "gallery",
       "calendar",
     ]);
     expect(availableResourceViewKinds({ dashboard: true })).toEqual([
       "list",
       "board",
-      "gallery",
       "dashboard",
     ]);
+    // The gallery needs a card to draw.
+    expect(availableResourceViewKinds({ gallery: true })).toEqual(["list", "board", "gallery"]);
   });
 
   test("round-trips calendar mode + anchor through the family codec", () => {

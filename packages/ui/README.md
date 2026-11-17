@@ -71,7 +71,9 @@ kinds, and kinds addons contribute as `<model>#views` children with namespaced
 ids. A contributed kind declares `label`, `icon`, `capabilities` and a `render`
 component that reads the collection through `useResourceView()`; `?view=`,
 presets and favourites name it by id. The calendar, Gantt and dashboard kinds
-stay offered only where the page declares the data they need, and layers narrow
+stay offered only where the page declares the data they need, and the gallery only
+where the list has a card to draw (`renderCard`, `gallery` fields or the model's
+`#card`) or a page or view opens on it; layers narrow
 the offered kinds per model with `only`, `except` and `hide`. See
 [containers](../../docs/frontend/guidelines.md#containers). The calendar's
 `?mode=` is `month`, `week`, `day` or `list`, which lists a month's occurrences

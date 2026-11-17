@@ -222,6 +222,7 @@ function ListViewBody<TRow extends Row = Row>({
   customFilterFields: explicitCustomFilterFields,
   groupOptions: explicitGroupOptions,
   order,
+  defaultView,
   defaultGroup,
   defaultGroups,
   defaultExpandedGroups,
@@ -283,14 +284,17 @@ function ListViewBody<TRow extends Row = Row>({
     ...[gallery?.image, gallery?.title, gallery?.subtitle].filter((field): field is string => Boolean(field)),
     ...(modelCard?.requiredFields ?? []),
   ]);
-  // The Calendar kind is offered only where the page declares occurrence sources;
-  // the switcher's options derive from that (list, board and gallery always).
+  // The Calendar kind is offered only where the page declares occurrence sources and
+  // the gallery where there is a card to draw (or a page or view opens on it); the
+  // switcher's options derive from that (list and board always).
   const ganttAvailable = !source && Boolean(gantt && (laneSource || gantt.linked) && modelMetadata);
   const calendarAvailable = (calendar?.sources.length ?? 0) > 0;
   const dashboardAvailable = !source && Boolean(modelMetadata?.resource?.roots.aggregate);
+  const galleryAvailable = Boolean(renderCard || gallery)
+    || defaultView === "gallery" || resourceView.state.view === "gallery";
   const declaredSources = React.useMemo(
-    () => ({ calendar: calendarAvailable, gantt: ganttAvailable, dashboard: dashboardAvailable }),
-    [calendarAvailable, ganttAvailable, dashboardAvailable],
+    () => ({ calendar: calendarAvailable, gantt: ganttAvailable, dashboard: dashboardAvailable, gallery: galleryAvailable }),
+    [calendarAvailable, ganttAvailable, dashboardAvailable, galleryAvailable],
   );
   const offered = useOfferedResourceViewKinds(declaredSources);
   // A page's own list of views is narrowed by what the layers offer; otherwise the container decides.
