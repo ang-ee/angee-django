@@ -381,8 +381,8 @@ class CredentialInput:
 
     ``kind`` discriminates the material: ``static_token`` reads ``api_key``,
     ``ssh_key`` reads ``private_key``, ``basic_auth`` reads ``username`` +
-    ``password``, ``app_keys`` reads ``app_id`` + ``app_secret``. ``user``
-    defaults to the calling admin.
+    ``password``, ``app_keys`` reads ``app_id`` + ``app_secret``, ``jwt_bearer``
+    reads the provider's JSON ``key_file``. ``user`` defaults to the calling admin.
     """
 
     name: str
@@ -394,6 +394,7 @@ class CredentialInput:
     password: str = ""
     app_id: str = ""
     app_secret: str = ""
+    key_file: str = ""
 
 
 @strawberry.type

@@ -69,22 +69,25 @@ describe("credentialCreateForm", () => {
     ]);
   });
 
-  test("offers static-token and ssh-key kinds and swaps the material field", () => {
+  test("offers static-token, ssh-key and jwt-bearer kinds and swaps the material field", () => {
     const Component = credentialCreateForm.Component;
     render(<Component resource={credentialCreateForm.resource} id={null} />);
     const fields = new Map(
       mocks.fields.map((field) => [field.name, field as unknown as FieldLike]),
     );
 
-    expect([...fields.keys()]).toEqual(["name", "kind", "api_key", "private_key"]);
+    expect([...fields.keys()]).toEqual(["name", "kind", "api_key", "private_key", "key_file"]);
     expect(fields.get("kind")?.options?.map((option) => option.value)).toEqual([
       "static_token",
       "ssh_key",
+      "jwt_bearer",
     ]);
     expect(fields.get("api_key")?.showWhen?.({ kind: "static_token" })).toBe(true);
     expect(fields.get("api_key")?.showWhen?.({ kind: "ssh_key" })).toBe(false);
     expect(fields.get("private_key")?.showWhen?.({ kind: "ssh_key" })).toBe(true);
     expect(fields.get("private_key")?.showWhen?.({ kind: "static_token" })).toBe(false);
+    expect(fields.get("key_file")?.showWhen?.({ kind: "jwt_bearer" })).toBe(true);
+    expect(fields.get("key_file")?.showWhen?.({ kind: "ssh_key" })).toBe(false);
   });
 
   test("reveals a transient secret in a copyable read-only prompt without refreshing", async () => {
@@ -122,8 +125,9 @@ describe("credentialCreateForm", () => {
   });
 
   test.each([
-    { kind: "static_token", api_key: "", private_key: "" },
-    { kind: "ssh_key", api_key: "", private_key: "private material" },
+    { kind: "static_token", api_key: "", private_key: "", key_file: "" },
+    { kind: "ssh_key", api_key: "", private_key: "private material", key_file: "" },
+    { kind: "jwt_bearer", api_key: "", private_key: "", key_file: "{\"issuer\": \"robot\"}" },
   ])("creates $kind using canonical input names and form-owned error feedback", async (material) => {
     const Component = credentialCreateForm.Component;
     render(<Component resource={credentialCreateForm.resource} id={null} />);
