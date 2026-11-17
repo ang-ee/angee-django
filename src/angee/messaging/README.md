@@ -171,12 +171,15 @@ error retains selection. Selection-limit read errors explain disabled actions.
 
 An email file (`message/rfc822`, the type IMAP keeps raw mail under) previews as its
 message: the web fragment contributes the `messaging.email` provider to `PreviewPane`
-through the manifest `previews`. postal-mime parses the file in the browser. The
-preview shows subject, sender, recipients and date, and toggles between the HTML and
-plain-text alternatives when both exist. The HTML renders in `@angee/ui`'s
-`MessageHtmlFrame` sandbox, the one `MessagePartsView` uses, with the message's
-`Content-Language` and its inline images as data URLs. HTML files keep the built-in
-source view.
+through the manifest `previews`, with a `maxSize` of 10 MiB, so a larger file falls
+through to the generic file fallback. postal-mime parses the file in the browser,
+and the preview keeps only what it shows. The subject, in the message's
+`Content-Language`, sits over `MessageEnvelope`, the sender, To/Cc/Bcc and date
+header `MessageReader` also uses. The body toggles between the HTML and plain-text
+alternatives when both exist, and the attachments are listed under it. The HTML
+renders in `@angee/ui`'s `MessageHtmlFrame`, the sandbox `MessagePartsView` uses: its
+inline images arrive as data URLs, and remote images stay blocked until the reader
+loads them. HTML files keep the built-in source view.
 
 Email delivery distinguishes definite refusals from uncertain acceptance. SMTP
 4xx and provider rate limits retry; SMTP 5xx and permanent HTTP 4xx fail. SMTP
