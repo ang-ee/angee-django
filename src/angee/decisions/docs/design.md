@@ -83,7 +83,9 @@ How the ontology maps to this addon.
   with no per-model declaration: records with open decisions, and the open decisions of a record.
 - **Readers:**
   Assignees, requesters, administrators and operators of the asking step can read
-  the decision; execution read access alone grants no decision read access.
+  the decision; execution read access alone grants no decision read access. Readers
+  are the `read_granted` audience, which consumers widen (an outside party's user)
+  and from which `read` derives.
   `context` and `proposal` currently share that row visibility. Restricting them
   to assignees, requesters and administrators requires native field permissions,
   nullable GraphQL fields and redaction of the proposal-derived `verdict_label`.

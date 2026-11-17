@@ -8,7 +8,7 @@ verdict with who stopped it; no verdict is the sole open-state rule.
 
 `Decision.objects.ask(DecisionRequest(...), actor=actor)` admits one question.
 Requests declare `kind`, saved `records`, `proposal`, and optional `assignees`,
-`requester` and `context`. Assignees default to `()` and requester to `None`.
+`requester`, `context`, `due_at` and `remind_after`. Assignees default to `()` and requester to `None`.
 When supplied, assignees must be active and at least one must be permitted to
 answer. The composed `act` permission governs answers, including an owning
 addon's `owner_eligible` contribution. Without such a contribution or named
@@ -17,8 +17,13 @@ one participant and standing read access to concerns and context references for
 the asking actor, requester and assignees. It creates no grants. Concern links
 use canonical model identities. An owning addon may declare
 `RetainedGenericRelation("decisions.DecisionRecord", related_query_name=...)` on the
-canonical concerned model and contribute typed `owner_eligible` and `read` arms
+canonical concerned model and contribute typed `owner_eligible` and `read_granted` arms
 through that query path. Deleting the source preserves these retained links.
+`decisions/decision#read_granted` is the assignees, the requester and administrators,
+and `read` derives from it. A consumer whose outside audience reads the question asked
+of them, such as a represented party's admitted user, unions that arm into
+`read_granted` from its own `permissions.extends.zed`; it reaches the question and its
+concern links and nothing else.
 
 `DecisionProposal` is the Pydantic contract for the stored JSON:
 
