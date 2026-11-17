@@ -1440,7 +1440,9 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
 - **Headings read the display face:** the `display`, `title` and `heading` roles of
   [`textRoleVariants`](../../packages/ui/src/ui/text.tsx) carry `font-display`, the
   theme's `--font-family-display`, which follows `--font-family-sans` when unset. A
-  heading takes the role rather than spelling `font-display` beside its own size.
+  heading takes the role rather than spelling `font-display`; an owner with its own
+  size composes the role and sets the size after it, as the card, dialog and popover
+  titles do.
 - **Control heights are tokens:** `h-control-xs` (28px) is the pane control — tabs,
   toggles, pane toolbar buttons, tree rows, select triggers; `h-btn-sm/md/lg` are
   26/30/36. Never a raw `h-7`/`size-7` on a control.

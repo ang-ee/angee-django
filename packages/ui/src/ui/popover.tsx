@@ -15,6 +15,7 @@ import type {
 
 import { cn } from "../lib/cn";
 import { tv, type VariantProps } from "../lib/variants";
+import { textRoleVariants } from "./text";
 
 /** Global layer for the fixed Base UI positioner that owns portal stacking.
  * @kind token
@@ -43,7 +44,8 @@ export const popoverVariants = tv({
     modal:
       "z-modal overflow-hidden rounded-12 border border-border-subtle bg-sheet shadow-lg outline-none",
     modalBackdrop: "fixed inset-0 z-modal-backdrop bg-overlay",
-    title: "px-3 py-2 text-13 font-semibold text-fg",
+    // The shared title role (display face, weight, color) at the popover's size.
+    title: cn(textRoleVariants({ role: "title" }), "px-3 py-2 text-13"),
     description: "px-3 pb-2 text-12 text-fg-muted",
   },
   variants: {

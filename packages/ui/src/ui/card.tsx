@@ -62,7 +62,9 @@ export const cardHeaderVariants = tv({
  * @kind token
  */
 export const cardTitleVariants = tv({
-  base: "text-sm font-semibold leading-tight text-fg",
+  // The shared title role (display face, weight, color); the density sets the size
+  // and its line height (a line-height class here would be merged away by it).
+  base: textRoleVariants({ role: "title" }),
   variants: {
     density: {
       sm: "text-13",
