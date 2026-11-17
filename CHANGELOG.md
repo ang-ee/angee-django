@@ -10,6 +10,37 @@ live in code docstrings.
 
 ## Unreleased — shared addon contracts, native embeddings and graph retrieval
 
+- Storage mounts read Google Drive: `angee.storage_integrate_google_drive` mounts
+  My Drive, a folder or a shared drive, in place (read-only) or copied into a chosen
+  writable backend, reading with one of the connecting user's Google accounts that
+  granted `drive.readonly`; Google-native documents and shortcuts are skipped and
+  counted. One `connect_mount(backend_class, name, source_root, mode, credential_id,
+  copy_backend_id)` mutation replaces `connect_local_folder` and the per-backend
+  connect mutations, and `mount_backend(backend_class)` tells the dialog what a
+  backend asks for. A mount's root is its backend's source token
+  (`MountBackend.source_root`), `MountEntry.storage_key` keeps a file's row across
+  renames and moves, `Backend.writable` and `ExternalStorageBackend` own read-only
+  serving, and a refused download answers 404, 403 or 502 instead of 500.
+- Integration follow-ups across the OAuth, credential and mount owners:
+  - every token request (the authorization-code and refresh grants, the JSON shim and
+    the JWT bearer assertion grant, now `angee.integrate.oauth.client.jwt_bearer_grant`)
+    maps its failures once and keeps the response's real HTTP status, so a JSON 429 on
+    an OAuth refresh is transient instead of failing the credential; a token endpoint
+    the address policy refuses is the permanent `endpoint_not_allowed` refusal;
+  - `CredentialKindHandler.carry_forward` decides what a new grant keeps of a
+    credential's stored material (the OAuth kind keeps its refresh token);
+  - a code exchange whose response omits `scope` granted the requested scopes
+    (RFC 6749 §5.1), so the credential records them;
+  - `connect_account_start(scopes:)` requests a consumer's scopes, `@angee/integrate`
+    exports `ConnectAccountButton` and `useConnectAccountStart`, and the Drive account
+    picker connects another account with `drive.readonly`;
+  - `Integration.admit_credential` is asked on every attachment; a Mount admits only
+    an account its backend reads with (`Mount.reads_with`);
+  - `angee.integrate.http.retry_after` is the one `Retry-After` parser (delay-seconds
+    or a future HTTP-date, at most a day); posts, Notion and Google Drive compose it,
+    and posts keeps its one-minute fallback;
+  - the Anthropic, work, uom and WhatsApp migration templates carry named placeholder
+    dependencies and no `applies()`; the Anthropic rehome gains its reverse, `restore`.
 - `angee.calendar` is the framework calendar, moved from arpee's `arp.calendar`
   and reshaped: a `Calendar` belongs to a `parties.Party` and is the access root
   of its events, an exception to a recurring event is an override row (`series`,
