@@ -326,10 +326,12 @@ class CaptureCampaign(TransactionTestCase):
             with system_context(reason="tests.t3.email"):
                 if confirmed:
                     party.with_actor(self.actor).confirm_statement(aspect="handle", handle=handle, values={})
+                # Each message starts its own conversation: the sender's message on a
+                # captured one would be that request's reply, not a second request.
                 parsed = ParsedMessage(
                     external_id=key,
                     platform="email",
-                    subject="Request",
+                    subject=f"Request {key}",
                     sender=ParsedHandle(platform="email", value=email),
                     body=ParsedPart(type="text/plain", role="body", text="Please investigate"),
                 )
