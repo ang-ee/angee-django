@@ -22,7 +22,7 @@ from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
 from django.test import RequestFactory
 from django.utils import timezone
-from rebac import system_context
+from rebac import actor_context, system_context
 
 from angee.graphql.testing.documents import execute_schema, result_data
 from angee.integrate.credentials import CredentialKind
@@ -727,6 +727,9 @@ def test_serving_reads_with_the_mounts_own_credential_while_it_is_connected(
     stranger = get_user_model().objects.create_user(username="drive-lender", email="drive-lender@example.com")
     fake.tokens.add("lender-token")
     lender = _connect_account(drive_env.google, stranger, "google-lender", access_token="lender-token")
+    # Only an ownership transfer releases the account binding; the new owner attaches their own account.
+    with actor_context(drive_env.owner):
+        mount.transfer_ownership(stranger)
     with system_context(reason="test Google Drive mount re-pointed"):
         mount.attach_credential(lender)
     fake.bearers.clear()
