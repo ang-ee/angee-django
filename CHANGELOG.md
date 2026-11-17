@@ -11,27 +11,35 @@ live in code docstrings.
 ## Unreleased — shared addon contracts, native embeddings and graph retrieval
 
 - Decisions answer for a represented record, replace questions atomically and
-  remind once. `Decision.decide(..., on_behalf_of=, evidence=, note=)` stores
-  `answered_for` (a `DecisionRecordReference` to any record) and
-  `verdict_context` (a `DecisionContext`); `answered_by` stays the actor and
-  `act` is unchanged, and every participant must read each reference.
-  `Decision.objects.supersede(decision, request, *, actor, reason)` asks the
-  replacement and withdraws the old question with its reason and a
-  `superseded_by` link in one transaction, in the asking owner's system
-  context, and refuses a question a requesting record (a workflow step)
-  retains; escalation is a supersede with the escalation's assignees.
-  `withdraw` takes an optional `reason`. Requests carry the asker's `due_at`
-  and `remind_after`; `is_overdue` filters the resource; `Decision.remind()`
-  stamps `reminded_at` once and sends `decision_reminder_due`, which an addon
-  above delivers; the `decisions.remind_due` beat task runs it every minute
-  and shows a `decisions.reminder` timeline line. `decisions/decision` gains
+  remind once. `Decision.decide(..., on_behalf_of=, evidence=, note=)` takes
+  `EvidenceReference`s (model, public id, pointer) and stores `answered_for`
+  and `answer_evidence` rebuilt from the resolved records, plus `answer_note`;
+  `answered_by` stays the actor, `act` is unchanged, every participant must
+  read each record, and GraphQL shows each reference only to its record's
+  readers. `Decision.objects.supersede(decision, request, *, actor, reason)`
+  asks the replacement and withdraws the old question with its
+  `withdrawal_reason` and a `superseded_by` link in one transaction, in the
+  asking owner's system context (any named system context), and refuses a
+  question a requesting record (a workflow step) retains. Escalation is a
+  supersede of `decision.replacement_request(due_at=, remind_after=,
+  assignees=)`, which derives the request from the stored question and never
+  copies its instants. `withdraw` takes an optional `reason`. Requests carry
+  the asker's `due_at` and `remind_after`; overdue (`Decision.objects.overdue()`,
+  `Decision.is_overdue`, the `is_overdue` field and filter) is false for an
+  undated question. `Decision.remind()` stamps `reminded_at` once, returns
+  whether it sent `decision_reminder_due`, and runs receivers without
+  decisions' elevation; the `decisions.remind_due` beat task runs a bounded,
+  skip-locked sweep with a savepoint per reminder and shows a
+  `decisions.reminder` timeline line. `decisions/decision` gains
   `read_granted` (assignees, requester, admins) and `read` derives from it:
   consumers union outside audiences into `read_granted`, and fragments that
   still add `read` arms (workflows, `tests/extcontrib`, arp) move there next.
   Upgrade: decisions depends on `angee-jobs`; hosts author the decisions
-  migration (six columns, the widened `decisions_verdict_consistent`
-  constraint and the `decisions_reminder_due` index), re-sync the permission
-  schema (decisions revision 8) and restart the whole application.
+  migration (`answered_for`, `answer_evidence`, `answer_note`,
+  `withdrawal_reason`, `superseded_by`, `due_at`, `remind_after`,
+  `reminded_at`, the widened `decisions_verdict_consistent` constraint and the
+  `decisions_reminder_due` index), re-sync the permission schema (decisions
+  revision 8) and restart the whole application.
 - A record-visibility file takes its access from its attached records, its
   direct viewers and admins. Its owner (the uploader, by default) holds it while
   the upload is a draft, which the record edge needs, and once it is published
