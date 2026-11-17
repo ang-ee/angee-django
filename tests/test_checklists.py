@@ -429,6 +429,22 @@ def test_counts_group_every_record_in_one_actor_scoped_statement(world: Any) -> 
     )
 
 
+def test_counts_group_under_primary_key_functional_dependence(world: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    """PostgreSQL reduces GROUP BY to selected primary keys; the status expression survives that reduction.
+
+    Every backend compiles the reduction here, so it is not left to the PostgreSQL lane.
+    """
+
+    monkeypatch.setattr(connection.features, "allows_group_by_selected_pks", True)
+    _record(world, "owner", "conflict")
+    rows = Inspection.objects.with_actor(world.writer)
+    summary, attention = ChecklistResult.objects.counts(rows)
+    assert summary == [("conflict", 1)]
+    assert ("identity", "Identity", "conflict", 1) in attention
+    grouped = rows.values("name").annotate(status=checklist_status(rows), total=models.Count("pk"))
+    assert list(grouped.values_list("status", "total")) == [("conflict", 1)]
+
+
 # Consumers of the rule.
 
 

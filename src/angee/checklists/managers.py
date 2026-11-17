@@ -214,7 +214,7 @@ class ChecklistStatuses(models.Func):
         self.checklist: Checklist = model.checklist()
         self.select = select
         target = canonical_model(model) or model
-        self.target = (target._meta.app_label, target._meta.model_name)
+        self.record_type = (target._meta.app_label, target._meta.model_name)
         self.target_read = _holding(actor, "target_read")
         self.evidence_hidden = _holding(actor, "evidence_hidden")
         self.read = _holding(actor, "read")
@@ -243,7 +243,7 @@ class ChecklistStatuses(models.Func):
     def _results(self, record: str = "pk") -> Any:
         """The record's results, correlated by its content type's natural key so building reads no rows."""
 
-        app_label, model_name = self.target
+        app_label, model_name = self.record_type
         return _result_model()._base_manager.filter(
             content_type__app_label=app_label,
             content_type__model=model_name,
@@ -259,7 +259,7 @@ class ChecklistStatuses(models.Func):
 
         if self.target_read is None:
             return models.Value(True, output_field=models.BooleanField())
-        app_label, model_name = self.target
+        app_label, model_name = self.record_type
         held = models.Exists(
             self.target_read.filter(
                 content_type__app_label=app_label,
