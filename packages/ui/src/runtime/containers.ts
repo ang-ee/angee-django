@@ -92,7 +92,11 @@ export interface ResourceViewKindContent {
  * A model's card, registered once as the one child of `<app.Model>#card`: the
  * board and gallery kinds of that model's lists draw it wherever the page
  * declares no card of its own. The child's `requiredFields` name the fields the
- * card reads, which the list selects.
+ * card reads, which the list selects. `render` receives any row of the model
+ * (`Row`), so narrow it to the model's row type where the fields it reads are
+ * declared, and narrow the context on `kind` before reading a board-only fact;
+ * like every card renderer it is called as a plain function, so it returns a
+ * component that holds any hooks.
  */
 export interface ResourceCardContent {
   render: CardRenderer;

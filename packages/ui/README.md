@@ -22,8 +22,10 @@ field as their table ID even when metadata resolves a different display path.
 `ResourceList`/`ListView` may declare `presetIds` for route-local shipped views,
 `search={{ box, shortcuts }}` with text, facet, clause, toggle and group controls,
 and `boardCard` with a title and up to four fields. `renderCard(row, context)` draws
-a custom card body on the board and the gallery; the context names the surface,
-the board lane, the drag state and the selection. Both surfaces frame cards on the
+a custom card body on the board and the gallery; the context is discriminated by
+its surface (`kind`), with the selection on both and the board lane and drag state
+on the board. The surface calls the renderer as a plain function, so it returns a
+component that holds any hooks. Both surfaces frame cards on the
 shared `cardVariants` and `cardFrameVariants` recipes: `cardFrame="inset"` pads the
 body (the board's default), `"flush"` lets an art header reach the card's edges and
 overlays the checkbox and drag handle (the gallery's default). The frame owns the

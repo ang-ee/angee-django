@@ -145,10 +145,19 @@ when the page declares none. An addon registers that card once, for a model it
 may not own; app creation refuses a second card for the same model:
 
 ```tsx
+// render receives any row of the model and is called as a plain function, so it
+// narrows the row to the fields requiredFields selects, narrows the context on
+// kind, and returns a component that holds any hooks.
+type NoteCardRow = Row & { title: string; cover_url: string | null; status: string };
 containers: {
   "notes.Note#card": {
     "desk.note-card": {
-      content: { render: (row, context) => <NoteCard row={row} lane={context.laneId} />, frame: "flush" },
+      content: {
+        render: (row, context) => (
+          <NoteCard row={row as NoteCardRow} lane={context.kind === "board" ? context.laneId : undefined} />
+        ),
+        frame: "flush",
+      },
       requiredFields: ["title", "cover_url", "status"],
     },
   },

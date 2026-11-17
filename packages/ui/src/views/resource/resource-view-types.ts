@@ -147,19 +147,33 @@ export interface CardActionContext {
 }
 
 /**
- * What a card renderer knows about the card it draws: the surface (`gallery`
- * or `board`), the board lane it sits in, whether it is being dragged and
- * whether the collection has it selected. One renderer serves both surfaces.
+ * What a card renderer knows about the card it draws, discriminated by the
+ * surface: narrow on `kind` before reading a board-only fact.
+ * One renderer serves both surfaces.
  */
-export interface CardRenderContext {
-  kind: "gallery" | "board";
-  /** The board lane's id; `null` for the lane of records with no value. */
-  laneId?: string | null;
-  dragging?: boolean;
-  selected?: boolean;
-}
+export type CardRenderContext =
+  | {
+      kind: "gallery";
+      /** The collection has this card selected. */
+      selected: boolean;
+    }
+  | {
+      kind: "board";
+      selected: boolean;
+      /** The card is being dragged. */
+      dragging: boolean;
+      /** The lane's group value (`RowGroup.identity`): the related record's id or the
+       * grouped value, `null` for the records with no value; absent on an ungrouped board. */
+      laneId?: string | null;
+    };
 
-/** Draw one card's body; the surface keeps the frame, link, selection and actions. */
+/**
+ * Draw one card's body; the surface keeps the frame, link, selection and actions.
+ * The surface calls it as a plain function while it renders, so it must not call
+ * hooks: return elements, and put hooks in a component it returns
+ * (`(row, context) => <EventCard row={row} context={context} />`). The body is
+ * inside the card's link or button, so it holds no interactive element.
+ */
 export type CardRenderer<TRow extends Row = Row> = (row: TRow, context: CardRenderContext) => ReactNode;
 
 export interface ListEmptyAction {
