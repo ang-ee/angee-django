@@ -2556,18 +2556,21 @@ class AgentTurn(AuditMixin, AngeeDataModel, concrete=True):
         """Fold the saved tool updates into one ACP call per ``toolCallId``, in call order.
 
         ``tool_call`` opens a call and ``tool_call_update`` amends an opened one,
-        each provided field replacing the earlier value, as ACP clients reduce
-        them. A call's ``title`` is its tool's name (``SessionRunner``); ``names``
-        keeps only the calls to those tools.
+        each non-null field replacing the earlier value: ACP reads a null or
+        omitted field as unchanged. A call's ``title`` is its tool key
+        (``SessionRunner``); ``names`` keeps only the calls to those tools, and
+        only kept calls are validated.
         """
 
         calls: dict[str, dict[str, Any]] = {}
         for update in self.updates:
             kind = update["sessionUpdate"]
             if kind == "tool_call" or (kind == "tool_call_update" and update["toolCallId"] in calls):
-                calls.setdefault(update["toolCallId"], {}).update(update)
-        folded = (ToolCall.model_validate(call) for call in calls.values())
-        return tuple(call for call in folded if not names or call.title in names)
+                provided = {key: value for key, value in update.items() if value is not None}
+                calls.setdefault(update["toolCallId"], {}).update(provided)
+        return tuple(
+            ToolCall.model_validate(call) for call in calls.values() if not names or call.get("title") in names
+        )
 
     def change_related_records(self) -> tuple[RecordRef, ...]:
         """Name the session without loading its guarded relation, including on delete."""

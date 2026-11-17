@@ -635,6 +635,31 @@ def test_tool_calls_fold_the_saved_transcript_per_call_and_select_by_tool_name(
     assert turn.tool_calls("absent_tool") == ()
 
 
+def test_tool_calls_keep_the_tool_key_over_a_null_title_and_never_select_an_untitled_call() -> None:
+    turn = AgentTurn(
+        updates=[
+            *tool_call_updates("search_catalogue", "call-1", output="Two hits."),
+            {"sessionUpdate": "tool_call_update", "toolCallId": "call-1", "title": None},
+            {"sessionUpdate": "tool_call", "toolCallId": "call-2", "title": None, "status": "pending"},
+        ]
+    )
+
+    assert [(call.tool_call_id, call.title) for call in turn.tool_calls("search_catalogue")] == [
+        ("call-1", "search_catalogue"),
+    ]
+
+
+def test_tool_calls_keep_the_settled_status_over_a_null_status() -> None:
+    turn = AgentTurn(
+        updates=[
+            *tool_call_updates("open_page", "call-1", output="Page text.", failed=True),
+            {"sessionUpdate": "tool_call_update", "toolCallId": "call-1", "status": None, "rawOutput": None},
+        ]
+    )
+
+    assert [(call.status, call.raw_output) for call in turn.tool_calls()] == [("failed", "Page text.")]
+
+
 @pytest.mark.django_db(transaction=True)
 def test_final_flush_uses_the_agent_principal(
     session: AgentSession,

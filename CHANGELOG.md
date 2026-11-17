@@ -90,13 +90,18 @@ live in code docstrings.
 - A `start_conversation` step may require grounding evidence:
   `StartConversationConfig(grounding=GroundingPolicy(search=("web_search",), fetch=("fetch_url",)))`
   names the tools that satisfy each requirement. One completed call to a named
-  tool meets a requirement, read from the completed turn's saved calls; an answer
-  that leaves one unmet fails the step with the unmet requirements and the calls
-  the turn made, and operator Retry posts another turn. `AgentTurn.tool_calls(*names)`
-  folds a turn's saved ACP tool updates into one `acp.schema.ToolCall` per
-  `toolCallId`, selected by tool name: a saved tool call's `title` is its tool's
-  name (the `SessionRunner` contract). What agents store is unchanged, and a
-  step without `grounding` behaves as before.
+  tool meets a requirement, read from the completed turn's saved calls. A
+  non-empty answer that leaves one unmet fails the step with the unmet
+  requirements and every call the turn made; an empty answer still routes
+  `no_reply`. Operator Retry posts another turn whose prompt ends with the
+  reason. A completed call proves only that the named function tool returned
+  without raising during the turn, so a grounding tool raises on empty results
+  or HTTP errors; provider-native tools are not saved and cannot meet the
+  policy. `AgentTurn.tool_calls(*names)` folds a turn's saved ACP tool updates
+  into one `acp.schema.ToolCall` per `toolCallId`, ignoring null fields, selected
+  by tool name: a saved tool call's `title` is its tool key (the `SessionRunner`
+  contract). What agents store is unchanged, and a step without `grounding`
+  behaves as before.
 
 - `angee.scheduling` owns due rules: a `DueRule` (`angee.scheduling.due`) names due
   anchors the subject supplies later and labelled terms measured from them; the

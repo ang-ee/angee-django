@@ -10,6 +10,7 @@ from types import ModuleType, SimpleNamespace
 from unittest import skipUnless
 from unittest.mock import patch
 
+import pydantic
 import tablib
 import yaml
 from asgiref.sync import async_to_sync
@@ -128,14 +129,24 @@ class GroundingPolicyTests(SimpleTestCase):
         )
         self.assertEqual(
             self.policy.unmet(turn),
-            "The agent answer is ungrounded: search needs a completed web_search or site_search call, "
-            "saw web_search failed, site_search in_progress; fetch needs a completed fetch_url call, saw none.",
+            "The agent answer is ungrounded: search needs a completed web_search or site_search call; "
+            "fetch needs a completed fetch_url call. "
+            "The turn called web_search (failed), site_search (in_progress), summarize (completed).",
         )
 
     def test_a_requirement_naming_no_tool_asks_nothing(self):
         fetched = AgentTurn(updates=tool_call_updates("fetch_url", "call-1", output="Page text."))
         self.assertIsNone(GroundingPolicy().unmet(AgentTurn(updates=[])))
         self.assertIsNone(GroundingPolicy(fetch=("fetch_url",)).unmet(fetched))
+        self.assertEqual(
+            GroundingPolicy(search=("web_search",)).unmet(AgentTurn(updates=[])),
+            "The agent answer is ungrounded: search needs a completed web_search call. The turn called no tools.",
+        )
+
+    def test_tool_names_need_at_least_one_character(self):
+        for field in ("search", "fetch"):
+            with self.subTest(field=field), self.assertRaises(pydantic.ValidationError):
+                GroundingPolicy.model_validate({field: ["web_search", ""]})
 
 
 class CommentReplyTests(TransactionTestCase):
@@ -661,17 +672,28 @@ class CommentReplyTests(TransactionTestCase):
         self.complete(run, session)
         self.assertEqual((run.outcome, self.replies().count()), ("scheduled", 1))
 
-    def test_ungrounded_answer_fails_the_conversation_with_the_calls_it_made(self):
+    def test_ungrounded_answer_fails_the_conversation_with_every_call_it_made(self):
         run, session = self.grounded_run("ungrounded-answer")
-        self.fake.during_turn = emitting(*tool_call_updates("web_search", "call-1", failed=True))
+        self.fake.during_turn = emitting(
+            *tool_call_updates("web_search", "call-1", failed=True),
+            *tool_call_updates("fetch_page", "call-2", output="Page text."),
+        )
         self.complete(run, session)
         self.assertEqual((run.status, self.step(run).status), ("failed", "failed"))
         self.assertEqual(
             self.step(run).failure_reason,
-            "The agent answer is ungrounded: search needs a completed web_search call, saw web_search failed; "
-            "fetch needs a completed fetch_url call, saw none.",
+            "The agent answer is ungrounded: search needs a completed web_search call; "
+            "fetch needs a completed fetch_url call. The turn called web_search (failed), fetch_page (completed).",
         )
         self.assertEqual(AgentTurn.system_queryset().get(session=session).status, "completed")
+        self.assertFalse(self.replies().exists())
+
+    def test_empty_answer_routes_no_reply_without_the_grounding_check(self):
+        run, session = self.grounded_run("grounded-empty-answer")
+        self.fake.outcome = TurnOutcome(kind="completed", text=" \n ")
+        self.complete(run, session)
+        self.assertEqual((run.status, run.outcome), ("succeeded", "no_reply"))
+        self.assertEqual(self.step(run, "schedule").status, "skipped")
         self.assertFalse(self.replies().exists())
 
     def test_grounded_answer_prepares_the_reply_beside_failed_calls(self):
@@ -685,7 +707,7 @@ class CommentReplyTests(TransactionTestCase):
         self.assertEqual((run.status, run.outcome, self.replies().count()), ("succeeded", "scheduled", 1))
         self.assertEqual(self.step(run).output["text"], "A useful answer.")
 
-    def test_operator_retry_after_an_ungrounded_answer_asks_again(self):
+    def test_operator_retry_after_an_ungrounded_answer_asks_again_with_the_reason(self):
         run, session = self.grounded_run("ungrounded-retry")
         self.complete(run, session)
         self.assertEqual(run.status, "failed")
@@ -700,7 +722,12 @@ class CommentReplyTests(TransactionTestCase):
         )
         self.complete(run, retried)
         self.assertEqual((run.status, run.outcome, self.replies().count()), ("succeeded", "scheduled", 1))
-        self.assertEqual(self.fake.prompts, [f"Prepare an answer for {self.comment.sqid}."] * 2)
+        prompt = f"Prepare an answer for {self.comment.sqid}."
+        reason = (
+            "The agent answer is ungrounded: search needs a completed web_search call; "
+            "fetch needs a completed fetch_url call. The turn called no tools."
+        )
+        self.assertEqual(self.fake.prompts, [prompt, f"{prompt}\n\n{reason}"])
 
     def test_transcript_flushes_do_not_wake_or_create_attempts(self):
         run, session = self.waiting_run()
