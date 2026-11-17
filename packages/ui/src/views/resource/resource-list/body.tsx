@@ -60,6 +60,8 @@ export function ResourceListBody<TRow extends Row = Row>({
   calendar,
   laneSource,
   boardCard,
+  gallery,
+  renderCard,
   fields,
   relatedModels,
   list: ListRenderer = ListView as ListComponent<TRow>,
@@ -132,6 +134,8 @@ export function ResourceListBody<TRow extends Row = Row>({
     emptyContent,
     laneSource: resolvedLaneSource,
     boardCard,
+    gallery,
+    renderCard,
     ...(declarations.list
       ? listElementRenderProps(declarations.list.props)
       : {}),

@@ -156,6 +156,10 @@ export interface ResourceListProps<TRow extends Row = Row> {
   /** Declared board lanes for a relation group field; empty lanes render too. */
   laneSource?: BoardLaneSource;
   boardCard?: BoardCardSpec;
+  /** The gallery kind's declared default card fields. */
+  gallery?: ListViewProps<TRow>["gallery"];
+  /** One card renderer for the board and gallery kinds. */
+  renderCard?: ListViewProps<TRow>["renderCard"];
   fields?: ListViewProps<TRow>["fields"];
   /** List component used for the collection surface. Defaults to `ListView`. */
   list?: ListComponent<TRow>;

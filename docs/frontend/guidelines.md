@@ -1876,7 +1876,13 @@ independently of the record aside. See the
 
 `resource#views` holds the view kinds a collection's switcher offers. The
 framework declares the built-in kinds under the bare ids URLs and saved views
-already carry: `list`, `board`, `calendar`, `gantt` and `dashboard`. An addon
+already carry: `list`, `board`, `gallery`, `calendar`, `gantt` and `dashboard`.
+The `gallery` kind pages the collection's records as cards with the list's search,
+presets, selection, bulk actions and record links; it never groups. Board and
+gallery share one card seam: `renderCard(row, context)` draws a card on either
+(the context names the surface, lane, drag and selection state), `cardFrame`
+picks the `inset` or `flush` frame, `boardCard` and `gallery` declare default
+card fields, and with none the gallery draws the board's column card. An addon
 contributes a kind as a `<model>#views` child with a namespaced id. Its
 `ResourceViewKindContent` carries `label` (or a ui `labelKey`), `icon`,
 `capabilities` (which collection controls apply while it is active) and

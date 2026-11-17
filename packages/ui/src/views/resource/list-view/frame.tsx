@@ -175,6 +175,8 @@ function useResourceModels(resource: string, canonical: string | null | undefine
   return React.useMemo(() => modelChain(canonical, resource), [canonical, resource]);
 }
 
+const NO_GROUPS: readonly never[] = [];
+
 function ListViewBody<TRow extends Row = Row>({
   resource,
   relatedModels,
@@ -205,6 +207,7 @@ function ListViewBody<TRow extends Row = Row>({
   gantt,
   laneSource,
   boardCard,
+  gallery,
   onCreate,
   onCreateInLane,
   createLabel,
@@ -251,9 +254,10 @@ function ListViewBody<TRow extends Row = Row>({
   const queryFields = useValueStable([
     ...(fields ?? []), ...filterOptionFields, ...recordMatchFields,
     ...(boardCard ? [boardCard.title, ...(boardCard.fields ?? [])] : []),
+    ...[gallery?.image, gallery?.title, gallery?.subtitle].filter((field): field is string => Boolean(field)),
   ]);
   // The Calendar kind is offered only where the page declares occurrence sources;
-  // the switcher's options derive from that (list + board always).
+  // the switcher's options derive from that (list, board and gallery always).
   const ganttAvailable = !source && Boolean(gantt && (laneSource || gantt.linked) && modelMetadata);
   const calendarAvailable = (calendar?.sources.length ?? 0) > 0;
   const dashboardAvailable = !source && Boolean(modelMetadata?.resource?.roots.aggregate);
@@ -352,9 +356,11 @@ function ListViewBody<TRow extends Row = Row>({
   );
   const boardGroupingPinned =
     (resourceView.state.view === "board" || resourceView.state.view === "gantt") && laneSourceGroup !== null;
-  const effectiveGroupStack = React.useMemo(() => boardGroupingPinned
+  // The gallery never groups: it pages the collection's records as cards.
+  const ungrouped = resourceView.state.view === "gallery";
+  const effectiveGroupStack = React.useMemo(() => ungrouped ? NO_GROUPS : boardGroupingPinned
     ? [laneSourceGroup!] : resourceView.state.groupStack,
-  [boardGroupingPinned, laneSourceGroup, resourceView.state.groupStack]);
+  [ungrouped, boardGroupingPinned, laneSourceGroup, resourceView.state.groupStack]);
 
   // A client resource holds the whole set in the browser, so it groups through
   // TanStack row models — never the server _groups/GroupedListBody path (the
@@ -428,6 +434,7 @@ function ListViewBody<TRow extends Row = Row>({
       bulkActions={bulkActions}
       cardActions={cardActions}
       boardCard={boardCard}
+      gallery={gallery}
       renderCard={renderCard}
       cardFrame={cardFrame}
       emptyContent={resolvedEmptyContent}

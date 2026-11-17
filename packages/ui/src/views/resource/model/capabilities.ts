@@ -5,7 +5,7 @@ import type { ResourceViewInitialState } from "./filter";
  * @kind null
  * @reason Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.
  */
-export const RESOURCE_VIEW_KINDS = ["list", "board", "calendar", "gantt", "dashboard"] as const;
+export const RESOURCE_VIEW_KINDS = ["list", "board", "gallery", "calendar", "gantt", "dashboard"] as const;
 
 /** The calendar kind's window modes; `month` is the default period and `list` lists a month's occurrences by day.
  * @kind null
@@ -82,6 +82,8 @@ export const RESOURCE_VIEW_KIND_CAPABILITIES: Record<
   // Board grouping may be backed by a declared laneSource; the kind still uses
   // the group control, but lanes can come from the relation owner instead of rows.
   board: { grouping: true, pagination: true, columns: false, filter: true },
+  // The gallery pages the collection's records as cards; it never groups.
+  gallery: { grouping: false, pagination: true, columns: false, filter: true },
   gantt: { grouping: true, pagination: true, columns: false, filter: true, requiresSources: true },
   // A windowed occurrence fetch takes only window args in v1: no pagination, no
   // group-by, no columns chooser, and no filter/search (a filterable calendar is

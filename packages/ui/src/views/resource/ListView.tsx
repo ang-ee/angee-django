@@ -9,6 +9,7 @@ export type {
 export type {
   BoardLaneSource,
   BoardCardSpec,
+  GalleryCardSpec,
   ListChrome,
   CalendarViewSpec,
   CardActionContext,

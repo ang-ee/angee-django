@@ -133,6 +133,9 @@ An addon can specialize existing copy and declare named resource views:
     groupStack: [{ field: "status" }], view: "board",
     columnVisibility: { updated_at: false },
     sort: { field: "title", dir: "asc" }, pageSize: 20,
+  }, {
+    id: "desk.recent", label: "Recent reviews", resource: "notes.Note",
+    view: "gallery", sort: { field: "updated_at", dir: "desc" }, pageSize: 6,
   }],
 }
 ```

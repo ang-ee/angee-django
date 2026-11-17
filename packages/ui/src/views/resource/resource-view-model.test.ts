@@ -267,6 +267,7 @@ describe("resource-view model", () => {
     expect(RESOURCE_VIEW_KINDS).toEqual([
       "list",
       "board",
+      "gallery",
       "calendar",
       "gantt",
       "dashboard",
@@ -286,6 +287,13 @@ describe("resource-view model", () => {
       filter: true,
       requiresSources: true,
     });
+    // The gallery pages and filters the records as cards; it never groups or picks columns.
+    expect(RESOURCE_VIEW_KIND_CAPABILITIES.gallery).toEqual({
+      grouping: false,
+      pagination: true,
+      columns: false,
+      filter: true,
+    });
     // list/board applicability is unchanged (both keep filter + pager + group-by).
     expect(RESOURCE_VIEW_KIND_CAPABILITIES.list.filter).toBe(true);
     expect(RESOURCE_VIEW_KIND_CAPABILITIES.list.pagination).toBe(true);
@@ -301,16 +309,18 @@ describe("resource-view model", () => {
   });
 
   test("offers the calendar kind only where sources are declared", () => {
-    expect(availableResourceViewKinds()).toEqual(["list", "board"]);
-    expect(availableResourceViewKinds({ calendar: false })).toEqual(["list", "board"]);
+    expect(availableResourceViewKinds()).toEqual(["list", "board", "gallery"]);
+    expect(availableResourceViewKinds({ calendar: false })).toEqual(["list", "board", "gallery"]);
     expect(availableResourceViewKinds({ calendar: true })).toEqual([
       "list",
       "board",
+      "gallery",
       "calendar",
     ]);
     expect(availableResourceViewKinds({ dashboard: true })).toEqual([
       "list",
       "board",
+      "gallery",
       "dashboard",
     ]);
   });

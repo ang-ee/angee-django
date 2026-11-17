@@ -22,6 +22,7 @@ export {
   ListView,
   type ListViewProps,
   type BoardCardSpec,
+  type GalleryCardSpec,
   type ListChrome,
   type CardActionContext,
   type CardRenderContext,

@@ -56,7 +56,7 @@ appears on record views; a model-level tab on that model's pages. Tabs a page
 publishes follow the composed ones and take the same narrowing. Tab ids are
 namespaced and `?chatterTab=` links name those ids directly.
 The view switcher offers a collection's `resource#views` children for its
-models: the built-in `list`, `board`, `calendar`, `gantt` and `dashboard`
+models: the built-in `list`, `board`, `gallery`, `calendar`, `gantt` and `dashboard`
 kinds, and kinds addons contribute as `<model>#views` children with namespaced
 ids. A contributed kind declares `label`, `icon`, `capabilities` and a `render`
 component that reads the collection through `useResourceView()`; `?view=`,

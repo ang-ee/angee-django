@@ -1,5 +1,6 @@
 // @vitest-environment happy-dom
 
+import type { ComponentProps } from "react";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { createMemoryHistory, createRootRoute, createRouter, RouterContextProvider } from "@tanstack/react-router";
 import { testDataResource, testQueryField, testResourceQuery } from "@angee/metadata/testing";
@@ -45,13 +46,14 @@ function composed(rules: (Omit<ContainerRule, "exempt" | "rank"> & { rank?: numb
   return { ...containers, rules: rules.length ? { "resource#views": rules.map((rule, index) => ({ rank: index, ...rule, exempt: [] })) } : {} };
 }
 
-function renderCollection(containers: ComposedContainers) {
-  const getList = vi.fn(async () => ({ data: [{ id: "note-1", title: "First note" }], total: 1 }));
+function renderCollection(containers: ComposedContainers, props: Partial<ComponentProps<typeof ResourceList>> = {}) {
+  const getList = vi.fn(async () => ({ data: [{ id: "note-1", title: "First note" }, ...(props.defaultView === "gallery"
+    ? [{ id: "note-2", title: "Second note" }] : [])], total: props.defaultView === "gallery" ? 2 : 1 }));
   const router = createRouter({ routeTree: createRootRoute(), history: createMemoryHistory({ initialEntries: ["/"] }) });
   render(<Provider dataProvider={{ getList }}>
     <RouterContextProvider router={router}><ModalsHost><ToastProvider>
       <AppRuntimeProvider runtime={{ widgets: defaultWidgets, containers }}>
-        <ResourceList resource={resource.modelLabel} scope="local" hideCreate columns={[{ field: "title" }]} />
+        <ResourceList resource={resource.modelLabel} scope="local" hideCreate columns={[{ field: "title" }]} {...props} />
       </AppRuntimeProvider>
     </ToastProvider></ModalsHost></RouterContextProvider>
   </Provider>);
@@ -66,7 +68,7 @@ test("the switcher offers the model's contributed kinds among the framework's, i
   renderCollection(composed());
   await screen.findByText("First note");
   // Calendar and Gantt need page-declared sources; the dashboard needs the aggregate root, which this model has.
-  expect(await switcherLabels()).toEqual(["List view", "Graph", "Board view", "Dashboard view"]);
+  expect(await switcherLabels()).toEqual(["List view", "Graph", "Board view", "Grid view", "Dashboard view"]);
   expect(screen.queryByRole("button", { name: "Timeline" })).toBeNull();
 });
 
@@ -84,11 +86,33 @@ test("layers narrow the offered kinds: only, except and hide, each where its con
   renderCollection(composed([{ layer: "notes", only: ["list", "nexus.graph"] }]));
   await waitFor(async () => expect(await switcherLabels()).toEqual(["List view", "Graph"]));
   cleanup();
-  renderCollection(composed([{ layer: "notes", except: ["board", "dashboard"] }, { layer: "product", hide: ["nexus.graph"] }]));
+  renderCollection(composed([{ layer: "notes", except: ["board", "gallery", "dashboard"] }, { layer: "product", hide: ["nexus.graph"] }]));
   await screen.findByText("First note");
   // A single remaining kind needs no switcher.
   expect(screen.queryByRole("group", { name: "View switcher" })).toBeNull();
   cleanup();
   renderCollection(composed([{ layer: "notes", when: { route: "notes.board" }, only: ["list"] }]));
-  await waitFor(async () => expect(await switcherLabels()).toEqual(["List view", "Graph", "Board view", "Dashboard view"]));
+  await waitFor(async () => expect(await switcherLabels()).toEqual(["List view", "Graph", "Board view", "Grid view", "Dashboard view"]));
+});
+
+test("the gallery kind pages the records as cards with one renderer and the shared selection", async () => {
+  renderCollection(composed(), {
+    defaultView: "gallery",
+    renderCard: (row, context) => <span>{String(row.title)} · {context.kind}</span>,
+  });
+  expect(await screen.findByText("First note · gallery")).toBeTruthy();
+  expect(screen.getByText("Second note · gallery")).toBeTruthy();
+  expect(document.querySelectorAll("[data-slot='gallery-card']")).toHaveLength(2);
+  expect(screen.getByRole("button", { name: "Grid view" }).getAttribute("aria-pressed")).toBe("true");
+  const checkbox = screen.getByRole("checkbox", { name: "Select First note" });
+  fireEvent.click(checkbox);
+  await waitFor(() => expect(screen.getByRole("checkbox", { name: "Select First note" }).getAttribute("aria-checked")).toBe("true"));
+});
+
+test("with no card declared, the gallery draws the list's column card in an inset frame", async () => {
+  renderCollection(composed(), { defaultView: "gallery" });
+  expect(await screen.findByText("Second note")).toBeTruthy();
+  const cards = document.querySelectorAll("[data-slot='gallery-card']");
+  expect(cards).toHaveLength(2);
+  expect(cards[0]?.getAttribute("data-frame")).toBe("inset");
 });

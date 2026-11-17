@@ -134,6 +134,13 @@ export interface BoardCardSpec {
   fields?: readonly string[];
 }
 
+/** Declared default gallery card: an image, a title and a secondary line, each a readable field. */
+export interface GalleryCardSpec<TRow extends Row = Row> {
+  image?: keyof TRow & string;
+  title?: keyof TRow & string;
+  subtitle?: keyof TRow & string;
+}
+
 export interface CardActionContext {
   /** Re-pull the collection backing the board/list surface. */
   refresh: () => void;
@@ -294,6 +301,9 @@ export interface ListViewProps<TRow extends Row = Row> {
   laneSource?: BoardLaneSource;
   /** Card content without replacing the board's shared frame and actions. */
   boardCard?: BoardCardSpec;
+  /** The gallery kind's default card fields (image, title, subtitle). Without it
+   * the gallery draws the board's column card; `renderCard` overrides both. */
+  gallery?: GalleryCardSpec<TRow>;
   /** Default grouping stack; a single group declares one level. */
   defaultGroup?: ResourceViewGroup | readonly ResourceViewGroup[] | null;
   /** Per-view group defaults seeded by the resource list. */

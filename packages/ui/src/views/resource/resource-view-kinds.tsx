@@ -12,6 +12,7 @@ import {
 const BUILT_IN_KINDS: Readonly<Record<BuiltInResourceViewKind, { labelKey: string; icon: string; sequence: number }>> = {
   list: { labelKey: "resourceToolbar.listView", icon: "list", sequence: 10 },
   board: { labelKey: "resourceToolbar.boardView", icon: "grid-2x2", sequence: 20 },
+  gallery: { labelKey: "resourceToolbar.gridView", icon: "layout-grid", sequence: 25 },
   calendar: { labelKey: "resourceToolbar.calendarView", icon: "calendar", sequence: 30 },
   gantt: { labelKey: "resourceToolbar.ganttView", icon: "chart-gantt", sequence: 40 },
   dashboard: { labelKey: "resourceToolbar.dashboardView", icon: "chart-no-axes-combined", sequence: 50 },
