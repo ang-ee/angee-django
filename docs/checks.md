@@ -480,7 +480,9 @@ database, and these commands do not create one.
 pushes to `main`. A pull request's merge gate is the static tier, the SQLite tests
 its changed paths reach, the packages and the composed stack with its smoke.
 Pushes to `main` and releases run the whole SQLite suite and the PostgreSQL lane,
-so whole suites report after a merge instead of gating it. The current tiers are:
+so whole suites report after a merge instead of gating it. A new push to a pull
+request cancels the run it supersedes; every push to `main` runs to completion.
+The current tiers are:
 
 - **Static** (the `python-quality` job): Ruff over the source tree, mypy over
   addons, `lint-imports` over the declared import contracts, and the tests that
