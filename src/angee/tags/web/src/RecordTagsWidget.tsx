@@ -2,8 +2,8 @@ import * as React from "react";
 import { holdsPermission, rowPublicId, useModelMetadata, useResourceInvalidates, type Row } from "@angee/metadata";
 import { useAuthoredMutation } from "@angee/refine";
 import {
-  FieldRoot, FieldLabel, RelationMultiFieldWidget, relationFieldInfoForResource, relationIdList, relationValueId,
-  useBusyRun, useRecordChromeContext, useRelationOptions, useRuntimeViewAs,
+  FieldRoot, FieldLabel, RelationMultiFieldWidget, SectionEyebrow, relationFieldInfoForResource, relationIdList,
+  relationValueId, useBusyRun, useRecordChromeContext, useRelationOptions, useRuntimeViewAs,
   type RelationCreateConfig, type WidgetDefinition, type WidgetRenderProps,
 } from "@angee/ui";
 
@@ -12,22 +12,44 @@ import { useTagsT } from "./i18n";
 
 const TAG_MODEL = "tags.Tag";
 const CATEGORY_MODEL = "tags.TagCategory";
+const CATEGORY_FIELDS = ["position", "max_per_record", "is_archived"];
 const CATEGORY_ORDER = [{ field: "position", order: "asc" as const }];
+const FILING_FIELDS = ["category.id", "category.name", ...CATEGORY_FIELDS.map((field) => `category.${field}`)];
 
-/** One picker's share of the record's tags: a category's, or the uncategorised ones (`id` empty). */
-interface TagGroup {
+/** A tag category as the widget groups by it; the uncategorised group has an empty `id`. */
+interface Category {
   id: string;
-  label: string;
+  name: string;
+  position: number;
+  maximum: number | null;
   archived: boolean;
-  /** Narrows the picker's options to the group; absent while no category exists. */
-  where?: Record<string, unknown>;
+}
+
+function categoryFromRow(row: Row | null | undefined): Category | null {
+  const id = relationValueId(row);
+  if (!row || !id) return null;
+  const position = Number(row.position);
+  const maximum = Number(row.max_per_record);
+  return {
+    id,
+    name: String(row.name ?? id),
+    position: Number.isFinite(position) ? position : 0,
+    maximum: row.max_per_record == null || !Number.isFinite(maximum) ? null : maximum,
+    archived: row.is_archived === true,
+  };
 }
 
 /**
- * The record's tags as one picker per tag category, in category order, then one for
- * its uncategorised tags; with no categories, a single picker. Independent tag verbs
- * also serve records whose scalar fields are read-only. The server judges each
- * category's maximum, and its refusal reaches the error toast.
+ * The record's tags, grouped: one picker per tag category in category order, then
+ * one for the uncategorised tags; with no categories, a single picker. Independent
+ * tag verbs also serve records whose scalar fields are read-only.
+ *
+ * Each held tag's category is read once and kept, so a refetch never regroups the
+ * pickers, and a tag picked from a group joins it at once. A held tag's category
+ * gets its picker even when the category list stops short of it. A category with a
+ * maximum shows it; at a maximum of one, a new pick replaces the held tag, untagging
+ * before tagging. Otherwise the server judges the maximum and its refusal reaches
+ * the error toast.
  */
 function RecordTagsWidget({ readOnly }: WidgetRenderProps): React.ReactElement | null {
   const context = useRecordChromeContext();
@@ -49,63 +71,91 @@ function RecordTagsWidget({ readOnly }: WidgetRenderProps): React.ReactElement |
   const type = metadata?.resource.resourceType;
   const tags = Array.isArray(record?.tags) ? record.tags : [];
   const ids = relationIdList(tags);
-  const categories = useRelationOptions(categoryRelation, { fields: ["is_archived"], sorters: CATEGORY_ORDER }).rows;
+  const categoryList = useRelationOptions(categoryRelation, { fields: CATEGORY_FIELDS, sorters: CATEGORY_ORDER });
   // The record's own selection carries no category, so read where each held tag is filed.
-  const filing = categories.length > 0 && ids.length > 0;
-  const filed = useRelationOptions(relation, {
+  const [filedUnder, setFiledUnder] = React.useState<ReadonlyMap<string, Category | null>>(new Map());
+  const unfiled = ids.filter((id) => !filedUnder.has(id));
+  const filing = categoryList.rows.length > 0 && unfiled.length > 0;
+  const filedQuery = useRelationOptions(relation, {
     enabled: filing,
-    fields: ["category.id"],
-    ...(filing ? { where: { id: { _in: ids } } } : {}),
-  }).rows;
+    fields: FILING_FIELDS,
+    ...(filing ? { where: { id: { _in: unfiled } } } : {}),
+  });
+  const fresh = filedQuery.rows.map((row): [string, Category | null] => [
+    relationValueId(row), categoryFromRow(row.category as Row | null),
+  ]);
+  // Rows read in this render group at once; the effect keeps them once the query is disabled.
+  const known: ReadonlyMap<string, Category | null> = fresh.length ? new Map([...filedUnder, ...fresh]) : filedUnder;
+  React.useEffect(() => {
+    if (!filedQuery.rows.length) return;
+    setFiledUnder((previous) => new Map([
+      ...previous,
+      ...filedQuery.rows.map((row): [string, Category | null] => [
+        relationValueId(row), categoryFromRow(row.category as Row | null),
+      ]),
+    ]));
+  }, [filedQuery.rows]);
   const disabled = readOnly || context.actionsBlocked || !holdsPermission(record, "write") || preview.viewAs || preview.pending || busy.busy;
+  // Place pickers once the reads settle, so they never regroup; a failed read leaves its tags uncategorised.
+  const settled = !categoryList.list.fetching && !(filing && filedQuery.list.fetching);
   if (!recordId || !type || !relation) return null;
 
-  const filedUnder = new Map(filed.map((row): [string, string] => [rowPublicId(row) ?? "", relationValueId(row.category)]));
-  const held = (group: TagGroup): readonly unknown[] =>
-    tags.filter((value) => (filedUnder.get(relationValueId(value)) ?? "") === group.id);
-  const labelField = categoryRelation?.labelField ?? "name";
-  const groups: TagGroup[] = categories.length === 0
-    ? [{ id: "", label: t("record.label"), archived: false }]
-    : [
-      ...categories.map((row) => {
-        const id = rowPublicId(row) ?? "";
-        return { id, label: String(row[labelField] ?? id), archived: row.is_archived === true, where: { category: { _eq: id } } };
-      }),
-      { id: "", label: t("record.other"), archived: false, where: { category: { _is_null: true } } },
-    ];
-  // An archived category stays visible only while the record still holds one of its tags.
-  const shown = groups.filter((group) => !group.archived || held(group).length > 0);
-  // A tag created from a category's picker is filed under that category.
-  const create = (group: TagGroup): RelationCreateConfig | null | undefined =>
-    !group.id ? undefined : relation.canCreate ? { resource: TAG_MODEL, defaultValues: { category: group.id } } : null;
+  const categories = new Map(categoryList.rows.flatMap((row) => {
+    const category = categoryFromRow(row);
+    return category ? [[category.id, category] as const] : [];
+  }));
+  for (const category of known.values()) if (category && !categories.has(category.id)) categories.set(category.id, category);
+  const held = (group: string): readonly unknown[] =>
+    tags.filter((value) => (known.get(relationValueId(value))?.id ?? "") === group);
+  const groups = [...categories.values()]
+    .filter((category) => !category.archived || held(category.id).length > 0)
+    .sort((left, right) => left.position - right.position || left.name.localeCompare(right.name));
 
-  const change = async (group: TagGroup, next: readonly unknown[]): Promise<void> => {
+  const change = async (group: Category | null, next: readonly unknown[]): Promise<void> => {
     // One change at a time: a second edit computes its diff from the record the first one settles.
     if (disabled || running.current) return;
     running.current = true;
+    const groupId = group?.id ?? "";
     await busy.settle(async () => {
-      const wanted = relationIdList(next);
-      const previous = relationIdList(held(group));
+      const previous = relationIdList(held(groupId));
+      let wanted = relationIdList(next);
+      // At a maximum of one, a new pick replaces the held tag.
+      if (group?.maximum === 1 && wanted.length > 1) wanted = wanted.filter((id) => !previous.includes(id)).slice(-1);
       const added = wanted.filter((id) => !previous.includes(id));
       const removed = previous.filter((id) => !wanted.includes(id));
-      if (added.length) await tag({ type, id: recordId, tags: added });
       if (removed.length) await untag({ type, id: recordId, tags: removed });
+      if (added.length) {
+        await tag({ type, id: recordId, tags: added });
+        setFiledUnder((previous) => new Map([...previous, ...added.map((id): [string, Category | null] => [id, group])]));
+      }
     }, undefined, t("record.error")).finally(() => {
       running.current = false;
     });
   };
-  return <>
-    {shown.map((group) => (
-      <FieldRoot key={group.id || "uncategorised"}>
-        <FieldLabel id={`${labelId}-${group.id || "uncategorised"}`} nativeLabel={false} render={<span />}>
-          {group.label}
-        </FieldLabel>
-        <RelationMultiFieldWidget relation={relation} value={held(group)} aria-label={group.label}
-          {...(group.where ? { where: group.where } : {})} create={create(group)}
-          readOnly={Boolean(disabled)} onChange={(next) => void change(group, next)} />
-      </FieldRoot>
-    ))}
-  </>;
+  // A tag created from a category's picker is filed under that category.
+  const create = (group: Category | null): RelationCreateConfig | null | undefined =>
+    !group ? undefined : relation.canCreate ? { resource: TAG_MODEL, defaultValues: { category: group.id } } : null;
+  const picker = (group: Category | null, label: string): React.ReactElement => (
+    <FieldRoot key={group?.id ?? "uncategorised"}>
+      <FieldLabel id={`${labelId}-${group?.id ?? "uncategorised"}`} nativeLabel={false} render={<span />}
+        {...(group?.maximum != null ? { meta: t("record.maximum", { count: group.maximum }) } : {})}>
+        {label}
+      </FieldLabel>
+      <RelationMultiFieldWidget relation={relation} value={held(group?.id ?? "")} aria-label={label}
+        {...(groups.length ? { where: { category: group ? { _eq: group.id } : { _is_null: true } } } : {})}
+        create={create(group)} readOnly={Boolean(disabled)} onChange={(next) => void change(group, next)} />
+    </FieldRoot>
+  );
+  if (!groups.length) return settled ? picker(null, t("record.label")) : null;
+  return (
+    <div role="group" aria-labelledby={labelId} className="flex flex-col gap-3">
+      <SectionEyebrow as="span" id={labelId}>{t("record.label")}</SectionEyebrow>
+      {settled || known.size ? <>
+        {groups.map((group) => picker(group, t("record.categoryLabel", { name: group.name })))}
+        {picker(null, t("record.other"))}
+      </> : null}
+    </div>
+  );
 }
 
 export const recordTagsWidget: WidgetDefinition = {

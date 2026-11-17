@@ -11,7 +11,10 @@ export const enTagsMessages: Record<string, string> = {
   "col.maxPerRecord": "Most per record",
   "form.details": "Details",
   "record.label": "Tags",
+  "record.categoryLabel": "{name} tags",
   "record.other": "Other tags",
+  "record.maximum_one": "At most {count} tag",
+  "record.maximum_other": "At most {count} tags",
   "record.error": "Could not update tags.",
 };
 
