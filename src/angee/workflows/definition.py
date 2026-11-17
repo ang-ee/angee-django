@@ -62,6 +62,11 @@ def map_body_key(key: str) -> str:
     return key + MAP_BODY_SUFFIX
 
 
+def declared_node_key(key: str) -> str:
+    """Name the declared node a step row executes: a map item's map, else the row's own key."""
+    return key.partition(".")[0]
+
+
 def _has_path(value: Any, path: tuple[str | int, ...]) -> bool:
     """Whether a JSON value holds an item at ``path``."""
     for part in path:
@@ -509,7 +514,7 @@ class Definition(BaseModel):
         """Freeze reader labels with the validated graph and step outcome contracts."""
         document = self.model_dump(mode="json", by_alias=True)
         for key, node, _ in sorted(self.declarations(), key=lambda item: item[0]):
-            stored = document["nodes"][key.partition(".")[0]]
+            stored = document["nodes"][declared_node_key(key)]
             if key.endswith(MAP_BODY_SUFFIX):
                 stored = stored["body"]
             stored["label"] = self.node_label(key)
@@ -882,6 +887,15 @@ class Definition(BaseModel):
         return {key: set(self.predecessors[key]) for key in sorted(self.nodes)}
 
     @cached_property
+    def successors(self) -> dict[str, set[str]]:
+        """Return the reverse adjacency: each node and the targets its outcomes route to."""
+        following: dict[str, set[str]] = {key: set() for key in self.graph}
+        for target, sources in self.graph.items():
+            for source in sources:
+                following[source].add(target)
+        return following
+
+    @cached_property
     def ranks(self) -> dict[str, int]:
         """Stable execution ranks, with dependency order owned by graphlib."""
         graph = {key: sorted(sources) for key, sources in self.graph.items()}
@@ -1072,11 +1086,7 @@ class Definition(BaseModel):
         if len(self.entries) != 1:
             issues.append(Issue(code="entry", message="A workflow requires exactly one entry node."))
         if len(self.entries) == 1:
-            outgoing: dict[str, set[str]] = {key: set() for key in self.nodes}
-            for target, sources in self.graph.items():
-                for source in sources:
-                    outgoing[source].add(target)
-            reached = self._walk(outgoing, self.entries)
+            reached = self._walk(self.successors, self.entries)
             issues.extend(
                 Issue(node=key, path=["nodes", key], code="unreachable", message="Node is unreachable.")
                 for key in self.nodes
@@ -1102,7 +1112,7 @@ class Definition(BaseModel):
                     node=key, path=[*path, "input"], code="input", message="Map items require a list schema.",
                 ))
                 continue
-            parent = key.partition(".")[0]
+            parent = declared_node_key(key)
             mapped = key != parent
             if node.input is not None:
                 issues.extend(
@@ -1264,11 +1274,12 @@ class Definition(BaseModel):
                 if source == INPUT_SOURCE:
                     continue
                 try:
-                    schema = (schema_at(self.map_items_schema(node.partition(".")[0]), [0]) or {}) if (
+                    schema = (schema_at(self.map_items_schema(declared_node_key(node)), [0]) or {}) if (
                         source == ITEM_SOURCE and node is not None
                     ) else self.output_schema(
                         source,
-                        self.predecessors[node.partition(".")[0]].get(source) if node else (outcomes or {}).get(source),
+                        self.predecessors[declared_node_key(node)].get(source) if node
+                        else (outcomes or {}).get(source),
                     )
                 except (KeyError, ImproperlyConfigured):
                     messages.append(f"Unknown source {source!r}.")
@@ -1329,30 +1340,36 @@ class Definition(BaseModel):
         return self._walk(self.graph, self.graph[key])
 
     def descendants(self, key: str) -> set[str]:
-        """Return ``key`` and every node its routes reach, through the same graph walk."""
-        following: dict[str, set[str]] = {node: set() for node in self.graph}
-        for target, sources in self.graph.items():
-            for source in sources:
-                following[source].add(target)
-        return self._walk(following, [key])
+        """Return ``key`` and every node its routes reach, through the shared graph walk."""
+        return self._walk(self.successors, [key])
 
-    def reusable_rows[R: StepRow](self, rows: Iterable[R], from_node: str) -> list[R]:
-        """Return the retained rows a reprocess from ``from_node`` copies.
+    def reprocess_plan[R: StepRow](self, rows: Iterable[R], from_node: str) -> tuple[list[R], list[R]]:
+        """Split a retained run's rows for a reprocess from ``from_node``: what it reuses, and what else reruns.
 
-        The node and every node it reaches run again. Each other row that settled
-        with a routed result (succeeded, skipped, or failed through a declared
-        error route) is reused, map items with their map; an unsettled row or an
-        unrouted failure is planned afresh.
+        The node and every node it reaches run again. Outside that reach a declared
+        node's row is reused when it settled with a routed result (succeeded,
+        skipped, or failed through a declared error route), and a map item only with
+        its reused map. Every other row outside the reach (unsettled, an unrouted
+        failure, an item of a map planned afresh) is returned second: it runs again
+        too, in the new run.
         """
         if from_node not in self.nodes:
             raise ValidationError("A reprocess starts at a declared node.")
+        rows = list(rows)
         rerun = self.descendants(from_node)
         settled = {StepRunStatus.SUCCEEDED, StepRunStatus.SKIPPED, StepRunStatus.FAILED}
-        return [
-            row for row in rows
-            if row.node_key.partition(".")[0] not in rerun and row.status in settled
-            and not self.unrouted_failure([row])
-        ]
+        reused_nodes = {
+            row.node_key for row in rows
+            if row.node_key in self.nodes and row.node_key not in rerun
+            and row.status in settled and not self.unrouted_failure([row])
+        }
+        reused: list[R] = []
+        again: list[R] = []
+        for row in rows:
+            node = declared_node_key(row.node_key)
+            if node not in rerun:
+                (reused if node in reused_nodes else again).append(row)
+        return reused, again
 
     def unrouted_failure(self, rows: Iterable[StepRow]) -> bool:
         """Whether a failed node has no declared route for its built-in failure."""
@@ -1363,8 +1380,7 @@ class Definition(BaseModel):
 
     def retry_allowed(self, key: str) -> bool:
         """In-place recovery must not replay a failure already routed through error."""
-        parent = key.partition(".")[0]
-        return self.failure_port(key) not in self.nodes[parent].next
+        return self.failure_port(key) not in self.nodes[declared_node_key(key)].next
 
     @staticmethod
     def failure_port(key: str) -> str:

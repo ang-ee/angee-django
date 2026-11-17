@@ -49,7 +49,7 @@ EXPECTED_VERBS = {
     "workflows.StepRun.manager": "record_await retry_step",
     "workflows.StepRun.queryset": (
         "answered_decisions cancel_open changed_records claim collect_map count_redispatch dispatch due expire expired "
-        "extend_deadline fail_attempt fenced for_map graph_rows item_counts nodes settle terminal_runs to_ready "
+        "extend_deadline fail_attempt fenced for_map graph_rows holding item_counts nodes settle terminal_runs to_ready "
         "to_running to_succeeded to_waiting undispatched"
     ),
     "workflows.StepWatch.manager": "record_change record_changes register wait_kind",
@@ -57,14 +57,14 @@ EXPECTED_VERBS = {
         "admit disable drain enable enable_preview lock_grants reconcile_grants record_occurrences revoke_grant"
     ),
     "workflows.Trigger.queryset": "bulk_create update",
-    "workflows.TriggerEvent.manager": "record_change record_changes record_occurrences",
+    "workflows.TriggerEvent.manager": "prune record_change record_changes record_occurrences skip_pending_occurrences",
     "workflows.TriggerEvent.queryset": "pending",
     "workflows.Workflow.manager": "authoring_outcomes install_definition publish save_draft save_identity",
     "workflows.WorkflowRun.manager": (
         "cancel cancel_abandoned prune reap_interrupted reprocess start"
     ),
     "workflows.WorkflowRun.queryset": (
-        "about about_filter blocking for_subject hold hold_owned retention_candidates working_on"
+        "about about_filter blocking for_subject lock_owned_runs lock_run retention_candidates working_on"
     ),
     "decisions.Decision.manager": "ask remind_due supersede",
     "decisions.Decision.queryset": (

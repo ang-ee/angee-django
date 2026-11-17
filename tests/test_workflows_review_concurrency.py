@@ -27,7 +27,7 @@ def test_answer_races_cancel_without_lock_inversion(review, winner):
     run, step = start_review(review)
     decision = questions(step)[0]
     with ThreadPoolExecutor(max_workers=1) as pool:
-        with WorkflowRun.objects.hold(run.pk):
+        with WorkflowRun.objects.lock_run(run.pk):
             if winner == "answer":
                 contender, pid = submit(pool, lambda: WorkflowRun.objects.cancel(run, actor=actor))
                 wait_for_lock(pid, contender)
@@ -52,7 +52,7 @@ def test_busy_run_wakes_on_the_next_sweep(review):
     actor, people, _, _ = review
     run, step = start_review(review)
     with ThreadPoolExecutor(max_workers=1) as pool:
-        with WorkflowRun.objects.hold(run.pk):
+        with WorkflowRun.objects.lock_run(run.pk):
             future, _ = submit(pool, lambda: answer(questions(step)[0], people[0]))
             assert not future.result(timeout=10).is_open
             assert StepRun.system_queryset().get(pk=step.pk).status == "waiting"

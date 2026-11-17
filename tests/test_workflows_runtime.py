@@ -782,7 +782,7 @@ def test_holder_resend_refreshes_backlogged_ready_row_before_tick(execution, set
         StepRun.objects.filter(pk=step_run.pk).update(
             dispatched_at=Now() - timedelta(minutes=5), dispatches=4,
         )
-    with WorkflowRun.objects.hold(run.pk):
+    with WorkflowRun.objects.lock_run(run.pk):
         pass
     assert runner.redispatch() == 0
     retained = StepRun.system_queryset().get(pk=step_run.pk)
@@ -802,8 +802,8 @@ def test_nested_holds_dispatch_each_ready_row_once(execution):
     run = WorkflowRun.objects.start(workflow, actor=actor)
     sent.clear()
 
-    with WorkflowRun.objects.hold(run.pk):
-        with WorkflowRun.objects.hold(run.pk):
+    with WorkflowRun.objects.lock_run(run.pk):
+        with WorkflowRun.objects.lock_run(run.pk):
             assert StepRun.system_queryset().filter(run=run, status=StepRunStatus.READY).count() == 1
 
     assert [name for name, _ in sent] == ["workflows.execute"]

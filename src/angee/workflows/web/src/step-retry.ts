@@ -7,22 +7,28 @@ import { jsonSchemaActionArgs } from "@angee/ui/views/json-schema";
 import { RUN_MODELS } from "./documents.console";
 import { useWorkflowsT } from "./i18n";
 
-/** Both execution views use the same retry and duplicate-effect acknowledgement. */
-export function useStepRetryActions(inline = false): readonly ActionDescriptor[] {
+/** The one form an operator fills to accept a possible duplicate external effect. */
+export function useDuplicateAcknowledgement(description: string) {
   const t = useWorkflowsT();
   const uiT = useUiT();
   const { widgets } = useAppRuntime();
+  return useMemo(() => jsonSchemaActionArgs({
+    type: "object", properties: { acknowledge: { type: "boolean", const: true, default: false,
+      label: t("action.acknowledge"), description } },
+    required: ["acknowledge"],
+  }, widgets, { translate: uiT }), [description, t, uiT, widgets]);
+}
+
+/** Both execution views use the same retry and duplicate-effect acknowledgement. */
+export function useStepRetryActions(inline = false): readonly ActionDescriptor[] {
+  const t = useWorkflowsT();
   const [retry] = useRecordActionMutation<ActionFieldName>("retry_step", {
     dataProviderName: "console", invalidateModels: RUN_MODELS,
   });
   const [retryDuplicate] = useActionOutcomeMutation<ActionFieldName>("retry_step_accepting_duplicate", {
     dataProviderName: "console", invalidateModels: RUN_MODELS,
   });
-  const acknowledgement = useMemo(() => jsonSchemaActionArgs({
-    type: "object", properties: { acknowledge: { type: "boolean", const: true, default: false,
-      label: t("action.acknowledge"), description: t("action.duplicateDescription") } },
-    required: ["acknowledge"],
-  }, widgets, { translate: uiT }), [t, uiT, widgets]);
+  const acknowledgement = useDuplicateAcknowledgement(t("action.duplicateDescription"));
   return [{
     id: "retry", label: t(inline ? "timeline.retry" : "action.retry_step"), placement: "toolbar", primary: !inline, run: retry,
     visibleWhen: (row) => row.can_retry === true && row.requires_duplicate_acknowledgement !== true,

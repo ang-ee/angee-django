@@ -2336,7 +2336,7 @@ bridge advisory lock as polling and delivery settlement.
   `Step.check` at the body boundary. Retryability, timeouts and stack traces
   belong to the runner's attempt record, not to consumer settlements.
   A failed IO attempt cannot roll back writes already committed by its body.
-- **`WorkflowRunQuerySet.hold` owns the run lock and transaction.** It registers
+- **`WorkflowRunQuerySet.lock_run` owns the run lock and transaction.** It registers
   ready-row dispatch on successful commit. The run row owns its state:
   [`WorkflowRun.advance`](../../src/angee/workflows/models.py) requires that lock,
   settles the attempt, composes `Definition` to plan the graph and writes the
@@ -2347,14 +2347,14 @@ bridge advisory lock as polling and delivery settlement.
   and hands any other failure to `WorkflowRun.fail_advance` to record. Each tick
   candidate's transition is a `StepRun` verb (`wake`, `redispatch`, `reap`) that
   reports whether its run must replan; managers and querysets own row-set verbs
-  and act on a held run only through its verbs (`admit_subject`, `reopen`,
+  and act on a locked run only through its verbs (`admit_subject`, `reopen`,
   `interrupt`, `cancel_owned_work`).
 - **Queryset verbs own transitions and companion fields.** `StepRunQuerySet`
   owns `claim`, `settle`, `to_succeeded`, `fail_attempt`, `to_waiting`,
   `to_ready`, `cancel_open`, `dispatch` and `count_redispatch`;
   `StepAttemptQuerySet.close` owns attempt closure.
   Conditional updates check the attempt fence. The runner's periodic tick
-  rechecks due waits, expired claims and stale deliveries under `hold`, then delegates to
+  rechecks due waits, expired claims and stale deliveries under `lock_run`, then delegates to
   those verbs. The effect marker and heartbeat check the same attempt fence
   under the step lock used by the reaper. Uncertain non-idempotent effects wait
   for explicit operator acknowledgement; dispatch exhaustion also waits for an
@@ -2366,7 +2366,8 @@ bridge advisory lock as polling and delivery settlement.
   planning, and retry replans from all retained rows.
   Reprocessing records its predecessor and uses the requesting actor on the
   current publication; reprocessing from a node keeps the predecessor's version,
-  reuses the settled steps the node cannot reach and runs the rest again.
+  reuses the steps outside the node's reach that settled with a routed result and
+  runs the rest again. A run with an open replacement refuses another.
   Artifacts reference actor-readable records without
   granting access to them. Admission retains the subject and each declared
   record-reference input as shared `DerivedFrom` evidence, after checking the

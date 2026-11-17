@@ -46,9 +46,10 @@ from angee.provenance.contrib.angee.history import HistoryMixin
 from angee.provenance.contrib.angee.managers import AngeeHistoryManager
 from angee.provenance.contrib.angee.querysets import AngeeHistoryQuerySet
 from angee.resources.mixins import ResourceLoadMixin
-from angee.scheduling.fields import RecurrenceField
+from angee.scheduling.fields import RecurrenceField, TimeZoneField
 from angee.scheduling.recurrence import Recurrence
-from angee.workflows.definition import MAP_BODY_SUFFIX, Definition, GraphEdge, GraphNode
+from angee.scheduling.zones import validate_zone_name
+from angee.workflows.definition import MAP_BODY_SUFFIX, Definition, GraphEdge, GraphNode, declared_node_key
 from angee.workflows.managers import (
     StepAttemptQuerySet,
     StepRecordManager,
@@ -77,6 +78,7 @@ from angee.workflows.steps import AttemptRecord, Fail, Step
 from angee.workflows.subjects import RunSubject
 from angee.workflows.transactions import isolate_failure
 from angee.workflows.triggers import (
+    SCHEDULE_PAGE_LIMIT,
     TriggerEventManager,
     TriggerGrantTarget,
     TriggerManager,
@@ -430,10 +432,15 @@ class WorkflowRun(RecordRefMixin, AngeeDataModel, concrete=True):
 
     hold_order = ("error", "run", "decision")
     """Step holds from most to least urgent: an operator's error, another run, then a person."""
+    incident_holds = ("error", "run")
+    """The holds an operator answers: the run console's Incidents view lists them."""
 
     @property
     def hold(self) -> str | None:
-        """The run's reader-facing hold: its most urgent step hold in :attr:`hold_order`."""
+        """The run's reader-facing hold: its most urgent step hold in :attr:`hold_order`.
+
+        A run with a replacement (``reprocesses``) holds nothing; the replacement carries it.
+        """
         if "_hold" in self.__dict__:
             return self.__dict__["_hold"]
         return type(self).system_queryset().filter(pk=self.pk).annotate(
@@ -441,20 +448,43 @@ class WorkflowRun(RecordRefMixin, AngeeDataModel, concrete=True):
         ).values_list("_hold", flat=True).get()
 
     @classmethod
-    def hold_expression(cls) -> models.Subquery:
-        """Read each run's most urgent step hold in one correlated expression, for filters and lists."""
+    def _held_steps(cls, *holds: str) -> Any:
+        """This run's steps holding one of ``holds``, correlated to the outer run row."""
         step_model = cls._meta.get_field("step_runs").related_model
         assert step_model is not None and issubclass(step_model, StepRun)
-        urgency = models.Case(
-            *(models.When(_hold=hold, then=models.Value(rank)) for rank, hold in enumerate(cls.hold_order)),
-            output_field=models.IntegerField(),
+        return cast(Any, step_model.system_queryset()).filter(run_id=models.OuterRef("pk")).holding(*holds)
+
+    @classmethod
+    def _replaced(cls) -> models.Exists:
+        """Whether a replacement reprocesses the outer run row."""
+        return models.Exists(cls.system_queryset().filter(reprocess_of=models.OuterRef("pk")))
+
+    @classmethod
+    def hold_expression(cls) -> models.Case:
+        """Read each run's most urgent step hold in one correlated expression, for lists.
+
+        Urgency ranks the steps' own status and waiting kind (``StepRun.hold_states``)
+        through :attr:`hold_order`.
+        """
+        step_model = cls._meta.get_field("step_runs").related_model
+        assert step_model is not None and issubclass(step_model, StepRun)
+        urgency = models.Case(*(
+            models.When(status=status, waiting_kind=kind, then=models.Value(cls.hold_order.index(hold)))
+            for (status, kind), hold in step_model.hold_states.items()
+        ), output_field=models.IntegerField())
+        held = cls._held_steps().order_by(urgency, "pk").values("_hold")[:1]
+        return models.Case(
+            models.When(cls._replaced(), then=models.Value(None)),
+            default=models.Subquery(held), output_field=models.CharField(null=True),
         )
-        held = (
-            step_model.system_queryset().filter(run_id=models.OuterRef("pk"))
-            .annotate(_hold=step_model.hold_expression()).filter(_hold__isnull=False)
-            .order_by(urgency, "pk").values("_hold")[:1]
+
+    @classmethod
+    def incident_expression(cls) -> models.ExpressionWrapper:
+        """Whether a run holds on one of :attr:`incident_holds` and has no replacement, as two ``EXISTS`` tests."""
+        return models.ExpressionWrapper(
+            models.Q(models.Exists(cls._held_steps(*cls.incident_holds))) & ~models.Q(cls._replaced()),
+            output_field=models.BooleanField(),
         )
-        return models.Subquery(held, output_field=models.CharField(null=True))
 
     def _lock_run_subject(self, *, required: bool = True) -> RunSubject | None:
         """Lock this root run's opted-in subject after the caller has locked the run."""
@@ -515,7 +545,7 @@ class WorkflowRun(RecordRefMixin, AngeeDataModel, concrete=True):
         records: list[Any] | None = None,
         notes: list[dict[str, str]] | None = None,
     ) -> None:
-        """Settle an attempt, plan the graph and write this held run's state.
+        """Settle an attempt, plan the graph and write this locked run's state.
 
         Settlement and planning have their own savepoints, so a bad plan cannot
         poison the transaction that records the failure. A terminal run only keeps
@@ -579,7 +609,7 @@ class WorkflowRun(RecordRefMixin, AngeeDataModel, concrete=True):
                 self._write_state(status=status, outcome=outcome, output=output)
 
     def admit_subject(self) -> None:
-        """Lock this held root run's opted-in subject and let it admit the run.
+        """Lock this locked root run's opted-in subject and let it admit the run.
 
         The subject's refusal raises ``ValidationError`` and rolls the caller back.
         """
@@ -587,17 +617,17 @@ class WorkflowRun(RecordRefMixin, AngeeDataModel, concrete=True):
             subject.admit_run(self)
 
     def reopen(self) -> None:
-        """Clear this held run's terminal facts and readmit its subject; the runner replans it."""
+        """Clear this locked run's terminal facts and readmit its subject; the runner replans it."""
         self.admit_subject()
         self._write_state(status=str(RunStatus.RUNNING), outcome="", output={})
 
     def interrupt(self) -> None:
-        """Settle this held run as interrupted by a process restart and close its open steps."""
+        """Settle this locked run as interrupted by a process restart and close its open steps."""
         self._write_state(status=str(RunStatus.INTERRUPTED), outcome=INTERRUPTED_OUTCOME, output={})
         self.step_runs.cancel_open()
 
     def cancel_owned_work(self, *, actor: Any) -> tuple[bool, int]:
-        """Stop this held run's open work, keeping its terminal facts.
+        """Stop this locked run's open work, keeping its terminal facts.
 
         Return whether the run transitioned to canceled and how many open steps closed.
         """
@@ -845,6 +875,15 @@ class WorkflowRun(RecordRefMixin, AngeeDataModel, concrete=True):
             raise ValidationError("The awaited run belongs to a different workflow.")
         if self.pk == observer.pk:
             raise ValidationError("A run cannot await itself.")
+
+    def reprocess_plan(self, from_node: str) -> tuple[list[StepRun], list[StepRun]]:
+        """Split this run's step rows for a reprocess from ``from_node`` (``Definition.reprocess_plan``).
+
+        Return the rows the replacement reuses, then the rows outside the node's
+        reach that run again. The rows are read elevated.
+        """
+        rows = self.step_runs.system_context(reason="workflows.reprocess_plan").order_by("rank", "map_index", "pk")
+        return self.policy_version.definition.reprocess_plan(rows, from_node)
 
     def can_reprocess(self, actor: Any) -> bool:
         """Reprocessing needs terminal execution, run write and workflow start access."""
@@ -1216,6 +1255,33 @@ class StepRun(AngeeDataModel, concrete=True):
         """Whether ``actor`` may reprocess this row's run from its node."""
         return self.starts_reprocess and self.run.can_reprocess(actor)
 
+    @property
+    def reprocess_reruns(self) -> list[str]:
+        """The labels of the nodes a reprocess from this row's node runs again, in execution order.
+
+        That is the node, every node it reaches, and each node outside its reach whose
+        row is not reused; empty when no reprocess can start here.
+        """
+        if not self.starts_reprocess:
+            return []
+        definition = self.run.policy_version.definition
+        _reused, again = self.run.reprocess_plan(self.node_key)
+        nodes = definition.descendants(self.node_key) | {declared_node_key(row.node_key) for row in again}
+        return [definition.node_label(key) for key in sorted(nodes, key=definition.ranks.__getitem__)]
+
+    @property
+    def reprocess_requires_duplicate_acknowledgement(self) -> bool:
+        """Whether a step outside this node's reach that runs again may already have made an external effect.
+
+        The node and what it reaches run again by the operator's choice; a row outside
+        that reach reruns only because it never settled, so its possible duplicate
+        effect needs the same acknowledgement a retry does.
+        """
+        if not self.starts_reprocess:
+            return False
+        _reused, again = self.run.reprocess_plan(self.node_key)
+        return any(row.requires_duplicate_acknowledgement for row in again)
+
     class Meta:
         """Django options for node identity, fences and tick predicates."""
 
@@ -1387,9 +1453,11 @@ class Trigger(ImplementationChoicesMixin, ResourceLoadMixin, AngeeDataModel, con
 
     An ``extends`` donor implementing ``trigger_input`` or ``check_admission``
     declares ``trigger_sources`` as registered source keys. Admission runs all
-    matching guards and accepts at most one matching input builder; a schedule
-    passes them no record. A record source names a model and condition; a
-    scheduled source names a recurrence instead.
+    matching guards and accepts at most one matching input builder. A record
+    source names a model and condition and passes its hooks the record; a
+    scheduled source names a recurrence and passes ``record=None`` with the
+    keyword ``occurrence``, the aware instant being admitted, so a digest can bind
+    its window.
     """
 
     resource_class = TriggerResource
@@ -1403,13 +1471,15 @@ class Trigger(ImplementationChoicesMixin, ResourceLoadMixin, AngeeDataModel, con
     """Targets this trigger contributes to the workflow principal's direct tuples."""
     disabled_reason = DiagnosticTextField(blank=True, default="", editable=False)
     enabled_at = models.DateTimeField(null=True, blank=True, editable=False)
-    """When the current enablement began; a schedule records no occurrence before it."""
+    """When the current enablement began; a schedule admits no occurrence before it."""
     recurrence = RecurrenceField()
     """A schedule's RFC-5545 rule; a blank rule runs once, at its start."""
     recurrence_start = models.DateTimeField(null=True, blank=True)
-    """A schedule's first occurrence (its DTSTART), from which the rule unrolls."""
-    recurrence_zone = models.CharField(max_length=64, blank=True, default="")
-    """The IANA zone a schedule's rule unrolls in; validation accepts only blank, the project ``TIME_ZONE``."""
+    """A schedule's DTSTART: the rule unrolls from it and takes the parts it omits from it."""
+    recurrence_zone = TimeZoneField()
+    """The IANA zone a schedule's wall-clock rule unrolls in; blank is the project ``TIME_ZONE``."""
+    next_occurrence_at = models.DateTimeField(null=True, blank=True, editable=False)
+    """An enabled schedule's next unrecorded occurrence: the tick's cursor, empty once the rule ends."""
     objects = TriggerManager()
 
     @classmethod
@@ -1484,10 +1554,8 @@ class Trigger(ImplementationChoicesMixin, ResourceLoadMixin, AngeeDataModel, con
             if self.model_label or self.condition:
                 raise ValidationError("A schedule admits no record; leave its model and condition empty.")
             if self.recurrence_start is None:
-                raise ValidationError({"recurrence_start": "A schedule needs its first occurrence."})
-            if self.recurrence_zone:
-                raise ValidationError({"recurrence_zone": "Leave the zone blank: a schedule unrolls in the "
-                                                          "project time zone."})
+                raise ValidationError({"recurrence_start": "A schedule needs its start."})
+            validate_zone_name(self.recurrence_zone)
             Recurrence(self.recurrence).validate()
             if self.workflow.subject_model:
                 raise ValidationError("A schedule starts runs without a subject; this workflow requires one.")
@@ -1499,12 +1567,12 @@ class Trigger(ImplementationChoicesMixin, ResourceLoadMixin, AngeeDataModel, con
             raise ValidationError("The trigger source does not match the workflow subject model.")
         return model, GraphQLSchemas.from_discovery().resource_filter(model, self.condition)
 
-    def trigger_input(self, record: Any) -> dict[str, Any]:
+    def trigger_input(self, record: Any, *, occurrence: datetime | None = None) -> dict[str, Any]:
         """Domain extensions build admitted input; source adapters never do."""
         return {}
 
-    def check_admission(self, record: Any, *, actor: Any) -> None:
-        """Domain extensions may reject this record without disabling the trigger."""
+    def check_admission(self, record: Any, *, actor: Any, occurrence: datetime | None = None) -> None:
+        """Domain extensions may reject this record or occurrence without disabling the trigger."""
 
     def _trigger_hooks(self, name: str) -> list[Any]:
         """Select only source-declared donor hooks in stable order; reject ambiguous input."""
@@ -1523,35 +1591,67 @@ class Trigger(ImplementationChoicesMixin, ResourceLoadMixin, AngeeDataModel, con
             raise ImproperlyConfigured("Multiple trigger_input hooks contribute to this source.")
         return [hook for _, hook in hooks]
 
-    def admission_input(self, record: Any) -> dict[str, Any]:
-        """Build source-specific input from at most one declared domain contributor."""
-        hooks = self._trigger_hooks("trigger_input")
-        return hooks[0](self, record) if hooks else Trigger.trigger_input(self, record)
+    def admission_input(self, record: Any, *, occurrence: datetime | None = None) -> dict[str, Any]:
+        """Build source-specific input from at most one declared domain contributor.
 
-    def admit_record(self, record: Any, *, actor: Any) -> None:
+        Hooks of a record source receive the record; a schedule's receive ``None`` and
+        its ``occurrence``.
+        """
+        hooks = self._trigger_hooks("trigger_input")
+        extra = {} if occurrence is None else {"occurrence": occurrence}
+        return hooks[0](self, record, **extra) if hooks else Trigger.trigger_input(self, record, **extra)
+
+    def admit_record(self, record: Any, *, actor: Any, occurrence: datetime | None = None) -> None:
         """Apply every source-specific domain admission policy."""
         hooks = self._trigger_hooks("check_admission")
+        extra = {} if occurrence is None else {"occurrence": occurrence}
         if hooks:
             for hook in hooks:
-                hook(self, record, actor=actor)
+                hook(self, record, actor=actor, **extra)
         else:
-            Trigger.check_admission(self, record, actor=actor)
+            Trigger.check_admission(self, record, actor=actor, **extra)
+
+    def next_occurrence(self, after: datetime) -> datetime | None:
+        """Return this schedule's first occurrence strictly after ``after``, or ``None`` once the rule ends."""
+        if self.recurrence_start is None:
+            return None
+        return Recurrence(self.recurrence).get_occurrence_after(
+            self.recurrence_start, after, zone=self.recurrence_zone,
+        )
 
     def due_occurrences(self, until: datetime) -> list[datetime]:
-        """Return this schedule's unrecorded occurrences from its enablement up to ``until``.
+        """Return the occurrences from the cursor up to and including ``until``, at most one page.
 
-        The window opens at the later of :attr:`enabled_at` and the last recorded
-        occurrence, which is excluded, and closes before ``until``: occurrences
-        while the trigger was disabled are never due. A rule without a first
-        occurrence has none.
+        :attr:`next_occurrence_at` is the first of them; a longer catch-up resumes
+        next tick from the cursor the caller moves past the last one returned.
         """
-        if self.recurrence_start is None:
+        cursor = self.next_occurrence_at
+        if cursor is None or cursor > until or self.recurrence_start is None:
             return []
-        events = apps.get_model("workflows", "TriggerEvent").system_queryset()
-        last = events.filter(trigger=self).aggregate(last=models.Max("occurs_at"))["last"]
-        opened = max((moment for moment in (self.enabled_at, last) if moment is not None), default=until)
-        moments = Recurrence(self.recurrence).occurrences(self.recurrence_start, opened, until)
-        return [moment for moment in moments if last is None or moment > last]
+        following = Recurrence(self.recurrence).occurrences_after(
+            self.recurrence_start, cursor, until, zone=self.recurrence_zone, limit=SCHEDULE_PAGE_LIMIT - 1,
+        )
+        return [cursor, *following]
+
+    def validate_enablement(self, moment: datetime) -> datetime | None:
+        """Refuse a schedule that would never run or could not start its workflow; return its first occurrence.
+
+        A schedule must occur after ``moment``, which refuses a one-off start already
+        past and an ended or never-matching rule, and its workflow must accept the
+        input it would be admitted with. A record source returns ``None``.
+        """
+        if not self.source_class.scheduled:
+            return None
+        first = self.next_occurrence(moment)
+        if first is None:
+            raise ValidationError(
+                "The schedule never occurs after now: its start has passed, its rule has ended, "
+                "or its rule matches no date."
+            )
+        published = self.workflow.published
+        if published is not None:
+            published.definition.validate_input(self.admission_input(None, occurrence=first))
+        return first
 
     def clean(self) -> None:
         """Validate authoring and require disabling before changing an enabled rule."""
@@ -1559,7 +1659,10 @@ class Trigger(ImplementationChoicesMixin, ResourceLoadMixin, AngeeDataModel, con
         self.model_label = "" if self.source_class.model_label else ModelLabelField.normalize(self.model_label)
         self.validate_configuration()
         previous = type(self).system_queryset().filter(pk=self.pk).first() if self.pk else None
+        # Engine-owned activation facts come from the stored row, never from a stale instance.
         self.granted_targets = previous.granted_targets if previous is not None else []
+        self.enabled_at = previous.enabled_at if previous is not None else None
+        self.next_occurrence_at = previous.next_occurrence_at if previous is not None else None
         if previous is not None and self.workflow_id != previous.workflow_id:
             raise ValidationError("A trigger's workflow cannot be changed.")
         if self.enabled and (previous is None or not previous.enabled):
@@ -1590,10 +1693,14 @@ class Trigger(ImplementationChoicesMixin, ResourceLoadMixin, AngeeDataModel, con
             self.clean()
             self.workflow.require_access("write", self.actor())
             if not self.enabled:
-                self.enabled_at = None
+                self.enabled_at = self.next_occurrence_at = None
                 if kwargs.get("update_fields") is not None:
-                    kwargs["update_fields"] = {*kwargs["update_fields"], "enabled", "disabled_reason", "enabled_at"}
+                    kwargs["update_fields"] = {
+                        *kwargs["update_fields"], "enabled", "disabled_reason", "enabled_at", "next_occurrence_at",
+                    }
             super().save(*args, **kwargs)
+            if previous is not None and previous.enabled and not self.enabled:
+                apps.get_model("workflows", "TriggerEvent").objects.skip_pending_occurrences(self)
             if previous is not None and previous.granted_targets and not self.enabled:
                 type(self).objects.reconcile_grants(self, ())
 
@@ -1618,6 +1725,10 @@ class Trigger(ImplementationChoicesMixin, ResourceLoadMixin, AngeeDataModel, con
 
         abstract = True
         rebac_resource_type = "workflows/trigger"
+        indexes = [models.Index(
+            fields=("next_occurrence_at",), condition=models.Q(enabled=True, next_occurrence_at__isnull=False),
+            name="workflows_trigger_cursor",
+        )]
 
 
 class TriggerEvent(RecordRefMixin, AngeeDataModel, concrete=True):
@@ -1655,7 +1766,8 @@ class TriggerEvent(RecordRefMixin, AngeeDataModel, concrete=True):
         constraints = [models.UniqueConstraint(
             fields=("trigger", "record_content_type", "record_object_id"), name="workflows_trigger_record_unique",
         ), models.UniqueConstraint(
-            fields=("trigger", "occurs_at"), name="workflows_trigger_occurrence_unique",
+            fields=("trigger", "occurs_at"), condition=models.Q(occurs_at__isnull=False),
+            name="workflows_trigger_occurrence_unique",
         ), models.CheckConstraint(
             condition=models.Q(admitted_at__isnull=True) | models.Q(evaluated_at__isnull=False),
             name="workflows_event_admission_evaluated",
@@ -1669,6 +1781,6 @@ class TriggerEvent(RecordRefMixin, AngeeDataModel, concrete=True):
             name="workflows_event_record_or_occurrence",
         )]
         indexes = [models.Index(
-            fields=("changed_at", "id"), condition=models.Q(admitted_at__isnull=True),
+            fields=("changed_at", "id"), condition=models.Q(admitted_at__isnull=True, skipped_at__isnull=True),
             name="workflows_event_pending",
         )]

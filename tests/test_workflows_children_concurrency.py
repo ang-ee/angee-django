@@ -106,7 +106,7 @@ def test_prune_skips_locked_terminal_continuation_until_child_is_pruned(child_gr
     entered, release = Event(), Event()
 
     def hold_continuation():
-        with WorkflowRun.objects.hold(child.pk):
+        with WorkflowRun.objects.lock_run(child.pk):
             entered.set()
             assert release.wait(10)
 

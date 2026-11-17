@@ -52,7 +52,6 @@ from angee.workflows.states import (
     ERROR_OUTCOME,
     AttemptResult,
     NodeKey,
-    NoteTone,
     RunOrigin,
     RunRelation,
     RunStatus,
@@ -495,8 +494,8 @@ class WorkflowRunQuerySet[T: WorkflowRun](AngeeQuerySet[T]):
             )
 
     @contextmanager
-    def hold(self, run_id: int, *, skip_locked: bool = False, timeout: timedelta | None = None) -> Iterator[Any]:
-        """Lock one run and dispatch once for the outermost hold after commit.
+    def lock_run(self, run_id: int, *, skip_locked: bool = False, timeout: timedelta | None = None) -> Iterator[Any]:
+        """Lock one run and dispatch once for the outermost lock after commit.
 
         Register at context exit. Robust callbacks log delivery failures without
         suppressing later publications from enclosing parent/child transactions;
@@ -512,7 +511,7 @@ class WorkflowRunQuerySet[T: WorkflowRun](AngeeQuerySet[T]):
         previous = held.copy()
         try:
             with transaction.atomic():
-                with system_context(reason="workflows.hold"), (
+                with system_context(reason="workflows.lock_run"), (
                     database_timeout(timeout, setting="lock_timeout") if timeout is not None else nullcontext()
                 ), (transaction.atomic() if timeout is not None else nullcontext()):
                     run = self.filter(pk=run_id).lock_if_supported(no_key=True, skip_locked=skip_locked).first()
@@ -536,16 +535,18 @@ class WorkflowRunQuerySet[T: WorkflowRun](AngeeQuerySet[T]):
                 _held_runs.reset(token)
 
     @contextmanager
-    def hold_owned(self, run_id: int, *, skip_locked: bool = False, timeout: timedelta | None = None) -> Iterator[Any]:
-        """Hold an owned tree ancestor first, admitting no new child behind a held parent."""
-        with ExitStack() as stack, system_context(reason="workflows.hold_owned"):
-            root = stack.enter_context(self.hold(run_id, skip_locked=skip_locked, timeout=timeout))
+    def lock_owned_runs(
+        self, run_id: int, *, skip_locked: bool = False, timeout: timedelta | None = None,
+    ) -> Iterator[Any]:
+        """Lock an owned tree ancestor first, admitting no new child behind a locked parent."""
+        with ExitStack() as stack, system_context(reason="workflows.lock_owned_runs"):
+            root = stack.enter_context(self.lock_run(run_id, skip_locked=skip_locked, timeout=timeout))
             runs = [] if root is None else [root]
             for run in runs:
                 children = list(self.filter(parent_step__run=run, relation=RunRelation.OWNED)
                                 .order_by("pk").values_list("pk", flat=True))
                 for child_id in children:
-                    child = stack.enter_context(self.hold(child_id, skip_locked=skip_locked, timeout=timeout))
+                    child = stack.enter_context(self.lock_run(child_id, skip_locked=skip_locked, timeout=timeout))
                     if child is None:
                         yield []
                         return
@@ -605,8 +606,8 @@ class WorkflowRunManager[T: WorkflowRun](_WorkflowRunManagerBase[T]):
         """Insert the pinned version, origin and sole cause together, or replay the same request.
 
         A reprocess ``from_node`` runs on the reprocessed run's version and starts
-        with copies of the steps that node cannot reach (``Definition.reusable_rows``),
-        each noting its reuse; the first plan then readies the node.
+        with copies of the rows ``Definition.reprocess_plan`` reuses; the first plan
+        then readies the node and every other row that runs again.
         """
 
         actor = workflow.require_access("start", actor)
@@ -625,7 +626,7 @@ class WorkflowRunManager[T: WorkflowRun](_WorkflowRunManagerBase[T]):
                   RunOrigin.TRIGGER if trigger_event is not None else RunOrigin.MANUAL)
         payload = {} if input is None else input
         with transaction.atomic(), (
-            self.hold(parent_step.run_id) if parent_step is not None else nullcontext(None)
+            self.lock_run(parent_step.run_id) if parent_step is not None else nullcontext(None)
         ) as parent, system_context(reason="workflows.start"):
             if parent_step is not None:
                 if parent is None:
@@ -673,7 +674,7 @@ class WorkflowRunManager[T: WorkflowRun](_WorkflowRunManagerBase[T]):
                 if version.pk != reprocess_of.version_id:
                     raise ValidationError("A reprocess from a node runs on the reprocessed run's version.")
                 prior = reprocess_of.step_runs.system_context(reason="workflows.start")
-                reused = version.definition.reusable_rows(prior.order_by("rank", "map_index", "pk"), from_node)
+                reused, _again = version.definition.reprocess_plan(prior.order_by("rank", "map_index", "pk"), from_node)
             principal_workflow = (
                 apps.get_model("workflows", "Workflow").system_queryset().filter(user_id=principal_id).first()
                 if principal_id is not None else None
@@ -708,12 +709,11 @@ class WorkflowRunManager[T: WorkflowRun](_WorkflowRunManagerBase[T]):
             )
             if reused:
                 steps = run.step_runs.system_context(reason="workflows.start")
-                reuse = {"tone": str(NoteTone.INFO), "message": f"Reused from {reprocess_of}."}
                 steps.bulk_create([steps.model(
                     run=run, node_key=row.node_key, map_index=row.map_index, rank=row.rank, status=row.status,
-                    outcome=row.outcome, input=row.input, output=row.output, notes=[*row.notes, reuse],
+                    outcome=row.outcome, input=row.input, output=row.output, notes=row.notes,
                 ) for row in reused])
-            with self.hold(run.pk) as locked:
+            with self.lock_run(run.pk) as locked:
                 locked.admit_subject()
                 runner.advance(locked)
             return locked.with_actor(actor)
@@ -727,7 +727,7 @@ class WorkflowRunManager[T: WorkflowRun](_WorkflowRunManagerBase[T]):
             awaited = parent.step_runs.exclude(awaited_run_id=None).values("awaited_run_id")
             abandoned = self.filter(parent_step__run=parent, relation=RunRelation.OWNED).exclude(pk__in=awaited)
             for child_id in abandoned.order_by("pk").values_list("pk", flat=True):
-                with self.hold_owned(child_id) as children:
+                with self.lock_owned_runs(child_id) as children:
                     self._cancel_locked(children, actor=parent.run_as)
 
     def reap_interrupted(self) -> int:
@@ -737,7 +737,7 @@ class WorkflowRunManager[T: WorkflowRun](_WorkflowRunManagerBase[T]):
         with system_context(reason="workflows.reap_interrupted"):
             candidates = list(self.filter(status=RunStatus.RUNNING).order_by("-pk").values_list("pk", flat=True))
             for run_id in candidates:
-                with self.hold(run_id, skip_locked=True) as run:
+                with self.lock_run(run_id, skip_locked=True) as run:
                     if run is None or run.status != RunStatus.RUNNING:
                         continue
                     run.interrupt()
@@ -761,27 +761,36 @@ class WorkflowRunManager[T: WorkflowRun](_WorkflowRunManagerBase[T]):
             return Cancellation(False, 0)
         actor = run.require_access("write", actor)
         try:
-            with self.hold_owned(run.pk, timeout=timeout) as runs:
+            with self.lock_owned_runs(run.pk, timeout=timeout) as runs:
                 return self._cancel_locked(runs, actor=actor or runs[0].run_as)
         except OperationalError as error:
             if sqlstate(error) == "55P03":
                 raise ValidationError("The run is still running; retry cancellation.") from error
             raise
 
-    def reprocess(self, run: Any, *, actor: Any = None, from_node: str | None = None) -> Any:
+    def reprocess(
+        self, run: Any, *, actor: Any = None, from_node: str | None = None, accept_duplicate: bool = False,
+    ) -> Any:
         """Reprocess a terminal run as its requesting operator; the retained run never changes.
 
         The replacement runs on the current publication. From a node, it runs on the
-        retained run's version instead: that node and every node it reaches run
-        again, and the settled steps it cannot reach are reused. The node must be a
-        declared step of the run that ran.
+        retained run's version instead, under ``Definition.reprocess_plan``: the node,
+        every node it reaches and every unsettled row outside that reach run again,
+        and the other settled rows are reused. The node must be a declared step of
+        the run that ran; a rerun row outside its reach that may already have made an
+        external effect requires ``accept_duplicate``. A run with an open replacement
+        refuses another, so a repeated request cannot start two.
         """
 
         actor = run.require_access("write", actor)
-        with self.hold(run.pk) as retained:
+        if accept_duplicate and actor is None:
+            raise PermissionDenied("A duplicate-effect acknowledgement requires an actor.")
+        with self.lock_run(run.pk) as retained:
             with system_context(reason="workflows.reprocess"):
                 if not retained.is_terminal:
                     raise ValidationError("Only terminal runs can be reprocessed.")
+                if self.filter(reprocess_of=retained).exclude(status__in=RunStatus.terminal_values()).exists():
+                    raise ValidationError("A replacement of this run is still open; let it finish or stop it first.")
                 workflow = retained.version.workflow
                 model = retained.subject_model_class
                 subject = model.system_queryset().get(pk=retained.subject_object_id) if model is not None else None
@@ -790,6 +799,12 @@ class WorkflowRunManager[T: WorkflowRun](_WorkflowRunManagerBase[T]):
                     step = retained.step_runs.filter(node_key=from_node, map_index=0).first()
                     if step is None or not step.starts_reprocess:
                         raise ValidationError("A reprocess starts at a step of the run that ran.")
+                    step.run = retained
+                    if step.reprocess_requires_duplicate_acknowledgement and not accept_duplicate:
+                        raise ValidationError(
+                            "A step that runs again may already have made an external effect; "
+                            "accept a possible duplicate to reprocess from here."
+                        )
                     version = retained.version
             return self.start(
                 workflow, actor=actor, subject=subject, input=retained.input, reprocess_of=retained,
@@ -803,7 +818,10 @@ class WorkflowRunManager[T: WorkflowRun](_WorkflowRunManagerBase[T]):
             candidates = list(self.retention_candidates().order_by("finished_at", "pk")
                               .values_list("pk", flat=True)[:PRUNE_BATCH_LIMIT])
             for run_id in candidates:
-                with isolate_failure(f"prune candidate {run_id}"), self.hold_owned(run_id, skip_locked=True) as runs:
+                with (
+                    isolate_failure(f"prune candidate {run_id}"),
+                    self.lock_owned_runs(run_id, skip_locked=True) as runs,
+                ):
                     if not runs or not self.retention_candidates().filter(pk=run_id).exists():
                         continue
                     try:
@@ -816,7 +834,7 @@ class WorkflowRunManager[T: WorkflowRun](_WorkflowRunManagerBase[T]):
                             continuation_ids = self.filter(
                                 parent_step__run_id__in=ids, relation=RunRelation.CONTINUATION,
                             ).order_by("pk").values_list("pk", flat=True)
-                            continuations = [continuation_locks.enter_context(self.hold(pk, skip_locked=True))
+                            continuations = [continuation_locks.enter_context(self.lock_run(pk, skip_locked=True))
                                              for pk in continuation_ids]
                             if any(run is None or not run.is_terminal for run in [*runs, *continuations]):
                                 raise ProtectedError("A descendant is still running.", runs)
@@ -951,6 +969,18 @@ class StepRunQuerySet[T: StepRun](AngeeQuerySet[T]):
     def nodes(self) -> Any:
         """Select declared node rows, excluding map item rows."""
         return self.exclude(node_key__endswith=MAP_BODY_SUFFIX)
+
+    def holding(self, *holds: str) -> Any:
+        """Select rows holding one of ``holds`` (any reader-facing hold when none is named), annotated ``_hold``.
+
+        The rows' state narrows the set first (``StepRun.hold_states``), so the full
+        hold rule, with its routed-failure check, evaluates only rows that can hold.
+        """
+        narrowed = Q(pk__in=[])
+        for (status, kind), hold in self.model.hold_states.items():
+            if not holds or hold in holds:
+                narrowed |= Q(status=status, waiting_kind=kind)
+        return self.filter(narrowed).annotate(_hold=self.model.hold_expression()).filter(_hold__isnull=False)
 
     def graph_rows(self) -> Any:
         """Project failure reasons and map progress without loading row payloads."""
@@ -1235,7 +1265,7 @@ class StepRunManager[T: StepRun](_StepRunManagerBase[T]):
 
     def retry_step(self, step_run: Any, *, actor: Any = None, accept_duplicate: bool = False) -> Any:
         """Retry one failed or operator-waiting node, retaining all settled evidence."""
-        with self.run_model.objects.hold(step_run.run_id) as run:
+        with self.run_model.objects.lock_run(step_run.run_id) as run:
             if run is None:
                 raise ValidationError("The workflow run no longer exists.")
             actor = run.require_access("write", actor)

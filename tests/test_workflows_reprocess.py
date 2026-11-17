@@ -3,19 +3,66 @@
 from types import SimpleNamespace
 
 import pytest
+from billiard.exceptions import SoftTimeLimitExceeded
 from django.core.exceptions import PermissionDenied, ValidationError
+from pydantic import BaseModel
 from rebac import actor_context
 
 from angee.graphql.testing.documents import execute_schema, result_data
 from angee.workflows import schema as workflow_schema
 from angee.workflows.definition import Definition
 from angee.workflows.states import RunOrigin, RunStatus, StepRunStatus
+from angee.workflows.steps import Step, StepMode
 from angee.workflows.testing.drivers import load_workflow, publish_draft, run_until, start_run
 from angee.workflows.testing.models import StepAttempt, StepRun, WorkflowRun
 from tests.conftest import addon_schema, create_user
-from tests.workflow_steps import document
+from tests.workflow_steps import Value, document
+
+
+class Items(BaseModel):
+    """A list of scalar items for a map."""
+
+    items: list[Value]
+
 
 pytestmark = [pytest.mark.django_db, pytest.mark.usefixtures("workflow_step_classes")]
+
+class Produce(Step[None, Items, None]):
+    """Emit three items for the map."""
+
+    key = "reprocess_produce"
+
+    def run(self, ctx):
+        return ctx.done({"items": [{"value": 0}, {"value": 1}, {"value": 2}]})
+
+
+class ItemFails(Step[Value, Value, None]):
+    """Fail the third item so the map never settles."""
+
+    key = "reprocess_item_fails"
+
+    def run(self, ctx):
+        return ctx.fail("The third item fails.") if ctx.input.value == 2 else ctx.done(ctx.input)
+
+
+class Side(Step[None, None, None]):
+    """A sibling branch beside the map."""
+
+    key = "reprocess_side"
+
+    def run(self, ctx):
+        return ctx.done({})
+
+
+MAPPED = {
+    "nodes": {
+        "start": {"step": Produce.key, "next": {"done": ["items", "side"]}},
+        "items": {"step": "map", "label": "Items", "body": {"step": ItemFails.key},
+                  "input": {"items": {"from": "start", "path": ["items"]}}},
+        "side": {"step": Side.key, "label": "Side", "input": {}},
+    },
+    "results": [{"from": "side"}],
+}
 
 FORK = {
     "nodes": {
@@ -56,7 +103,7 @@ def test_reprocess_from_a_step_reuses_what_it_cannot_reach_and_reruns_the_rest(e
     for key in ("entry", "right"):
         assert copied[key].status == StepRunStatus.SUCCEEDED and copied[key].attempt == 0
         assert copied[key].output == rows(run)[key].output
-        assert copied[key].notes[-1] == {"tone": "info", "message": f"Reused from {run}."}
+        assert copied[key].notes == rows(run)[key].notes
         assert copied[key].decision_id is None and copied[key].awaited_run_id is None
     assert copied["left"].status == StepRunStatus.READY
     finished = run_until(replacement)
@@ -78,6 +125,7 @@ def test_reprocess_from_a_step_reruns_an_unrouted_failure_it_cannot_reach(execut
     assert {key: row.status for key, row in rows(from_left).items()} == {
         "entry": StepRunStatus.SUCCEEDED, "left": StepRunStatus.READY, "right": StepRunStatus.READY,
     }
+    assert run_until(from_left).status == RunStatus.FAILED
     from_right = WorkflowRun.objects.reprocess(run, actor=actor, from_node="right")
     reused = rows(from_right)
     assert reused["left"].status == StepRunStatus.SUCCEEDED and reused["left"].attempt == 0
@@ -180,10 +228,99 @@ def test_definition_reuses_routed_settlements_outside_the_rerun_branch():
         row("fallback", StepRunStatus.SUCCEEDED, "done"), row("open", StepRunStatus.WAITING),
     ]
     assert definition.descendants("guarded") == {"guarded", "fallback"}
-    assert [item.node_key for item in definition.reusable_rows(retained_rows, "open")] == [
-        "entry", "guarded", "fallback",
-    ]
-    assert [item.node_key for item in definition.reusable_rows(retained_rows, "fallback")] == ["entry", "guarded"]
-    assert definition.reusable_rows(retained_rows, "entry") == []
+    def plan(node):
+        reused, again = definition.reprocess_plan(retained_rows, node)
+        return [item.node_key for item in reused], [item.node_key for item in again]
+
+    assert plan("open") == (["entry", "guarded", "fallback"], [])
+    assert plan("fallback") == (["entry", "guarded"], ["open"])
+    assert plan("entry") == ([], [])
     with pytest.raises(ValidationError, match="declared node"):
-        definition.reusable_rows(retained_rows, "missing")
+        definition.reprocess_plan(retained_rows, "missing")
+
+
+def test_definition_reuses_map_items_only_with_their_reused_map():
+    definition = Definition.model_validate(MAPPED)
+
+    def row(key, status, index=0, outcome="done"):
+        return SimpleNamespace(node_key=key, status=status, outcome=outcome, map_index=index)
+
+    unsettled = [
+        row("start", StepRunStatus.SUCCEEDED), row("items", StepRunStatus.WAITING, outcome=""),
+        row("items.body", StepRunStatus.SUCCEEDED, 0), row("items.body", StepRunStatus.FAILED, 1, "error"),
+        row("side", StepRunStatus.SUCCEEDED),
+    ]
+    reused, again = definition.reprocess_plan(unsettled, "side")
+    assert [item.node_key for item in reused] == ["start"]
+    assert [(item.node_key, item.map_index) for item in again] == [("items", 0), ("items.body", 0), ("items.body", 1)]
+    settled = [*unsettled[:1], row("items", StepRunStatus.SUCCEEDED), *unsettled[2:3], unsettled[-1]]
+    reused, again = definition.reprocess_plan(settled, "side")
+    assert [(item.node_key, item.map_index) for item in reused] == [("start", 0), ("items", 0), ("items.body", 0)]
+    assert again == []
+
+
+def test_reprocess_from_a_sibling_reruns_an_unsettled_map_without_its_old_items(execution, register_step):
+    actor, _sent = execution
+    for step in (Produce, ItemFails, Side):
+        register_step(step)
+    workflow = load_workflow(MAPPED, key="map-reprocess", actor=actor)
+    run = run_until(start_run(workflow, actor=actor))
+    assert run.status == RunStatus.FAILED and rows(run)["items"].status == StepRunStatus.WAITING
+    replacement = WorkflowRun.objects.reprocess(run, actor=actor, from_node="side")
+    planned = {(row.node_key, row.map_index): (row.status, row.attempt)
+               for row in StepRun.system_queryset().filter(run=replacement)}
+    assert planned == {
+        ("start", 0): (StepRunStatus.SUCCEEDED, 0), ("items", 0): (StepRunStatus.READY, 0),
+        ("side", 0): (StepRunStatus.READY, 0),
+    }
+    assert rows(run)["side"].reprocess_reruns == ["Items", "Side"]
+
+
+def test_a_run_with_an_open_replacement_refuses_another_reprocess(execution):
+    actor, _sent = execution
+    run = run_until(start_run(load_workflow(document("entry"), key="double-source", actor=actor), actor=actor))
+    first = WorkflowRun.objects.reprocess(run, actor=actor, from_node="entry")
+    for repeat in ({"from_node": "entry"}, {}):
+        with pytest.raises(ValidationError, match="still open"):
+            WorkflowRun.objects.reprocess(run, actor=actor, **repeat)
+    assert WorkflowRun.system_queryset().filter(reprocess_of=run).count() == 1
+    assert run_until(first).status == RunStatus.SUCCEEDED
+    assert WorkflowRun.objects.reprocess(run, actor=actor).reprocess_of_id == run.pk
+
+
+def test_the_rerun_set_names_the_node_its_reach_and_unsettled_rows_outside_it(execution):
+    actor, _sent = execution
+    failing = {**FORK, "nodes": {**FORK["nodes"], "right": {"step": "reject", "next": {"done": "join"}}}}
+    run = run_until(start_run(load_workflow(failing, key="fork-reruns", actor=actor), actor=actor))
+    steps = rows(run)
+    assert steps["left"].reprocess_reruns == ["Left", "Right", "Join"]
+    assert steps["right"].reprocess_reruns == ["Right", "Join"]
+    assert steps["entry"].reprocess_reruns == ["Entry", "Left", "Right", "Join"]
+    assert not steps["left"].reprocess_requires_duplicate_acknowledgement
+
+
+@pytest.mark.django_db(transaction=True)
+def test_a_possible_duplicate_outside_the_reach_needs_acknowledgement(execution, register_step):
+    actor, _sent = execution
+
+    class Uncertain(Step[Value, Value, None]):
+        """Mark an external effect, then time out without settling it."""
+
+        key = "reprocess_uncertain"
+        mode = StepMode.IO
+        effect_idempotent = False
+
+        def run(self, ctx):
+            ctx.begin_effect()
+            raise SoftTimeLimitExceeded()
+
+    register_step(Uncertain)
+    effectful = {**FORK, "nodes": {**FORK["nodes"], "right": {"step": Uncertain.key, "next": {"done": "join"}}}}
+    run = run_until(start_run(load_workflow(effectful, key="fork-uncertain", actor=actor), actor=actor))
+    left = rows(run)["left"]
+    assert run.status == RunStatus.FAILED and left.reprocess_requires_duplicate_acknowledgement
+    with pytest.raises(ValidationError, match="possible duplicate"):
+        WorkflowRun.objects.reprocess(run, actor=actor, from_node="left")
+    replacement = WorkflowRun.objects.reprocess(run, actor=actor, from_node="left", accept_duplicate=True)
+    assert set(rows(replacement)) == {"entry", "left", "right"}
+    assert not rows(run)["right"].reprocess_requires_duplicate_acknowledgement

@@ -52,6 +52,7 @@ export function TriggersList({ workflowId }: { workflowId?: string }) {
         <Field name="recurrence_zone" label={t("trigger.recurrenceZone")} defaultValue="" showWhen={scheduled} />
         <Field name="enabled" label={t("trigger.enabled")} readOnly widget="boolean" />
         <Field name="enabled_at" label={t("trigger.enabledAt")} readOnly showWhen={(row) => Boolean(row.enabled_at)} />
+        <Field name="next_occurrence_at" label={t("trigger.nextOccurrence")} readOnly showWhen={(row) => scheduled(row) && Boolean(row.next_occurrence_at)} />
       </Group>
       <Field name="disabled_reason" label={t("trigger.disabledReason")} readOnly widget="textarea" showWhen={(row) => Boolean(row.disabled_reason)} />
       <Action id="enable" label={t("trigger.enable")} placement="toolbar" primary

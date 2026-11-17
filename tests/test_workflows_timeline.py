@@ -363,9 +363,22 @@ def test_three_holds_are_queryable(schema, review, child_graph, register_step):
     assert {run: WorkflowRun.system_queryset().get(sqid=run).hold for run in expected} == expected
     # The incidents view: runs held on an operator's error or on another run.
     incidents = result_data(execute_schema(
-        schema, 'query { workflowrun(where: {hold: {_in: ["error", "run"]}}) { id hold } }', user=actor,
+        schema, "query { workflowrun(where: {is_incident: {_eq: true}}) { id hold } }", user=actor,
     ))["workflowrun"]
     assert {row["id"]: row["hold"] for row in incidents} == {parent.sqid: "run", failed.sqid: "error"}
+    by_hold = result_data(execute_schema(
+        schema, 'query { workflowrun(where: {hold: {_in: ["error", "run"]}}) { id } }', user=actor,
+    ))["workflowrun"]
+    assert {row["id"] for row in by_hold} == {parent.sqid, failed.sqid}
+    # A replacement drains its predecessor's hold and carries its own.
+    replacement = WorkflowRun.objects.reprocess(failed, actor=actor)
+    run_until(replacement)
+    assert WorkflowRun.system_queryset().get(pk=failed.pk).hold is None
+    assert WorkflowRun.system_queryset().get(pk=replacement.pk).hold == "error"
+    incidents = result_data(execute_schema(
+        schema, "query { workflowrun(where: {is_incident: {_eq: true}}) { id } }", user=actor,
+    ))["workflowrun"]
+    assert {row["id"] for row in incidents} == {parent.sqid, replacement.sqid}
 
 
 def test_a_run_holds_on_its_most_urgent_step_hold(review, register_step):
