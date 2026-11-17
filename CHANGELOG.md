@@ -49,34 +49,45 @@ live in code docstrings.
 - `projects` templates: a project with `is_template` is copied by
   `Project.objects.create_from_template(template, idempotency_key=, values=, task=,
   anchors=, role_mapping=)` (idempotent per actor and key; template read and project
-  create). The copy carries the project's tags, its phases through
-  `Milestone.setup_template_values`, its open tasks and subtasks with their tags and
-  relations, and every due rule; dates, statements, grants, participants, bindings,
-  links and files stay behind. `Task.assignee_role` names a consumer's role, which
-  `role_mapping` maps to a person. `Project.created_from_template` records the
-  provenance. Ordinary lists, boards, attention and overdue phases leave templates
-  out; a Templates page lists them. GraphQL: `create_project_from_template`, the
-  project resource's `is_template` and the task resource's `in_template` filter.
+  create, and with `task=` write on the task, whose promoted project is built in one
+  insert under the task's lock). The copy carries its phases through
+  `Milestone.setup_template_values`, its open tasks and subtasks with their audience
+  and relations, the tags (through the new `TagAssignmentManager.copy`) and every due
+  rule; dates, statements, grants, participants, bindings, links and files stay
+  behind. `Task.assignee_role` names a consumer's role, which `role_mapping` maps to
+  a person. `Project.created_from_template` records the provenance. A project with
+  closed tasks or reached phases cannot become a template. Ordinary lists, boards
+  (projects' and work's), My Work, the project picker, attention and overdue phases
+  leave templates out; a Templates page lists them. GraphQL:
+  `create_project_from_template`, the project resource's `is_template` and the task
+  resource's `in_template` filter (a boolean, false for a task about no project).
   Contributors extend `template_copy_values()` on Project, Milestone and Task and
   `validate_template()` on Project.
 - `projects` due dates: `Task` and `Milestone` compose `RuleDatedMixin` (`due_rule`,
   `due_basis`), resolved into `Task.due_date` and the new aware `Task.due_at`, and
   into `Milestone.target_date`, against the project's due anchors (`created` and the
-  named `Project.due_anchors` that `set_due_anchor` records). A hand or stated date
-  wins over the rule; `reset_due_to_rule` hands it back. Completing a task whose rule
-  repeats creates its next task once (`Task.repeated_from`). GraphQL:
+  named `Project.due_anchors` that `set_due_anchor` records). A person's edit or a
+  source's stated `schedule` holds the date (`due_basis.held`), even at the rule's
+  value; `reset_due_to_rule` releases it. Closed tasks and reached milestones keep
+  their dates. Rules over counters are refused, and a rule that cannot resolve when
+  anchors move records why (`due_basis.unresolved`). When a save moves a task to
+  done by any path, a repeating rule creates its next task once
+  (`Task.repeated_from`, `Task.repetition_values()`), due from inputs stored on it;
+  a failed repetition is logged and the completion stands. GraphQL:
   `set_project_due_anchor`, `reset_task_due_to_rule`, `reset_milestone_due_to_rule`,
   and `due_rule`, `due_basis`, `due_status` on tasks and milestones.
-  `MilestoneTemplate` takes a `due_rule`.
+  `MilestoneTemplate` takes a `due_rule`. The task form edits `due_rule` as raw JSON
+  until scheduling ships a rule editor.
 - `projects.Task.recurrence` is removed: a task's repetition is its due rule's
   `repeat`. Projects author
   [`task_recurrence_due_rule`](src/angee/projects/compose_migrations/projects/task_recurrence_due_rule.py)
-  as their next `projects` migration (it adds the task's `due_at`, `due_rule` and
-  `due_basis`, moves each recurrence into "the date set by hand, repeating", with a
-  `COUNT` becoming `UNTIL`, and removes the column), then run `makemigrations` for
-  the release's other columns: `Project.is_template`, `created_from_template`,
-  `due_anchors`; `Milestone.due_rule`, `due_basis`; `Task.assignee_role`,
-  `repeated_from`.
+  as their next `projects` migration. It adds `due_at`, `due_rule` and `due_basis`
+  to the task table and its history table, moves each recurrence into "the date set
+  by hand, repeating" (a `COUNT` becomes the `UNTIL` of its last point, the task's
+  date counting first), skips and counts blank or malformed rules, and removes the
+  column from both; it is irreversible. Then run `makemigrations` for the release's
+  other columns: `Project.is_template`, `created_from_template`, `due_anchors`;
+  `Milestone.due_rule`, `due_basis`; `Task.assignee_role`, `repeated_from`.
 - `angee.scheduling.fields.TimeZoneField` stores an IANA zone name and
   `angee.scheduling.zones.ZoneName` is the same rule for Pydantic inputs; a blank
   zone takes its context's zone and finally the project `TIME_ZONE`, which

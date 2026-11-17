@@ -1,4 +1,4 @@
-import { TASK_MODEL, TaskBoardSurface } from "@angee/projects";
+import { TASK_MODEL, TASKS_OUTSIDE_TEMPLATES, TaskBoardSurface } from "@angee/projects";
 import { Column, ErrorBanner, List, useBreadcrumbLeafLabel, useRouteParam } from "@angee/ui";
 import * as React from "react";
 
@@ -53,6 +53,7 @@ export function CycleBoardPage(): React.ReactElement {
           baseFilter={{
             queue: { exact: queueId },
             cycle: { exact: id },
+            ...TASKS_OUTSIDE_TEMPLATES,
           }}
           order={{ sort_order: "ASC" }}
           laneSource={{

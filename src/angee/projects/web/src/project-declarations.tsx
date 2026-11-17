@@ -1,6 +1,7 @@
 import {
   Action,
   Column,
+  createClientKey,
   Facet,
   Field,
   Form,
@@ -72,8 +73,18 @@ export function useProjectFormDeclaration(
     invalidateModels: [PROJECT_MODEL],
   });
   const settleCreation = useActionResultRun({ linkTo: PROJECT_MODEL });
+  // A retry of the same template reuses its key, so the server replays one creation.
+  const pendingCreation = React.useRef<{ template: string; key: string } | null>(null);
   const createProject = useRecordAction(async (id) => {
-    await settleCreation(() => createFromTemplate(id, { idempotency_key: crypto.randomUUID() }));
+    if (pendingCreation.current?.template !== id) {
+      pendingCreation.current = { template: id, key: createClientKey("project-template") };
+    }
+    const { key } = pendingCreation.current;
+    await settleCreation(async () => {
+      const outcome = await createFromTemplate(id, { idempotency_key: key });
+      if (outcome?.ok) pendingCreation.current = null;
+      return outcome;
+    });
   });
   const verbs = selection.verbs ?? ["pause", "resume", "complete", "drop", "createFromTemplate"];
   const standardActions = <>
@@ -210,10 +221,11 @@ export const PROJECT_TEMPLATES = { is_template: { exact: true } } as const;
 
 /** The project collection's columns, facets and view-specific initial group. */
 export function useProjectListDeclaration(options: Partial<Omit<ListProps, "resource">> = {}): React.ReactElement {
-  const { children, defaultGroups, ...listOptions } = options;
+  const { children, defaultGroups, baseFilter, ...listOptions } = options;
+  // A caller's scope narrows the list; it does not bring templates back.
   return <List resource={PROJECT_MODEL} defaultGroup={{ field: "status" }}
     defaultGroups={{ gantt: null, ...defaultGroups }} order={{ updated_at: "DESC" }}
-    gantt={projectGanttSpec} baseFilter={PROJECTS_OUTSIDE_TEMPLATES} {...listOptions}>
+    gantt={projectGanttSpec} baseFilter={{ ...PROJECTS_OUTSIDE_TEMPLATES, ...baseFilter }} {...listOptions}>
     {children ?? <>
     <Facet field="lead" />
     <Column field="title" />
