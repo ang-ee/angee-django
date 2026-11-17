@@ -105,7 +105,11 @@ class RecordRefMixin(RecordRefMergeContract):
     accepts_any_record_target: ClassVar[bool] = False
     """Whether this infrastructure edge may point at every canonical record type."""
     teardown_for_target: ClassVar[_TargetTeardown | None] = None
-    """Optional class hook replacing ordinary deletion policy with the edge owner's cleanup."""
+    """Optional class hook replacing ordinary deletion policy with the edge owner's cleanup.
+
+    It runs before a target is deleted, whether the target names the edge through a
+    reverse ``GenericRelation`` or the edge's schema declares the target's type.
+    """
 
     class Meta:
         """Django model options for record-ref-only abstract inheritance."""
@@ -411,7 +415,12 @@ def record_ref_cleanup_edges_for_target(
 
 
 def delete_record_refs(instance: models.Model, using: str, **kwargs: Any) -> None:
-    """Apply each edge owner's declared policy before its target is deleted."""
+    """Apply each edge owner's declared policy before its target is deleted.
+
+    An edge declaring ``teardown_for_target`` runs it instead of its
+    ``on_target_delete`` policy, once per deleted target, whether the target names
+    it through a reverse relation or the edge's schema declares the target.
+    """
 
     del kwargs
     cleanup_edges = record_ref_cleanup_edges_for_target(type(instance))
@@ -424,6 +433,9 @@ def delete_record_refs(instance: models.Model, using: str, **kwargs: Any) -> Non
     content_type, object_id = generic_pointer_target(instance)
     for edge in declared:
         if edge in cleanup_edges:
+            continue
+        if edge.teardown_for_target is not None:
+            edge.teardown_for_target(instance)
             continue
         pointer = edge.record_ref_field()
         rows = edge._base_manager.using(using).filter(

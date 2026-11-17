@@ -1856,7 +1856,9 @@ native reverse relation's exclusion from automatic collection.
 Each edge declares `on_target_delete` as `CASCADE`, `PROTECT`, or `SET_NULL`; a
 model needing row-aware cleanup implements `teardown_for_target(target)`. The
 foundation target-delete receiver invokes that one declaration for instance and
-queryset deletion paths.
+queryset deletion paths, whether the target names the edge through a reverse
+relation or the edge's schema declares the target's type. An append-only edge,
+whose collection refuses bulk deletes, cascades through its teardown.
 [`RecordReferenceNode`](../../src/angee/graphql/relations.py) and
 `with_record_reference_access` project it into GraphQL under the current
 reader's scope. A hidden target yields null identity fields; its model and ID
