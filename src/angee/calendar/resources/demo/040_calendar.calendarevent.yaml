@@ -1,0 +1,44 @@
+# Demo events (demo tier). `start`/`end` are timezone-aware UTC: the unquoted
+# ISO-8601 `…Z` values parse to aware datetimes, stored as written.
+#
+# `standup` carries a weekly RRULE; the calendar expands one occurrence per week
+# within the viewport window server-side, never a stored row per week, and those
+# occurrences are not draggable. 041 overrides two of its instances. The one-off
+# events carry no rule and are single draggable occurrences. Bob's focus block is
+# private: whoever reads his calendar sees it as busy time only.
+_meta:
+  model: calendar.CalendarEvent
+rows:
+  - xref: standup
+    fields:
+      calendar: calendar.alice_calendar
+      title: Team Standup
+      description: Weekly team sync.
+      location: Main Office
+      start: 2026-07-06T09:00:00Z
+      end: 2026-07-06T09:30:00Z
+      recurrence: FREQ=WEEKLY
+  - xref: kickoff
+    fields:
+      calendar: calendar.alice_calendar
+      title: Project Kickoff
+      description: Kickoff for the new engagement.
+      location: Conference Room A
+      conference_url: https://meet.example.test/kickoff
+      start: 2026-07-07T14:00:00Z
+      end: 2026-07-07T15:00:00Z
+  - xref: review
+    fields:
+      calendar: calendar.alice_calendar
+      title: Quarterly Review
+      location: Boardroom
+      status: tentative
+      start: 2026-07-15T10:00:00Z
+      end: 2026-07-15T11:30:00Z
+  - xref: bob_focus
+    fields:
+      calendar: calendar.bob_calendar
+      title: Focus time
+      visibility: private
+      start: 2026-07-07T10:00:00Z
+      end: 2026-07-07T12:00:00Z

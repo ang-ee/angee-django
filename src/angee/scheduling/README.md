@@ -23,17 +23,24 @@ scheduling never guesses an offset.
 [`RecurrenceField`](fields.py) holds an RFC-5545 RRULE and
 [`Recurrence`](recurrence.py) expands it: `occurrences(dtstart, start, end,
 zone=…)` over a half-open window, `occurrences_after(dtstart, after, until, zone=…,
-limit=…)` over `(after, until]`, and `get_occurrence_after(dtstart, moment,
-zone=…)` for the next occurrence. Expansion runs on the wall clock of the named
-zone (a venue's), or of the project zone when it is blank. An hourly or finer rule
-follows the wall clock through a DST change: the missing hour in spring lands on the
-next instant, which counts once, and the repeated hour in autumn runs once.
+limit=…)` over `(after, until]`, `get_occurrence_after(dtstart, moment,
+zone=…)` for the next occurrence, and `get_last_occurrence(dtstart, zone=…)` for
+where a series ends (`None` when any rule it parses to has neither `UNTIL` nor
+`COUNT`). Expansion runs on the wall clock of the named zone (a venue's), or of
+the project zone when it is blank. An hourly or finer rule follows the wall clock
+through a DST change: the missing hour in spring lands on the next instant, which
+counts once, and the repeated hour in autumn runs once.
 
 Expansion is bounded. A rule whose day filters can never match
 (`BYMONTH=2;BYMONTHDAY=30`) is recognised in one 400-year calendar cycle and expands
-to nothing, instead of letting dateutil scan to year 9999. `occurrences_after`
-refuses a window holding more than `MAX_OCCURRENCES` unless the caller pages with
-`limit` and resumes after the last occurrence it got.
+to nothing, instead of letting dateutil scan to year 9999. A `COUNT` over
+`Recurrence.OCCURRENCE_LIMIT` is invalid, and `occurrences` or `get_last_occurrence`
+refuses an expansion that would yield more occurrences than that limit with a
+`ValidationError`, never truncated. `occurrences_after` refuses a window holding
+more than `MAX_OCCURRENCES` unless the caller pages with `limit` and resumes after
+the last occurrence it got. A consumer whose rows must not repeat too often
+declares `RecurrenceField(finest_frequency=…)` (a calendar event refuses minutely
+and secondly rules); other consumers keep every frequency.
 
 ## Due rules
 
