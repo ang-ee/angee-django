@@ -1,1 +1,1 @@
-"""Scheduling addon — RFC-5545 recurrence (RRULE) parsing and bounded, timezone-aware occurrence expansion."""
+"""Scheduling addon — time as values: RFC-5545 recurrence, due rules from named anchors, named time zones."""

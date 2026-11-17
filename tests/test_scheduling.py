@@ -1,7 +1,7 @@
-"""Tests for the scheduling addon.
+"""Tests for the scheduling addon's recurrence and named time zones.
 
-Recurrence is a pure value type — no model, no database — so these import the
-field and value object directly and touch no rows; the timezone assertions pin
+Recurrence and zone names are pure values — no model, no database — so these import
+the fields and value objects directly and touch no rows; the timezone assertions pin
 the timezone/window contract (see :class:`~angee.scheduling.apps.SchedulingConfig`)
 by overriding ``TIME_ZONE`` per case.
 """
@@ -12,15 +12,42 @@ from datetime import UTC, datetime, time
 from zoneinfo import ZoneInfo
 
 import pytest
+import strawberry
+import strawberry_django
 from django.core.exceptions import ValidationError
 from django.db import migrations, models
 from django.db.migrations.state import ModelState
 from django.db.migrations.writer import MigrationWriter
 from django.test import override_settings
 from django.test.utils import isolate_apps
+from pydantic import TypeAdapter
+from pydantic import ValidationError as PydanticValidationError
 
-from angee.scheduling.fields import RecurrenceField
+from angee.scheduling.fields import RecurrenceField, TimeZoneField
 from angee.scheduling.recurrence import Recurrence
+from angee.scheduling.zones import ZoneName, get_zone_info
+
+with isolate_apps("angee.scheduling"):
+
+    class _Venue(models.Model):
+        """A row composing the zone field, for the GraphQL projection probe."""
+
+        timezone = TimeZoneField()
+
+        class Meta:
+            app_label = "scheduling"
+
+
+@strawberry_django.type(_Venue)
+class _VenueType:
+    timezone: strawberry.auto
+
+
+@strawberry.type
+class _VenueQuery:
+    @strawberry.field
+    def venue(self) -> _VenueType:
+        return _Venue(timezone="America/Barbados")
 
 
 def _utc(year: int, month: int, day: int, hour: int = 0, minute: int = 0) -> datetime:
@@ -171,13 +198,14 @@ def test_valid_and_blank_rules_pass() -> None:
     assert RecurrenceField().clean("", None) == ""
 
 
-def test_model_composing_the_field_migrates_cleanly() -> None:
-    """A CreateModel over the field renders through MigrationWriter (exercises deconstruct)."""
+def test_model_composing_the_fields_migrates_cleanly() -> None:
+    """A CreateModel over the fields renders through MigrationWriter (exercises deconstruct)."""
 
     with isolate_apps("angee.scheduling"):
 
         class Event(models.Model):
             recurrence = RecurrenceField()
+            timezone = TimeZoneField()
 
             class Meta:
                 app_label = "scheduling"
@@ -189,6 +217,7 @@ def test_model_composing_the_field_migrates_cleanly() -> None:
 
     rendered = MigrationWriter(migration).as_string()
     assert "angee.scheduling.fields.RecurrenceField" in rendered
+    assert "angee.scheduling.fields.TimeZoneField" in rendered
 
 
 @override_settings(TIME_ZONE="America/New_York")
@@ -220,3 +249,84 @@ def test_legacy_until_retains_local_clock_across_dst(until, last_day, hour):
         _local("America/New_York", 2026, 3, 11),
     )
     assert result == [_local("America/New_York", 2026, 3, day, hour) for day in range(7, last_day + 1)]
+
+
+@override_settings(TIME_ZONE="UTC")
+def test_named_zone_drives_expansion_instead_of_the_project_zone() -> None:
+    """A venue-time 09:00 daily rule stays 09:00 in its zone across DST while the project runs in UTC."""
+
+    ny = ZoneInfo("America/New_York")
+    occurrences = Recurrence("FREQ=DAILY").occurrences(
+        _local("America/New_York", 2026, 3, 6, 9),
+        window_start=_local("America/New_York", 2026, 3, 6),
+        window_end=_local("America/New_York", 2026, 3, 11),
+        zone="America/New_York",
+    )
+    assert [occ.astimezone(ny).time() for occ in occurrences] == [time(9, 0)] * 5
+    assert occurrences[0].hour == 14 and occurrences[-1].hour == 13  # EST, then EDT
+    with pytest.raises(ValidationError):
+        Recurrence("FREQ=DAILY").occurrences(occurrences[0], occurrences[0], occurrences[-1], zone="Nowhere/Town")
+
+
+@override_settings(TIME_ZONE="UTC")
+@pytest.mark.parametrize(
+    ("rule", "moment", "expected"),
+    [
+        pytest.param("FREQ=WEEKLY", _utc(2026, 7, 6, 9), _utc(2026, 7, 13, 9), id="strictly-after-an-occurrence"),
+        pytest.param("FREQ=WEEKLY", _utc(2026, 7, 8), _utc(2026, 7, 13, 9), id="between-occurrences"),
+        pytest.param("FREQ=WEEKLY", _utc(2026, 7, 1), _utc(2026, 7, 6, 9), id="before-the-start"),
+        pytest.param("FREQ=WEEKLY;UNTIL=20260713T090000Z", _utc(2026, 7, 13, 9), None, id="series-ended"),
+        pytest.param("", _utc(2026, 7, 1), _utc(2026, 7, 6, 9), id="single-before"),
+        pytest.param("", _utc(2026, 7, 6, 9), None, id="single-passed"),
+    ],
+)
+def test_the_occurrence_after_a_moment_is_strictly_after_it(
+    rule: str, moment: datetime, expected: datetime | None
+) -> None:
+    assert Recurrence(rule).get_occurrence_after(_utc(2026, 7, 6, 9), moment) == expected
+
+
+@override_settings(TIME_ZONE="UTC")
+def test_the_occurrence_after_unrolls_in_the_named_zone() -> None:
+    """Monthly on the 31st, in a zone: the next occurrence keeps the local clock and skips short months."""
+
+    barbados = ZoneInfo("America/Barbados")
+    start = datetime(2026, 1, 31, 14, tzinfo=barbados)
+    following = Recurrence("FREQ=MONTHLY").get_occurrence_after(start, start, zone="America/Barbados")
+    assert following == datetime(2026, 3, 31, 14, tzinfo=barbados)
+    assert following is not None and following.tzinfo is UTC
+
+
+@pytest.mark.parametrize("name", ["America/Barbados", "UTC", ""])
+def test_time_zone_field_admits_listed_and_blank_names(name: str) -> None:
+    assert TimeZoneField().clean(name, None) == name
+
+
+@pytest.mark.parametrize("name", ["Mars/Olympus_Mons", "Factory", "america/puerto_rico", "+02:00"])
+def test_time_zone_field_and_zone_name_refuse_an_unlisted_name(name: str) -> None:
+    """The Django field and the Pydantic type share one admission set and one message."""
+
+    with pytest.raises(ValidationError) as field_error:
+        TimeZoneField().clean(name, None)
+    with pytest.raises(PydanticValidationError) as value_error:
+        TypeAdapter(ZoneName).validate_python(name)
+    assert field_error.value.code == "invalid_time_zone"
+    assert field_error.value.messages[0] in str(value_error.value)
+
+
+@override_settings(TIME_ZONE="America/New_York")
+def test_get_zone_info_reads_a_blank_name_as_the_project_zone() -> None:
+    assert get_zone_info("") == ZoneInfo("America/New_York")
+    assert get_zone_info("Europe/Brussels") == ZoneInfo("Europe/Brussels")
+    with pytest.raises(ValidationError):
+        get_zone_info("Nowhere/Town")
+
+
+def test_time_zone_field_crosses_graphql_as_a_string() -> None:
+    """``auto`` projects the field as ``String`` and returns the stored name unchanged."""
+
+    schema = strawberry.Schema(query=_VenueQuery)
+    assert "timezone: String!" in str(schema)
+    result = schema.execute_sync("{ venue { timezone } }")
+    assert result.errors is None
+    assert result.data == {"venue": {"timezone": "America/Barbados"}}
