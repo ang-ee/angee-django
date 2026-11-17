@@ -1,0 +1,16 @@
+# Demo tag categories (demo tier), shared vocabulary like the tags they group.
+# A relationship is one at a time, so its category caps a record at one tag;
+# segments overlap and set no maximum. Idempotency is the resource ledger's
+# (source_addon, xref) identity; positions append in file order.
+_meta:
+  model: tags.TagCategory
+rows:
+  - xref: relationship
+    fields:
+      name: Relationship
+      description: How the organization stands with the record. A record holds at most one.
+      max_per_record: 1
+  - xref: segment
+    fields:
+      name: Segment
+      description: Market segments the record belongs to.

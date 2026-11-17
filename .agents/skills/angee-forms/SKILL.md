@@ -84,6 +84,7 @@ description: "Builds forms and widgets in an Angee addon: registered JSX forms (
        <Form {...props} resource={TAG_MODEL}>
          <Field name="name" title />
          <Group label={t("form.details")} columns={2}>
+           <Field name="category" label={t("col.category")} />
            <Field name="color" label={t("col.color")} />
            <Field name="attention" label={t("col.attention")} />
            {containerContents(scopeFieldEntries)}

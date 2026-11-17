@@ -121,10 +121,11 @@ def test_base_tag_is_always_shared_and_declares_no_policy_fields(db: None) -> No
     """The vocabulary uses authenticated membership without a row-level policy."""
 
     del db
-    # Audit stamps and the merge redirect are identity, not a row-level policy.
+    # Audit stamps and the merge redirect are identity and the category files the tag
+    # in the vocabulary; none is a row-level policy.
     tag_relation_fields = {
         field.name for field in Tag._meta.fields
-        if field.is_relation and field.name not in {"created_by", "updated_by", "merged_into"}
+        if field.is_relation and field.name not in {"created_by", "updated_by", "merged_into", "category"}
     }
     assert tag_relation_fields == set()
     with system_context(reason="tags vocabulary setup"):
@@ -132,8 +133,8 @@ def test_base_tag_is_always_shared_and_declares_no_policy_fields(db: None) -> No
     _assert_authenticated_reads(tag)
 
 
-def test_attention_category_is_one_tag_owned_resource_flag(db: None) -> None:
-    """The console writes and reads the category bit the unified attention column selects."""
+def test_attention_is_one_tag_owned_resource_flag(db: None) -> None:
+    """The console writes and reads the attention flag the unified attention column selects."""
 
     del db
     admin = create_platform_admin("tags-attention-admin")
@@ -409,9 +410,12 @@ def curated_vocabulary(party_edge: SimpleNamespace, composed_permissions: None) 
     del composed_permissions
     schema = Path(apps.get_app_config("tags").rebac_schema)
     source = schema.read_text(encoding="utf-8")
+    start = source.index("definition tags/tag {")
+    end = source.index("}", start)
     shared = "permission read = ((authenticated + admin->member) + manager->effective_member)"
-    assert source.count(shared) == 1
-    schema.write_text(source.replace(shared, "permission read = (admin->member + manager->effective_member)"))
+    assert source[start:end].count(shared) == 1
+    curated = source[start:end].replace(shared, "permission read = (admin->member + manager->effective_member)")
+    schema.write_text(source[:start] + curated + source[end:])
     call_command("rebac", "sync", "--force-overwrite", "--yes", verbosity=0)
     return party_edge
 
