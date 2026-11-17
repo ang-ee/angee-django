@@ -27,7 +27,7 @@ from rebac.errors import MissingActorError
 
 import angee.iam
 from angee.graphql.testing.documents import execute_schema, graphql_request, result_data
-from angee.iam.auth import sign_in_credentials
+from angee.iam.auth import ONE_ATTEMPT_MESSAGE, sign_in_credentials
 from angee.iam.autoconfig import SETTINGS as IAM_SETTINGS
 from angee.iam.events import sign_in_link_sent
 from angee.iam.models import SIGN_IN_LINK_PATH, SIGN_IN_LINK_UNAVAILABLE_MESSAGE
@@ -48,6 +48,7 @@ DELIVERABLE = {
 ISSUE = "mutation($id: ID!) { issue_user_sign_in_link(id: $id) { ok message } }"
 REDEEM = "mutation($token: String!) { redeem_sign_in_link(token: $token) { ok user { username } } }"
 LOGIN = "mutation($username: String!, $password: String!) { login(username: $username, password: $password) { ok } }"
+SPENT_MARK = "angee_iam_spent_sign_in_link"
 LIST = "{ users(limit: 100) { username account_actions } }"
 # IAM's own order, axes first: the bare harness authors ModelBackend ahead of it.
 BACKENDS = IAM_SETTINGS["AUTHENTICATION_BACKENDS:append"]
@@ -389,7 +390,7 @@ def test_a_spent_link_exempts_only_its_own_attempt_in_a_batched_request(delivera
 
 
 @override_settings(AXES_FAILURE_LIMIT=2, AUTHENTICATION_BACKENDS=BACKENDS)
-def test_a_lockout_lifts_after_the_cool_off_and_a_sign_in_clears_failures(deliverable, iam_admin, sent):
+def test_a_lockout_lifts_after_the_cool_off_and_a_sign_in_clears_nothing(deliverable, iam_admin, sent):
     target = _person("guest-cooled")
     token = sent(target, iam_admin)
     request = _at("198.51.100.9")
@@ -401,11 +402,12 @@ def test_a_lockout_lifts_after_the_cool_off_and_a_sign_in_clears_failures(delive
     assert authenticate(request, **sign_in_credentials(f"{target.public_id}.guess-again")) is None
     signed_in = execute_schema(_schema("public"), REDEEM, {"token": token}, request=_at("198.51.100.9", session=True))
     assert result_data(signed_in)["redeem_sign_in_link"]["ok"] is True
-    assert not AccessAttempt.objects.filter(ip_address="198.51.100.9").exists()
+    # Only the cool-off lifts failures; a sign-in from the same client keeps them.
+    assert AccessAttempt.objects.get(ip_address="198.51.100.9").failures_since_start == 1
 
 
 @pytest.mark.parametrize("parameters", [["ip_address"], ["username"], ["username", "ip_address"]])
-def test_link_failures_are_keyed_per_account_never_pooled(deliverable, iam_admin, sent, parameters):
+def test_link_failures_are_recorded_under_the_account_they_name(deliverable, iam_admin, sent, parameters):
     victim = _person("guest-victim")
     bystander = _person("guest-bystander")
     victim_token = sent(victim, iam_admin)
@@ -418,7 +420,7 @@ def test_link_failures_are_keyed_per_account_never_pooled(deliverable, iam_admin
             # One guess at the victim's account from each of three addresses.
             guess = sign_in_credentials(f"{victim.public_id}.bogus{attempt}")
             assert authenticate(_at(f"192.0.2.{10 + attempt}"), **guess) is None
-        # No shared null username: anyone else, elsewhere, signs in.
+        # No shared empty username: anyone else, elsewhere, signs in.
         assert _redeem(bystander_token, "203.0.113.77") == bystander
         # The victim's own account is throttled exactly when the account is a lockout key.
         expected = None if "username" in parameters else victim
@@ -508,6 +510,7 @@ def test_issue_waits_out_the_per_account_cooldown(deliverable, iam_admin, sent):
         ({"ANGEE_PUBLIC_ORIGIN": "https://user:secret@app.example.test"}, False),
         ({"ANGEE_PUBLIC_ORIGIN": "https://app.example.test:notaport"}, False),
         ({"ANGEE_PUBLIC_ORIGIN": "https://app.example.test/"}, True),
+        ({"ANGEE_PUBLIC_ORIGIN": "https://*.example.test"}, False),
         ({"DEFAULT_FROM_EMAIL": "not an address"}, False),
         ({"DEFAULT_FROM_EMAIL": "Sign-in <signin@example.test>"}, True),
     ],
@@ -520,3 +523,144 @@ def test_links_need_an_https_origin_and_a_valid_sender(overrides, deliverable_no
 def test_links_open_the_route_iams_web_fragment_declares():
     manifest = Path(angee.iam.__file__).with_name("web") / "src" / "index.ts"
     assert f'const SIGN_IN_LINK_PATH = "{SIGN_IN_LINK_PATH}";' in manifest.read_text()
+
+
+def _logins(attempts: list[tuple[str, str, str]]) -> str:
+    """One GraphQL document carrying one aliased ``login`` per ``(alias, username, password)``."""
+
+    fields = " ".join(
+        f'{alias}: login(username: "{user}", password: "{password}") {{ ok }}' for alias, user, password in attempts
+    )
+    return f"mutation {{ {fields} }}"
+
+
+def _refusals(result: Any) -> dict[str, str]:
+    return {str(error.path[0]): error.message for error in result.errors or ()}
+
+
+@override_settings(AUTHENTICATION_BACKENDS=BACKENDS, AXES_FAILURE_LIMIT=3)
+def test_a_request_makes_one_sign_in_attempt_however_many_fields_it_aliases(db):
+    _person("guest-guarded", password="guarded-secret-pw")
+    _person("guest-own", password="own-secret-pw")
+    attempts = [
+        ("g1", "guest-guarded", "bad-1"),
+        ("me", "guest-own", "own-secret-pw"),
+        ("hit", "guest-guarded", "guarded-secret-pw"),
+    ]
+
+    request = _at("203.0.113.50", session=True)
+    result = execute_schema(_schema("public"), _logins(attempts), request=request)
+
+    # The second field is refused, which nulls the payload and stops the fields after it.
+    assert result.data is None
+    assert _refusals(result) == {"me": ONE_ATTEMPT_MESSAGE}
+    assert SESSION_KEY not in request.session
+    assert AccessAttempt.objects.get(ip_address="203.0.113.50").failures_since_start == 1
+
+
+@override_settings(AUTHENTICATION_BACKENDS=BACKENDS)
+def test_a_batched_request_shares_the_one_sign_in_attempt(deliverable, iam_admin, sent):
+    owner = _person("guest-batch", password="batch-secret-pw")
+    token = sent(owner, iam_admin)
+    request = _at("203.0.113.52", session=True)  # A batch executes every operation on one request.
+
+    first = execute_schema(_schema("public"), LOGIN, {"username": "guest-batch", "password": "wrong"}, request=request)
+    second = execute_schema(_schema("public"), REDEEM, {"token": token}, request=request)
+
+    assert result_data(first)["login"] == {"ok": False}
+    assert [error.message for error in second.errors or ()] == [ONE_ATTEMPT_MESSAGE]
+    assert SignInLink._base_manager.get(user=owner).used_at is None
+
+
+@override_settings(AUTHENTICATION_BACKENDS=BACKENDS, AXES_FAILURE_LIMIT=3)
+def test_a_clients_own_sign_ins_never_clear_its_guesses(db):
+    _person("guest-targeted", password="targeted-secret-pw")
+    _person("guest-guesser", password="guesser-secret-pw")
+
+    def login(username: str, password: str) -> Any:
+        request = _at("203.0.113.53", session=True)
+        return result_data(
+            execute_schema(_schema("public"), LOGIN, {"username": username, "password": password}, request=request)
+        )
+
+    assert login("guest-targeted", "bad-1") == {"login": {"ok": False}}
+    assert login("guest-targeted", "bad-2") == {"login": {"ok": False}}
+    assert login("guest-guesser", "guesser-secret-pw") == {"login": {"ok": True}}
+    assert login("guest-targeted", "bad-3") == {"login": {"ok": False}}
+    assert login("guest-targeted", "targeted-secret-pw") == {"login": {"ok": False}}
+
+
+@override_settings(
+    AUTHENTICATION_BACKENDS=BACKENDS,
+    AXES_FAILURE_LIMIT=2,
+    AXES_LOCKOUT_PARAMETERS=["username"],
+    AXES_RESET_COOL_OFF_ON_FAILURE_DURING_LOCKOUT=False,
+)
+def test_a_spent_link_mark_never_opens_another_locked_account(deliverable, iam_admin, sent):
+    _person("guest-locked", password="locked-secret-pw")
+    holder = _person("guest-holder")
+    spent = sent(holder, iam_admin)
+    assert result_data(
+        execute_schema(_schema("public"), REDEEM, {"token": spent}, request=_at("203.0.113.60", session=True))
+    )
+    for attempt in range(2):
+        assert authenticate(_at("203.0.113.61"), username="guest-locked", password=f"bad-{attempt}") is None
+
+    # Through GraphQL the interleaving is one request's three attempts: only the first runs.
+    document = (
+        'mutation($t: String!) { l: login(username: "guest-locked", password: "nope") { ok } '
+        "s: redeem_sign_in_link(token: $t) { ok } "
+        'hit: login(username: "guest-locked", password: "locked-secret-pw") { ok } }'
+    )
+    result = execute_schema(_schema("public"), document, {"t": spent}, request=_at("203.0.113.63", session=True))
+    assert result.data is None
+    assert _refusals(result) == {"s": ONE_ATTEMPT_MESSAGE}
+
+    # Below the guard, a mark the lockout path left unread exempts only its own account.
+    request = _at("203.0.113.64")
+    assert authenticate(request, username="guest-locked", password="nope") is None
+    assert request.axes_locked_out is True
+    assert authenticate(request, **sign_in_credentials(spent)) is None
+    assert vars(request)[SPENT_MARK] == holder.public_id
+    assert authenticate(request, username="guest-locked", password="locked-secret-pw") is None
+
+
+@override_settings(AXES_ENABLED=False)
+def test_the_spent_mark_ends_with_its_attempt_even_when_it_raises(deliverable, iam_admin, sent):
+    holder = _person("guest-raising")
+    spent = sent(holder, iam_admin)
+    assert result_data(
+        execute_schema(_schema("public"), REDEEM, {"token": spent}, request=_at("203.0.113.65", session=True))
+    )
+    quiet = _at("203.0.113.66", session=True)
+    assert (
+        result_data(execute_schema(_schema("public"), REDEEM, {"token": spent}, request=quiet))["redeem_sign_in_link"][
+            "ok"
+        ]
+        is False
+    )
+    assert SPENT_MARK not in vars(quiet)
+
+    def fail(sender: Any, **kwargs: Any) -> None:
+        raise RuntimeError("receiver failed")
+
+    raising = _at("203.0.113.67", session=True)
+    user_login_failed.connect(fail, weak=False)
+    try:
+        result = execute_schema(_schema("public"), REDEEM, {"token": spent}, request=raising)
+    finally:
+        user_login_failed.disconnect(fail)
+    assert result.errors
+    assert SPENT_MARK not in vars(raising)
+
+
+@override_settings(AUTHENTICATION_BACKENDS=BACKENDS, AXES_FAILURE_LIMIT=3, AXES_LOCKOUT_PARAMETERS=["username"])
+def test_link_failures_stay_under_the_account_public_id_after_a_sign_in(deliverable, iam_admin, sent):
+    target = _person("guest-keyed")
+    token = sent(target, iam_admin)
+    assert authenticate(_at("203.0.113.70"), **sign_in_credentials(f"{target.public_id}.guess")) is None
+
+    signed_in = execute_schema(_schema("public"), REDEEM, {"token": token}, request=_at("203.0.113.70", session=True))
+
+    assert result_data(signed_in)["redeem_sign_in_link"]["ok"] is True
+    assert AccessAttempt.objects.get(username=target.public_id).failures_since_start == 1

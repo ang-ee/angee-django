@@ -5,9 +5,10 @@ from __future__ import annotations
 from typing import Any, cast
 
 from django.apps import apps
-from django.contrib.auth import get_user_model
+from django.contrib.auth import authenticate, get_user_model
 from django.contrib.auth.backends import BaseBackend
 from django.contrib.auth.backends import ModelBackend as DjangoModelBackend
+from django.core.exceptions import BadRequest
 from django.views.decorators.debug import sensitive_variables
 
 
@@ -44,7 +45,33 @@ class ModelBackend(BaseBackend):
 
 
 _SPENT_SIGN_IN_LINK = "angee_iam_spent_sign_in_link"
-"""Request attribute ``SignInLinkBackend`` sets when a genuine link is refused."""
+"""Request attribute holding the account of a genuine link ``SignInLinkBackend`` just refused."""
+
+_AUTHENTICATION_ATTEMPTED = "angee_iam_authentication_attempted"
+"""Request attribute set once the request has made its one sign-in attempt."""
+
+ONE_ATTEMPT_MESSAGE = "Only one sign-in attempt is allowed per request."
+"""Refusal of a second sign-in attempt within one HTTP request."""
+
+
+@sensitive_variables("credentials")
+def authenticate_once(request: Any, **credentials: Any) -> Any | None:
+    """Run the request's one sign-in attempt through Django's ``authenticate()``.
+
+    Password login and sign-in link redemption share this guard: a second
+    attempt within one HTTP request (aliased or batched GraphQL fields) is
+    refused with :data:`ONE_ATTEMPT_MESSAGE` before ``authenticate()`` runs,
+    so a request cannot interleave guesses with a sign-in that axes would
+    count differently. A sign-in link's spent mark never outlives the attempt.
+    """
+
+    if getattr(request, _AUTHENTICATION_ATTEMPTED, False):
+        raise BadRequest(ONE_ATTEMPT_MESSAGE)
+    setattr(request, _AUTHENTICATION_ATTEMPTED, True)
+    try:
+        return authenticate(request, **credentials)
+    finally:
+        vars(request).pop(_SPENT_SIGN_IN_LINK, None)
 
 
 def sign_in_credentials(token: str) -> dict[str, str]:
@@ -52,8 +79,8 @@ def sign_in_credentials(token: str) -> dict[str, str]:
 
     ``sign_in_token`` carries the token; Django masks it before
     ``user_login_failed`` receivers see it. ``sign_in_account`` carries the
-    account public id the token names, unmasked, so ``axes_username`` keys
-    the attempt by account.
+    account public id the token names, unmasked, so ``axes_username`` records
+    the attempt under that account.
     """
 
     account = cast(Any, apps.get_model("iam", "SignInLink")).token_account(token)
@@ -63,8 +90,9 @@ def sign_in_credentials(token: str) -> dict[str, str]:
 def axes_username(request: Any, credentials: Any) -> str | None:
     """``AXES_USERNAME_CALLABLE``: a sign-in link's account public id, else axes' own username lookup.
 
-    Each link attempt is thereby throttled under the account it names, never
-    in a shared null username.
+    A link attempt is thereby recorded under the account public id it names
+    (the string it carries, for an account that does not exist), never under
+    an empty username.
     """
 
     from axes.helpers import get_username_from_data
@@ -75,25 +103,32 @@ def axes_username(request: Any, credentials: Any) -> str | None:
 
 
 def spent_sign_in_link(request: Any, credentials: Any) -> bool:
-    """``AXES_WHITELIST_CALLABLE``: exempt the one failure a genuine but spent link just caused.
+    """``AXES_WHITELIST_CALLABLE``: exempt the failure of a genuine but spent link, and nothing else.
 
-    ``SignInLinkBackend`` marks the request when a token matched a real link
-    that can no longer sign in; this reads and clears the mark, so axes does
-    not count that failure as a guess, while the next attempt on the same
-    request is lockout-checked and counted as usual.
+    ``SignInLinkBackend`` marks the request with the refused link's account.
+    Only credentials naming that same account are exempt, and the mark is
+    cleared when read; :func:`authenticate_once` also clears it when the
+    attempt ends, so it cannot exempt another attempt.
     """
 
-    return request is not None and bool(vars(request).pop(_SPENT_SIGN_IN_LINK, False))
+    if request is None or not credentials:
+        return False
+    account = vars(request).get(_SPENT_SIGN_IN_LINK)
+    if not account or credentials.get("sign_in_account") != account:
+        return False
+    del vars(request)[_SPENT_SIGN_IN_LINK]
+    return True
 
 
 class SignInLinkBackend(ModelBackend):
     """Django authentication from a single-use sign-in link, with IAM's session loading.
 
-    Its credentials come from :func:`sign_in_credentials`; Django's
-    ``authenticate()`` admits the backend only for ``sign_in_token``.
-    django-axes counts and locks out failed links at the same seam as
-    passwords, keyed by ``axes_username``, without the token reaching its
-    records. A genuine link that is spent marks the request for
+    Its credentials come from :func:`sign_in_credentials`, and callers run it
+    through :func:`authenticate_once`; Django's ``authenticate()`` admits the
+    backend only for ``sign_in_token``. django-axes counts and locks out
+    failed links at the same seam as passwords, recorded by
+    ``axes_username``, without the token reaching its records. A genuine link
+    that is spent marks the request with its account for
     ``spent_sign_in_link``. ``SignInLinkManager.redeem`` owns every check.
     """
 
@@ -112,8 +147,8 @@ class SignInLinkBackend(ModelBackend):
         try:
             return cast(Any, apps.get_model("iam", "SignInLink")).objects.redeem(sign_in_token)
         except SignInLinkSpent:
-            if request is not None:
-                setattr(request, _SPENT_SIGN_IN_LINK, True)
+            if request is not None and sign_in_account:
+                setattr(request, _SPENT_SIGN_IN_LINK, sign_in_account)
             return None
 
     # Django's async default wraps ``authenticate``; the parent binds the password one.

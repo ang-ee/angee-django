@@ -448,6 +448,16 @@ def test_public_origin_joins_csrf_trusted_origins(tmp_path: Path, monkeypatch: p
     assert "https://demo.example.com" in namespace["CSRF_TRUSTED_ORIGINS"]
 
 
+@pytest.mark.parametrize("origin", ["http://app.example.com", "https://*.example.com", "https://u:p@app.example.com"])
+def test_an_invalid_public_origin_is_never_trusted_for_csrf(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, origin: str,
+) -> None:
+    monkeypatch.setenv("ANGEE_PUBLIC_ORIGIN", origin)
+    namespace = _compose(tmp_path)
+    assert namespace["ANGEE_PUBLIC_ORIGIN"] == origin
+    assert origin not in namespace["CSRF_TRUSTED_ORIGINS"]
+
+
 def test_an_authored_public_origin_is_the_resolved_setting_csrf_trusts(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:

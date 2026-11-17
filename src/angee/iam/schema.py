@@ -16,7 +16,7 @@ from typing import Any, cast
 import strawberry
 import strawberry_django
 from django.apps import apps
-from django.contrib.auth import authenticate, get_user_model
+from django.contrib.auth import get_user_model
 from django.contrib.auth import login as auth_login
 from django.contrib.auth import logout as auth_logout
 from django.contrib.auth.models import AnonymousUser
@@ -60,7 +60,7 @@ from angee.graphql.node import AngeeNode
 from angee.graphql.sharing import authorized_record_access
 from angee.graphql.subscriptions import changes
 from angee.graphql.view_as import ViewAs
-from angee.iam.auth import sign_in_credentials
+from angee.iam.auth import authenticate_once, sign_in_credentials
 from angee.iam.identity import user_display_label, user_label
 from angee.iam.models import VISIBLE_PEOPLE_DEFAULT_LIMIT, UserAccountAction
 from angee.iam.models import Group as GroupModel
@@ -952,7 +952,7 @@ class IAMMutation:
         username: str,
         password: str,
     ) -> LoginPayload:
-        """Authenticate credentials and bind the user to the session."""
+        """Authenticate credentials and bind the user to the session; one sign-in attempt per request."""
 
         request = get_request(info)
         # Elevate the whole credential-verification flow: Django upgrades a
@@ -963,7 +963,7 @@ class IAMMutation:
         # would raise, ``authenticate`` would swallow it as a backend refusal,
         # and a user with valid credentials would be denied.
         with system_context(reason="iam.login"):
-            user = authenticate(
+            user = authenticate_once(
                 request,
                 username=username,
                 password=password,
@@ -979,14 +979,15 @@ class IAMMutation:
         """Sign in with a single-use sign-in link and bind the person to the session.
 
         The token authenticates through ``authenticate()``, so django-axes
-        throttles failed links as it does passwords, per account. Every refusal
-        is the same ``ok: false``, whatever the reason.
+        throttles failed links as it does passwords; like ``login``, it is the
+        request's only sign-in attempt. Every refusal is the same ``ok: false``,
+        whatever the reason.
         """
 
         request = get_request(info)
         # As for passwords: the anonymous request's sign-in writes are the system work it sanctions.
         with system_context(reason="iam.sign_in_link.redeem"):
-            user = authenticate(request, **sign_in_credentials(token))
+            user = authenticate_once(request, **sign_in_credentials(token))
             if user is None:
                 return LoginPayload(ok=False)
             auth_login(request, user)

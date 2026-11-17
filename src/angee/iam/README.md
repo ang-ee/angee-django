@@ -134,23 +134,37 @@ address. Nothing notifies the previous address.
 Redemption is Django's `authenticate()` with the credentials of
 `angee.iam.auth.sign_in_credentials`, through `SignInLinkBackend`, so
 django-axes throttles links as it does passwords. Django masks the token before
-`user_login_failed` receivers see it. IAM owns the axes policy in its
-autoconfig: `AXES_COOLOFF_TIME` lifts a lockout after an hour, and
-`AXES_RESET_ON_SUCCESS` clears a client's failures when it signs in.
-`AXES_USERNAME_CALLABLE` keys each link attempt under the account public id the
-token names, so a deployment that locks out by username throttles each account
-and never pools link failures in an empty username. `AXES_WHITELIST_CALLABLE`
-exempts a genuine link that is spent (used, expired, replaced or retired, or for
-an account that can no longer sign in): its holder had the real link and made
-no guess. The exemption covers only the attempt that raised it. A project that
-sets its own whitelist callable loses that exemption. The public mutation
+`user_login_failed` receivers see it. The token's account public id is not a
+secret: an unknown one refuses like a wrong secret. A request makes one sign-in
+attempt: `login` and `redeem_sign_in_link` share `angee.iam.auth.authenticate_once`,
+so a second attempt in the same HTTP request (aliased or batched fields) is
+refused with "Only one sign-in attempt is allowed per request." before
+`authenticate()` runs.
+
+IAM owns the axes policy in its autoconfig. `AXES_COOLOFF_TIME` lifts a lockout
+after an hour, and nothing else does: a successful sign-in clears no failures,
+so a client cannot reset its count by signing in to an account it holds. Axes
+records each failure under the client's IP address and a username, which
+`AXES_USERNAME_CALLABLE` sets. For a link, the username is the account public id
+the token names; for an account that does not exist, it is the string the token
+carries. For a password, it is the sign-in name. IAM leaves axes locking out by
+IP address. A deployment that adds `username` to `AXES_LOCKOUT_PARAMETERS`
+throttles each account under those keys, separately for links and for
+passwords, and never under an empty username. `AXES_WHITELIST_CALLABLE` exempts
+a genuine link that is spent (used, expired, replaced or retired, or for an
+account that can no longer sign in): its holder had the real link and made no
+guess. The exemption covers only that attempt and only credentials naming the
+same account, and it ends with the attempt. A project that sets its own
+whitelist callable loses that exemption. The public mutation
 `redeem_sign_in_link(token)` signs the person in and returns them; every refusal
 is the same `ok: false`.
 
 Links open `ANGEE_PUBLIC_ORIGIN` + `/sign-in-link#token=...`. Base owns that
-setting, which also joins the CSRF trusted origins. Links are built only from an
-`https` origin (`http` only under `DEBUG`) with no user info or path, and only
-when `DEFAULT_FROM_EMAIL` is a valid address and `MAILERS["default"]` exists.
+setting and its rule (`angee.base.origins.public_origin`): only an `https`
+origin (`http` only under `DEBUG`) with a valid host and port and no wildcard,
+user info or path joins the CSRF trusted origins and builds links, and
+`angee.E051` reports any other set value. Links are also built only when
+`DEFAULT_FROM_EMAIL` is a valid address and `MAILERS["default"]` exists.
 Otherwise no link is offered and the verb refuses. The token rides the
 fragment, which no browser request, access log or referrer carries, and
 Angee's browser error reporting strips fragments from what it records. IAM's
@@ -162,7 +176,8 @@ continuing. The password form stays below it as the fallback.
 
 The token still leaves the server inside the email. The provider's message
 store, a database-backed mail queue and webmail link wrappers can keep it, and
-so does a click-tracking redirect. Click tracking is set per provider account
+so does a click-tracking redirect. The browser's history, and any history sync,
+can record the visited URL, fragment included, before the page clears it. Click tracking is set per provider account
 or message stream, not per message, so send these emails through a stream with
 tracking off. Until the commit sends it, the token also lives in the on-commit
 callback (`partial(link.send, token)`). An error reporter that records frame

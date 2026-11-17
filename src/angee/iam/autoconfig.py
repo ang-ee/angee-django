@@ -38,11 +38,11 @@ SETTINGS = {
     # Seconds before an account may be sent another sign-in link.
     "ANGEE_IAM_SIGN_IN_LINK_COOLDOWN": 60,
     # IAM's login throttling policy (django-axes): a lockout lifts after an
-    # hour, and a successful sign-in clears that client's failures.
+    # hour. A success clears nothing, so a client cannot interleave its own
+    # sign-ins with guesses; each request makes one attempt (`authenticate_once`).
     "AXES_COOLOFF_TIME": 1,
-    "AXES_RESET_ON_SUCCESS": True,
-    # A sign-in link is throttled under its account's public id, never pooled
-    # in a null username; a genuine but spent link is not a guess.
+    # A sign-in link attempt is recorded under the account public id it names,
+    # never an empty username; a genuine but spent link is not a guess.
     "AXES_USERNAME_CALLABLE": "angee.iam.auth.axes_username",
     "AXES_WHITELIST_CALLABLE": "angee.iam.auth.spent_sign_in_link",
 }

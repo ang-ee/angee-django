@@ -6,6 +6,7 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any, NotRequired, TypedDict
 
+from angee.base.origins import public_origin
 from angee.base.paths import resolve_path
 
 _Settings = TypedDict(
@@ -53,8 +54,9 @@ SETTINGS: _Settings = {
     # Administrator reach is expressed in schema relations, so every actor uses grants.
     "REBAC_SUPERUSER_BYPASS": False,
     # The deployment's public browser origin (`https://host`, no path), fed by the
-    # ANGEE_PUBLIC_ORIGIN environment variable the stack sets. It joins the CSRF
-    # trusted origins, and owners that build links without a request read it.
+    # ANGEE_PUBLIC_ORIGIN environment variable the stack sets. A valid one joins
+    # the CSRF trusted origins, and owners that build links without a request
+    # read it through `angee.base.origins.public_origin`.
     "ANGEE_PUBLIC_ORIGIN": "",
 }
 
@@ -77,7 +79,9 @@ def settings(namespace: Mapping[str, Any]) -> _DerivedSettings:
     """Derive storage and permission defaults while preserving project settings.
 
     The resolved ``ANGEE_PUBLIC_ORIGIN``, authored or from the environment,
-    joins ``CSRF_TRUSTED_ORIGINS``.
+    joins ``CSRF_TRUSTED_ORIGINS`` when it is a valid public origin
+    (:func:`angee.base.origins.public_origin`); ``angee.E051`` reports one that
+    is not.
     """
 
     data = resolve_path(namespace.get("ANGEE_DATA_DIR", resolve_path(namespace["BASE_DIR"]) / ".angee" / "data"))
@@ -103,7 +107,7 @@ def settings(namespace: Mapping[str, Any]) -> _DerivedSettings:
             "REBAC_DEPTH_LIMIT", 8 if engine == "django.db.backends.sqlite3" else 16,
         )),
     }
-    origin = namespace.get("ANGEE_PUBLIC_ORIGIN")
+    origin = public_origin(namespace.get("ANGEE_PUBLIC_ORIGIN"), debug=bool(namespace.get("DEBUG", False)))
     if origin and origin not in namespace.get("CSRF_TRUSTED_ORIGINS", ()):
         derived["CSRF_TRUSTED_ORIGINS:append"] = [origin]
     return derived

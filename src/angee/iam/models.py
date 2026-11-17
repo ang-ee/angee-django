@@ -22,7 +22,7 @@ from datetime import timedelta
 from email.utils import parseaddr
 from functools import partial
 from typing import Any, ClassVar, Self, cast
-from urllib.parse import urlencode, urlsplit
+from urllib.parse import urlencode
 
 from django.apps import apps
 from django.conf import settings
@@ -72,6 +72,7 @@ from angee.base.models.identity import PublicIdentity, instance_from_public_id
 from angee.base.models.locks import OptimisticLockMixin
 from angee.base.models.roles import role_anchor
 from angee.base.models.timestamps import auto_now_stamps
+from angee.base.origins import public_origin
 from angee.base.querysets import AngeeQuerySet
 from angee.iam.events import person_created, sign_in_link_sent
 from angee.iam.identity import user_label
@@ -1124,25 +1125,6 @@ class User(AbstractBaseUser, RebacPermissionsMixin, OptimisticLockMixin, AngeeDa
         return self.first_name
 
 
-def _public_origin() -> str | None:
-    """Return ``ANGEE_PUBLIC_ORIGIN`` when links may be built from it, else ``None``.
-
-    It must be a bare origin, ``https://host[:port]`` without user info, path,
-    query or fragment; plain ``http`` is accepted only under ``DEBUG``.
-    """
-
-    origin = str(settings.ANGEE_PUBLIC_ORIGIN or "").rstrip("/")
-    parts = urlsplit(origin)
-    try:
-        parts.port  # noqa: B018 -- an invalid port raises here
-    except ValueError:
-        return None
-    schemes = {"https", "http"} if settings.DEBUG else {"https"}
-    if parts.scheme not in schemes or not parts.hostname or "@" in parts.netloc:
-        return None
-    return None if parts.path or parts.query or parts.fragment else origin
-
-
 def _default_sender_usable() -> bool:
     """Whether ``DEFAULT_FROM_EMAIL`` names a valid address, as messaging's outbound sender requires."""
 
@@ -1213,13 +1195,14 @@ class SignInLinkManager[LinkT: SignInLink](AngeeManager[LinkT]):
 
         ``None`` means the token matches no link of a person, as a guess does;
         :class:`SignInLinkSpent` means it matches one that can no longer sign
-        in. Every link of the account is compared in constant time, and only
-        the newest link the mailer accepted signs in. It must be unused and
+        in. The token's account public id is not a secret, and an unknown one
+        refuses like a wrong secret. The secret's digest is compared with every
+        link of the account through ``constant_time_compare``, and only the
+        newest link the mailer accepted signs in. It must be unused and
         unexpired, its account facts (:meth:`SignInLink.account_digest`)
-        unchanged, and its account an active, unprotected person. The
-        account's row lock serializes redemption with issuing, and a
-        conditional update consumes the link, so a token signs in once on
-        every database backend.
+        unchanged, and its account an active, unprotected person. The account's
+        row lock serializes redemption with issuing, and a conditional update
+        consumes the link, so a token signs in once on every database backend.
         """
 
         selector, secret = _token_parts(token)
@@ -1227,9 +1210,9 @@ class SignInLinkManager[LinkT: SignInLink](AngeeManager[LinkT]):
         users = get_user_model().objects.system_context(reason=reason).people().lock_if_supported()
         with transaction.atomic(), system_context(reason=reason):
             user = instance_from_public_id(get_user_model(), selector, queryset=users) if selector else None
-            digest = self.model.token_digest(None if user is None else user.pk, secret)
             if user is None:
                 return None
+            digest = self.model.token_digest(user.pk, secret)
             links = list(self.filter(user=user).order_by("-pk"))
             matched = None
             for link in links:
@@ -1303,7 +1286,8 @@ class SignInLink(AuditMixin, AngeeModel, concrete=True):
 
     user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="sign_in_links")
     token_hash = models.CharField(max_length=64)
-    account_hash = models.CharField(max_length=64)
+    # Rows issued before this column existed keep the empty default and read as spent.
+    account_hash = models.CharField(max_length=64, default="")
     expires_at = models.DateTimeField()
     sent_at = models.DateTimeField(null=True, blank=True)
     used_at = models.DateTimeField(null=True, blank=True)
@@ -1344,13 +1328,14 @@ class SignInLink(AuditMixin, AngeeModel, concrete=True):
     def deliverable(cls) -> bool:
         """Whether this deployment can build and send links: a usable public origin, sender and default mailer."""
 
-        return _public_origin() is not None and _default_sender_usable() and DEFAULT_MAILER_ALIAS in mailers
+        origin = public_origin(settings.ANGEE_PUBLIC_ORIGIN, debug=settings.DEBUG)
+        return origin is not None and _default_sender_usable() and DEFAULT_MAILER_ALIAS in mailers
 
     @staticmethod
     def url_for(token: str) -> str:
         """Return the public URL that redeems ``token``; the token rides the fragment, which no request carries."""
 
-        origin = _public_origin()
+        origin = public_origin(settings.ANGEE_PUBLIC_ORIGIN, debug=settings.DEBUG)
         if origin is None:
             raise ImproperlyConfigured(SIGN_IN_LINK_UNAVAILABLE_MESSAGE)
         return f"{origin}{SIGN_IN_LINK_PATH}#{urlencode({'token': token})}"

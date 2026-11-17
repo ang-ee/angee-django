@@ -30,10 +30,19 @@ def stamp_last_login(sender: Any, user: Any, **kwargs: Any) -> None:
     user.last_login = now
 
 
-def retire_sign_in_links(sender: Any, instance: Any, update_fields: Any = None, **kwargs: Any) -> None:
-    """Retire the outstanding sign-in links of an account saved inactive, so reactivating it revives none."""
+def retire_sign_in_links(
+    sender: Any,
+    instance: Any,
+    update_fields: Any = None,
+    raw: bool = False,
+    **kwargs: Any,
+) -> None:
+    """Retire the outstanding sign-in links of an account saved inactive, so reactivating it revives none.
 
-    if instance.is_active or (update_fields is not None and "is_active" not in update_fields):
+    Fixture loading (``raw``) writes rows as given and retires nothing.
+    """
+
+    if raw or instance.is_active or (update_fields is not None and "is_active" not in update_fields):
         return
     cast(Any, apps.get_model("iam", "SignInLink")).objects.retire(instance)
 

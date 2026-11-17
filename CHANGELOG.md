@@ -23,15 +23,24 @@ live in code docstrings.
   Django's `MAILERS["default"]` once the row commits. Redemption is
   `authenticate()` through `angee.iam.auth.SignInLinkBackend` with
   `sign_in_credentials(token)`, behind the public `redeem_sign_in_link`
-  mutation and IAM's public `/sign-in-link` route. IAM now owns the
-  django-axes policy: `AXES_COOLOFF_TIME` (one hour; lockouts were permanent),
-  `AXES_RESET_ON_SUCCESS`, and username and whitelist callables, so link
-  attempts are keyed by account and a genuine spent link is not a failure.
-  `ANGEE_PUBLIC_ORIGIN` is now a base setting, fed by the environment variable
-  of that name or authored; the CSRF trusted origins read the resolved value,
-  so an origin authored in `settings.yaml` is now trusted too. Browser error
-  reports drop URL fragments. `useSignInRedirect` (`@angee/app/auth`) is the
-  post-sign-in navigation `LoginPage` uses. Upgrade: compose and author the
+  mutation and IAM's public `/sign-in-link` route. A request now makes one
+  sign-in attempt: `login` and `redeem_sign_in_link` share
+  `angee.iam.auth.authenticate_once`, and a second attempt in the same request
+  (aliased or batched fields) is refused. IAM now owns the django-axes policy
+  (axes 9 or later): `AXES_COOLOFF_TIME` (one hour; lockouts were permanent;
+  a successful sign-in clears no failures), and username and whitelist
+  callables, so link attempts are recorded under the account public id they
+  name and a genuine spent link is not a failure. `ANGEE_PUBLIC_ORIGIN` is now
+  a base setting, fed by the environment variable of that name or authored,
+  with one rule (`angee.base.origins.public_origin`): only a bare `https`
+  origin (`http` only under `DEBUG`) joins the CSRF trusted origins, so an
+  origin authored in `settings.yaml` is now trusted too, and `angee.E051`
+  reports an invalid one (an `http` origin without `DEBUG` now fails the
+  check). Browser error reports drop URL fragments, frame locations included.
+  `safeRedirectPath` resolves a `next` value as the browser does and accepts
+  only a same-origin result, closing `/%09/host`-style escapes.
+  `useSignInRedirect` (`@angee/app/auth`) is the post-sign-in navigation
+  `LoginPage` uses. Upgrade: compose and author the
   `iam` migration for the new table, then re-sync the permission schema (iam
   revision 25). Projects whose `AUTHENTICATION_BACKENDS` replace IAM's list add
   `angee.iam.auth.SignInLinkBackend`; projects with their own
