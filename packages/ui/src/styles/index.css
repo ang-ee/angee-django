@@ -258,6 +258,9 @@
 /* Theme-authored typography must be referenced directly by the generated
    utilities so overrides on a theme selector remain authoritative. */
 @theme inline {
+  /* `font-display`: the headings' face, falling back to sans in tokens.css. */
+  --font-display: var(--font-family-display);
+
   --font-weight-normal:   var(--fw-regular);
   --font-weight-medium:   var(--fw-medium);
   --font-weight-semibold: var(--fw-semibold);

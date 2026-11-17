@@ -1432,6 +1432,10 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
   `text-sm` (14), `text-15`, `text-base` (16), `text-lg` (18), `text-22`, `text-28`,
   `text-34` — every step reads a public `--fs-*`/`--lh-*` theme token. Tailwind's
   `text-xs` is not bridged; 12px is `text-12`. No arbitrary `text-[Npx]`.
+- **Headings read the display face:** the `display`, `title` and `heading` roles of
+  [`textRoleVariants`](../../packages/ui/src/ui/text.tsx) carry `font-display`, the
+  theme's `--font-family-display`, which follows `--font-family-sans` when unset. A
+  heading takes the role rather than spelling `font-display` beside its own size.
 - **Control heights are tokens:** `h-control-xs` (28px) is the pane control — tabs,
   toggles, pane toolbar buttons, tree rows, select triggers; `h-btn-sm/md/lg` are
   26/30/36. Never a raw `h-7`/`size-7` on a control.

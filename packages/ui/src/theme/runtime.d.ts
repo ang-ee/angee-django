@@ -14,7 +14,7 @@ export type ThemeTokenName =
   | "--danger" | "--danger-hover" | "--danger-active" | "--on-danger" | "--danger-line" | "--danger-tint"
   | "--info" | "--on-info" | "--info-line" | "--info-tint"
   | "--on-accent" | "--accent-line" | "--accent-tint" | "--brand-line" | "--brand-tint"
-  | "--ring" | "--ring-danger" | "--font-family-sans" | "--font-family-mono" | "--elevation-xs" | "--elevation-sm"
+  | "--ring" | "--ring-danger" | "--font-family-sans" | "--font-family-mono" | "--font-family-display" | "--elevation-xs" | "--elevation-sm"
   | "--elevation-md" | "--elevation-lg" | "--elevation-popover" | "--r-2" | "--r-4" | "--r-6" | "--r-8"
   | "--r-10" | "--r-12" | "--r-full" | "--rail-w" | "--topbar-h" | "--breadcrumbbar-h" | "--controlpanel-h"
   | "--control-h-xs" | "--control-h-sm" | "--control-h-md" | "--control-h-lg"

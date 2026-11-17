@@ -11,16 +11,18 @@ import { tv } from "../lib/variants";
 // `<span className={textRoleVariants({ role: "display", tone: "muted" })}>`.
 // `numeric`/`mono` add tabular figures or monospaced text, and `truncate` adds
 // the shared overflow treatment. Call sites compose this recipe instead of
-// re-spelling size/weight/color literals.
+// re-spelling size/weight/color literals. The three title-like roles read the
+// theme's display face (`font-display`), which is the sans face unless a theme
+// sets `--font-family-display`.
 /**
  * @kind token
  */
 export const textRoleVariants = tv({
   variants: {
     role: {
-      display: "text-22 font-semibold text-fg",
-      title: "text-15 font-semibold text-fg",
-      heading: "text-lg font-semibold text-fg",
+      display: "font-display text-22 font-semibold text-fg",
+      title: "font-display text-15 font-semibold text-fg",
+      heading: "font-display text-lg font-semibold text-fg",
       value: "text-13 tabular-nums text-fg",
       caption: "text-2xs text-fg-muted",
       meta: "text-13 text-fg-muted",
