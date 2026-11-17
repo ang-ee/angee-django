@@ -3,7 +3,7 @@
 import { cleanup, render, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { operationDocuments } from "@angee/gql/console/actions";
-import { RoutedRuntimeFixture, storySchema, type GraphQLWireRequest } from "@angee/storybook/testing";
+import { RoutedRuntimeFixture, storySchema, testDataResource, type GraphQLWireRequest } from "@angee/storybook/testing";
 import { containersFromChildren, type Occurrence, type ResourceListCalendarSpec } from "@angee/ui";
 import { createRouteHref } from "@angee/ui/runtime";
 
@@ -45,10 +45,14 @@ const requests: GraphQLWireRequest[] = [];
 let outcome = { ok: true, message: "Event rescheduled." };
 
 function renderPage(): void {
-  const schema = storySchema({
-    calendars: () => CALENDARS,
-    reschedule_event: () => outcome,
-  }, (request) => requests.push(request)).public!;
+  // The record routes and the action's invalidation resolve models through the schema's resource metadata.
+  const schema = {
+    ...storySchema({
+      calendars: () => CALENDARS,
+      reschedule_event: () => outcome,
+    }, (request) => requests.push(request)).public!,
+    metadata: { angee: { resources: [testDataResource("calendar.CalendarEvent"), testDataResource("calendar.Calendar")] } },
+  };
   const containers = containersFromChildren([{ address: OCCURRENCE_SOURCES }], {
     [OCCURRENCE_SOURCES]: {
       "projects-calendar.due-tasks": {
