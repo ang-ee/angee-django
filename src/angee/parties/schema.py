@@ -577,7 +577,7 @@ class PartiesIdentityMutation:
         party_b = Party.objects.all().from_public_id(str(b_id))
         if party_a is None or party_b is None:
             raise ValueError("party not found")
-        return cast(SameAsStatementType, Party.same_as.for_pair(party_a, party_b).dismiss(aspect="same_as"))
+        return cast(SameAsStatementType, Party.same_as.for_pair(party_a, party_b).dismiss_statement(aspect="same_as"))
 
 
 

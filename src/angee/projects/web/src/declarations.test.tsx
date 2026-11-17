@@ -13,6 +13,7 @@ import {
   projectGanttSpec, projectRecordTabsFor, projectTimelineSpec, projectTimelineTab, taskRecordTabs, taskRecordTabsFor, useProjectFormDeclaration, useProjectListDeclaration,
   useTaskFormDeclaration, useTaskListDeclaration,
 } from "./index";
+import { projectForm, taskForm } from "./record-forms";
 import { ProjectsPage } from "./views/ProjectsPage";
 import { TasksPage } from "./views/TasksPage";
 
@@ -75,13 +76,12 @@ describe("composable standard project and task declarations", () => {
     const props = propsOf<FormProps>(result.current);
     const fields = [...parsePageFields(props.children), ...parsePageGroups(props.children).flatMap((group) => group.fields)];
     expect(fields.find(({ name }) => name === "title")?.title).toBe(true);
-    expect(fields.find(({ name }) => name === "body")?.body).toBe(true);
+    expect(parsePageGroups(props.children).find(({ pane }) => pane === "description")?.fields.map(({ name }) => name)).toEqual(["body"]);
     expect(fields.find(({ name }) => name === "status")).toMatchObject({ hidden: true, readOnly: true });
     expect(fields.find(({ name }) => name === "current_milestone")).toMatchObject({ status: true, widget: "projects.phase" });
     expect(fields.some(({ name }) => ["sort_order", "health"].includes(name))).toBe(false);
-    const details = parsePageGroups(props.children).find(({ label }) => label === "Details");
-    expect(details).toMatchObject({ collapsible: true, defaultOpen: false });
-    expect(details?.fields.map(({ name }) => name)).toEqual(["owns_items", "folder", "converted_from"]);
+    const details = parsePageGroups(props.children).find(({ pane }) => pane === "project-settings");
+    expect(details?.fields.map(({ name }) => name)).toEqual(["owner", "start_date_resolution", "target_date_resolution", "owns_items", "folder", "converted_from"]);
     expect(parsePageActions(props.children).map(({ id }) => id)).toEqual(["pause", "resume", "complete", "drop"]);
     expect(props.returning).toContain("permissions");
     const actions = parsePageActions(props.children);
@@ -100,9 +100,8 @@ describe("composable standard project and task declarations", () => {
     const groups = parsePageGroups(propsOf<FormProps>(form.current).children);
     expect(groups.filter(({ label }) => label !== "Details").flatMap(({ fields }) => fields)
       .some(({ name }) => ["sort_order", "sub_sort_order"].includes(name))).toBe(false);
-    expect(groups.find(({ label }) => label === "Details")?.fields.slice(0, 2).map(({ name, createOnly }) => ({ name, createOnly })))
-      .toEqual([{ name: "sort_order", createOnly: true }, { name: "sub_sort_order", createOnly: true }]);
-    expect(groups.find(({ label }) => label === "Details")).toMatchObject({ collapsible: true, defaultOpen: false });
+    expect(groups.find(({ pane }) => pane === "task-details")?.fields.map(({ name }) => name))
+      .toEqual(["delegate", "recurrence", "dropped_reason", "done_at", "dropped_at"]);
   });
 
   test("consumer selections keep dependency fields and reuse native groups and verbs", () => {
@@ -110,18 +109,17 @@ describe("composable standard project and task declarations", () => {
     const { result: project } = renderHook(() => useProjectFormDeclaration({ groups: ["planning"], verbs: ["complete"], contextLine: line }));
     const projectProps = propsOf<FormProps>(project.current);
     expect(projectProps.contextLine).toBe(line);
-    expect(parsePageGroups(projectProps.children).map(({ label }) => label)).toEqual(["Planning"]);
+    expect(parsePageGroups(projectProps.children).map(({ label }) => label)).toEqual(["Planning", "Description"]);
     expect(parsePageActions(projectProps.children).map(({ id }) => id)).toEqual(["complete"]);
     expect(parsePageActions(projectProps.children)[0]).toMatchObject({ label: "Complete", permission: "write" });
     expect(parsePageFields(projectProps.children).map(({ name }) => name)).toEqual([
-      "title", "revision", "status", "current_milestone", "owner", "lead", "start_date",
-      "start_date_resolution", "target_date", "target_date_resolution", "tags", "body",
+      "title", "revision", "status", "current_milestone", "lead", "tags", "start_date", "target_date", "body",
     ]);
 
     const { result: task } = renderHook(() => useTaskFormDeclaration({ groups: ["assignment"], verbs: ["complete"], contextLine: line }));
     const taskProps = propsOf<FormProps>(task.current);
     expect(taskProps.contextLine).toBe(line);
-    expect(parsePageGroups(taskProps.children).map(({ label }) => label)).toEqual(["Assignment"]);
+    expect(parsePageGroups(taskProps.children).map(({ label }) => label)).toEqual(["Assignment", "Description"]);
     expect(parsePageActions(taskProps.children).map(({ id }) => id)).toEqual(["complete"]);
     expect(parsePageActions(taskProps.children)[0]).toMatchObject({ label: "Complete", permission: "write" });
     expect(parsePageFields(taskProps.children).map(({ name }) => name)).toContain("revision");
@@ -163,7 +161,7 @@ describe("composable standard project and task declarations", () => {
     expect(parsePageFields(props.children).find(({ name }) => name === "stage")).toMatchObject({
       status: true, readOnly: true, widget: "work.stage",
     });
-    expect(parsePageGroups(props.children).map(({ label }) => label)).toEqual(["Details"]);
+    expect(parsePageGroups(props.children).map(({ label }) => label)).toEqual(["Description", "Details"]);
   });
 
   test("exports the standard record tabs and a timeline scoped to one project's lane", () => {
@@ -194,9 +192,12 @@ describe("composable standard project and task declarations", () => {
   test("ProjectsPage mounts the exported list, form and tabs", () => {
     render(<ProjectsPage />);
     expect(mounted.props?.resource).toBe(PROJECT_MODEL);
-    expect(mounted.props?.recordTabs).toBe(projectRecordTabs);
+    expect(mounted.props?.form).toBe(projectForm);
+    const { result } = renderHook(() => (projectForm.Component as (props: { resource: string }) => React.ReactElement<FormProps>)({ resource: PROJECT_MODEL }) as React.ReactElement<FormProps>);
+    expect(result.current.props.recordTabs).toBe(projectRecordTabs);
+    expect(result.current.props.defaultRecordTab).toBe("description");
     expect(mountedDeclaration<ListProps>(List)).toBe(projectListDeclaration.props);
-    const props = mountedDeclaration<FormProps>(Form);
+    const props = result.current.props;
     expect(parsePageFields(props.children).find(({ name }) => name === "current_milestone")?.status).toBe(true);
     expect(parsePageActions(props.children).map(({ id }) => id)).toEqual(["pause", "resume", "complete", "drop"]);
   });
@@ -204,9 +205,12 @@ describe("composable standard project and task declarations", () => {
   test("TasksPage mounts the exported task declarations and its default filter", () => {
     render(<TasksPage />);
     expect(mounted.props?.resource).toBe(TASK_MODEL);
-    expect(mounted.props?.recordTabs).toBe(taskRecordTabs);
+    expect(mounted.props?.form).toBe(taskForm);
+    const { result } = renderHook(() => (taskForm.Component as (props: { resource: string }) => React.ReactElement<FormProps>)({ resource: TASK_MODEL }) as React.ReactElement<FormProps>);
+    expect(result.current.props.recordTabs).toBe(taskRecordTabs);
+    expect(result.current.props.defaultRecordTab).toBe("description");
     expect(mounted.props?.defaultFilter).toEqual({ NOT: { status: { exact: "DROPPED" } } });
     expect(mountedDeclaration<ListProps>(List).defaultGroup).toEqual({ field: "project" });
-    expect(parsePageFields(mountedDeclaration<FormProps>(Form).children).find(({ name }) => name === "title")?.title).toBe(true);
+    expect(parsePageFields(result.current.props.children).find(({ name }) => name === "title")?.title).toBe(true);
   });
 });

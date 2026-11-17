@@ -36,7 +36,7 @@ import {
 import type { IResourceItem } from "@refinedev/core";
 import { graphqlWireFetch, type GraphQLWireOperation, type GraphQLWireRequest } from "@angee/refine/testing/wire";
 import { composeAddons } from "@angee/app";
-import { parseFlatSearch, stringifyFlatSearch } from "@angee/app/create-app";
+import { createApp, parseFlatSearch, stringifyFlatSearch, type CreateAppInput } from "@angee/app/create-app";
 import { NuqsTestingAdapter } from "nuqs/adapters/testing";
 import { NuqsAdapter } from "nuqs/adapters/tanstack-router";
 import { previewThemes, previewThemeId } from "../theme-global";
@@ -51,6 +51,26 @@ import {
 
 export { testDataResource, testQueryAxis, testQueryField, testResourceQuery } from "@angee/metadata/testing";
 export { GraphQLError, type GraphQLWireOperation, type GraphQLWireRequest } from "@angee/refine/testing/wire";
+export { resourceSnapshotOperations } from "../resource-snapshots";
+
+/** Full product pages use the production composition root and native memory history.
+ * The caller owns stable fixture input, including every schema's isolated transport.
+ * Set angeeOwnRuntime so the global decorator does not mount a second provider stack.
+ */
+export function ComposedRuntimeFixture({ input, initialEntry }: {
+  input: CreateAppInput;
+  initialEntry: string;
+}) {
+  const app = useMemo(() => {
+    for (const [name, schema] of Object.entries(input.schemas)) {
+      if (!schema.fetch || schema.live !== false) {
+        throw new Error(`Story schema ${name} needs a fixture fetch and live subscriptions disabled.`);
+      }
+    }
+    return createApp({ ...input, history: createMemoryHistory({ initialEntries: [initialEntry] }) });
+  }, [input, initialEntry]);
+  return <RouterProvider router={app.router} />;
+}
 
 /**
  * The one Storybook environment, shared by the global preview decorator and

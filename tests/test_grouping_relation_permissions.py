@@ -40,7 +40,7 @@ from angee.graphql.data.hasura import (
     hasura_model_resource,
 )
 from angee.graphql.node import AngeeNode
-from angee.graphql.relations import actor_scoped_to_many, actor_scoped_to_one
+from angee.graphql.relations import actor_scoped_public_ids, actor_scoped_to_many, actor_scoped_to_one
 from angee.graphql.schema import GraphQLSchemas
 from angee.graphql.testing.documents import execute_schema, result_data
 from tests.conftest import SchemaAddon
@@ -1019,3 +1019,22 @@ def test_selected_alias_compiles_only_its_related_permission_scope(relation_grou
     assert values[str(case.parents[0].sqid)] == case.alpha.display_name
     assert values[str(case.parents[2].sqid)] is None
     assert {call.kwargs["model"] for call in scope.call_args_list} == {GroupParent, GroupLabel}
+
+
+@override_settings(REBAC_STRICT_MODE=True)
+@pytest.mark.parametrize("prefetch", [False, True])
+def test_public_ids_project_only_the_readers_rows(relation_grouping_case: Any, prefetch: bool) -> None:
+    """The to-many id projection keeps the reader's rows, prefetched or read through the actor."""
+
+    case = relation_grouping_case
+    ids = actor_scoped_public_ids("parents").base_resolver.wrapped_func
+    with system_context(reason="tests.relations.public_ids"):
+        hidden = GroupParent.objects.create(kind="nested", middle=case.alpha_middle)
+        assert set(ids(GroupMiddle.objects.get(pk=case.alpha_middle.pk))) == {
+            case.parents[6].sqid, hidden.sqid,
+        }
+    with actor_context(case.alice):
+        rows = GroupMiddle.objects.with_actor(case.alice)
+        if prefetch:
+            rows = rows.prefetch_related("parents")
+        assert ids(rows.get(pk=case.alpha_middle.pk)) == [case.parents[6].sqid]

@@ -29,6 +29,7 @@ function PersonHandlesTab({ recordId }: Pick<RecordPanelContext, "recordId">): R
     <ListView<HandleRow>
       resource="parties.Handle"
       presentation="embedded"
+      chrome={{ heading: false }}
       fields={["id", "platform", "value", "label", "is_preferred"]}
       baseFilter={{ party: { exact: recordId } }}
       columns={columns}
@@ -53,18 +54,20 @@ export function personFields(t: ReturnType<typeof usePartiesT>, extraFields: Rea
     <Group label={t("person.group.name")} columns={2}>
       <Field name="given_name" label={t("person.field.givenName")} />
       <Field name="family_name" label={t("person.field.familyName")} />
+    </Group>
+    <Field name="tags" />
+    <Group label={t("person.group.details")} pane="personal-details" columns={2}>
       <Field name="additional_name" label={t("person.field.middleName")} />
       <Field name="nickname" label={t("person.field.nickname")} />
       <Field name="name_prefix" label={t("person.field.prefix")} />
       <Field name="name_suffix" label={t("person.field.suffix")} />
-    </Group>
-    <Group label={t("person.group.details")} columns={2}>
       <Field name="birthday" label={t("person.field.birthday")} />
       <Field name="anniversary" label={t("person.field.anniversary")} />
-      <Field name="tags" />
     </Group>
     {extraFields}
-    <Field name="notes" />
+    <Group label={t("common.notes")} pane="notes" columns={1}>
+      <Field name="notes" />
+    </Group>
   </>;
 }
 

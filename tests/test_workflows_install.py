@@ -131,6 +131,99 @@ def test_definition_composes_before_point_edges_and_bindings() -> None:
     assert composed.nodes["record"].next == {"done": "finish"}
 
 
+def test_a_fragment_splices_at_a_point_an_earlier_fragment_declares() -> None:
+    """A later addon's fragment runs inside an earlier fragment's graph, before the node its point names."""
+
+    base = Definition.model_validate(_extensible_document())
+    ledger = WorkflowExtension.model_validate({
+        "extends": "extensible",
+        "at": "after_entry",
+        "nodes": {
+            "ledger": {"step": "install_probe", "next": {"done": ["movements", "references"]}},
+            "references": {"step": "install_probe", "next": {"done": "movements"}},
+            "movements": {"step": "install_probe", "join": "all"},
+        },
+        "points": {"before_movements": {"before": "movements"}},
+    })
+    orders = _contribution("consumer.orders", "orders", sequence=0).extension.model_copy(
+        update={"at": "before_movements"},
+    )
+    projects = _contribution("consumer.projects", "projects", sequence=0).extension.model_copy(
+        update={"at": "before_movements"},
+    )
+    composed = base.with_extensions((
+        SourcedWorkflowExtension("consumer.ledger", ledger),
+        SourcedWorkflowExtension("consumer.orders", orders),
+        SourcedWorkflowExtension("consumer.projects", projects),
+    ))
+    # Both later fragments run inside the ledger fragment, in addon order, before the node its point names.
+    assert composed.nodes["entry"].next == {"done": "ledger"}
+    assert composed.nodes["ledger"].next == {"done": ["orders", "references"]}
+    assert composed.nodes["references"].next == {"done": "orders"}
+    assert composed.nodes["orders"].next == {"done": "projects"}
+    assert composed.nodes["projects"].next == {"done": "movements"}
+    assert composed.nodes["movements"].next == {"done": "finish"}
+    retained = composed.retained_extensions()
+    assert [item.extension.points for item in retained] == [ledger.points, {}, {}]
+    replayed = base.with_extensions(retained)
+    assert replayed.model_dump(mode="json", by_alias=True) == composed.model_dump(mode="json", by_alias=True)
+
+
+def test_an_after_point_a_fragment_declares_retains_its_authored_route() -> None:
+    """Splicing after a fragment's node rewrites that node's route; retention restores the authored one."""
+
+    base = Definition.model_validate(_extensible_document())
+    ledger = WorkflowExtension.model_validate({
+        "extends": "extensible",
+        "at": "after_entry",
+        "nodes": {
+            "ledger": {"step": "install_probe", "next": {"done": "movements"}},
+            "movements": {"step": "install_probe"},
+        },
+        "points": {"after_ledger": {"after": "ledger"}},
+    })
+    orders = _contribution("consumer.orders", "orders", sequence=0).extension.model_copy(
+        update={"at": "after_ledger"},
+    )
+    composed = base.with_extensions((
+        SourcedWorkflowExtension("consumer.ledger", ledger),
+        SourcedWorkflowExtension("consumer.orders", orders),
+    ))
+    assert composed.nodes["ledger"].next == {"done": "orders"}
+    assert composed.nodes["orders"].next == {"done": "movements"}
+    assert composed.nodes["movements"].next == {"done": "finish"}
+    assert composed.contributions[0].routes == {"ledger": {"done": "movements"}}
+    replayed = base.with_extensions(composed.retained_extensions())
+    assert replayed.model_dump(mode="json", by_alias=True) == composed.model_dump(mode="json", by_alias=True)
+
+
+def test_a_fragment_point_must_be_declared_earlier_and_once() -> None:
+    """Fragment points fail fast: unknown at their use, duplicated, or anchored outside their fragment."""
+
+    base = Definition.model_validate(_extensible_document())
+    declaring = WorkflowExtension.model_validate({
+        "extends": "extensible",
+        "at": "after_entry",
+        "nodes": {"ledger": {"step": "install_probe"}},
+        "points": {"after_ledger": {"after": "ledger"}},
+    })
+    using = _contribution("consumer.early", "early", sequence=0).extension.model_copy(update={"at": "after_ledger"})
+    with pytest.raises(DefinitionInvalid, match="unknown point 'after_ledger'"):
+        base.with_extensions((
+            SourcedWorkflowExtension("consumer.early", using),
+            SourcedWorkflowExtension("consumer.ledger", declaring),
+        ))
+    redeclaring = declaring.model_copy(update={"nodes": {"other": {"step": "install_probe"}},
+                                               "points": {"after_entry": {"after": "other"}}})
+    with pytest.raises(DefinitionInvalid, match="duplicate point 'after_entry'"):
+        base.with_extensions((SourcedWorkflowExtension("consumer.other", redeclaring),))
+    with pytest.raises(ValueError, match="must name a node this extension contributes"):
+        stray = {**declaring.model_dump(), "points": {"after_x": {"after": "entry"}}}
+        WorkflowExtension.model_validate(stray).fragment()
+    # A fragment without points serializes, and so fingerprints, exactly as before points existed.
+    assert "points" not in using.model_dump(mode="json", by_alias=True)
+
+
 def test_resource_composes_extensions_without_editing_the_base_draft(
     db: None,
     tmp_path: Path,

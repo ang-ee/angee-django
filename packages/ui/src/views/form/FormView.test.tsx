@@ -466,6 +466,32 @@ describe("FormView", () => {
     expect(details.getAttribute("aria-expanded")).toBe("true");
   });
 
+  test("overflow sections remain reachable and keep the selected pane and unsaved form visible", async () => {
+    const nativeRect = Element.prototype.getBoundingClientRect;
+    const rect = vi.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(function (this: Element) {
+      if (this.querySelector(':scope > [role="tablist"]')) return { width: 310 } as DOMRect;
+      if (this.parentElement?.hasAttribute("inert")) return { width: 100 } as DOMRect;
+      return nativeRect.call(this);
+    });
+    try {
+      renderWithProviders(<FormView resource="notes.Note" id="note-1" fields={fields}
+        recordTabs={["Overview", "Activity", "History", "Related"].map((label) => ({
+          id: label, label, render: () => <p>{label} content</p>,
+        }))} />);
+      const title = await screen.findByLabelText("Title");
+      fireEvent.change(title, { target: { value: "Unsaved title" } });
+      expect(screen.queryByRole("tab", { name: "Related" })).toBeNull();
+      fireEvent.click(screen.getByRole("button", { name: "More sections" }));
+      fireEvent.click(await screen.findByRole("menuitem", { name: "Related" }));
+      expect(await screen.findByRole("tab", { name: "Related", selected: true })).toBeTruthy();
+      expect(screen.getByText("Related content")).toBeTruthy();
+      expect((screen.getByLabelText("Title") as HTMLInputElement).value).toBe("Unsaved title");
+      expect(screen.getAllByRole("tablist")).toHaveLength(1);
+    } finally {
+      rect.mockRestore();
+    }
+  });
+
   test.each(["document", "workspace"] as const)("%s records keep the sheet above one strip of declared and contributed panes", async (recordPresentation) => {
     const mounted = vi.fn();
     function RetainedPane({ active }: { active: boolean }): ReactElement {
@@ -1655,7 +1681,7 @@ describe("FormView", () => {
       workflowRelationMetadata(),
     );
     expect(screen.getByRole("combobox", { name: "Workflow" }).textContent).toContain(
-      "Untitled",
+      "Select…",
     );
     expect(screen.queryByRole("textbox", { name: "Workflow" })).toBeNull();
   });

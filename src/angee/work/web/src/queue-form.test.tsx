@@ -83,15 +83,28 @@ describe("queue settings sections", () => {
 });
 
 describe("queue settings form declaration", () => {
-  test("titles the queue form, shows name, category and tone first, and keeps the rule flags behind the menu with their help", () => {
+  test("titles the queue form, shows name, category and tone first, and keeps description, fold, rotting and the rule flags behind the menu with their help", () => {
     render(<Declaration />);
 
     expect(mocks.formProps?.resource).toBe("work.Queue");
     expect(mocks.formProps?.layout).toBeUndefined();
     expect(mocks.formProps?.linePrimaryFields).toEqual(["name", "category", "tone"]);
     const fields = mocks.formProps?.lineFields as readonly LineField[];
-    expect(fields.map((field) => field.name)).toEqual(["name", "category", "tone", "rule_owned"]);
+    expect(fields.map((field) => field.name))
+      .toEqual(["name", "category", "tone", "description", "fold", "rotting_days", "rule_owned"]);
     const byName = new Map(fields.map((field) => [field.name, field]));
+    expect(byName.get("description")).toMatchObject({
+      label: "Description",
+      description: "What this stage requires before a task moves on.",
+    });
+    expect(byName.get("fold")).toMatchObject({
+      label: "Folded",
+      description: "Boards show this stage collapsed until someone expands it.",
+    });
+    expect(byName.get("rotting_days")).toMatchObject({
+      label: "Rotting after (days)",
+      description: "Days a task may rest in this stage before it needs attention; leave empty for no limit.",
+    });
     expect(byName.get("rule_owned")).toMatchObject({ label: "Moved by rules", description: "Only automation rules move tasks into or out of this stage; hand moves and the default stage are refused." });
     const title = mocks.formProps?.children as React.ReactElement<{ name: string; title?: boolean }>;
     expect(title.props).toMatchObject({ name: "name", title: true });

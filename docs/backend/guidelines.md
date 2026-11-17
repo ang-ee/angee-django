@@ -236,7 +236,9 @@ Use these owners instead of maintaining another contract in an addon:
 - A foreign key that its row discloses whatever the reader may see of the target
   projects as [`public_id_field("relation", nullable=...)`](../../src/angee/graphql/ids.py),
   the stored key without a target read; a reference that target readability must
-  redact projects as [`actor_scoped_public_id`](../../src/angee/graphql/relations.py).
+  redact projects as [`actor_scoped_public_id`](../../src/angee/graphql/relations.py), and a
+  to-many relation a form edits by id as its many-valued counterpart
+  [`actor_scoped_public_ids`](../../src/angee/graphql/relations.py).
 - Management commands stay thin. They parse CLI arguments, load settings/context,
   and call the owner. Command modules should not contain reusable business logic,
   import generated runtime models directly, or duplicate resource/composer/schema
@@ -339,6 +341,14 @@ Use these owners instead of maintaining another contract in an addon:
   child subranks serialize within each non-null parent, including children from
   different projects. Root subranks are inert and need no global allocation or
   uniqueness. Explicit numeric ranks, including Stage positions, retain exact values.
+- A pipeline whose stage names and order belong to users composes the `angee.base`
+  [stage primitive](../../src/angee/base/models/stages.py): a concrete `Stage` per
+  addon and `StagedModelMixin` on its records. A lifecycle whose vocabulary belongs
+  to code stays a `StateField` on the record: an outcome such as won or hired is
+  never a stage flag, and a stage reaches a lifecycle only through projection.
+  Addons contribute vocabulary (categories, reservations, applicability) through
+  the primitive's hooks; they never copy its scope, admission, projection or
+  provisioning ([Persistence primitives](#persistence-primitives)).
 - Runtime model modules, generated schemas and codegen stubs are output.
   Change their source declarations. Native Django migration history is reviewed,
   version-controlled project source; preserve it across runtime rebuilds.
@@ -733,7 +743,12 @@ data through REBAC, never a queryset bypass.
   [`UserManager.create_person`](../../src/angee/iam/models.py), whose `create`
   permission owns admission; ingress without an actor uses
   `create_person_as_system` with a named reason, once its channel owner has
-  required channel `write` and account `create` to enable that ingress.
+  required channel `write` and account `create` to enable that ingress. An
+  ingress that already imported the person's contact passes it as `identity`;
+  `Party.objects.for_user(user, adopt=)` links that Person instead of creating a
+  second one and passes its ownership to the account; it refuses a Person another
+  account holds. A Person whose name a source states keeps that name when the
+  account is renamed.
   `create_user` stays the trusted bootstrap and OIDC path.
 - **Managed accounts change through IAM's account verbs.** `User.set_active`,
   `rename`, `issue_password` and `reset_password` lock the row, check their own
@@ -1070,7 +1085,9 @@ classifies eligible sources; `set()` refuses missing or unknown classifications.
 Statements retain the assertion-time classification across source edits and
 deletion. The declaring addon passes `StatementRecords(link="integrate.RecordLink")`
 (and `model_name=` when `<Subject>Statement` is already a domain model; a money
-column copied without its currency column becomes a plain decimal on the statement);
+column copied without its currency column becomes a plain decimal on the statement;
+a value field named like a stance column, such as a subject's `status`, is held as
+`stated_<name>`, which `Aspect.column` names);
 the base declaration defaults to `None`, and the named model composes `StatementLinkMixin`: its
 `authoritative` fact (`SyncStream.authoritative`, read through `RecordLink.stream`)
 places a SYSTEM_OF_RECORD source ahead of PERSON in every aspect listing both
@@ -1083,7 +1100,19 @@ whose precedence admits a person, including separate MTI child tables; parent
 declarations keep their shared-pk owner. An aspect whose precedence leaves PERSON
 out belongs to its native owner: a person's save writes those fields as an ordinary
 save. A person's create states no group whose values are all empty; clearing a
-field later is an edit and is stated. Confirm or dismiss stay explicit.
+field later is an edit and is stated. Retained statements protect their subject and
+every row they name from deletion, so a subject whose local rows stay deletable sets
+`StatementsMixin.person_stances_once_stated`: a person's save states nothing until
+the row carries a statement (`carries_statements()`). Known debt: the first source
+assertion on such a row applies over its local values even from a plain stream,
+which contradicts "a plain stream ranks below people" for these rows; the owner-level
+cure is to seed PERSON stances from the row's history attribution when its first
+non-authoritative assertion arrives. A subject whose `write` other rows inherit names
+a narrower `statement_write_permission` (projects' `write_statements`), so admission
+lends a source nothing those rows reach (see [projects](../../src/angee/projects/README.md));
+`statement_source` stays out of every permission another row inherits, a record task's
+`*_as_subject` arms included.
+Confirm or dismiss stay explicit.
 Consumers contribute domain aspects through the descriptor's abstract donors: the
 subject source's own declaration finalizes the one statement table (bases, prefix,
 queryset, link) and every donor's aspects join it. `Aspect.precedence` owns source
@@ -1237,6 +1266,35 @@ exception closes the rows as failed. Tests inherit a boundary from the root
   values from the owner's persisted copy of the same row through
   `StateTransitions.copy_persisted_state`; reload authorization stays private.
   Recovery writes outside the graph use `force_state` with a concrete reason.
+- **Stages are data-owned; lifecycles are code-owned.**
+  [`Stage`](../../src/angee/base/models/stages.py) is the abstract stage row an
+  addon makes concrete with its container foreign key (`container_field_name`);
+  [`StagedModelMixin`](../../src/angee/base/models/stages.py) is the record side.
+  The row carries the user's name, `description`, tone and fractional `position`,
+  the board's default-collapsed `fold` hint (a lane source reads it as
+  `foldField`; a board never writes it back) and `rotting_days`, the dwell after
+  which a resting record needs attention, measured from the record's
+  `stage_entered_at`, which the mixin stamps on every save that moves the stage.
+  A write that bypasses `save()` does not stamp it: a stage deleted under
+  `on_delete=SET_NULL` leaves the record's last stamp in place.
+  *Applicability:* an override of `Stage.for_record` narrows a container's stages
+  for one record; scope validation and `resolve_default_stage` both read it, and a
+  container default the record cannot hold falls back through
+  `Stage.resolve_default_fallback` over the applicable stages. *Admission:* the
+  mixin reads the committed row once under the row lock and asks
+  `Stage.validate_transition(previous, following, *, manual, admitted, adding)` for
+  hand moves and every non-sudo write; a verb that owns a reserved entry passes
+  `save(admitted_stage=...)` and must write exactly that stage. A partial save is
+  judged on the row it stores (written fields over the committed row), never on a
+  stale instance; a consumer checks its own same-row invariants there through
+  `validate_stored_row(persisted, stored)`, and copies the instance facts its rules
+  read outside the columns (a flag held for one write) onto that row through
+  `carry_instance_facts(stored)`.
+  *Projection:* `project_stage(previous, following)` returns the fields a move
+  writes and the save merges them into `update_fields`; a consumer extends it
+  through `super()` to write its code-owned lifecycle through `StateTransitions`.
+  *Provisioning:* `Stage.provision(container, rows, key=...)` creates a
+  container's missing default stages once, inside the caller's system context.
 - **Give a model an opaque public id by mixing in `SqidMixin` and declaring
   `sqid_prefix = "abc_"`** — the one fact that varies per model. The shared
   `angee.base.fields.SqidField` reads that prefix in `contribute_to_class`; don't

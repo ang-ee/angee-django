@@ -12,6 +12,12 @@ projection locks name and category, so lines may change their tone and order but
 cannot rename, recategorize, delete or create one; provisioning and resource loads
 still own them.
 
+The [`angee.base` stage primitive](../base/models/stages.py) owns stage scope,
+admission, the `stage_entered_at` stamp, the `fold` and `rotting_days` hints and
+default provisioning; work contributes its category vocabulary and reservations
+through `Stage.validate_transition` and the task lifecycle through the
+`project_stage` override.
+
 The queue settings form is one owner, `useQueueFormDeclaration` (and
 `QueueSettingsForm` for a product's own route). Its sections are
 `work.Queue#sections` children: `work.queue-identity` (with the description),

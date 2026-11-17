@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from contextlib import contextmanager, nullcontext
+from datetime import datetime
 from enum import StrEnum
 from typing import Any, ClassVar, Self, cast
 
@@ -30,6 +31,7 @@ from rebac.field_backing import canonical_model
 
 from angee.base.exceptions import RecordAccessSubjectRefused
 from angee.base.fields.ordering import FractionalRankExhausted, FractionalRankField
+from angee.base.fields.relations import RetainedGenericRelation
 from angee.base.fields.state import StateField
 from angee.base.models.audit import AuditMixin
 from angee.base.models.base import AngeeDataModel
@@ -58,8 +60,44 @@ from angee.provenance.context import changeset, changeset_model, require_changes
 from angee.provenance.contrib.angee.history import HistoryMixin
 from angee.provenance.contrib.angee.managers import AngeeHistoryManager, AngeeHistoryMergeableUnscopedManager
 from angee.provenance.contrib.angee.querysets import AngeeHistoryMergeableUnscopedQuerySet, AngeeHistoryQuerySet
+from angee.provenance.statements import Aspect, SourceKind, StatementRecords, StatementsMixin
 from angee.scheduling.fields import RecurrenceField
 from angee.tags.models import TaggedModel
+
+STATED_BY: tuple[SourceKind, ...] = (SourceKind.PERSON, SourceKind.SYSTEM_OF_RECORD)
+"""Source precedence of every projects aspect.
+
+A person's normal stance outranks a plain stream, a system of reference; an
+authoritative stream (``SyncStream.authoritative``) outranks it as the system of
+record (``Aspect.priority``). A person's confirm or dismiss stays on top.
+"""
+
+
+class StatedRecordMixin(StatementsMixin):
+    """A projects row a system of record states through the ``integrate.RecordLink`` naming it.
+
+    A local row stays an ordinary record: a person's edit becomes a stance only
+    once a source states it (``person_stances_once_stated``). A source is admitted
+    by ``write_statements`` alone, kept out of ``read`` and ``write`` so no row
+    inheriting them reaches a source. Statements protect a stated row and every
+    row they name, so deleting them is refused.
+    """
+
+    person_stances_once_stated = True
+    statement_write_permission = "write_statements"
+    record_links = RetainedGenericRelation(
+        "integrate.RecordLink", content_type_field="target_content_type", object_id_field="target_object_id"
+    )
+
+    class Meta:
+        abstract = True
+
+    def delete_blocker(self) -> str | None:
+        """Name the refusal the statement tables' protected key enforces on every delete path."""
+
+        if self.carries_statements():
+            return f"This {self._meta.verbose_name} carries source statements and is retained."
+        return cast(Any, super()).delete_blocker()
 
 
 class ProjectSetupState(StrEnum):
@@ -592,6 +630,7 @@ class Project(
     ItemOwnershipMixin,
     OptimisticLockMixin,
     ThreadedModelMixin,
+    StatedRecordMixin,
     HistoryMixin,
     AngeeDataModel,
     concrete=True,
@@ -667,6 +706,37 @@ class Project(
         content_type_field="content_type",
         object_id_field="object_id",
         related_query_name="project",
+    )
+
+    def apply_lifecycle(self, *, member: Mapping[str, Any], values: Mapping[str, Any], statement: Any | None) -> None:
+        """Apply the surviving lifecycle stance through the status owner.
+
+        ``_set_status`` changes, stamps and announces the status; a stated change
+        time then replaces its stamp. No surviving stance (a withdrawal) or an
+        unknown value keeps the lifecycle.
+        """
+
+        del member
+        if statement is None or statement.snak == statement.StatementSnak.SOME_VALUE:
+            return
+        self._set_status(values["status"] or self.ProjectStatus.OPEN)
+        stated = values["status_changed_at"]
+        if stated is not None and self.status_changed_at != stated:
+            self.status_changed_at = stated
+            self.save(update_fields=("status_changed_at", "updated_at"))
+
+    statements = StatementRecords(
+        link="integrate.RecordLink",
+        aspects={
+            "identity": Aspect(fields=("title", "body"), precedence=STATED_BY),
+            "lifecycle": Aspect(fields=("status", "status_changed_at"), precedence=STATED_BY, apply=apply_lifecycle),
+            "schedule": Aspect(
+                fields=("start_date", "start_date_resolution", "target_date", "target_date_resolution"),
+                precedence=STATED_BY,
+            ),
+            "assignment": Aspect(fields=("lead",), precedence=STATED_BY),
+        },
+        sqid_prefix="pjs_",
     )
 
     objects = ProjectManager()
@@ -857,12 +927,14 @@ class Project(
                 locked.unsudo()
                 if actor is not None:
                     locked.with_actor(actor)
-                project_status_changed.send(
-                    sender=type(locked),
-                    project=locked,
-                    previous_status=previous_status,
-                    status=status,
-                )
+                # Survivorship may re-apply a source's stance inside the save, and announces that change itself.
+                if locked.status == status:
+                    project_status_changed.send(
+                        sender=type(locked),
+                        project=locked,
+                        previous_status=previous_status,
+                        status=status,
+                    )
             self.refresh_from_db()
         return self
 
@@ -935,13 +1007,51 @@ class _MilestoneManager[MilestoneT: Milestone](_MilestoneManagerBase[MilestoneT]
     """Preserve the native milestone scheduling queryset on manager reads."""
 
 
-class Milestone(HistoryMixin, OptimisticLockMixin, ImmutableFieldsMixin, AuditMixin, AngeeDataModel, concrete=True):
+class Milestone(
+    StatedRecordMixin,
+    HistoryMixin,
+    OptimisticLockMixin,
+    ImmutableFieldsMixin,
+    AuditMixin,
+    AngeeDataModel,
+    concrete=True,
+):
     """A named marker reached within one project."""
 
     sqid_prefix = "mls_"
     immutable_fields = ("reached_at", "reached_by_id")
 
     objects = _MilestoneManager()
+
+    def lifecycle_candidates(self, rows: Sequence[Any]) -> Sequence[Any]:
+        """A stamped receipt is historical: only the stances stating it compete, so no other one applies."""
+
+        if self.reached_at is None:
+            return rows
+        return [row for row in rows if row.stated_value("reached_at") == self.reached_at]
+
+    def apply_lifecycle(self, *, member: Mapping[str, Any], values: Mapping[str, Any], statement: Any | None) -> None:
+        """Stamp a stated receipt through ``mark_reached``, at the stated time."""
+
+        del member
+        if statement is None or statement.snak != statement.StatementSnak.VALUE or values["reached_at"] is None:
+            return
+        self.mark_reached(at=values["reached_at"])
+
+    statements = StatementRecords(
+        link="integrate.RecordLink",
+        aspects={
+            "identity": Aspect(fields=("name", "description"), precedence=STATED_BY),
+            "lifecycle": Aspect(
+                fields=("reached_at",),
+                precedence=STATED_BY,
+                candidates=lifecycle_candidates,
+                apply=apply_lifecycle,
+            ),
+            "schedule": Aspect(fields=("start_date", "target_date"), precedence=STATED_BY),
+        },
+        sqid_prefix="mss_",
+    )
 
     @classmethod
     def setup_template_values(cls, values: Mapping[str, Any]) -> dict[str, Any]:
@@ -1011,8 +1121,11 @@ class Milestone(HistoryMixin, OptimisticLockMixin, ImmutableFieldsMixin, AuditMi
         if self.start_date is not None and self.target_date is not None and self.start_date > self.target_date:
             raise ValidationError({"target_date": "The target date must be on or after the start date."})
 
-    def mark_reached(self, *, expected_revision: int | None = None) -> Milestone:
-        """Stamp and announce the first historical receipt, retaining it on replay."""
+    def mark_reached(self, *, at: datetime | None = None, expected_revision: int | None = None) -> Milestone:
+        """Stamp and announce the first historical receipt, retaining it on replay.
+
+        ``at`` is a source's stated receipt time; the stamp is now without one.
+        """
 
         actor, bypass = self.effective_actor(strict=True)
         with transaction.atomic():
@@ -1022,7 +1135,7 @@ class Milestone(HistoryMixin, OptimisticLockMixin, ImmutableFieldsMixin, AuditMi
             if expected_revision is not None:
                 locked.require_revision(expected_revision)
             if locked.reached_at is None:
-                locked.reached_at = timezone.now()
+                locked.reached_at = at or timezone.now()
                 locked.reached_by_id = actor_user_id(actor)
                 locked.allow_immutable_save("reached_at", "reached_by_id")
                 locked.sudo(reason="projects.milestone.mark_reached").save(
@@ -1084,6 +1197,7 @@ class Task(
     OwnerMixin,
     OptimisticLockMixin,
     ThreadedModelMixin,
+    StatedRecordMixin,
     HistoryMixin,
     AngeeDataModel,
     concrete=True,
@@ -1325,6 +1439,50 @@ class Task(
         related_query_name="task",
     )
     file_attachments = GenericRelation("storage.FileAttachment", related_query_name="task")
+
+    def apply_lifecycle(self, *, member: Mapping[str, Any], values: Mapping[str, Any], statement: Any | None) -> None:
+        """Apply the surviving lifecycle stance through the lifecycle verbs.
+
+        ``complete``, ``drop`` and ``reopen`` own the state, its stamps and every
+        capability projecting them, so a queued task enters the stage that
+        projects the stated state and its status and stage never disagree. A
+        state already held writes nothing; a stated close time then replaces the
+        verb's stamp. No surviving stance (a withdrawal) or an unknown value keeps
+        the lifecycle.
+        """
+
+        del member
+        if statement is None or statement.snak == statement.StatementSnak.SOME_VALUE:
+            return
+        status = self.TaskStatus(values["status"] or self.TaskStatus.OPEN)
+        reason = values["dropped_reason"] or self.dropped_reason or self.TaskDroppedReason.OBSOLETE
+        if status == self.TaskStatus.DONE and self.status != status:
+            self.complete()
+        elif status == self.TaskStatus.DROPPED and (self.status != status or self.dropped_reason != reason):
+            self.drop(reason)
+        elif status == self.TaskStatus.OPEN and self.status != status:
+            self.reopen()
+        stamp = {self.TaskStatus.DONE: "done_at", self.TaskStatus.DROPPED: "dropped_at"}.get(status)
+        if stamp is not None and values[stamp] is not None and getattr(self, stamp) != values[stamp]:
+            setattr(self, stamp, values[stamp])
+            self.save(update_fields=(stamp, "updated_at"))
+
+    statements = StatementRecords(
+        link="integrate.RecordLink",
+        aspects={
+            "identity": Aspect(fields=("title", "note"), precedence=STATED_BY),
+            "lifecycle": Aspect(
+                fields=("status", "done_at", "dropped_at", "dropped_reason"),
+                precedence=STATED_BY,
+                apply=apply_lifecycle,
+            ),
+            "schedule": Aspect(fields=("due_date",), precedence=STATED_BY),
+            "priority": Aspect(fields=("priority",), precedence=STATED_BY),
+            "assignment": Aspect(fields=("assignee",), precedence=STATED_BY),
+            "structure": Aspect(fields=("project", "milestone", "parent"), precedence=STATED_BY),
+        },
+        sqid_prefix="tks_",
+    )
 
     objects = TaskManager()
 
@@ -1595,7 +1753,8 @@ class Task(
             cast(Any, self).dropped_reason = None
             self.dropped_at = None
             self.save(update_fields=("status", "done_at", "dropped_reason", "dropped_at", "updated_at"))
-            self.post_completion(feedback)
+            if self.status == self.TaskStatus.DONE:  # survivorship may re-apply a source's stance in the save
+                self.post_completion(feedback)
         return self
 
     def _lock_lifecycle(self) -> None:

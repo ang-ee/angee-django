@@ -409,6 +409,41 @@ describe("EditableLines authored fields", () => {
     expect(screen.getByRole("textbox", { name: "Units" })).toBeTruthy();
   });
 
+  test("an authored readOnlyWhen locks one cell per row from the row and its document", () => {
+    function RoleHost(): React.ReactElement {
+      const form = useForm<Record<string, unknown>>({
+        defaultValues: { lines: [
+          { id: "section", label: "Hardware", quantity: 0, position: 0, kind: "section" },
+          { id: "product", label: "Widget", quantity: 2, position: 1, kind: "product" },
+        ] },
+      });
+      return (
+        <AppRuntimeProvider runtime={{ widgets: defaultWidgets }}>
+          <ModalsHost><EditableLines
+            control={form.control}
+            setValue={form.setValue}
+            name="lines"
+            lines={LINES}
+            parentRow={{ company: "Acme" }}
+            fields={[{
+              name: "quantity",
+              readOnlyWhen: (row, parentRow) => row.kind === "section" && parentRow?.company === "Acme",
+            }]}
+          /></ModalsHost>
+        </AppRuntimeProvider>
+      );
+    }
+    render(<RoleHost />);
+
+    const [, section, product] = within(screen.getByRole("table")).getAllByRole("row");
+    // The section row's quantity reads while its label still edits; the product row edits both.
+    expect(within(section!).queryByRole("textbox", { name: "Quantity" })).toBeNull();
+    expect(within(section!).getByRole("textbox", { name: "Label" })).toBeTruthy();
+    expect(within(product!).getByRole("textbox", { name: "Quantity" })).toBeTruthy();
+    // The predicate locks a cell, never the row: the section keeps its row actions.
+    expect(within(section!).getByRole("button", { name: "Remove line" })).toBeTruthy();
+  });
+
   test("lines without authored help render no legend beside the composer's footer", () => {
     const { container } = render(<Host footer={(rows) => <div>lines: {rows.length}</div>} />);
     expect(container.querySelector("dl")).toBeNull();

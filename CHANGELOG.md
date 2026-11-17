@@ -10,6 +10,34 @@ live in code docstrings.
 
 ## Unreleased — shared addon contracts, native embeddings and graph retrieval
 
+- `StatementsMixin`'s subject verbs are `confirm_statement(*, aspect, values, **members)`
+  and `dismiss_statement(*, aspect, **members)` (were `confirm` / `dismiss`), so a
+  subject's own `confirm` — a sales order's transition — no longer shadows or is
+  shadowed by the statement verb. `Statement.confirm()` / `dismiss()` (the stance
+  row's verbs) and every GraphQL mutation keep their names; callers of the subject
+  verbs move to the new names.
+- `EditableLineField.readOnlyWhen(row, parentRow)` locks one line cell per row
+  from the row and its owning document, so a document's section and note rows
+  read their commercial cells while their text and row actions stay editable.
+- An adopted Person (`Party.objects.for_user(user, adopt=)`) is owned by its
+  account, like a Person the account's creation makes, so the account reads and
+  edits its own private fields. `follow_user_name` no longer renames a Person
+  whose `identity` aspect a source states: survivorship keeps the source's name.
+- `UserManager.create_person_as_system(..., identity=)` carries an existing
+  identity record on `person_created`, and `Party.objects.for_user(user,
+  adopt=)` links that Person to the new account instead of creating another:
+  an integration that imported a person's contact provisions their account
+  onto it. Adopting a Person another account holds refuses and rolls the
+  account back.
+- A `workflows.workflowextension` row may declare `points` over its own nodes,
+  and a fragment composed after it may splice there with `at`: a dependent
+  addon's phase runs inside another addon's fragment (the Odoo sales and project
+  bridges before the accounting bridge's analytic lines). Base points splice
+  first, then fragment points in declaration order; a point used before its
+  declaring fragment, or declared twice, refuses the load. Published
+  contributions retain the declared points and the authored routes a splice
+  rewrote, so a narrow reload recomposes the same graph; documents without
+  fragment points keep their published shape and fingerprints.
 - The `composed_tables` test fixture is removed: a database test requests
   pytest-django's `db` or carries a `django_db` mark, and rolls back over the
   session baseline `angee.base.testing.fixtures` records. The
@@ -25,6 +53,21 @@ live in code docstrings.
   `storage/file` `read`, `write` or `share`. Operators re-sync the permission
   schema: storage revision 12, the messaging fragment 7, the projects fragment
   10 and the notes example fragment 4.
+- Stages: the `angee.base` stage primitive owns every user-named pipeline.
+  `Stage` gains `description`, `fold` (a board's default-collapsed lane, read as
+  `foldField`), `rotting_days`, `for_record` applicability, a
+  `validate_transition(previous, following, *, manual, admitted, adding)` admission
+  hook and idempotent `provision(container, rows, key=...)`; `StagedModelMixin`
+  gains `stage_entered_at`, `stage_transition`, `project_stage`, `writes_stage`, the
+  `validate_stored_row(persisted, stored)` hook and `save(admitted_stage=...)`. A
+  save reads the committed row once under its lock and judges a partial save on
+  the row it stores. `work` composes it (its private transition read and
+  provisioning loop are gone; `Stage.validate_transition` takes the new signature).
+  Projects run `makemigrations` for the new columns. Existing staged rows keep a
+  null `stage_entered_at` until their next move; a project that wants dwell time
+  at once authors an optional data migration setting `stage_entered_at` to
+  `updated_at` where `stage` is set (an approximation: the last write, not the
+  last move).
 - Native lists accept `relatedModels: readonly string[]` for columns and filter
   membership derived from related rows. Declared model changes refresh flat,
   client and grouped lists when `related_records` names any record of the list's

@@ -210,7 +210,7 @@ def test_confirmed_uses_platform_normalization(owner: Any, platform: str, stored
     with system_context(reason="test confirmed handle lookup"):
         party = Party.objects.create(display_name="Alex Example", created_by=owner)
         handle = Handle.objects.create(platform=platform, value=stored, created_by=owner)
-        party.with_actor(owner).confirm(aspect="handle", handle=handle, values={})
+        party.with_actor(owner).confirm_statement(aspect="handle", handle=handle, values={})
 
     candidates = Handle.objects.with_actor(owner).confirmed(platform, query)
 
@@ -245,7 +245,7 @@ def test_confirmed_preserves_actor_scope(owner: Any) -> None:
     with system_context(reason="test scoped confirmed handle"):
         party = Party.objects.create(display_name="Morgan Example", created_by=other)
         handle = Handle.objects.create(platform="email", value="morgan@example.test", created_by=other)
-        party.with_actor(other).confirm(aspect="handle", handle=handle, values={})
+        party.with_actor(other).confirm_statement(aspect="handle", handle=handle, values={})
 
     assert not Handle.objects.with_actor(owner).confirmed("email", handle.value).exists()
 
@@ -262,7 +262,7 @@ def test_child_binds_parent_statements_without_a_query(owner: Any, deferred: boo
         organization = Organization.objects.create(
             display_name="Upcast Studio", legal_name="Upcast Legal", created_by=owner
         )
-        organization.with_actor(owner).confirm(aspect="identity", values={"display_name": "Upcast Studio"})
+        organization.with_actor(owner).confirm_statement(aspect="identity", values={"display_name": "Upcast Studio"})
     rows = Organization.objects.with_actor(owner)
     reader = (rows.only("pk", "legal_name") if deferred else rows).get(pk=organization.pk)
 
