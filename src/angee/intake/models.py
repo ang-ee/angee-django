@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Callable, Mapping
+from datetime import datetime
 from types import NotImplementedType
-from typing import TYPE_CHECKING, Any, ClassVar, Final, Self
+from typing import TYPE_CHECKING, Any, ClassVar, Final, Self, cast
 
 from django.apps import apps
 from django.conf import settings
 from django.contrib.auth import get_user_model
+from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import ValidationError
 from django.core.validators import DomainNameValidator, validate_email
 from django.db import models, transaction
@@ -48,7 +50,7 @@ if TYPE_CHECKING:
     from angee.iam.models import User
     from angee.messaging.models import Message
     from angee.projects.models import Project, Task
-    from angee.work.models import Queue
+    from angee.work.models import Queue, TaskWork
 
 
 logger = logging.getLogger(__name__)
@@ -224,6 +226,57 @@ class NeedManager[NeedT: Need](_NeedManagerBase[NeedT]):
             need.with_actor(actor).save(force_insert=True)
             return need
 
+    def take_requester_reply(self, message: Message) -> bool:
+        """Take ``message`` as its requester's reply when it continues a captured conversation.
+
+        An inbound message continues a request when its thread is bound as a
+        task's source and it comes from the sender, through handle merges, of one
+        of that task's captured requests. It files no new request: the thread
+        already holds it as the task's evidence. Each continued task held awaiting
+        that requester's account, or awaiting nobody, wakes with reason ``reply``.
+        Returns whether ``message`` was such a reply.
+        """
+
+        if message.pk is None or message.thread_id is None or message.sender_id is None:
+            return False
+        if message.direction != type(message).Direction.INBOUND:
+            return False
+        attachment_model = apps.get_model("messaging", "ThreadAttachment")
+        task_model = apps.get_model("projects", "Task")
+        with system_context(reason="intake.need.requester_reply"):
+            if self.model._base_manager.filter(source_message_id=message.pk).exists():
+                return False
+            sender = message.sender
+            thread = message.thread
+            assert sender is not None and thread is not None
+            bound = attachment_model._base_manager.filter(
+                thread_id__in=thread.member_threads().values("pk"),
+                role=attachment_model.AttachmentRole.SOURCE,
+                content_type=ContentType.objects.get_for_model(task_model),
+            ).values("object_id")
+            senders = type(sender)._base_manager.redirect_group(sender.canonical()).values("pk")
+            requests = list(
+                self.model._base_manager.filter(
+                    task_id__in=models.Subquery(bound),
+                    source_message__sender_id__in=senders,
+                ).select_related("party")
+            )
+            party_model = apps.get_model("parties", "Party")
+            repliers: dict[Any, set[Any]] = {}
+            for need in requests:
+                accounts = repliers.setdefault(need.task_id, set())
+                if need.admitted_user_id is not None:
+                    accounts.add(need.admitted_user_id)
+                account = party_model.objects.user_for(need.party) if need.party is not None else None
+                if account is not None:
+                    accounts.add(account.pk)
+        tasks = task_model.work.sudo(reason="intake.need.requester_reply.wake")
+        for task_id, accounts in sorted(repliers.items()):
+            tasks.filter(pk=task_id).filter(
+                models.Q(snoozed_awaiting__isnull=True) | models.Q(snoozed_awaiting__in=accounts),
+            ).wake_each(task_model.WakeReason.REPLY, message=message)
+        return bool(requests)
+
     def capture_from_message(
         self,
         message: Message,
@@ -281,8 +334,7 @@ class NeedManager[NeedT: Need](_NeedManagerBase[NeedT]):
                     need.party_id = self._resolved_sender_party_id(locked_message)
                     if need.party_id is None and need.claimed_email and channel.intake_requester_domains:
                         need._link_requester(
-                            allow_create=need.claimed_email.rsplit("@", 1)[-1].lower()
-                            in channel.intake_requester_domains,
+                            allow_create=channel.creates_requester_account(need.claimed_email.rsplit("@", 1)[-1]),
                             system_reason=f"intake.requester_domain:{channel.slug}",
                         )
                     if need.party_id is not None:
@@ -974,8 +1026,8 @@ def _requested_by_viewer_filter(queryset: models.QuerySet[Any]) -> models.Expres
     )
 
 
-class TaskIntakeFilters(Composable, extends="projects.Task"):
-    """Filter tasks by who filed them, the way the task shows it: intake's first request."""
+class TaskIntake(Composable, extends="projects.Task"):
+    """Intake's task contribution: who filed it, as the task shows it, and asking them to clarify it."""
 
     hasura_filter_expressions: ClassVar[Mapping[str, Callable[[models.QuerySet[Any]], BaseExpression]]] = {
         "requester_name": _requester_name_filter,
@@ -984,6 +1036,113 @@ class TaskIntakeFilters(Composable, extends="projects.Task"):
 
     class Meta:
         abstract = True
+
+    @transaction.atomic
+    def clarify(
+        self,
+        question: str,
+        *,
+        to: models.Model | None = None,
+        reply_by: datetime | None = None,
+        expected_revision: int | None = None,
+    ) -> Any:
+        """Ask this triage task's requester ``question``, then hold the task for their reply.
+
+        The question is a comment on the task's chatter, addressed to the
+        requester when their account may reply there (an admitted requester may);
+        one without an admitted account also gets it as a reply on their request's
+        source message when that message came by email on a channel with an
+        outbound sender. The task then snoozes in its
+        triage stage (``TaskWork.snooze``, with the task write and revision check),
+        awaiting the requester's account when they have one and until
+        ``reply_by`` when given. The requester's reply, on chatter or on their own
+        conversation, wakes it with reason ``reply``; ``reply_by`` passing wakes it
+        with ``due``. ``to`` names the requester's party when several filed the
+        task. A requester who can neither reply on the task nor be reached by
+        email is refused rather than awaited.
+        """
+
+        question = str(question or "").strip()
+        if not question:
+            raise ValidationError({"question": "Write the question to ask."})
+        requests = self._requests_to_ask(to)
+        admitted_id = next((need.admitted_user_id for need in requests if need.admitted_user_id is not None), None)
+        replier: Any
+        if admitted_id is not None:
+            replier = get_user_model()._base_manager.get(pk=admitted_id)
+            route = None
+        else:
+            party = next((need.party for need in requests if need.party is not None), None)
+            replier = apps.get_model("parties", "Party").objects.user_for(party) if party is not None else None
+            route = self._email_reply_route(requests)
+        posts = replier is not None and (
+            type(self)._base_manager.get(pk=self.pk).with_actor(replier).has_access(self.thread_post_access)
+        )
+        if route is None and not posts:
+            raise ValidationError(
+                {"to": "The requester can neither reply on this task nor be reached by email; approve their access."}
+            )
+        cast("TaskWork", self).snooze(reply_by, awaiting=replier, expected_revision=expected_revision)
+        self.message_post(question, recipient_user_ids=(replier.pk,) if posts else ())
+        if route is not None:
+            source, sender = route
+            actor = instance_actor(self)
+            message_model = apps.get_model("messaging", "Message")
+            message_model.objects.compose_reply(source, body=question, sender=sender, actor=actor, queued=True)
+        return self
+
+    def _requests_to_ask(self, to: models.Model | None) -> list[Need]:
+        """Return the task's requests from one requester: ``to``'s, or the only requester's."""
+
+        requests = list(
+            apps.get_model("intake", "Need")
+            ._base_manager.filter(task_id=self.pk)
+            .select_related("party", "source_message__sender")
+            .order_by("created_at", "pk")
+        )
+        if to is not None:
+            requests = [need for need in requests if need.party_id == to.pk]
+            if not requests:
+                raise ValidationError({"to": "Choose a party that filed this task."})
+        requesters = {key for need in requests if (key := self._requester_key(need)) is not None}
+        if not requesters:
+            raise ValidationError({"to": "This task has no requester to ask."})
+        if len(requesters) > 1:
+            raise ValidationError({"to": "Several requesters filed this task; choose the party to ask."})
+        return [need for need in requests if self._requester_key(need) in requesters]
+
+    @staticmethod
+    def _requester_key(need: Need) -> tuple[str, Any] | None:
+        """Identify a request's requester: its party, else the sender of its source message."""
+
+        if need.party_id is not None:
+            return ("party", need.party_id)
+        source = need.source_message
+        if source is not None and source.sender is not None:
+            return ("sender", source.sender.canonical().pk)
+        return None
+
+    @staticmethod
+    def _email_reply_route(requests: list[Need]) -> tuple[Message, Any] | None:
+        """Return the first emailed request's source message and its channel's outbound sender handle."""
+
+        handle_model = apps.get_model("parties", "Handle")
+        email = handle_model.Platform.EMAIL
+        for need in requests:
+            source = need.source_message
+            if source is None or source.platform != email:
+                continue
+            channel = source.transport_channel(reason="intake.clarify.channel")
+            if channel is None:
+                continue
+            try:
+                name, address = channel.outbound_sender()
+            except ValidationError:
+                continue
+            with system_context(reason="intake.clarify.sender"):
+                sender = handle_model.objects.upsert(platform=email, value=address, display_name=name)
+            return source, sender
+        return None
 
 
 class ProjectIntakeSetup(Composable, extends="projects.Project"):
@@ -1013,7 +1172,11 @@ class ProjectIntakeSetup(Composable, extends="projects.Project"):
 class ChannelIntake(Composable, extends="messaging.Channel"):
     """Same-row intake fields and capture behavior for ``messaging.Channel``.
 
-    A channel with an ``intake_queue`` captures every ingested message as a Need.
+    A channel with an ``intake_queue`` captures each ingested message as a Need,
+    except a requester's reply on a conversation it already captured.
+    ``intake_requester_domains`` lists the lower-case domains whose claimed
+    webform addresses get a passwordless account on capture; ``["*"]`` names
+    every domain.
     """
 
     hasura_readable_fields: ClassVar[tuple[str, ...]] = (
@@ -1038,6 +1201,7 @@ class ChannelIntake(Composable, extends="messaging.Channel"):
     intake_requester_domains = models.JSONField(default=list, blank=True)
 
     intake_map_targets = frozenset({"title", "note", "due_date", "priority", "estimate", "claimed_name"})
+    ANY_REQUESTER_DOMAIN: ClassVar[str] = "*"
 
     class Meta:
         """Abstract contribution folded into the concrete channel table."""
@@ -1081,10 +1245,14 @@ class ChannelIntake(Composable, extends="messaging.Channel"):
         for domain in domains:
             if not isinstance(domain, str) or domain != domain.strip().lower():
                 raise ValidationError({"intake_requester_domains": "Use lower-case domains without whitespace."})
+            if domain == self.ANY_REQUESTER_DOMAIN:
+                continue
             try:
                 DomainNameValidator()(domain)
             except ValidationError as error:
                 raise ValidationError({"intake_requester_domains": "Enter valid domain names."}) from error
+        if self.ANY_REQUESTER_DOMAIN in domains and len(domains) > 1:
+            raise ValidationError({"intake_requester_domains": 'Use "*" alone to cover every domain.'})
         previous = (
             []
             if self._state.adding
@@ -1112,6 +1280,12 @@ class ChannelIntake(Composable, extends="messaging.Channel"):
             self._validate_requester_domains()
         super().save(*args, **kwargs)
 
+    def creates_requester_account(self, domain: str) -> bool:
+        """Whether capture gives a requester claiming an address at ``domain`` a passwordless account."""
+
+        domains = self.intake_requester_domains if isinstance(self.intake_requester_domains, list) else []
+        return self.ANY_REQUESTER_DOMAIN in domains or domain.lower() in domains
+
     def mapped_task_values(self, message: Message) -> dict[str, Any]:
         """Clean each mapped answer through its field; malformed answers fall back."""
 
@@ -1137,10 +1311,16 @@ class ChannelIntake(Composable, extends="messaging.Channel"):
         return values
 
     def capture_ingested_message(self, message: Message) -> Need | None:
-        """Dispatch an ingested message to the Need write owner when the channel has an intake queue."""
+        """Dispatch an ingested message to the Need owner when the channel has an intake queue.
+
+        A requester's reply on a captured conversation is taken onto its request;
+        any other message is captured as a new one.
+        """
 
         queue = self.intake_queue
         if queue is None:
             return None
         need_model = apps.get_model("intake", "Need")
+        if need_model.objects.take_requester_reply(message):
+            return None
         return need_model.objects.capture_from_message(message, queue=queue)

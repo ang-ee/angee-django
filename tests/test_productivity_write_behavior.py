@@ -332,7 +332,7 @@ def test_stage_scope_rejects_foreign_container(productivity_tables: None) -> Non
 
 
 @pytest.mark.django_db
-def test_bulk_snooze_wake_clears_only_the_selected_snoozes() -> None:
+def test_due_wake_clears_only_the_selected_holds() -> None:
     """The work queryset wakes the rows its caller selected, through the composed task."""
 
     now = timezone.now()
@@ -340,13 +340,13 @@ def test_bulk_snooze_wake_clears_only_the_selected_snoozes() -> None:
         owner = create_user("productivity-wake-owner")
         rows = []
         for title in ("Selected", "Other"):
-            row = Task(title=title, snoozed_until=now, snoozed_by=owner)
+            row = Task(title=title, snoozed_at=now, snoozed_until=now, snoozed_by=owner)
             row.sudo(reason="tests.productivity.wake.create").save(ownerless=True)
             rows.append(row)
         assert Task.work.filter(pk=rows[0].pk).wake_due_snoozes(now=now) == 1
     selected, other = (Task._base_manager.get(pk=row.pk) for row in rows)
-    assert (selected.snoozed_until, selected.snoozed_by_id) == (None, None)
-    assert (other.snoozed_until, other.snoozed_by_id) == (now, owner.pk)
+    assert (selected.snoozed_at, selected.snoozed_until, selected.snoozed_by_id) == (None, None, None)
+    assert (other.snoozed_at, other.snoozed_until, other.snoozed_by_id) == (now, now, owner.pk)
 
 
 @pytest.mark.parametrize("status", ["open", "done", "dropped"])

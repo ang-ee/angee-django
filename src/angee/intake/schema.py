@@ -13,7 +13,7 @@ from strawberry import auto
 from strawberry.scalars import JSON
 
 from angee.decisions.schema import DecisionType
-from angee.graphql.actions import ActionResult, action_guard, authorized_permission_target
+from angee.graphql.actions import ActionResult, action_guard, authorized_action_target, authorized_permission_target
 from angee.graphql.capabilities import held_permissions, permission_annotations, permissions_field
 from angee.graphql.data.hasura import AngeeHasuraWriteBackend, hasura_model_resource, public_pk_decoder
 from angee.graphql.ids import PublicID, optional_public_id
@@ -244,6 +244,24 @@ class IntakeActionMutation:
         target = authorized_permission_target(info, Need, need, "write")
         user = target.decide_access(action, expected_revision=expected_revision)
         return ActionResult(ok=True, message="Request access decided.", id=user.sqid if user is not None else None)
+
+    @strawberry.mutation
+    @action_guard("Asking the requester failed.")
+    def clarify_task(
+        self,
+        info: strawberry.Info,
+        task: PublicID,
+        question: str,
+        to: PublicID | None = None,
+        reply_by: datetime | None = None,
+        expected_revision: int | None = None,
+    ) -> ActionResult:
+        """Ask a writable triage task's requester to clarify it and hold the task for their reply."""
+
+        target = authorized_action_target(info, Task, task, "write")
+        party = None if to is None else authorized_permission_target(info, Party, to, "read")
+        target.clarify(question, to=party, reply_by=reply_by, expected_revision=expected_revision)
+        return ActionResult(ok=True, message="Question sent to the requester.", id=target.sqid)
 
     @strawberry.mutation
     @action_guard("Requester admission failed.")

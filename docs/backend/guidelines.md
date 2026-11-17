@@ -348,7 +348,11 @@ Use these owners instead of maintaining another contract in an addon:
   never a stage flag, and a stage reaches a lifecycle only through projection.
   Addons contribute vocabulary (categories, reservations, applicability) through
   the primitive's hooks; they never copy its scope, admission, projection or
-  provisioning ([Persistence primitives](#persistence-primitives)).
+  provisioning ([Persistence primitives](#persistence-primitives)). A record's
+  position is its stage: a consumer reads it there and never derives a parallel
+  status from the record's other facts. Waiting is not a stage either; a paused
+  review keeps its stage and carries a hold, as a triage task does through
+  [`TaskWork.snooze`](../../src/angee/work/models.py) and `wake`.
 - Runtime model modules, generated schemas and codegen stubs are output.
   Change their source declarations. Native Django migration history is reviewed,
   version-controlled project source; preserve it across runtime rebuilds.
