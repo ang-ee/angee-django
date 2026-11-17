@@ -68,6 +68,7 @@ from angee.base.models.transitions import StateTransitions, save_state, transiti
 from angee.base.permissions import actor_user_id, instance_actor, require_rebac_queryset
 from angee.base.refs import RecordRef
 from angee.iam.models import ServiceUserMixin
+from angee.integrate.credentials import CredentialKind
 from angee.integrate.models import IntegrationCreateMode
 from angee.integrate_vcs.registry import VcsOutput, VcsOutputManager
 from angee.jobs.enqueue import enqueue_task
@@ -885,12 +886,12 @@ class MCPServer(ResourceLoadMixin, AuditMixin, AngeeDataModel, concrete=True):
     placement = StateField(choices_enum=MCPPlacement, default=MCPPlacement.EXTERNAL)
     transport = StateField(choices_enum=MCPTransport, default=MCPTransport.HTTP)
     url = models.URLField(blank=True)
-    # Expected to be a non-rotating credential (e.g. a static token). For an internal
-    # server this credential's secret is the HMAC key from which each agent's per-agent
-    # bearer is derived (see ``bearer_for``); the raw secret never leaves the platform.
-    # Rotating the credential re-keys the derivation, so every provisioned agent's bearer
-    # stops verifying and its MCP calls 401 until reprovisioned. Constrain to static
-    # credentials at the catalogue level.
+    # Expected to be a non-rotating credential (e.g. a static token) of one of the
+    # ``credential_kinds`` (``clean`` refuses the rest). For an internal server this
+    # credential's secret is the HMAC key from which each agent's per-agent bearer is
+    # derived (see ``bearer_for``); the raw secret never leaves the platform. Rotating
+    # the credential re-keys the derivation, so every provisioned agent's bearer stops
+    # verifying and its MCP calls 401 until reprovisioned.
     credential = models.ForeignKey(
         "integrate.Credential",
         on_delete=models.SET_NULL,
@@ -899,6 +900,13 @@ class MCPServer(ResourceLoadMixin, AuditMixin, AngeeDataModel, concrete=True):
         related_name="mcp_servers",
     )
     config = models.JSONField(default=dict, blank=True)
+
+    credential_kinds: ClassVar[frozenset[str]] = frozenset(
+        {CredentialKind.STATIC_TOKEN, CredentialKind.OAUTH, CredentialKind.BASIC_AUTH}
+    )
+    """Credential kinds whose ``auth_headers()`` yield an ``Authorization`` header without
+    scopes. An MCP server declares no scopes, so key-only kinds (``ssh_key``, ``app_keys``)
+    and per-scope minting kinds (``jwt_bearer``) are refused."""
 
     objects = MCPServerManager()
 
@@ -913,6 +921,13 @@ class MCPServer(ResourceLoadMixin, AuditMixin, AngeeDataModel, concrete=True):
         """Return the server's name."""
 
         return self.name
+
+    def clean(self) -> None:
+        """Refuse a credential whose kind cannot authorize an MCP request (:attr:`credential_kinds`)."""
+
+        super().clean()
+        if self.credential_id is not None:
+            self._authorizing_credential()
 
     @property
     def builtin(self) -> str:
@@ -948,20 +963,21 @@ class MCPServer(ResourceLoadMixin, AuditMixin, AngeeDataModel, concrete=True):
 
         return bool(self.resolved_url)
 
-    def config_entry(self, bearer_env: str | None) -> dict[str, Any]:
-        """Return this server's ``.mcp.json`` entry, given an optional bearer env var.
+    def config_entry(self, authorization_env: str | None) -> dict[str, Any]:
+        """Return this server's ``.mcp.json`` entry, given an optional authorization env var.
 
-        A credentialed server carries an ``Authorization: Bearer`` header whose value is
-        the agent runtime's ``${<bearer_env>}`` expansion — the bearer rides the *container
-        env* (set from the operator secret in the service env, like the inference token),
-        never the file or browser. The operator only resolves ``${secret.<name>}`` in a
-        service's env, not in file content, so a bearer placed literally in ``.mcp.json``
-        would never resolve. Pass ``None`` for an uncredentialed server.
+        A credentialed server carries an ``Authorization`` header whose whole value is the
+        agent runtime's ``${<authorization_env>}`` expansion of :meth:`authorization_for` —
+        it rides the *container env* (set from the operator secret in the service env, like
+        the inference token), never the file or browser. The operator only resolves
+        ``${secret.<name>}`` in a service's env, not in file content, so a value placed
+        literally in ``.mcp.json`` would never resolve. Pass ``None`` for an uncredentialed
+        server.
         """
 
         entry: dict[str, Any] = {"type": str(self.transport), "url": self.resolved_url}
-        if bearer_env is not None:
-            entry["headers"] = {"Authorization": f"Bearer ${{{bearer_env}}}"}
+        if authorization_env is not None:
+            entry["headers"] = {"Authorization": f"${{{authorization_env}}}"}
         return entry
 
     def require_credential(self) -> Credential:
@@ -972,45 +988,84 @@ class MCPServer(ResourceLoadMixin, AuditMixin, AngeeDataModel, concrete=True):
             raise ValidationError({"credential": "This MCP server has no authentication credential."})
         return credential
 
-    def bearer_for(self, agent: Agent) -> str:
-        """Return the bearer ``agent`` presents to this MCP server.
+    def authorization_for(self, agent: Agent) -> str:
+        """Return the ``Authorization`` header value ``agent`` presents to this MCP server.
 
-        For an ``INTERNAL`` (platform-verified) server this is a *per-agent* bearer
-        ``"<agent sqid>.<hmac>"`` derived from the server credential (see
-        :meth:`_bearer_digest`): each agent gets a distinct value, an agent holding only
-        its own bearer cannot forge a peer's (it never sees the server secret), and the
-        derivation is deterministic, so a reprovision re-mints the same value while the
-        credential is unchanged. For any other placement the server verifies the raw token
-        itself, so it receives the credential's ``secret_value()`` unchanged. Callers
-        refresh the credential (``ensure_fresh()``) first, as :meth:`Agent.mcp_secrets` does.
+        The one owner of what a server receives, for the in-process transport and the
+        provisioned ``.mcp.json`` alike. An ``INTERNAL`` server gets the per-agent bearer
+        (:meth:`bearer_for`); any other gets the credential's own authorization
+        (``integrate.Credential.auth_headers``), so a static or OAuth token is sent as
+        ``Bearer`` and a basic-auth pair as ``Basic``. A kind outside
+        :attr:`credential_kinds` and an empty secret are refused. Callers refresh the
+        credential (``ensure_fresh()``) first, as :meth:`Agent.mcp_secrets` does.
         """
 
         if self.placement == MCPPlacement.INTERNAL:
-            return f"{agent.sqid}.{self._bearer_digest(agent)}"
-        return str(self.require_credential().secret_value())
+            return f"Bearer {self.bearer_for(agent)}"
+        self._credential_secret()
+        return self.require_credential().auth_headers()["Authorization"]
+
+    def bearer_for(self, agent: Agent) -> str:
+        """Return the per-agent bearer ``agent`` presents to this ``INTERNAL`` server.
+
+        A *per-agent* bearer ``"<agent sqid>.<hmac>"`` derived from the server credential
+        (see :meth:`_bearer_digest`): each agent gets a distinct value, an agent holding
+        only its own bearer cannot forge a peer's (it never sees the server secret), and
+        the derivation is deterministic, so a reprovision re-mints the same value while
+        the credential is unchanged. Any other placement verifies its own token and
+        receives :meth:`authorization_for` instead, so it is refused here.
+        """
+
+        if self.placement != MCPPlacement.INTERNAL:
+            raise ValidationError({"placement": "Only an internal MCP server mints per-agent bearers."})
+        return f"{agent.sqid}.{self._bearer_digest(agent)}"
 
     def accepts_bearer_digest(self, agent: Agent, digest: str) -> bool:
         """Whether ``digest`` is the per-agent bearer digest this server mints for ``agent``.
 
         Only meaningful for an ``INTERNAL`` server (an external one verifies its own raw
-        token, not a derived digest), so any other placement returns ``False``. Compared in
-        constant time against the freshly recomputed digest so a mismatch leaks no timing.
+        token, not a derived digest), so any other placement returns ``False``. A server
+        whose credential cannot key the digest (an empty secret or a refused kind) mints
+        no bearer, so it verifies none: an empty HMAC key would let anyone forge one.
+        Compared in constant time against the freshly recomputed digest so a mismatch
+        leaks no timing.
         """
 
         if self.placement != MCPPlacement.INTERNAL:
             return False
-        return hmac.compare_digest(self._bearer_digest(agent), digest)
+        try:
+            expected = self._bearer_digest(agent)
+        except ValidationError:
+            return False
+        return hmac.compare_digest(expected, digest)
 
     def _bearer_digest(self, agent: Agent) -> str:
         """Return the HMAC digest binding ``agent`` to this server's credential.
 
         The single home of the derivation, so minting (:meth:`bearer_for`) and verifying
         (:meth:`accepts_bearer_digest`) cannot drift: the credential secret keys an
-        HMAC-SHA256 over the agent's stable public sqid.
+        HMAC-SHA256 over the agent's stable public sqid. An empty secret is refused.
         """
 
-        secret = str(self.require_credential().secret_value())
-        return hmac.new(secret.encode(), agent.sqid.encode(), hashlib.sha256).hexdigest()
+        return hmac.new(self._credential_secret().encode(), agent.sqid.encode(), hashlib.sha256).hexdigest()
+
+    def _credential_secret(self) -> str:
+        """Return the allowed credential's secret, refusing an empty one: it would key or send nothing."""
+
+        secret = str(self._authorizing_credential().secret_value())
+        if not secret:
+            raise ValidationError({"credential": "This MCP server's credential has an empty secret."})
+        return secret
+
+    def _authorizing_credential(self) -> Credential:
+        """Return the credential, refusing a kind that sends no scope-free HTTP authorization."""
+
+        credential = self.require_credential()
+        if credential.kind not in self.credential_kinds:
+            raise ValidationError(
+                {"credential": "An MCP server authenticates with a static token, OAuth or basic-auth credential."}
+            )
+        return credential
 
     @staticmethod
     def parse_bearer(bearer: str) -> tuple[str, str] | None:
@@ -1886,11 +1941,11 @@ class Agent(ServiceUserMixin, ResourceLoadMixin, OwnerMixin, HistoryMixin, Angee
                     backend=model.provider.backend, credential=credential, secret_name=self.inference_secret_name(),
                 )
             )
-        # The MCP bearers ride the container env too: one ``${secret.<name>}`` line per
+        # The MCP authorizations ride the container env too: one ``${secret.<name>}`` line per
         # credentialed server (the operator resolves it), which the service template renders
-        # under the service env and ``.mcp.json`` reads via ``${ANGEE_MCP_BEARER_<…>}``.
+        # under the service env and ``.mcp.json`` reads via ``${ANGEE_MCP_AUTHORIZATION_<…>}``.
         mcp_env = {
-            self.mcp_bearer_env(server): operator_secret_ref(secret_name)
+            self.mcp_authorization_env(server): operator_secret_ref(secret_name)
             for server, secret_name in self._addressable_mcp_servers()
             if secret_name
         }
@@ -1928,14 +1983,14 @@ class Agent(ServiceUserMixin, ResourceLoadMixin, OwnerMixin, HistoryMixin, Angee
         """Return the ``.mcp.json`` document for this agent's reachable MCP servers.
 
         Each server renders its own entry (:meth:`MCPServer.config_entry`); this supplies
-        the bearer env var (:meth:`mcp_bearer_env`) for a credentialed server and skips
-        servers that aren't addressable. The header expands that env var, which the service
-        env sets from the operator secret (:meth:`provision_service_inputs`) — the value
-        rides the container env, never the file or the browser. See :meth:`mcp_secrets`.
+        the authorization env var (:meth:`mcp_authorization_env`) for a credentialed server
+        and skips servers that aren't addressable. The header expands that env var, which
+        the service env sets from the operator secret (:meth:`provision_service_inputs`) —
+        the value rides the container env, never the file or the browser. See :meth:`mcp_secrets`.
         """
 
         servers = {
-            server.name: server.config_entry(self.mcp_bearer_env(server) if secret_name else None)
+            server.name: server.config_entry(self.mcp_authorization_env(server) if secret_name else None)
             for server, secret_name in self._addressable_mcp_servers()
         }
         return {"mcpServers": servers}
@@ -1955,17 +2010,18 @@ class Agent(ServiceUserMixin, ResourceLoadMixin, OwnerMixin, HistoryMixin, Angee
             yield server, (self.mcp_secret_name(server) if server.credential_id else "")
 
     def mcp_secret_name(self, server: MCPServer) -> str:
-        """Return the operator secret name holding one MCP server's bearer for this agent.
+        """Return the operator secret name holding one MCP server's authorization for this agent.
 
         Stable and scoped to the agent + server credential: the service env references it
-        (``${secret.<name>}`` → the bearer env var) and the provision flow syncs the agent's
-        bearer (:meth:`mcp_secrets`) under it (the value never appears in the file or the browser).
+        (``${secret.<name>}`` → the authorization env var) and the provision flow syncs the
+        agent's authorization (:meth:`mcp_secrets`) under it (the value never appears in the
+        file or the browser).
         """
 
         return f"agent-{self.sqid}-mcp-{server.require_credential().sqid}"
 
-    def mcp_bearer_env(self, server: MCPServer) -> str:
-        """Return the container env var carrying one MCP server's bearer for this agent.
+    def mcp_authorization_env(self, server: MCPServer) -> str:
+        """Return the container env var carrying one MCP server's ``Authorization`` value for this agent.
 
         The rendered ``.mcp.json`` header reads it via the agent runtime's ``${VAR}``
         expansion; the service env sets it from the operator secret (:meth:`mcp_secret_name`),
@@ -1975,16 +2031,17 @@ class Agent(ServiceUserMixin, ResourceLoadMixin, OwnerMixin, HistoryMixin, Angee
         container runtimes/shells that reject or fold lowercase env names.
         """
 
-        return f"ANGEE_MCP_BEARER_{server.require_credential().sqid.upper()}"
+        return f"ANGEE_MCP_AUTHORIZATION_{server.require_credential().sqid.upper()}"
 
     def mcp_secrets(self) -> dict[str, str]:
-        """Return ``{secret_name: bearer_value}`` for every credentialed MCP server.
+        """Return ``{secret_name: authorization}`` for every credentialed MCP server.
 
-        The bearer is whatever this agent presents to the server (:meth:`MCPServer.bearer_for`):
-        a per-agent derived token for an internal, platform-verified server, or the raw
-        credential secret for an external one. Server-side only — the provision flow pushes
-        these to the operator secret store so each server's ``${secret.<name>}`` header
-        resolves in the container; the raw internal-server secret never reaches a container.
+        The value is the whole ``Authorization`` header this agent presents to the server
+        (:meth:`MCPServer.authorization_for`), the same one the in-process transport sends:
+        a per-agent derived bearer for an internal, platform-verified server, or the
+        credential's own authorization for an external one. Server-side only — the provision
+        flow pushes these to the operator secret store so each server's ``${secret.<name>}``
+        header resolves in the container; the raw internal-server secret never reaches a container.
         """
 
         secrets: dict[str, str] = {}
@@ -1992,7 +2049,7 @@ class Agent(ServiceUserMixin, ResourceLoadMixin, OwnerMixin, HistoryMixin, Angee
             if not secret_name:
                 continue
             server.require_credential().ensure_fresh()
-            secrets[secret_name] = server.bearer_for(self)
+            secrets[secret_name] = server.authorization_for(self)
         return secrets
 
     def inference_secret_name(self) -> str:

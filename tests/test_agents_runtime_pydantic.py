@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -50,7 +51,7 @@ from angee.agents.context import render_view_context
 from angee.agents.models import AgentLifecycle, RuntimeStatus, SessionStatus, TurnStatus
 from angee.agents.runtimes import ANTHROPIC_OAUTH_CLIENT_HEADERS, ANTHROPIC_OAUTH_SYSTEM_PREAMBLE
 from angee.agents.tasks import run_session
-from angee.agents.testing.models import Agent, AgentSession
+from angee.agents.testing.models import Agent, AgentSession, MCPServer
 from angee.agents_integrate_anthropic.backend import AnthropicInferenceBackend
 from angee.agents_integrate_ollama.backend import OllamaInferenceBackend
 from angee.agents_integrate_openai.backend import OpenAIInferenceBackend
@@ -59,13 +60,13 @@ from angee.agents_runtime_pydantic.acp import updates_for_event
 from angee.agents_runtime_pydantic.runner import PydanticAISessionRunner, _usage_limits
 from angee.agents_runtime_pydantic.toolsets import _transport_for
 from angee.integrate.credentials import CredentialKind
-from tests.conftest import create_platform_admin
+from tests.conftest import Credential, create_platform_admin
 
 pytestmark = pytest.mark.django_db(transaction=True)
 
 
 class _Credential:
-    """Minimal credential double exercising the public SDK backend seam through its kind handler."""
+    """Minimal credential double exercising the public SDK backend seam."""
 
     def __init__(self, value: str, *, kind: Any = CredentialKind.STATIC_TOKEN) -> None:
         self.value = value
@@ -75,14 +76,8 @@ class _Credential:
     def ensure_fresh(self) -> None:
         self.freshened += 1
 
-    def reveal(self) -> dict[str, str]:
-        return {CredentialKind(self.kind).handler.material_field: self.value}
-
     def secret_value(self) -> str:
-        return CredentialKind(self.kind).handler.secret_value(self)
-
-    def auth_headers(self) -> dict[str, str]:
-        return CredentialKind(self.kind).handler.auth_headers(self)
+        return self.value
 
 
 def test_anthropic_model_keeps_override_and_oauth_beta_header(monkeypatch: Any) -> None:
@@ -247,38 +242,37 @@ def test_acp_events_emit_reducer_shapes_and_one_tool_call() -> None:
     assert sum(update["sessionUpdate"] == "tool_call" for update in updates) == 1
 
 
-def test_external_mcp_transport_carries_its_agent_bearer() -> None:
-    """External servers retain the authenticated HTTP transport."""
+@pytest.mark.parametrize(
+    ("kind", "material", "authorization"),
+    [
+        pytest.param(CredentialKind.STATIC_TOKEN, {"api_key": "agent-bearer"}, "Bearer agent-bearer", id="bearer"),
+        pytest.param(
+            CredentialKind.BASIC_AUTH,
+            {"username": "agent", "password": "pass"},
+            f"Basic {base64.b64encode(b'agent:pass').decode()}",
+            id="basic-auth",
+        ),
+    ],
+)
+def test_external_mcp_transport_sends_the_same_authorization_as_the_provisioned_config(
+    kind: str, material: dict[str, str], authorization: str,
+) -> None:
+    """The in-process transport and the provisioned ``.mcp.json`` send one server-owned header."""
 
-    credential = _Credential("agent-bearer")
-    server = SimpleNamespace(
-        name="Angee",
-        resolved_url="http://angee.test/mcp",
-        builtin="",
-        credential_id=1,
-        credential=credential,
-    )
-
-    transport = _transport_for(server)
+    owner = create_platform_admin(f"mcp-transport-{kind}")
+    with system_context(reason="test.mcp.transport"):
+        credential = Credential.objects.create_local_credential(owner, kind=kind, name="mcp", material=material)
+        server = MCPServer.objects.create(name="external", url="http://angee.test/mcp", credential=credential)
+        agent = Agent.objects.create(name="MCP transport agent", owner=owner)
+        agent.mcp_servers.add(server)
+        provisioned = agent.mcp_secrets()[agent.mcp_secret_name(server)]
+        rendered = agent.mcp_config()["mcpServers"]["external"]["headers"]
+        transport = _transport_for(server, agent)
 
     assert transport.url == "http://angee.test/mcp"
-    assert transport.headers == {"Authorization": "Bearer agent-bearer"}
-    assert credential.freshened == 1
-
-
-def test_external_mcp_transport_never_sends_a_signing_key() -> None:
-    """A JWT bearer credential has no generic secret, so the MCP transport refuses it."""
-
-    server = SimpleNamespace(
-        name="Angee",
-        resolved_url="http://angee.test/mcp",
-        builtin="",
-        credential_id=1,
-        credential=_Credential("{\"private_key\": \"pem\"}", kind=CredentialKind.JWT_BEARER),
-    )
-
-    with pytest.raises(ValueError, match="empty credential"):
-        _transport_for(server)
+    assert transport.headers == {"Authorization": authorization}
+    assert provisioned == authorization
+    assert rendered == {"Authorization": f"${{{agent.mcp_authorization_env(server)}}}"}
 
 
 def test_usage_limits_allow_a_multi_request_tool_turn(db: Any) -> None:

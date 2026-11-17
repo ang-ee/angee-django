@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import hashlib
+import hmac
 from typing import Any
 
 import pytest
 from django.contrib.auth import get_user_model
-from django.core.exceptions import ImproperlyConfigured
+from django.core.exceptions import ImproperlyConfigured, ValidationError
 from django.test import override_settings
 from rebac import system_context, to_object_ref
 from rebac.backends import backend
@@ -19,6 +21,7 @@ from angee.integrate.credentials import CredentialKind
 from angee.mcp.verifier import _verifier
 from tests import test_integrate_vcs  # noqa: F401 -- register the concrete relation graph
 from tests.conftest import Credential
+from tests.test_integrate_jwt_bearer import neutral_key_file
 
 User = get_user_model()
 
@@ -206,12 +209,62 @@ def test_mcp_bearer_for_external_server_does_not_authenticate(db: None) -> None:
         )
         agent = _provisioned_agent(owner, name="External MCP Agent")
         agent.mcp_servers.add(server)
-        bearer = server.bearer_for(agent)
+        authorization = server.authorization_for(agent)
+        with pytest.raises(ValidationError, match="Only an internal MCP server"):
+            server.bearer_for(agent)
 
-    # For an external server ``bearer_for`` hands back the raw secret, which the platform
-    # verifier declines: it only trusts the per-agent digest of an internal server.
-    assert bearer == "tok-external"
-    assert resolve_actor(bearer) is None
+    # An external server receives the credential's own authorization, whose raw token the
+    # platform verifier declines: it only trusts the per-agent digest of an internal server.
+    assert authorization == "Bearer tok-external"
+    assert resolve_actor("tok-external") is None
+
+
+@pytest.mark.parametrize("kind", [CredentialKind.STATIC_TOKEN, CredentialKind.JWT_BEARER])
+def test_a_credential_with_no_secret_mints_and_verifies_no_bearer(db: None, kind: str) -> None:
+    """An empty HMAC key would let anyone forge ``<sqid>.<HMAC("", sqid)>``; it verifies nothing."""
+
+    owner = User.objects.create_user(username=f"mcp-forgery-{kind}", email=f"mcp-forgery-{kind}@example.com")
+    material = {"api_key": ""} if kind == CredentialKind.STATIC_TOKEN else {"key_file": neutral_key_file()}
+    with system_context(reason="test.mcp.actor.forgery"):
+        credential = Credential.objects.create_local_credential(owner, kind=kind, name="keyless", material=material)
+        # Created past ``clean``, as a row written before the kind check would be.
+        server = MCPServer.objects.create(
+            name="keyless", url="http://x/mcp/keyless/", credential=credential, placement=MCPPlacement.INTERNAL
+        )
+        agent = _provisioned_agent(owner, name="Forgery target")
+        agent.mcp_servers.add(server)
+        with pytest.raises(ValidationError):
+            server.bearer_for(agent)
+
+    forged = f"{agent.sqid}.{hmac.new(b'', agent.sqid.encode(), hashlib.sha256).hexdigest()}"
+    assert resolve_actor(forged) is None
+
+
+@pytest.mark.parametrize(
+    ("kind", "material", "accepted"),
+    [
+        pytest.param(CredentialKind.STATIC_TOKEN, {"api_key": "tok"}, True, id="static-token"),
+        pytest.param(CredentialKind.BASIC_AUTH, {"username": "u", "password": "p"}, True, id="basic-auth"),
+        pytest.param(CredentialKind.SSH_KEY, {"private_key": "key"}, False, id="ssh-key"),
+        pytest.param(CredentialKind.APP_KEYS, {"app_id": "id", "app_secret": "secret"}, False, id="app-keys"),
+        pytest.param(CredentialKind.JWT_BEARER, {"key_file": neutral_key_file()}, False, id="jwt-bearer"),
+    ],
+)
+def test_an_mcp_server_accepts_only_credentials_that_send_scope_free_authorization(
+    db: None, kind: str, material: dict[str, str], accepted: bool,
+) -> None:
+    """``MCPServer.clean``, which every console write runs, refuses kinds with no MCP authorization."""
+
+    owner = User.objects.create_user(username=f"mcp-kind-{kind}", email=f"mcp-kind-{kind}@example.com")
+    with system_context(reason="test.mcp.server.kind"):
+        credential = Credential.objects.create_local_credential(owner, kind=kind, name=kind, material=material)
+        server = MCPServer(name=f"kind-{kind}", url="https://mcp.example.test/", credential=credential)
+        if accepted:
+            server.full_clean()
+        else:
+            with pytest.raises(ValidationError) as refused:
+                server.full_clean()
+            assert set(refused.value.message_dict) == {"credential"}
 
 
 def test_mcp_bearer_from_server_the_agent_lacks_is_declined(db: None) -> None:

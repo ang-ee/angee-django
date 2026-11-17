@@ -18,7 +18,7 @@ from django.utils import timezone
 from joserfc.errors import JoseError
 from joserfc.jwk import RSAKey
 
-from angee.integrate.errors import IntegrationError, RequestNotSentError
+from angee.integrate.errors import IntegrationError, RequestNotSentError, is_transient_failure
 from angee.integrate.http import HTTP_TIMEOUT_SECONDS, HttpClient
 from angee.integrate.net import parse_http_url
 from angee.integrate.oauth.client import OUTBOUND_HEADERS
@@ -50,8 +50,10 @@ class CredentialKindHandler:
     kind: ClassVar[str]
     material_field: ClassVar[str]
     """The single secret key this kind stores — also the `CredentialInput` field
-    that carries it (e.g. ``api_key``). This handler owns the kind↔secret mapping;
-    callers ask the handler rather than switching on ``kind`` themselves."""
+    that carries it (e.g. ``api_key``). A kind whose input is a document read by
+    :meth:`clean` names that input field here, and it is not stored. This handler
+    owns the kind↔secret mapping; callers ask the handler rather than switching on
+    ``kind`` themselves."""
     material_fields: ClassVar[tuple[str, ...]] = ()
     """The credential-input fields this kind reads into its material when it stores
     more than one (e.g. ``("username", "password")``); empty means just
@@ -99,8 +101,9 @@ class CredentialKindHandler:
 
         A kind whose token was fixed when it was granted ignores ``scopes``. A kind
         that mints per scope set (:attr:`mints_per_scope`) requires them: it returns
-        the cached token for that set, and on a miss mints one, which needs
-        autocommit because the grant is network I/O; every refusal is raised.
+        the cached token for that set or, on a miss, mints one. Because a miss is
+        network I/O, it refuses an atomic block even on a cache hit, so the outcome
+        never depends on the cache; every refusal is raised.
         """
 
         raise NotImplementedError
@@ -129,10 +132,11 @@ class CredentialKindHandler:
         """Return whether a mint refusal condemns the stored material, so it must be re-entered.
 
         ``Credential.scoped_access_token`` records ``last_refresh_status="failed"``
-        only for these. Only kinds that mint per scope set implement it.
+        only for these. By default every refusal that is not transient
+        (:func:`~angee.integrate.errors.is_transient_failure`), the renewal default.
         """
 
-        raise NotImplementedError(f"{self.kind} credentials do not mint access tokens per scope set.")
+        return not is_transient_failure(error)
 
     def secret_value(self, credential: Any) -> str:
         """Return the credential's primary secret value."""
@@ -284,6 +288,7 @@ class JwtBearerCredentialHandler(CredentialKindHandler):
 
     kind = "jwt_bearer"
     material_field = "key_file"
+    """The input only: :meth:`clean` reads the key file into the signing fields and stores none of it."""
     mints_per_scope = True
     signing_fields: ClassVar[tuple[str, ...]] = (
         "issuer",
@@ -301,8 +306,13 @@ class JwtBearerCredentialHandler(CredentialKindHandler):
         "token_endpoint": "token_uri",
     }
     """A Google service-account key file's names for the signing fields it renames."""
-    recorded_refusals: ClassVar[frozenset[str]] = frozenset({"invalid_grant", "invalid_client", "unauthorized_client"})
-    """The RFC 6749 §5.2 errors that refuse the key or identity rather than one request."""
+    signing_key_refusal: ClassVar[str] = "invalid_signing_key"
+    """The error code a refusal carries when the stored key does not load or sign locally."""
+    recorded_refusals: ClassVar[frozenset[str]] = frozenset(
+        {"invalid_grant", "invalid_client", "unauthorized_client", signing_key_refusal}
+    )
+    """The RFC 6749 §5.2 errors that refuse the key or identity rather than one request,
+    plus :attr:`signing_key_refusal`."""
     algorithm: ClassVar[str] = "RS256"
 
     def clean(self, material: Mapping[str, Any]) -> dict[str, Any]:
@@ -361,8 +371,16 @@ class JwtBearerCredentialHandler(CredentialKindHandler):
         return {"Authorization": f"Bearer {credential.scoped_access_token(scopes)}"}
 
     def probe(self, credential: Any) -> None:
-        """Sign one assertion locally, proving the stored key loads and signs, without a request."""
+        """Sign one assertion locally, proving the stored key loads and signs, without a request.
 
+        Fails closed: an inactive credential and one whose key was refused
+        (``Credential.is_reconnect_required``) are not usable until their key file is
+        re-entered, whatever the local signature proves.
+        """
+
+        credential.require_active()
+        if credential.is_reconnect_required:
+            raise IntegrationError("The key file was refused; re-enter it.")
         material = credential.reveal()
         try:
             JWTBearerGrant.sign(
@@ -384,15 +402,26 @@ class JwtBearerCredentialHandler(CredentialKindHandler):
         says. The grant is posted through ``HttpClient.transport_factory`` with
         public addresses only. A refusal raises
         ``OAuthFlowError(TOKEN_EXCHANGE_FAILED, status)`` with the response's real
-        HTTP status, so a 429, a server error, ``temporarily_unavailable`` or a
-        request never sent is transient; the provider's error code rides ``body``
-        for :meth:`records_failure`. A key that no longer loads or signs is a
-        permanent refusal. Logs carry the credential id and status only.
+        HTTP status (400 when the response was not an error status), so a 429, a
+        server error, ``temporarily_unavailable`` or a request never sent is
+        transient; the refusal's error code rides ``body`` for :meth:`records_failure`.
+        A key that does not load or sign is the permanent
+        :attr:`signing_key_refusal`. Logs carry the credential id and status only.
         """
 
         material = credential.reveal()
+        try:
+            signing_key = RSAKey.import_key(material["private_key"])
+        except (JoseError, TypeError, ValueError) as error:
+            raise self._signing_key_refused(credential) from error
         claim = material["scope_placement"] == "claim"
         statuses: list[int] = []
+
+        def refusal_status() -> int:
+            """Return the response's error status, or 400 for a refusal that carried none."""
+
+            return statuses[-1] if statuses and statuses[-1] >= 400 else 400
+
         client: AssertionClient | None = None
         try:
             client = AssertionClient(
@@ -402,7 +431,7 @@ class JwtBearerCredentialHandler(CredentialKindHandler):
                 audience=material["audience"] or None,
                 scope=None if claim else scope,
                 claims={"scope": scope} if claim else None,
-                key=RSAKey.import_key(material["private_key"]),
+                key=signing_key,
                 header=self._header(material),
                 headers=dict(OUTBOUND_HEADERS),
                 timeout=HTTP_TIMEOUT_SECONDS,
@@ -411,11 +440,10 @@ class JwtBearerCredentialHandler(CredentialKindHandler):
             )
             token = client.refresh_token()
         except JoseError as error:
-            self._log_failure(credential, "signing_key")
-            raise OAuthFlowError(TOKEN_EXCHANGE_FAILED, 400) from error
+            raise self._signing_key_refused(credential) from error
         except OAuthError as error:
             # Authlib raises OAuthError for any JSON error body; the hook kept its status.
-            status = 503 if error.error == "temporarily_unavailable" else (statuses[-1] if statuses else 400)
+            status = 503 if error.error == "temporarily_unavailable" else refusal_status()
             self._log_failure(credential, status)
             raise OAuthFlowError(TOKEN_EXCHANGE_FAILED, status, body={"error": error.error}) from error
         except httpx2.HTTPStatusError as error:
@@ -432,7 +460,10 @@ class JwtBearerCredentialHandler(CredentialKindHandler):
                 client.close()
         access_token = str(token.get("access_token") or "")
         if not access_token:
-            raise OAuthFlowError(TOKEN_EXCHANGE_FAILED, 400)
+            # A JSON body without ``error`` (a gateway's 429, say) still carries its status.
+            status = refusal_status()
+            self._log_failure(credential, status)
+            raise OAuthFlowError(TOKEN_EXCHANGE_FAILED, status)
         try:
             expires_in: int | None = int(token["expires_in"])
         except KeyError, TypeError, ValueError:
@@ -443,15 +474,21 @@ class JwtBearerCredentialHandler(CredentialKindHandler):
     def records_failure(self, error: Exception) -> bool:
         """Return whether a mint refusal condemns the key or identity, so the key file must be re-entered.
 
-        A refused grant, client or client authorization does (:attr:`recorded_refusals`),
-        and so does a key that no longer loads or signs. A refused scope, any other
+        A refused grant, client or client authorization does, and so does a key that
+        does not load or sign (:attr:`recorded_refusals`). A refused scope, any other
         request-specific refusal and every transient failure do not.
         """
 
         if not isinstance(error, OAuthFlowError) or error.transient:
             return False
-        provider_error = error.body.get("error") if isinstance(error.body, Mapping) else None
-        return isinstance(error.__cause__, JoseError) or provider_error in self.recorded_refusals
+        code = error.body.get("error") if isinstance(error.body, Mapping) else None
+        return code in self.recorded_refusals
+
+    def _signing_key_refused(self, credential: Any) -> OAuthFlowError:
+        """Return the permanent, recorded refusal for a stored key that does not load or sign."""
+
+        self._log_failure(credential, self.signing_key_refusal)
+        return OAuthFlowError(TOKEN_EXCHANGE_FAILED, 400, body={"error": self.signing_key_refusal})
 
     def _header(self, material: Mapping[str, Any]) -> dict[str, str]:
         """Return the assertion's JOSE header, naming the key when the key file does."""

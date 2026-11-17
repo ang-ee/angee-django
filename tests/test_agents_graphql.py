@@ -3640,7 +3640,7 @@ def test_mcp_config_emits_secret_ref_auth_header_for_credentialed_server(
     """A credentialed MCP server renders a ``${<env>}`` Authorization header.
 
     The bearer rides through the operator secret store, never the rendered file: the
-    header references the container env var (:meth:`Agent.mcp_bearer_env`), which the
+    header references the container env var (:meth:`Agent.mcp_authorization_env`), which the
     service env sets from the operator secret (the operator resolves ``${secret.<name>}``
     in a service's env, not in file content); :meth:`Agent.mcp_secrets` carries the value
     for the provision flow to sync.
@@ -3664,11 +3664,11 @@ def test_mcp_config_emits_secret_ref_auth_header_for_credentialed_server(
 
     servers = config["mcpServers"]
     assert "headers" not in servers["public"]  # no credential → no auth header
-    assert servers["notes"]["headers"] == {"Authorization": f"Bearer ${{{agent.mcp_bearer_env(secured)}}}"}
+    assert servers["notes"]["headers"] == {"Authorization": f"${{{agent.mcp_authorization_env(secured)}}}"}
     assert secret_name == f"agent-{agent.sqid}-mcp-{credential.sqid}"
-    # The bearer reaches the container via the service env, set from the operator secret.
-    assert f'{agent.mcp_bearer_env(secured)}: "${{secret.{secret_name}}}"' in service_inputs["mcp_env"]
-    assert secrets == {secret_name: "tok-notes"}  # synced server-side, never in the file
+    # The authorization reaches the container via the service env, set from the operator secret.
+    assert f'{agent.mcp_authorization_env(secured)}: "${{secret.{secret_name}}}"' in service_inputs["mcp_env"]
+    assert secrets == {secret_name: "Bearer tok-notes"}  # synced server-side, never in the file
 
 
 @pytest.mark.parametrize("placement", [MCPPlacement.EXTERNAL, MCPPlacement.INTERNAL])
@@ -3682,9 +3682,9 @@ def test_mcp_authenticated_operations_require_a_configured_credential(db: None, 
         assert agent.mcp_secrets() == {}
         assert "headers" not in agent.mcp_config()["mcpServers"][server.name]
         for operation in (
-            lambda: server.bearer_for(agent),
+            lambda: server.authorization_for(agent),
             lambda: agent.mcp_secret_name(server),
-            lambda: agent.mcp_bearer_env(server),
+            lambda: agent.mcp_authorization_env(server),
         ):
             with pytest.raises(ValidationError, match="no authentication credential"):
                 operation()
@@ -3710,7 +3710,7 @@ def test_mcp_secrets_derive_per_agent_bearer_for_internal_server(db: None) -> No
         secret_name = agent.mcp_secret_name(server)
         bearer = server.bearer_for(agent)
 
-    assert secrets[secret_name] == bearer
+    assert secrets[secret_name] == f"Bearer {bearer}"
     assert bearer.startswith(f"{agent.sqid}.")
     assert bearer != "tok-internal"  # the raw credential secret never leaves the platform
 

@@ -877,7 +877,7 @@ class ExternalAccount(OwnerMixin, AngeeDataModel, concrete=True):
 def _records_permanent_refusal(error: Exception) -> bool:
     """Return whether a renewal refusal marks the credential failed: any refusal that is not transient."""
 
-    return not (isinstance(error, IntegrationError) and error.transient)
+    return not is_transient_failure(error)
 
 
 class CredentialQuerySet[CredentialT: Credential](AngeeHistoryQuerySet[CredentialT]):
@@ -1289,7 +1289,8 @@ class Credential(AuditMixin, AngeeDataModel, concrete=True):
 
     @property
     def is_reconnect_required(self) -> bool:
-        """Require consent only for inactive, failed-refresh or unrenewable expired grants."""
+        """Require new consent or key material only for an inactive credential, a failed refresh or
+        mint (``last_refresh_status="failed"``), or an unrenewable expired grant."""
 
         return (
             self.status != CredentialStatus.ACTIVE
@@ -1415,14 +1416,15 @@ class Credential(AuditMixin, AngeeDataModel, concrete=True):
     def scoped_access_token(self, scopes: Collection[str]) -> str:
         """Return a live access token for ``scopes`` from a kind that mints one per scope set.
 
-        ``scopes`` is a collection of scope names; order and repeats do not matter,
-        and one bare string is refused. Tokens are cached in the encrypted material,
-        one per scope set, and renewed at the earlier of ``_TOKEN_RENEWAL_MARGIN``
-        and half their lifetime before expiry. The call needs autocommit, cached or
-        not, because a miss mints over the network; a kind that does not mint is
-        refused before any request. An inactive credential fails closed: it serves
-        no token, cached or minted (:meth:`_require_active`), judged on this
-        instance, on the row re-read under the lock, and again after a mint.
+        ``scopes`` is a collection of scope names; each element is split on
+        whitespace (RFC 6749 §3.3), order and repeats do not matter, and one bare
+        string is refused. Tokens are cached in the encrypted material, one per
+        scope set, and renewed at the earlier of ``_TOKEN_RENEWAL_MARGIN`` and half
+        their lifetime before expiry. The call needs autocommit, cached or not,
+        because a miss mints over the network; a kind that does not mint is refused
+        before any request. An inactive credential fails closed: it serves no token,
+        cached or minted (:meth:`require_active`), judged on this instance, on the
+        row re-read under the lock, and again after a mint.
         Concurrent consumers serialize in :meth:`_renew_locked`: one mints and the
         others adopt its persisted token. A refusal the kind handler attributes to
         the key or identity (:meth:`CredentialKindHandler.records_failure`) records
@@ -1437,17 +1439,17 @@ class Credential(AuditMixin, AngeeDataModel, concrete=True):
             raise ValueError(f"{self.kind} credentials do not mint access tokens per scope set.")
         if connection.in_atomic_block:
             raise RuntimeError("A scoped access token requires autocommit.")
-        scope = " ".join(sorted({str(item).strip() for item in scopes} - {""}))
+        scope = " ".join(sorted({part for item in scopes for part in str(item).split()}))
         if not scope:
             raise ValueError("A scoped access token needs at least one scope.")
-        self._require_active()
+        self.require_active()
         if token := self._scoped_token(scope):
             return token
         live = ""
 
         def due(current: Self) -> bool:
             nonlocal live
-            current._require_active()
+            current.require_active()
             live = current._scoped_token(scope)
             return not live
 
@@ -1461,11 +1463,11 @@ class Credential(AuditMixin, AngeeDataModel, concrete=True):
             return live
         # A key edit, reconnect or deactivation during the exchange keeps the minted
         # token out of the cache; the caller still receives it while the row is active.
-        self._require_active()
+        self.require_active()
         return str(minted["access_token"])
 
-    def _require_active(self) -> None:
-        """Refuse a scoped token, cached or minted, from a credential that is not active."""
+    def require_active(self) -> None:
+        """Refuse a scoped token, cached or minted, or a probe, from a credential that is not active."""
 
         if self.status != CredentialStatus.ACTIVE:
             raise ValueError("This credential is not active, so it serves no tokens.")
@@ -1482,14 +1484,15 @@ class Credential(AuditMixin, AngeeDataModel, concrete=True):
         """Cache one minted token on this locked row, pruning expired scope sets, and record success.
 
         The renewal time is the earlier of ``_TOKEN_RENEWAL_MARGIN`` and half the
-        token's lifetime before expiry; a response without ``expires_in`` is given
-        ``_DEFAULT_TOKEN_LIFETIME``.
+        token's lifetime before expiry; a response without a positive ``expires_in``
+        is given ``_DEFAULT_TOKEN_LIFETIME``.
         """
 
         now = timezone.now()
         issued = now.timestamp()
         expires_in = response["expires_in"]
-        lifetime = _DEFAULT_TOKEN_LIFETIME.total_seconds() if expires_in is None else float(expires_in)
+        positive = expires_in is not None and expires_in > 0
+        lifetime = float(expires_in) if positive else _DEFAULT_TOKEN_LIFETIME.total_seconds()
         margin = min(_TOKEN_RENEWAL_MARGIN.total_seconds(), lifetime / 2)
         material = self.reveal()
         cached = {key: entry for key, entry in material.get(_SCOPED_TOKENS, {}).items() if entry["expires_at"] > issued}

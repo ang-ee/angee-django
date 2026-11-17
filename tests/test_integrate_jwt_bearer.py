@@ -100,13 +100,17 @@ def set_status(credential: Any, status: str) -> None:
 
 @dataclass
 class TokenEndpoint:
-    """A JWT bearer token endpoint that verifies each assertion and answers with ``status``."""
+    """A JWT bearer token endpoint that verifies each assertion and answers with ``status``.
+
+    A non-200 status, or an explicit ``refusal`` body (even on a 2xx), answers with that
+    JSON body, ``{"error": "invalid_grant"}`` by default; otherwise it grants a token.
+    """
 
     status: int = 200
     expires_in: int | None = 3600
     granted_scope: str | None = None
     delay: float = 0.0
-    refusal: dict[str, Any] = field(default_factory=lambda: {"error": "invalid_grant"})
+    refusal: dict[str, Any] | None = None
     on_grant: Callable[[], None] | None = None
     grants: list[dict[str, Any]] = field(default_factory=list)
 
@@ -117,8 +121,9 @@ class TokenEndpoint:
         time.sleep(self.delay)
         if self.on_grant is not None:
             self.on_grant()
-        if self.status != 200:
-            return httpx2.Response(self.status, json=self.refusal)
+        if self.refusal is not None or self.status != 200:
+            refusal = {"error": "invalid_grant"} if self.refusal is None else self.refusal
+            return httpx2.Response(self.status, json=refusal)
         body: dict[str, Any] = {"access_token": f"access-{len(self.grants)}", "token_type": "Bearer"}
         if self.expires_in is not None:
             body["expires_in"] = self.expires_in
@@ -235,6 +240,7 @@ def test_a_neutral_key_file_sends_the_scope_as_a_request_parameter_and_caches_pe
     with mock_transport(endpoint) as requests:
         assert credential.scoped_access_token([WRITE, READ]) == "access-1"
         assert credential.scoped_access_token((READ, WRITE, READ)) == "access-1"
+        assert credential.scoped_access_token([f" {WRITE}  {READ} "]) == "access-1"  # elements split on whitespace
         assert credential.auth_headers(scopes={WRITE}) == {"Authorization": "Bearer access-2"}
         assert credential.scoped_access_token([WRITE]) == "access-2"
 
@@ -259,6 +265,7 @@ def test_a_neutral_key_file_sends_the_scope_as_a_request_parameter_and_caches_pe
         pytest.param(3600, 3300, id="long-lifetime-renews-five-minutes-early"),
         pytest.param(60, 30, id="short-lifetime-renews-at-half-life"),
         pytest.param(None, 150, id="missing-expires-in-assumes-five-minutes"),
+        pytest.param(0, 150, id="non-positive-expires-in-assumes-five-minutes"),
     ],
 )
 def test_a_token_renews_at_the_earlier_of_five_minutes_and_half_its_lifetime(
@@ -325,28 +332,31 @@ def test_concurrent_callers_mint_once_per_scope_set(second: str) -> None:
 
 @pytest.mark.django_db(transaction=True)
 @pytest.mark.parametrize(
-    ("status", "error", "transient", "recorded"),
+    ("status", "refusal", "reported", "transient", "recorded"),
     [
-        pytest.param(400, "invalid_grant", False, True, id="refused-grant"),
-        pytest.param(401, "invalid_client", False, True, id="refused-client"),
-        pytest.param(400, "unauthorized_client", False, True, id="unauthorized-client"),
-        pytest.param(400, "invalid_scope", False, False, id="refused-scope-is-not-the-key"),
-        pytest.param(429, "rate_limit_exceeded", True, False, id="json-rate-limit"),
-        pytest.param(400, "temporarily_unavailable", True, False, id="temporarily-unavailable"),
-        pytest.param(503, "server_error", True, False, id="server-error"),
+        pytest.param(400, {"error": "invalid_grant"}, 400, False, True, id="refused-grant"),
+        pytest.param(401, {"error": "invalid_client"}, 401, False, True, id="refused-client"),
+        pytest.param(400, {"error": "unauthorized_client"}, 400, False, True, id="unauthorized-client"),
+        pytest.param(400, {"error": "invalid_scope"}, 400, False, False, id="refused-scope-is-not-the-key"),
+        pytest.param(429, {"error": "rate_limit_exceeded"}, 429, True, False, id="json-rate-limit"),
+        pytest.param(429, {}, 429, True, False, id="json-rate-limit-without-error"),
+        pytest.param(200, {"error": "invalid_grant"}, 400, False, True, id="2xx-carrying-error"),
+        pytest.param(400, {"error": "temporarily_unavailable"}, 503, True, False, id="temporarily-unavailable"),
+        pytest.param(503, {"error": "server_error"}, 503, True, False, id="server-error"),
     ],
 )
 def test_only_key_or_identity_refusals_require_reconnect(
-    status: int, error: str, transient: bool, recorded: bool,
+    status: int, refusal: dict[str, Any], reported: int, transient: bool, recorded: bool,
 ) -> None:
-    """Every refusal is raised; only a refusal of the key or identity marks the credential failed."""
+    """Every refusal is raised with the response's real error status; only a key or identity refusal is recorded."""
 
     credential = create_jwt_bearer()
-    endpoint = TokenEndpoint(status=status, refusal={"error": error})
+    endpoint = TokenEndpoint(status=status, refusal=refusal)
 
     with mock_transport(endpoint), pytest.raises(OAuthFlowError) as raised:
         credential.scoped_access_token([WRITE])
 
+    assert raised.value.http_status == reported
     assert raised.value.transient is transient
     assert credential.is_reconnect_required is recorded
     assert credential.last_refresh_status == ("failed" if recorded else "")
@@ -468,7 +478,7 @@ def test_scoped_tokens_refuse_bad_calls_before_any_request() -> None:
 
 @pytest.mark.django_db
 def test_the_connection_test_signs_locally_without_a_request() -> None:
-    """Test connection proves the key loads and signs; a key that no longer loads is not usable."""
+    """Test connection proves the key loads and signs; a key that does not load is not usable."""
 
     owner = create_user("jwt-probe-owner")
     credential = create_jwt_bearer(user=owner)
@@ -488,6 +498,46 @@ def test_the_connection_test_signs_locally_without_a_request() -> None:
         with pytest.raises(IntegrationError) as refused:
             integration.probe_credential()
     assert refused.value.public_message == "Credential is not usable."
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.parametrize("state", ["refused", "revoked"])
+def test_the_connection_test_fails_closed_for_a_refused_or_inactive_credential(state: str) -> None:
+    """A key that still signs locally is not usable once the provider refused it or it was revoked."""
+
+    owner = create_user(f"jwt-probe-{state}")
+    credential = create_jwt_bearer(user=owner)
+    with system_context(reason="test jwt bearer probe setup"):
+        vendor = Vendor.objects.create(slug=f"jwt-probe-{state}", display_name="JWT probe")
+        integration = VcsBridge.objects.create(
+            owner=owner, vendor=vendor, credential=credential, backend_class="local", lifecycle="connected",
+        )
+    if state == "refused":
+        with mock_transport(TokenEndpoint(status=400)), pytest.raises(OAuthFlowError):
+            credential.scoped_access_token([WRITE])
+    else:
+        set_status(credential, CredentialStatus.REVOKED)
+
+    with system_context(reason="test jwt bearer probe"), pytest.raises(IntegrationError) as refused:
+        integration.refresh_from_db()
+        integration.probe_credential()
+    assert refused.value.public_message == "Credential is not usable."
+
+
+@pytest.mark.django_db(transaction=True)
+def test_a_key_that_does_not_load_is_a_recorded_refusal_before_any_request() -> None:
+    """An unloadable stored key condemns the key file: refused permanently, recorded, never sent."""
+
+    credential = create_jwt_bearer()
+    credential.update_material(private_key="no longer a key")
+
+    with mock_transport(lambda request: pytest.fail("an unloadable key must not reach the endpoint")):
+        with pytest.raises(OAuthFlowError) as raised:
+            credential.scoped_access_token([WRITE])
+
+    assert not raised.value.transient
+    assert raised.value.body == {"error": "invalid_signing_key"}
+    assert credential.last_refresh_status == "failed" and credential.is_reconnect_required
 
 
 @pytest.mark.django_db(transaction=True)
