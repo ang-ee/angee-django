@@ -3,7 +3,11 @@
 Record chatter and source conversations have different identity. Chatter folds
 through core `MergeableMixin`: the retired thread redirects to its survivor,
 while its messages, follower occurrences and history stay on their physical rows.
-The current record owns read and post admission. Messaging contributes comments,
+The current record owns read, post and moderation admission through the record
+permissions its model declares on `ThreadedModelMixin`: `thread_read_access`
+(default `read`), `thread_post_access` and `thread_moderate_access` (both default
+`write`). A record whose `write` reaches people who must not edit, delete or trash
+other people's comments names a narrower `thread_moderate_access`. Messaging contributes comments,
 its existing composer, and linked source conversations to the framework Activity
 stream; provenance contributes record history independently through the same owner.
 

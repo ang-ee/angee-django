@@ -19,6 +19,7 @@ from angee.graphql import records
 from angee.graphql.schema import SCHEMA_PART_KEYS, GraphQLSchemas
 from angee.graphql.testing.documents import execute_schema, result_data
 from angee.messaging.testing.models import Message, Thread, ThreadAttachment, ThreadFollower
+from tests.chatterdemo.models import ChatterDoc
 from tests.conftest import SchemaAddon, create_platform_admin
 from tests.messaging_campaign import comment_record as comment_record
 from tests.messaging_campaign import grant, make_user
@@ -169,6 +170,44 @@ def test_only_record_moderators_get_the_trash_control(discussion: Any) -> None:
     assert _run(TRASH, case, case.writer, message=case.removed, reason="")["error_code"] == "BAD_MESSAGE"
     with actor_context(case.author), pytest.raises(ValueError, match="does not belong"):
         case.record.message_update_content(Message._base_manager.get(pk=case.removed.pk), body="Edited")
+
+
+def test_a_declared_moderation_permission_narrows_moderation_below_write(
+    discussion: Any, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A record naming a narrower ``thread_moderate_access`` takes moderation from its writers."""
+
+    case = discussion
+    monkeypatch.setattr(ChatterDoc, "thread_moderate_access", "post")
+    manager = make_user("comment-manager")
+    grant(case.record, "manager", manager)
+    with actor_context(case.writer):
+        assert case.record.has_access("write")
+        assert not case.record.can_moderate()
+        with pytest.raises(PermissionDenied):
+            case.record.message_update_content(case.removed, body="Rewritten by a writer")
+        with pytest.raises(PermissionDenied):
+            case.record.message_unlink(case.removed)
+        with pytest.raises(PermissionDenied):
+            case.record.message_trash(case.removed)
+        with pytest.raises(PermissionDenied):
+            case.record.message_removed()
+        with pytest.raises(PermissionDenied):
+            case.record.message_unsubscribe(user=case.peer)
+    writer_view = _thread(case, case.writer)
+    writer_rows = [row for row in writer_view["messages"] if row["preview"] in _COMMENTS]
+    assert writer_view["removed_message_count"] is None
+    assert [(row["can_trash"], row["can_delete"]) for row in writer_rows] == [(False, False), (False, False)]
+    assert _run(TRASH, case, case.writer, message=case.removed, reason="")["error_code"] == "PERMISSION_DENIED"
+    assert not Message._base_manager.get(pk=case.removed.pk).is_trashed
+
+    moderator_view = _thread(case, manager)
+    assert [row["can_trash"] for row in moderator_view["messages"] if row["preview"] in _COMMENTS] == [True, True]
+    assert _run(TRASH, case, manager, message=case.removed, reason="")["error"] is None
+    assert _thread(case, manager)["removed_message_count"] == 1
+    with actor_context(manager):
+        assert case.record.message_unsubscribe(user=case.peer)
+    assert Message._base_manager.get(pk=case.removed.pk).is_trashed
 
 
 def test_notes_and_tracked_messages_stay_out_of_the_trash(discussion: Any) -> None:

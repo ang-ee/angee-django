@@ -1502,7 +1502,7 @@ class ThreadFollowerManager[ThreadFollowerT: ThreadFollower](_ThreadFollowerMana
         return parties.person_id_for_user(resolved_user_id)
 
     def _require_follow_access(self, record: Any, party_id: Any) -> None:
-        """A person manages their own follow; a record writer may manage others."""
+        """A person manages their own follow; a record moderator may manage others."""
 
         if is_sudo():
             return
@@ -1510,7 +1510,7 @@ class ThreadFollowerManager[ThreadFollowerT: ThreadFollower](_ThreadFollowerMana
         if actor_id is not None and party_id == self.get_party_id(user_id=actor_id):
             return
         if not record.can_moderate():
-            raise PermissionDenied("Managing another party's follow requires record write access.")
+            raise PermissionDenied("Managing another party's follow requires moderator access to the record.")
 
     def _person_account(self, party_id: Any) -> Any | None:
         """Return the human account for a party, if this is an account follow."""
@@ -1692,7 +1692,7 @@ class ThreadFollowerManager[ThreadFollowerT: ThreadFollower](_ThreadFollowerMana
 
         Omitted preferences and an existing read cutoff remain unchanged. A person
         account needs the current record's read permission; managing another party
-        needs that record's write permission. Only a new follow seeds a receipt.
+        needs that record's moderation (``can_moderate``). Only a new follow seeds a receipt.
         """
 
         attachments = apps.get_model("messaging", "ThreadAttachment").objects
