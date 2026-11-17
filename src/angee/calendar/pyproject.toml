@@ -38,7 +38,7 @@ depends_on = ["demo/020_parties.handle.yaml", "demo/041_calendar.calendarevent.y
 [[tool.angee.resources.demo]]
 path = "demo/grants/060_calendar.grants.yaml"
 kind = "grants"
-depends_on = ["demo/020_parties.handle.yaml", "demo/030_calendar.calendar.yaml"]
+depends_on = "demo/030_calendar.calendar.yaml"
 
 [tool.angee.platform]
 category = "Productivity"

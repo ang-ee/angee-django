@@ -1,6 +1,14 @@
 // Calendar-owned record arms contributed to upstream edge definitions.
 // @rebac_package: calendar
-// @rebac_schema_revision: 1
+// @rebac_schema_revision: 2
+
+// An event's readers read its attendees' addresses, through the attendee edge,
+// as a thread's readers read its followers.
+definition parties/handle {
+    relation calendar_event: calendar/event // rebac:field=event_attendees__event
+
+    permission read_granted = calendar_event->read
+}
 
 // An event retains source conversations under its writers: the thread
 // attachment edge reaches the event through its GenericForeignKey.

@@ -18,7 +18,7 @@ from rebac import PermissionDenied, actor_context, system_context
 from rebac.testing import assert_decisions
 
 from angee.calendar import schema as calendar_schema
-from angee.calendar.models import EventTransparency, EventVisibility
+from angee.calendar.models import OVERLAP_MESSAGE, EventTransparency, EventVisibility
 from angee.calendar.testing.models import Calendar, CalendarEvent, EventAttendee
 from angee.graphql.testing.documents import execute_schema, result_data
 from angee.messaging.testing.models import Handle, Organization, Person
@@ -40,7 +40,11 @@ def world(db: None) -> SimpleNamespace:
     with system_context(reason="tests.calendar.access.setup"):
         actors = {seat: create_user(f"cal_{seat}") for seat in SEATS if seat != "admin"}
         person = Person.objects.for_user(actors["holder"])
+        # A calendar created as system work has no owner: its holder alone holds it.
+        held = Calendar.objects.create(party=person, name="Held")
+    with actor_context(actors["holder"]):
         calendar = Calendar.objects.create(party=person, name="Holder")
+    with system_context(reason="tests.calendar.access.setup"):
         events = {
             visibility.value: CalendarEvent.objects.create(
                 calendar=calendar, title=f"{visibility.value} meeting", visibility=visibility,
@@ -60,7 +64,7 @@ def world(db: None) -> SimpleNamespace:
     shared = _as(actors["holder"], calendar)
     for relation, seat in (("reader", "reader"), ("editor", "editor"), ("free_busy", "viewer")):
         shared.grant_record_access(relation, actors[seat])
-    return SimpleNamespace(calendar=calendar, free=free, attendee=attendee, **actors, **events)
+    return SimpleNamespace(calendar=calendar, held=held, free=free, attendee=attendee, **actors, **events)
 
 
 def _as(actor: Any, calendar: Any) -> Any:
@@ -77,8 +81,14 @@ def test_the_calendar_decision_table(world: SimpleNamespace) -> None:
         (w.calendar, "read", "holder reader editor admin", "viewer stranger"),
         (w.calendar, "see_busy", "holder reader editor viewer admin", "stranger"),
         (w.calendar, "write", "holder editor admin", "reader viewer stranger"),
+        # The holder created this calendar, so it is also its owner.
         (w.calendar, "share", "holder editor admin", "reader viewer stranger"),
         (w.calendar, "delete", "holder admin", "reader editor viewer stranger"),
+        (w.calendar, "transfer", "holder admin", "reader editor viewer stranger"),
+        # An ownerless calendar: its holder writes and deletes it, but sharing takes an owner.
+        (w.held, "write", "holder admin", "reader editor viewer stranger"),
+        (w.held, "share", "admin", "holder reader editor viewer stranger"),
+        (w.held, "transfer", "admin", "holder reader editor viewer stranger"),
         (w.default, "read", "holder reader editor admin", "viewer stranger"),
         (w.private, "read", "holder editor admin", "reader viewer stranger"),
         (w.public, "read", "holder reader editor viewer admin", "stranger"),
@@ -86,6 +96,8 @@ def test_the_calendar_decision_table(world: SimpleNamespace) -> None:
         (w.default, "write", "holder editor admin", "reader viewer stranger"),
         (w.attendee, "read", "holder reader editor admin", "viewer stranger"),
         (w.attendee, "write", "holder editor admin", "reader viewer stranger"),
+        # An event's readers read its attendees' addresses; nobody else was granted this one.
+        (w.attendee.handle, "read", "holder reader editor admin", "viewer stranger"),
     ]
 
     assert_decisions(
@@ -115,16 +127,28 @@ def test_a_free_busy_viewer_reads_no_event_row_and_sees_redacted_busy_time(world
     assert CalendarEvent.objects.with_actor(w.stranger).occurrences(_utc(13, 0), _utc(14, 0)) == []
 
 
-def test_a_creator_keeps_the_calendar_of_a_party_without_a_user(db: None) -> None:
+def test_the_creator_owns_a_calendar_and_ownership_transfers(db: None) -> None:
     del db
     with system_context(reason="tests.calendar.access.setup"):
-        founder, outsider = create_user("cal_founder"), create_user("cal_outsider")
+        founder, successor, outsider = (create_user(f"cal_{name}") for name in ("founder", "successor", "outsider"))
     with actor_context(founder):
         organization = Organization.objects.create(display_name="Studio")
         calendar = Calendar.objects.create(party=organization, name="Studio")
 
+    assert calendar.owner_id == founder.pk
     assert list(Calendar.objects.with_actor(founder).filter(pk=calendar.pk)) == [calendar]
     assert list(Calendar.objects.with_actor(outsider).filter(pk=calendar.pk)) == []
+
+    with actor_context(founder):
+        Calendar.objects.with_actor(founder).get(pk=calendar.pk).transfer_ownership(successor)
+
+    assert_decisions(
+        checks=[
+            (successor, "share", calendar, True),
+            (successor, "transfer", calendar, True),
+            (founder, "read", calendar, False),
+        ],
+    )
     # Only whoever may edit the party gives it a calendar.
     with actor_context(outsider), pytest.raises(PermissionDenied):
         Calendar.objects.create(party=organization, name="Not mine")
@@ -164,6 +188,33 @@ def test_event_occurrences_redacts_for_a_free_busy_viewer_and_narrows_by_calenda
         ("public meeting", False, w.calendar.sqid),
     ]
     assert elsewhere == []
+
+
+_INSERT = """
+mutation ($calendar: ID!, $start: DateTime!, $end: DateTime!) {
+  insert_calendar_events_one(object: {calendar: $calendar, title: "Mine", start: $start, end: $end}) { id }
+}
+"""
+
+
+def test_a_refused_insert_on_a_refuse_calendar_learns_nothing_of_its_events(world: SimpleNamespace) -> None:
+    """A reader may not insert; the refusal names no event and does not say the time is taken."""
+
+    w = world
+    with system_context(reason="tests.calendar.access.setup"):
+        w.calendar.overlap_policy = "refuse"
+        w.calendar.save(update_fields=["overlap_policy", "updated_at"])
+    variables = {
+        "calendar": w.calendar.sqid, "start": _utc(13, 11, 10).isoformat(), "end": _utc(13, 11, 20).isoformat(),
+    }
+
+    refused = execute_schema(_console(), _INSERT, variables, user=w.reader)
+    taken = execute_schema(_console(), _INSERT, variables, user=w.editor)
+
+    told = repr(refused.errors) + repr(refused.data)
+    assert refused.errors and "private meeting" not in told and OVERLAP_MESSAGE not in told
+    # A writer is told the time is taken, still without the other event's title.
+    assert taken.errors and OVERLAP_MESSAGE in repr(taken.errors) and "private meeting" not in repr(taken.errors)
 
 
 @pytest.mark.parametrize(

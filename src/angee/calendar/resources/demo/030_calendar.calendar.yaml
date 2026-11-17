@@ -1,18 +1,21 @@
 # One calendar per demo person (demo tier). The calendar addon creates no
 # default calendar: a calendar is created explicitly, and demo data seeds the
-# ones the demo needs. Alice's calendar accepts overlaps; Bob's refuses them.
+# ones the demo needs; each is owned by its person's user. Alice's calendar accepts
+# overlaps; Bob's refuses them.
 _meta:
   model: calendar.Calendar
 rows:
   - xref: alice_calendar
     fields:
       party: calendar.alice_person
+      owner: iam.user_alice
       name: Alice Morgan
       description: Alice's working calendar.
       color: "#2563eb"
   - xref: bob_calendar
     fields:
       party: calendar.bob_person
+      owner: iam.user_bob
       name: Bob Chen
       description: Bob's working calendar; it refuses overlapping events.
       color: "#16a34a"

@@ -24,6 +24,13 @@ A `CalendarEvent` belongs to one calendar. It stores one master row with an
 optional RRULE. An exception to one instance of a recurring master is an override
 row (the RFC 5545 `RECURRENCE-ID` shape): `series` names the master and
 `original_start` the instance it replaces. A cancelled override drops its instance.
+An event's calendar, series and instance are set once.
+
+A series owns its overrides. When a master's start, all-day flag or rule changes,
+or its calendar's time zone changes, each override's instance moves with the
+master's wall clock. An override that no longer matches an instance becomes a
+standalone event if it carries edits, and is deleted if it was a cancellation. A
+cancelled master hides its moved instances too.
 
 - **Status** is `confirmed`, `tentative` or `cancelled`; a cancelled event shows no
   occurrence.
@@ -50,21 +57,28 @@ and can. `reschedule_event` drags a single row.
 
 A calendar whose overlap policy is `refuse` rejects a busy event whose
 `[start, end)` meets another busy occurrence on it, expanded recurrences
-included. Free and cancelled events never conflict. The event model validates
-it, whoever saves. Two concurrent saves are not serialized against each other.
+included. Free and cancelled events never conflict. `CalendarEvent.clean` reports
+it to a form; `CalendarEvent.save` checks it again under the calendar's row lock,
+on every save path, so two concurrent saves cannot take the same time. The
+refusal names no other event, and an actor whose save would be refused anyway is
+judged only against the events it can read.
 
 ## Access
 
 A calendar is the access root of its events.
 
-- The **holder** (the user of the person whose calendar it is) and the
-  calendar's **creator** read, write and share it.
+- The calendar's **owner** (its creator by default, transferable) reads, writes,
+  shares and deletes it, and transfers it.
+- The **holder** (the user of the person whose calendar it is) reads, writes and
+  deletes it.
 - **Sharing** grants `reader`, `editor` or `free_busy` through the generic
-  record-access surface. A `free_busy` grantee reads no event: the occurrence read
-  shows them busy time only, without title or details, and nothing for free events.
+  record-access surface; the owner and editors share. A `free_busy` grantee reads
+  no event: the occurrence read shows them busy time only, without title or
+  details, and nothing for free events.
+- An event's readers read its attendees' addresses.
 - **Platform admins** reach every calendar.
-- **Consumers** widen access from their own `permissions.extends.zed`; a company
-  scope adds its members to `write`.
+- **Consumers** widen `read_granted`, `write`, `share` and `delete` from their own
+  `permissions.extends.zed`, as a company scope does.
 
 ## Web
 
@@ -75,5 +89,6 @@ The fragment ships the Calendar app:
 - the calendar list and record pages, with the platform's share control.
 
 Other addons overlay their own dated rows on the calendar page by contributing an
-occurrence source to the `calendar.events#occurrence-sources` container. Projects
-contributes the viewer's open tasks by due date.
+occurrence source to the `calendar.events#occurrence-sources` container. The
+[`projects_calendar`](../projects_calendar/README.md) bridge contributes the
+viewer's open tasks by due date.

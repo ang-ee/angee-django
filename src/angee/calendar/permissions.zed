@@ -1,36 +1,39 @@
 // Authorization schema for the calendar addon.
 // @rebac_package: calendar
 // @rebac_package_version: 0.1.0
-// @rebac_schema_revision: 1
+// @rebac_schema_revision: 2
 
 // A calendar belongs to one party and is the access root of its events.
 //
+//   - `owner` is the calendar's transferable owner (OwnerMixin), the creator by
+//     default; it or a platform admin transfers it.
 //   - `holder` is the user of the person whose calendar it is, read live through
 //     the party's person (no tuple mirrors it).
-//   - `creator` keeps a calendar with its creator, which a calendar for a party
-//     without a user (an organization) needs.
 //   - `reader`, `editor` and `free_busy` are the share surface (`rebac_grantable`):
 //     a `free_busy` grantee sees the calendar's busy time and reads nothing else.
 //   - `party->write` admits a new calendar: whoever may edit a party may give it a
 //     calendar (a person's own user owns their person).
 //
-// Consumers widen `write` (and so `read` and `see_busy`) from their own
+// Consumers widen `read_granted`, `write`, `share` and `delete` from their own
 // `permissions.extends.zed`, as a company scope does.
 definition calendar/calendar {
     relation party: parties/party // rebac:field=party
+    relation owner: auth/user // rebac:field=owner
     relation holder: auth/user // rebac:field=party__person__user
-    relation creator: auth/user // rebac:field=created_by
     relation reader: auth/user | auth/group#member
     relation editor: auth/user | auth/group#member
     relation free_busy: auth/user | auth/group#member
     relation admin: angee/role // rebac:const=admin
 
     permission create = party->write + admin->member
-    permission write = holder + creator + editor + admin->member
-    permission read = reader + write
+    permission write = owner + holder + editor + admin->member
+    permission read_granted = reader + write
+    permission read = read_granted
     permission see_busy = read + free_busy
-    permission share = write
-    permission delete = holder + creator + admin->member
+    permission share = owner + editor + admin->member
+    permission delete = owner + holder + admin->member
+    permission transfer = owner + admin->member
+    permission write__owner = transfer
 }
 
 // An event takes its access from its calendar. Its details follow its
@@ -47,7 +50,8 @@ definition calendar/event {
     permission create = calendar->write + admin->member
     permission write = calendar->write + admin->member
     permission delete = calendar->write + admin->member
-    permission read = default_calendar->read + public_calendar->see_busy + write
+    permission read_granted = default_calendar->read + public_calendar->see_busy + write
+    permission read = read_granted
     permission see_busy = calendar->see_busy + admin->member
 }
 

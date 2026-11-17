@@ -50,6 +50,7 @@ dependencies = [
     "angee-portfolio==3.0.0",
     "angee-posts==3.0.0",
     "angee-projects==3.0.0",
+    "angee-projects-calendar==3.0.0",
     "angee-proposals==3.0.0",
     "angee-proposals-work==3.0.0",
     "angee-provenance==3.0.0",
@@ -164,6 +165,7 @@ angee-pm = {workspace = true}
 angee-portfolio = {workspace = true}
 angee-posts = {workspace = true}
 angee-projects = {workspace = true}
+angee-projects-calendar = {workspace = true}
 angee-proposals = {workspace = true}
 angee-proposals-work = {workspace = true}
 angee-provenance = {workspace = true}

@@ -35,6 +35,7 @@ from angee.graphql.ids import PublicID
 from angee.graphql.node import NODE_DISPLAY_NAME_DESCRIPTION, AngeeNode
 from angee.graphql.relations import actor_scoped_to_one
 from angee.graphql.subscriptions import changes
+from angee.iam.schema import UserType
 from angee.parties.schema import HandleType, PartyType
 from angee.tags.schema import TaggedNode, tags_input_extensions
 
@@ -65,7 +66,8 @@ class CalendarType(AngeeNode):
     created_at: auto
     updated_at: auto
     party: PartyType | None = actor_scoped_to_one("party")
-    permissions = permissions_field(("write", "share", "delete"))
+    owner: UserType | None = actor_scoped_to_one("owner")
+    permissions = permissions_field(("write", "share", "delete", "transfer"))
 
 
 @strawberry_django.type(CalendarEvent)
@@ -165,6 +167,20 @@ _CALENDAR_RESOURCE = hasura_model_resource(
     id_column="sqid",
 )
 
+_EVENT_SCHEDULE_FIELDS = (
+    "title",
+    "description",
+    "location",
+    "start",
+    "end",
+    "all_day",
+    "recurrence",
+    "status",
+    "transparency",
+    "visibility",
+    "conference_url",
+)
+
 _EVENT_RESOURCE = hasura_model_resource(
     CalendarEventType,
     model=CalendarEvent,
@@ -173,22 +189,10 @@ _EVENT_RESOURCE = hasura_model_resource(
     sortable=["start", "end", "title", "created_at", "updated_at"],
     aggregatable=["id"],
     groupable=["calendar", "status", "all_day"],
-    writable=[
-        "calendar",
-        "series",
-        "original_start",
-        "title",
-        "description",
-        "location",
-        "start",
-        "end",
-        "all_day",
-        "recurrence",
-        "status",
-        "transparency",
-        "visibility",
-        "conference_url",
-    ],
+    # Containment is set once (`CalendarEvent.immutable_fields`): an event never
+    # moves to another calendar, series or instance after insert.
+    insertable=["calendar", "series", "original_start", *_EVENT_SCHEDULE_FIELDS],
+    updatable=list(_EVENT_SCHEDULE_FIELDS),
     field_id_decode={
         "calendar": public_pk_decoder(Calendar),
         "series": public_pk_decoder(CalendarEvent),
@@ -205,7 +209,9 @@ _ATTENDEE_RESOURCE = hasura_model_resource(
     sortable=["created_at", "updated_at"],
     aggregatable=["id"],
     groupable=["event", "handle", "role", "response"],
-    writable=["event", "handle", "role", "response"],
+    # An attendee belongs to one event for good (`EventAttendee.immutable_fields`).
+    insertable=["event", "handle", "role", "response"],
+    updatable=["handle", "role", "response"],
     field_id_decode={
         "event": public_pk_decoder(CalendarEvent),
         "handle": public_pk_decoder(Handle),

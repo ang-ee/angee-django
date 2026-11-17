@@ -3,7 +3,6 @@ import { defineBaseAddon, resourcePageRoutes, type MenuDeclarations } from "@ang
 import { lazyRouteComponent } from "@tanstack/react-router";
 import { Briefcase, ClipboardCheck, Kanban, ListChecks } from "lucide-react";
 
-import { dueTasksCalendarSource } from "./calendar-source";
 import { projectForm, taskForm } from "./record-forms";
 import { enProjectsMessages } from "./i18n";
 import { PROJECT_MODEL, TASK_MODEL } from "./resources";
@@ -70,10 +69,6 @@ const projects = defineBaseAddon({
   i18n: { projects: enProjectsMessages },
   widgets: { "projects.phase": { read: ProjectPhaseControl, edit: ProjectPhaseControl } },
   containers: {
-    // The viewer's open tasks by due date overlay the calendar page.
-    "calendar.events#occurrence-sources": {
-      "projects.due-tasks": { content: dueTasksCalendarSource },
-    },
     // A task's line on the Timeline opens the Tasks tab.
     "timeline#kinds": {
       "projects.task": { content: { label: "Tasks", icon: "project-task", tone: "info", verb: "Open in Tasks", target: { tab: "projects.tasks", focus: "task" } } },

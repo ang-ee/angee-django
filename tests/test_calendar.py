@@ -228,6 +228,100 @@ def test_one_override_per_instance(dst_series: tuple[Any, ...]) -> None:
         )
 
 
+# --- a series owns its overrides ---------------------------------------------
+
+
+def _save(row: Any, **fields: Any) -> None:
+    with system_context(reason="tests.calendar.edit"):
+        for name, value in fields.items():
+            setattr(row, name, value)
+        row.full_clean()
+        row.save()
+
+
+def _refreshed(*rows: Any) -> None:
+    with system_context(reason="tests.calendar.read"):
+        for row in rows:
+            row.refresh_from_db()
+
+
+def test_moving_a_master_carries_its_overrides_by_the_wall_clock_change(dst_series: tuple[Any, ...]) -> None:
+    calendar, master, moved, cancelled = dst_series
+
+    _save(master, start=_ny(2026, 3, 2, 10), end=_ny(2026, 3, 2, 11))
+    _refreshed(moved, cancelled)
+
+    # 10:00 local on either side of the spring-forward.
+    assert (moved.original_start, cancelled.original_start) == (_ny(2026, 3, 9, 10), _ny(2026, 3, 16, 10))
+    assert [(o.event_sqid, o.start) for o in _occurrences(calendar, _ny(2026, 3, 1), _ny(2026, 3, 25))] == [
+        (master.sqid, _ny(2026, 3, 2, 10)),
+        (moved.sqid, _ny(2026, 3, 10, 11)),
+        (master.sqid, _ny(2026, 3, 23, 10)),
+    ]
+
+
+def test_changing_the_calendar_zone_keeps_overridden_instances_overridden(dst_series: tuple[Any, ...]) -> None:
+    calendar, master, moved, cancelled = dst_series
+    london = ZoneInfo("Europe/London")
+
+    _save(calendar, timezone="Europe/London")
+    _refreshed(moved, cancelled)
+
+    # The series now runs at 14:00 London (its UTC start), and so do its overridden instances.
+    assert cancelled.original_start == datetime(2026, 3, 16, 14, tzinfo=london).astimezone(UTC)
+    assert [(o.event_sqid, o.start) for o in _occurrences(calendar, _utc(2026, 3, 1), _utc(2026, 3, 25))] == [
+        (master.sqid, _utc(2026, 3, 2, 14)),
+        (moved.sqid, _ny(2026, 3, 10, 11)),
+        (master.sqid, _utc(2026, 3, 23, 14)),
+    ]
+
+
+def test_clearing_the_rule_detaches_edited_overrides_and_drops_cancellations(dst_series: tuple[Any, ...]) -> None:
+    calendar, master, moved, cancelled = dst_series
+
+    _save(master, recurrence="")
+    _refreshed(moved)
+
+    assert (moved.series_id, moved.original_start, moved.title) == (None, None, "Standup (moved)")
+    with system_context(reason="tests.calendar.read"):
+        assert not CalendarEvent.objects.filter(pk=cancelled.pk).exists()
+    shown = _occurrences(calendar, _ny(2026, 3, 1), _ny(2026, 3, 25))
+    assert [o.event_sqid for o in shown] == [master.sqid, moved.sqid]
+
+
+def test_a_cancelled_master_hides_its_moved_instances_from_the_calendar_and_from_overlap(db: None) -> None:
+    del db
+    calendar = _calendar(overlap_policy="refuse")
+    master = _event(calendar, start=_utc(2026, 7, 6, 9), end=_utc(2026, 7, 6, 10), recurrence="FREQ=WEEKLY")
+    _event(
+        calendar, series=master, original_start=_utc(2026, 7, 13, 9), title="Moved",
+        start=_utc(2026, 7, 14, 9), end=_utc(2026, 7, 14, 10),
+    )
+
+    _save(master, status="cancelled")
+
+    assert _occurrences(calendar, _utc(2026, 7, 1), _utc(2026, 7, 31)) == []
+    _clean(calendar, _utc(2026, 7, 14, 9), _utc(2026, 7, 14, 10))
+
+
+def test_an_event_stays_on_its_calendar_series_and_instance(dst_series: tuple[Any, ...]) -> None:
+    calendar, master, moved, _cancelled = dst_series
+    other = _calendar(name="Other")
+
+    for field, value in (("calendar", other), ("series", None), ("original_start", _ny(2026, 3, 23, 9))):
+        with system_context(reason="tests.calendar.edit"), pytest.raises(ValidationError) as raised:
+            setattr(moved, field, value)
+            moved.save()
+        assert field in raised.value.message_dict
+        _refreshed(moved)
+    with system_context(reason="tests.calendar.edit"), pytest.raises(ValidationError):
+        attendee = EventAttendee.objects.create(
+            event=master, handle=Handle.objects.create(platform="email", value="kept@example.test"),
+        )
+        attendee.event = moved
+        attendee.save()
+
+
 # --- overlap -----------------------------------------------------------------
 
 
