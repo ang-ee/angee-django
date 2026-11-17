@@ -200,6 +200,38 @@ class TagAssignmentManager[AssignmentT: TagAssignment](_TagAssignmentManagerBase
         for tag_pk in sorted(wanted - current):
             self.create(tag_id=tag_pk, **lookups)
 
+    def copy(self, pairs: Iterable[tuple[models.Model, models.Model]]) -> None:
+        """Give each ``(source, target)`` pair's target the tags its source carries that the actor reads.
+
+        One read covers every source and one every target, under the ambient
+        actor; each new edge passes its ``create`` gate (the target owner's
+        declared tag authority). A tag the target already carries stays single.
+        """
+
+        targets = [(generic_target(source), generic_target(target)) for source, target in pairs]
+        if not targets:
+            return
+
+        def edges(rows: Iterable[GenericTarget]) -> dict[tuple[Any, Any], set[Any]]:
+            wanted = models.Q(pk__in=[])
+            for row in rows:
+                wanted |= models.Q(content_type_id=row.content_type.pk, object_id=row.object_id)
+            found: dict[tuple[Any, Any], set[Any]] = {}
+            for content_type_id, object_id, tag_id in self.filter(wanted).values_list(
+                "content_type_id", "object_id", "tag_id",
+            ):
+                found.setdefault((content_type_id, object_id), set()).add(tag_id)
+            return found
+
+        carried = edges(source for source, _target in targets)
+        present = edges(target for _source, target in targets)
+        for source, target in targets:
+            key = (target.content_type.pk, target.object_id)
+            missing = carried.get((source.content_type.pk, source.object_id), set()) - present.get(key, set())
+            for tag_pk in sorted(missing):
+                self.create(tag_id=tag_pk, **target.lookups(self.model, "target"))
+                present.setdefault(key, set()).add(tag_pk)
+
     def _tag_for_id(self, tag_id: str) -> Tag:
         """Return the actor-readable tag row for one public id, or fail fast."""
 
