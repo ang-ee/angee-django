@@ -244,6 +244,7 @@ jobs:
             tests/test_extraction_models.py::test_competing_revision_requests_allocate_exactly_one_successor \
             tests/test_extraction_models.py::test_retention_waits_for_a_held_file_and_refuses_its_committed_change \
             tests/test_decisions_lifecycle.py tests/test_decisions_concurrency.py \
+            tests/test_checklists.py \
             tests/test_agent_sessions.py tests/test_agent_sessions_concurrency.py \
             tests/test_integrate_discovery_concurrency.py \
             tests/test_framework_integration.py \
