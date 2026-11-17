@@ -393,6 +393,17 @@ def test_declared_target_models_read_the_schema_target_relations(db: None) -> No
     assert {"projects.task", "storage.drive", "mtidemo.mtiparent"} <= set(FileAttachment.declared_target_models())
 
 
+def test_the_effective_edge_index_is_read_once_per_schema_revision(db: None) -> None:
+    """A deletion reads the policy once, not once per edge of every collected instance."""
+
+    del db
+    first = record_edges_by_target()
+    assert record_edges_by_target() is first
+    with CaptureQueriesContext(connection) as captured:
+        record_edges_by_target()
+    assert len(captured) <= 1
+
+
 def test_record_edges_invert_the_declared_targets_into_resource_metadata(db: None) -> None:
     """A type carries every edge accepting its canonical type; its resource lists them."""
 

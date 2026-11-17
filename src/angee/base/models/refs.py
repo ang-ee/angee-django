@@ -24,9 +24,10 @@ from django.db import models
 from django.db.models.deletion import ProtectedError
 from django.utils.text import capfirst
 from rebac import system_context
+from rebac.backends import backend
 from rebac.field_backing import canonical_model
-from rebac.resources import model_for_resource_type
-from rebac.schema import Definition, FieldBinding
+from rebac.resources import model_for_resource_type, model_resource_type
+from rebac.schema import Definition, FieldBinding, Schema
 
 from angee.base.identity import public_data_id_field
 from angee.base.models.identity import public_id_for
@@ -105,10 +106,13 @@ class RecordRefMixin(RecordRefMergeContract):
     accepts_any_record_target: ClassVar[bool] = False
     """Whether this infrastructure edge may point at every canonical record type."""
     teardown_for_target: ClassVar[_TargetTeardown | None] = None
-    """Optional class hook replacing ordinary deletion policy with the edge owner's cleanup.
+    """Optional class hook replacing ``on_target_delete`` with the edge owner's cleanup.
 
-    It runs before a target is deleted, whether the target names the edge through a
-    reverse ``GenericRelation`` or the edge's schema declares the target's type.
+    It runs before each collected target instance is deleted, whether the target
+    names the edge through a reverse ``GenericRelation`` or the edge's schema
+    declares the target's type. An MTI child's deletion collects its canonical
+    parent too, so a teardown is idempotent. An edge with a teardown never blocks
+    its target's deletion.
     """
 
     class Meta:
@@ -190,7 +194,9 @@ class RecordRefMixin(RecordRefMergeContract):
         canonical = canonical_model(target)
         declared = record_edges_by_target().get(canonical, ()) if canonical is not None else ()
         controlled = {*declared, *record_ref_cleanup_edges_for_target(target)}
-        return cls not in controlled or cls.on_target_delete is models.PROTECT
+        if cls not in controlled:
+            return True
+        return cls.teardown_for_target is None and cls.on_target_delete is models.PROTECT
 
     @classmethod
     def record_ref_field(cls) -> GenericForeignKey:
@@ -367,6 +373,10 @@ class RecordRefMixin(RecordRefMergeContract):
         return self.record_ref.public_id
 
 
+_effective_edges: tuple[Schema, list[type[models.Model]], dict[type[models.Model], tuple[Any, ...]]] | None = None
+"""The last effective index, with the schema revision and installed-model set it was read from."""
+
+
 def record_edges_by_target(
     *, definition_for: Callable[[type[models.Model]], Definition | None] = effective_rebac_definition,
 ) -> dict[type[models.Model], tuple[type[RecordRefMixin], ...]]:
@@ -376,8 +386,28 @@ def record_edges_by_target(
     edges a record can carry, keyed by the canonical model
     :func:`rebac.generic_target` names it by. Infrastructure edges can explicitly
     accept every canonical target without declaring an independent row policy.
+    The effective policy's index is read once per schema revision and installed
+    model set, so a deletion reads the policy once rather than once per edge.
     """
 
+    global _effective_edges
+    if definition_for is not effective_rebac_definition:
+        return _index_record_edges(definition_for)
+    schema = backend().schema()
+    installed = apps.get_models()
+    cached = _effective_edges
+    if cached is not None and cached[0] is schema and cached[1] is installed:
+        return cached[2]
+    index = _index_record_edges(
+        lambda model: schema.get_definition(resource_type) if (resource_type := model_resource_type(model)) else None,
+    )
+    _effective_edges = (schema, installed, index)
+    return index
+
+
+def _index_record_edges(
+    definition_for: Callable[[type[models.Model]], Definition | None],
+) -> dict[type[models.Model], tuple[type[RecordRefMixin], ...]]:
     index: dict[type[models.Model], list[type[RecordRefMixin]]] = {}
     for edge in sorted(apps.get_models(), key=lambda model: model._meta.label):
         if not issubclass(edge, RecordRefMixin):
@@ -415,11 +445,11 @@ def record_ref_cleanup_edges_for_target(
 
 
 def delete_record_refs(instance: models.Model, using: str, **kwargs: Any) -> None:
-    """Apply each edge owner's declared policy before its target is deleted.
+    """Apply each edge owner's declared policy before a collected target instance is deleted.
 
     An edge declaring ``teardown_for_target`` runs it instead of its
-    ``on_target_delete`` policy, once per deleted target, whether the target names
-    it through a reverse relation or the edge's schema declares the target.
+    ``on_target_delete`` policy, once per collected instance, whether the target
+    names it through a reverse relation or the edge's schema declares the target.
     """
 
     del kwargs
