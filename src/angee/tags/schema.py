@@ -193,48 +193,58 @@ def tags_input_extensions(resource: Any) -> list[type]:
     return donors
 
 
-_TAG_EXTENSION_FILTER_FIELDS = declared_hasura_resource_fields(Tag, "hasura_filterable_fields")
-_TAG_EXTENSION_ORDER_FIELDS = declared_hasura_resource_fields(Tag, "hasura_sortable_fields")
-_TAG_EXTENSION_AGGREGATE_FIELDS = declared_hasura_resource_fields(Tag, "hasura_aggregatable_fields")
-_TAG_EXTENSION_GROUP_FIELDS = declared_hasura_resource_fields(Tag, "hasura_groupable_fields")
-_TAG_EXTENSION_INSERT_FIELDS = declared_hasura_resource_fields(Tag, "hasura_insertable_fields")
-_TAG_EXTENSION_UPDATE_FIELDS = declared_hasura_resource_fields(Tag, "hasura_updatable_fields")
-_TAG_EXTENSION_PUBLIC_ID_FIELDS = declared_hasura_write_relation_fields(Tag)
-_TAG_BASE_WRITABLE_FIELDS = (
-    "name",
-    "color",
-    "attention",
-    "category",
-    "is_archived",
-)
+def _donor_axes(model: type[models.Model]) -> dict[str, tuple[str, ...]]:
+    """Return the query and write axes ``model``'s donors declare, keyed as ``hasura_model_resource`` takes them.
+
+    A consumer's same-row donor (a company scope, say) declares each axis it
+    supports through ``hasura_<axis>_fields``; the resources below compose them
+    beside their own fields.
+    """
+
+    return {
+        axis: declared_hasura_resource_fields(model, f"hasura_{axis}_fields")
+        for axis in ("filterable", "sortable", "aggregatable", "groupable", "insertable", "updatable")
+    }
+
+
+_TAG_AXES = _donor_axes(Tag)
+_TAG_BASE_WRITABLE_FIELDS = ("name", "color", "attention", "category", "is_archived")
 
 _TAG_RESOURCE = hasura_model_resource(
     TagType,
     model=Tag,
     name="tags",
     get_queryset=lambda info: Tag.objects.canonical(),
-    filterable=["id", "name", "attention", "category", "is_archived", *_TAG_EXTENSION_FILTER_FIELDS],
-    sortable=["name", "created_at", "updated_at", *_TAG_EXTENSION_ORDER_FIELDS],
-    aggregatable=["id", *_TAG_EXTENSION_AGGREGATE_FIELDS],
-    groupable=["attention", "category", "is_archived", *_TAG_EXTENSION_GROUP_FIELDS],
-    insertable=[*_TAG_BASE_WRITABLE_FIELDS, *_TAG_EXTENSION_INSERT_FIELDS],
-    updatable=[*_TAG_BASE_WRITABLE_FIELDS, *_TAG_EXTENSION_UPDATE_FIELDS],
+    filterable=["id", "name", "attention", "category", "is_archived", *_TAG_AXES["filterable"]],
+    sortable=["name", "created_at", "updated_at", *_TAG_AXES["sortable"]],
+    aggregatable=["id", *_TAG_AXES["aggregatable"]],
+    groupable=["attention", "category", "is_archived", *_TAG_AXES["groupable"]],
+    insertable=[*_TAG_BASE_WRITABLE_FIELDS, *_TAG_AXES["insertable"]],
+    updatable=[*_TAG_BASE_WRITABLE_FIELDS, *_TAG_AXES["updatable"]],
     write_backend=AngeeHasuraWriteBackend(
         Tag,
-        public_id_fields=("category", *_TAG_EXTENSION_PUBLIC_ID_FIELDS),
+        public_id_fields=("category", *declared_hasura_write_relation_fields(Tag)),
     ),
     id_column="sqid",
 )
+
+_TAG_CATEGORY_AXES = _donor_axes(TagCategory)
+_TAG_CATEGORY_BASE_WRITABLE_FIELDS = ("name", "description", "position", "max_per_record", "is_archived")
 
 _TAG_CATEGORY_RESOURCE = hasura_model_resource(
     TagCategoryType,
     model=TagCategory,
     name="tag_categories",
-    filterable=["id", "name", "is_archived"],
-    sortable=["position", "name", "created_at", "updated_at"],
-    aggregatable=["id"],
-    groupable=["is_archived"],
-    writable=["name", "description", "position", "max_per_record", "is_archived"],
+    filterable=["id", "name", "is_archived", *_TAG_CATEGORY_AXES["filterable"]],
+    sortable=["position", "name", "created_at", "updated_at", *_TAG_CATEGORY_AXES["sortable"]],
+    aggregatable=["id", *_TAG_CATEGORY_AXES["aggregatable"]],
+    groupable=["is_archived", *_TAG_CATEGORY_AXES["groupable"]],
+    insertable=[*_TAG_CATEGORY_BASE_WRITABLE_FIELDS, *_TAG_CATEGORY_AXES["insertable"]],
+    updatable=[*_TAG_CATEGORY_BASE_WRITABLE_FIELDS, *_TAG_CATEGORY_AXES["updatable"]],
+    write_backend=AngeeHasuraWriteBackend(
+        TagCategory,
+        public_id_fields=declared_hasura_write_relation_fields(TagCategory),
+    ),
     id_column="sqid",
 )
 
