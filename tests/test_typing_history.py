@@ -87,7 +87,7 @@ def test_native_history_projection_preserves_runtime_and_type_checks(tmp_path: P
         "SubjectStatement.history.filter().latest_of_each()\n"
         "from simple_history.models import HistoricalChanges\n"
         "from tests.typing_history.models import Subject as AbstractSubject, Tracked\n"
-        "from runtime.typing_history.models import SubjectSameAsPair\n"
+        "from runtime.typing_history.models import SubjectSameAsPair, SubjectSameAsPairStatement\n"
         "assert_type(AbstractSubject.history.get(), HistoricalSubject)\n"
         "def abstract_history(record: AbstractSubject) -> None:\n"
         "    assert_type(record.history.filter().tagged(), FixtureHistoricalQuerySet[HistoricalSubject])\n"
@@ -112,6 +112,10 @@ def test_native_history_projection_preserves_runtime_and_type_checks(tmp_path: P
         "    assert_type(record.history.filter().get(), HistoricalSubject | HistoricalSubjectStatement)\n"
         "def union_statements(record: AbstractSubject | Subject) -> None:\n"
         "    assert_type(record.statements.get(), SubjectStatement)\n"
+        "def pair_statements(pair: StatementPair, carrier: SubjectSameAsPair) -> None:\n"
+        "    assert_type(pair.statements.get(), Statement)\n"
+        "    assert_type(type(pair).statements.get(), Statement)\n"
+        "    assert_type(carrier.statements.get(), SubjectSameAsPairStatement)\n"
     )
     invalid = tmp_path / "invalid.py"
     invalid.write_text(
@@ -137,6 +141,9 @@ def test_native_history_projection_preserves_runtime_and_type_checks(tmp_path: P
         "AbstractSubject.same_as.model._base_manager.filter(missing_pair_field=1)\n"
         "from tests.typing_history.models import Tracked\n"
         "Tracked.history.filter().missing_queryset_method()\n"
+        "from angee.provenance.statements import StatementPair\n"
+        "def invalid_pair(pair: StatementPair) -> None:\n"
+        "    pair.statements.missing_method()\n"
     )
     # The native plugin owns TypeInfos only. Compare actual Django model/state
     # identities after semantic analysis to the fixture's pre-analysis snapshot.
@@ -167,8 +174,8 @@ def test_native_history_projection_preserves_runtime_and_type_checks(tmp_path: P
     assert positive.returncode == 0, positive.stdout + positive.stderr
     negative = subprocess.run([*command, str(invalid)], cwd=root, env=env, capture_output=True, text=True, check=False)
     assert negative.returncode == 1, negative.stdout + negative.stderr
-    assert negative.stdout.count(": error:") == 17, negative.stdout
-    for line in (2, 3, 4, 5, 6, 7, 8, 9, 11, 12, 14, 15, 17, 18, 19, 20, 22):
+    assert negative.stdout.count(": error:") == 18, negative.stdout
+    for line in (2, 3, 4, 5, 6, 7, 8, 9, 11, 12, 14, 15, 17, 18, 19, 20, 22, 25):
         assert f"invalid.py:{line}: error:" in negative.stdout, negative.stdout
     assert {path.relative_to(runtime): path.read_bytes() for path in runtime.rglob("*.py")} == before
     assert not tuple(runtime.rglob("*.pyi"))
