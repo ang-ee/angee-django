@@ -16,14 +16,20 @@ from angee.graphql.ids import PublicID, public_id_field
 from angee.graphql.node import AngeeNode
 from angee.graphql.subscriptions import changes
 from angee.iam.permissions import ADMIN_PERMISSION_CLASSES
-from angee.integrate.schema import BridgeTypeMixin
-from angee.storage_integrate.connect import create_local_folder_mount
+from angee.integrate.schema import BridgeTypeMixin, ConnectedCredentialType
 from angee.storage_integrate.models import MountMode
 from angee.storage_integrate.mounts import MountBrowseResult
 
 Mount = apps.get_model("storage_integrate", "Mount")
 Credential = apps.get_model("integrate", "Credential")
+Backend = apps.get_model("storage", "Backend")
 strawberry.enum(cast(Any, MountMode))
+
+
+def _by_public_id(model: Any, id: PublicID | None, *, reason: str) -> Any | None:
+    """Resolve an optional input row by public id; the Mount manager admits it."""
+
+    return resolve_action_target(model, id, reason=reason) if id is not None else None
 
 
 @strawberry.type
@@ -46,6 +52,17 @@ class MountBrowseResultType:
     entries: tuple[MountLocationType, ...]
     truncated: bool
     supports_manual_token: bool
+
+
+@strawberry.type
+class MountBackendType:
+    """What connecting a mount of one backend asks for: its account, if any, and the session user's choices."""
+
+    key: str
+    label: str
+    requires_credential: bool
+    oauth_client: strawberry.ID | None
+    accounts: list[ConnectedCredentialType]
 
 
 @strawberry_django.type(Mount)
@@ -104,24 +121,30 @@ class StorageIntegrateQuery:
         credential_id: PublicID | None = None,
         token: str = "",
     ) -> MountBrowseResultType:
-        """List one bounded level from a configured mount backend."""
+        """List one bounded level from a configured mount backend, read with one of the user's accounts."""
 
-        del info
-        credential = (
-            resolve_action_target(
-                Credential,
-                credential_id,
-                reason="storage_integrate.graphql.browse_mount_source.credential",
-            )
-            if credential_id is not None
-            else None
-        )
         result: MountBrowseResult = Mount.objects.browse_source(
+            session_user(info),
             backend_class,
-            credential=credential,
+            credential=_by_public_id(Credential, credential_id, reason="storage_integrate.graphql.browse.credential"),
             token=token,
         )
         return cast(MountBrowseResultType, result)
+
+    @strawberry.field(permission_classes=ADMIN_PERMISSION_CLASSES)
+    def mount_backend(self, info: strawberry.Info, backend_class: str) -> MountBackendType:
+        """Describe connecting a mount of one backend for the session user."""
+
+        impl = Mount.objects.backend_impl(backend_class)
+        registration = Mount.objects.connect_oauth_client(backend_class)
+        accounts = Mount.objects.connectable_credentials(session_user(info), backend_class).order_by("pk")
+        return MountBackendType(
+            key=impl.key,
+            label=str(impl.label),
+            requires_credential=impl.requires_credential,
+            oauth_client=strawberry.ID(registration.public_id) if registration is not None else None,
+            accounts=cast(list[ConnectedCredentialType], list(accounts)),
+        )
 
 
 @strawberry.type
@@ -129,20 +152,27 @@ class StorageIntegrateMutation:
     """Admin connection and sync actions for storage mounts."""
 
     @strawberry.mutation(permission_classes=ADMIN_PERMISSION_CLASSES)
-    def connect_local_folder(
+    def connect_mount(
         self,
         info: strawberry.Info,
+        backend_class: str,
         name: str,
-        path: str,
+        # A GraphQL argument named ``root`` collides with Strawberry's extension middleware.
+        source_root: str,
         mode: MountMode,
+        credential_id: PublicID | None = None,
+        copy_backend_id: PublicID | None = None,
     ) -> MountType:
-        """Connect a Django-host folder and queue its first sync."""
+        """Connect a mount of any configured backend and queue its first sync; the Mount manager admits every input."""
 
-        mount = create_local_folder_mount(
+        mount = Mount.objects.provision(
             session_user(info),
+            backend_class=backend_class,
             name=name,
-            path=path,
+            root=source_root,
             mode=mode,
+            credential=_by_public_id(Credential, credential_id, reason="storage_integrate.graphql.connect.credential"),
+            copy_backend=_by_public_id(Backend, copy_backend_id, reason="storage_integrate.graphql.connect.backend"),
         )
         return cast(MountType, mount)
 
@@ -163,6 +193,7 @@ schemas = {
         "types": [
             MountLocationType,
             MountBrowseResultType,
+            MountBackendType,
             MountType,
             *_MOUNT_RESOURCE.types,
         ],

@@ -5,14 +5,16 @@ import * as React from "react";
 import { beforeEach, describe, expect, test, vi } from "vitest";
 
 const actionMocks = vi.hoisted(() => ({
-  connect: vi.fn(async () => ({ connect_local_folder: { id: "int_1" } })),
+  connect: vi.fn(async () => ({ connect_mount: { id: "int_1" } })),
   dialogProps: null as Record<string, unknown> | null,
   mutationOptions: null as Record<string, unknown> | null,
 }));
 
 vi.mock("./documents", () => ({
   BrowseMountSource: "BrowseMountSource",
-  ConnectLocalFolder: "ConnectLocalFolder",
+  ConnectMount: "ConnectMount",
+  MountBackendFacts: "MountBackendFacts",
+  MountCopyTargets: "MountCopyTargets",
   MOUNT_MODEL: "storage_integrate.Mount",
 }));
 
@@ -20,7 +22,7 @@ vi.mock("@angee/refine", async (importOriginal) => {
   const original = await importOriginal<typeof import("@angee/refine")>();
   return {
     ...original,
-    useAuthoredQuery: vi.fn(),
+    useAuthoredQuery: () => ({ data: undefined }),
     useAuthoredMutation: (_document: unknown, options?: Record<string, unknown>) => {
       actionMocks.mutationOptions = options ?? null;
       return [actionMocks.connect, { fetching: false, error: null }];
@@ -43,7 +45,7 @@ vi.mock("@angee/ui", async (importOriginal) => {
       },
       values: {
         name: "  Shared  ",
-        path: "/srv/shared/docs",
+        root: "/srv/shared/docs",
         mode: "REFERENCE",
       },
       submitLabel: "submit",
@@ -78,8 +80,9 @@ describe("ConnectLocalFolderAction", () => {
     fireEvent.submit(screen.getByRole("form", { name: "Connect local folder" }));
     await waitFor(() =>
       expect(actionMocks.connect).toHaveBeenCalledWith({
+        backendClass: "local_folder",
         name: "Shared",
-        path: "/srv/shared/docs",
+        root: "/srv/shared/docs",
         mode: "REFERENCE",
       }),
     );

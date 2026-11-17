@@ -99,7 +99,7 @@ class IphoneBackupMountBackend(LocalFolderMountBackend):
                 self.scan_errors += 1
                 logger.warning("storage.mount.iphone.path: skipped row: %s", error)
                 continue
-            self.observed_paths.add(path)
+            self.observed_keys.add(path)
             try:
                 stat = manifest_file.blob_path.stat()
             except OSError as error:
@@ -111,7 +111,7 @@ class IphoneBackupMountBackend(LocalFolderMountBackend):
                 )
                 continue
             if not stat_module.S_ISREG(stat.st_mode):
-                self.observed_paths.discard(path)
+                self.observed_keys.discard(path)
                 continue
             self._blob_by_path[path] = manifest_file.blob_path
             yield MountEntry(
