@@ -22,9 +22,11 @@ scheduling never guesses an offset.
 
 [`RecurrenceField`](fields.py) holds an RFC-5545 RRULE and
 [`Recurrence`](recurrence.py) expands it: `occurrences(dtstart, start, end,
-zone=…)` over a half-open window, and `get_occurrence_after(dtstart, moment,
-zone=…)` for the next occurrence. Expansion runs on the wall clock of the named
-zone (a venue's), or of the project zone when it is blank.
+zone=…)` over a half-open window, `get_occurrence_after(dtstart, moment,
+zone=…)` for the next occurrence, and `get_last_occurrence(dtstart, zone=…)` for
+where a rule with `UNTIL` or `COUNT` ends (`None` for one that never does).
+Expansion runs on the wall clock of the named zone (a venue's), or of the project
+zone when it is blank.
 
 ## Due rules
 

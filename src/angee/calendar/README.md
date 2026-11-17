@@ -26,8 +26,8 @@ row (the RFC 5545 `RECURRENCE-ID` shape): `series` names the master and
 `original_start` the instance it replaces. A cancelled override drops its instance.
 An event's calendar, series and instance are set once.
 
-A series owns its overrides. When a master's start, all-day flag or rule changes,
-or its calendar's time zone changes, each override's instance moves with the
+A series owns its overrides. When a master's start, all-day flag, rule or zone changes,
+or the calendar zone it follows changes, each override's instance moves with the
 master's wall clock. An override that no longer matches an instance becomes a
 standalone event if it carries edits, and is deleted if it was a cancellation. A
 cancelled master hides its moved instances too.
@@ -37,7 +37,18 @@ cancelled master hides its moved instances too.
 - **Transparency** is `busy` or `free`; a free event never conflicts and never shows
   as busy time.
 - **Visibility** is `default` (the calendar's readers read it), `public` (its
-  free/busy viewers read it too) or `private` (only its writers read it).
+  free/busy viewers read it too) or `private` (only its writers read it), as
+  Google Calendar's event `visibility` means them. An override created at the
+  default visibility and transparency takes its master's.
+- **Time zone:** an event may name its own zone (`timezone`), as RFC 5545's
+  `DTSTART;TZID` and Google's `event.start.timeZone` do; blank means its
+  calendar's. That zone is the wall clock its recurrence, its all-day dates and
+  its overlap check expand on (`CalendarEvent.expansion_zone`), so a Berlin series
+  on a New York calendar keeps its Berlin time. Changing a calendar's zone rebases
+  only the series without a zone of their own.
+- **All-day** events start and end at midnight in their zone, a whole number of
+  days apart; a form that sends another time is refused, and a drag lands on the
+  nearest midnights.
 - **Tags, chatter and history** come from `TaggedModel`, `ThreadedModelMixin` and
   `HistoryMixin`.
 - **Attendees** are the `through` rows of `CalendarEvent.attendees` to
@@ -47,21 +58,36 @@ cancelled master hides its moved instances too.
 
 ## Occurrences
 
-`event_occurrences(window_start, window_end, calendars)` returns what a calendar
-shows in a half-open window, expanded server-side in each calendar's zone. A
-recurring master's instance has the id `<event_sqid>:<UTC basic start>` and cannot
-be dragged; a single row (a plain event or an override) has the id `<event_sqid>`
-and can. `reschedule_event` drags a single row.
+`event_occurrences(window_start, window_end)` returns what a calendar shows in a
+half-open window of at most 400 days (`CalendarEvent.occurrence_window_limit`),
+expanded server-side in each calendar's zone.
+
+- **Ids:** every instance of a series has the id `<series_sqid>:<original start,
+  UTC basic>`, overridden or not, and a plain event has its own `<event_sqid>`;
+  `event_sqid` names the row to open.
+- **Dragging:** an occurrence is `editable` when it is a single row the viewer may
+  write. `reschedule_event` drags it.
+- **Bounds:** each series stores where it ends (`series_end`, from its rule's
+  `UNTIL` or `COUNT`), so reads skip series that ended before their window.
+- **Live updates:** `changes(CalendarEvent)` sends readers the change as usual, and
+  sends free/busy viewers only that an event's busy time changed, so they refetch
+  the redacted occurrences.
 
 ## Overlap
 
-A calendar whose overlap policy is `refuse` rejects a busy event whose
-`[start, end)` meets another busy occurrence on it, expanded recurrences
-included. Free and cancelled events never conflict. `CalendarEvent.clean` reports
-it to a form; `CalendarEvent.save` checks it again under the calendar's row lock,
-on every save path, so two concurrent saves cannot take the same time. The
-refusal names no other event, and an actor whose save would be refused anyway is
-judged only against the events it can read.
+A calendar whose overlap policy is `refuse` rejects a busy event any of whose
+instances meets another busy occurrence on it. A single event is checked over its
+`[start, end)`. A series is checked instance by instance, up to the end of its
+rule, or two years from its start for an open-ended rule
+(`CalendarEvent.overlap_horizon`). Free and cancelled events never conflict.
+
+- **Where it runs:** `CalendarEvent.clean` (and so `full_clean`, the GraphQL write
+  path and `reschedule_event`) reports the refusal to a form. `CalendarEvent.save`
+  checks again under the calendar's row lock. Every save path is covered, including
+  plain ORM saves such as a sync, and two concurrent saves cannot take the same
+  time. Queryset `update()` and `bulk_create` skip `save` and are not checked.
+- **What it reveals:** the refusal names no other event. An actor whose save would
+  be refused anyway is judged only against the events it can read.
 
 ## Access
 

@@ -287,6 +287,20 @@ def test_the_occurrence_after_a_moment_is_strictly_after_it(
 
 
 @override_settings(TIME_ZONE="UTC")
+@pytest.mark.parametrize(
+    ("rule", "expected"),
+    [
+        pytest.param("FREQ=WEEKLY;COUNT=3", _utc(2026, 7, 20, 9), id="count"),
+        pytest.param("FREQ=WEEKLY;UNTIL=20260716T000000Z", _utc(2026, 7, 13, 9), id="until"),
+        pytest.param("FREQ=WEEKLY", None, id="open-ended"),
+        pytest.param("", _utc(2026, 7, 6, 9), id="single"),
+    ],
+)
+def test_the_last_occurrence_is_where_a_bounded_rule_ends(rule: str, expected: datetime | None) -> None:
+    assert Recurrence(rule).get_last_occurrence(_utc(2026, 7, 6, 9)) == expected
+
+
+@override_settings(TIME_ZONE="UTC")
 def test_the_occurrence_after_unrolls_in_the_named_zone() -> None:
     """Monthly on the 31st, in a zone: the next occurrence keeps the local clock and skips short months."""
 

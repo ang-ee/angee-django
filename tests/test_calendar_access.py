@@ -14,12 +14,14 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
-from rebac import PermissionDenied, actor_context, system_context
+from rebac import PermissionDenied, actor_context, system_context, to_subject_ref
 from rebac.testing import assert_decisions
 
 from angee.calendar import schema as calendar_schema
 from angee.calendar.models import OVERLAP_MESSAGE, EventTransparency, EventVisibility
+from angee.calendar.schema import FreeBusyChangeReadGate
 from angee.calendar.testing.models import Calendar, CalendarEvent, EventAttendee
+from angee.graphql.events import ChangePayload
 from angee.graphql.testing.documents import execute_schema, result_data
 from angee.messaging.testing.models import Handle, Organization, Person
 from tests.conftest import addon_schema, create_platform_admin, create_user
@@ -122,7 +124,7 @@ def test_a_free_busy_viewer_reads_no_event_row_and_sees_redacted_busy_time(world
     assert [(o.event_sqid, o.title, o.redacted, o.editable) for o in occurrences] == [
         (w.default.sqid, "", True, False),
         (w.private.sqid, "", True, False),
-        (w.public.sqid, "public meeting", False, True),
+        (w.public.sqid, "public meeting", False, False),
     ]
     assert CalendarEvent.objects.with_actor(w.stranger).occurrences(_utc(13, 0), _utc(14, 0)) == []
 
@@ -155,8 +157,8 @@ def test_the_creator_owns_a_calendar_and_ownership_transfers(db: None) -> None:
 
 
 _OCCURRENCES = """
-query ($start: DateTime!, $end: DateTime!, $calendars: [ID!]) {
-  event_occurrences(window_start: $start, window_end: $end, calendars: $calendars) {
+query ($start: DateTime!, $end: DateTime!) {
+  event_occurrences(window_start: $start, window_end: $end) {
     event_sqid calendar title redacted editable
   }
 }
@@ -173,21 +175,35 @@ def _console() -> Any:
     return addon_schema(calendar_schema.schemas, "console")
 
 
-def test_event_occurrences_redacts_for_a_free_busy_viewer_and_narrows_by_calendar(world: SimpleNamespace) -> None:
+def test_event_occurrences_redacts_for_a_free_busy_viewer_and_drags_only_for_writers(world: SimpleNamespace) -> None:
     w = world
     window = {"start": _utc(13, 0).isoformat(), "end": _utc(14, 0).isoformat()}
 
-    viewed = result_data(execute_schema(_console(), _OCCURRENCES, window, user=w.viewer))["event_occurrences"]
-    elsewhere = result_data(
-        execute_schema(_console(), _OCCURRENCES, {**window, "calendars": ["cal_unknown"]}, user=w.holder)
-    )["event_occurrences"]
+    def read(seat: str) -> list[dict[str, Any]]:
+        return result_data(execute_schema(_console(), _OCCURRENCES, window, user=getattr(w, seat)))["event_occurrences"]
 
-    assert [(row["title"], row["redacted"], row["calendar"]) for row in viewed] == [
-        ("", True, w.calendar.sqid),
-        ("", True, w.calendar.sqid),
-        ("public meeting", False, w.calendar.sqid),
+    assert [(row["title"], row["redacted"], row["calendar"], row["editable"]) for row in read("viewer")] == [
+        ("", True, w.calendar.sqid, False),
+        ("", True, w.calendar.sqid, False),
+        ("public meeting", False, w.calendar.sqid, False),
     ]
-    assert elsewhere == []
+    # Readers see the default, free and public events in full and drag none; writers drag them all.
+    assert {row["editable"] for row in read("reader")} == {False}
+    assert {row["editable"] for row in read("editor")} == {True}
+
+
+def test_free_busy_viewers_learn_only_that_busy_time_changed(world: SimpleNamespace) -> None:
+    w = world
+    with system_context(reason="tests.calendar.access.change"):
+        payload = ChangePayload.from_instance(w.default, action="update", update_fields=("title",))
+
+    def delivered(seat: str) -> Any:
+        return FreeBusyChangeReadGate(CalendarEvent, to_subject_ref(getattr(w, seat))).filter(payload)
+
+    assert delivered("reader").changed_fields == ["title"]
+    bare = delivered("viewer")
+    assert (bare.id, bare.changed_fields, bare.changed_values) == (w.default.sqid, None, None)
+    assert delivered("stranger") is None
 
 
 _INSERT = """

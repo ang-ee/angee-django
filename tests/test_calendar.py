@@ -6,7 +6,7 @@ after its preflight; ``tests/test_calendar_access.py`` owns who may do what.
 
 from __future__ import annotations
 
-from datetime import UTC, date, datetime, time
+from datetime import UTC, date, datetime, time, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -14,6 +14,7 @@ import pytest
 from django.apps import apps
 from django.core.exceptions import ValidationError
 from django.db import IntegrityError, transaction
+from django.db.models import Q
 from rebac import actor_context, system_context
 
 from angee.calendar.testing.models import Calendar, CalendarEvent, EventAttendee
@@ -55,6 +56,14 @@ def _event(calendar: Any, *, start: datetime, end: datetime, **fields: Any) -> A
         return event
 
 
+def _series(event: Any, window_start: datetime, window_end: datetime) -> list[Any]:
+    """Return one series' occurrences (the row and its overrides) as system work."""
+
+    with system_context(reason="tests.calendar.read"):
+        rows = CalendarEvent.objects.filter(Q(pk=event.pk) | Q(series_id=event.pk))
+        return rows.occurrences(window_start, window_end)
+
+
 def _occurrences(calendar: Any, window_start: datetime, window_end: datetime) -> list[Any]:
     """Return a calendar's occurrences as system work."""
 
@@ -69,7 +78,7 @@ def test_a_weekly_master_yields_one_non_editable_occurrence_per_week(db: None) -
     calendar = _calendar()
     event = _event(calendar, start=_utc(2026, 7, 6, 9), end=_utc(2026, 7, 6, 10), recurrence="FREQ=WEEKLY")
 
-    occurrences = event.expand_occurrences(_utc(2026, 7, 6), _utc(2026, 8, 5))
+    occurrences = _series(event, _utc(2026, 7, 6), _utc(2026, 8, 5))
 
     assert [o.start for o in occurrences] == [_utc(2026, 7, d, 9) for d in (6, 13, 20, 27)] + [_utc(2026, 8, 3, 9)]
     assert all(o.editable is False and o.redacted is False for o in occurrences)
@@ -81,7 +90,7 @@ def test_a_weekly_master_yields_one_non_editable_occurrence_per_week(db: None) -
 def test_a_plain_event_yields_one_editable_occurrence_keyed_by_its_sqid(db: None) -> None:
     event = _event(_calendar(), start=_utc(2026, 7, 6, 9), end=_utc(2026, 7, 6, 10))
 
-    [occurrence] = event.expand_occurrences(_utc(2026, 7, 6), _utc(2026, 7, 7))
+    [occurrence] = _series(event, _utc(2026, 7, 6), _utc(2026, 7, 7))
 
     assert (occurrence.occurrence_id, occurrence.editable) == (event.sqid, True)
     assert (occurrence.start, occurrence.end) == (_utc(2026, 7, 6, 9), _utc(2026, 7, 6, 10))
@@ -91,9 +100,9 @@ def test_the_window_is_half_open_and_takes_every_occurrence_that_meets_it(db: No
     calendar = _calendar()
     event = _event(calendar, start=_utc(2026, 7, 6, 9), end=_utc(2026, 7, 6, 10), recurrence="FREQ=WEEKLY")
 
-    starts = [o.start for o in event.expand_occurrences(_utc(2026, 7, 6, 9), _utc(2026, 7, 27, 9))]
+    starts = [o.start for o in _series(event, _utc(2026, 7, 6, 9), _utc(2026, 7, 27, 9))]
     # An instance already running at the window start meets the window.
-    running = [o.start for o in event.expand_occurrences(_utc(2026, 7, 13, 9, 30), _utc(2026, 7, 13, 11))]
+    running = [o.start for o in _series(event, _utc(2026, 7, 13, 9, 30), _utc(2026, 7, 13, 11))]
 
     assert starts == [_utc(2026, 7, 6, 9), _utc(2026, 7, 13, 9), _utc(2026, 7, 20, 9)]
     assert running == [_utc(2026, 7, 13, 9)]
@@ -124,7 +133,7 @@ def test_an_all_day_occurrence_ends_on_the_next_local_midnight_across_spring_for
     calendar = _calendar(zone="America/New_York")
     event = _event(calendar, all_day=True, recurrence="FREQ=DAILY", start=_ny(2026, 3, 7), end=_ny(2026, 3, 8))
 
-    occurrences = event.expand_occurrences(_ny(2026, 3, 7), _ny(2026, 3, 10))
+    occurrences = _series(event, _ny(2026, 3, 7), _ny(2026, 3, 10))
     by_date = {o.start.astimezone(NEW_YORK).date(): o for o in occurrences}
 
     # 2026-03-08 is the US spring-forward: an absolute timedelta would end at 01:00.
@@ -159,11 +168,12 @@ def test_overrides_replace_and_drop_their_instances_across_a_dst_change(dst_seri
 
     occurrences = _occurrences(calendar, _ny(2026, 3, 1), _ny(2026, 3, 25))
 
-    # 09:00 local stays 09:00 across the shift: 14:00Z before it, 13:00Z after.
-    assert [(o.occurrence_id, o.start) for o in occurrences] == [
-        (f"{master.sqid}:20260302T140000Z", _utc(2026, 3, 2, 14)),
-        (moved.sqid, _utc(2026, 3, 10, 15)),
-        (f"{master.sqid}:20260323T130000Z", _utc(2026, 3, 23, 13)),
+    # 09:00 local stays 09:00 across the shift: 14:00Z before it, 13:00Z after. The moved
+    # instance keeps the id of the 9 March instance it replaces and opens the override.
+    assert [(o.occurrence_id, o.event_sqid, o.start) for o in occurrences] == [
+        (f"{master.sqid}:20260302T140000Z", master.sqid, _utc(2026, 3, 2, 14)),
+        (f"{master.sqid}:20260309T130000Z", moved.sqid, _utc(2026, 3, 10, 15)),
+        (f"{master.sqid}:20260323T130000Z", master.sqid, _utc(2026, 3, 23, 13)),
     ]
     assert [o.editable for o in occurrences] == [False, True, False]
 
@@ -178,7 +188,7 @@ def test_a_moved_instance_leaves_its_original_window_and_shows_in_its_new_one(ds
 def test_a_series_expansion_includes_its_overrides(dst_series: tuple[Any, ...]) -> None:
     _calendar_, master, moved, _cancelled = dst_series
 
-    assert [o.event_sqid for o in master.expand_occurrences(_ny(2026, 3, 8), _ny(2026, 3, 18))] == [moved.sqid]
+    assert [o.event_sqid for o in _series(master, _ny(2026, 3, 8), _ny(2026, 3, 18))] == [moved.sqid]
 
 
 @pytest.mark.parametrize(
@@ -382,6 +392,109 @@ def test_an_override_does_not_conflict_with_the_instance_it_replaces(db: None) -
             override.reschedule(_utc(2026, 7, 20, 9, 15), _utc(2026, 7, 20, 9, 45))
 
 
+def test_a_new_series_is_checked_instance_by_instance_up_to_the_horizon(db: None) -> None:
+    del db
+    calendar = _calendar(overlap_policy="refuse")
+    _event(calendar, title="One-off", start=_utc(2026, 7, 20, 9), end=_utc(2026, 7, 20, 10))
+    _event(calendar, title="Far off", start=_utc(2029, 7, 2, 9), end=_utc(2029, 7, 2, 10))
+
+    # The third weekly instance meets the one-off.
+    with pytest.raises(ValidationError):
+        _clean(calendar, _utc(2026, 7, 6, 9), _utc(2026, 7, 6, 10), recurrence="FREQ=WEEKLY")
+    # A series ending before it does not; an open-ended one is checked two years out only.
+    _clean(calendar, _utc(2026, 7, 6, 9), _utc(2026, 7, 6, 10), recurrence="FREQ=WEEKLY;COUNT=2")
+    _clean(calendar, _utc(2026, 7, 7, 9), _utc(2026, 7, 7, 10), recurrence="FREQ=WEEKLY")
+
+
+def test_an_event_zone_keeps_its_wall_clock_on_a_calendar_in_another_zone(db: None) -> None:
+    """A Monday 09:00 Berlin series on a New York calendar stays 09:00 Berlin across both DST changes."""
+
+    del db
+    berlin = ZoneInfo("Europe/Berlin")
+    calendar = _calendar(zone="America/New_York")
+    start = datetime(2026, 3, 2, 9, tzinfo=berlin).astimezone(UTC)
+    series = _event(
+        calendar, start=start, end=start + timedelta(hours=1), recurrence="FREQ=WEEKLY", timezone="Europe/Berlin",
+    )
+
+    # New York springs forward on 8 March, Berlin on 29 March.
+    occurrences = _occurrences(calendar, _utc(2026, 3, 1), _utc(2026, 4, 7))
+
+    assert series.expansion_zone == "Europe/Berlin"
+    assert [o.start.astimezone(berlin).strftime("%m-%d %H:%M") for o in occurrences] == [
+        "03-02 09:00", "03-09 09:00", "03-16 09:00", "03-23 09:00", "03-30 09:00", "04-06 09:00",
+    ]
+    # A calendar zone change leaves a series with its own zone where it is.
+    _save(calendar, timezone="Europe/London")
+    after = _occurrences(calendar, _utc(2026, 3, 1), _utc(2026, 4, 7))
+    assert [o.start for o in after] == [o.start for o in occurrences]
+
+
+# --- bounds ------------------------------------------------------------------
+
+
+def test_a_bounded_series_stores_its_end_and_reads_skip_it_once_ended(db: None) -> None:
+    del db
+    calendar = _calendar()
+    bounded = _event(calendar, start=_utc(2026, 7, 6, 9), end=_utc(2026, 7, 6, 10), recurrence="FREQ=WEEKLY;COUNT=3")
+    endless = _event(calendar, start=_utc(2026, 7, 6, 11), end=_utc(2026, 7, 6, 12), recurrence="FREQ=WEEKLY")
+
+    assert (bounded.series_end, endless.series_end) == (_utc(2026, 7, 20, 10), None)
+    assert [o.event_sqid for o in _occurrences(calendar, _utc(2026, 8, 3), _utc(2026, 8, 4))] == [endless.sqid]
+    _save(bounded, recurrence="FREQ=WEEKLY;COUNT=5")
+    assert bounded.series_end == _utc(2026, 8, 3, 10)
+
+
+def test_an_occurrence_window_spans_at_most_four_hundred_days(db: None) -> None:
+    calendar = _calendar()
+
+    with pytest.raises(ValidationError):
+        _occurrences(calendar, _utc(2026, 1, 1), _utc(2027, 2, 6))
+    assert _occurrences(calendar, _utc(2026, 1, 1), _utc(2027, 2, 5)) == []
+
+
+# --- all-day events ----------------------------------------------------------
+
+
+def test_an_all_day_event_starts_and_ends_at_local_midnight(db: None) -> None:
+    calendar = _calendar(zone="America/New_York")
+
+    # A UTC-midnight client sends 20:00 the evening before, in New York.
+    with pytest.raises(ValidationError) as raised:
+        _clean(calendar, _utc(2026, 7, 7), _utc(2026, 7, 8), all_day=True)
+    assert "start" in raised.value.message_dict
+    _clean(calendar, _ny(2026, 7, 7), _ny(2026, 7, 8), all_day=True)
+
+
+def test_dragging_an_all_day_event_lands_on_the_nearest_local_midnights(db: None) -> None:
+    calendar = _calendar(zone="America/New_York")
+    holiday = _event(calendar, title="Holiday", all_day=True, start=_ny(2026, 7, 7), end=_ny(2026, 7, 8))
+
+    with system_context(reason="tests.calendar.reschedule"):
+        # The viewer's own midnight in UTC, four hours off New York's.
+        holiday.reschedule(_utc(2026, 7, 9), _utc(2026, 7, 10))
+
+    assert (holiday.start, holiday.end) == (_ny(2026, 7, 9), _ny(2026, 7, 10))
+
+
+# --- override defaults -------------------------------------------------------
+
+
+def test_an_override_takes_its_masters_visibility_and_transparency_by_default(db: None) -> None:
+    calendar = _calendar()
+    master = _event(
+        calendar, start=_utc(2026, 7, 6, 9), end=_utc(2026, 7, 6, 10), recurrence="FREQ=WEEKLY",
+        visibility="private", transparency="free",
+    )
+
+    override = _event(
+        calendar, series=master, original_start=_utc(2026, 7, 13, 9), start=_utc(2026, 7, 13, 10),
+        end=_utc(2026, 7, 13, 11),
+    )
+
+    assert (override.visibility, override.transparency) == ("private", "free")
+
+
 # --- rescheduling ------------------------------------------------------------
 
 
@@ -421,6 +534,24 @@ def test_reschedule_refuses_and_leaves_the_row_unchanged(
 
 
 # --- attendees ---------------------------------------------------------------
+
+
+def test_merging_two_invited_handles_keeps_one_invitation_with_the_organizer_and_the_stronger_answer(
+    db: None,
+) -> None:
+    del db
+    event = _event(_calendar(), start=_utc(2026, 7, 6, 9), end=_utc(2026, 7, 6, 10))
+    with system_context(reason="tests.calendar.merge"):
+        owner = create_user("cal_merger")
+        kept = Handle.objects.create(platform="email", value="ada@example.test", created_by=owner)
+        merged = Handle.objects.create(platform="email", value="ada.l@example.test", created_by=owner)
+        EventAttendee.objects.create(event=event, handle=kept)
+        EventAttendee.objects.create(event=event, handle=merged, role="organizer", response="accepted")
+
+        kept.with_actor(owner).merge(records=[merged.public_id])
+        attendees = list(EventAttendee.objects.filter(event=event).values_list("handle_id", "role", "response"))
+
+    assert attendees == [(kept.pk, "organizer", "accepted")]
 
 
 @pytest.fixture
@@ -480,7 +611,7 @@ def test_demo_resources_load_share_and_reload_idempotently(db: None) -> None:
 
     window = (_utc(2026, 7, 6), _utc(2026, 7, 27))
     alice_view = CalendarEvent.objects.with_actor(alice).occurrences(*window)
-    bob_view = CalendarEvent.objects.with_actor(bob).occurrences(*window, calendars=[alice_calendar.sqid])
+    bob_view = CalendarEvent.objects.with_actor(bob).filter(calendar=alice_calendar).occurrences(*window)
 
     # The standup's 13 July instance moved to the 14th and its 20 July one is cancelled.
     assert [o.title for o in bob_view] == [

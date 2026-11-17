@@ -18,6 +18,8 @@ the refusals (a recurring master, an inverted interval, an overlap); the shared
 
 from __future__ import annotations
 
+from collections.abc import Mapping
+from dataclasses import replace
 from datetime import datetime
 from typing import Any, cast
 
@@ -25,12 +27,16 @@ import strawberry
 import strawberry_django
 from django.apps import apps
 from django.db import transaction
+from rebac import ObjectRef
+from rebac.field_visibility import check_field_access
 from strawberry import auto
 
-from angee.calendar.models import EventOccurrence
+from angee.calendar.models import CalendarEventQuerySet
+from angee.graphql.access import ChangeReadGate
 from angee.graphql.actions import ActionResult, action_guard, authorized_action_target, session_user
 from angee.graphql.capabilities import permissions_field
 from angee.graphql.data.hasura import AngeeHasuraWriteBackend, hasura_model_resource, public_pk_decoder
+from angee.graphql.events import ChangeEvent, ChangePayload
 from angee.graphql.ids import PublicID
 from angee.graphql.node import NODE_DISPLAY_NAME_DESCRIPTION, AngeeNode
 from angee.graphql.relations import actor_scoped_to_one
@@ -84,6 +90,7 @@ class CalendarEventType(TaggedNode, AngeeNode):
     end: auto
     all_day: auto
     recurrence: auto
+    timezone: auto
     original_start: auto
     status: auto
     transparency: auto
@@ -112,11 +119,11 @@ class EventAttendeeType(AngeeNode):
 class EventOccurrenceType:
     """One occurrence a calendar shows, as ``event_occurrences`` returns it.
 
-    A server-expanded occurrence, not a stored row (see
-    :class:`~angee.calendar.models.EventOccurrence` for the id shapes).
-    ``event_sqid`` opens the stored row, ``calendar`` is the calendar's public id,
-    ``editable`` gates drag, and a ``redacted`` occurrence is busy time whose
-    details the actor may not read.
+    A server-expanded occurrence, not a stored row: the resolver returns
+    :class:`~angee.calendar.models.EventOccurrence` values, which own the id
+    shapes. ``event_sqid`` opens the stored row, ``calendar`` is the calendar's
+    public id, ``editable`` gates drag, and a ``redacted`` occurrence is busy time
+    whose details the actor may not read.
     """
 
     occurrence_id: str
@@ -129,21 +136,27 @@ class EventOccurrenceType:
     editable: bool
     redacted: bool
 
-    @classmethod
-    def of(cls, occurrence: EventOccurrence) -> EventOccurrenceType:
-        """Project one occurrence value onto the wire type."""
 
-        return cls(
-            occurrence_id=occurrence.occurrence_id,
-            event_sqid=occurrence.event_sqid,
-            calendar=PublicID(occurrence.calendar),
-            title=occurrence.title,
-            start=occurrence.start,
-            end=occurrence.end,
-            all_day=occurrence.all_day,
-            editable=occurrence.editable,
-            redacted=occurrence.redacted,
-        )
+class FreeBusyChangeReadGate(ChangeReadGate):
+    """Readers receive an event's change as usual; free/busy viewers learn only that its busy time changed.
+
+    A subscriber who may ``see_busy`` an event but not ``read`` it gets the change
+    with no changed fields, values or related records: enough to refetch its
+    occurrences, which the occurrence read redacts.
+    """
+
+    def filter(self, payload: Mapping[str, Any] | ChangePayload) -> ChangeEvent | None:
+        """Return the reader's event, the free/busy viewer's bare event, or ``None``."""
+
+        change = self._change(payload)
+        event = super().filter(change)
+        if event is not None or not self.resource_type:
+            return event
+        resource = change.read_resource or ObjectRef(self.resource_type, change.resource_identifier)
+        busy = check_field_access(self.active_backend, subject=self.actor, action="see_busy", resource=resource)
+        if not busy.allowed:
+            return None
+        return ChangeEvent.from_payload(replace(change, changed_fields=None, changed_values=None, related_records=()))
 
 
 # ---------------------------------------------------------------------------
@@ -175,6 +188,7 @@ _EVENT_SCHEDULE_FIELDS = (
     "end",
     "all_day",
     "recurrence",
+    "timezone",
     "status",
     "transparency",
     "visibility",
@@ -236,21 +250,15 @@ class CalendarQuery:
         info: strawberry.Info,
         window_start: datetime,
         window_end: datetime,
-        calendars: list[PublicID] | None = None,
     ) -> list[EventOccurrenceType]:
-        """Return the actor's occurrences in ``[window_start, window_end)``, optionally on ``calendars`` only.
+        """Return the actor's occurrences in ``[window_start, window_end)``.
 
-        Aware UTC bounds, start inclusive and end exclusive; every occurrence that
-        meets the window is returned, in each calendar's zone.
+        Aware UTC bounds, start inclusive and end exclusive, at most 400 days apart;
+        every occurrence that meets the window is returned, in each calendar's zone.
         """
 
-        scoped = CalendarEvent.objects.with_actor(session_user(info))
-        occurrences = cast(Any, scoped).occurrences(
-            window_start,
-            window_end,
-            calendars=None if calendars is None else [str(calendar) for calendar in calendars],
-        )
-        return [EventOccurrenceType.of(occurrence) for occurrence in occurrences]
+        scoped = cast(CalendarEventQuerySet, CalendarEvent.objects.with_actor(session_user(info)))
+        return cast(list[EventOccurrenceType], scoped.occurrences(window_start, window_end))
 
 
 @strawberry.type
@@ -282,7 +290,7 @@ schemas = {
         "mutation": [*[resource.mutation for resource in _RESOURCES], CalendarEventActionMutation],
         "subscription": [
             changes(Calendar, field="calendarChanged"),
-            changes(CalendarEvent, field="calendarEventChanged"),
+            changes(CalendarEvent, field="calendarEventChanged", read_gate=FreeBusyChangeReadGate),
             changes(EventAttendee, field="eventAttendeeChanged"),
         ],
         "types": [

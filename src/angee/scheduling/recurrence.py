@@ -27,6 +27,9 @@ from angee.scheduling.zones import get_zone_info, require_aware
 _VALIDATION_ANCHOR = datetime(2000, 1, 1, tzinfo=UTC)
 """A fixed aware anchor for grammar-only validation; its date never affects validity."""
 
+_ENDS = re.compile(r"(?im)(?<![A-Z])(UNTIL|COUNT)=")
+"""The RRULE parts that end a series; a rule without either repeats for ever."""
+
 
 class Recurrence:
     """An RFC-5545 RRULE and its bounded, timezone-aware expansion.
@@ -129,6 +132,27 @@ class Recurrence:
         else:
             following = self._compile(anchor).after(moment.astimezone(tz), inc=False)
         return following.astimezone(UTC) if following is not None else None
+
+    def get_last_occurrence(self, dtstart: datetime, *, zone: str = "") -> datetime | None:
+        """Return the series' last occurrence as aware UTC, or ``None`` when the rule never ends.
+
+        A rule ends when it carries ``UNTIL`` or ``COUNT``; one without either
+        repeats for ever. An empty rule is the single ``dtstart``. The series unrolls
+        in ``zone`` (blank: the project ``TIME_ZONE``), as :meth:`occurrences`
+        expands it.
+        """
+
+        require_aware(dtstart=dtstart)
+        tz = get_zone_info(zone)
+        anchor = dtstart.astimezone(tz)
+        if not self.rule:
+            return anchor.astimezone(UTC)
+        if not _ENDS.search(self.rule):
+            return None
+        last: datetime | None = None
+        for last in self._compile(anchor):
+            pass
+        return last.astimezone(UTC) if last is not None else None
 
     def _compile(self, anchor: datetime) -> rrule | rruleset:
         """Parse the rule anchored at an aware local ``anchor`` (a dateutil rrule/rruleset)."""

@@ -13,13 +13,13 @@ attendee whose ``role`` is ``organizer``.
 **Occurrences.** :meth:`CalendarEventQuerySet.occurrences` turns a row set into
 the :class:`EventOccurrence` wire shape the calendar renders, composing
 :meth:`Recurrence.occurrences` for the moments in the calendar's zone. An override
-replaces the moment at its ``original_start``, a cancelled override drops it, and
-a cancelled event shows nothing. A recurring master's occurrences are not
-editable (drag-rescheduling applies to a single row); an override's occurrence is
-its own row, so it is.
+replaces the moment at its ``original_start`` and keeps that instance's id, a
+cancelled override drops it, and a cancelled event shows nothing. A recurring
+master's occurrences are not draggable (drag-rescheduling moves a single row); a
+single row is, for an actor who may write it.
 
 **Overlap.** A calendar whose ``overlap_policy`` is ``refuse`` rejects a busy
-event whose ``[start, end)`` meets another busy occurrence on it; free and
+event any of whose instances meets another busy occurrence on it; free and
 cancelled events never conflict. :meth:`CalendarEvent.clean` reports it to a
 form, and :meth:`CalendarEvent.save` checks it again under the calendar's row
 lock on every save path.
@@ -31,15 +31,17 @@ changes, :meth:`CalendarEvent.rebase_overrides` carries each override along.
 from __future__ import annotations
 
 from collections import defaultdict
-from collections.abc import Collection
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, time, timedelta
-from typing import Any, Self, cast
+from typing import Any, ClassVar, Self, cast
 
 from django.core.exceptions import ObjectDoesNotExist, ValidationError
 from django.db import models, router, transaction
-from django.db.models import F, Q
+from django.db.models import F, Q, Value
+from django.db.models.functions import Coalesce, NullIf
 from django.utils import timezone
+from rebac import permission_expression
 
 from angee.base.fields.state import StateField
 from angee.base.fields.text import ColorField
@@ -47,6 +49,7 @@ from angee.base.models.audit import AuditMixin
 from angee.base.models.base import AngeeDataModel
 from angee.base.models.locks import ImmutableFieldsMixin
 from angee.base.models.ownership import OwnerMixin
+from angee.base.models.timestamps import update_fields_with_auto_now
 from angee.messaging.models import ThreadedModelMixin
 from angee.provenance.contrib.angee.history import HistoryMixin
 from angee.provenance.contrib.angee.managers import AngeeHistoryManager
@@ -80,12 +83,12 @@ class EventTransparency(models.TextChoices):
 
 
 class EventVisibility(models.TextChoices):
-    """Who reads an event's details (RFC 5545 ``CLASS``).
+    """Who reads an event's details, as Google Calendar's event ``visibility`` means it.
 
     ``default`` follows the calendar's readers, ``public`` also shows the details
     to free/busy viewers, and ``private`` shows them only to the calendar's
     writers; everyone else who sees the calendar's busy times sees the event as
-    busy time only.
+    busy time only. An override created at ``default`` takes its master's.
     """
 
     DEFAULT = "default", "Default"
@@ -114,11 +117,13 @@ class AttendeeResponse(models.TextChoices):
 class EventOccurrence:
     """One occurrence the calendar renders: the wire shape ``event_occurrences`` returns.
 
-    ``occurrence_id`` is stable: ``<event_sqid>:<UTC ISO-8601 basic start>`` for a
-    recurring master's instance, and the row's own ``<event_sqid>`` for a single
-    row (a plain event or an override). ``calendar`` is the calendar's public id.
-    A ``redacted`` occurrence is busy time an actor may see but not read: it carries
-    no title and opens nothing. ``editable`` gates drag-rescheduling.
+    ``occurrence_id`` is stable: ``<series_sqid>:<original start, UTC ISO-8601
+    basic>`` for every instance of a series, overridden or not, so an id survives
+    its instance becoming an override; a plain event is its own ``<event_sqid>``.
+    ``event_sqid`` names the row to open (the override, when there is one).
+    ``calendar`` is the calendar's public id. A ``redacted`` occurrence is busy time
+    an actor may see but not read: it carries no title and opens nothing.
+    ``editable`` is whether the actor may drag it: a single row it may write.
     """
 
     occurrence_id: str
@@ -134,12 +139,46 @@ class EventOccurrence:
 
 @dataclass(frozen=True)
 class EventMoment:
-    """One expanded moment of a row, before it is projected for an actor."""
+    """One expanded moment of a row, before it is projected for an actor.
+
+    ``calendar`` is the row's calendar public id, and ``series`` its master's
+    (blank for a master or a plain event).
+    """
 
     event: CalendarEvent
     calendar: str
+    series: str
     start: datetime
     end: datetime
+
+
+def _basic(moment: datetime) -> str:
+    """A moment as UTC ISO-8601 basic, the occurrence-id suffix."""
+
+    return moment.astimezone(UTC).strftime("%Y%m%dT%H%M%SZ")
+
+
+def _nearest_midnight(moment: datetime, tz: Any) -> datetime:
+    """The midnight in ``tz`` nearest ``moment``: a dragged date lands on the day the viewer meant."""
+
+    local = moment.astimezone(tz)
+    day = local.date() + timedelta(days=1 if local.time() >= time(12) else 0)
+    return timezone.make_aware(datetime.combine(day, time.min), tz)
+
+
+def _intervals_meet(left: Sequence[tuple[datetime, datetime]], right: Sequence[tuple[datetime, datetime]]) -> bool:
+    """Whether any half-open interval of ``left`` meets one of ``right``; both sorted by start, swept once."""
+
+    i = j = 0
+    while i < len(left) and j < len(right):
+        (left_start, left_end), (right_start, right_end) = left[i], right[j]
+        if left_end <= right_start:
+            i += 1
+        elif right_end <= left_start:
+            j += 1
+        else:
+            return True
+    return False
 
 
 class Calendar(OwnerMixin, HistoryMixin, AngeeDataModel, concrete=True):
@@ -195,7 +234,9 @@ class Calendar(OwnerMixin, HistoryMixin, AngeeDataModel, concrete=True):
             if previous_zone is None or previous_zone == self.timezone:
                 return
             events = cast("type[CalendarEvent]", self._meta.get_field("events").related_model)._base_manager
-            masters = events.filter(calendar_id=self.pk, series__isnull=True, overrides__isnull=False).distinct()
+            # A series that keeps its own zone does not follow the calendar's.
+            masters = events.filter(calendar_id=self.pk, series__isnull=True, timezone="", overrides__isnull=False)
+            masters = masters.distinct()
             for master in masters.order_by("pk"):
                 master.rebase_overrides(previous_start=master.start, previous_zone=previous_zone)
 
@@ -215,14 +256,23 @@ class CalendarEventQuerySet(AngeeHistoryQuerySet[Any]):
         through this queryset, so it must hold whole calendars (the actor's scope
         and a calendar filter do). The row set is bounded on both ends: a row
         starting at or after ``window_end`` cannot meet it, and neither can a single
-        row ending before ``window_start``. A recurring master is kept whatever its
-        ``end``, which bounds only its first instance.
+        row ending before ``window_start`` nor a series whose stored
+        ``series_end`` is at or before it. An open-ended series is always read.
         """
 
         rows = list(
-            self.annotate(occurrence_zone=F("calendar__timezone"), occurrence_calendar=F("calendar__sqid"))
+            self.annotate(
+                occurrence_zone=Coalesce(NullIf(F("timezone"), Value("")), F("calendar__timezone")),
+                occurrence_calendar=F("calendar__sqid"),
+                occurrence_series=F("series__sqid"),
+            )
             .filter(start__lt=window_end)
-            .filter(Q(recurrence__gt="") | Q(end__gt=window_start) | Q(start__gte=window_start))
+            .filter(
+                Q(recurrence__gt="", series_end__isnull=True)
+                | Q(recurrence__gt="", series_end__gt=window_start)
+                | Q(end__gt=window_start)
+                | Q(start__gte=window_start)
+            )
             .exclude(series__status=EventStatus.CANCELLED)
         )
         masters = [row for row in rows if row.recurrence]
@@ -251,47 +301,51 @@ class CalendarEventQuerySet(AngeeHistoryQuerySet[Any]):
             for start in starts:
                 end = row.occurrence_end(start, zone=zone)
                 if start < window_end and (end > window_start or start >= window_start):
-                    moments.append(EventMoment(row, row.occurrence_calendar, start, end))
+                    moments.append(EventMoment(row, row.occurrence_calendar, row.occurrence_series or "", start, end))
         return moments
 
-    def occurrences(
-        self,
-        window_start: datetime,
-        window_end: datetime,
-        *,
-        calendars: Collection[str] | None = None,
-    ) -> list[EventOccurrence]:
+    def occurrences(self, window_start: datetime, window_end: datetime) -> list[EventOccurrence]:
         """Return the occurrences this queryset's actor sees in ``[window_start, window_end)``, sorted.
 
-        The rows are those the actor may ``see_busy``; the ones it may also ``read``
-        project in full, the others as redacted busy time (no title, not editable,
-        and nothing at all for a free event). ``calendars`` narrows to calendars by
-        public id. Called on an actor-scoped queryset, the REBAC policy is the
-        preflight: an event the actor may not see never enters the set.
+        The rows are those the actor may ``see_busy``. The same row query projects
+        whether the actor may ``read`` each row (else it is redacted busy time: no
+        title, and nothing at all for a free event) and ``write`` it (a single row it
+        may write is draggable). Called on an actor-scoped queryset, the REBAC policy
+        is the preflight: an event the actor may not see never enters the set; as
+        system work every row reads and writes. A window spans at most
+        :attr:`CalendarEvent.occurrence_window_limit`; narrow to calendars by
+        filtering this queryset first.
         """
 
-        visible = self.with_action("see_busy")
-        if calendars is not None:
-            visible = visible.filter(calendar__sqid__in=list(calendars))
-        moments = visible.moments(window_start, window_end)
-        ids = {moment.event.pk for moment in moments}
-        readable = set(self.with_action("read").filter(pk__in=ids).values_list("pk", flat=True)) if ids else set()
+        limit = self.model.occurrence_window_limit
+        if window_end - window_start > limit:
+            raise ValidationError({"window_end": f"A calendar window spans at most {limit.days} days."})
+        actor, unscoped = self.effective_actor()
+        if unscoped:
+            granted: dict[str, Any] = {"occurrence_read": Value(True), "occurrence_write": Value(True)}
+        elif actor is None:
+            granted = {"occurrence_read": Value(False), "occurrence_write": Value(False)}
+        else:
+            granted = {
+                "occurrence_read": permission_expression(self.model, "read", actor=actor),
+                "occurrence_write": permission_expression(self.model, "write", actor=actor),
+            }
         result: list[EventOccurrence] = []
-        for moment in moments:
+        for moment in self.with_action("see_busy").annotate(**granted).moments(window_start, window_end):
             event = moment.event
-            redacted = event.pk not in readable
+            redacted = not event.occurrence_read
             if redacted and event.transparency == EventTransparency.FREE:
                 continue
             result.append(
                 EventOccurrence(
-                    occurrence_id=event.occurrence_id(moment.start),
+                    occurrence_id=event.occurrence_id(moment.start, series=moment.series),
                     event_sqid=event.sqid,
                     calendar=moment.calendar,
                     title="" if redacted else event.title,
                     start=moment.start,
                     end=moment.end,
                     all_day=event.all_day,
-                    editable=not (event.recurrence or redacted),
+                    editable=bool(event.occurrence_write) and not event.recurrence and not redacted,
                     redacted=redacted,
                 )
             )
@@ -305,7 +359,7 @@ CalendarEventManager = AngeeHistoryManager.from_queryset(CalendarEventQuerySet)
 OVERLAP_MESSAGE = "This calendar is already busy at this time."
 """The overlap refusal: it names no other event, whoever asks."""
 
-_TIME_FIELDS = frozenset({"start", "end", "all_day", "recurrence", "status", "transparency"})
+_TIME_FIELDS = frozenset({"start", "end", "all_day", "recurrence", "timezone", "status", "transparency"})
 """The columns whose change can make a row's busy time meet another's."""
 
 
@@ -331,6 +385,12 @@ class CalendarEvent(
 
     immutable_fields = ("calendar_id", "series_id", "original_start")
 
+    overlap_horizon: ClassVar[timedelta] = timedelta(days=730)
+    """How far an open-ended series is checked against a ``refuse`` calendar, from its start."""
+
+    occurrence_window_limit: ClassVar[timedelta] = timedelta(days=400)
+    """The longest window :meth:`CalendarEventQuerySet.occurrences` expands."""
+
     calendar = models.ForeignKey("calendar.Calendar", on_delete=models.CASCADE, related_name="events")
     title = models.CharField(max_length=256)
     description = models.TextField(blank=True, default="")
@@ -339,6 +399,12 @@ class CalendarEvent(
     end = models.DateTimeField()
     all_day = models.BooleanField(default=False)
     recurrence = RecurrenceField()
+    timezone = TimeZoneField()
+    """The wall clock this event keeps; blank: its calendar's.
+
+    RFC 5545 ``DTSTART;TZID`` and Google's ``start.timeZone`` map here.
+    """
+
     series = models.ForeignKey(
         "calendar.CalendarEvent",
         null=True,
@@ -350,6 +416,13 @@ class CalendarEvent(
 
     original_start = models.DateTimeField(null=True, blank=True)
     """The start of the master's instance this override replaces (RFC 5545 ``RECURRENCE-ID``)."""
+
+    series_end = models.DateTimeField(null=True, blank=True, editable=False)
+    """Where a bounded series' last instance ends (its rule's ``UNTIL`` or ``COUNT``), derived on save.
+
+    Empty for an open-ended series and for a single row, whose own ``end`` bounds it.
+    Reads prune a series that ended before their window.
+    """
 
     status = StateField(choices_enum=EventStatus, default=EventStatus.CONFIRMED)
     transparency = StateField(choices_enum=EventTransparency, default=EventTransparency.BUSY)
@@ -370,6 +443,7 @@ class CalendarEvent(
         abstract = True
         ordering = ("start", "pk")
         rebac_resource_type = "calendar/event"
+        indexes = (models.Index(fields=("calendar", "start"), name="%(app_label)s_event_calendar_start"),)
         constraints = (
             models.CheckConstraint(
                 condition=Q(end__gte=F("start")),
@@ -395,13 +469,27 @@ class CalendarEvent(
 
         return self.title or self.sqid
 
+    @property
+    def expansion_zone(self) -> str:
+        """The zone this event's recurrence, all-day dates and overlap expand on: its own, else its calendar's."""
+
+        return self.timezone or self.calendar.timezone
+
     def clean(self) -> None:
-        """Validate the interval, an override's series, and the calendar's overlap policy."""
+        """Validate the interval, all-day bounds, an override's series, and the calendar's overlap policy.
+
+        An all-day event's ``start`` and ``end`` are midnights in its zone,
+        a whole number of days apart. An override created at the default visibility
+        and transparency takes its master's.
+        """
 
         super().clean()
+        self._inherit_series_defaults()
         errors: dict[str, str] = {}
         if self.end is not None and self.start is not None and self.end < self.start:
             errors["end"] = "The event end must not be before its start."
+        if self.all_day and self.calendar_id is not None and self.start is not None and self.end is not None:
+            errors.update(self._all_day_errors())
         if self.series_id is None:
             if self.original_start is not None:
                 errors["original_start"] = "Only an override names the instance it replaces."
@@ -428,12 +516,47 @@ class CalendarEvent(
             return {"original_start": "The original start is not an instance of the series."}
         return {}
 
+    def _all_day_errors(self) -> dict[str, str]:
+        """Return why this all-day event's bounds are not local midnights in its zone."""
+
+        zone = self.expansion_zone
+        tz = get_zone_info(zone)
+        named = zone or "the project time zone"
+        for name in ("start", "end"):
+            local = getattr(self, name).astimezone(tz)
+            if local.time() != time.min:
+                return {name: f"An all-day event {name}s at midnight in its time zone ({named})."}
+        if self.end <= self.start:
+            return {"end": "An all-day event lasts at least one day."}
+        return {}
+
+    def _inherit_series_defaults(self) -> None:
+        """Give a new override its master's visibility and transparency when it was created at the defaults."""
+
+        if not self._state.adding or self.series_id is None:
+            return
+        series = self.series
+        assert series is not None
+        if self.visibility == EventVisibility.DEFAULT:
+            self.visibility = series.visibility
+        if self.transparency == EventTransparency.BUSY:
+            self.transparency = series.transparency
+
+    def _derive_series_end(self) -> datetime | None:
+        """Return where this series' last instance ends, or ``None`` for an open-ended rule or a single row."""
+
+        if not self.recurrence or self.calendar_id is None:
+            return None
+        zone = self.expansion_zone
+        last = Recurrence(self.recurrence).get_last_occurrence(self.start, zone=zone)
+        return self.occurrence_end(last, zone=zone) if last is not None else None
+
     def is_instance(self, moment: datetime, *, zone: str | None = None) -> bool:
-        """Whether ``moment`` is an instance of this master's rule, expanded in ``zone`` (its calendar's)."""
+        """Whether ``moment`` is an instance of this master's rule, expanded in ``zone`` (its expansion zone)."""
 
         if not self.recurrence:
             return False
-        zone = self.calendar.timezone if zone is None else zone
+        zone = self.expansion_zone if zone is None else zone
         instant = timedelta(microseconds=1)
         return moment in Recurrence(self.recurrence).occurrences(self.start, moment, moment + instant, zone=zone)
 
@@ -444,11 +567,15 @@ class CalendarEvent(
         the calendar row first and checks the overlap policy again under that lock,
         so two concurrent saves cannot both take the same time, and the rule holds on
         every save path (a form, a drag, a sync). A saved master whose ``start``,
-        ``all_day`` or ``recurrence`` changed rebases its overrides in the same
-        transaction (:meth:`rebase_overrides`).
+        ``all_day``, ``recurrence`` or ``timezone`` changed rebases its overrides in the same
+        transaction (:meth:`rebase_overrides`). ``series_end`` is derived here.
         """
 
         update_fields = kwargs.get("update_fields")
+        self._inherit_series_defaults()
+        self.series_end = self._derive_series_end()
+        if update_fields is not None and {"start", "end", "all_day", "recurrence", "timezone"} & set(update_fields):
+            kwargs["update_fields"] = update_fields = [*update_fields, "series_end"]
         using = kwargs.get("using") or router.db_for_write(type(self), instance=self)
         with transaction.atomic(using=using):
             previous = self._previous_schedule()
@@ -457,18 +584,19 @@ class CalendarEvent(
                 self.calendar = self.calendar.lock_subject()
                 self._refuse_overlap()
             super().save(*args, **kwargs)
-            if previous is not None and previous != (self.start, self.all_day, self.recurrence):
-                self.rebase_overrides(previous_start=previous[0], previous_zone=self.calendar.timezone)
+            if previous is not None and previous != (self.start, self.all_day, self.recurrence, self.timezone):
+                previous_zone = previous[3] or self.calendar.timezone
+                self.rebase_overrides(previous_start=previous[0], previous_zone=previous_zone)
 
-    def _previous_schedule(self) -> tuple[datetime, bool, str] | None:
-        """The stored ``(start, all_day, recurrence)`` of a saved master that has overrides, else ``None``."""
+    def _previous_schedule(self) -> tuple[datetime, bool, str, str] | None:
+        """The stored ``(start, all_day, recurrence, timezone)`` of a saved master that has overrides, else ``None``."""
 
         if self._state.adding or self.pk is None or self.series_id is not None:
             return None
         rows = type(self)._base_manager.filter(pk=self.pk)
         if not type(self)._base_manager.filter(series_id=self.pk).exists():
             return None
-        return rows.values_list("start", "all_day", "recurrence").first()
+        return rows.values_list("start", "all_day", "recurrence", "timezone").first()
 
     def lock_subject(self, members: Any = None) -> Self:
         """Lock the calendar before this event: the calendar row serializes its overlap rule."""
@@ -487,7 +615,7 @@ class CalendarEvent(
         shift's direction, so two never claim the same instance at once.
         """
 
-        old_tz, zone = get_zone_info(previous_zone), self.calendar.timezone
+        old_tz, zone = get_zone_info(previous_zone), self.expansion_zone
         new_tz = get_zone_info(zone)
         shift = self.start.astimezone(new_tz).replace(tzinfo=None) - previous_start.astimezone(old_tz).replace(
             tzinfo=None
@@ -530,11 +658,14 @@ class CalendarEvent(
         return type(self).system_queryset() if admitted else type(self).objects.with_actor(actor)
 
     def _refuse_overlap(self) -> None:
-        """Refuse this busy event when it meets another busy occurrence on a ``refuse`` calendar.
+        """Refuse this busy event when any of its instances meets another busy occurrence on a ``refuse`` calendar.
 
-        Only this row's own ``[start, end)`` is checked (a master's first instance).
-        This row's stored copy, a master's own overrides, and the instance an
-        override replaces are not others. The refusal names no other event.
+        Every instance is checked: a single row's ``[start, end)``, or each instance
+        of a series up to its rule's end, or :attr:`overlap_horizon` from its start
+        for an open-ended rule, minus the instances its own overrides replace. Both
+        sides are sorted and swept once. This row's stored copy, a master's own
+        overrides, and the instance an override replaces are not others. The refusal
+        names no other event.
         """
 
         if self.calendar_id is None or self.start is None or self.end is None or self.end <= self.start:
@@ -543,15 +674,39 @@ class CalendarEvent(
             return
         if self.calendar.overlap_policy != OverlapPolicy.REFUSE:
             return
+        mine = self._own_instances()
+        if not mine:
+            return
         rows = self._overlap_rows().filter(calendar_id=self.calendar_id)
-        for moment in rows.moments(self.start, self.end):
-            other = moment.event
-            if self.pk is not None and (other.pk == self.pk or other.series_id == self.pk):
-                continue
-            if other.pk == self.series_id and moment.start == self.original_start:
-                continue
-            if other.transparency == EventTransparency.BUSY:
-                raise ValidationError({"start": OVERLAP_MESSAGE})
+        theirs = sorted(
+            (moment.start, moment.end)
+            for moment in rows.moments(mine[0][0], max(end for _start, end in mine))
+            if moment.event.transparency == EventTransparency.BUSY and not self._is_own(moment)
+        )
+        if _intervals_meet(mine, theirs):
+            raise ValidationError({"start": OVERLAP_MESSAGE})
+
+    def _own_instances(self) -> list[tuple[datetime, datetime]]:
+        """This row's instances, sorted: itself, or its series up to its end or the overlap horizon."""
+
+        if not self.recurrence:
+            return [(self.start, self.end)]
+        zone = self.expansion_zone
+        horizon = self.start + self.overlap_horizon
+        starts = Recurrence(self.recurrence).occurrences(self.start, self.start, horizon, zone=zone)
+        replaced: set[datetime] = set()
+        if self.pk is not None:
+            stored = type(self)._base_manager.filter(series_id=self.pk)
+            replaced = {start for start in stored.values_list("original_start", flat=True) if start is not None}
+        return [(start, self.occurrence_end(start, zone=zone)) for start in starts if start not in replaced]
+
+    def _is_own(self, moment: EventMoment) -> bool:
+        """Whether ``moment`` is this row's own: its stored copy, its overrides, or the instance it replaces."""
+
+        other = moment.event
+        if self.pk is not None and (other.pk == self.pk or other.series_id == self.pk):
+            return True
+        return other.pk == self.series_id and moment.start == self.original_start
 
     def occurrence_end(self, start: datetime, *, zone: str = "") -> datetime:
         """Return the end of this row's occurrence starting at ``start``, expanded in ``zone``.
@@ -572,41 +727,42 @@ class CalendarEvent(
         end_local = datetime.combine(end_local_date, time.min)
         return timezone.make_aware(end_local, tz).astimezone(UTC)
 
-    def occurrence_id(self, start: datetime) -> str:
-        """Return the stable id of this row's occurrence at ``start`` (see :class:`EventOccurrence`)."""
+    def occurrence_id(self, start: datetime, *, series: str = "") -> str:
+        """Return the stable id of this row's occurrence at ``start`` (see :class:`EventOccurrence`).
 
-        if not self.recurrence:
-            return self.sqid
-        return f"{self.sqid}:{start.astimezone(UTC).strftime('%Y%m%dT%H%M%SZ')}"
-
-    def expand_occurrences(self, window_start: datetime, window_end: datetime) -> list[EventOccurrence]:
-        """Return this row's series occurrences in ``[window_start, window_end)``, as system work.
-
-        The series is this row and its overrides (a master's, or an override's own
-        single row), projected unredacted through
-        :meth:`CalendarEventQuerySet.occurrences`; a caller that already holds the
-        row reads its schedule.
+        ``series`` is an override's master public id: the override keeps the id of
+        the instance it replaces.
         """
 
-        series = type(self).system_queryset().filter(Q(pk=self.pk) | Q(series_id=self.pk))
-        return series.occurrences(window_start, window_end)
+        if self.series_id is not None and self.original_start is not None:
+            return f"{series}:{_basic(self.original_start)}"
+        if not self.recurrence:
+            return self.sqid
+        return f"{self.sqid}:{_basic(start)}"
 
     def reschedule(self, start: datetime, end: datetime) -> Self:
         """Move this single row to new ``start``/``end``, validate, and persist with history.
 
         A recurring master refuses: its occurrences are dragged one instance at a
         time through an override, and the series itself is edited through the
-        event form. The moved fields are validated before the write
-        (:meth:`clean`: the interval, the series and the overlap policy), so an
-        invalid move surfaces as a ``ValidationError``, never an ``IntegrityError``.
-        The ordinary save joins the caller's changeset, so provenance owns the
-        resulting field delta and reason.
+        event form. An all-day event lands on the nearest midnights in its
+        calendar's zone, since a drag carries the viewer's own midnight. The moved
+        fields are validated before the write (:meth:`clean`: the interval, the
+        series and the overlap policy), so an invalid move surfaces as a
+        ``ValidationError``, never an ``IntegrityError``. The ordinary save joins the
+        caller's changeset, so provenance owns the resulting field delta and reason.
         """
 
         if self.recurrence:
             raise ValidationError(
                 {"start": "A recurring event's occurrences cannot be dragged; edit the series instead."}
             )
+        if self.all_day:
+            tz = get_zone_info(self.expansion_zone)
+            start, end = _nearest_midnight(start, tz), _nearest_midnight(end, tz)
+            if end <= start:
+                next_day = start.astimezone(tz).date() + timedelta(days=1)
+                end = timezone.make_aware(datetime.combine(next_day, time.min), tz)
         self.start = start
         self.end = end
         self.full_clean(
@@ -642,7 +798,7 @@ class EventAttendee(ImmutableFieldsMixin, AuditMixin, HistoryMixin, AngeeDataMod
         """Django model options for an event attendee."""
 
         abstract = True
-        ordering = ("event", "pk")
+        ordering = ("event_id", "pk")
         rebac_resource_type = "calendar/event_attendee"
         constraints = (
             models.UniqueConstraint(fields=("event", "handle"), name="%(app_label)s_attendee_one_per_handle"),
@@ -653,7 +809,42 @@ class EventAttendee(ImmutableFieldsMixin, AuditMixin, HistoryMixin, AngeeDataMod
             ),
         )
 
+    merge_identity = (("event", "handle"),)
+    """A handle is invited to an event once: merging two handles folds their invitations into one."""
+
     def __str__(self) -> str:
         """Return a readable label for Django displays."""
 
         return f"{self.event_id}:{self.handle_id}"
+
+    def merge_collapse(self, duplicate: Any) -> bool:
+        """Keep one invitation covering both: the organizer role, else the stronger role, and the stronger answer.
+
+        An answer outranks none, and a definite answer a tentative one, with
+        acceptance first: ``accepted`` > ``declined`` > ``tentative`` > ``needs_action``.
+        The duplicate gives up the organizer role first, since one event has one
+        organizer and the duplicate goes only after this row is saved.
+        """
+
+        role = min((self.role, duplicate.role), key=_ROLE_RANK.index)
+        response = max((self.response, duplicate.response), key=_RESPONSE_RANK.index)
+        if role == AttendeeRole.ORGANIZER and duplicate.role == AttendeeRole.ORGANIZER:
+            duplicate.role = AttendeeRole.REQUIRED
+            duplicate.save(update_fields=update_fields_with_auto_now(duplicate, {"role"}))
+        dirty = {name for name, value in (("role", role), ("response", response)) if getattr(self, name) != value}
+        self.role, self.response = role, response
+        if dirty:
+            self.save(update_fields=update_fields_with_auto_now(self, dirty))
+        return True
+
+
+_ROLE_RANK = (AttendeeRole.ORGANIZER, AttendeeRole.REQUIRED, AttendeeRole.OPTIONAL)
+"""Attendee roles, strongest first."""
+
+_RESPONSE_RANK = (
+    AttendeeResponse.NEEDS_ACTION,
+    AttendeeResponse.TENTATIVE,
+    AttendeeResponse.DECLINED,
+    AttendeeResponse.ACCEPTED,
+)
+"""Attendee answers, weakest first."""
