@@ -1380,8 +1380,14 @@ exception closes the rows as failed. Tests inherit a boundary from the root
   Its `validate_insert` seam narrows all generic insert entrypoints. Retention
   commands insert validated batches through `owner_bulk_create`; lease state
   machines expose exact conditional writes through domain queryset methods using
-  `owner_update`. These public, framework-protected APIs skip only the declaring
-  owner's guard and retain downstream authorization and queryset guards. Each
+  `owner_update`; an owner deletes rows it validated through `owner_delete`, the
+  native collector delete with its receivers and cascades. These public,
+  framework-protected APIs skip only the declaring owner's guard and retain
+  downstream authorization and queryset guards.
+  [`OwnerDeleteQuerySet`](../../src/angee/base/querysets.py) owns the one
+  exception: Django's raw delete path, taken when rows have no receivers or
+  dependents, is admitted for the owner's own model during its `owner_delete`
+  and refused otherwise. Each
   owner supplies its validated predicates and allowed fields. `HierarchyQuerySet`
   exposes the same `owner_update` contract for derived path maintenance. They do
   not reopen generic mutations or replace model/FK invariants. `AuditMixin` dispatches
@@ -1862,8 +1868,8 @@ collected instance (an MTI child's deletion also collects its canonical parent, 
 a teardown is idempotent), whether the target names the edge through a reverse
 relation or the edge's schema declares the target's type. An append-only edge,
 whose collection refuses bulk deletes, cascades through its teardown and the
-owner's bulk `owner_delete`, under a named system context when the deleter needs
-no authority on the edge rows.
+owner's `owner_delete`, under a named system context when the deleter needs no
+authority on the edge rows.
 [`RecordReferenceNode`](../../src/angee/graphql/relations.py) and
 `with_record_reference_access` project it into GraphQL under the current
 reader's scope. A hidden target yields null identity fields; its model and ID

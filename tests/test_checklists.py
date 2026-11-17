@@ -9,6 +9,7 @@ under the actor that holds the inspection's write and reads the report.
 from __future__ import annotations
 
 from typing import Any, cast
+from unittest.mock import patch
 
 import pytest
 import strawberry
@@ -21,7 +22,15 @@ from django.db import connection, models
 from django.db.models import Value
 from django.db.models.lookups import Exact
 from django.test.utils import CaptureQueriesContext, isolate_apps
-from rebac import RelationshipTuple, actor_context, system_context, to_object_ref, to_subject_ref, write_relationships
+from rebac import (
+    MissingActorError,
+    RelationshipTuple,
+    actor_context,
+    system_context,
+    to_object_ref,
+    to_subject_ref,
+    write_relationships,
+)
 from rebac.models import SchemaOverride, SchemaPermission
 from strawberry import auto
 
@@ -740,19 +749,27 @@ def test_the_timeline_is_a_chronology_of_each_readable_result(world: Any) -> Non
 
 
 @pytest.mark.parametrize("path", ["instance", "queryset"])
-def test_an_actor_deleting_evidence_deletes_the_results_it_supports(world: Any, path: str) -> None:
-    """The owner deletes the results; the actor needs no authority on them."""
+def test_an_actor_deleting_evidence_deletes_the_results_it_supports(
+    world: Any, path: str, django_capture_on_commit_callbacks: Any
+) -> None:
+    """The owner deletes the results; the actor needs no authority on them, and the record's timeline refreshes."""
 
     admin = create_platform_admin(f"evidence-admin-{path}")
     supported = _record(world, "owner", "passed", evidence=(world.report,))
     kept = _record(world, "totals", "conflict", "Other source.", evidence=(world.hidden,))
-    with actor_context(admin):
+    groups: list[str] = []
+    with (
+        patch("angee.timeline.events.broadcast_group", side_effect=lambda group, payload: groups.append(group)),
+        django_capture_on_commit_callbacks(execute=True),
+        actor_context(admin),
+    ):
         if path == "instance":
             Report.objects.get(pk=world.report.pk).delete()
         else:
             Report.objects.filter(pk=world.report.pk).delete()
     assert set(ChecklistResult._base_manager.values_list("pk", flat=True)) == {kept.pk}
     assert not ChecklistEvidence._base_manager.filter(result_id=supported.pk).exists()
+    assert f"angee.timeline.checklistdemo.inspection.{world.inspection.sqid}" in groups
 
 
 @pytest.mark.parametrize("path", ["instance", "queryset"])
@@ -774,14 +791,38 @@ def test_an_actor_deleting_a_checked_record_deletes_its_results_and_no_others(wo
     assert set(ChecklistEvidence._base_manager.values_list("result_id", flat=True)) == {untouched.pk}
 
 
-def test_deleting_results_takes_one_read_and_two_deletes(world: Any) -> None:
-    for key in ("owner", "signature", "totals"):
-        _record(world, key, "passed", evidence=(world.report,))
-    with CaptureQueriesContext(connection) as captured:
-        assert ChecklistResult.objects.delete_results(models.Q(object_id=world.inspection.pk)) == 3
-    checklist = [query["sql"] for query in captured if "test_checklists_" in query["sql"]]
-    assert [sql.split()[0].upper() for sql in checklist] == ["SELECT", "DELETE", "DELETE"]
-    assert not ChecklistResult._base_manager.exists() and not ChecklistEvidence._base_manager.exists()
+def test_the_owner_deletes_one_records_results_or_those_one_record_supports(world: Any) -> None:
+    """Each delete verb names its scope; neither takes an arbitrary selection, and neither needs an actor."""
+
+    with system_context(reason="tests.checklists.delete_verbs"):
+        other = Inspection.objects.create(name="Gantry", notes="")
+    _grant(other, "writer", world.writer)
+    _record(world, "owner", "passed", evidence=(world.report,))
+    _record(world, "signature", "risk")
+    with actor_context(world.writer):
+        supported = other.checklist_record("owner", "passed", evidence=(world.report,))
+        kept = other.checklist_record("totals", "conflict", evidence=(world.hidden,))
+    assert ChecklistResult.objects.delete_for_record(world.inspection) == 2
+    assert set(ChecklistResult._base_manager.values_list("pk", flat=True)) == {supported.pk, kept.pk}
+    assert ChecklistResult.objects.delete_supported_by(world.report) == 1
+    assert set(ChecklistResult._base_manager.values_list("pk", flat=True)) == {kept.pk}
+    assert set(ChecklistEvidence._base_manager.values_list("result_id", flat=True)) == {kept.pk}
+    with actor_context(world.outsider):
+        # The verbs read no ambient reader: an actor who cannot read the results still deletes them.
+        assert ChecklistResult.objects.delete_for_record(other) == 1
+    assert not ChecklistResult._base_manager.exists()
+
+
+def test_owner_delete_keeps_the_readers_scope_and_needs_an_actor(world: Any) -> None:
+    """The protected delete skips only the append-only guard: REBAC still scopes it and requires an actor."""
+
+    result = _record(world, "owner", "passed", evidence=(world.report,))
+    with actor_context(world.outsider):
+        assert ChecklistResult.objects.filter(pk=result.pk).owner_delete() == (0, {})
+    with pytest.raises(MissingActorError):
+        ChecklistResult.objects.filter(pk=result.pk).owner_delete()
+    assert ChecklistResult._base_manager.filter(pk=result.pk).exists()
+    assert ChecklistEvidence._base_manager.filter(result_id=result.pk).exists()
 
 
 def test_a_deleted_results_event_reaches_its_records_readers_without_the_result(
@@ -848,10 +889,10 @@ def test_edges_with_a_teardown_never_block_their_targets_deletion(db: None) -> N
     assert not ChecklistResult.blocks_target_delete(Inspection)
 
 
-def test_deleting_evidence_reads_the_policy_once_whatever_it_supports(world: Any) -> None:
-    """The edge index is read once per deletion; each supported result adds only its publication."""
+def test_deleting_evidence_costs_a_constant_per_supported_result(world: Any) -> None:
+    """The edge index is read once per deletion, not once per edge of every collected result."""
 
-    def deleting(results: int) -> tuple[int, int]:
+    def deleting(results: int) -> int:
         with system_context(reason="tests.checklists.delete_cost"):
             evidence = Report.objects.create(name=f"Survey {results}")
         _grant(evidence, "reader", world.writer)
@@ -859,15 +900,17 @@ def test_deleting_evidence_reads_the_policy_once_whatever_it_supports(world: Any
             _record(world, key, "passed", evidence=(evidence,))
         with system_context(reason="tests.checklists.delete_cost"), CaptureQueriesContext(connection) as captured:
             Report.objects.filter(pk=evidence.pk).delete()
-        return len(captured), sum("rebac_schemageneration" in query["sql"] for query in captured)
+        return len(captured)
 
     with system_context(reason="tests.checklists.delete_cost"):
         Report.objects.filter(pk=Report.objects.create(name="Warm").pk).delete()
-    (none, guards), (one, one_guards), (three, three_guards) = deleting(0), deleting(1), deleting(3)
-    assert guards == one_guards == three_guards
-    # One result read and the two deletes; then one record-view read per published deletion.
-    assert one - none <= 3
-    assert three - one <= 2
+    none, one, three = deleting(0), deleting(1), deleting(3)
+    # Each collected result runs every delete receiver once: its REBAC cleanup and audit row,
+    # its record-edge policy (RecordLink), the workflows run stop, the change publication and the
+    # timeline refresh, 14 statements. The first result also reads the results and deletes the
+    # rows. Before the edge index was read once per revision, each result cost 56.
+    assert one - none <= 20
+    assert three - one <= 2 * 14
 
 
 @pytest.mark.parametrize("deleted", ["child", "parent"])

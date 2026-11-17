@@ -80,10 +80,12 @@ definition checklists/evidence {
 Deleting an evidence record deletes every result it supports, even one with
 other links: the result's read depended on all of them, so it must not become
 readable to more people. Its item reads `not_checked` again. Deleting the
-checked record deletes its results. Both run through
-`ChecklistResultManager.delete_results` under a named system context (one read,
-two deletes, each deletion published), so whoever may delete the record needs no
-authority on its results.
+checked record deletes its results. Both run through the owner's delete verbs
+(`delete_supported_by` and `delete_for_record`) under a named system context,
+so whoever may delete the record needs no authority on its results. They delete
+through Django's collector: the links follow through their foreign key, and
+every delete receiver runs (REBAC cleanup, record-edge policy, the change event
+and the checked record's timeline refresh).
 
 ## Read
 

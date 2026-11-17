@@ -36,7 +36,6 @@ from django.contrib.contenttypes.fields import GenericForeignKey
 from django.contrib.contenttypes.models import ContentType
 from django.core import checks
 from django.db import models
-from rebac import generic_target
 from rebac.field_backing import canonical_model
 from rebac.resources import model_resource_type
 
@@ -134,7 +133,8 @@ class ChecklistResult(AppendOnlyModel, AuditMixin, RecordRefMixin, AngeeDataMode
     result was recorded. Rows are append-only: the latest row per item is its
     result. Merging the record keeps the rows on the merged record; deleting the
     record, or any record a result has as evidence, deletes the results through
-    :meth:`ChecklistResultManager.delete_results`.
+    :meth:`ChecklistResultManager.delete_for_record` and
+    :meth:`~ChecklistResultManager.delete_supported_by`.
     """
 
     sqid_prefix = "ckr_"
@@ -172,7 +172,7 @@ class ChecklistResult(AppendOnlyModel, AuditMixin, RecordRefMixin, AngeeDataMode
     def teardown_for_target(cls, target: models.Model) -> None:
         """Delete a deleted record's results and their evidence links, whoever deletes the record."""
 
-        cls.objects.delete_results(models.Q(**generic_target(target).lookups(cls, "record")))
+        cls.objects.delete_for_record(target)
 
     @classmethod
     def check(cls, **kwargs: Any) -> list[checks.CheckMessage]:
@@ -299,5 +299,4 @@ class ChecklistEvidence(DerivedFrom, concrete=True):
     def teardown_for_target(cls, target: models.Model) -> None:
         """Delete the results ``target`` is evidence of, with all their links, whoever deletes ``target``."""
 
-        supported = cls._base_manager.filter(**generic_target(target).lookups(cls, "record")).values("result_id")
-        _result_model().objects.delete_results(models.Q(pk__in=supported))
+        _result_model().objects.delete_supported_by(target)

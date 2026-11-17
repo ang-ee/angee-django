@@ -10,18 +10,19 @@ from django.core.exceptions import ImproperlyConfigured, ValidationError
 from django.db import models
 from rebac.managers import RebacQuerySet, TrackedQuerySet
 
-from angee.base.querysets import AngeeQuerySetMixin, ClosedUpdateQuerySet
+from angee.base.querysets import AngeeQuerySetMixin, ClosedUpdateQuerySet, OwnerDeleteQuerySet
 
 _ModelT = TypeVar("_ModelT", bound=models.Model)
 
 
-class _AppendOnlyWritesMixin(ClosedUpdateQuerySet[_ModelT]):
+class _AppendOnlyWritesMixin(ClosedUpdateQuerySet[_ModelT], OwnerDeleteQuerySet[_ModelT]):
     """The closed collection-write policy shared by the scoped and base querysets.
 
     ``owner_update``, ``owner_bulk_create`` and ``owner_delete`` are public,
     framework-protected APIs for domain owners that have already validated
     fields and predicates.
-    They skip this class's guard only, preserving every downstream guard.
+    They skip this class's guard only, preserving every downstream guard,
+    delete receiver and collector cascade.
     """
 
     def validate_insert(self) -> None:
@@ -53,18 +54,10 @@ class _AppendOnlyWritesMixin(ClosedUpdateQuerySet[_ModelT]):
 
         raise self.immutable_error("delete")
 
-    def owner_delete(self) -> int:
-        """Protected API: delete owner-checked rows in one statement, without the collector or its signals.
+    def raw_delete_error(self) -> ValidationError:
+        """Refuse raw deletion with the same model-labelled error as every closed write."""
 
-        The owner deletes the rows' dependents first and publishes each change itself.
-        """
-
-        return super()._raw_delete(self.db)
-
-    def _raw_delete(self, using: str | None) -> int:
-        """Reject direct SQL deletion through the queryset."""
-
-        raise self.immutable_error("_raw_delete")
+        return self.immutable_error("_raw_delete")
 
 
 class AppendOnlyQuerySet(_AppendOnlyWritesMixin[_ModelT], RebacQuerySet[_ModelT]):

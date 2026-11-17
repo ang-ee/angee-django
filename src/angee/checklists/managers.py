@@ -48,7 +48,6 @@ from angee.base.models.identity import public_id_for
 from angee.base.permissions import reader_queryset, require_rebac_queryset
 from angee.base.prefetch import InstancePrefetch
 from angee.base.querysets import AngeeQuerySet
-from angee.base.signals import publish_change
 from angee.checklists.contracts import ATTENTION_STATUSES, PASSING_STATUSES, Checklist, ChecklistStatus
 from angee.provenance.evidence import EvidenceReference, readable_records
 
@@ -759,24 +758,37 @@ class ChecklistResultManager[ResultT: ChecklistResult](_ChecklistResultManagerBa
                     )
         return result
 
-    def delete_results(self, which: models.Q) -> int:
-        """Delete the results ``which`` selects and their evidence links, publishing each deletion.
+    def delete_for_record(self, record: models.Model) -> int:
+        """Delete ``record``'s results, with their evidence links, whoever deletes the record.
 
-        The owner's teardowns call it when a checked record or an evidence record is
-        deleted: one read of the results, one delete of their links and one of the
-        results, under a named system context, so whoever deletes the record needs
-        no authority on its results. Returns the number of results deleted.
+        Only rows keyed on ``record`` itself: rows a merged-away record keeps under
+        its own identity stay. Returns the number of results deleted.
         """
 
-        with transaction.atomic(), system_context(reason="checklists.delete_results"):
-            doomed = list(self.model._base_manager.filter(which).order_by("pk"))
-            if not doomed:
-                return 0
-            for result in doomed:
-                publish_change(result, action="delete", update_fields=None)
-            ids = [result.pk for result in doomed]
-            cast(Any, _evidence_model()._base_manager.filter(result_id__in=ids)).owner_delete()
-            return int(cast(Any, self.model._base_manager.filter(pk__in=ids)).owner_delete())
+        return self._delete(self.for_record(record))
+
+    def delete_supported_by(self, evidence: models.Model) -> int:
+        """Delete every result ``evidence`` supports, with all their links, whoever deletes it.
+
+        A result with several links goes when any one goes: its read depended on
+        all of them. Returns the number of results deleted.
+        """
+
+        links = _evidence_model()._base_manager.filter(**generic_target(evidence).lookups(_evidence_model(), "record"))
+        return self._delete(self.filter(pk__in=links.values("result_id")))
+
+    def _delete(self, rows: ChecklistResultQuerySet[ResultT]) -> int:
+        """Delete the selected results through the owner delete, under a named system context.
+
+        The deleter of a record needs no authority on its results. Django's
+        collector removes their evidence links through the foreign key in batches,
+        and every delete receiver runs: REBAC cleanup, record-edge policy, the
+        change publication and the timeline's refresh of the checked record.
+        """
+
+        with system_context(reason="checklists.delete"):
+            _total, deleted = rows.owner_delete()
+        return deleted.get(self.model._meta.label, 0)
 
     def latest_readable(self, model: type[models.Model], record_ids: Sequence[Any], actor: Any) -> list[LatestResult]:
         """The latest readable result per item of each listed record, with its evidence, in one read.
