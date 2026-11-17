@@ -95,6 +95,7 @@ from angee.integrate.oauth.providers import OAuthProviderType
 from angee.integrate.registry import models_with
 from angee.integrate.signals import discovery_finished
 from angee.integrate.states import (
+    EXTERNAL_KEY_LENGTH,
     UNSET,
     ConflictKeep,
     LinkStatus,
@@ -4191,14 +4192,6 @@ class WebhookSubscription(OwnerMixin, AngeeDataModel, concrete=True):
         self.refresh_from_db(fields=("consecutive_failures",))
 
 
-EXTERNAL_KEY_LENGTH = 512
-"""The longest remote identity: a ``RecordLink.external_key``, and so a ``SyncStream.partition``.
-
-A child stream's partition is its container's external key, one fact, so both
-columns take this one length.
-"""
-
-
 class SyncStreamQuerySet[SyncStreamT: SyncStream](AngeeHistoryQuerySet[SyncStreamT]):
     """Chainable reads over stream epochs."""
 
@@ -4229,8 +4222,8 @@ class SyncStreamQuerySet[SyncStreamT: SyncStream](AngeeHistoryQuerySet[SyncStrea
     def retiring(self, stream: models.Model) -> Self:
         """The current child streams of ``stream`` with a pending retirement pass and a container still gone.
 
-        A container that observes again stops its child's pass; reopening is the
-        child's next declaration (:meth:`SyncStreamManager.bump_generation`).
+        A container that observes again pauses its child's pass, which the child's
+        reopening drops (:meth:`SyncStreamManager.bump_generation`).
         """
 
         return (
@@ -4769,10 +4762,15 @@ class RecordLinkQuerySet[RecordLinkT: RecordLink](AngeeHistoryQuerySet[RecordLin
         parents = self.filter(parent__isnull=True, absence_count__gt=0).unseen_since(started)
         return rows.filter(parent_id__in=parents.values("pk"))
 
-    def with_sync_evidence(self) -> Self:
-        """Load the protected application projection; state is already on the link."""
+    def with_sync_evidence(self, *, source_payload: bool = False) -> Self:
+        """Load the protected application projection; state is already on the link.
+
+        ``source_payload`` also loads the link's latest observation, for a caller
+        that compares it with a new one.
+        """
+        deferred = ("mapped_payload", "applied_base__source_payload")
         return self.select_related("applied_base", "parent", "stream").defer(
-            "source_payload", "mapped_payload", "applied_base__source_payload"
+            *deferred if source_payload else ("source_payload", *deferred)
         )
 
     def with_open_failures(self, *, include_source: bool = False) -> Self:

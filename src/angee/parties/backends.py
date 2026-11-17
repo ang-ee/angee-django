@@ -317,7 +317,7 @@ class DirectoryBackend(BridgeImpl, HttpClientMixin):
         (a statement), never a local change.
         """
 
-        rows = stream.links.select_related("applied_base").defer("applied_base__source_payload").order_by("pk")
+        rows = stream.links.with_sync_evidence(source_payload=True).order_by("pk")
         links = {link.external_key: link for link in rows}
         listed = {book.href: book for book in books}
         baseline = stream.phase == StreamPhase.BASELINE

@@ -31,6 +31,7 @@ from angee.integrate.errors import IntegrationError
 from angee.integrate.impl import AdapterContractError, BridgeImpl
 from angee.integrate.models import merge_json_state
 from angee.integrate.states import (
+    EXTERNAL_KEY_LENGTH,
     LinkStatus,
     StreamDefinition,
     StreamDirection,
@@ -2456,7 +2457,7 @@ def test_a_container_missing_from_a_listing_pauses_its_stream_until_its_absence_
     assert RecordLink.objects.get(stream=held).status == LinkStatus.TOMBSTONE
 
 
-def test_a_container_that_returns_stops_the_retirement_pass_of_its_streams(
+def test_a_container_that_returns_pauses_the_retirement_pass_until_its_stream_reopens(
     stream_bridge: Channel, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     adapter = ShelfAdapter(stream_bridge, shelves={"a": ["x", "y"]})
@@ -2471,13 +2472,18 @@ def test_a_container_that_returns_stops_the_retirement_pass_of_its_streams(
         RecordLink.objects.revalidate(shelf)
 
     assert not SyncStream.objects.retiring(shelves).exists()
-    assert reconcile_stream(held, adapter) == 0
+    pending = SyncStream.objects.get(pk=held.pk).reconcile_state
+    assert pending and reconcile_stream(held, adapter) == 0
     held.refresh_from_db()
-    assert (held.state, held.reconcile_state) == (StreamState.RETIRED, {})
+    assert (held.state, held.reconcile_state) == (StreamState.RETIRED, pending)  # Paused, not dropped.
     assert set(RecordLink.objects.filter(stream=held).values_list("status", "absence_count")) == {
         (LinkStatus.CURRENT, 0)
     }
     assert adapter.absent == []
+
+    sync_bridge(stream_bridge)  # The live shelf declares its books again, which reopens them.
+    held.refresh_from_db()
+    assert held.reconcile_state == {} and _books(stream_bridge, "a").state == StreamState.OPEN
 
 
 def test_retirement_closes_the_open_failures_of_the_links_it_tombstones(
@@ -2510,6 +2516,10 @@ class OrderedShelfAdapter(ShelfAdapter):
     def finish_page(self, stream: Any, page: StreamPage, outcomes: Any) -> None:
         self.events.append(f"applied {stream.key}")
 
+    def on_absent(self, stream: Any, links: Sequence[Any]) -> None:
+        self.events.append(f"absent {stream.partition}")
+        super().on_absent(stream, links)
+
 
 @pytest.mark.skipif(connection.vendor != "postgresql", reason="Parallel stream partitions require PostgreSQL.")
 def test_a_parallel_wave_starts_a_held_stream_after_its_container_stream_finishes(
@@ -2528,4 +2538,64 @@ def test_a_parallel_wave_starts_a_held_stream_after_its_container_stream_finishe
     assert all(index > applied for index, event in enumerate(adapter.events) if event == "extract books")
     assert ("books", "a") not in adapter.extracted
     assert _books(stream_bridge, "a").state == StreamState.OPEN
+
+
+def test_an_identity_longer_than_a_link_key_is_refused_once_at_the_stream(stream_bridge: Channel) -> None:
+    stream = current_stream(stream_bridge, "contacts", kind=StreamKind.RECORD_REPLICA)
+    long_key = "k" * (EXTERNAL_KEY_LENGTH + 1)
+    records = [
+        RecordChange(key, {"name": key[:8]}, f"hash-{len(key)}", mapped_payload={"name": key[:8]})
+        for key in (long_key, "person:1")
+    ]
+    again = [records[0], replace(records[1], projection=records[1].mapped_payload)]
+    adapter = MemoryAdapter(pages=[StreamPage(records, {"page": 1}), StreamPage(again, {"page": 2})])
+    for _cycle in range(2):
+        result = advance_stream(stream, adapter)
+        assert (result.count, len(result.failure_ids)) == (1 if _cycle == 0 else 0, 1)
+        stream = result.stream
+    assert list(RecordLink.objects.filter(stream=stream).values_list("external_key", flat=True)) == ["person:1"]
+    (refusal,) = SyncStream.objects.get(pk=stream.pk).sync_failures(open_only=True)
+    assert (refusal.code, refusal.link_id, refusal.attempts) == ("identity_too_long", None, 2)
+
+
+def test_no_partition_is_opened_or_read_after_the_deadline(
+    stream_bridge: Channel, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    adapter = ShelfAdapter(stream_bridge, shelves={"a": ["x"]})
+    monkeypatch.setattr(Channel, "capability_impl", property(lambda self: adapter))
+    stream_bridge.config = {**stream_bridge.config, "sync_time_budget": 0}
+    assert sync_bridge(stream_bridge) == 0
+    assert adapter.extracted == []
+    assert not SyncStream.objects.filter(integration_id=stream_bridge.pk).exists()
+
+
+def test_a_retirement_backlog_runs_after_the_sibling_streams_drain(
+    stream_bridge: Channel, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    adapter = OrderedShelfAdapter(stream_bridge, shelves={"a": [f"x{index}" for index in range(6)], "b": ["y"]})
+    monkeypatch.setattr(Channel, "capability_impl", property(lambda self: adapter))
+    sync_bridge(stream_bridge)
+    adapter.events.clear()
+    adapter.shelves.pop("a")
+
+    sync_bridge(stream_bridge)
+    assert adapter.events.index("extract books") < adapter.events.index("absent a")
+    assert adapter.absent == [("a", tuple(f"a/x{index}" for index in range(6)))]
+    assert _books(stream_bridge, "a").reconcile_state == {}
+
+
+def test_a_self_held_declaration_fails_fast(stream_bridge: Channel, monkeypatch: pytest.MonkeyPatch) -> None:
+    books = current_stream(stream_bridge, "books", "a", kind=StreamKind.RECORD_REPLICA)
+    own = RecordLink.objects.observe(books, "a", target=books)
+
+    @dataclass
+    class SelfHeld(ShelfAdapter):
+        def streams(self, *, deadline: float | None = None) -> Iterable[StreamDefinition]:
+            yield StreamDefinition("books", "a", kind=StreamKind.RECORD_REPLICA, container=own)
+
+    adapter = SelfHeld(stream_bridge)
+    monkeypatch.setattr(Channel, "capability_impl", property(lambda self: adapter))
+    with pytest.raises(AdapterContractError, match="cycle"):
+        sync_bridge(stream_bridge)
+    assert adapter.extracted == []
 

@@ -24,6 +24,13 @@ if TYPE_CHECKING:
 UNSET = object()
 """Omitted record binding; ``None`` explicitly clears the target."""
 
+EXTERNAL_KEY_LENGTH = 512
+"""The longest remote identity: a ``RecordLink.external_key``, and so a ``SyncStream.partition``.
+
+A child stream's partition is its container's external key, one fact, so both
+columns take this one length; the driver refuses a longer record identity.
+"""
+
 
 class StreamKind(models.TextChoices):
     """Whether a stream carries append-only events or mutable replicas."""

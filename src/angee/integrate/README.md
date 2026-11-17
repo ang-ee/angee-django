@@ -98,6 +98,8 @@ it ([`SyncStreamManager.retire_children`](models.py)); the retirement pass
 tombstones the child's links and deletes nothing. The
 [driver](streams.py) (`sync_bridge`) owns ordering, deadlines and re-declaration.
 
+A replica identity longer than [`EXTERNAL_KEY_LENGTH`](states.py) can hold no link: the
+driver records one coalesced stream failure for it, and the rest of the page applies.
 Several inbound problems can coexist. For one record link, new source or mapping
 evidence closes older versions of the same non-conflict problem while retaining
 their history. Stream-level event failures remain independent.

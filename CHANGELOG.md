@@ -17,7 +17,9 @@ live in code docstrings.
   immutable on the model; a stream declared before containers existed adopts it
   once. The parent declares `holds_containers` (`SyncStream.holds_containers`).
   `SyncStream.partition` widens to 512 characters: a child's partition is its
-  container's external key, so both take `integrate.models.EXTERNAL_KEY_LENGTH`.
+  container's external key, so both take `integrate.states.EXTERNAL_KEY_LENGTH`;
+  the driver refuses a longer replica identity once, as a coalesced stream
+  failure, and the page goes on.
   `RecordLinkQuerySet.observing_rule()` and `live_container_rule()` (observing,
   bound to a target, no absence counted) are the one rule for joined reads,
   `observing()`, `live_containers()` and `containers_of(bridge, key)` apply it.
@@ -29,14 +31,17 @@ live in code docstrings.
   (`SyncStreamManager.retire_children`); a bounded, resumable pass over
   `reconcile_state` then tombstones the child's links and closes their open
   failures (`RecordLinkManager.mark_absent(..., confirmed=True)`) with
-  `on_absent`, nothing is deleted, and the pass stops once the container
-  observes again. `mark_absent` now returns the links whose status changed.
+  `on_absent`, nothing is deleted, and the pass pauses while the container
+  observes again (reopening drops it). `mark_absent` now returns the links whose
+  status changed.
   `bump_generation` reopens a retired generation only while its container is
   live, and `reset_stream` reports a retired one exhausted. `sync_bridge` drains
   every declared partition in its first wave, a container-held partition only
-  after the stream holding its container (in order, or concurrently once that
-  stream finished), declares again only after a container-holding stream gained a
-  live container, and starts no wave after its deadline. New
+  after the stream holding its container applied its pages and sweep (in holder
+  depth order, or concurrently once that worker finished), runs the holders'
+  retirement passes last, declares again only after a container-holding stream
+  gained a live container, and opens no partition and starts no wave after its
+  deadline. A cyclic or self-held container declaration fails fast. New
   `RecordLinkQuerySet.observing()` and `SyncStreamQuerySet.latest_generations()`.
   A page of a superseded generation is refused as a "superseded stream generation".
   `ImmutableFieldsMixin` checks only the immutable fields a partial save's

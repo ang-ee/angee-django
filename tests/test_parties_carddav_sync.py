@@ -2657,6 +2657,20 @@ def test_a_removed_address_book_pauses_its_contacts_then_retires_them_once_its_a
     assert Person.objects.filter(pk=person.pk).exists() and Folder.objects.filter(pk=folder.pk).exists()
 
 
+def test_a_listed_href_longer_than_a_link_key_is_refused_while_the_directory_syncs(replica: Replica) -> None:
+    replica.baseline()
+    long_book = f"{_BASE}books/{'x' * 600}/"
+    replica.server.books[long_book] = "Too long"
+    replica.server.store(f"{_BOOK}grace.vcf", _card(uid="grace", name="Grace Hopper"))
+
+    for _cycle in range(2):
+        sync_bridge(replica.directory)
+    assert RecordLink.objects.get(stream=replica.stream, external_key="grace").target.display_name == "Grace Hopper"
+    assert not RecordLink.objects.filter(stream=replica.addressbooks, external_key=long_book).exists()
+    (refusal,) = SyncStream.objects.get(pk=replica.addressbooks.pk).sync_failures(open_only=True)
+    assert (refusal.code, refusal.link_id) == ("identity_too_long", None)
+
+
 def test_a_failed_discovery_raises_and_leaves_every_address_book_in_place(
     replica: Replica, monkeypatch: pytest.MonkeyPatch
 ) -> None:
