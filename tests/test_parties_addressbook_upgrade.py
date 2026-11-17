@@ -22,17 +22,18 @@ from angee.integrate.states import LinkStatus, StreamDirection, StreamKind, Stre
 from angee.integrate.streams import advance_stream, sync_bridge
 from angee.integrate.testing.http import mock_transport
 from angee.integrate.testing.models import RecordLink, SyncStream
-from angee.messaging.testing.models import Directory, Folder, Person
+from angee.messaging.testing.models import Directory, Folder, Person, RelationshipKind
 from angee.parties.compose_migrations.parties import addressbook_links
 from angee.parties_integrate_carddav.backend import CardDavDirectoryBackend
 from tests.conftest import current_stream, make_integration
-from tests.test_parties_carddav_sync import _BASE, _BOOK, FakeDav
+from tests.test_parties_carddav_sync import _BASE, _BOOK, FakeDav, _card
 
 pytestmark = pytest.mark.django_db(transaction=True)
 
 _STALE = f"{_BASE}books/stale/"
 _OTHER = f"{_BASE}books/other/"
 _LONG = f"{_BASE}books/{'x' * 600}/"
+_WIDE = f"{_BASE}books/{'w' * 373}/"  # 400 characters: longer than the old 255-character partition.
 _NAME = "0099_addressbook_links"
 
 
@@ -67,15 +68,23 @@ def _todays_rows(config: dict[str, Any]) -> dict[str, Any]:
         )
         for name in ("one", "two")
     )
+    RelationshipKind.objects.create(  # The master row contact ingestion reads.
+        slug="employee", name="Employee", inverse_name="Employer", category="professional",
+        other_party_kind="organization",
+    )
     folders = {
         name: Folder._base_manager.create(name=name.title(), directory=directory, created_by=directory.owner)
-        for name, directory in (("contacts", one), ("stale", one), ("other", two), ("manual", one), ("long", one))
+        for name, directory in (
+            ("contacts", one), ("stale", one), ("other", two), ("manual", one), ("long", one), ("wide", one)
+        )
     }
     # The synced book's contacts reach a delta cursor through a scaffold container, then lose it.
     scaffold = current_stream(one, "addressbooks", kind=StreamKind.RECORD_REPLICA)
     holder = RecordLink.objects.observe(scaffold, _BOOK, target=folders["contacts"])
     backend = CardDavDirectoryBackend(one)
     contacts = advance_stream(SyncStream.objects.current(one, backend.contacts_stream(holder)), backend).stream
+    synced = RecordLink.objects.get(stream=contacts, external_key="ada")
+    assert (synced.status, synced.target.display_name) == (LinkStatus.CURRENT, "Ada Lovelace")
     SyncStream._base_manager.filter(pk=contacts.pk).update(container=None, last_reconciled_at=timezone.now())
     RecordLink._base_manager.filter(pk=holder.pk).delete()
     SyncStream._base_manager.filter(pk=scaffold.pk).delete()
@@ -96,7 +105,11 @@ def _snapshot(rows: dict[str, Any]) -> tuple[Any, ...]:
 
 
 def _upgrade_round_trip(caplog: pytest.LogCaptureFixture, config: dict[str, Any]) -> None:
+    assert len(_WIDE) == 400
+    assert SyncStream._meta.get_field("partition").max_length == RecordLink._meta.get_field("external_key").max_length
     server = FakeDav()
+    server.books[_WIDE] = "Wide"
+    server.store(f"{_WIDE}wide.vcf", _card(uid="wide", name="Wide Person"))
     executor = MigrationExecutor(connection)
     migration = addressbook_links.Migration(_NAME, "parties")
     with system_context(reason="test address-book upgrade"), mock_transport(server.handle_request):
@@ -104,7 +117,7 @@ def _upgrade_round_trip(caplog: pytest.LogCaptureFixture, config: dict[str, Any]
         before = _legacy_state()
         legacy_columns = True
         try:
-            hrefs = {"contacts": _BOOK, "stale": _STALE, "other": _OTHER, "long": _LONG}
+            hrefs = {"contacts": _BOOK, "stale": _STALE, "other": _OTHER, "long": _LONG, "wide": _WIDE}
             legacy = before.apps.get_model("parties", "Folder")
             for name, href in hrefs.items():
                 legacy._base_manager.filter(pk=rows["folders"][name].pk).update(source_href=href)
@@ -114,7 +127,10 @@ def _upgrade_round_trip(caplog: pytest.LogCaptureFixture, config: dict[str, Any]
             executor.apply_migration(before.clone(), migration)
             legacy_columns = False
 
-            expected = ((rows["one"], {_BOOK: "contacts", _STALE: "stale"}), (rows["two"], {_OTHER: "other"}))
+            expected = (
+                (rows["one"], {_BOOK: "contacts", _STALE: "stale", _WIDE: "wide"}),
+                (rows["two"], {_OTHER: "other"}),
+            )
             for directory, books in expected:
                 (addressbooks,) = SyncStream.objects.current_for_bridge(directory, "addressbooks")
                 assert (addressbooks.kind, addressbooks.direction) == (StreamKind.RECORD_REPLICA, StreamDirection.PULL)
@@ -124,7 +140,8 @@ def _upgrade_round_trip(caplog: pytest.LogCaptureFixture, config: dict[str, Any]
                 }
                 for href, link in links.items():
                     held = SyncStream._base_manager.filter(integration_id=directory.pk, key="contacts", partition=href)
-                    assert set(held.values_list("container_id", flat=True)) == {link.pk}
+                    # The wide book's contacts stream could not exist before the partition widened.
+                    assert set(held.values_list("container_id", flat=True)) == (set() if href == _WIDE else {link.pk})
             for unadopted in ("manual", "long"):
                 assert not RecordLink.objects.filter(target_object_id=str(rows["folders"][unadopted].pk)).exists()
             long_folder = rows["folders"]["long"].pk
@@ -134,8 +151,13 @@ def _upgrade_round_trip(caplog: pytest.LogCaptureFixture, config: dict[str, Any]
             assert _snapshot(rows) == kept
 
             server.requests.clear()
-            assert sync_bridge(rows["one"]) == 1  # The listed book states its name once; no card is fetched.
-            assert not [request for request in server.requests if "addressbook-multiget" in request[3]]
+            # Both listed books state their names once; only the wide book's new contacts stream fetches a card.
+            assert sync_bridge(rows["one"]) == 3
+            fetched = [request[1] for request in server.requests if "addressbook-multiget" in request[3]]
+            assert _BOOK not in fetched
+            wide = SyncStream.objects.current_for_bridge(rows["one"], "contacts").get(partition=_WIDE)
+            assert wide.container == RecordLink.objects.get(stream__key="addressbooks", external_key=_WIDE)
+            assert RecordLink.objects.get(stream=wide, external_key="wide").target.display_name == "Wide Person"
             assert not [request for request in server.requests if request[1].startswith(_STALE)]
             stale = RecordLink.objects.get(stream__key="addressbooks", external_key=_STALE)
             stale_contacts = SyncStream.objects.current_for_bridge(rows["one"], "contacts").get(partition=_STALE)
@@ -148,7 +170,8 @@ def _upgrade_round_trip(caplog: pytest.LogCaptureFixture, config: dict[str, Any]
             stale.refresh_from_db()
             stale_contacts.refresh_from_db()
             assert (stale.status, stale_contacts.state) == (LinkStatus.TOMBSTONE, StreamState.RETIRED)
-            assert list(Person.objects.order_by("pk").values_list("pk", "display_name")) == kept[2]
+            people = Person.objects.exclude(display_name="Wide Person").order_by("pk")
+            assert list(people.values_list("pk", "display_name")) == kept[2]
 
             executor.unapply_migration(before.clone(), migration)
             legacy_columns = True
@@ -158,6 +181,7 @@ def _upgrade_round_trip(caplog: pytest.LogCaptureFixture, config: dict[str, Any]
                 "Other": _OTHER,
                 "Manual": "",
                 "Long": "",
+                "Wide": _WIDE,
             }
         finally:
             if legacy_columns:

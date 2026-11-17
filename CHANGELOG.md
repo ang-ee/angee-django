@@ -16,6 +16,8 @@ live in code docstrings.
   holds the partition; the partition is its external key. The container is
   immutable on the model; a stream declared before containers existed adopts it
   once. The parent declares `holds_containers` (`SyncStream.holds_containers`).
+  `SyncStream.partition` widens to 512 characters: a child's partition is its
+  container's external key, so both take `integrate.models.EXTERNAL_KEY_LENGTH`.
   `RecordLinkQuerySet.observing_rule()` and `live_container_rule()` (observing,
   bound to a target, no absence counted) are the one rule for joined reads,
   `observing()`, `live_containers()` and `containers_of(bridge, key)` apply it.
@@ -60,8 +62,8 @@ live in code docstrings.
   beside `LinkedRecordMixin`, the `record_links` relation `Party` composes;
   `Folder` composes `StatedRecordMixin`. A source backend implements `discover`,
   `extract_contacts` and `read_contacts`.
-  Upgrade: a host runs `makemigrations integrate` for the container and
-  `holds_containers` columns, copies the migration template
+  Upgrade: a host runs `makemigrations integrate` for the `container` and
+  `holds_containers` columns and the widened `partition`, copies the migration template
   `src/angee/parties/compose_migrations/parties/addressbook_links.py` into
   `runtime/parties/migrations/` and pins its placeholder dependencies to its own
   leaves, then runs `makemigrations` for the folder's history and statement

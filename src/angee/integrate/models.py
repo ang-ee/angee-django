@@ -4191,6 +4191,14 @@ class WebhookSubscription(OwnerMixin, AngeeDataModel, concrete=True):
         self.refresh_from_db(fields=("consecutive_failures",))
 
 
+EXTERNAL_KEY_LENGTH = 512
+"""The longest remote identity: a ``RecordLink.external_key``, and so a ``SyncStream.partition``.
+
+A child stream's partition is its container's external key, one fact, so both
+columns take this one length.
+"""
+
+
 class SyncStreamQuerySet[SyncStreamT: SyncStream](AngeeHistoryQuerySet[SyncStreamT]):
     """Chainable reads over stream epochs."""
 
@@ -4530,7 +4538,7 @@ class SyncStream(ImmutableFieldsMixin, SyncStateMixin, AuditMixin, AngeeDataMode
     immutable_fields = ("container_id",)
     integration = models.ForeignKey("integrate.Integration", on_delete=models.PROTECT, related_name="sync_streams")
     key = models.CharField(max_length=160)
-    partition = models.CharField(max_length=255, blank=True)
+    partition = models.CharField(max_length=EXTERNAL_KEY_LENGTH, blank=True)
     container = models.ForeignKey(
         "integrate.RecordLink", null=True, blank=True, on_delete=models.PROTECT, related_name="child_streams"
     )
@@ -5127,7 +5135,7 @@ class RecordLink(
         return bool(self.stream.authoritative)
 
     parent = models.ForeignKey("self", null=True, blank=True, on_delete=models.PROTECT, related_name="children")
-    external_key = models.CharField(max_length=512)
+    external_key = models.CharField(max_length=EXTERNAL_KEY_LENGTH)
     asserted_by = models.TextField(blank=True, editable=False)
     target_content_type = models.ForeignKey(
         ContentType, null=True, blank=True, on_delete=models.PROTECT, related_name="+"
