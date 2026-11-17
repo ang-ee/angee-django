@@ -1,6 +1,7 @@
 """GraphQL schema contributions for Angee tags.
 
-Exposed on the admin console. :class:`Tag` gets ordinary CRUD; the polymorphic
+Exposed on the admin console. :class:`Tag` and :class:`TagCategory` get ordinary
+CRUD, and a tag's ``category`` is written by the category's public id; the polymorphic
 :class:`TagAssignment` edge is **not** an ordinary resource insert, so it is
 written through the authored ``tag`` / ``untag`` mutations and read through the
 authored ``tag_assignments`` query — all thin dispatchers into
@@ -45,15 +46,30 @@ from angee.tags.models import TagAssignmentQuerySet
 
 Tag = apps.get_model("tags", "Tag")
 TagAssignment = apps.get_model("tags", "TagAssignment")
+TagCategory = apps.get_model("tags", "TagCategory")
+
+
+@strawberry_django.type(TagCategory)
+class TagCategoryType(AngeeNode):
+    """Admin projection of one tag category: its name, order and per-record maximum."""
+
+    name: auto
+    description: auto
+    position: auto
+    max_per_record: auto
+    is_archived: auto
+    created_at: auto
+    updated_at: auto
 
 
 @strawberry_django.type(Tag)
 class TagType(AngeeNode):
-    """Admin projection of one tag in the vocabulary."""
+    """Admin projection of one tag in the vocabulary, with its category as a display node."""
 
     name: auto
     color: auto
     attention: auto
+    category: TagCategoryType | None
     is_archived: auto
     created_at: auto
     updated_at: auto
@@ -188,6 +204,7 @@ _TAG_BASE_WRITABLE_FIELDS = (
     "name",
     "color",
     "attention",
+    "category",
     "is_archived",
 )
 
@@ -196,16 +213,28 @@ _TAG_RESOURCE = hasura_model_resource(
     model=Tag,
     name="tags",
     get_queryset=lambda info: Tag.objects.canonical(),
-    filterable=["id", "name", "attention", "is_archived", *_TAG_EXTENSION_FILTER_FIELDS],
+    filterable=["id", "name", "attention", "category", "is_archived", *_TAG_EXTENSION_FILTER_FIELDS],
     sortable=["name", "created_at", "updated_at", *_TAG_EXTENSION_ORDER_FIELDS],
     aggregatable=["id", *_TAG_EXTENSION_AGGREGATE_FIELDS],
-    groupable=["attention", "is_archived", *_TAG_EXTENSION_GROUP_FIELDS],
+    groupable=["attention", "category", "is_archived", *_TAG_EXTENSION_GROUP_FIELDS],
     insertable=[*_TAG_BASE_WRITABLE_FIELDS, *_TAG_EXTENSION_INSERT_FIELDS],
     updatable=[*_TAG_BASE_WRITABLE_FIELDS, *_TAG_EXTENSION_UPDATE_FIELDS],
     write_backend=AngeeHasuraWriteBackend(
         Tag,
-        public_id_fields=_TAG_EXTENSION_PUBLIC_ID_FIELDS,
+        public_id_fields=("category", *_TAG_EXTENSION_PUBLIC_ID_FIELDS),
     ),
+    id_column="sqid",
+)
+
+_TAG_CATEGORY_RESOURCE = hasura_model_resource(
+    TagCategoryType,
+    model=TagCategory,
+    name="tag_categories",
+    filterable=["id", "name", "is_archived"],
+    sortable=["position", "name", "created_at", "updated_at"],
+    aggregatable=["id"],
+    groupable=["is_archived"],
+    writable=["name", "description", "position", "max_per_record", "is_archived"],
     id_column="sqid",
 )
 
@@ -243,8 +272,14 @@ class TagMutation:
 
 schemas = {
     "console": {
-        "query": [TagQuery, _TAG_RESOURCE.query],
-        "mutation": [TagMutation, _TAG_RESOURCE.mutation],
-        "types": [TagType, TagAssignmentType, *_TAG_RESOURCE.types],
+        "query": [TagQuery, _TAG_RESOURCE.query, _TAG_CATEGORY_RESOURCE.query],
+        "mutation": [TagMutation, _TAG_RESOURCE.mutation, _TAG_CATEGORY_RESOURCE.mutation],
+        "types": [
+            TagType,
+            TagCategoryType,
+            TagAssignmentType,
+            *_TAG_RESOURCE.types,
+            *_TAG_CATEGORY_RESOURCE.types,
+        ],
     },
 }

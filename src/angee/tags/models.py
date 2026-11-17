@@ -5,10 +5,13 @@ polymorphic edge attaching a tag to a record of a taggable type: a
 ``content_type``/``object_id`` pair with a
 :class:`~django.contrib.contenttypes.fields.GenericForeignKey` ``target``, stored
 at :func:`rebac.generic_target`. Tags reach every taggable model without a FK
-back to it.
+back to it. A :class:`TagCategory` groups tags in a manual order and may cap how
+many of its tags one record holds; a tag sits in at most one category, and an
+uncategorised tag stays valid.
 
-**Scope.** Tags are reference vocabulary readable by every non-anonymous actor
-through the native ``authenticated`` permission; tag administrators curate it.
+**Scope.** Tags and their categories are reference vocabulary readable by every
+non-anonymous actor through the native ``authenticated`` permission; tag
+administrators curate it.
 A tag assignment is authorized by the record it tags (``permissions.zed``):
 adding or removing a tag needs the record owner's declared tag authority, and an
 assignment is visible to whoever reads both the tag and the record.
@@ -32,18 +35,21 @@ same content type the write used (the placement invariant in
 
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Iterable, Sequence
 from operator import attrgetter
 from typing import Any, Self
 
+from django.apps import apps
 from django.contrib.contenttypes.fields import GenericForeignKey, GenericRelation
 from django.contrib.contenttypes.models import ContentType
 from django.core import checks
-from django.db import models
+from django.core.exceptions import NON_FIELD_ERRORS, ValidationError
+from django.db import models, router, transaction
 from rebac import GenericTarget, generic_target
 from rebac.field_backing import canonical_model
 from rebac.resources import model_for_resource_type, model_resource_type
 
+from angee.base.fields.ordering import FractionalRankField
 from angee.base.fields.text import ColorField
 from angee.base.models.audit import AuditMixin
 from angee.base.models.base import AngeeDataModel
@@ -55,10 +61,82 @@ from angee.base.models.refs import RecordRefMixin
 from angee.base.models.roles import role_anchor
 from angee.base.models.trash import ArchiveMixin, ArchiveQuerySet
 from angee.base.permissions import declared_rebac_definition
-from angee.base.querysets import MergeableQuerySet
+from angee.base.querysets import MergeableQuerySet, row_lock_paths
 from angee.provenance.contrib.angee.history import HistoryMixin
 from angee.provenance.contrib.angee.managers import AngeeHistoryManager, AngeeHistoryMergeableUnscopedManager
 from angee.provenance.contrib.angee.querysets import AngeeHistoryQuerySet
+
+
+class TagCategoryQuerySet[CategoryT: TagCategory](ArchiveQuerySet[CategoryT], AngeeHistoryQuerySet[CategoryT]):
+    """Archive read scopes layered over the REBAC-scoped category queryset."""
+
+
+TagCategoryManager = AngeeHistoryManager.from_queryset(TagCategoryQuerySet)
+
+
+class TagCategory(HistoryMixin, ArchiveMixin, AngeeDataModel, concrete=True):
+    """A named, manually ordered group of tags, shared like the tags themselves.
+
+    Every taggable type can carry a category's tags; a category narrows no model.
+    ``max_per_record`` caps how many of its tags one record holds, which
+    :meth:`TagAssignmentManager.require_category_maximum` judges on every write
+    that can raise a record's count. Deleting a category leaves its tags
+    uncategorised.
+    """
+
+    sqid_prefix = "tgc_"
+
+    name = models.CharField(max_length=128)
+    description = models.TextField(blank=True, default="")
+    position = FractionalRankField()
+    max_per_record = models.PositiveSmallIntegerField(null=True, blank=True)
+    """The most tags of this category one record may hold; ``None`` sets no maximum."""
+
+    objects = TagCategoryManager()
+
+    class Meta:
+        """Django model options for a tag category."""
+
+        abstract = True
+        ordering = ("position", "name", "sqid")
+        rebac_resource_type = "tags/tag_category"
+        verbose_name_plural = "tag categories"
+        constraints = (
+            models.UniqueConstraint(fields=("position",), name="%(app_label)s_category_position"),
+            models.CheckConstraint(
+                condition=models.Q(max_per_record__isnull=True) | models.Q(max_per_record__gte=1),
+                name="%(app_label)s_category_max_per_record_positive",
+                violation_error_message="A category's maximum per record is at least one tag.",
+            ),
+        )
+
+    def __str__(self) -> str:
+        """Return the category name for Django displays."""
+
+        return self.name
+
+    def save(self, *args: Any, **kwargs: Any) -> None:
+        """Save the category; a written maximum must already hold on every record it tags.
+
+        Lowering the maximum below what a record holds is refused, and the save
+        rolls back.
+        """
+
+        update_fields = kwargs.get("update_fields")
+        judged = (
+            not self._state.adding
+            and self.max_per_record is not None
+            and (update_fields is None or "max_per_record" in update_fields)
+        )
+        with transaction.atomic(using=kwargs.get("using") or router.db_for_write(type(self), instance=self)):
+            super().save(*args, **kwargs)
+            if judged:
+                assignment_model = apps.get_model(self._meta.app_label, "TagAssignment")
+                assert issubclass(assignment_model, TagAssignment)
+                assignment_model.objects.require_category_maximum(
+                    models.Q(tag__category=self.pk),
+                    field="max_per_record",
+                )
 
 
 class TagQuerySet[TagT: Tag](
@@ -82,7 +160,15 @@ class Tag(HistoryMixin, MergeableMixin, ArchiveMixin, AngeeDataModel, concrete=T
     name = models.CharField(max_length=128)
     color = ColorField(max_length=32, blank=True, default="")
     attention = models.BooleanField(default=False, db_index=True)
-    """Whether assignments of this tag belong in a record's attention cluster."""
+    """Whether this tag marks a record for attention, beside the record's open decisions."""
+    category = models.ForeignKey(
+        "tags.TagCategory",
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="tags",
+    )
+    """The one category this tag is filed under; ``None`` leaves it uncategorised."""
 
     objects = TagManager()
 
@@ -97,6 +183,49 @@ class Tag(HistoryMixin, MergeableMixin, ArchiveMixin, AngeeDataModel, concrete=T
         """Return the tag name for Django displays."""
 
         return self.name
+
+    def save(self, *args: Any, **kwargs: Any) -> None:
+        """Save the tag; filing it into a category must keep every record it tags within that maximum.
+
+        A save that writes ``category`` re-judges the category's records, and a
+        refusal rolls the save back.
+        """
+
+        update_fields = kwargs.get("update_fields")
+        judged = (
+            not self._state.adding
+            and self.category_id is not None
+            and (update_fields is None or bool({"category", "category_id"} & set(update_fields)))
+        )
+        with transaction.atomic(using=kwargs.get("using") or router.db_for_write(type(self), instance=self)):
+            super().save(*args, **kwargs)
+            if judged:
+                assignment_model = apps.get_model(self._meta.app_label, "TagAssignment")
+                assert issubclass(assignment_model, TagAssignment)
+                assignment_model.objects.require_category_maximum(
+                    models.Q(tag__category=self.category_id),
+                    field="category",
+                )
+
+    def validate_merge(self, merged: Sequence[Self]) -> None:
+        """Refuse merging tags filed elsewhere into a tag whose category sets a maximum.
+
+        A merge moves the merged tags' assignments onto this tag, so their records
+        gain a tag of this tag's category. File those tags into the category first,
+        where the maximum is judged, then merge: a merge within one category only
+        collapses tags, so no record's count rises.
+        """
+
+        super().validate_merge(merged)
+        if self.category_id is None or all(record.category_id == self.category_id for record in merged):
+            return
+        category = apps.get_model(self._meta.app_label, "TagCategory")._base_manager.get(pk=self.category_id)
+        assert isinstance(category, TagCategory)
+        if category.max_per_record is not None:
+            raise ValidationError(
+                f"File the merged tags under {category} before merging them into {self}: "
+                f"a record may hold at most {category.max_per_record} of its tags."
+            )
 
 
 class TagAssignmentQuerySet[AssignmentT: TagAssignment](AngeeHistoryQuerySet[AssignmentT]):
@@ -118,7 +247,7 @@ _TagAssignmentManagerBase = AngeeHistoryManager.from_queryset(TagAssignmentQuery
 
 
 class TagAssignmentManager[AssignmentT: TagAssignment](_TagAssignmentManagerBase[AssignmentT]):
-    """Owns the polymorphic tag edge: target resolution, attach, detach, and set.
+    """Owns the polymorphic tag edge: target resolution, attach, detach, set, and the category maximum.
 
     Every read and write runs under the ambient actor. The target and each tag
     resolve through REBAC-scoped lookups, which fail fast on a row the actor
@@ -162,6 +291,8 @@ class TagAssignmentManager[AssignmentT: TagAssignment](_TagAssignmentManagerBase
         Fails fast with :class:`ValueError` on an unresolvable target or tag (an
         unreadable row is indistinguishable from a missing one, by design); the
         edge's ``create`` gate enforces the target owner's declared tag authority.
+        Under the target row's lock, a result over a category's maximum is refused
+        (:meth:`require_category_maximum`) and nothing is attached.
         """
 
         target = self.resolve_target(target_type, target_id)
@@ -169,7 +300,11 @@ class TagAssignmentManager[AssignmentT: TagAssignment](_TagAssignmentManagerBase
             raise ValueError("tag target not found")
         tag_rows = [self._tag_for_id(tag_id) for tag_id in tag_ids]
         lookups = target.lookups(self.model, "target")
-        return [self.get_or_create(tag=tag_row, **lookups)[0] for tag_row in tag_rows]
+        with transaction.atomic():
+            self._lock_target(target)
+            assignments = [self.get_or_create(tag=tag_row, **lookups)[0] for tag_row in tag_rows]
+            self.require_category_maximum(models.Q(**lookups), field="tags")
+        return assignments
 
     def detach(self, target_type: str, target_id: str, tag_ids: list[str]) -> int:
         """Detach each tag from the target row; return the number of edges removed.
@@ -190,15 +325,61 @@ class TagAssignmentManager[AssignmentT: TagAssignment](_TagAssignmentManagerBase
 
         Runs in the save of an owner's insert or update carrying the ``tags``
         input, under the same actor: the edge gates require its declared tag authority
-        for each tag added or removed.
+        for each tag added or removed. Under the record's row lock, a result over a
+        category's maximum is refused (:meth:`require_category_maximum`) and the
+        record's tags stay as they were.
         """
 
         wanted = {self._tag_for_id(tag_id).pk for tag_id in tag_ids}
-        lookups = generic_target(record).lookups(self.model, "target")
-        current = set(self.filter(**lookups).values_list("tag_id", flat=True))
-        self.filter(tag_id__in=current - wanted, **lookups).delete()
-        for tag_pk in sorted(wanted - current):
-            self.create(tag_id=tag_pk, **lookups)
+        target = generic_target(record)
+        lookups = target.lookups(self.model, "target")
+        with transaction.atomic():
+            self._lock_target(target)
+            current = set(self.filter(**lookups).values_list("tag_id", flat=True))
+            self.filter(tag_id__in=current - wanted, **lookups).delete()
+            for tag_pk in sorted(wanted - current):
+                self.create(tag_id=tag_pk, **lookups)
+            self.require_category_maximum(models.Q(**lookups), field="tags")
+
+    def require_category_maximum(self, scope: models.Q, *, field: str = NON_FIELD_ERRORS) -> None:
+        """Refuse when a record holds more tags of one category than the category's maximum.
+
+        ``scope`` selects the edges to judge: one record's (its target lookups) or
+        one category's (``tag__category``). Each record's edges in a category with a
+        maximum count as named system work, so tags the actor cannot read count
+        too. The first group over its maximum raises :class:`ValidationError` under
+        ``field``. Callers run it inside the write's transaction, after the write,
+        so a refusal rolls the write back: :meth:`attach` and :meth:`set_for` under
+        the target row's lock, :meth:`TagCategory.save` and :meth:`Tag.save` when
+        they write the maximum or the category. Queryset and bulk updates, like any
+        write that bypasses those, are not judged.
+        """
+
+        over = (
+            self.model.system_queryset()
+            .filter(scope, tag__category__max_per_record__isnull=False)
+            .values("tag__category", "content_type", "object_id")
+            .annotate(held=models.Count("pk"))
+            .filter(held__gt=models.F("tag__category__max_per_record"))
+            .order_by("tag__category__position", "tag__category")
+            .values_list("tag__category__name", "tag__category__max_per_record")
+            .first()
+        )
+        if over is not None:
+            name, maximum = over
+            noun = "tag" if maximum == 1 else "tags"
+            raise ValidationError({field: f"A record may hold at most {maximum} {noun} from {name}."})
+
+    def _lock_target(self, target: GenericTarget) -> None:
+        """Hold the target row's lock to the end of the transaction, serializing tag writes on it.
+
+        The edge keys on the canonical model, so every address of the row takes the
+        same lock; it is the ``lock_if_supported`` contract on any Django model.
+        """
+
+        model = target.content_type.model_class()
+        assert model is not None
+        list(model._base_manager.filter(pk=target.object_id).select_for_update(of=row_lock_paths(model)))
 
     def _tag_for_id(self, tag_id: str) -> Tag:
         """Return the actor-readable tag row for one public id, or fail fast."""
