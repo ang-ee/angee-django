@@ -1,5 +1,6 @@
-import type { ReactElement, ReactNode } from "react";
+import { useMemo, type ReactElement, type ReactNode } from "react";
 import type { Row } from "@angee/metadata";
+import type { Row as TableRowModel } from "@tanstack/react-table";
 
 import { useUiT } from "../i18n";
 import { useInAppLink } from "../lib/in-app-link";
@@ -26,8 +27,8 @@ export interface GalleryViewProps<TRow extends Row = Row> {
   titleField?: keyof TRow & string;
   /** Field holding the secondary label. */
   subtitleField?: keyof TRow & string;
-  /** Field holding the stable row id. */
-  rowKey?: keyof TRow & string;
+  /** A row's selection id; a collection passes its surface's row ids (`useGalleryRows`). Defaults to `row.id`. */
+  getRowId?: (row: TRow) => string;
   /** Override the card body. */
   renderCard?: CardRenderer<TRow>;
   /** Optional actions rendered in a footer outside the card's navigation target. */
@@ -57,7 +58,7 @@ export function GalleryView<TRow extends Row = Row>({
   imageField,
   titleField,
   subtitleField,
-  rowKey = "id" as keyof TRow & string,
+  getRowId = defaultGalleryRowId,
   renderCard,
   cardActions,
   cardHref,
@@ -84,7 +85,7 @@ export function GalleryView<TRow extends Row = Row>({
       ) : (
       <div className="grid grid-cols-[repeat(auto-fill,minmax(180px,1fr))] gap-4">
         {rows.map((row) => {
-          const id = String(row[rowKey] ?? "");
+          const id = getRowId(row);
           return (
             <GalleryCard
               key={id}
@@ -111,6 +112,24 @@ export function GalleryView<TRow extends Row = Row>({
       )}
     </div>
   );
+}
+
+function defaultGalleryRowId(row: Row): string {
+  return String(row.id ?? "");
+}
+
+/**
+ * A collection surface's row models as gallery rows keyed by the surface's own
+ * row ids, so a card's selection is the list's selection whatever the identity field.
+ * @owner GalleryView
+ */
+export function useGalleryRows<TRow extends Row>(
+  rowModels: readonly TableRowModel<TRow>[],
+): { rows: readonly TRow[]; getRowId: (row: TRow) => string } {
+  return useMemo(() => {
+    const ids = new Map(rowModels.map((model) => [model.original, model.id]));
+    return { rows: rowModels.map((model) => model.original), getRowId: (row: TRow) => ids.get(row) ?? "" };
+  }, [rowModels]);
 }
 
 function GallerySkeleton({

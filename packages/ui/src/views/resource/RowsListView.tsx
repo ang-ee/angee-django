@@ -4,7 +4,7 @@ import { type ResourceQuery } from "@angee/metadata";
 import type { DndPayload } from "../../lib/dnd";
 import { useUiT } from "../../i18n";
 import { ErrorBanner } from "../../fragments/ErrorBanner";
-import { GalleryView } from "../GalleryView";
+import { GalleryView, useGalleryRows } from "../GalleryView";
 import {
   ResourceViewSwitcher,
   type FilterClauseField,
@@ -229,6 +229,7 @@ function RowsListViewBody<TRow extends StringIdRow = StringIdRow>({
     textFilterField: DEFAULT_TEXT_FILTER_FIELD,
   });
   const selectedIds = selectable ? surface.selectedIds : EMPTY_SELECTED_IDS;
+  const galleryRows = useGalleryRows(surface.rowModels);
   const interactive = Boolean(onRowClick || rowHref);
   const filtered = Object.keys(resourceView.state.filter).length > 0;
   const resolvedEmptyContent = filtered
@@ -278,7 +279,8 @@ function RowsListViewBody<TRow extends StringIdRow = StringIdRow>({
     >
       {gallery && layout === "grid" ? (
         <GalleryView<TRow>
-          rows={surface.rowModels.map((model) => model.original)}
+          rows={galleryRows.rows}
+          getRowId={galleryRows.getRowId}
           imageField={gallery.image}
           titleField={gallery.title}
           subtitleField={gallery.subtitle}

@@ -5,7 +5,7 @@ import type { ModelFieldMetadata, Row } from "@angee/metadata";
 import { useUiT } from "../../../i18n";
 import { titleCase } from "../../../lib/titleCase";
 import { BoardView } from "../BoardView";
-import { GalleryView } from "../../GalleryView";
+import { GalleryView, useGalleryRows } from "../../GalleryView";
 import { GroupedBoardBody } from "../board/grouped";
 import { type ResourceViewContextValue } from "../resource-view-context";
 import { type ResourceViewFilter, type ResourceViewGroup, type ResourceViewKind } from "../resource-view-model";
@@ -201,9 +201,7 @@ export function ListViewContent<TRow extends Row = Row>({
   [resolvedColumns, modelMetadata]);
   const galleryRenderCard = renderCard ?? (gallery ? undefined : boardCard ? boardCardBody : columnCardBody);
   const galleryFrame = cardFrame ?? (renderCard || gallery ? "flush" : "inset");
-  const galleryRows = React.useMemo(() => surface.rowModels.map((model) => model.original), [surface.rowModels]);
-  // Selection keys are the surface's row ids: the resource's identity field.
-  const galleryRowKey = (modelMetadata?.resource.query.identity.field ?? "id") as keyof TRow & string;
+  const galleryRows = useGalleryRows(surface.rowModels);
   const search = useResourceSearch({ resourceView, catalog, groupStack: effectiveGroupStack,
     groupingEnabled: !boardGroupingPinned, maxGroupDepth });
   const heading = chrome?.heading ?? (resolvedChrome.compact
@@ -298,8 +296,8 @@ export function ListViewContent<TRow extends Row = Row>({
           groupStack={effectiveGroupStack} emptyContent={emptyContent} toolbar={pane ? toolbar : undefined} />
       ) : resourceView.state.view === "gallery" ? (
         <GalleryView<TRow>
-          rows={galleryRows}
-          rowKey={galleryRowKey}
+          rows={galleryRows.rows}
+          getRowId={galleryRows.getRowId}
           imageField={gallery?.image}
           titleField={gallery?.title}
           subtitleField={gallery?.subtitle}
