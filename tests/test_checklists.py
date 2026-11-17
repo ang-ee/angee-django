@@ -22,6 +22,7 @@ from django.db.models import Value
 from django.db.models.lookups import Exact
 from django.test.utils import CaptureQueriesContext, isolate_apps
 from rebac import RelationshipTuple, actor_context, system_context, to_object_ref, to_subject_ref, write_relationships
+from rebac.models import SchemaOverride, SchemaPermission
 from strawberry import auto
 
 from angee.base.permissions import bind_rebac_schema
@@ -31,6 +32,7 @@ from angee.checklists.managers import (
     checklist_category_status,
     checklist_next_blocking,
     checklist_status,
+    read_decomposes,
 )
 from angee.checklists.models import ChecklistMixin
 from angee.checklists.schema import ChecklistNode, ChecklistResultChangeGate, resource_filters
@@ -416,9 +418,10 @@ def test_counts_group_every_record_in_one_actor_scoped_statement(world: Any) -> 
         summary, attention = ChecklistResult.objects.counts(rows)
     assert summary == [("conflict", 1), ("not_checked", 1)]
     assert ("identity", "Identity", "conflict", 1) in attention and len(attention) == len(CATEGORIES) * 3
-    # REBAC 0.34: a schema-revision guard per scope (the rows, the record's target_read,
-    # the evidence exclusion) and the one aggregate statement.
-    assert len(captured) <= 4
+    # REBAC 0.34: schema-revision guards for the rows, for the assessment's read proof and for
+    # each scope it compiles (the record's target_read, the evidence exclusion), and the one
+    # aggregate statement; each further checklist expression in a statement adds its two scopes.
+    assert len(captured) <= 5
     assert len([query for query in captured if "COUNT(" in query["sql"].upper()]) == 1
     assert ChecklistResult.objects.counts(rows.none()) == (
         [],
@@ -448,8 +451,8 @@ def test_records_still_blocked_are_one_actor_scoped_query(world: Any) -> None:
             .values_list("name", "next_blocking")
         )
     assert blocked == [("Harbour crane", "totals")]
-    # REBAC 0.34: a schema-revision guard per scope and the one data statement.
-    assert len(captured) <= 4
+    # REBAC 0.34: the guards above (rows, proof, two scopes) and the one data statement.
+    assert len(captured) <= 5
     assert len([query for query in captured if "test_checklistdemo_inspection" in query["sql"]]) == 1
     assert unseen.pk not in rows.values_list("pk", flat=True)
 
@@ -779,6 +782,44 @@ def test_a_deleted_results_event_reaches_its_records_readers_without_the_result(
             continue
         assert event is not None and event.id == "" and event.action == "delete"
         assert [{"model": ref.model, "id": ref.id} for ref in event.related_records] == [inspection]
+
+
+def _override(permission: str, kind: str, expression: str) -> SchemaOverride:
+    target = SchemaPermission.objects.get(definition__resource_type="checklists/result", name=permission)
+    return SchemaOverride.objects.create(kind=kind, target=target, expression=expression, reason="tests.checklists")
+
+
+@pytest.mark.parametrize(
+    ("permission", "kind", "expression"),
+    [
+        pytest.param("read", SchemaOverride.KIND_TIGHTEN, "nil", id="tightened-read"),
+        pytest.param(
+            "target_read", SchemaOverride.KIND_EXTEND, "evidence->record_read", id="target-read-off-the-record"
+        ),
+    ],
+)
+def test_statuses_fall_back_to_read_when_the_policy_no_longer_decomposes_it(
+    world: Any,
+    permission: str,
+    kind: str,
+    expression: str,
+) -> None:
+    _record(world, "owner", "passed", evidence=(world.report,))
+    _record(world, "signature", "risk", "Recorded without evidence.")
+    assert read_decomposes()
+    override = _override(permission, kind, expression)
+    try:
+        assert not read_decomposes()
+        for actor in (world.writer, world.reader):
+            readable = set(
+                ChecklistResult.objects.with_actor(actor).with_action("read").values_list("key", flat=True),
+            )
+            statuses = _statuses(_assess(world, actor))
+            assert {key for key, status in statuses.items() if status != "not_checked"} == readable, actor
+            _assert_parity(world, actor)
+    finally:
+        override.delete()
+    assert read_decomposes()
 
 
 def test_edges_with_a_teardown_never_block_their_targets_deletion(db: None) -> None:

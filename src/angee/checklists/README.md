@@ -105,6 +105,16 @@ process (a run, a verb), not on the checklist.
 
 The record's `target_read` and token are computed once per row; each item reads
 its latest row and checks only its evidence (`checklists/result#evidence_hidden`).
+That stands in for `read` only while the effective policy states
+`read = target_read - evidence_hidden` with every `target_read` arm walking an
+unfiltered `record`-backed relation (`read_decomposes`, read when the statement
+compiles); an override that breaks it makes each result check `read` instead.
+
+A statement reads the policy revision once for the proof, which its checklist
+expressions share, and twice per checklist expression for its two scopes (REBAC
+0.34 keeps one revision guard per scoped queryset, and one base scope serving
+both actions costs more, not less), besides the rows' own read: constant in rows,
+so a page or a count costs the same at one record as at many.
 
 These readers share the rule:
 - The `checklist_status`, `checklist_<category>` and `checklist_next_blocking`

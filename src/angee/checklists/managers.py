@@ -20,6 +20,7 @@ evidence and time, chosen by the statuses the SQL returned.
 from __future__ import annotations
 
 from collections.abc import Callable, Iterable, Mapping, Sequence
+from contextvars import ContextVar
 from dataclasses import dataclass
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Literal, Self, cast
@@ -33,8 +34,11 @@ from django.db.models.functions import Coalesce, JSONObject
 from django.db.models.lookups import Exact, In, IsNull
 from rebac import current_actor, generic_target, system_context
 from rebac.actors import is_sudo
+from rebac.backends import backend
 from rebac.field_backing import canonical_model
 from rebac.relation_loading import relation_actor
+from rebac.resources import model_resource_type
+from rebac.schema import FieldBinding, PermArrow, PermBinOp, PermExpr, PermNil, PermRef
 
 from angee.base.expressions import JSONArraySubquery
 from angee.base.managers import AngeeManager
@@ -99,6 +103,74 @@ def _holding(actor: Any, permission: str) -> models.QuerySet[Any] | None:
     return cast(Any, rows.with_action(permission)).scoped_for_aggregate()
 
 
+def read_decomposes() -> bool:
+    """Whether the effective policy states a result's read as its record's ``target_read`` less ``evidence_hidden``.
+
+    The status rule checks ``target_read`` once per record and ``evidence_hidden``
+    per result. That stands in for ``read`` only while ``read`` is exactly
+    ``target_read - evidence_hidden`` and every arm of ``target_read`` walks an
+    unfiltered ``record``-backed relation, so it answers the same for every result
+    of one record. An override that changes either leaves it unproved, and the
+    rule checks ``read`` per result instead.
+    """
+
+    definition = backend().schema().get_definition(model_resource_type(_result_model()) or "")
+    if definition is None:
+        return False
+    expressions = {permission.name: permission.expression for permission in definition.permissions}
+    if expressions.get("read") != PermBinOp("-", PermRef("target_read"), PermRef("evidence_hidden")):
+        return False
+    record = {
+        relation.name
+        for relation in definition.relations
+        if isinstance(relation.backing, FieldBinding)
+        and relation.backing.path == "record"
+        and not relation.backing.filters
+    }
+
+    def record_backed(expression: PermExpr) -> bool:
+        if isinstance(expression, PermNil):
+            return True
+        if isinstance(expression, PermArrow):
+            return expression.via in record
+        if isinstance(expression, PermBinOp):
+            return record_backed(expression.left) and record_backed(expression.right)
+        return False
+
+    target_read = expressions.get("target_read")
+    return target_read is not None and record_backed(target_read)
+
+
+_decomposed: ContextVar[bool | None] = ContextVar("checklists_read_decomposed", default=None)
+"""The proof an assessment reads once as it compiles, shared by the read gates it nests."""
+
+
+class _ReadGate(models.Expression):
+    """Compile ``proved`` while the effective policy decomposes a result's read, else ``fallback``.
+
+    Building it reads nothing; the proof is read when the statement compiles.
+    """
+
+    conditional = True
+
+    def __init__(self, proved: Any, fallback: Any) -> None:
+        super().__init__(output_field=models.BooleanField())
+        self.proved = proved
+        self.fallback = fallback
+
+    def get_source_expressions(self) -> list[Any]:
+        return [self.proved, self.fallback]
+
+    def set_source_expressions(self, exprs: Sequence[Any]) -> None:
+        self.proved, self.fallback = exprs
+
+    def as_sql(self, compiler: SQLCompiler, connection: BaseDatabaseWrapper) -> _AsSqlType:
+        decomposed = _decomposed.get()
+        if decomposed is None:
+            decomposed = read_decomposes()
+        return compiler.compile(self.proved if decomposed else self.fallback)
+
+
 class _InputColumn(models.Expression):
     """One column of the assessment's own derived input, read by the expressions it nests."""
 
@@ -145,6 +217,7 @@ class ChecklistStatuses(models.Func):
         self.target = (target._meta.app_label, target._meta.model_name)
         self.target_read = _holding(actor, "target_read")
         self.evidence_hidden = _holding(actor, "evidence_hidden")
+        self.read = _holding(actor, "read")
         self.items = self.checklist.category_items(select[1]) if isinstance(select, tuple) else self.checklist.items
         self.retired = select in ("status", "vector", "projection")
         self.projection = select == "projection"
@@ -177,26 +250,36 @@ class ChecklistStatuses(models.Func):
             object_id=models.OuterRef(record),
         )
 
-    def _record_readable(self) -> models.Exists | models.Value:
-        """Whether the reader holds the record's ``target_read``: every result of a record shares it."""
+    def _record_readable(self) -> models.Expression:
+        """Whether the reader holds the record's ``target_read``: every result of a record shares it.
+
+        Unproved (:func:`read_decomposes`), or under a named system context, each
+        result's own check decides alone.
+        """
 
         if self.target_read is None:
             return models.Value(True, output_field=models.BooleanField())
         app_label, model_name = self.target
-        return models.Exists(
+        held = models.Exists(
             self.target_read.filter(
                 content_type__app_label=app_label,
                 content_type__model=model_name,
                 object_id=models.OuterRef("pk"),
             )
         )
+        return _ReadGate(held, models.Value(True, output_field=models.BooleanField()))
 
     def _shown(self) -> models.Q:
         """A result row the reader may read: the record is readable and no evidence link hides the row."""
 
         shown = models.Q(_InputColumn(_INPUT, _READABLE, models.BooleanField()))
-        if self.evidence_hidden is not None:
-            shown &= ~models.Q(models.Exists(self.evidence_hidden.filter(pk=models.OuterRef("pk"))))
+        if self.evidence_hidden is not None and self.read is not None:
+            shown &= models.Q(
+                _ReadGate(
+                    ~models.Exists(self.evidence_hidden.filter(pk=models.OuterRef("pk"))),
+                    models.Exists(self.read.filter(pk=models.OuterRef("pk"))),
+                )
+            )
         return shown
 
     def _fresh(self) -> models.Q:
@@ -353,6 +436,13 @@ class ChecklistStatuses(models.Func):
         arg_joiner: str | None = None,
         **extra_context: Any,
     ) -> _AsSqlType:
+        token = _decomposed.set(read_decomposes())
+        try:
+            return self._compiled(compiler, connection)
+        finally:
+            _decomposed.reset(token)
+
+    def _compiled(self, compiler: SQLCompiler, connection: BaseDatabaseWrapper) -> _AsSqlType:
         quote = connection.ops.quote_name
         revision, readable, *sources = self.get_source_expressions()
         revision_sql, revision_params = compiler.compile(revision)
