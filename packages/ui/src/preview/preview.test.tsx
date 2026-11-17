@@ -1,10 +1,11 @@
 // @vitest-environment happy-dom
 
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
 import { AppRuntimeProvider } from "../runtime";
 import { afterEach, describe, expect, test, vi } from "vitest";
 
 import { displayMime, normaliseMime } from "./model";
+import { PreviewFileContent, type PreviewFileReadContext } from "./builtins";
 import { PreviewPane } from "./PreviewPane";
 import { resolvePreviewProvider, type PreviewProvider } from "./registry";
 
@@ -38,6 +39,13 @@ describe("resolvePreviewProvider", () => {
 
   test("returns null when nothing matches", () => {
     expect(resolvePreviewProvider([providers[0]!], "application/zip")).toBeNull();
+  });
+
+  test("a provider's maxSize lets a larger file of known size fall through", () => {
+    const capped: readonly PreviewProvider[] = [{ id: "capped", mime: "image/*", component: Img, maxSize: 10 }, ...providers];
+    expect(resolvePreviewProvider(capped, "image/png", 10)?.id).toBe("capped");
+    expect(resolvePreviewProvider(capped, "image/png", 11)?.id).toBe("img");
+    expect(resolvePreviewProvider(capped, "image/png", null)?.id).toBe("capped");
   });
 
   test("an earlier entry wins an equal-priority tie (addon overrides built-in)", () => {
@@ -141,4 +149,50 @@ test.each(["image/png", "text/plain"])("%s keeps loaded bytes when only credenti
     expect(view.container.querySelector("img")).toBe(image);
     expect(image?.getAttribute("src")).toBe("/first");
   } else expect(fetch).toHaveBeenCalledTimes(1);
+});
+
+describe("PreviewFileContent", () => {
+  const show = (text: string) => <p>{text}</p>;
+
+  test("an inline read fetches once across re-renders", async () => {
+    const fetchMock = vi.fn(async () => new Response("notes"));
+    vi.stubGlobal("fetch", fetchMock);
+    const { rerender } = render(<PreviewFileContent url="/notes.txt" read={(response) => response.text()}>{show}</PreviewFileContent>);
+    expect(await screen.findByText("notes")).toBeTruthy();
+    rerender(<PreviewFileContent url="/notes.txt" read={(response) => response.text()}>{show}</PreviewFileContent>);
+    rerender(<PreviewFileContent url="/notes.txt" read={(response) => response.text()}>{show}</PreviewFileContent>);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  test("a new URL aborts the pending fetch, and replaced or unmounted content is released", async () => {
+    const signals = new Map<string, AbortSignal>();
+    vi.stubGlobal("fetch", vi.fn((url: string, init?: RequestInit) => {
+      signals.set(url, init!.signal!);
+      if (url === "/first") return new Promise<Response>(() => undefined);
+      return Promise.resolve(new Response(url.slice(1)));
+    }));
+    const released = vi.fn();
+    const read = async (response: Response, { onCleanup }: PreviewFileReadContext) => {
+      const text = await response.text();
+      onCleanup(() => released(text));
+      return text;
+    };
+    const { rerender, unmount } = render(<PreviewFileContent url="/first" read={read}>{show}</PreviewFileContent>);
+    rerender(<PreviewFileContent url="/second" read={read}>{show}</PreviewFileContent>);
+    expect(signals.get("/first")!.aborted).toBe(true);
+    expect(await screen.findByText("second")).toBeTruthy();
+    rerender(<PreviewFileContent url="/third" read={read}>{show}</PreviewFileContent>);
+    expect(released).toHaveBeenCalledWith("second");
+    expect(await screen.findByText("third")).toBeTruthy();
+    act(() => unmount());
+    expect(released).toHaveBeenCalledWith("third");
+    expect(signals.get("/third")!.aborted).toBe(true);
+  });
+
+  test("a failed fetch shows the shared load error with the status", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response("", { status: 404 })));
+    render(<PreviewFileContent url="/missing.txt" read={(response) => response.text()}>{show}</PreviewFileContent>);
+    expect(await screen.findByText("Could not load file")).toBeTruthy();
+    expect(screen.getByText("The file could not be fetched (404).")).toBeTruthy();
+  });
 });

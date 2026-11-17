@@ -12,6 +12,7 @@ export {
   PreviewFileContent,
   type ImagePreviewSurfaceProps,
   type PreviewFileContentProps,
+  type PreviewFileReadContext,
 } from "./builtins";
 export {
   resolvePreviewProvider,

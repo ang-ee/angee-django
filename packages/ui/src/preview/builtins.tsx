@@ -3,6 +3,7 @@ import { lazy, useEffect, useState, type ReactElement } from "react";
 import { EmptyState } from "../fragments/EmptyState";
 import { useUiT } from "../i18n";
 import { ScrollArea } from "../ui/scroll-area";
+import { useLatestRef } from "../lib/use-latest-ref";
 import { formatSize, isJsonMime } from "./model";
 import { PreviewSkeleton } from "./PreviewSkeleton";
 import {
@@ -18,34 +19,53 @@ type PreviewFileState<T> =
   | { status: "ready"; content: T }
   | { status: "error"; error: Error };
 
-/** Fetch a preview file and read its response for the fetching renderers. */
+/** What a preview read gets beside the response. */
+export interface PreviewFileReadContext {
+  /** Aborted when the file's URL changes or the renderer unmounts; `fetch` and `read` share it. */
+  signal: AbortSignal;
+  /**
+   * Register a release for what the read created, such as an object URL. It runs when
+   * the content is replaced or unmounted, or at once when the read was already aborted.
+   */
+  onCleanup: (cleanup: () => void) => void;
+}
+
+/** Fetch a preview file and read its response; refetches only when the URL changes. */
 function usePreviewFileContent<T>(
   url: string,
-  read: (response: Response) => Promise<T>,
+  read: (response: Response, context: PreviewFileReadContext) => Promise<T>,
+  fetchFailed: (status: number) => string,
 ): PreviewFileState<T> {
+  // `read` and the copy are read at fetch time, so an inline function never refetches.
+  const latest = useLatestRef({ read, fetchFailed });
   const [state, setState] = useState<PreviewFileState<T>>({ status: "loading" });
 
   useEffect(() => {
-    let live = true;
-    setState({ status: "loading" });
-    fetch(url)
-      .then((response) => {
-        if (!response.ok) throw new Error(`Preview fetch failed (${response.status})`);
-        return read(response);
-      })
-      .then((content) => live && setState({ status: "ready", content }))
-      .catch(
-        (error: unknown) =>
-          live &&
-          setState({
-            status: "error",
-            error: error instanceof Error ? error : new Error("Preview failed"),
-          }),
-      );
-    return () => {
-      live = false;
+    const controller = new AbortController();
+    const { signal } = controller;
+    const cleanups: (() => void)[] = [];
+    const onCleanup = (cleanup: () => void) => {
+      if (signal.aborted) cleanup();
+      else cleanups.push(cleanup);
     };
-  }, [url, read]);
+    setState({ status: "loading" });
+    fetch(url, { signal })
+      .then((response) => {
+        if (!response.ok) throw new Error(latest.current.fetchFailed(response.status));
+        return latest.current.read(response, { signal, onCleanup });
+      })
+      .then((content) => {
+        if (!signal.aborted) setState({ status: "ready", content });
+      })
+      .catch((error: unknown) => {
+        if (signal.aborted) return;
+        setState({ status: "error", error: error instanceof Error ? error : new Error(String(error)) });
+      });
+    return () => {
+      controller.abort();
+      for (const cleanup of cleanups.splice(0)) cleanup();
+    };
+  }, [url, latest]);
 
   return state;
 }
@@ -53,23 +73,25 @@ function usePreviewFileContent<T>(
 export interface PreviewFileContentProps<T> {
   url: string;
   /**
-   * Reads the fetched response: its text, its bytes, or a parse of either. Keep it
-   * stable (a module-level function); a new function refetches. A rejection shows
-   * the load-error surface.
+   * Reads the fetched response: its text, its bytes, or a parse of either. It may be
+   * an inline function; only a new `url` refetches. A rejection shows the load-error
+   * surface.
    */
-  read: (response: Response) => Promise<T>;
+  read: (response: Response, context: PreviewFileReadContext) => Promise<T>;
+  /** The pending surface's accessible label; defaults to the shared loading copy. */
+  loadingLabel?: string;
   children: (content: T) => ReactElement;
 }
 
 /**
- * Fetch a preview file and own its loading and error surfaces, so a renderer only
- * describes its happy path: it receives what `read` resolved via the render prop.
+ * Fetch a preview file and own its loading, error, abort and release, so a renderer
+ * only describes its happy path: it receives what `read` resolved via the render prop.
  * @owner PreviewPane
  */
-export function PreviewFileContent<T>({ url, read, children }: PreviewFileContentProps<T>): ReactElement {
+export function PreviewFileContent<T>({ url, read, loadingLabel, children }: PreviewFileContentProps<T>): ReactElement {
   const t = useUiT();
-  const state = usePreviewFileContent(url, read);
-  if (state.status === "loading") return <PreviewSkeleton label={t("preview.loading")} variant="text" />;
+  const state = usePreviewFileContent(url, read, (status) => t("preview.fetchFailed", { status: String(status) }));
+  if (state.status === "loading") return <PreviewSkeleton label={loadingLabel ?? t("preview.loading")} variant="text" />;
   if (state.status === "error") return <EmptyState title={t("preview.loadError")} description={state.error.message} />;
   return children(state.content);
 }

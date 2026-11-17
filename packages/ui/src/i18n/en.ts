@@ -766,6 +766,7 @@ export const enUiMessages: Record<string, string> = {
   "mime.binary": "File",
   "preview.loading": "Loading preview…",
   "preview.loadError": "Could not load file",
+  "preview.fetchFailed": "The file could not be fetched ({status}).",
   "preview.noInline": "No inline preview.",
   "preview.unavailable": "No preview available",
   "logStream.waiting": "Waiting for output…",
