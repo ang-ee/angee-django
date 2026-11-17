@@ -1132,6 +1132,19 @@ IAM stores the canonical person email:
 and every save that writes `email` applies it, so lookups and the person-email
 unique constraint compare the stored column without SQL transforms.
 
+[`ChecklistMixin`](../../src/angee/checklists/models.py) declares a model's checks:
+the `checklist()` classmethod lists ordered categories and items, which composed
+donors extend through `super()`. `checklist_revision_expression()` names the
+record's content token. Results are append-only rows recorded with their evidence
+through [`ChecklistResultManager.record`](../../src/angee/checklists/managers.py).
+A checked record never carries a second status field or a retained review snapshot.
+[`ChecklistStatuses`](../../src/angee/checklists/managers.py) is the one status rule.
+Cells, filters, counts and record projections read it, so a list cell, its filter
+and a dashboard count cannot disagree. A result shows only when its record and
+every evidence link are readable. The recording addon declares the evidence types
+it records, and the checklist type's addon declares the type's relation
+([checklists README](../../src/angee/checklists/README.md)).
+
 [`MergeableMixin`](../../src/angee/base/models/merge.py) owns operational redirects, actor
 admission and the system fold. Models declare domain refusals and carry/retire
 hooks; pointing rows declare `MergePolicy` (an edge's `merge_policy`, a key's
@@ -1994,6 +2007,11 @@ A round's lift reads `can_open`, which composes the same
 Decision admission, answers and withdrawal belong to the
 [decisions manager](../../src/angee/decisions/managers.py). Asking owners
 consume its verdict; controls consume the owning verb's eligibility.
+
+Readiness a record can compute from its own rows is a blocker of the verb it
+gates, never a checklist item. A [checklist](../../src/angee/checklists/README.md)
+holds recorded checks, and a gate that needs them reads
+`ChecklistAssessment.blocking_unmet`.
 
 ### Integration and worker contracts
 

@@ -413,6 +413,21 @@ answer. It is derived and pays no query cost when a list does not request it.
 **Inbox** — the person's readable decisions, filtered by assignment or requester
 to distinguish questions they can answer from questions they issued.
 
+## Checklists
+
+**Checklist** — the ordered categories and items a model declares through its
+`checklist()` classmethod, extended by composed donors. It holds recorded
+checks only; readiness a model can compute stays a verb-eligibility condition.
+
+**Checklist result** — one append-only outcome of one item on one record, with
+its status, detail, the record's content token and its evidence links. The
+latest result per item wins. A result shows only when its record and every
+evidence link are readable.
+
+**Content token** — the opaque string a checklist type declares through
+`checklist_revision_expression()`. A passed result recorded against another
+token reads unresolved.
+
 ## Extraction
 
 **Extraction** — an independent evidence domain that retains source-grounded
