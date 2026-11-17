@@ -18,13 +18,18 @@ live in code docstrings.
 - A `start_conversation` step may require grounding evidence:
   `StartConversationConfig(grounding=GroundingPolicy(search=("web_search",), fetch=("fetch_url",)))`
   names the tools that satisfy each requirement. One completed call to a named
-  tool meets a requirement, read from the completed turn's saved calls; an answer
-  that leaves one unmet fails the step with the unmet requirements and the calls
-  the turn made, and operator Retry posts another turn. `AgentTurn.tool_calls(*names)`
-  folds a turn's saved ACP tool updates into one `acp.schema.ToolCall` per
-  `toolCallId`, selected by tool name: a saved tool call's `title` is its tool's
-  name (the `SessionRunner` contract). What agents store is unchanged, and a
-  step without `grounding` behaves as before.
+  tool meets a requirement, read from the completed turn's saved calls. A
+  non-empty answer that leaves one unmet fails the step with the unmet
+  requirements and every call the turn made; an empty answer still routes
+  `no_reply`. Operator Retry posts another turn whose prompt ends with the
+  reason. A completed call proves only that the named function tool returned
+  without raising during the turn, so a grounding tool raises on empty results
+  or HTTP errors; provider-native tools are not saved and cannot meet the
+  policy. `AgentTurn.tool_calls(*names)` folds a turn's saved ACP tool updates
+  into one `acp.schema.ToolCall` per `toolCallId`, ignoring null fields, selected
+  by tool name: a saved tool call's `title` is its tool key (the `SessionRunner`
+  contract). What agents store is unchanged, and a step without `grounding`
+  behaves as before.
 - A record-visibility file takes its access from its attached records, its
   direct viewers and admins. Its owner (the uploader, by default) holds it while
   the upload is a draft, which the record edge needs, and once it is published

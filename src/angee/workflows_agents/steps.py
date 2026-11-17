@@ -2,15 +2,15 @@
 
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from typing import Any
+from typing import Annotated, Any
 
 from django.apps import apps
 from django.core.exceptions import ValidationError
-from pydantic import BaseModel, ConfigDict, Field, JsonValue
+from pydantic import BaseModel, ConfigDict, Field, JsonValue, StringConstraints
 from rebac import actor_context, generic_target, to_object_ref
 
 from angee.agents.context import record_view_context
-from angee.agents.models import ACTIVE_TURN_STATUSES, SessionStatus, TurnStatus
+from angee.agents.models import ACTIVE_TURN_STATUSES, AgentTurn, SessionStatus, TurnStatus
 from angee.base.models.identity import public_id_of
 from angee.jobs.timeouts import task_time_budget
 from angee.workflows.steps import Fail, Settlement, Step
@@ -19,6 +19,9 @@ from angee.workflows.triggers import TriggerGrantTarget
 QUEUEING_ALLOWANCE = timedelta(minutes=2)
 MAX_PENDING_REDISPATCHES = 2
 
+ToolName = Annotated[str, StringConstraints(min_length=1)]
+"""A tool's name as the agent calls it and its saved calls carry it in ``title``."""
+
 
 def conversation_timeout() -> timedelta:
     """Leave a queue allowance around the runtime's native worker time budget."""
@@ -26,28 +29,32 @@ def conversation_timeout() -> timedelta:
 
 
 class GroundingPolicy(BaseModel):
-    """Tools, by name, whose completed calls must ground a completed turn's answer.
+    """Tools, by name, whose completed calls must ground a turn's non-empty answer.
 
     Each requirement is met by one completed call to a tool it names among the
-    turn's saved calls; a requirement naming no tool asks nothing. An unmet one
-    is reported with the calls the turn did make.
+    turn's saved calls; a requirement naming no tool asks nothing. A completed
+    call proves only that the named function tool returned without raising in
+    this turn. An unmet policy is reported with every call the turn made, so a
+    tool-name mismatch shows.
     """
 
     model_config = ConfigDict(extra="forbid")
-    search: tuple[str, ...] = ()
-    fetch: tuple[str, ...] = ()
+    search: tuple[ToolName, ...] = ()
+    fetch: tuple[ToolName, ...] = ()
 
-    def unmet(self, turn: Any) -> str | None:
-        """Name each requirement without a completed call, with the calls the turn saved."""
-        missing = []
-        for requirement, names in (("search", self.search), ("fetch", self.fetch)):
-            if not names:
-                continue
-            calls = turn.tool_calls(*names)
-            if not any(call.status == "completed" for call in calls):
-                seen = ", ".join(f"{call.title} {call.status}" for call in calls) or "none"
-                missing.append(f"{requirement} needs a completed {' or '.join(names)} call, saw {seen}")
-        return f"The agent answer is ungrounded: {'; '.join(missing)}." if missing else None
+    def unmet(self, turn: AgentTurn) -> str | None:
+        """Name each requirement without a completed call, then every call the turn made."""
+        calls = turn.tool_calls()
+        completed = {call.title for call in calls if call.status == "completed"}
+        missing = [
+            f"{requirement} needs a completed {' or '.join(names)} call"
+            for requirement in type(self).model_fields
+            if (names := getattr(self, requirement)) and completed.isdisjoint(names)
+        ]
+        if not missing:
+            return None
+        made = ", ".join(f"{call.title} ({call.status})" for call in calls) or "no tools"
+        return f"The agent answer is ungrounded: {'; '.join(missing)}. The turn called {made}."
 
 
 class StartConversationConfig(BaseModel):
@@ -136,15 +143,17 @@ class StartConversation(Step[ConversationInput, ConversationOutput, StartConvers
             TriggerGrantTarget(to_object_ref(agent), "caller", grant_permission="call"),
         ))
         retained = ConversationState.model_validate(ctx.state) if ctx.state else None
+        ungrounded: str | None = None
         if retained is not None:
             # Match the executor's session-before-turn lock order.
             session = ctx.load(sessions, retained.session, lock=True)
             turn = ctx.load(turns, retained.turn, lock=True)
             if turn.session_id != session.pk or session.agent_id != agent.pk or session.context != context:
                 raise ValidationError("The retained turn belongs to a different conversation.")
+            if turn.status == TurnStatus.COMPLETED and turn.text.strip():
+                ungrounded = ctx.config.grounding.unmet(turn)
             retry = ctx.step_run.retries > retained.retry and (
-                turn.status in (TurnStatus.FAILED, TurnStatus.CANCELED)
-                or (turn.status == TurnStatus.COMPLETED and ctx.config.grounding.unmet(turn) is not None)
+                turn.status in (TurnStatus.FAILED, TurnStatus.CANCELED) or ungrounded is not None
             )
         else:
             retry = False
@@ -161,14 +170,16 @@ class StartConversation(Step[ConversationInput, ConversationOutput, StartConvers
                 session = sessions.objects.start(agent, user=ctx.run.run_as, context=context, actor=ctx.actor)
                 ctx.record(session, "Conversation", operation="created")
             deadline = ctx.now + ctx.config.timeout
-            turn = session.post(prompt, context=context, actor=ctx.actor, dispatch_expires=deadline)
+            # A retried ungrounded answer re-asks with its reason, also on a continued session.
+            asked = f"{prompt}\n\n{ungrounded}" if ungrounded else prompt
+            turn = session.post(asked, context=context, actor=ctx.actor, dispatch_expires=deadline)
             ctx.record(turn, "Agent turn", operation="created")
             retained = ConversationState(
                 session=public_id_of(session), turn=public_id_of(turn),
                 deadline=deadline, retry=ctx.step_run.retries,
             )
         if turn.status == TurnStatus.COMPLETED:
-            if ungrounded := ctx.config.grounding.unmet(turn):
+            if ungrounded:
                 return ctx.fail(ungrounded)
             ctx.record(turn, "Agent answer")
             outcome = "done" if turn.text.strip() else "no_reply"

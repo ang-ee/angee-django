@@ -13,15 +13,27 @@ the run actor. Continuations must have the same agent and subject context. Outpu
 names the exact `session` and completed `turn`, with `text` from `AgentTurn.text`.
 An empty or whitespace answer selects `no_reply`; other answers select `done`.
 
-Config `grounding` may require evidence before an answer counts. For example,
-`grounding: {search: [web_search], fetch: [fetch_url]}` names, for each
+Config `grounding` may require evidence before a non-empty answer counts. For
+example, `grounding: {search: [web_search], fetch: [fetch_url]}` names, for each
 requirement, the tools that satisfy it, by the name the agent calls them. One
 completed call to a named tool meets a requirement; failed calls beside it do not
 count against it. The step reads the completed turn's saved calls through
-`AgentTurn.tool_calls`, so what agents store is the evidence. An answer that
-leaves a requirement unmet fails the step with each unmet requirement and the
-calls the turn made, and operator Retry asks again with another turn. A
-requirement that names no tool asks nothing, which is the default.
+`AgentTurn.tool_calls`, so what agents store is the evidence. A requirement that
+names no tool asks nothing, which is the default, and an empty answer takes its
+`no_reply` route without the check.
+
+A completed call proves only that the named function tool returned without
+raising during this turn. Each tool decides what counts as success, so a tool
+used for grounding raises (`ModelRetry`, or FastMCP's `ToolError` in a
+registered tool) on empty results or HTTP errors, and the prompt asks the agent
+to search and fetch. Provider-native tools, such as a model's built-in web
+search, are not saved as tool calls and cannot meet the policy.
+
+An answer that leaves a requirement unmet fails the step with each unmet
+requirement and every call the turn made, so a tool-name mismatch shows.
+Operator Retry asks again with another turn whose prompt ends with that reason.
+A continued session (input `session`) stays open when the run fails, so the
+retry posts on it, and the reason keeps it from repeating the same prompt.
 
 `AgentSession.post` queues `agents.run_session` after commit. The workflow watches
 that turn and retains its ids in the checkpoint, so waking does not post again.
