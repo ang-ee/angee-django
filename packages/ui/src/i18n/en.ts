@@ -443,6 +443,7 @@ export const enUiMessages: Record<string, string> = {
   "calendar.mode.month": "Month",
   "calendar.mode.week": "Week",
   "calendar.mode.day": "Day",
+  "calendar.mode.list": "List",
   "dateTile.pending": "Date pending",
   "textDiff.removals_one": "{count} removal",
   "textDiff.removals_other": "{count} removals",

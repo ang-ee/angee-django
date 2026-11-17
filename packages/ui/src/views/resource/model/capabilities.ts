@@ -7,11 +7,11 @@ import type { ResourceViewInitialState } from "./filter";
  */
 export const RESOURCE_VIEW_KINDS = ["list", "board", "calendar", "gantt", "dashboard"] as const;
 
-/** The calendar kind's window modes; `month` is the default period.
+/** The calendar kind's window modes; `month` is the default period and `list` lists a month's occurrences by day.
  * @kind null
  * @reason Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.
  */
-export const CALENDAR_VIEW_MODES = ["month", "week", "day"] as const;
+export const CALENDAR_VIEW_MODES = ["month", "week", "day", "list"] as const;
 export type CalendarViewMode = (typeof CALENDAR_VIEW_MODES)[number];
 /**
  * @kind null

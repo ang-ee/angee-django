@@ -57,7 +57,9 @@ component that reads the collection through `useResourceView()`; `?view=`,
 presets and favourites name it by id. The calendar, Gantt and dashboard kinds
 stay offered only where the page declares the data they need, and layers narrow
 the offered kinds per model with `only`, `except` and `hide`. See
-[containers](../../docs/frontend/guidelines.md#containers).
+[containers](../../docs/frontend/guidelines.md#containers). The calendar's
+`?mode=` is `month`, `week`, `day` or `list`, which lists a month's occurrences
+under their day headers.
 Dashboard widget titles link to the source collection, and table rows use the
 resource record route. Widget options `fullViewRoute`, `recordRoute`, and
 `recordParam` select explicit destinations when the default route is unsuitable.
