@@ -22,17 +22,34 @@ scheduling never guesses an offset.
 
 [`RecurrenceField`](fields.py) holds an RFC-5545 RRULE and
 [`Recurrence`](recurrence.py) expands it: `occurrences(dtstart, start, end,
-zone=…)` over a half-open window, `get_occurrence_after(dtstart, moment,
+zone=…)` over a half-open window, `occurrences_after(dtstart, after, until, zone=…,
+limit=…)` over `(after, until]`, `get_occurrence_after(dtstart, moment,
 zone=…)` for the next occurrence, and `get_last_occurrence(dtstart, zone=…)` for
 where a series ends (`None` when any rule it parses to has neither `UNTIL` nor
 `COUNT`). Expansion runs on the wall clock of the named zone (a venue's), or of
-the project zone when it is blank.
+the project zone when it is blank. An hourly or finer rule follows the wall clock
+through a DST change: the missing hour in spring lands on the next instant, which
+counts once, and the repeated hour in autumn runs once.
 
-Recurrence is bounded. A `COUNT` over `Recurrence.OCCURRENCE_LIMIT` is invalid,
-and an expansion that would yield more occurrences than the limit is refused with
-a `ValidationError`, never truncated. A consumer whose rows must not repeat too
-often declares `RecurrenceField(finest_frequency=…)` (a calendar event refuses
-minutely and secondly rules); other consumers keep every frequency.
+Expansion is bounded. A rule is one bare `RRULE` value: a rule set, or `DTSTART`,
+`EXDATE` or `RDATE` lines, are invalid. A rule whose day filters can never match
+(`BYMONTH=2;BYMONTHDAY=30`) is recognised in one 400-year calendar cycle and expands
+to nothing, instead of letting dateutil scan to year 9999; given a start,
+`validate` also refuses a rule with no occurrence within about 30 years of it
+(`never_occurs`), probed in bounded time. One cap, `MAX_OCCURRENCES` (10,000),
+bounds every rule: a `COUNT` over it is invalid, and `occurrences` and
+`get_last_occurrence` count every occurrence from the series' start, refusing a
+series that passes the cap (`series_too_long`) with a `ValidationError`, never
+truncated. A window further from the start than `MAX_OCCURRENCES` of the rule's
+periods is refused before any walk, so a sparse rule's steps are bounded too. An
+expansion that reaches past the representable dates is refused (`out_of_range`).
+`occurrences_after` refuses more unless the caller pages with `limit` and resumes
+after the last occurrence it got. Two helpers still walk from the start uncounted,
+through dateutil's own `after`: `get_occurrence_after` (its cost grows with the
+distance to `moment`) and `occurrences_after` (whose `limit` counts only the
+window's results); their callers bound the distance. A consumer whose rows must not
+repeat too often declares `RecurrenceField(finest_frequency=…)` (a calendar event
+repeats at most daily); other consumers keep every frequency.
 
 ## Due rules
 

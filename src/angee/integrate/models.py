@@ -968,11 +968,16 @@ class CredentialManager[CredentialT: Credential](_CredentialManagerBase[Credenti
     ) -> bool:
         """Retire one credential: prepare its disconnect, then delete it; return whether a row went.
 
-        The one way a credential goes. :meth:`prepare_disconnect` owns vetoes,
+        The verb a credential's owner retires it through (an account disconnect, a
+        calendar subscription's purge). :meth:`prepare_disconnect` owns vetoes,
         derived releases and after-commit remote revocation; ``before_delete`` runs
         the caller's own release between the two (an account's), and ``rows`` scopes
         the delete (an actor's ``with_action("delete")``). A credential an
-        integration still attaches directly keeps its ``PROTECT``: detach it first.
+        integration still attaches directly keeps its ``PROTECT``: detach it first,
+        or use :meth:`retire_unattached`. Two other paths delete a credential
+        without it: the admin delete preview (``delete_credential``), which runs
+        :meth:`prepare_disconnect` itself, and :meth:`delete_unattached_derived`,
+        which drops discovery-created material without a remote revocation.
         """
 
         with system_context(reason="integrate.credential.retire"), transaction.atomic():
@@ -1006,15 +1011,27 @@ class CredentialManager[CredentialT: Credential](_CredentialManagerBase[Credenti
             target.attach_credential(None)
         transaction.on_commit(copy(credential).revoke_remote, robust=True)
 
+    def unattached(self) -> models.QuerySet[Any]:
+        """Return the credentials no integration attaches, directly or as its discovery grant."""
+
+        return self.filter(integrations__isnull=True, discovered_integrations__isnull=True)
+
+    def retire_unattached(self, credential: Any) -> bool:
+        """Retire ``credential`` once nothing attaches it (:meth:`retire`); return whether it went.
+
+        A credential shared by several integrations (two subscriptions to one feed
+        keep one) stays while any of them still attaches it.
+        """
+
+        if not self.unattached().filter(pk=credential.pk).exists():
+            return False
+        return self.retire(credential)
+
     def delete_unattached_derived(self, credential_pk: int | None) -> None:
         """Dispose of discovery-created material after its last attachment releases it."""
 
         if credential_pk is not None:
-            self.filter(
-                pk=credential_pk,
-                integrations__isnull=True,
-                discovered_integrations__isnull=True,
-            ).delete()
+            self.unattached().filter(pk=credential_pk).delete()
 
     def live_oauth_for_user(self, user: Any, oauth_client: Any) -> Any | None:
         """Reuse a credential whenever its owner does not require fresh consent."""

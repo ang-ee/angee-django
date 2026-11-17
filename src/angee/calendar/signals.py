@@ -14,8 +14,8 @@ from angee.calendar.models import Calendar, CalendarEvent, EventAttendee
 
 _OWNED = (Calendar, CalendarEvent, EventAttendee)
 
-_VERDICTS: WeakKeyDictionary[models.QuerySet[Any], dict[Any, str | None]] = WeakKeyDictionary()
-"""One queryset delete's verdict per calendar, kept only while that delete's queryset lives."""
+_WRITABLE: WeakKeyDictionary[models.QuerySet[Any], dict[Any, bool]] = WeakKeyDictionary()
+"""One queryset delete's ``Calendar.takes_write`` answer per calendar, kept only while that queryset lives."""
 
 
 def connect() -> None:
@@ -36,9 +36,9 @@ def refuse_source_owned_delete(sender: Any, instance: Any, *, origin: Any, **kwa
     ``delete_blocker`` refuses it (a source's calendar on its own, or a read-only
     calendar's event or attendee outside its source's own work). A cascade from
     removing the source proceeds. A queryset delete judges each row it starts from,
-    and an event's verdict is its calendar's, so one verdict serves each calendar
-    (a source's purge reads writability once per calendar, not per row); a row it
-    only cascades to (an event's attendees) goes with the row it started from.
+    reading each calendar's writability once (a source's purge reads it once per
+    calendar, not per row); a row it only cascades to (an event's attendees) goes
+    with the row it started from.
     """
 
     if isinstance(origin, models.Model):
@@ -50,10 +50,10 @@ def refuse_source_owned_delete(sender: Any, instance: Any, *, origin: Any, **kwa
     if not isinstance(root, _OWNED):
         return
     if isinstance(root, CalendarEvent) and isinstance(origin, models.QuerySet):
-        verdicts = _VERDICTS.setdefault(origin, {})
-        if root.calendar_id not in verdicts:
-            verdicts[root.calendar_id] = root.delete_blocker()
-        blocker = verdicts[root.calendar_id]
+        writable = _WRITABLE.setdefault(origin, {})
+        if root.calendar_id not in writable:
+            writable[root.calendar_id] = root.calendar.takes_write()
+        blocker = root.delete_blocker(takes_write=writable[root.calendar_id])
     else:
         blocker = root.delete_blocker()
     if blocker:

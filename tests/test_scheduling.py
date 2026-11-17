@@ -372,6 +372,45 @@ def test_a_rule_ending_before_its_first_match_never_occurs() -> None:
     assert Recurrence("FREQ=YEARLY;BYMONTH=12;UNTIL=20260601T000000Z").never_occurs(_utc(2026, 1, 1), zone="UTC")
 
 
+@pytest.mark.parametrize(
+    "rule",
+    [
+        pytest.param("FREQ=DAILY\nFREQ=WEEKLY", id="rule-set"),
+        pytest.param("DTSTART:20260101T090000Z\nRRULE:FREQ=DAILY", id="embedded-dtstart"),
+        pytest.param("RRULE:FREQ=DAILY", id="property-prefix"),
+        pytest.param("FREQ=DAILY\nEXDATE:20260102T090000Z", id="exdate-line"),
+    ],
+)
+def test_only_one_bare_rule_validates(rule: str) -> None:
+    with pytest.raises(ValidationError) as refused:
+        Recurrence(rule).validate()
+
+    assert refused.value.code == "invalid"
+    with pytest.raises(ValidationError):
+        RecurrenceField().clean(rule, None)
+
+
+def test_a_sparse_rule_far_from_its_start_is_refused_before_any_walk() -> None:
+    # Every fourth February 29 costs dateutil a step a day: the span alone refuses it.
+    leap_days = Recurrence("FREQ=DAILY;BYMONTH=2;BYMONTHDAY=29")
+
+    began = perf_counter()
+    with pytest.raises(ValidationError) as refused:
+        leap_days.occurrences(_utc(2028, 2, 29, 9), _utc(2100, 1, 1), _utc(2100, 3, 1), zone="UTC")
+
+    assert refused.value.code == "series_too_long"
+    assert perf_counter() - began < 0.5
+
+
+def test_a_never_occurs_probe_at_the_end_of_time_is_refused_not_overflowed() -> None:
+    with pytest.raises(ValidationError) as refused:
+        Recurrence("FREQ=DAILY;INTERVAL=7;BYDAY=TU").validate(
+            dtstart=datetime(9999, 12, 31, 23, tzinfo=UTC), zone="Pacific/Kiritimati"
+        )
+
+    assert refused.value.code == "out_of_range"
+
+
 def test_an_open_daily_series_twenty_years_on_still_expands_and_one_past_the_cap_refuses() -> None:
     daily = Recurrence("FREQ=DAILY")
     start = _utc(2026, 1, 1, 9)
