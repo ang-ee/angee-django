@@ -156,7 +156,7 @@ class NotionResponseError(IntegrationError):
     def __init__(self, status: int, *, retry_after: timedelta | None = None) -> None:
         self.status = status
         messages = {
-            401: "Notion rejected this API token. Check that it is valid and has not been revoked.",
+            401: "Notion rejected this credential. Reconnect Notion or check that the API token has not been revoked.",
             403: "The Notion connection needs read-content capability and access to the source pages.",
             404: "The Notion page is unavailable or is no longer shared with this connection.",
         }
@@ -174,12 +174,11 @@ class NotionBackend(BridgeImpl, HttpClientMixin):
     key = "notion"
     label = "Notion"
     icon = "integration"
-    oauth_client = ""
     defaults = {"vendor": "notion"}
     requires_connection_discovery = True
     supports_identity_reads = True
     sync_parallelism = 1
-    mapping_version: ClassVar[int] = 4
+    mapping_version: ClassVar[int] = 5
 
     def _request[T: BaseModel](
         self,
@@ -190,10 +189,11 @@ class NotionBackend(BridgeImpl, HttpClientMixin):
         credential: Any = None,
     ) -> T:
         credential = credential or self.bridge.fresh_credential()
-        if credential is None or credential.kind != CredentialKind.STATIC_TOKEN:
-            raise IntegrationError("Attach an API token credential for Notion.")
+        # Notion's OAuth connect and an internal integration's API token are both bearer tokens.
+        if credential is None or credential.kind not in (CredentialKind.OAUTH, CredentialKind.STATIC_TOKEN):
+            raise IntegrationError("Connect Notion or attach a Notion API token credential.")
         if not credential.secret_value():
-            raise IntegrationError("The Notion API token is empty.")
+            raise IntegrationError("The Notion credential has no token.")
         response = self.http.request(
             "GET" if payload is None else "POST",
             f"https://api.notion.com/v1/{path}",

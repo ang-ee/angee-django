@@ -1,12 +1,25 @@
 # Notion connections
 
 Install `angee.knowledge_integrate_notion` in the project's `INSTALLED_APPS`.
-Open **Integrations → Notion**, create a connection, and create or select an
-**API token** credential in its credential picker. Credentials are encrypted and
-managed by `angee.integrate`; the Notion addon stores no token of its own.
+Open **Integrations → Notion**, create a connection, save it and choose
+**Connect**: Notion's sign-in page opens, you pick the workspace pages to share,
+and Notion returns to the connection with its OAuth credential attached. Connect
+uses the `notion` OAuth registration this addon installs. The deployment
+supplies a Notion [public integration](https://developers.notion.com/docs/authorization)'s
+client id and secret once, on **Integrations → OAuth providers → Notion** or
+through `ANGEE_INTEGRATE_OAUTH_CLIENTS`, and registers
+`<console origin>/integrate/oauth/callback` as its redirect URI. Connect stays
+hidden until that registration has a client id; Notion's exchange also needs
+the secret. Integrate keeps one Notion grant per user: a user's later Connect
+attaches that grant instead of opening Notion again, so share further pages with
+the integration in Notion rather than connecting a second time.
 
-Save the connection and use the inherited **Resume** and **Test connection**
-actions. Credential attachment and Resume validate the token through Notion's
+An internal integration's **API token** remains an alternative: create or select
+it in the credential picker instead. Credentials are encrypted and managed by
+`angee.integrate`; the Notion addon stores no token of its own.
+
+Use the inherited **Resume** and **Test connection** actions on a saved
+connection. Credential attachment and Resume validate the token through Notion's
 [`GET /v1/users/me`](https://developers.notion.com/reference/get-self) endpoint
 using the integration owner's discovery lifecycle and HTTP transport. Give an
 internal Notion connection read-content capability and access to the pages that
@@ -34,11 +47,15 @@ source observation, and remapping follows the same local-edit conflict policy.
 Content comes from Notion's native
 [Markdown export](https://developers.notion.com/reference/retrieve-page-markdown).
 The addon translates Notion's enhanced tags into ordinary Markdown for the shared
-Knowledge renderer: references and media become links, toggles and columns become
-readable sections, and tables become pipe tables. Colors and layout are omitted;
-the original export is retained on the source observation. Code remains literal.
-Embed placeholders in otherwise complete exports become labeled links back to
-the Notion block; the bridge does not claim to reproduce the embedded content.
+Knowledge renderer: references, media, embeds and link previews become links
+(labelled by their kind when Notion exports no caption), toggles, columns and
+meeting notes become readable sections, and tables become pipe tables. The
+tab-indented children of toggle headings stay content, not code. Colors and
+layout are omitted; the original export is retained on the source observation.
+Fenced code remains literal. Embed placeholders in otherwise complete exports
+become labeled links back to the Notion block; the bridge does not claim to
+reproduce the embedded content. Media links keep Notion's own URL, so a
+Notion-hosted file link expires as Notion's signed URLs do.
 Incomplete exports and inaccessible pages are quarantined without replacing an
 existing body. Database properties remain in the retained source observation;
 this bridge does not turn them into Knowledge fields or copy remote media files.

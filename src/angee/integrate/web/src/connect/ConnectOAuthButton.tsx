@@ -1,11 +1,13 @@
-import { rowPublicId, type Row } from "@angee/metadata";
+import { rowPublicId, useResourceInvalidates, type Row } from "@angee/metadata";
 import { type DocumentType } from "@angee/gql/console";
-import { Button, Glyph, errorMessage, useToast } from "@angee/ui";
+import { useAuthoredMutation } from "@angee/refine";
+import { Button, Glyph, errorMessage, useRecordChromeContext, useToast, type ContainerChild } from "@angee/ui";
+import { useRouterState } from "@tanstack/react-router";
 import * as React from "react";
 
 import { ConnectIntegration } from "../documents";
 import { useIntegrateT } from "../i18n";
-import { INTEGRATION_CONNECTION_FIELDS } from "../IntegrationLifecycleActions";
+import { INTEGRATION_CONNECTION_FIELDS, INTEGRATION_MODEL } from "../IntegrationLifecycleActions";
 import { connectCallbackRedirectUri } from "./redirects";
 import { useOAuthAuthorization, type OAuthAuthorizationStart } from "./use-oauth-authorization";
 
@@ -73,5 +75,27 @@ export function ConnectOAuthButton(props: ConnectOAuthButtonProps): React.ReactE
 
 /** Public facts used by record-based connect and lifecycle actions. */
 export const CONNECT_RECORD_FIELDS = [...INTEGRATION_CONNECTION_FIELDS, "can_connect"] as const;
+
+/** The saved integration record's OAuth Connect verb; the server's `can_connect` decides whether it shows. */
+function ConnectIntegrationAction(): React.ReactElement | null {
+  const context = useRecordChromeContext();
+  const here = useRouterState({ select: (state) => state.location.href });
+  const models = React.useMemo(() => [context.resource, INTEGRATION_MODEL], [context.resource]);
+  const invalidates = useResourceInvalidates(models);
+  const [connect] = useAuthoredMutation(ConnectIntegration, { invalidateModels: models, invalidates });
+  if (!context.record || context.formReadOnly) return null;
+  return <ConnectOAuthButton row={context.record} disabled={context.actionsBlocked} next={here}
+    start={async ({ id, redirectUri, next }) =>
+      (await connect({ resource: context.resource, id, redirectUri, next }))?.connect_integration}
+  />;
+}
+
+/**
+ * The Connect child a vendor addon contributes at its own model's `#actions`
+ * for an OAuth registration; the provider returns to the record's page.
+ */
+export function connectIntegrationAction(): ContainerChild<React.ReactElement> {
+  return { sequence: 10, requiredFields: [...CONNECT_RECORD_FIELDS], content: <ConnectIntegrationAction /> };
+}
 
 export { parseManualCode } from "./use-oauth-authorization";

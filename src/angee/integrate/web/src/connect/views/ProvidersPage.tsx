@@ -101,6 +101,7 @@ export function ProvidersPage(): React.ReactElement {
           <Field name="revoke_endpoint" />
           <Field name="userinfo_endpoint" />
           <Field name="token_request_format" />
+          <Field name="token_endpoint_auth_method" />
           <Field name="manual_redirect_uri" />
         </Group>
         <Group label={t("providers.group.behavior")} columns={2}>
@@ -119,6 +120,7 @@ export function ProvidersPage(): React.ReactElement {
           <Field name="email_claim" />
           <Field name="display_name_claim" />
           <Field name="avatar_url_claim" />
+          <Field name="token_identity_keys" widget="tagInput" />
         </Group>
         <Group label={t("providers.group.oauthMetadata")} columns={2}>
           <Field name="authorize_params" />

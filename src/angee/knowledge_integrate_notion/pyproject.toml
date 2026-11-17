@@ -14,5 +14,9 @@ dynamic = ["entry-points"]
 path = "master/010_integrate.vendor.yaml"
 adopt = "slug"
 
+[[tool.angee.resources.install]]
+path = "install/010_integrate.oauthclient.yaml"
+adopt = ["slug", "environment"]
+
 [tool.angee.platform]
 category = "Integration"

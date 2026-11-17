@@ -118,6 +118,11 @@ The provider's `refine_grant(protocol, tokens)` runs after code exchange and
 before profile lookup or credential persistence. It can call
 `OAuthClientProtocol.exchange_grant(grant_type, **grant)` for an additional
 wire exchange. Those names distinguish refinement from a token request.
+`OAuthClient.token_endpoint_auth_method` selects body or HTTP Basic client
+authentication for both token-request formats. `OAuthClient.token_identity_keys`
+names the non-secret token-response keys connect reads the account from when
+userinfo cannot; token material is never among them. Presets seed both through
+`defaults`, like the other registration fields.
 Product presets and registrations belong to their capability addons; a vendor
 whose one client serves several capabilities has its own addon
 ([`integrate_google`](../integrate_google/__init__.py)).
@@ -129,7 +134,8 @@ connect rules are `OAuthClient.requested_scopes` (scopes),
 grant checks), `Integration.attach_connection` (the account binding),
 `Integration.admit_credential` (which credentials a capability accepts, asked on
 every attachment), `OAuthProviderType.authorize_params` (the prompt),
-[`connect.complete_account_connect`](connect.py) (account identity) and
+[`connect.complete_account_connect`](connect.py) (account identity: userinfo, the
+`token_identity_keys`, then the verified ID token) and
 `connect.complete_external_account_link` (the consent restart). A credential stored
 without an account, before credentials were per account, and the integrations it
 serves without a binding bind to the first account that connects.
@@ -233,7 +239,9 @@ projected. Live sessions require completed discovery in addition to healthy
 runtime status.
 `ConnectOAuthButton` accepts optional vendor-owned labels. Its optional `row`
 path consumes `CONNECT_RECORD_FIELDS`; existing callers may keep their own
-selection and supply `start({redirectUri, next})` without a row.
+selection and supply `start({redirectUri, next})` without a row. A vendor addon
+whose saved record connects through an OAuth registration contributes
+`connectIntegrationAction()` at its own model's `#actions`.
 
 Integration capabilities use native Hasura resources with
 `IntegrationWriteBackend`. Its creation factory prepares implementation defaults
