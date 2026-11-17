@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from contextlib import contextmanager, nullcontext
-from datetime import date, datetime
+from datetime import datetime
 from enum import StrEnum
 from graphlib import TopologicalSorter
 from typing import Any, ClassVar, Self, cast
@@ -104,7 +104,7 @@ class StatedRecordMixin(StatementsMixin):
 
 
 SET_ANCHOR = "set"
-"""The due anchor naming a row's own hand-set date (``DueRule.of(Term(anchor="set"))``)."""
+"""The due anchor naming a row's own hand-set date (``DueRule(terms=[Term(anchor="set")])``)."""
 
 CREATED_ANCHOR = "created"
 """The built-in due anchor naming the subject's creation instant."""
@@ -156,6 +156,11 @@ class RuleDatedMixin(models.Model):
 
         return {**self.due_subject_anchors(), SET_ANCHOR: getattr(self, self.due_date_field)}
 
+    def resolve_due(self, rule: DueRule) -> Due:
+        """Resolve ``rule`` for this row: against its due anchors, by default."""
+
+        return rule.resolve(anchors=self.due_anchor_values())
+
     def _due_point_fields(self) -> tuple[str, ...]:
         return (self.due_date_field, *((self.due_instant_field,) if self.due_instant_field else ()))
 
@@ -168,7 +173,7 @@ class RuleDatedMixin(models.Model):
         return (local_date, *((at,) if self.due_instant_field else ()))
 
     def _basis_due(self) -> Due | None:
-        return Due.model_validate(self.due_basis) if self.due_basis else None
+        return Due.from_json(self.due_basis)
 
     def follows_due_rule(self) -> bool:
         """Whether the row's date is its rule's: it has a rule and its point equals the basis point."""
@@ -193,9 +198,12 @@ class RuleDatedMixin(models.Model):
                 changed.add(instant)
             return changed
         following = take or self.follows_due_rule()
-        due = DueRule.model_validate(self.due_rule).resolve(anchors=self.due_anchor_values())
-        if due.basis != self.due_basis:
-            self.due_basis = due.basis
+        rule = DueRule.from_json(self.due_rule)
+        assert rule is not None  # a blank rule returned above
+        due = self.resolve_due(rule)
+        basis = due.as_json()
+        if basis != self.due_basis:
+            self.due_basis = basis
             changed.add("due_basis")
         if following:
             for name, value in zip(self._due_point_fields(), self._point_of(due), strict=True):
@@ -212,17 +220,17 @@ class RuleDatedMixin(models.Model):
 
         A row following its rule reads the rule's basis (its warn and grace
         windows included); a hand-set or stated date resolves through
-        ``DueRule.of(Term(anchor="set"))``. ``None`` without a date.
+        ``DueRule(terms=[Term(anchor="set")])``. ``None`` without a date.
         """
 
         moment = now or timezone.now()
         if self.follows_due_rule():
             due = self._basis_due()
-            return due.status(now=moment) if due is not None else None
-        if getattr(self, self.due_date_field) is None:
+            return due.get_status(now=moment) if due is not None else None
+        day = getattr(self, self.due_date_field)
+        if day is None:
             return None
-        hand_set = DueRule.of(Term(anchor=SET_ANCHOR)).resolve(anchors={SET_ANCHOR: getattr(self, self.due_date_field)})
-        return hand_set.status(now=moment)
+        return DueRule(terms=(Term(anchor=SET_ANCHOR),)).resolve(anchors={SET_ANCHOR: day}).get_status(now=moment)
 
     def reset_due_to_rule(self, *, expected_revision: int | None = None) -> Self:
         """Hand the row's date back to its due rule, undoing a hand-set or stated date."""
@@ -407,6 +415,7 @@ class ProjectManager[ProjectT: Project](_ProjectManagerBase[ProjectT]):
         values: Mapping[str, Any] | None = None,
         task: Task | None = None,
         anchors: Mapping[str, Any] | None = None,
+        role_mapping: Mapping[str, Any] | None = None,
     ) -> ProjectT:
         """Create a project from a readable template with its items, atomically and idempotently.
 
@@ -414,9 +423,12 @@ class ProjectManager[ProjectT: Project](_ProjectManagerBase[ProjectT]):
         template's title and what each owner's ``template_copy_values`` names;
         ``values`` override them. With ``task``, the project is the task's
         promoted project (:meth:`from_task`: write on the task, one project per
-        task), so a task that already has one is refused. ``anchors`` are the new
-        project's named due anchors (:meth:`Project.set_due_anchor`). What the copy
-        carries is :meth:`Project.copy_template`'s. The key belongs to the
+        task), titled, described and led from the task, so a task that already
+        has one is refused. ``anchors`` are the new
+        project's named due anchors (:meth:`Project.set_due_anchor`);
+        ``role_mapping`` maps a template task's ``assignee_role`` to the person
+        who takes it. What the copy carries is :meth:`Project.copy_template`'s.
+        The key belongs to the
         creating actor: replay returns the created project, and the same key with
         other content conflicts. Template edits afterwards change only later
         copies.
@@ -426,8 +438,12 @@ class ProjectManager[ProjectT: Project](_ProjectManagerBase[ProjectT]):
         actor_id = actor_user_id(actor)
         if actor_id is None and not bypass:
             raise ValidationError({"idempotency_key": "Creating from a template requires a user actor."})
-        named = {name: Anchor.model_validate(value).as_json() for name, value in (anchors or {}).items() if value}
+        named = {
+            self.model.due_anchor_name(name): validate_value(Anchor, value, field=f"anchors.{name}").as_json()
+            for name, value in sorted((anchors or {}).items()) if value is not None
+        }
         values = dict(values or {})
+        roles = {str(role): person for role, person in sorted((role_mapping or {}).items())}
         with changeset(fresh=True), transaction.atomic():
             source = type(template).system_queryset(lock=("self",)).get(pk=template.pk)
             if not bypass and not source.with_actor(actor).has_access("read"):
@@ -435,7 +451,7 @@ class ProjectManager[ProjectT: Project](_ProjectManagerBase[ProjectT]):
             result = changeset_model().objects.claim_created(
                 f"projects.template:{actor_id}",
                 idempotency_key,
-                values={"template": source, "task": task, "values": values, "anchors": named},
+                values={"template": source, "task": task, "values": values, "anchors": named, "roles": roles},
                 model=self.model,
                 unavailable=ValidationError({"idempotency_key": "The created project is unavailable."}),
             )
@@ -461,16 +477,16 @@ class ProjectManager[ProjectT: Project](_ProjectManagerBase[ProjectT]):
                 if promoted:
                     raise ValidationError({"task": "This task already has a project."})
                 project = self.from_task(task)
-                # The template fills what promotion left at its default; the caller's values win.
+                # Promotion's title, body and lead are the task's (a blank one takes the
+                # template's); the template gives every other value; the caller's win.
                 written = []
                 for name, value in {**copied, **values}.items():
-                    field = self.model._meta.get_field(name)
-                    if name in values or getattr(project, name) == cast(models.Field, field).get_default():
+                    if name in values or name not in {"title", "body", "lead"} or not getattr(project, name):
                         setattr(project, name, value)
                         written.append(name)
                 if written:
                     project.save(update_fields=(*written, "updated_at"))
-            project.copy_template(source, anchors=named)
+            project.copy_template(source, anchors=named, role_mapping=roles)
             require_changeset().record_created(project)
             if actor is not None:
                 project.with_actor(actor)
@@ -1047,7 +1063,9 @@ class Project(
             "target_date_resolution": self.target_date_resolution,
         }
 
-    def copy_template(self, template: Project, *, anchors: Mapping[str, Any]) -> None:
+    def copy_template(
+        self, template: Project, *, anchors: Mapping[str, Any], role_mapping: Mapping[str, Any] | None = None,
+    ) -> None:
         """Copy ``template``'s items into this new project, inside :meth:`ProjectManager.create_from_template`.
 
         Copies, through each row's own insert under the creating actor (so every
@@ -1055,7 +1073,9 @@ class Project(
         in order, through :meth:`Milestone.setup_template_values` (the one
         milestone input); its open tasks and subtasks the actor reads, with their
         tags and the relations between copied tasks, through
-        :meth:`Task.template_copy_values`. Due rules copy and resolve against
+        :meth:`Task.template_copy_values`. A task holding an ``assignee_role``
+        takes the person ``role_mapping`` names for it, else no assignee: the
+        role stays until someone is assigned. Due rules copy and resolve against
         ``anchors``; dates, statements, grants, participants, bindings, links and
         files never copy. The template's current phase (else the first) becomes
         the project's current phase.
@@ -1096,11 +1116,15 @@ class Project(
             source = sources[pk]
             if source.parent_id is not None and source.parent_id not in copies:
                 continue  # its parent is closed, removed or unreadable: the branch stays behind
+            values = source.template_copy_values()
+            if values.get("assignee_role"):
+                person = (role_mapping or {}).get(values["assignee_role"])
+                values["assignee_id"] = person.pk if isinstance(person, models.Model) else person
             copies[pk] = insert(task_model(
                 project=self,
                 milestone=phases.get(source.milestone_id),
                 parent=copies.get(source.parent_id),
-                **source.template_copy_values(),
+                **values,
             ))
             self.copy_tags(source, copies[pk], actor=actor, bypass=bypass)
         relation_model = apps.get_model("projects", "TaskRelation")
@@ -1140,8 +1164,17 @@ class Project(
             return {}
         return {
             CREATED_ANCHOR: self.created_at or timezone.now(),
-            **{name: Anchor.model_validate(value) for name, value in sorted(self.due_anchors.items())},
+            **{name: Anchor.from_json(value) for name, value in sorted(self.due_anchors.items())},
         }
+
+    @staticmethod
+    def due_anchor_name(name: str) -> str:
+        """Return a named due anchor's canonical name; ``created`` and ``set`` are built in."""
+
+        canonical = strip_null_bytes(str(name or "")).strip()
+        if not canonical or len(canonical) > 64 or canonical in {CREATED_ANCHOR, SET_ANCHOR}:
+            raise ValidationError({"name": "Name a due anchor other than created or set, in at most 64 characters."})
+        return canonical
 
     def set_due_anchor(self, name: str, value: Any, *, expected_revision: int | None = None) -> Project:
         """Record (``None`` clears) one named due anchor, then re-resolve the rows that follow rules.
@@ -1151,9 +1184,7 @@ class Project(
         template holds rules, not anchors.
         """
 
-        name = strip_null_bytes(str(name or "")).strip()
-        if not name or len(name) > 64 or name in {CREATED_ANCHOR, SET_ANCHOR}:
-            raise ValidationError({"name": "Name a due anchor other than created or set, in at most 64 characters."})
+        name = self.due_anchor_name(name)
         anchor = validate_value(Anchor, value, field="value").as_json() if value is not None else None
         actor, bypass = self.effective_actor(strict=True)
         with transaction.atomic():
@@ -1181,13 +1212,16 @@ class Project(
         """Re-resolve this project's rule-dated milestones and tasks against its due anchors.
 
         A system write: a following row's date is the project's fact, whoever may
-        write the row; a hand-set date stays and only its basis moves.
+        write the row; a hand-set date stays and only its basis moves. A reached
+        milestone and a closed task keep theirs: their dates are history.
         """
 
-        for model_name in ("Milestone", "Task"):
-            model = apps.get_model("projects", model_name)
-            rows = model.system_queryset(lock=("self",)).filter(project_id=self.pk, due_rule__isnull=False)
-            for row in rows.order_by("pk"):
+        task_model = apps.get_model("projects", "Task")
+        milestone_model = apps.get_model("projects", "Milestone")
+        milestones = milestone_model.system_queryset(lock=("self",)).filter(reached_at__isnull=True)
+        tasks = task_model.system_queryset(lock=("self",)).filter(status=task_model.TaskStatus.OPEN)
+        for rows in (milestones, tasks):
+            for row in rows.filter(project_id=self.pk, due_rule__isnull=False).order_by("pk"):
                 changed = row.apply_due_rule()
                 if changed:
                     row.sudo(reason="projects.project.resolve_due_rules").save(
@@ -1666,6 +1700,8 @@ class Task(
     owner_container = "project"
     immutable_fields: ClassVar[tuple[str, ...]] = ("visibility",)
     rebac_grantable = {"reader": "share", "editor": "share"}
+    # A repetition's lineage stays on the original retained identity.
+    merge_policies = {"repeated_from": MergePolicy.KEEP}
 
     ORDERING_RANK_FIELDS: ClassVar[tuple[str, ...]] = ("sort_order", "sub_sort_order")
     ORDERING_FIELDS: ClassVar[frozenset[str]] = frozenset({
@@ -1851,6 +1887,8 @@ class Task(
         on_delete=models.SET_NULL,
         related_name="assigned_project_tasks",
     )
+    assignee_role = models.CharField(max_length=64, blank=True, default="")
+    """A consumer-named role a template task is assigned by; ``create_from_template`` maps it to a person."""
     delegate = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         null=True,
@@ -1861,6 +1899,15 @@ class Task(
     priority = StateField(choices_enum=TaskPriority, default=TaskPriority.NONE)
     due_date = models.DateField(null=True, blank=True, db_index=True)
     due_at = models.DateTimeField(null=True, blank=True, editable=False, db_index=True)
+    repeated_from = models.OneToOneField(
+        "projects.Task",
+        null=True,
+        blank=True,
+        editable=False,
+        on_delete=models.SET_NULL,
+        related_name="repetition",
+    )
+    """The completed task whose repeating due rule created this one; each task repeats once."""
     sort_order = FractionalRankField()
     sub_sort_order = FractionalRankField()
     done_at = models.DateTimeField(null=True, blank=True, db_index=True)
@@ -1980,6 +2027,64 @@ class Task(
             return {CREATED_ANCHOR: self.created_at or timezone.now()}
         return super().due_subject_anchors()
 
+    def resolve_due(self, rule: DueRule) -> Due:
+        """A repetition's due point follows its predecessor's (``DueRule.resolve_next``); a first task's, its anchors.
+
+        It resolves again on every save, so a moved anchor still reaches it.
+        """
+
+        if self.repeated_from_id is not None:
+            previous = type(self)._base_manager.filter(pk=self.repeated_from_id).only("due_basis", "done_at").first()
+            prior = Due.from_json(previous.due_basis) if previous is not None else None
+            if prior is not None and previous is not None and previous.done_at is not None and (
+                rule.repeat.kind != "calendar" or prior.local_date is not None
+            ):
+                following = rule.resolve_next(prior, done=previous.done_at, anchors=self.due_anchor_values())
+                if following is not None:
+                    return following
+        return super().resolve_due(rule)
+
+    def create_repetition(self) -> Task | None:
+        """Create the next task this completed task's repeating rule asks for, once per task.
+
+        Called by :meth:`post_completion`. A system write: the rule asks for the work,
+        whoever completed it. The repetition keeps the task's place, subject,
+        visibility, owner, assignee, tags and rule, takes fresh ranks, and is due
+        at ``rule.resolve_next`` from this task's basis and completion. Nothing is
+        created when the rule ends, does not repeat, or already repeated (a
+        reopened task completed again keeps its one repetition).
+        """
+
+        rule = DueRule.from_json(self.due_rule)
+        prior = self._basis_due()
+        if rule is None or rule.repeat.kind == "once" or prior is None or self.done_at is None:
+            return None
+        if rule.repeat.kind == "calendar" and prior.local_date is None:
+            return None
+        if rule.resolve_next(prior, done=self.done_at, anchors=self.due_anchor_values()) is None:
+            return None
+        if type(self)._base_manager.filter(repeated_from_id=self.pk).exists():
+            return None
+        values = {
+            key: value for key, value in self.template_copy_values().items()
+            if key not in {"sort_order", "sub_sort_order"}
+        }
+        repetition = type(self)(
+            project_id=self.project_id,
+            milestone_id=self.milestone_id,
+            parent_id=self.parent_id,
+            subject_content_type_id=self.subject_content_type_id,
+            subject_object_id=self.subject_object_id,
+            visibility=self.visibility,
+            owner_id=self.owner_id,
+            repeated_from=self,
+            **values,
+        )
+        repetition.sudo(reason="projects.task.create_repetition").save()
+        repetition.unsudo()
+        Project.copy_tags(self, repetition, actor=None, bypass=True)
+        return repetition
+
     def template_copy_values(self) -> dict[str, Any]:
         """Task values a copy of this template task carries; contributors extend through ``super()``.
 
@@ -1992,6 +2097,7 @@ class Task(
             "note": self.note,
             "priority": self.priority,
             "assignee_id": self.assignee_id,
+            "assignee_role": self.assignee_role,
             "delegate_id": self.delegate_id,
             "activity_type_id": self.activity_type_id,
             "due_rule": self.due_rule,
@@ -2250,12 +2356,15 @@ class Task(
         self.status = status
 
     def post_completion(self, feedback: str = "") -> None:
-        """Announce this record task's completion, with ``feedback``, on its record's chatter.
+        """Act on this task's completion: create its repetition, and announce it on its record's chatter.
 
-        Every lifecycle that completes a task calls it once, after the transition;
-        a task about no record posts nothing.
+        Every lifecycle that completes a task calls it once, after the transition.
+        A repeating due rule creates the next task (:meth:`create_repetition`); a
+        record task posts the completion, with ``feedback``; a task about no
+        record posts nothing.
         """
 
+        self.create_repetition()
         if self.subject_object_id is None:
             return
         # Structural: whoever completes a record task reads its record.

@@ -188,6 +188,14 @@ class ProjectSetupInput:
 
 
 @strawberry.input
+class TemplateRoleInput:
+    """The person who takes a template task's ``assignee_role`` in the new project."""
+
+    role: str
+    user: PublicID
+
+
+@strawberry.input
 class ProjectLinkTargetInput:
     """A project or task record that may own an external link."""
 
@@ -468,6 +476,7 @@ class TaskType(TaskProjectionMixin, AuthoredRefMixin, AngeeNode):
     owner: UserType | None = actor_scoped_to_one("owner")
     dropped_reason: auto
     priority: auto
+    assignee_role: auto
     due_date: auto
     due_at: auto
     due_rule: auto
@@ -487,6 +496,7 @@ class TaskType(TaskProjectionMixin, AuthoredRefMixin, AngeeNode):
     project: ProjectType | None = actor_scoped_to_one("project")
     milestone: MilestoneType | None = actor_scoped_to_one("milestone")
     parent: "TaskType | None" = actor_scoped_to_one("parent")
+    repeated_from: "TaskType | None" = actor_scoped_to_one("repeated_from")
 
     @strawberry_django.field(only=["assignee_id"])
     def assignee(self) -> strawberry.ID | None:
@@ -517,6 +527,7 @@ class ConsoleTaskType(TaskProjectionMixin, AuthoredRefMixin, TaggedNode, AngeeNo
     owner: UserType | None = actor_scoped_to_one("owner")
     dropped_reason: auto
     priority: auto
+    assignee_role: auto
     due_date: auto
     due_at: auto
     due_rule: auto
@@ -536,6 +547,7 @@ class ConsoleTaskType(TaskProjectionMixin, AuthoredRefMixin, TaggedNode, AngeeNo
     project: ConsoleProjectType | None = actor_scoped_to_one("project")
     milestone: MilestoneType | None = actor_scoped_to_one("milestone")
     parent: "ConsoleTaskType | None" = actor_scoped_to_one("parent")
+    repeated_from: "ConsoleTaskType | None" = actor_scoped_to_one("repeated_from")
     assignee: UserType | None = actor_scoped_to_one("assignee")
     delegate: UserType | None = actor_scoped_to_one("delegate")
 
@@ -745,14 +757,18 @@ class ProjectTaskActionMutation:
     @action_guard("Create project from template failed.")
     def create_project_from_template(
         self, info: strawberry.Info, id: PublicID, idempotency_key: str, title: str | None = None,
-        task: PublicID | None = None,
+        task: PublicID | None = None, roles: list[TemplateRoleInput] | None = None,
     ) -> ActionResult:
         """Create a project from a readable template; with ``task``, the task's promoted project."""
 
         template = authorized_permission_target(info, Project, id, "read")
         source_task = authorized_action_target(info, Task, task, "write") if task is not None else None
+        role_mapping = {
+            entry.role: authorized_permission_target(info, User, entry.user, "read") for entry in roles or ()
+        }
         project = Project.objects.create_from_template(
             template, idempotency_key=idempotency_key, values={"title": title} if title else None, task=source_task,
+            role_mapping=role_mapping,
         )
         return ActionResult(ok=True, message="Project created from template.", id=project.sqid)
 
@@ -1166,6 +1182,7 @@ def _task_resource(node_type: type) -> Any:
             "visibility",
             "dropped_reason",
             "assignee",
+            "assignee_role",
             "delegate",
             "priority",
             "due_date",
@@ -1232,6 +1249,7 @@ def _task_resource(node_type: type) -> Any:
                     "visibility",
                     "dropped_reason",
                     "assignee",
+                    "assignee_role",
                     "delegate",
                     "priority",
                     "due_date",
@@ -1250,6 +1268,7 @@ def _task_resource(node_type: type) -> Any:
             "title",
             "note",
             "assignee",
+            "assignee_role",
             "delegate",
             "priority",
             "due_date",

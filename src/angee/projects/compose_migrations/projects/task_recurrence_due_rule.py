@@ -49,12 +49,14 @@ def calendar_rule(rule: str, start: date) -> str:
     return ";".join((*kept, f"UNTIL={last.astimezone(UTC):%Y%m%dT%H%M%SZ}"))
 
 
-def task_due_rule(recurrence: str, *, due_date: date | None, created_at: datetime) -> tuple[dict[str, Any], dict[str, Any]]:
+def task_due_rule(
+    recurrence: str, *, due_date: date | None, created_at: datetime
+) -> tuple[dict[str, Any], dict[str, Any]]:
     """Return the due rule and basis replacing ``recurrence`` on a task due ``due_date``."""
 
     start = due_date or timezone.localtime(created_at).date()
-    rule = DueRule.of(Term(anchor="set"), repeat=Repeat.calendar(calendar_rule(recurrence, start)))
-    return rule.as_json(), rule.resolve(anchors={"set": due_date}).basis
+    rule = DueRule(terms=(Term(anchor="set"),), repeat=Repeat.from_rrule(calendar_rule(recurrence, start)))
+    return rule.as_json(), rule.resolve(anchors={"set": due_date}).as_json()
 
 
 def task_recurrence_due_rule(apps, schema_editor):
@@ -68,7 +70,9 @@ class Migration(migrations.Migration):
     dependencies = []
     operations = [
         migrations.AddField(
-            "task", "due_at", models.DateTimeField(blank=True, db_index=True, editable=False, null=True),
+            "task",
+            "due_at",
+            models.DateTimeField(blank=True, db_index=True, editable=False, null=True),
         ),
         migrations.AddField("task", "due_rule", DueRuleField(blank=True, default=None, null=True)),
         migrations.AddField("task", "due_basis", models.JSONField(blank=True, default=dict, editable=False)),
