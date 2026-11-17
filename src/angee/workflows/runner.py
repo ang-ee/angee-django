@@ -63,7 +63,7 @@ class Runner:
         records: list[Any] | None = None,
         notes: list[dict[str, str]] | None = None,
     ) -> None:
-        """Advance a held run, classifying a failure for the run to record durably.
+        """Advance a locked run, classifying a failure for the run to record durably.
 
         The caller holds the run lock. A lost fence, a retryable database error, or
         a database error settling an IO attempt escapes to roll back the caller's
@@ -91,7 +91,7 @@ class Runner:
         if run_id is None:
             return False
         try:
-            with self.run_model.objects.select_related("version", "run_as").hold(run_id, skip_locked=True) as run:
+            with self.run_model.objects.select_related("version", "run_as").lock_run(run_id, skip_locked=True) as run:
                 if run is None:
                     return False
                 with system_context(reason="workflows.execute.claim"):
@@ -204,7 +204,7 @@ class Runner:
         remaining = step_run.deadline_at - timezone.now()
         if remaining <= timedelta():
             raise Superseded
-        with self.run_model.objects.hold(step_run.run_id, timeout=remaining) as run:
+        with self.run_model.objects.lock_run(step_run.run_id, timeout=remaining) as run:
             with system_context(reason="workflows.attempt"), (
                 database_timeout(step_run.deadline_at - timezone.now())
             ), transaction.atomic():
@@ -292,7 +292,7 @@ class Runner:
             for pk, run_id in list(candidates.order_by("pk").values_list("pk", "run_id")[:TICK_CANDIDATE_LIMIT]):
                 try:
                     with isolate_failure(f"tick candidate {pk}"):
-                        with self.run_model.objects.hold(run_id, skip_locked=True) as run:
+                        with self.run_model.objects.lock_run(run_id, skip_locked=True) as run:
                             if run is None or run.is_terminal:
                                 continue
                             step_run = candidates.filter(pk=pk).lock_if_supported(no_key=True).first()

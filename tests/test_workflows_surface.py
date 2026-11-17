@@ -64,7 +64,7 @@ EXPECTED_VERBS = {
         "cancel cancel_abandoned prune reap_interrupted reprocess start"
     ),
     "workflows.WorkflowRun.queryset": (
-        "about about_filter blocking for_subject hold hold_owned retention_candidates working_on"
+        "about about_filter blocking for_subject lock_owned_runs lock_run retention_candidates working_on"
     ),
     "decisions.Decision.manager": "ask",
     "decisions.Decision.queryset": (

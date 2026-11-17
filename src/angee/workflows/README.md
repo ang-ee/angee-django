@@ -130,9 +130,9 @@ own discovery; run admission owns authorization, validation and replay.
 [`Runner`](runner.py) owns the tick, dispatch and failure classification. The run
 row owns its state: [`WorkflowRun`](models.py) settles, plans and writes its status
 in `advance`, and its verbs `admit_subject`, `reopen`, `interrupt` and
-`cancel_owned_work` admit, retry, settle after a restart and cancel a held run. The
+`cancel_owned_work` admit, retry, settle after a restart and cancel a locked run. The
 run and step managers and querysets in [`managers.py`](managers.py) own the run lock
-(`hold`), admission, row-set transitions and retention, and act on a held run only
+(`lock_run`, `lock_owned_runs`), admission, row-set transitions and retention, and act on a locked run only
 through those verbs. A database step holds its run lock for its
 whole transaction. The domain writes, fenced result and successor planning
 commit together. After commit, every ready row of an active run is sent to the job

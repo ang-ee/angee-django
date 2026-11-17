@@ -553,7 +553,7 @@ def test_soft_limit_during_settlement_lock_wait_is_recorded_as_timeout(execution
     """The soft limit is handled while waiting for the result lock as well as inside the body."""
     actor, _ = execution
     original = StepRunQuerySet.settle
-    hold = WorkflowRun.objects.hold
+    lock_run = WorkflowRun.objects.lock_run
     bodies, settlements, waits = [], [], []
 
     class InterruptedSettlement(Echo):
@@ -574,12 +574,12 @@ def test_soft_limit_during_settlement_lock_wait_is_recorded_as_timeout(execution
         waits.append(run_id)
         if len(waits) == 2:
             raise SoftTimeLimitExceeded()  # the worker's soft limit fires while waiting for the run lock
-        with hold(run_id, **kwargs) as run:
+        with lock_run(run_id, **kwargs) as run:
             yield run
 
     register_step(InterruptedSettlement)
     monkeypatch.setattr(StepRunQuerySet, "settle", settle)
-    monkeypatch.setattr(WorkflowRun.objects, "hold", interrupted_hold)
+    monkeypatch.setattr(WorkflowRun.objects, "lock_run", interrupted_hold)
     workflow = load_workflow(document("entry"), key="settlement_soft_limit", actor=actor)
     run = WorkflowRun.objects.start(workflow, actor=actor)
 

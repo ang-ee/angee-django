@@ -91,7 +91,7 @@ def test_cancel_racing_last_item_fences_its_late_result(execution, map_steps, re
         worker = pool.submit(in_connection, runner.execute, item.pk)
         assert entered.wait(10)
         try:
-            with WorkflowRun.objects.hold(run.pk):
+            with WorkflowRun.objects.lock_run(run.pk):
                 result = WorkflowRun.objects.cancel(run, actor=actor)
                 assert result.canceled and result.steps == 2
                 release.set()
@@ -197,7 +197,7 @@ def test_tick_reaches_another_run_beyond_one_hundred_locked_map_items(
     other, _other_map = start_map(actor, [{"value": 0}], body=DueItem.key)
     run_until(other, max_steps=1000)
     with ThreadPoolExecutor(max_workers=1) as pool:
-        with WorkflowRun.objects.hold(busy.pk):
+        with WorkflowRun.objects.lock_run(busy.pk):
             contender = pool.submit(in_connection, runner.tick)
             assert contender.result(timeout=20)["woken"] == 1
             assert body_rows(busy).filter(status="waiting").count() == 128

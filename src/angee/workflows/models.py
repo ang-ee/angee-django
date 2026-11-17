@@ -515,7 +515,7 @@ class WorkflowRun(RecordRefMixin, AngeeDataModel, concrete=True):
         records: list[Any] | None = None,
         notes: list[dict[str, str]] | None = None,
     ) -> None:
-        """Settle an attempt, plan the graph and write this held run's state.
+        """Settle an attempt, plan the graph and write this locked run's state.
 
         Settlement and planning have their own savepoints, so a bad plan cannot
         poison the transaction that records the failure. A terminal run only keeps
@@ -579,7 +579,7 @@ class WorkflowRun(RecordRefMixin, AngeeDataModel, concrete=True):
                 self._write_state(status=status, outcome=outcome, output=output)
 
     def admit_subject(self) -> None:
-        """Lock this held root run's opted-in subject and let it admit the run.
+        """Lock this locked root run's opted-in subject and let it admit the run.
 
         The subject's refusal raises ``ValidationError`` and rolls the caller back.
         """
@@ -587,17 +587,17 @@ class WorkflowRun(RecordRefMixin, AngeeDataModel, concrete=True):
             subject.admit_run(self)
 
     def reopen(self) -> None:
-        """Clear this held run's terminal facts and readmit its subject; the runner replans it."""
+        """Clear this locked run's terminal facts and readmit its subject; the runner replans it."""
         self.admit_subject()
         self._write_state(status=str(RunStatus.RUNNING), outcome="", output={})
 
     def interrupt(self) -> None:
-        """Settle this held run as interrupted by a process restart and close its open steps."""
+        """Settle this locked run as interrupted by a process restart and close its open steps."""
         self._write_state(status=str(RunStatus.INTERRUPTED), outcome=INTERRUPTED_OUTCOME, output={})
         self.step_runs.cancel_open()
 
     def cancel_owned_work(self, *, actor: Any) -> tuple[bool, int]:
-        """Stop this held run's open work, keeping its terminal facts.
+        """Stop this locked run's open work, keeping its terminal facts.
 
         Return whether the run transitioned to canceled and how many open steps closed.
         """

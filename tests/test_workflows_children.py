@@ -170,14 +170,14 @@ def test_derived_child_key_changes_with_parent_page(child_graph):
 def test_child_cleanup_failure_cannot_roll_back_parent_terminal_state(child_graph, monkeypatch, caplog):
     _, _, admitted, build = child_graph
     parent, _ = build(await_child=False)
-    original = WorkflowRunQuerySet.hold_owned
+    original = WorkflowRunQuerySet.lock_owned_runs
 
     def unavailable(self, run_id, **kwargs):
         if run_id == admitted[0].pk:
             raise RuntimeError("Child cancellation unavailable")
         return original(self, run_id, **kwargs)
 
-    monkeypatch.setattr(WorkflowRunQuerySet, "hold_owned", unavailable)
+    monkeypatch.setattr(WorkflowRunQuerySet, "lock_owned_runs", unavailable)
     run_until(parent)
     assert WorkflowRun.system_queryset().get(pk=parent.pk).status == "succeeded"
     assert "Child cancellation unavailable" in caplog.text
