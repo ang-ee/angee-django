@@ -1,7 +1,10 @@
 """The asking owner replaces an open question atomically; escalation is a replacement with new assignees."""
 
+from datetime import timedelta
+
 import pytest
 from django.core.exceptions import PermissionDenied, ValidationError
+from django.utils import timezone
 from rebac import RelationshipTuple, system_context, to_object_ref, to_subject_ref, write_relationships
 
 from angee.base.models.locks import StaleRevisionError
@@ -66,6 +69,34 @@ def test_escalation_replaces_the_question_and_links_it_in_one_step(asked):
     with system_context(reason="tests.decisions.assignees"):
         assert list(replacement.assignees.values_list("pk", flat=True)) == [lead.pk]
         assert list(replaced.assignees.values_list("pk", flat=True)) == [reviewer.pk]
+
+
+def test_escalation_asks_the_stored_question_again_with_new_instants(asked):
+    requester, reviewer, lead, subject, question = asked
+    due = timezone.now() + timedelta(days=2)
+    with system_context(reason="tests.decisions.escalate"):
+        same = question.replacement_request(due_at=None, remind_after=None)
+        escalated = question.replacement_request(assignees=(lead,), due_at=due, remind_after=None)
+        with pytest.raises(TypeError):
+            question.replacement_request(assignees=(lead,))
+    assert (same.kind, same.records, same.requester, same.assignees) == (
+        "hold_review",
+        (subject,),
+        requester,
+        (reviewer,),
+    )
+    assert same.proposal.model_dump(mode="json") == question.proposal
+    assert (escalated.assignees, escalated.due_at, escalated.remind_after) == ((lead,), due, None)
+    replacement = supersede(question, escalated, actor=requester)
+    replacement.refresh_from_db()
+    assert replacement.due_at == due and replacement.remind_after is None
+    assert replacement.decide(actor=lead, chosen=["keep"]).verdict == ["keep"]
+
+
+def test_only_the_asking_owner_derives_a_replacement_request(asked):
+    *_rest, question = asked
+    with pytest.raises(PermissionDenied, match="system context"):
+        question.replacement_request(due_at=None, remind_after=None)
 
 
 def test_a_stale_answer_to_the_replaced_question_is_refused(asked):

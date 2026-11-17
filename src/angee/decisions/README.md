@@ -77,6 +77,12 @@ asks `request`, withdraws the old question with the reason and links the replace
 revision refusal. A question a requesting record retains (`requester_querysets`, a
 workflow step's) belongs to that asker, so supersede refuses it. Escalation is a
 supersede naming the escalation's assignees; no question changes in place.
+`decision.replacement_request(due_at=, remind_after=, assignees=None)` derives that
+request from the stored question (kind, concerned records, proposal, context,
+requester) in the asking owner's system context. The instants are required and never
+copied, so a past reminder is not replayed; escalators never rebuild a request from the
+stored JSON. Decisions runs no due-time sweep: an escalating addon receives
+`decision_reminder_due` and supersedes there.
 
 A request may carry `due_at` and `remind_after`, aware instants the asker supplies;
 decisions does no date arithmetic on them and they stay fixed once asked. Overdue (open,

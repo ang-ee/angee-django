@@ -106,7 +106,8 @@ How the ontology maps to this addon.
   A named system owner may withdraw without a user; it still records `answered_at`.
   A withdrawal may keep a reason. Superseding asks the replacement and withdraws the old question with
   its reason and a `superseded_by` link in one transaction, by the asker only; a question a workflow step
-  retains is replaced by that step. Escalation is a supersede with the escalation's assignees.
+  retains is replaced by that step. Escalation is a supersede with the escalation's assignees, asking the
+  `replacement_request` the stored question derives with fresh instants.
   Every substantive answer requires `answered_by`.
   "Open" stays one rule: no verdict yet.
   The card's choice and accepted-answer lock belong to its observed revision. A new revision

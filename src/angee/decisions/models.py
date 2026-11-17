@@ -1,6 +1,7 @@
 """One question, its immutable proposal, and its final verdict."""
 
 from collections.abc import Iterable, Sequence
+from datetime import datetime
 from typing import Any, Self
 
 from django.conf import settings
@@ -22,7 +23,7 @@ from angee.base.models.locks import OptimisticLockMixin
 from angee.base.permissions import actor_user_id, require_rebac_queryset
 from angee.base.refs import RecordRef, record_view_refs
 from angee.base.signals import publish_change
-from angee.decisions.contracts import DecisionProposal, DecisionRecordReference
+from angee.decisions.contracts import DecisionContext, DecisionProposal, DecisionRecordReference, DecisionRequest
 from angee.decisions.managers import DecisionManager, DecisionRecordManager
 from angee.decisions.signals import decision_answered, decision_reminder_due
 from angee.provenance.evidence import (
@@ -151,6 +152,38 @@ class Decision(OptimisticLockMixin, AppendOnlyModel, AngeeDataModel, concrete=Tr
             raise PermissionDenied("Withdrawal requires the authorized asking owner's system context.")
         row, withdrawing, _closed = self._withdraw(actor=actor, reason=reason)
         return row.with_actor(withdrawing) if withdrawing is not None else row
+
+    def replacement_request(
+        self,
+        *,
+        due_at: datetime | None,
+        remind_after: datetime | None,
+        assignees: Sequence[Any] | None = None,
+    ) -> DecisionRequest:
+        """Ask this question again, for ``Decision.objects.supersede``; the asking owner's system context.
+
+        Kind, concerned records, proposal, context and requester come from this question.
+        ``due_at`` and ``remind_after`` are required and never copied, so a past reminder
+        is not replayed. ``assignees`` defaults to this question's; an escalation names
+        its own, typically from a ``decision_reminder_due`` receiver.
+        """
+        if not is_sudo():
+            raise PermissionDenied("A replacement request requires the authorized asking owner's system context.")
+        with system_context(reason="decisions.replacement_request"):
+            links = self.records.model.system_queryset().filter(decision_id=self.pk).select_related("content_type")
+            records = tuple(link.record for link in links.order_by("pk"))
+            if any(record is None for record in records):
+                raise ValidationError({"records": "A record this question concerns no longer exists."})
+            return DecisionRequest(
+                kind=self.kind,
+                records=records,
+                assignees=tuple(self.assignees.order_by("pk")) if assignees is None else tuple(assignees),
+                requester=self.requester,
+                proposal=DecisionProposal.model_validate(self.proposal),
+                context=DecisionContext.model_validate(self.context),
+                due_at=due_at,
+                remind_after=remind_after,
+            )
 
     def _withdraw(self, *, actor: Any, reason: str, superseded_by: Any = None) -> tuple[Self, Any, bool]:
         """Close this question with an empty verdict if it is still open; callers hold the asker's system context."""
