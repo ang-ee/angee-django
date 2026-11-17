@@ -2,15 +2,12 @@ import * as React from "react";
 import { useAuthoredMutation } from "@angee/refine";
 import { senderAvatarUrl, senderDisplayName } from "@angee/parties";
 import {
-  Avatar,
   Button,
   ErrorBanner,
   Glyph,
   MessagePartsView,
   PreviewPane,
-  avatarInitials,
   cn,
-  formatDateTime,
   useResourceRecordHrefLookup,
   type MessagePart,
 } from "@angee/ui";
@@ -18,12 +15,11 @@ import {
 import { SetMessageStarredDocument, type MessageReaderData, type MessageReplyData } from "./documents";
 import { useMessagingT } from "./i18n";
 import { isStatusUpdate, useMessageChannelLabel } from "./MessageSummary";
+import { MessageEnvelope, RECIPIENT_ROLES } from "./MessageEnvelope";
 import { MessageSourceCopies } from "./MessageSourceCopies";
 import { StarButton } from "./StarButton";
 import { MessageReplyQuote } from "./MessageReplyQuote";
 
-// The envelope roles listed under the sender, in header order.
-const RECIPIENT_ROLES = ["TO", "CC", "BCC"] as const;
 const STAR_MODELS = ["messaging.MessageStar", "messaging.Message"];
 
 export interface MessageReaderProps {
@@ -64,43 +60,22 @@ export function MessageReader({
   const recordHref = useResourceRecordHrefLookup();
   const [setStarred, starState] = useAuthoredMutation(SetMessageStarredDocument, { invalidateModels: STAR_MODELS });
   const [starError, setStarError] = React.useState<string>();
-  const recipientLabels = { TO: t("message.to"), CC: t("message.cc"), BCC: t("message.bcc") };
   const sender = senderDisplayName(message.sender, t("message.unknownSender"));
-  const address = message.sender?.value;
+  const recipients = Object.fromEntries(RECIPIENT_ROLES.map((role) => [role, message.participants
+    .filter((participant) => participant.role === role)
+    .map((participant) => senderDisplayName(participant.handle))]));
   const preview = previewPartId ? message.parts.find((part) => part.id === previewPartId) : undefined;
   const previewUrl = preview?.file?.url;
   return (
     <div className={cn("grid min-w-0 gap-6", previewUrl && "lg:grid-cols-2")}>
       <article aria-label={message.title || t("message.label")} className="min-w-0 space-y-5">
-        <header className="flex flex-wrap items-start gap-3">
-          <Avatar src={senderAvatarUrl(message.sender)} initials={avatarInitials(sender)} />
-          <div className="min-w-40 flex-1 space-y-0.5">
-            <div className="flex min-w-0 items-baseline gap-2">
-              <span className="truncate text-13 font-semibold">{sender}</span>
-              {address && address !== sender ? (
-                <span className="truncate text-12 text-fg-muted">{address}</span>
-              ) : null}
-            </div>
-            {isStatusUpdate(message) ? <p className="text-12 text-fg-muted">{channelLabel(message)}</p> : null}
-            {RECIPIENT_ROLES.map((role) => {
-              const names = message.participants
-                .filter((participant) => participant.role === role)
-                .map((participant) => senderDisplayName(participant.handle))
-                .filter(Boolean);
-              return names.length ? (
-                <div key={role} className="truncate text-12 text-fg-muted">
-                  {recipientLabels[role]} {names.join(", ")}
-                </div>
-              ) : null;
-            })}
-          </div>
-          {/* The date, star and host actions wrap below the sender as one group rather
-              than overlap it when the column is narrow. */}
-          <div className="ml-auto flex shrink-0 items-start gap-3">
-            {/* The read date is a fact of the record: absolute, like every facts line. */}
-            <time className="whitespace-nowrap pt-0.5 text-12 text-fg-muted" dateTime={message.sent_at ?? message.created_at}>
-              {formatDateTime(message.sent_at ?? message.created_at)}
-            </time>
+        <MessageEnvelope
+          sender={sender}
+          address={message.sender?.value}
+          avatarUrl={senderAvatarUrl(message.sender)}
+          recipients={recipients}
+          date={message.sent_at ?? message.created_at}
+          actions={<>
             <StarButton
               starred={Boolean(message.starred)}
               disabled={starState.fetching}
@@ -112,8 +87,10 @@ export function MessageReader({
               }}
             />
             {actions}
-          </div>
-        </header>
+          </>}
+        >
+          {isStatusUpdate(message) ? <p className="text-12 text-fg-muted">{channelLabel(message)}</p> : null}
+        </MessageEnvelope>
         <ErrorBanner description={starError ?? null} />
         {message.parent ? <MessageReplyQuote message={message.parent}
           href={onOpenReply ? undefined : recordHref("messaging.Message", message.parent.id)}

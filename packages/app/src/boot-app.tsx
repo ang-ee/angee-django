@@ -100,6 +100,7 @@ export function appSelection(
     app: key,
     rail,
     brand: app?.brand ?? first.brand ?? { name: first.displayLabel, mark: first.iconName },
+    ...(app?.brand || first.brand ? {} : { brandFallback: true as const }),
     ...(theme !== undefined ? { theme } : {}),
     ...(themeLocked ? { themeLocked } : {}),
     ...(home !== undefined ? { home } : {}),

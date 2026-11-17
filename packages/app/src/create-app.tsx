@@ -4,6 +4,7 @@ import {
   createAngeeAccessControlProvider,
   dataResourcesFromAngeeSchemaMetadata,
   defineAngeeSchemaMetadata,
+  modelFieldForPath,
   mergeModelLabelInventory,
   refineResourceIdentifier,
   schemaFieldMetadataFromAngeeSchemaMetadata,
@@ -80,7 +81,7 @@ import {
   type RuntimeVocabulary,
 } from "@angee/ui/runtime";
 import { isBuiltInResourceViewKind, validateResourceViewPreset } from "@angee/ui/views/resource-view-model";
-import { validateSearchShortcut } from "@angee/ui/views/resource-view-types";
+import { validateResourceCard, validateSearchShortcut } from "@angee/ui/views/resource-view-types";
 import { composeAddons, type ShellSettings } from "./define-addon";
 import {
   ModalsHost,
@@ -347,12 +348,12 @@ export function createApp(input: CreateAppInput): AngeeApp {
       return definition.id;
     })),
   });
-  // The selected app's theme is the default until the person picks their own, unless the app
-  // locks it; the build's theme options belong to the build's theme.
-  const selectedAppearance = selection.theme === undefined || selection.theme === input.appearance?.themeId
+  // The selected app's theme is the default until the person picks their own; the build's
+  // theme options belong to the build's theme. Only the selection can lock it.
+  const appearance = selection.theme === undefined || selection.theme === input.appearance?.themeId
     ? input.appearance
     : { ...input.appearance, themeId: selection.theme, options: undefined };
-  const appearance = selection.themeLocked ? { ...selectedAppearance, themeLocked: true } : selectedAppearance;
+  const themeLocked = selection.themeLocked === true;
   // Optional links (`maybe`, record destinations) skip unavailable pages; authored links still build.
   const runtimeRouteHref = unavailable.size
     ? createRouteHref(routeDescriptors, { unavailable: new Set(unavailable.keys()) })
@@ -365,29 +366,47 @@ export function createApp(input: CreateAppInput): AngeeApp {
   });
   // Presence: what the menus and container children `requires`; the identity read asks which the session holds.
   const requirements = presenceRequirements(menuTree, composed.containers);
+  // A model label's metadata in every schema that projects it.
+  const modelsFor = (label: string) => Object.values(schemas).flatMap((schema) => {
+    const model = schema.fieldMetadata.labels[label];
+    return model ? [{ model, fieldMetadata: schema.fieldMetadata }] : [];
+  });
   for (const [address, children] of Object.entries(composed.containers.children)) {
     if (!address.endsWith("#search")) continue;
     const modelLabel = address.slice(0, -"#search".length);
     for (const child of children) {
       validateSearchShortcut(child.content, child.id);
       if (modelLabel === "resource") continue;
-      const models = Object.values(schemas).flatMap((schema) => {
-        const model = schema.fieldMetadata.labels[modelLabel];
-        return model ? [model] : [];
-      });
       let failure: unknown;
-      const valid = models.some((model) => {
+      const valid = modelsFor(modelLabel).some(({ model }) => {
         try { validateSearchShortcut(child.content, child.id, ResourceQuery.from(model)); return true; }
         catch (error) { failure = error; return false; }
       });
       if (!valid) throw failure ?? new Error(`Unknown resource "${modelLabel}" in search shortcut "${child.id}".`);
     }
   }
+  // A model's cards (`<app.Model>#card`; the composer allows one per model besides
+  // its impl children and variants): content the card owner accepts, and field
+  // paths the model's metadata resolves.
+  for (const [address, children] of Object.entries(composed.containers.children)) {
+    if (!address.endsWith("#card")) continue;
+    const modelLabel = address.slice(0, -"#card".length);
+    for (const card of children) {
+      if (modelLabel === "resource") {
+        throw new Error(`Card "${card.id}" is declared on "resource#card"; a card belongs to one model ("<app.Model>#card").`);
+      }
+      validateResourceCard(card.content, card.id);
+      const models = modelsFor(modelLabel);
+      if (models.length === 0) throw new Error(`Card "${card.id}" is declared for unknown model "${modelLabel}".`);
+      const unknown = (card.requiredFields ?? []).filter((path) => !models.some(({ model, fieldMetadata }) =>
+        modelFieldForPath(path, model, fieldMetadata) || model.resource.query.fields[path]));
+      if (unknown.length > 0) {
+        throw new Error(`Card "${card.id}" of "${modelLabel}" reads unknown fields ${unknown.map((field) => `"${field}"`).join(", ")}.`);
+      }
+    }
+  }
   for (const preset of Object.values(composed.resourceViews)) {
-    const models = Object.values(schemas).flatMap((schema) => {
-      const model = schema.fieldMetadata.labels[preset.resource];
-      return model ? [model] : [];
-    });
+    const models = modelsFor(preset.resource).map(({ model }) => model);
     let failure: unknown;
     const valid = models.some((model) => {
       try { validateResourceViewPreset(preset, model); return true; }
@@ -405,10 +424,7 @@ export function createApp(input: CreateAppInput): AngeeApp {
   for (const route of routes) {
     if (route.defaultFilter === undefined) continue;
     const resource = inheritedRouteFact(route, routesByName, (item) => item.recordModel ?? item.resource);
-    const models = resource ? Object.values(schemas).flatMap((schema) => {
-      const model = schema.fieldMetadata.labels[resource];
-      return model ? [model] : [];
-    }) : [];
+    const models = resource ? modelsFor(resource).map(({ model }) => model) : [];
     let failure: unknown;
     const valid = models.some((model) => {
       try { ResourceQuery.from(model).filterFrom(route.defaultFilter); return true; }
@@ -456,6 +472,7 @@ export function createApp(input: CreateAppInput): AngeeApp {
   const runtime: Omit<AppRuntime, "auth" | "logoutAction" | "userPreferences"> = {
     rail: selection.rail,
     brand: selection.brand,
+    ...(selection.brandFallback ? { brandFallback: true as const } : {}),
     ...(selection.railExpanded !== undefined ? { railExpanded: selection.railExpanded } : {}),
     widgets: { ...defaultWidgets, ...composed.widgets },
     statusTones: composed.statusTones,
@@ -636,6 +653,7 @@ export function createApp(input: CreateAppInput): AngeeApp {
           authSchema={authSchema}
           loginPath={loginPath}
           appearance={appearance}
+          themeLocked={themeLocked}
         >
           <Outlet />
         </AppFrame>
@@ -884,12 +902,14 @@ function AppFrame({
   authSchema,
   loginPath,
   appearance,
+  themeLocked,
   children,
 }: {
   viewAs: ViewAsProvider;
   authSchema: string;
   loginPath: string;
   appearance?: HostAppearanceDefaults;
+  themeLocked: boolean;
   children: ReactNode;
 }): ReactNode {
   const { auth: identityAuth, identity } = useRuntimeAuthState();
@@ -936,6 +956,7 @@ function AppFrame({
           logoutAction={logoutAction}
           loginPath={loginPath}
           appearance={appearance}
+          themeLocked={themeLocked}
         >
           {children}
         </RuntimeSessionProvider>
@@ -949,12 +970,14 @@ function RuntimeSessionProvider({
   logoutAction,
   loginPath,
   appearance,
+  themeLocked,
   children,
 }: {
   auth: AuthState;
   logoutAction: ReturnType<typeof useLogoutAction>;
   loginPath: string;
   appearance?: HostAppearanceDefaults;
+  themeLocked: boolean;
   children: ReactNode;
 }): ReactNode {
   const userPreferences = useUserPreferences();
@@ -964,7 +987,7 @@ function RuntimeSessionProvider({
   );
   return (
     <AppRuntimeProvider runtime={runtime}>
-      <AppearanceProvider host={appearance}>{children}</AppearanceProvider>
+      <AppearanceProvider host={appearance} themeLocked={themeLocked}>{children}</AppearanceProvider>
     </AppRuntimeProvider>
   );
 }

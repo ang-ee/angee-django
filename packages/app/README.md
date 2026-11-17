@@ -133,8 +133,36 @@ An addon can specialize existing copy and declare named resource views:
     groupStack: [{ field: "status" }], view: "board",
     columnVisibility: { updated_at: false },
     sort: { field: "title", dir: "asc" }, pageSize: 20,
+  }, {
+    id: "desk.recent", label: "Recent reviews", resource: "notes.Note",
+    view: "gallery", sort: { field: "updated_at", dir: "desc" }, pageSize: 6,
   }],
 }
+```
+
+A shipped view opening on `board` or `gallery` draws the model's registered card
+when the page declares none. An addon registers that card once, for a model it
+may not own; the composer refuses a second card for the same model, besides the
+`impl` children and variants that vary it per row:
+
+```tsx
+// render receives any row of the model and is called as a plain function, so it
+// narrows the row to the fields requiredFields selects, narrows the context on
+// kind, and returns a component that holds any hooks.
+type NoteCardRow = Row & { title: string; cover_url: string | null; status: string };
+containers: {
+  "notes.Note#card": {
+    "desk.note-card": {
+      content: {
+        render: (row, context) => (
+          <NoteCard row={row as NoteCardRow} lane={context.kind === "board" ? context.laneId : undefined} />
+        ),
+        frame: "flush",
+      },
+      requiredFields: ["title", "cover_url", "status"],
+    },
+  },
+},
 ```
 
 The referenced app (a root or an included app, flattened ones too), route, menu
@@ -242,7 +270,8 @@ undoes a `hide`, never an `only`. A child may carry `permission`, `requires`
 `requiredFields`, `impl` (shown only on rows of that implementation) or
 `variant: { of, impl }` (stands in for `of` on those rows). An addon declares a
 container of its own on its own node, model-scoped with `models: true` or one
-child per key with `unique: "key"`. The deployment's `ANGEE_UI.containers`
+child per key with `unique: "key"`, or one per rendered address (besides `impl`
+children and variants) with `unique: "address"`. The deployment's `ANGEE_UI.containers`
 alters and narrows last. Unknown addresses or children, duplicate ids and
 foreign-namespace declarations fail composition. The framework's containers
 are `CORE_CONTAINERS` in [`core-containers.ts`](src/core-containers.ts); the

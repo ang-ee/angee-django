@@ -4,7 +4,12 @@
 
 Install: `pnpm add @angee/ui`
 
-`useRuntimeBrand` supplies the selected app's identity to chrome. `DocumentTitle`
+`useRuntimeBrand` supplies the selected app's identity to chrome. Over several apps,
+the rail's app chooser draws the brand's mark and the expanded rail's caption its name
+only when a deployment, app or menu root declared it (`useDeclaredBrand`): a named
+app's first root standing in with its label and icon does not count. Without a
+declared brand they keep the framework glyph and "Apps", and an unregistered mark
+falls back to the framework glyph. `DocumentTitle`
 composes the active breadcrumb with that brand. `GanttView` is the presentational date
 axis; the `gantt` collection kind composes the list owner's filter, grouping and
 row paging alongside list, board and calendar views.
@@ -16,7 +21,20 @@ column visibility survives saved views. Relation columns retain their authored
 field as their table ID even when metadata resolves a different display path.
 `ResourceList`/`ListView` may declare `presetIds` for route-local shipped views,
 `search={{ box, shortcuts }}` with text, facet, clause, toggle and group controls,
-and `boardCard` with a title and up to four fields. The full search box is the
+and `boardCard` with a title and up to four fields. `renderCard(row, context)` draws
+a custom card body on the board and the gallery; the context is discriminated by
+its surface (`kind`), with the selection on both and the board lane and drag state
+on the board. The surface calls the renderer as a plain function, so it returns a
+component that holds any hooks. Both surfaces frame cards on the
+shared `cardVariants` and `cardFrameVariants` recipes: `cardFrame="inset"` pads the
+body (the board's default), `"flush"` lets an art header reach the card's edges and
+overlays the checkbox and drag handle (the gallery's default). The frame owns the
+card's hover, selected and dragging states (a selected card keeps its brand border on
+hover) and draws the body's focus ring itself, so an edge-to-edge body never clips
+it; card controls show on hover, focus and selection, and always on touch. The frames carry
+`data-slot="board-card"` / `"gallery-card"` and `data-frame` for themes. A model's
+card registered as the one `<app.Model>#card` child draws both kinds wherever the
+page declares no card (`renderCard`, `boardCard` or `gallery`). The full search box is the
 default; shortcuts default it to a collapsed badge trigger (`box: true` keeps
 it full). Every control reads the shared model. The box keeps one line: the
 chips that fit, then "+N", which opens the panel listing every active item.
@@ -50,16 +68,23 @@ appears on record views; a model-level tab on that model's pages. Tabs a page
 publishes follow the composed ones and take the same narrowing. Tab ids are
 namespaced and `?chatterTab=` links name those ids directly.
 The view switcher offers a collection's `resource#views` children for its
-models: the built-in `list`, `board`, `calendar`, `gantt` and `dashboard`
+models: the built-in `list`, `board`, `gallery`, `calendar`, `gantt` and `dashboard`
 kinds, and kinds addons contribute as `<model>#views` children with namespaced
 ids. A contributed kind declares `label`, `icon`, `capabilities` and a `render`
 component that reads the collection through `useResourceView()`; `?view=`,
 presets and favourites name it by id. The calendar, Gantt and dashboard kinds
-stay offered only where the page declares the data they need, and layers narrow
+stay offered only where the page declares the data they need, and the gallery only
+where the list has a card to draw (`renderCard`, `gallery` fields or the model's
+`#card`) or a page or view opens on it; layers narrow
 the offered kinds per model with `only`, `except` and `hide`. See
 [containers](../../docs/frontend/guidelines.md#containers). The calendar's
 `?mode=` is `month`, `week`, `day` or `list`, which lists a month's occurrences
-under their day headers.
+under their day headers. A page source declaring a `key` and a `label` gets a
+toolbar toggle when the calendar has more than one source; a hidden source pauses
+its fetch and leaves the grid. Only a toggled source can be hidden (a URL key for
+any other is ignored), and hiding every source shows a note that offers them back. The hidden keys ride `?hiddenSources=` beside
+`?mode=` and `?anchor=`, and shipped views and favourites may name them
+(`hiddenSources: ["agenda"]`).
 Dashboard widget titles link to the source collection, and table rows use the
 resource record route. Widget options `fullViewRoute`, `recordRoute`, and
 `recordParam` select explicit destinations when the default route is unsuitable.

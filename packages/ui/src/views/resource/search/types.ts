@@ -23,6 +23,9 @@ export interface SearchFacet {
   group?: GroupSpec | false;
   /** Query-resolved target and bucket factory for values beyond the facet page. */
   relation?: RelationFieldInfo;
+  /** Related-record fields grouping a relation facet's options (`FacetProps`). */
+  optionGroupField?: string;
+  optionGroupOrderField?: string;
   optionForValue?: (value: string, label?: ReactNode) => SearchFacetOption | undefined;
 }
 

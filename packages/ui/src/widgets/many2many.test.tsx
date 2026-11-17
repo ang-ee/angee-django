@@ -68,6 +68,21 @@ test("a read-only multiple relation has no picker", () => {
 });
 
 
+test("grouped options list under their headings in group order, ungrouped last", async () => {
+  const Edit = many2manyWidget.edit;
+  render(<Edit value={[]} onChange={vi.fn()} field={{ label: "Tags", options: [
+    { value: "loose", label: "Loose" },
+    { value: "partner", label: "Partner", group: "Relationship", groupOrder: 2 },
+    { value: "enterprise", label: "Enterprise", group: "Segment", groupOrder: 1 },
+  ] }} />);
+  fireEvent.input(screen.getByRole("combobox", { name: "Tags" }), { target: { value: "e" }, inputType: "insertText" });
+  const listbox = await screen.findByRole("listbox");
+  expect(within(within(listbox).getByRole("group", { name: "Segment" })).getByRole("option", { name: "Enterprise" })).toBeTruthy();
+  expect(within(within(listbox).getByRole("group", { name: "Other" })).getByRole("option", { name: "Loose" })).toBeTruthy();
+  expect(within(listbox).getAllByRole("option").map((option) => option.textContent)).toEqual(["Enterprise", "Partner", "Loose"]);
+  cleanup();
+});
+
 test("full forms retain individually removable chips, including unloaded selections", () => {
   const Edit = many2manyWidget.edit;
   const onChange = vi.fn();

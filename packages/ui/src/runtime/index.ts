@@ -32,6 +32,7 @@ export {
   type CoreContainer,
   type ResolveContainerOptions,
   type ResourceViewKindContent,
+  type ResourceCardContent,
   type DockedDrawerContent,
 } from "./containers";
 export {
@@ -55,6 +56,7 @@ export {
   useLoginPath,
   useRuntimeAuth,
   useRuntimeBrand,
+  useDeclaredBrand,
   useRuntimeViewAs,
   useRuntimeLogoutAction,
   useRuntimeUserPreferences,

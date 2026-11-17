@@ -24,7 +24,7 @@ const CHILD_KEYS: ReadonlySet<string> = new Set(["content", "sequence", "before"
 const ALTERATION_KEYS: ReadonlySet<string> = new Set(["sequence", "before", "after", "remove", "hide"]);
 const CONDITION_KEYS: ReadonlySet<string> = new Set(["app", "route"]);
 
-type Entry = Record<string, unknown> & { only?: readonly string[]; except?: readonly string[]; force?: true; when?: ContainerCondition; unique?: "key"; models?: true };
+type Entry = Record<string, unknown> & { only?: readonly string[]; except?: readonly string[]; force?: true; when?: ContainerCondition; unique?: "key" | "address"; models?: true };
 
 interface Child extends ComposedContainerChild {
   setBy: Record<string, string>;
@@ -61,7 +61,8 @@ export function compileContainers(
   };
   for (const container of core) {
     if (declared[container.address]) throw new Error(`Container "${container.address}" is declared twice.`);
-    declared[container.address] = { owner: FRAMEWORK, models: container.models === true, ...(container.extras ? { extras: true } : {}) };
+    declared[container.address] = { owner: FRAMEWORK, models: container.models === true, ...(container.extras ? { extras: true } : {}),
+      ...(container.unique ? { unique: container.unique } : {}) };
     if (container.models) registerKind(containerName(container.address), container.address);
   }
   // An id belongs to the addon whose id is its longest prefix (`appearance.integrate.x` is not appearance's).
@@ -297,6 +298,13 @@ export function compileContainers(
         variantKeys.set(key, child.id);
       }
       positionSiblings(orderById(group), `Children of "${where}"`);
+      if (declared[family]?.unique === "address") {
+        // One child per rendered address; `impl` children and variants vary it per row.
+        const originals = group.filter((child) => child.impl === undefined && !child.variant);
+        if (originals.length > 1) {
+          throw new Error(`Children ${originals.map((child) => `"${child.id}"`).join(" and ")} of "${where}" are both its one child; remove one, or vary it with impl or variant.`);
+        }
+      }
       if (declared[family]?.unique === "key") {
         const keys = new Map<string, string>();
         for (const child of group) {
@@ -336,7 +344,7 @@ function validateEntry(layer: string, address: string, entry: Entry): void {
       throw new Error(`${where}: ${key} must be a list of child ids.`);
     }
   }
-  if (entry.unique !== undefined && entry.unique !== "key") throw new Error(`${where}: unique must be "key".`);
+  if (entry.unique !== undefined && entry.unique !== "key" && entry.unique !== "address") throw new Error(`${where}: unique must be "key" or "address".`);
   if (entry.models !== undefined && entry.models !== true) throw new Error(`${where}: models must be true.`);
   if (entry.when !== undefined) {
     if (typeof entry.when !== "object" || entry.when === null) throw new Error(`${where}: when must be a mapping.`);

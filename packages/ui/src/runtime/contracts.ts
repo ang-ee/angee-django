@@ -29,6 +29,8 @@ export interface RuntimeSelection {
   /** The top-level menu roots the rail shows, in order; null shows every root. */
   rail: readonly string[] | null;
   brand: RuntimeBrand | null;
+  /** The brand only stands in for an undeclared one: the first rail root's label and icon. */
+  brandFallback?: true;
   /** The theme a person who chose none sees; unset keeps the build default. */
   theme?: string;
   /** The selected theme wins over the person's own theme choice; set only beside `theme`. */

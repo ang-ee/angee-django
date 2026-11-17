@@ -68,11 +68,13 @@ independently. The stored document contains stable IDs and versioned inputs:
 ```
 
 A selected app may lock its theme (`themeLocked: true` beside the app's or its
-root's `theme`; see [`selectApp`](../../packages/app/src/boot-app.tsx)). Within
-that app the locked theme and the host options replace the person's `themeId`
-and `options`, which stay saved and apply again in unlocked apps; their
-`colorScheme` still applies. The Appearance page shows why and disables the
-theme choice, its customization and theme tools there.
+root's `theme`; see [`selectApp`](../../packages/app/src/boot-app.tsx)). Only the app
+selection locks: the build defaults cannot. Within that app the locked theme and the
+host options replace the person's `themeId` and `options`, which stay saved and apply
+again in unlocked apps; their `colorScheme` still applies. A locked app does not
+write the device's boot cache, so the next first paint follows the person's own
+choice. The Appearance page shows why, disables the theme choices (describing them by
+that reason), and hides the customization and the theme tools there.
 
 An absent field follows the corresponding host default. Selecting a different
 theme replaces the old theme's options. Reset removes the complete appearance

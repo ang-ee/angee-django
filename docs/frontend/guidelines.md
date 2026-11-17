@@ -1222,7 +1222,16 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
   its baseline, so it is not dirty. A `kind:"list"` field with *no* relation target
   (a plain string array) stays the `tagInput`. This mirrors the to-one
   `relationFieldInfo` + `RelationFieldWidget` — compose those, never hand-roll a
-  relation-list control.
+  relation-list control. `optionGroupField` and `optionGroupOrderField` (related-row
+  paths, as `optionDescriptionField` is) group the offered rows under headings: on
+  `RelationMultiFieldWidget` and on a relation `Facet`, whose panel reads its
+  options' related rows once while it is open. Options carry `group` and
+  `groupOrder`, and [`optionGroups`](../../packages/ui/src/lib/option-groups.ts) is
+  the one grouping rule for every picker (`Select`, the search panel's filter
+  sections and facets, the relation multi-picker): ordered groups first, then the
+  rest, the ungrouped options included, in first-appearance order. The tags addon's
+  categories provide this contract: a tag's `category.name` heads its group and
+  `category.position` orders the groups, so uncategorised tags list last.
 - **Tags show only where an owner places them, never as a chatter tab, and save
   with the record.** An owner composes the backend's `TaggedModel` on the model
   and declares its type's `tags/tag_assignment` relation, `TaggedNode` on its
@@ -1442,7 +1451,9 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
 - **Headings read the display face:** the `display`, `title` and `heading` roles of
   [`textRoleVariants`](../../packages/ui/src/ui/text.tsx) carry `font-display`, the
   theme's `--font-family-display`, which follows `--font-family-sans` when unset. A
-  heading takes the role rather than spelling `font-display` beside its own size.
+  heading takes the role rather than spelling `font-display`; an owner with its own
+  size composes the role and sets the size after it, as the card, dialog and popover
+  titles do.
 - **Control heights are tokens:** `h-control-xs` (28px) is the pane control — tabs,
   toggles, pane toolbar buttons, tree rows, select triggers; `h-btn-sm/md/lg` are
   26/30/36. Never a raw `h-7`/`size-7` on a control.
@@ -1578,7 +1589,9 @@ presentation of the timeline kinds its Python source implements:
 An addon declares a container of its own by naming an address on its own node,
 with no children or with its own: `"messaging.channels#toolbar": {}`. Two
 entry keys apply only there. `unique: "key"` makes every child carry a `key`
-and fails two children with one key. `models: true`
+and fails two children with one key; `unique: "address"` fails two children at
+an address a page renders together, besides their `impl` children and variants
+(the framework's `resource#card` is one). `models: true`
 makes the container model-scoped: IAM declares `iam#access-roles`, and
 [proposals](../../src/angee/proposals/web/src/record-rounds.tsx) adds
 children at `proposals.Round#access-roles`; the owner passes the record's
@@ -1678,6 +1691,7 @@ the toolbar through `RecordChromeContext.toolbarHost`
 | `resource#views` | view kinds a collection's switcher offers | `ResourceViewKindContent` |
 | `resource#utilities` | collection utilities beside a resource view's toolbar | `ReactNode` |
 | `resource#search` | separate controls over the list search model; page shortcuts are `page.*` extras | `SearchShortcut` |
+| `<model>#card` | the model's one card on its board and gallery kinds where the page declares none; `requiredFields` names what it reads | `ResourceCardContent` |
 | `record#aside` | context-aside tabs (`strip: true`) and drill-ins (`strip: false`, with a target) | `ChatterTabContent` |
 | `timeline#kinds` | presentation of a timeline kind a Python source implements | `TimelineKindContent` |
 | `reference#preview`, `<model>#preview` | opt-in record previews composed by `RecordReferencePreview`; addon content reads `useRecordReference` identity/navigation | React node |
@@ -1878,17 +1892,41 @@ independently of the record aside. See the
 
 `resource#views` holds the view kinds a collection's switcher offers. The
 framework declares the built-in kinds under the bare ids URLs and saved views
-already carry: `list`, `board`, `calendar`, `gantt` and `dashboard`. An addon
+already carry: `list`, `board`, `gallery`, `calendar`, `gantt` and `dashboard`.
+The `gallery` kind pages the collection's records as cards with the list's search,
+presets, selection, bulk actions and record links; it never groups. It is offered
+where the list has a card to draw (a page `renderCard`, declared `gallery` fields
+or the model's registered card) and wherever a page's `defaultView`, a shipped
+view, a favourite or the URL opens on it. Board and
+gallery share one card seam: `renderCard(row, context)` draws a card on either
+(the context names the surface, lane, drag and selection state), `cardFrame`
+picks the `inset` or `flush` frame, `boardCard` and `gallery` declare default
+card fields, and with none the gallery draws the board's column card. A model's
+card is registered once as the one child of `<app.Model>#card` (content
+`{ render, frame? }`, its `requiredFields` joining the list's selection); every
+list of that model whose page declares no card draws it, so a shipped view
+naming `view: "gallery"` or `"board"` needs no page code. An addon may register
+the card of a model it does not own; replacing another addon's card removes it
+first (`remove: true`), since the composer allows one card per model
+(`unique: "address"`). `impl` children and variants vary the card per row: the
+list draws, for each row, the card its implementation admits. App creation
+checks each card's content (`validateResourceCard`) and resolves its
+`requiredFields` paths through the model's metadata, and refuses a card on
+`resource#card`. The most specific model's card wins over its MTI parent's. An addon
 contributes a kind as a `<model>#views` child with a namespaced id. Its
 `ResourceViewKindContent` carries `label` (or a ui `labelKey`), `icon`,
 `capabilities` (which collection controls apply while it is active) and
 `render`, a component receiving `{ resource }` that reads the collection's
 filter and state through `useResourceView()`. `?view=` selects a kind by id,
 and presets and favourites name it. Whether a built-in kind can run on a page
-(calendar, Gantt and dashboard need declared sources) stays the kind's
+(calendar, Gantt and dashboard need declared sources, the gallery a card) stays the kind's
 capability check; whether a
 kind is offered is the container's, so layers narrow kinds per model with
 `only`, `except` and `hide`. See [resource view kinds](../../packages/ui/src/views/resource/resource-view-kinds.tsx).
+The calendar filters by the sources its page declares, never by a wire field: a
+source with a `key` and a `label` gets a toolbar toggle, and the hidden keys are
+view state carried in the URL (`?hiddenSources=`) beside `?mode=` and `?anchor=`,
+so shipped views, favourites and deep links reproduce the calendar.
 
 `resource#search` has model inheritance and accepts page-declared `page.*`
 extras alongside contributed typed shortcuts. `only`/`except` reach both;

@@ -252,13 +252,14 @@ export const enMessagingMessages: Record<string, string> = {
   "overview.channels.needsAttention": "Needs attention",
 
   "email.noSubject": "(no subject)",
-  "email.from": "From {address}",
-  "email.to": "To {addresses}",
   "email.format": "Email format",
   "email.html": "HTML",
   "email.text": "Plain text",
   "email.htmlBody": "HTML email body",
   "email.noBody": "This email has no body.",
+  "email.tooLarge": "This email is too large to preview.",
+  "email.attachments": "Attachments",
+  "email.attachment": "Attachment",
 };
 
 // A translator bound to the `messaging` namespace: resolves against the host

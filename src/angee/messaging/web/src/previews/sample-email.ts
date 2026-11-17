@@ -1,13 +1,17 @@
 // Invented RFC 822 messages for the email previewer's test and story.
 
-/** HTML and plain-text alternatives, a declared language, an inline image and a script that must stay inert. */
+/** HTML and plain-text alternatives, a declared language, an inline image, an attachment and a script that must stay inert. */
 export const SAMPLE_EMAIL = [
   "From: Ada Example <ada@example.test>",
   "To: Grace Example <grace@example.test>, Lin Example <lin@example.test>",
+  "Cc: Ren Example <ren@example.test>",
   "Subject: =?UTF-8?Q?Las_puertas_abren_a_las_ocho?=",
   "Date: Tue, 17 Nov 2026 09:00:00 +0000",
   "Content-Language: es",
   "MIME-Version: 1.0",
+  'Content-Type: multipart/mixed; boundary="mixed"',
+  "",
+  "--mixed",
   'Content-Type: multipart/related; boundary="related"',
   "",
   "--related",
@@ -30,6 +34,13 @@ export const SAMPLE_EMAIL = [
   "",
   "iVBORw0KGgo=",
   "--related--",
+  "--mixed",
+  'Content-Type: application/pdf; name="agenda.pdf"',
+  'Content-Disposition: attachment; filename="agenda.pdf"',
+  "Content-Transfer-Encoding: base64",
+  "",
+  "JVBERi0xLjQK",
+  "--mixed--",
   "",
 ].join("\r\n");
 

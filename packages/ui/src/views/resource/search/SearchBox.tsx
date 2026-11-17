@@ -17,6 +17,7 @@ import { FilterClauseEditor } from "../../../toolbars/FilterClauseEditor";
 import { QueryConditionEditor } from "../../../toolbars/ResourceConditionEditor";
 import { useRelationOptions, useRelationSelectedOption } from "../../relation/relation-options";
 import { labelText } from "../resource-view-utils";
+import { optionGroups } from "../../../lib/option-groups";
 import { GroupStackPanel, GroupLevelLabel, groupLevelLabel } from "./GroupStackPanel";
 import type { ResourceSearch, SearchActiveItem, SearchFacet, SearchFacetOption } from "./types";
 
@@ -247,27 +248,19 @@ function SearchPanel({ search, stacked, lead }: { search: ResourceSearch; stacke
   const [favoriteOpen, setFavoriteOpen] = React.useState(false);
   const [editingFavoriteId, setEditingFavoriteId] = React.useState<string | null>(null);
   const [favoriteLabel, setFavoriteLabel] = React.useState(t("resourceToolbar.savedSearch"));
-  const sections = new Map<string, typeof search.catalog.filters[number][]>();
-  for (const option of search.catalog.filters) {
-    const key = option.group ?? "";
-    const choices = sections.get(key) ?? [];
-    choices.push(option);
-    sections.set(key, choices);
-  }
+  const sections = optionGroups(search.catalog.filters);
   return <>
     <PickerColumn stacked={stacked} icon={<Glyph name="filter" className="size-3.5" />} title={t("resourceToolbar.filters")}>
       {lead}
-      {[...sections].map(([label, choices]) => <section key={label} aria-label={label || undefined} className="grid gap-1">
-        {label ? <h4 className="px-2 pt-2 text-2xs font-semibold text-fg-muted">{label}</h4> : null}
-        {choices.map((option) => <PickerButton key={option.id} active={search.active.some((item) => item.id === `filter:${option.id}`)}
-          onClick={() => search.toggleFilter(option.id)}>{option.label}</PickerButton>)}
-      </section>)}
-      {search.catalog.facets.map((facet) => <section key={facet.field} className="grid gap-1">
-        <h4 className="px-2 pt-2 text-2xs font-semibold text-fg-muted">{facet.label}</h4>
-        {facet.options.map((option) => <PickerButton key={option.id}
-          active={search.active.some((item) => item.kind === "facet" && item.field === facet.field && item.options.some((active) => active.id === option.id))}
-          onClick={() => search.toggleFacetOption(facet.field, option.id)}>{option.label}</PickerButton>)}
-      </section>)}
+      {sections.map((section, index) => {
+        const label = section.label ?? (index > 0 ? t("options.otherGroup") : undefined);
+        return <section key={section.label ?? ""} aria-label={label} className="grid gap-1">
+          {label ? <h4 className="px-2 pt-2 text-2xs font-semibold text-fg-muted">{label}</h4> : null}
+          {section.options.map((option) => <PickerButton key={option.id} active={search.active.some((item) => item.id === `filter:${option.id}`)}
+            onClick={() => search.toggleFilter(option.id)}>{option.label}</PickerButton>)}
+        </section>;
+      })}
+      {search.catalog.facets.map((facet) => <FacetPickerSection key={facet.field} facet={facet} search={search} />)}
       {!search.catalog.filters.length && !search.catalog.facets.length ? <PickerMuted>{t("resourceToolbar.noFilters")}</PickerMuted> : null}
       <PickerDivider />
       <PickerButton active={clauseOpen} muted={!clauseOpen} onClick={() => setClauseOpen((open) => !open)}>
@@ -309,6 +302,61 @@ function SearchPanel({ search, stacked, lead }: { search: ResourceSearch; stacke
       </div>)}
     </PickerColumn>
   </>;
+}
+
+/** One facet's options in the panel, under the facet's heading. */
+function FacetPickerSection({ facet, search }: { facet: SearchFacet; search: ResourceSearch }): React.ReactElement {
+  return <section className="grid gap-1">
+    <h4 className="px-2 pt-2 text-2xs font-semibold text-fg-muted">{facet.label}</h4>
+    {facet.optionGroupField && facet.relation
+      ? <GroupedFacetOptions facet={facet} relation={facet.relation} optionGroupField={facet.optionGroupField} search={search} />
+      : <FacetOptionButtons facet={facet} options={facet.options} search={search} />}
+  </section>;
+}
+
+function FacetOptionButtons({ facet, options, search }: {
+  facet: SearchFacet; options: readonly SearchFacetOption[]; search: ResourceSearch;
+}): React.ReactElement {
+  return <>{options.map((option) => <PickerButton key={option.id}
+    active={search.active.some((item) => item.kind === "facet" && item.field === facet.field && item.options.some((active) => active.id === option.id))}
+    onClick={() => search.toggleFacetOption(facet.field, option.id)}>{option.label}</PickerButton>)}</>;
+}
+
+/**
+ * A relation facet declaring `optionGroupField` lists its options under the
+ * headings its related records name, in their order, read in one bounded
+ * relation query while the panel is open; ungrouped options trail.
+ */
+function GroupedFacetOptions({ facet, relation, optionGroupField, search }: {
+  facet: SearchFacet; relation: NonNullable<SearchFacet["relation"]>; optionGroupField: string; search: ResourceSearch;
+}): React.ReactElement {
+  const t = useUiT();
+  const ids = React.useMemo(() => facet.options.flatMap((option) => option.value === undefined ? [] : [option.value]), [facet.options]);
+  const related = useRelationOptions(relation, {
+    enabled: ids.length > 0,
+    filters: [{ field: "id", operator: "in", value: ids }],
+    // One page holds exactly the facet's options.
+    pageSize: Math.max(ids.length, 1),
+    optionGroupField,
+    optionGroupOrderField: facet.optionGroupOrderField,
+  });
+  const groups = React.useMemo(() => {
+    const byId = new Map(related.options.map((option) => [option.value, option]));
+    return optionGroups(facet.options.map((option) => {
+      const relatedOption = option.value === undefined ? undefined : byId.get(option.value);
+      return { option, group: relatedOption?.group, groupOrder: relatedOption?.groupOrder };
+    }));
+  }, [facet.options, related.options]);
+  if (!groups.some((group) => group.label !== null)) {
+    return <FacetOptionButtons facet={facet} options={facet.options} search={search} />;
+  }
+  return <>{groups.map((group, index) => {
+    const label = group.label ?? (index > 0 ? t("options.otherGroup") : undefined);
+    return <div key={group.label ?? ""} role="group" aria-label={label} className="grid gap-1">
+      {label ? <h5 className={cn(textRoleVariants({ role: "caption" }), "px-2 pt-1")}>{label}</h5> : null}
+      <FacetOptionButtons facet={facet} options={group.options.map((entry) => entry.option)} search={search} />
+    </div>;
+  })}</>;
 }
 
 function PickerColumn({ stacked, icon, title, children }: {

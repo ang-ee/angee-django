@@ -106,6 +106,8 @@ export type ResourceRecordHrefLookup = (
 export interface AppRuntime {
   /** The selected app's brand, else the deployment's; rail, sign-in and document title show it. */
   brand: RuntimeBrand | null;
+  /** The brand only stands in for an undeclared one (the first rail root's label and icon). */
+  brandFallback?: true;
   /** The selected app's rail roots, null showing every root; this shapes navigation, never server access. */
   rail: readonly string[] | null;
   /** The selected app's desktop rail default; a saved expansion preference takes precedence. */
@@ -340,6 +342,17 @@ export function useAppRuntime(): AppRuntime {
  */
 export function useRuntimeBrand(): RuntimeBrand | null {
   return useAppRuntime().brand ?? null;
+}
+
+/**
+ * The brand a deployment, an app or a menu root declared; null when the
+ * selection's brand only stands in for a missing one. Chrome that fronts the
+ * brand over several apps (the app chooser and the rail caption) reads this.
+ * @owner AppChooser
+ */
+export function useDeclaredBrand(): RuntimeBrand | null {
+  const { brand, brandFallback } = useAppRuntime();
+  return brandFallback ? null : brand ?? null;
 }
 
 /** Preview state injected by the app; absent injection leaves preview inactive.

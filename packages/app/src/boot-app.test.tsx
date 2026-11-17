@@ -199,6 +199,7 @@ describe("selectApp", () => {
       app: "pm",
       rail: ["pm"],
       brand: { name: "Work", mark: "pm" },
+      brandFallback: true,
       theme: "suite.light",
       home: "projects.my-work",
       sources: {
@@ -223,6 +224,9 @@ describe("selectApp", () => {
     });
     const library = selectApp({ search: "?app=library", shell, roots });
     expect(library).toMatchObject({ app: "library", rail: ["files", "pm"], brand: { name: "Files", mark: "files" }, theme: "suite.light" });
+    // With no brand declared, the first root's label and icon only stand in, which the chooser never shows as a brand.
+    expect(library.brandFallback).toBe(true);
+    expect(selectApp({ hostname: "payables.example.test", shell, roots })).not.toHaveProperty("brandFallback");
     // Its first rail root declares no home, so `/` lands on that root.
     expect(library).not.toHaveProperty("home");
   });

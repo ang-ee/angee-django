@@ -159,20 +159,49 @@ describe("MessagePartsView", () => {
 });
 
 describe("MessageHtmlFrame", () => {
-  test("sandboxes the body, sets its language and resolves cid references", () => {
-    render(<MessageHtmlFrame title="Body" lang="es-MX" html={'<p>Hola</p><img src="cid:logo@one">'}
-      inlineUrls={{ "logo@one": "data:image/png;base64,AAAA" }} />);
-    const frame = screen.getByTitle("Body");
-    expect(frame.getAttribute("sandbox")).toBe("");
-    const srcdoc = frame.getAttribute("srcdoc") ?? "";
-    expect(srcdoc).toContain('<html lang="es-MX">');
-    expect(srcdoc).toContain("default-src 'none'");
-    expect(srcdoc).toContain('src="data:image/png;base64,AAAA"');
-    expect(srcdoc).not.toContain("cid:logo@one");
+  const srcdoc = () => screen.getByTitle("Body").getAttribute("srcdoc") ?? "";
+
+  test("sandboxes the body without scripts or same origin, opening links in a new tab with no referrer", () => {
+    render(<MessageHtmlFrame title="Body" html={'<p><a href="https://example.test/read">Read</a></p>'} />);
+    expect(screen.getByTitle("Body").getAttribute("sandbox")).toBe("allow-popups allow-popups-to-escape-sandbox");
+    expect(srcdoc()).toContain('<base target="_blank">');
+    expect(srcdoc()).toContain('<meta name="referrer" content="no-referrer">');
+    expect(srcdoc()).toContain("default-src 'none'; img-src data: blob:;");
   });
 
-  test("drops a language that is not a language tag", () => {
-    render(<MessageHtmlFrame title="Body" lang={'en" onload="x'} html="<p>Hi</p>" />);
-    expect(screen.getByTitle("Body").getAttribute("srcdoc")).toContain("<html><head>");
+  test("sets a well-formed language and resolves cid references, admitting their origins only", () => {
+    render(<MessageHtmlFrame title="Body" lang="es-MX"
+      html={'<p>Hola</p><img src="cid:logo@one"><img src="cid:photo@two">'}
+      inlineUrls={{ "logo@one": "data:image/png;base64,AAAA", "photo@two": "https://files.example.test/p.jpg" }} />);
+    expect(srcdoc()).toContain('<html lang="es-MX">');
+    expect(srcdoc()).toContain('src="data:image/png;base64,AAAA"');
+    expect(srcdoc()).toContain('src="https://files.example.test/p.jpg"');
+    expect(srcdoc()).toContain("img-src data: blob: https://files.example.test;");
+    expect(srcdoc()).not.toContain("cid:");
+  });
+
+  test("drops an unsafe inline URL and a language that is not a language tag", () => {
+    render(<MessageHtmlFrame title="Body" lang={'en" onload="x'} html={'<img src="cid:x@one">'}
+      inlineUrls={{ "x@one": "javascript:alert(1)" }} />);
+    expect(srcdoc()).toContain("<html><head>");
+    expect(srcdoc()).toContain('src="cid:x@one"');
+    expect(srcdoc()).not.toContain("javascript:");
+  });
+
+  test("blocks remote images until the reader loads them", () => {
+    render(<MessageHtmlFrame title="Body" html={'<img src="https://tracker.example.test/open.gif">'} />);
+    expect(srcdoc()).not.toContain("https:;");
+    fireEvent.click(screen.getByRole("button", { name: "Load remote images" }));
+    expect(srcdoc()).toContain("img-src data: blob: http: https:;");
+    expect(screen.queryByRole("button", { name: "Load remote images" })).toBeNull();
+  });
+
+  test("offers no control when the body has no remote image, or when remote images load from the start", () => {
+    const { unmount } = render(<MessageHtmlFrame title="Body" html="<p>Plain</p>" />);
+    expect(screen.queryByRole("button", { name: "Load remote images" })).toBeNull();
+    unmount();
+    render(<MessageHtmlFrame title="Body" remoteImages html={'<img src="https://images.example.test/a.png">'} />);
+    expect(screen.queryByRole("button", { name: "Load remote images" })).toBeNull();
+    expect(srcdoc()).toContain("http: https:");
   });
 });
