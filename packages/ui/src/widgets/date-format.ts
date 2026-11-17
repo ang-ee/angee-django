@@ -186,32 +186,36 @@ export function formatMonth(value: DateFormatValue, options: HumanDateOptions = 
   }).format(date);
 }
 
-/** A date's calendar parts, each localized on its own: the short month, the day of the month and the year. */
+/** A date's month and day, each localized on its own. */
 export interface DateParts {
   month: string;
   day: string;
-  year: string;
 }
 
-/** The localized parts of a date ("Sep", "28", "2026"), for a layout that sets them apart, such as a date tile.
+/**
+ * The short month and the day of the month, each from its own formatter ("Sep" and
+ * "28", "9月" and "28日", "syys" and "28"), for a layout that sets them apart, such as
+ * a date tile. A combined month-and-day pattern would pick the month's in-context
+ * form, which is numeric in Japanese, Chinese or Finnish.
  * @kind null
  * @reason Format utility: converts data to display or storage text.
  */
 export function formatDateParts(value: DateFormatValue, options: HumanDateOptions = {}): DateParts | null {
   const date = dateFromValue(value);
   if (!date) return null;
-  const parts = new Intl.DateTimeFormat(localeCode(options.locale), {
-    month: "short",
-    day: "numeric",
-    year: "numeric",
-    ...(options.timeZone ? { timeZone: options.timeZone } : {}),
-  }).formatToParts(date);
-  const part = (type: Intl.DateTimeFormatPartTypes) => parts.find((entry) => entry.type === type)?.value ?? "";
-  return { month: part("month"), day: part("day"), year: part("year") };
+  const locale = localeCode(options.locale);
+  const zone = options.timeZone ? { timeZone: options.timeZone } : {};
+  return {
+    month: new Intl.DateTimeFormat(locale, { month: "short", ...zone }).format(date),
+    day: new Intl.DateTimeFormat(locale, { day: "numeric", ...zone }).format(date),
+  };
 }
 
-/** The calendar day of an instant in a zone, as a sortable key ("2026-09-30"). */
-function calendarDay(date: Date, timeZone?: string): string {
+/** The calendar day of an instant in a zone, as a sortable key and a `<time datetime>` value ("2026-09-30").
+ * @kind null
+ * @reason Format utility: converts data to display or storage text.
+ */
+export function calendarDay(date: Date, timeZone?: string): string {
   return new Intl.DateTimeFormat("en-CA", {
     year: "numeric", month: "2-digit", day: "2-digit",
     ...(timeZone ? { timeZone } : {}),
