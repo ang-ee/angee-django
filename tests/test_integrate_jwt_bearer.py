@@ -403,7 +403,7 @@ def test_a_fence_mismatch_during_a_mint_keeps_the_token_out_of_the_cache(edit: s
 
     with mock_transport(TokenEndpoint(on_grant=edit_row)):
         if outcome is None:
-            with pytest.raises(ValueError, match="deactivated"):
+            with pytest.raises(ValueError, match="not active"):
                 credential.scoped_access_token([WRITE])
         else:
             assert credential.scoped_access_token([WRITE]) == outcome
@@ -420,6 +420,26 @@ def test_an_inactive_credential_mints_nothing() -> None:
     with mock_transport(lambda request: pytest.fail("an inactive credential must not mint")):
         with pytest.raises(ValueError, match="not active"):
             credential.scoped_access_token([WRITE])
+
+
+@pytest.mark.django_db(transaction=True)
+def test_a_revoked_credential_serves_no_cached_token() -> None:
+    """Fail closed: revoking a credential refuses its cached token while that token is still live."""
+
+    credential = create_jwt_bearer()
+    with mock_transport(TokenEndpoint()):
+        assert credential.scoped_access_token([WRITE]) == "access-1"
+
+    set_status(credential, CredentialStatus.REVOKED)
+    credential.refresh_from_db()  # a consumer reloads the row, as Integration.fresh_credential() does
+    entry = credential.reveal()["scoped_tokens"][WRITE]
+    assert entry["renew_at"] > timezone.now().timestamp()  # the cached token is still within its lifetime
+
+    with mock_transport(lambda request: pytest.fail("a revoked credential must not mint")):
+        with pytest.raises(ValueError, match="This credential is not active, so it serves no tokens."):
+            credential.scoped_access_token([WRITE])
+        with pytest.raises(ValueError, match="not active"):
+            credential.auth_headers(scopes=[WRITE])
 
 
 @pytest.mark.django_db(transaction=True)

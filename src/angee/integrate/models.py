@@ -1419,11 +1419,13 @@ class Credential(AuditMixin, AngeeDataModel, concrete=True):
         and one bare string is refused. Tokens are cached in the encrypted material,
         one per scope set, and renewed at the earlier of ``_TOKEN_RENEWAL_MARGIN``
         and half their lifetime before expiry. The call needs autocommit, cached or
-        not, because a miss mints over the network; a kind that does not mint and
-        an inactive credential are refused before any request. Concurrent consumers
-        serialize in :meth:`_renew_locked`: one mints and the others adopt its
-        persisted token. A refusal the kind handler attributes to the key or
-        identity (:meth:`CredentialKindHandler.records_failure`) records
+        not, because a miss mints over the network; a kind that does not mint is
+        refused before any request. An inactive credential fails closed: it serves
+        no token, cached or minted (:meth:`_require_active`), judged on this
+        instance, on the row re-read under the lock, and again after a mint.
+        Concurrent consumers serialize in :meth:`_renew_locked`: one mints and the
+        others adopt its persisted token. A refusal the kind handler attributes to
+        the key or identity (:meth:`CredentialKindHandler.records_failure`) records
         ``last_refresh_status="failed"``, so :attr:`is_reconnect_required` asks
         for a new key; every refusal is raised, and an empty token is never returned.
         """
@@ -1438,14 +1440,14 @@ class Credential(AuditMixin, AngeeDataModel, concrete=True):
         scope = " ".join(sorted({str(item).strip() for item in scopes} - {""}))
         if not scope:
             raise ValueError("A scoped access token needs at least one scope.")
+        self._require_active()
         if token := self._scoped_token(scope):
             return token
         live = ""
 
         def due(current: Self) -> bool:
             nonlocal live
-            if current.status != CredentialStatus.ACTIVE:
-                raise ValueError("This credential is not active, so it mints no tokens.")
+            current._require_active()
             live = current._scoped_token(scope)
             return not live
 
@@ -1459,9 +1461,14 @@ class Credential(AuditMixin, AngeeDataModel, concrete=True):
             return live
         # A key edit, reconnect or deactivation during the exchange keeps the minted
         # token out of the cache; the caller still receives it while the row is active.
-        if self.status != CredentialStatus.ACTIVE:
-            raise ValueError("This credential was deactivated while its token was minted.")
+        self._require_active()
         return str(minted["access_token"])
+
+    def _require_active(self) -> None:
+        """Refuse a scoped token, cached or minted, from a credential that is not active."""
+
+        if self.status != CredentialStatus.ACTIVE:
+            raise ValueError("This credential is not active, so it serves no tokens.")
 
     def _scoped_token(self, scope: str) -> str:
         """Return the cached token for ``scope`` until its renewal time, else ``""``."""
