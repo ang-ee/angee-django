@@ -657,7 +657,7 @@ def test_failed_fork_preserves_open_siblings_until_retry(execution, register_ste
     assert runner.execute(sibling.pk) is False
     assert runner.tick() == {
         "woken": 0, "reaped": 0, "redispatched": 0, "decisions": 0, "runs": 0, "records": 0,
-        "pruned": 0, "drained": 0,
+        "pruned": 0, "scheduled": 0, "drained": 0,
     }
     sibling.refresh_from_db()
     assert (sibling.status, sibling.state, sibling.wake_at, sibling.attempt, sibling.retries) == preserved

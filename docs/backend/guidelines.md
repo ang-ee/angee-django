@@ -630,8 +630,9 @@ data through REBAC, never a queryset bypass.
   implementation changes. A refused trigger disables with a reason; a refused
   child start fails its step. The enable preview shows prospective grants and
   workflow monitor readers through REBAC's native subject lookup.
-  A `TriggerSource` declares its grant targets; a model captured by
-  `record_changed` explicitly opts in and declares its own grant targets.
+  A record `TriggerSource` declares its grant targets; a model captured by
+  `record_changed` explicitly opts in and declares its own grant targets. A
+  schedule admits no record and grants nothing.
   Enablement writes listable, revocable tuples to the workflow principal, not
   an implicit permission on the enabling user. Workflow monitoring grants
   readers access to triggered runs; per-reader record references remain redacted

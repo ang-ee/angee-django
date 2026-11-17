@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Any, cast
 
 from django.apps import apps
@@ -45,6 +46,8 @@ from angee.provenance.contrib.angee.history import HistoryMixin
 from angee.provenance.contrib.angee.managers import AngeeHistoryManager
 from angee.provenance.contrib.angee.querysets import AngeeHistoryQuerySet
 from angee.resources.mixins import ResourceLoadMixin
+from angee.scheduling.fields import RecurrenceField
+from angee.scheduling.recurrence import Recurrence
 from angee.workflows.definition import MAP_BODY_SUFFIX, Definition, GraphEdge, GraphNode
 from angee.workflows.managers import (
     StepAttemptQuerySet,
@@ -1347,7 +1350,9 @@ class Trigger(ImplementationChoicesMixin, ResourceLoadMixin, AngeeDataModel, con
 
     An ``extends`` donor implementing ``trigger_input`` or ``check_admission``
     declares ``trigger_sources`` as registered source keys. Admission runs all
-    matching guards and accepts at most one matching input builder.
+    matching guards and accepts at most one matching input builder; a schedule
+    passes them no record. A record source names a model and condition; a
+    scheduled source names a recurrence instead.
     """
 
     resource_class = TriggerResource
@@ -1360,6 +1365,14 @@ class Trigger(ImplementationChoicesMixin, ResourceLoadMixin, AngeeDataModel, con
     granted_targets = models.JSONField(default=list, editable=False)
     """Targets this trigger contributes to the workflow principal's direct tuples."""
     disabled_reason = DiagnosticTextField(blank=True, default="", editable=False)
+    enabled_at = models.DateTimeField(null=True, blank=True, editable=False)
+    """When the current enablement began; a schedule records no occurrence before it."""
+    recurrence = RecurrenceField()
+    """A schedule's RFC-5545 rule; a blank rule runs once, at its start."""
+    recurrence_start = models.DateTimeField(null=True, blank=True)
+    """A schedule's first occurrence (its DTSTART), from which the rule unrolls."""
+    recurrence_zone = models.CharField(max_length=64, blank=True, default="")
+    """The IANA zone a schedule's rule unrolls in; validation accepts only blank, the project ``TIME_ZONE``."""
     objects = TriggerManager()
 
     @classmethod
@@ -1392,9 +1405,13 @@ class Trigger(ImplementationChoicesMixin, ResourceLoadMixin, AngeeDataModel, con
 
     @property
     def source_model(self) -> str:
-        """Expose the resolved model's canonical label, retaining unavailable-source configuration."""
+        """Expose the resolved model's canonical label, retaining unavailable-source configuration.
+
+        A schedule has no source model.
+        """
         try:
-            return self.source_class.model(self)._meta.label
+            source = self.source_class
+            return "" if source.scheduled else source.model(self)._meta.label
         except ImproperlyConfigured:
             return self.model_label
 
@@ -1417,11 +1434,29 @@ class Trigger(ImplementationChoicesMixin, ResourceLoadMixin, AngeeDataModel, con
         ).filter(targets).order_by("resource_type", "resource_id", "relation"))
 
     def validate_configuration(self) -> tuple[Any, Any]:
-        """Use the model's final resource input and native filter compiler."""
+        """Use the model's final resource input and native filter compiler.
+
+        A schedule has neither and returns ``(None, None)`` once its recurrence is
+        valid; a record source carries no recurrence.
+        """
         if self.source_class.watch_only:
             raise ValidationError({"source": "Watch-only observations cannot be workflow trigger sources."})
         self._trigger_hooks("trigger_input")
         self._trigger_hooks("check_admission")
+        if self.source_class.scheduled:
+            if self.model_label or self.condition:
+                raise ValidationError("A schedule admits no record; leave its model and condition empty.")
+            if self.recurrence_start is None:
+                raise ValidationError({"recurrence_start": "A schedule needs its first occurrence."})
+            if self.recurrence_zone:
+                raise ValidationError({"recurrence_zone": "Leave the zone blank: a schedule unrolls in the "
+                                                          "project time zone."})
+            Recurrence(self.recurrence).validate()
+            if self.workflow.subject_model:
+                raise ValidationError("A schedule starts runs without a subject; this workflow requires one.")
+            return None, None
+        if self.recurrence or self.recurrence_start is not None or self.recurrence_zone:
+            raise ValidationError({"recurrence": "Only a schedule trigger has a recurrence."})
         model = self.source_class.model(self)
         if self.workflow.subject_model and self.workflow.subject_model != model._meta.label:
             raise ValidationError("The trigger source does not match the workflow subject model.")
@@ -1465,6 +1500,22 @@ class Trigger(ImplementationChoicesMixin, ResourceLoadMixin, AngeeDataModel, con
         else:
             Trigger.check_admission(self, record, actor=actor)
 
+    def due_occurrences(self, until: datetime) -> list[datetime]:
+        """Return this schedule's unrecorded occurrences from its enablement up to ``until``.
+
+        The window opens at the later of :attr:`enabled_at` and the last recorded
+        occurrence, which is excluded, and closes before ``until``: occurrences
+        while the trigger was disabled are never due. A rule without a first
+        occurrence has none.
+        """
+        if self.recurrence_start is None:
+            return []
+        events = apps.get_model("workflows", "TriggerEvent").system_queryset()
+        last = events.filter(trigger=self).aggregate(last=models.Max("occurs_at"))["last"]
+        opened = max((moment for moment in (self.enabled_at, last) if moment is not None), default=until)
+        moments = Recurrence(self.recurrence).occurrences(self.recurrence_start, opened, until)
+        return [moment for moment in moments if last is None or moment > last]
+
     def clean(self) -> None:
         """Validate authoring and require disabling before changing an enabled rule."""
         super().clean()
@@ -1476,7 +1527,10 @@ class Trigger(ImplementationChoicesMixin, ResourceLoadMixin, AngeeDataModel, con
             raise ValidationError("A trigger's workflow cannot be changed.")
         if self.enabled and (previous is None or not previous.enabled):
             raise ValidationError("Enable triggers through the manager action.")
-        fields = ("condition", "source", "model_label", *self.source_class.scope_fields)
+        fields = (
+            "condition", "source", "model_label", "recurrence", "recurrence_start", "recurrence_zone",
+            *self.source_class.scope_fields,
+        )
         if previous is not None:
             for name in fields:
                 field = self._meta.get_field(name)
@@ -1498,17 +1552,21 @@ class Trigger(ImplementationChoicesMixin, ResourceLoadMixin, AngeeDataModel, con
                 previous = type(self).system_queryset().filter(pk=self.pk).lock_if_supported(no_key=True).get()
             self.clean()
             self.workflow.require_access("write", self.actor())
-            if not self.enabled and kwargs.get("update_fields") is not None:
-                kwargs["update_fields"] = {*kwargs["update_fields"], "enabled", "disabled_reason"}
+            if not self.enabled:
+                self.enabled_at = None
+                if kwargs.get("update_fields") is not None:
+                    kwargs["update_fields"] = {*kwargs["update_fields"], "enabled", "disabled_reason", "enabled_at"}
             super().save(*args, **kwargs)
             if previous is not None and previous.granted_targets and not self.enabled:
                 type(self).objects.reconcile_grants(self, ())
 
     def __str__(self) -> str:
-        """Identify the source and its model's reader-facing noun."""
+        """Identify the source and its model's reader-facing noun, or a schedule's rule."""
         try:
             source_class = self.source_class
             source = source_class.display_label()
+            if source_class.scheduled:
+                return f"{source}: {self.recurrence}" if self.recurrence else source
             model = source_class.model(self)
         except (ImproperlyConfigured, ValidationError):
             source = str(self.source)
@@ -1526,17 +1584,25 @@ class Trigger(ImplementationChoicesMixin, ResourceLoadMixin, AngeeDataModel, con
 
 
 class TriggerEvent(RecordRefMixin, AngeeDataModel, concrete=True):
-    """One retained admission fact per trigger and concrete record reference."""
+    """One retained admission fact per trigger and concrete record reference, or per schedule occurrence.
+
+    An occurrence row names no record. Only the latest due occurrence awaits
+    admission; earlier ones are skipped, never admitted.
+    """
 
     merge_policy = MergePolicy.KEEP
     sqid_prefix = "wfe_"
     trigger = models.ForeignKey("workflows.Trigger", on_delete=models.PROTECT, related_name="events")
-    record_content_type = models.ForeignKey(ContentType, on_delete=models.PROTECT)
-    record_object_id = models.PositiveBigIntegerField()
+    record_content_type = models.ForeignKey(ContentType, on_delete=models.PROTECT, null=True, blank=True)
+    record_object_id = models.PositiveBigIntegerField(null=True, blank=True)
     record = GenericForeignKey("record_content_type", "record_object_id")
+    occurs_at = models.DateTimeField(null=True, blank=True)
+    """The schedule occurrence this row admits; record rows leave it empty."""
     changed_at = models.DateTimeField(db_default=Now())
     evaluated_at = models.DateTimeField(null=True, blank=True)
     admitted_at = models.DateTimeField(null=True, blank=True)
+    skipped_at = models.DateTimeField(null=True, blank=True)
+    """When a later due occurrence superseded this one before admission."""
     rejection = DiagnosticTextField(blank=True, default="")
     objects = TriggerEventManager()
 
@@ -1551,9 +1617,19 @@ class TriggerEvent(RecordRefMixin, AngeeDataModel, concrete=True):
         rebac_resource_type = "workflows/trigger_event"
         constraints = [models.UniqueConstraint(
             fields=("trigger", "record_content_type", "record_object_id"), name="workflows_trigger_record_unique",
+        ), models.UniqueConstraint(
+            fields=("trigger", "occurs_at"), name="workflows_trigger_occurrence_unique",
         ), models.CheckConstraint(
             condition=models.Q(admitted_at__isnull=True) | models.Q(evaluated_at__isnull=False),
             name="workflows_event_admission_evaluated",
+        ), models.CheckConstraint(
+            condition=(
+                models.Q(occurs_at__isnull=True, record_content_type__isnull=False, record_object_id__isnull=False,
+                         skipped_at__isnull=True)
+                | (models.Q(occurs_at__isnull=False, record_content_type__isnull=True, record_object_id__isnull=True)
+                   & (models.Q(skipped_at__isnull=True) | models.Q(admitted_at__isnull=True)))
+            ),
+            name="workflows_event_record_or_occurrence",
         )]
         indexes = [models.Index(
             fields=("changed_at", "id"), condition=models.Q(admitted_at__isnull=True),

@@ -76,6 +76,19 @@ readable ancestors. `ctx.note(message, tone="info")` adds a small recorded note.
 The three reader-facing `StepRun.hold` states are `decision`, `run` and `error`;
 timer, record-change and map scheduling remain internal wait mechanics.
 
+A [`Schedule`](triggers.py) trigger (`source: schedule`) names a recurrence instead of a
+model and condition: `recurrence` (an RRULE that `angee.scheduling` expands),
+`recurrence_start` and `recurrence_zone`; its workflow declares no subject model.
+The workflow tick records each enabled schedule's occurrences after the later of its
+`enabled_at` and its last recorded occurrence, then drains them. The latest due
+occurrence becomes a `TriggerEvent` keyed by `(trigger, occurs_at)` and starts one run
+with no subject and the request key `trigger:<trigger>:<occurrence>`. Earlier ones,
+missed while workers were down, are recorded with `skipped_at` and never run, as is
+any older occurrence still pending. Occurrences while a trigger is disabled are never
+recorded. A schedule contributes no source grant: its runs act as the workflow
+principal with the reach it already has. Expansion uses the project `TIME_ZONE`, so
+the zone must stay blank.
+
 `TriggerSource.watch_only` declares an observation that wakes `StepWatch` rows
 without contributing trigger scope or permissions. Its `model_label` and
 optional `fields` select saves through the same
@@ -203,6 +216,11 @@ Delivery is at least once; step implementations must tolerate repeated execution
 dispatch recovery, but has no owner for an overall run budget
 or deadline. Workflows that need an aggregate time, page or resource budget still
 need that engine contract; step bounds do not establish a run-wide limit.
+
+**Named gap: occurrence ledger retention.** Trigger events are retained after their
+runs are pruned, so a frequent schedule grows the ledger by one row per occurrence.
+No owner prunes old occurrence events, although only the latest per trigger is
+needed to open the next window.
 
 Resource rows supply `key`, `name`, `subject_model`, `draft` and `publish`.
 `subject_model` accepts a Django model label and stores the model's canonical

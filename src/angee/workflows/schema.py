@@ -470,13 +470,19 @@ class TriggerEnablePreviewType:
 class TriggerType(AngeeNode):
     """A workflow's editable event admission policy and server-owned activation."""
 
-    display_name: str = strawberry_django.field(resolver=AngeeNode.display_name, only=["source", "model_label"])
+    display_name: str = strawberry_django.field(
+        resolver=AngeeNode.display_name, only=["source", "model_label", "recurrence"],
+    )
     workflow: WorkflowType | None = actor_scoped_to_one("workflow")
     source: auto
     model_label: auto
     source_model: str = strawberry_django.field(only=["source", "model_label"])
     condition: JSON
+    recurrence: auto
+    recurrence_start: auto
+    recurrence_zone: auto
     enabled: auto
+    enabled_at: auto
     disabled_reason: auto
 
     @strawberry_django.field
@@ -526,9 +532,11 @@ class TriggerEventType(RecordReferenceNode):
 
     trigger: TriggerType | None = actor_scoped_to_one("trigger")
     started_run: WorkflowRunType | None = actor_scoped_to_one("started_run")
+    occurs_at: auto
     changed_at: auto
     evaluated_at: auto
     admitted_at: auto
+    skipped_at: auto
     rejection: auto
 
     record_model: str | None = strawberry_django.field(
@@ -651,12 +659,18 @@ _TRIGGER_INSERT = (
     "source",
     "model_label",
     "condition",
+    "recurrence",
+    "recurrence_start",
+    "recurrence_zone",
     *declared_hasura_resource_fields(Trigger, "hasura_insertable_fields"),
 )
 _TRIGGER_UPDATE = (
     "source",
     "model_label",
     "condition",
+    "recurrence",
+    "recurrence_start",
+    "recurrence_zone",
     *declared_hasura_resource_fields(Trigger, "hasura_updatable_fields"),
 )
 _TRIGGER_RESOURCE = hasura_model_resource(
@@ -686,10 +700,10 @@ _TRIGGER_RESOURCE = hasura_model_resource(
 _TRIGGER_EVENT_RESOURCE = hasura_model_resource(
     TriggerEventType,
     model=TriggerEvent,
-    filterable=["id", "trigger", "started_run", "admitted_at"],
+    filterable=["id", "trigger", "started_run", "admitted_at", "skipped_at"],
     record_ref_filters=("record_model", "record_id"),
     record_ref_requires_read=True,
-    sortable=["changed_at", "evaluated_at", "admitted_at"],
+    sortable=["occurs_at", "changed_at", "evaluated_at", "admitted_at"],
     aggregatable=["id"],
     insert=False,
     update=False,

@@ -53,9 +53,11 @@ EXPECTED_VERBS = {
         "to_running to_succeeded to_waiting undispatched"
     ),
     "workflows.StepWatch.manager": "record_change record_changes register wait_kind",
-    "workflows.Trigger.manager": "admit disable drain enable enable_preview lock_grants reconcile_grants revoke_grant",
+    "workflows.Trigger.manager": (
+        "admit disable drain enable enable_preview lock_grants reconcile_grants record_occurrences revoke_grant"
+    ),
     "workflows.Trigger.queryset": "bulk_create update",
-    "workflows.TriggerEvent.manager": "record_change record_changes",
+    "workflows.TriggerEvent.manager": "record_change record_changes record_occurrences",
     "workflows.TriggerEvent.queryset": "pending",
     "workflows.Workflow.manager": "authoring_outcomes install_definition publish save_draft save_identity",
     "workflows.WorkflowRun.manager": (
