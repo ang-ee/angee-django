@@ -23,15 +23,13 @@ import json
 from collections.abc import Iterator, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from email.utils import parsedate_to_datetime
 from typing import Any, BinaryIO
 from urllib.parse import quote, urlencode
 
 import httpx2
-from django.utils import timezone
 
 from angee.integrate.errors import IntegrationError
-from angee.integrate.http import HttpClient, ResponseTooLargeError
+from angee.integrate.http import HttpClient, ResponseTooLargeError, retry_after
 
 DRIVE_API = "https://www.googleapis.com/drive/v3"
 FOLDER_MIME = "application/vnd.google-apps.folder"
@@ -275,7 +273,7 @@ class GoogleDriveClient:
             raise GoogleDriveError(
                 "Google Drive is rate limiting this account; try the sync again later.",
                 transient=True,
-                retry_after=_retry_after(response),
+                retry_after=retry_after(response),
             )
         if status == 401:
             raise GoogleDriveError("Google Drive no longer accepts this account; reconnect the Google account.")
@@ -384,15 +382,3 @@ def _bounded_body(response: httpx2.Response) -> bytes:
             break
     return body[:_ERROR_BODY_MAX_BYTES]
 
-
-def _retry_after(response: httpx2.Response) -> timedelta | None:
-    """Return Google's ``Retry-After`` (seconds or an HTTP date) as a positive delay, if sent."""
-
-    value = response.headers.get("Retry-After", "").strip()
-    if value.isdecimal():
-        return timedelta(seconds=int(value)) if int(value) > 0 else None
-    try:
-        delay = parsedate_to_datetime(value) - timezone.now()
-    except (TypeError, ValueError):
-        return None
-    return delay if delay > timedelta(0) else None

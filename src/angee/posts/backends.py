@@ -24,8 +24,6 @@ from collections.abc import Callable, Sequence
 from contextlib import AbstractContextManager
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
-from email.utils import parsedate_to_datetime
-from math import isfinite
 from typing import Any, ClassVar, Self, cast
 
 import httpx2
@@ -38,6 +36,7 @@ from rebac import system_context
 from angee.integrate.discovery import ConnectionDiscovery
 from angee.integrate.errors import IntegrationError, RequestNotSentError
 from angee.integrate.http import HttpClientMixin, ResponseTooLargeError
+from angee.integrate.http import retry_after as http_retry_after
 from angee.integrate.impl import AdapterContractError, BridgeImpl
 from angee.integrate.net import AddressNotAllowedError
 from angee.integrate.states import StreamDefinition
@@ -339,22 +338,9 @@ class FeedBackend(BridgeImpl, HttpClientMixin):
 
     @staticmethod
     def retry_after(response: Any, *, now: datetime | None = None) -> timedelta:
-        """Parse a provider Retry-After delta/date, falling back to one minute."""
+        """Return the provider's ``Retry-After`` (:func:`angee.integrate.http.retry_after`), else one minute."""
 
-        value = response.headers.get("Retry-After", "")
-        try:
-            seconds = float(value)
-            if isfinite(seconds) and seconds > 0:
-                return timedelta(seconds=seconds)
-        except ValueError, TypeError, OverflowError:
-            pass
-        try:
-            at = parsedate_to_datetime(value)
-            if at.tzinfo is not None:
-                return max(at - (now or timezone.now()), timedelta(seconds=1))
-        except ValueError, TypeError, OverflowError:
-            pass
-        return timedelta(minutes=1)
+        return http_retry_after(response, now=now) or timedelta(minutes=1)
 
     @classmethod
     def reconciles_delivery(cls) -> bool:

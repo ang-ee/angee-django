@@ -19,7 +19,7 @@ from angee.base.serialization import canonical_json_sha256
 from angee.integrate.credentials import CredentialKind
 from angee.integrate.discovery import ConnectionDiscovery
 from angee.integrate.errors import IntegrationError
-from angee.integrate.http import HttpClientMixin
+from angee.integrate.http import HttpClientMixin, retry_after
 from angee.integrate.impl import BridgeImpl
 from angee.integrate.states import StreamDefinition, StreamKind, SyncFailureKind
 from angee.integrate.streams import ApplyResult, CursorInvalid, RecordChange, SemanticError, StreamPage
@@ -207,9 +207,7 @@ class NotionBackend(BridgeImpl, HttpClientMixin):
             max_bytes=8 * 1024 * 1024,
         )
         if not response.is_success:
-            hint = response.headers.get("Retry-After", "")
-            delay = timedelta(seconds=int(hint)) if hint.isdecimal() and 0 < int(hint) <= 86400 else None
-            raise NotionResponseError(response.status_code, retry_after=delay)
+            raise NotionResponseError(response.status_code, retry_after=retry_after(response))
         try:
             return model.model_validate_json(response.content)
         except ValidationError as error:
