@@ -33,7 +33,9 @@ from angee.messaging.backends import ChannelBackend, DeliveryOutcome, DeliveryUn
 
 logger = logging.getLogger(__name__)
 
-_ENVELOPE_HEADERS = frozenset({"bcc", "cc", "from", "subject", "to"})
+# Rendered from the message's own facts (participants, TITLE, external id, parent),
+# so a retained header part never adds a second copy of one.
+_ENVELOPE_HEADERS = frozenset({"bcc", "cc", "from", "in-reply-to", "message-id", "references", "subject", "to"})
 _HEADER_NAME_RE = re.compile(r"[!#$%&'*+\-.^_`|~0-9A-Za-z]+\Z")
 
 
@@ -177,6 +179,10 @@ class AnymailEmailChannelBackend(ChannelBackend):
         if message.external_id:
             extra_headers["Message-ID"] = _message_id(str(message.external_id))
             extra_headers["X-Angee-External-ID"] = str(message.external_id)
+        if message.parent_id is not None and (parent_id := _rfc_message_id(str(message.parent.external_id))):
+            # ``parent`` is the reply's In-Reply-To; References carries it too, so an
+            # answer still threads when a provider rewrites this message's Message-ID.
+            extra_headers["In-Reply-To"] = extra_headers["References"] = parent_id
         email = AnymailMessage(
             subject=subject,
             body=plain,
@@ -291,11 +297,16 @@ def _bare_address(address: str) -> str:
     return parsed[0][1].strip().casefold() if parsed else ""
 
 
-def _message_id(external_id: str) -> str:
-    """Return a stable RFC-5322 Message-ID derived from the delivery idempotency key."""
+def _rfc_message_id(external_id: str) -> str:
+    """Return ``<external_id>`` when the id is already an RFC-5322 Message-ID, else ``""``."""
 
     cleaned = external_id.strip().strip("<>")
     if cleaned and "@" in cleaned and not any(char.isspace() for char in cleaned):
         return f"<{cleaned}>"
-    digest = hashlib.sha256(external_id.encode("utf-8")).hexdigest()
-    return f"<{digest}@angee.invalid>"
+    return ""
+
+
+def _message_id(external_id: str) -> str:
+    """Return a stable RFC-5322 Message-ID derived from the delivery idempotency key."""
+
+    return _rfc_message_id(external_id) or f"<{hashlib.sha256(external_id.encode('utf-8')).hexdigest()}@angee.invalid>"
