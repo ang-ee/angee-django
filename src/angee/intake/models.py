@@ -5,7 +5,6 @@ from __future__ import annotations
 import logging
 from collections.abc import Callable, Mapping
 from datetime import datetime
-from email.utils import getaddresses
 from types import NotImplementedType
 from typing import TYPE_CHECKING, Any, ClassVar, Final, Self, cast
 
@@ -769,7 +768,7 @@ class Need(ResourceLoadMixin, HistoryMixin, OptimisticLockMixin, AuditMixin, Ang
         return account.pk if account is not None else None
 
     def reply_to_addresses(self) -> tuple[str, ...]:
-        """Return the lower-case addresses the emailed request's ``Reply-To`` names, in header order.
+        """Return the addresses the emailed request's ``Reply-To`` names (``Message.reply_addresses``).
 
         A relayed request (a web form, a mailing list) names its requester here;
         messaging's email reply goes to these addresses before the sender
@@ -780,9 +779,7 @@ class Need(ResourceLoadMixin, HistoryMixin, OptimisticLockMixin, AuditMixin, Ang
         if source is None or source.platform != "email":
             return ()
         with system_context(reason="intake.need.reply_to"):
-            values = source.source_header_values("reply-to")
-        addresses = (address.strip().lower() for _name, address in getaddresses(values))
-        return tuple(dict.fromkeys(address for address in addresses if "@" in address))
+            return tuple(source.reply_addresses())
 
     def requester_address(self) -> str:
         """Return the requester's address: the claimed email, else an emailed request's Reply-To, else its sender."""

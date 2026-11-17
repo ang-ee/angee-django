@@ -12,7 +12,9 @@ live in code docstrings.
 
 - `Message.objects.compose_reply` composes an email reply as a complete envelope:
   addressed to the parent's `Reply-To` when it carries one, else its sender (RFC
-  5322 §3.6.2), titled `Re: <thread title>` without stacking prefixes, and
+  5322 §3.6.2; `Message.reply_addresses(actor=)` is the one reader of `Reply-To`:
+  lower-cased addresses with their display names, in header order, read with the
+  caller's access, empty without the header), titled `Re: <thread title>` without stacking prefixes, and
   identified by a Message-ID (`make_msgid(domain=DNS_NAME)`, as Django mints one) as
   its external id. The email transport renders the parent's Message-ID as
   `In-Reply-To` and `References`, so the answer threads onto the same conversation
@@ -71,7 +73,7 @@ live in code docstrings.
   refused. `to` names the request to ask about. An inbound email answering a
   message on a request's conversation (its `In-Reply-To` resolved there), while
   its task is in triage, from that request's sender or from an address its
-  `Reply-To` named (`Need.reply_to_addresses`), is the request's reply: it files
+  `Reply-To` named (read through `Message.reply_addresses`), is the request's reply: it files
   no new request and task, and wakes the hold when it awaits that requester's
   account. A relayed request's requester is its `Reply-To` address, which their
   account is created for. A fresh email that only reuses a subject, and any email
