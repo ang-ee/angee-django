@@ -96,6 +96,11 @@ export {
   type SurfacePanelProps,
 } from "./SurfacePanel";
 export {
+  TextDiff,
+  textDiffVariants,
+  type TextDiffProps,
+} from "./TextDiff";
+export {
   SurfaceHeader,
   surfaceHeaderVariants,
   type SurfaceHeaderProps,

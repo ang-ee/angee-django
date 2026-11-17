@@ -320,6 +320,7 @@ resource transport/auth/live integration. The active frontend owners are
 | @floating-ui/react-dom | Floating-element positioning and virtual anchors | Popover and menu anchoring |
 | @angee/logo-react | Angee brand logo and cube marks | Brand lockup in the public layout |
 | react-markdown + remark-gfm | Markdown rendering (GitHub-flavored) | Markdown widget preview |
+| jsdiff (`diff`) | Word-level text comparison (`diffWords`) | `@angee/ui` [TextDiff](../packages/ui/src/fragments/TextDiff.tsx) marks removals and additions with native `<del>`/`<ins>` and names the change count for assistive technology |
 | tailwind-variants | Variant recipes with slots | Component recipes |
 | tw-animate-css | Tailwind 4 animation utilities | Motion tokens |
 | cmdk | Command menu | Spotlight command surface |
