@@ -30,6 +30,7 @@ from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import nullcontext
 from contextvars import Context
 from datetime import datetime, time, timedelta
+from email.utils import getaddresses
 from functools import partial, reduce
 from itertools import batched
 from operator import or_
@@ -3001,10 +3002,11 @@ class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
         Admission and replay run under actor even for an elevated caller.
 
         An email reply (the parent's kind is ``EMAIL``) is a complete envelope: it is
-        addressed to the parent's sender, titled ``Re: <thread title>`` and identified
-        by a Message-ID minted as Django mints one, so an answer to it threads back
-        onto this conversation; its ``parent`` renders as ``In-Reply-To``. A reply of
-        any other kind keeps a client token for the transport's provider id.
+        addressed to the parent's ``Reply-To`` when present, else its sender (RFC 5322
+        §3.6.2), titled ``Re: <thread title>`` and identified by a Message-ID minted as
+        Django mints one, so an answer to it threads back onto this conversation; its
+        ``parent`` renders as ``In-Reply-To``. A reply of any other kind keeps a client
+        token for the transport's provider id.
         """
 
         if is_sudo():
@@ -3025,8 +3027,13 @@ class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
         if sender is None or sender.pk is None or sender.platform != parent.platform:
             raise ValidationError({"sender": "The reply sender must use the comment's platform."})
         email = parent.message_type == self.model.MessageKind.EMAIL
-        if email and parent.sender_id is None:
-            raise ValidationError("An email reply requires a parent sender to address.")
+        reply_to = {
+            address.strip().lower(): name.strip()
+            for name, address in getaddresses(parent.source_header_values("reply-to", actor=actor) if email else ())
+            if "@" in address
+        }
+        if email and not reply_to and parent.sender_id is None:
+            raise ValidationError("An email reply requires a parent Reply-To or sender to address.")
         values = dict(local or {})
         if any(key.startswith("delivery_") for key in values):
             raise ValidationError({"local": "Delivery facts are owned by messaging."})
@@ -3064,7 +3071,11 @@ class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
                     preview=body[: self.model.preview.field.max_length],
                     metadata=_bounded_message_metadata({"local": values}), created_by_id=created_by_id,
                 )
-                position = self._write_email_reply_envelope(reply, parent, created_by_id=created_by_id) if email else 0
+                position = (
+                    self._write_email_reply_envelope(reply, parent, reply_to=reply_to, created_by_id=created_by_id)
+                    if email
+                    else 0
+                )
                 self._build_parts(
                     reply, ParsedPart(text=body), parent=None, position=position, created_by_id=created_by_id,
                 )
@@ -3075,21 +3086,33 @@ class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
                 require_changeset().record_created(reply)
         return reply.with_actor(actor)
 
-    def _write_email_reply_envelope(self, reply: Any, parent: Any, *, created_by_id: Any) -> int:
-        """Address an email reply to its parent's sender as ``Re: <thread title>``; return the body position.
+    def _write_email_reply_envelope(
+        self, reply: Any, parent: Any, *, reply_to: Mapping[str, str], created_by_id: Any
+    ) -> int:
+        """Address an email reply as ``Re: <thread title>``; return the body position.
 
-        The thread title is the normalized subject, so prefixes never stack. The
-        reply's ``parent`` is its In-Reply-To, which the email transport renders.
+        ``reply_to`` maps each of the parent's Reply-To addresses to its display name;
+        without one the reply goes to the handle the parent was sent from. The thread
+        title is the normalized subject, so prefixes never stack. The reply's ``parent``
+        is its In-Reply-To, which the email transport renders.
         """
 
         participant_model = apps.get_model("messaging", "Participant")
-        participant_model.objects.create(
-            message_id=reply.pk,
-            thread_id=reply.thread_id,
-            handle_id=parent.sender_id,
-            role=participant_model.ParticipantRole.TO,
-            created_by_id=created_by_id,
-        )
+        handle_model = apps.get_model("parties", "Handle")
+        handle_ids = [
+            handle_model.objects.upsert(
+                platform=reply.platform, value=address, display_name=name, created_by_id=created_by_id
+            ).pk
+            for address, name in reply_to.items()
+        ] or [parent.sender_id]
+        for handle_id in dict.fromkeys(handle_ids):
+            participant_model.objects.create(
+                message_id=reply.pk,
+                thread_id=reply.thread_id,
+                handle_id=handle_id,
+                role=participant_model.ParticipantRole.TO,
+                created_by_id=created_by_id,
+            )
         title = normalize_subject(parent.thread.display_title)
         return self._write_envelope_parts(reply, subject=f"Re: {title}" if title else "", created_by_id=created_by_id)
 
