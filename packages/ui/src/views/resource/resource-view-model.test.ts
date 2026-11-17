@@ -344,6 +344,11 @@ describe("resource-view model", () => {
     expect(parsed.anchor).toBe("2026-06-15");
   });
 
+  test("reads the list mode from the URL and rejects an unknown mode", () => {
+    expect(resourceViewSearchToState({ view: "calendar", mode: "list" }).mode).toBe("list");
+    expect(resourceViewSearchToState({ view: "calendar", mode: "agenda" }).mode).toBe("month");
+  });
+
   test("serializes mode/anchor only under the calendar kind", () => {
     // Defaults (month + today) are omitted even under the calendar kind.
     expect(resourceViewStateToSearch(createResourceViewState({ view: "calendar" })))

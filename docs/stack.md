@@ -263,6 +263,7 @@ settings or through the `ANGEE_WEB_STATEMENT_TIMEOUT` environment variable.
 | react-pdf (+ pdfjs-dist) | Inline PDF rendering (pdf.js) | storage file previewer |
 | @vidstack/react | Inline video/audio player | storage file previewer |
 | heic-to | Client-side HEIC/HEIF decode to a displayable image (current libheif-wasm) | storage HEIC previewer |
+| postal-mime | Browser-side RFC 822 / MIME parsing: multipart bodies, transfer encodings, charsets, encoded headers and inline parts | messaging's email previewer (`message/rfc822`, lazy-loaded); the HTML alternative renders in `@angee/ui`'s `MessageHtmlFrame` sandbox |
 | pnpm | JavaScript dependency resolution and workspaces | Workspace layout |
 | Node >= 22.13 | JavaScript build runtime | Project runtime |
 
@@ -320,6 +321,7 @@ resource transport/auth/live integration. The active frontend owners are
 | @floating-ui/react-dom | Floating-element positioning and virtual anchors | Popover and menu anchoring |
 | @angee/logo-react | Angee brand logo and cube marks | Brand lockup in the public layout |
 | react-markdown + remark-gfm | Markdown rendering (GitHub-flavored) | Markdown widget preview |
+| jsdiff (`diff`) | Word-level text comparison (`diffWords`) | `@angee/ui` [TextDiff](../packages/ui/src/fragments/TextDiff.tsx) marks removals and additions with native `<del>`/`<ins>` and names the change count for assistive technology |
 | tailwind-variants | Variant recipes with slots | Component recipes |
 | tw-animate-css | Tailwind 4 animation utilities | Motion tokens |
 | cmdk | Command menu | Spotlight command surface |
@@ -328,13 +330,13 @@ resource transport/auth/live integration. The active frontend owners are
 | CodeMirror 6 (+ @codemirror/lang-json) | Text / Markdown / JSON editor | Markdown and JSON widget editors (shared `useCodeMirrorEditor`) |
 | @xyflow/react | node/edge graph canvas | `@angee/ui` [GraphView](../packages/ui/src/views/GraphView.tsx) canvas and [GraphEditor](../packages/ui/src/views/GraphEditor.tsx) editing controls |
 | @dagrejs/dagre | directed-graph layout | `@angee/ui` [layoutGraph and placeGraphNodeBeside](../packages/ui/src/views/graph-layout.ts) placement helpers |
-| FullCalendar (Standard: `@fullcalendar/react` + `@fullcalendar/daygrid` + `@fullcalendar/timegrid` + `@fullcalendar/interaction`) | Month/week/day event calendar, drag/resize/select | `@angee/ui` `CalendarView` renders server-expanded occurrences and wires interactions to auto-CRUD; code-split behind a lazy import and themed through the token set |
+| FullCalendar (Standard: `@fullcalendar/react` + `@fullcalendar/daygrid` + `@fullcalendar/timegrid` + `@fullcalendar/list` + `@fullcalendar/interaction`) | Month/week/day/list event calendar, drag/resize/select | `@angee/ui` `CalendarView` renders server-expanded occurrences and wires interactions to auto-CRUD; code-split behind a lazy import and themed through the token set |
 | ReUI Base UI Gantt (vendored MIT) + @date-fns/tz | Date-scaled rows, bar layout, zoom, timeline navigation and timezone arithmetic | `@angee/ui` GanttView lazy-loads the drawing layer; the `gantt` collection kind composes native list queries and shared resource filter/search/group/saved-view state, pages related rows with all their bars, preserves empty rows, and disables drag/resize writes. Source, local adaptations and license: `packages/ui/src/views/gantt/UPSTREAM.md` and `LICENSE`. |
 | @dnd-kit | Drag and drop | Board and rail interactions |
 | Native browser drag/drop | File drag enter/leave/drop events and `DataTransfer.files` | `@angee/ui` upload drop target primitive |
 
-Event-calendar library choice: FullCalendar Standard (all four packages MIT)
-owns the month/week/day event surface. `@schedule-x` was evaluated and rejected
+Event-calendar library choice: FullCalendar Standard (all five packages MIT)
+owns the month/week/day/list event surface. `@schedule-x` was evaluated and rejected
 because its drag-and-drop and drag-to-create plugins — exactly the two
 interactions a framework calendar primitive requires — are premium/paid, a
 license cliff on code every consumer inherits (revisit only if it relicenses).

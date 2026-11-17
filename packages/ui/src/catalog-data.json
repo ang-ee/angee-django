@@ -912,7 +912,7 @@
     "source": "packages/ui/src/views/calendar/CalendarView.tsx",
     "kind": "surface",
     "status": "stable",
-    "storyId": null
+    "storyId": "views-calendarview--default"
   },
   {
     "package": "@angee/ui",
@@ -1830,6 +1830,14 @@
     "kind": "surface",
     "status": "stable",
     "storyId": "library-owners--editors"
+  },
+  {
+    "package": "@angee/ui",
+    "name": "DateTile",
+    "source": "packages/ui/src/fragments/DateTile.tsx",
+    "kind": "fragment",
+    "status": "stable",
+    "storyId": "fragments-datetile--default"
   },
   {
     "package": "@angee/ui",
@@ -2925,6 +2933,14 @@
   },
   {
     "package": "@angee/ui",
+    "name": "MessageHtmlFrame",
+    "source": "packages/ui/src/communication/message/index.tsx",
+    "kind": "fragment",
+    "status": "stable",
+    "storyId": null
+  },
+  {
+    "package": "@angee/ui",
     "name": "MessagePartsView",
     "source": "packages/ui/src/communication/message/index.tsx",
     "kind": "fragment",
@@ -3422,6 +3438,15 @@
     "source": "packages/ui/src/ui/popover.tsx",
     "kind": "primitive",
     "owner": "@angee/ui:Popover",
+    "status": "stable",
+    "storyId": null
+  },
+  {
+    "package": "@angee/ui",
+    "name": "PreviewFileContent",
+    "source": "packages/ui/src/preview/builtins.tsx",
+    "kind": "surface",
+    "owner": "@angee/ui:PreviewPane",
     "status": "stable",
     "storyId": null
   },
@@ -4952,6 +4977,14 @@
   },
   {
     "package": "@angee/ui",
+    "name": "TextDiff",
+    "source": "packages/ui/src/fragments/TextDiff.tsx",
+    "kind": "fragment",
+    "status": "stable",
+    "storyId": "fragments-textdiff--default"
+  },
+  {
+    "package": "@angee/ui",
     "name": "Textarea",
     "source": "packages/ui/src/ui/textarea.tsx",
     "kind": "primitive",
@@ -5846,6 +5879,14 @@
     "source": "packages/ui/src/widgets/date-format.ts",
     "kind": null,
     "reason": "Format utility: converts data to display or storage text.",
+    "status": "stable",
+    "storyId": null
+  },
+  {
+    "package": "@angee/ui",
+    "name": "dateTileVariants",
+    "source": "packages/ui/src/fragments/DateTile.tsx",
+    "kind": "token",
     "status": "stable",
     "storyId": null
   },
@@ -7569,6 +7610,14 @@
     "package": "@angee/ui",
     "name": "tabsVariants",
     "source": "packages/ui/src/ui/tabs.tsx",
+    "kind": "token",
+    "status": "stable",
+    "storyId": null
+  },
+  {
+    "package": "@angee/ui",
+    "name": "textDiffVariants",
+    "source": "packages/ui/src/fragments/TextDiff.tsx",
     "kind": "token",
     "status": "stable",
     "storyId": null

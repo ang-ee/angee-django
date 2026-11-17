@@ -143,6 +143,26 @@ const shell: ShellSettings = {
 };
 
 describe("selectApp", () => {
+  test("a theme lock travels with the theme it is declared beside", () => {
+    const locked = roots.map((root) => root.id === "accounting" ? { ...root, themeLocked: true } : root);
+    expect(selectApp({ search: "?app=accounting", shell, roots: locked })).toMatchObject({
+      theme: "books.paper", themeLocked: true,
+      sources: { theme: 'menu root "accounting"', themeLocked: 'menu root "accounting"' },
+    });
+    // A named app inheriting the root's theme inherits its lock.
+    expect(selectApp({ search: "?app=payables", shell, roots: locked })).toMatchObject({ theme: "books.paper", themeLocked: true });
+    // A named app that declares its own theme decides its own lock.
+    expect(selectApp({ search: "?app=payables", roots: locked, shell: {
+      apps: { payables: { rail: ["accounting"], theme: "suite.light" } },
+    } })).not.toHaveProperty("themeLocked");
+    expect(selectApp({ search: "?app=payables", roots, shell: {
+      apps: { payables: { rail: ["accounting"], theme: "suite.light", themeLocked: true } },
+    } })).toMatchObject({ theme: "suite.light", themeLocked: true, sources: { themeLocked: "ANGEE_UI.shell.apps.payables" } });
+    // The shell's own theme never locks.
+    expect(selectApp({ roots: locked, shell })).not.toHaveProperty("themeLocked");
+    expect(selectApp({ search: "?app=library", roots: locked, shell })).not.toHaveProperty("themeLocked");
+  });
+
   test("only the selected app supplies a rail default, and named apps may override their first root", () => {
     const configured = roots.map((root) => root.id === "accounting" ? { ...root, railExpanded: false } : root);
     expect(selectApp({ search: "?app=accounting", shell, roots: configured })).toMatchObject({
@@ -257,6 +277,11 @@ describe("assertShellSettings", () => {
     expect(() => assertShellSettings({ apps: { ap: { rail: ["accounting"], home: "" } } }))
       .toThrow("ANGEE_UI.shell.apps.ap.home must be a non-empty string.");
     expect(() => assertShellSettings({ apps: { ap: { rail: ["accounting"], railExpanded: false } } })).not.toThrow();
+    expect(() => assertShellSettings({ apps: { ap: { rail: ["accounting"], theme: "books.paper", themeLocked: true } } })).not.toThrow();
+    expect(() => assertShellSettings({ apps: { ap: { rail: ["accounting"], themeLocked: "yes" } } }))
+      .toThrow("ANGEE_UI.shell.apps.ap.themeLocked must be true or false.");
+    expect(() => assertShellSettings({ theme: "suite.light", themeLocked: true }))
+      .toThrow('ANGEE_UI.shell has unknown key "themeLocked".');
     expect(() => assertShellSettings({ apps: { ap: { rail: ["accounting"], railExpanded: "false" } } }))
       .toThrow("ANGEE_UI.shell.apps.ap.railExpanded must be true or false.");
     expect(() => assertShellSettings({ hosts: { "ap.example.test": ["accounting"] } }))

@@ -375,32 +375,60 @@ function renderMessagePartText(
   if (normaliseMime(mime) !== "text/html") {
     return <div className="whitespace-pre-wrap break-words">{text}</div>;
   }
+  // The first part naming a content id supplies it.
+  const inlineUrls: Record<string, string> = {};
+  for (const part of parts) {
+    const cid = part.cid?.trim();
+    const url = part.file ? safeMessagePartUrl(resolveFileUrl(part.file)) : undefined;
+    if (cid && url && !Object.hasOwn(inlineUrls, cid)) inlineUrls[cid] = url;
+  }
+  return <MessageHtmlFrame html={text} title={t("message.parts.htmlBody")} inlineUrls={inlineUrls} />;
+}
+
+export interface MessageHtmlFrameProps {
+  /** The untrusted HTML body. */
+  html: string;
+  /** The frame's accessible name. */
+  title: string;
+  /** The body's language tag, set on the document root. */
+  lang?: string;
+  /** Content id → a URL already safe to load (a same-origin path, http(s) or a data URL), for `cid:` references. */
+  inlineUrls?: Readonly<Record<string, string>>;
+  className?: string;
+}
+
+/**
+ * Untrusted message HTML in a sandboxed document: no scripts and no same origin, a
+ * content security policy admitting only inline styles and images, and `cid:`
+ * references resolved to the given URLs. The one sandbox for message HTML, shared by
+ * message parts and email previews.
+ * @kind fragment
+ */
+export function MessageHtmlFrame({ html, title, lang, inlineUrls = {}, className }: MessageHtmlFrameProps): ReactElement {
   return (
     <iframe
-      title={t("message.parts.htmlBody")}
+      title={title}
       sandbox=""
       referrerPolicy="no-referrer"
-      srcDoc={sandboxedMessageHtml(text, parts, resolveFileUrl)}
-      className="block h-96 w-full max-w-full rounded-6 border border-current/20 bg-white"
+      srcDoc={sandboxedMessageHtml(html, inlineUrls, lang)}
+      className={cn("block h-96 w-full max-w-full rounded-6 border border-current/20 bg-white", className)}
     />
   );
 }
 
+const LANGUAGE_TAG = /^[A-Za-z]{1,8}(?:-[A-Za-z0-9]{1,8})*$/;
+
 function sandboxedMessageHtml(
   html: string,
-  parts: readonly MessagePart[],
-  resolveFileUrl: NonNullable<MessagePartsViewProps["resolveFileUrl"]>,
+  inlineUrls: Readonly<Record<string, string>>,
+  lang: string | undefined,
 ): string {
   let body = html;
-  for (const part of parts) {
-    const cid = part.cid?.trim();
-    const file = part.file;
-    if (!cid || !file) continue;
-    const url = safeMessagePartUrl(resolveFileUrl(file));
-    if (!url) continue;
+  for (const [cid, url] of Object.entries(inlineUrls)) {
     body = body.replaceAll(`cid:${cid}`, escapeHtmlAttribute(url));
   }
-  return `<!doctype html><html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data: blob: http: https:; style-src 'unsafe-inline'"><meta name="viewport" content="width=device-width, initial-scale=1"><style>html{color-scheme:light}body{box-sizing:border-box;margin:0;padding:12px;max-width:100%;overflow-wrap:anywhere;font:14px/1.5 system-ui,sans-serif;color:#172033;background:#fff}img,table,pre{max-width:100%}img{height:auto}pre{white-space:pre-wrap}a{color:#2457c5}</style></head><body>${body}</body></html>`;
+  const language = lang && LANGUAGE_TAG.test(lang) ? ` lang="${lang}"` : "";
+  return `<!doctype html><html${language}><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data: blob: http: https:; style-src 'unsafe-inline'"><meta name="viewport" content="width=device-width, initial-scale=1"><style>html{color-scheme:light}body{box-sizing:border-box;margin:0;padding:12px;max-width:100%;overflow-wrap:anywhere;font:14px/1.5 system-ui,sans-serif;color:#172033;background:#fff}img,table,pre{max-width:100%}img{height:auto}pre{white-space:pre-wrap}a{color:#2457c5}</style></head><body>${body}</body></html>`;
 }
 
 function escapeHtmlAttribute(value: string): string {

@@ -6,7 +6,7 @@ import { createMemoryHistory, createRootRoute, createRoute, createRouter, Outlet
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { composeAddons } from "@angee/app/define-addon";
 import { installTestLocalStorage, ShellPageTestProviders } from "@angee/app/testing";
-import { AppearanceProvider, ControlBandProvider, dirtyControlBandClassName, ModalsHost, useAppearance, type AppearanceState, type RuntimeUserPreferences, type RuntimeUserPreferencesPatch } from "@angee/ui";
+import { AppearanceProvider, ControlBandProvider, dirtyControlBandClassName, ModalsHost, useAppearance, type AppearanceState, type HostAppearanceDefaults, type RuntimeUserPreferences, type RuntimeUserPreferencesPatch } from "@angee/ui";
 import { createThemeCustomizationOptions, defineTheme, defineThemeContribution, parseThemeCustomization, resolveThemeOptions, ThemeCustomizationEditor, type AppearancePreferences } from "@angee/ui/theme";
 
 import appearanceAddon from "../index";
@@ -34,7 +34,10 @@ const saved: AppearancePreferences = {
 };
 const { containers } = composeAddons([appearanceAddon], { canonicalModelLabel: (label) => label });
 
-async function fixture(initial: RuntimeUserPreferences = { appearance: saved, unrelated: true }) {
+async function fixture(
+  initial: RuntimeUserPreferences = { appearance: saved, unrelated: true },
+  hostDefaults: HostAppearanceDefaults = { themeId: paper.definition.id, colorScheme: "light" },
+) {
   let stored = initial;
   let current!: AppearanceState;
   let commit!: (preferences: RuntimeUserPreferences) => void;
@@ -54,7 +57,7 @@ async function fixture(initial: RuntimeUserPreferences = { appearance: saved, un
       themes: [paper, ink], containers,
       auth: { status: "authenticated", user: { id: "actor-1", name: "Example" }, hasRole: () => false },
       userPreferences: { available: true, preferences, patchPreferences },
-    }}><AppearanceProvider host={{ themeId: paper.definition.id, colorScheme: "light" }}><ModalsHost>
+    }}><AppearanceProvider host={hostDefaults}><ModalsHost>
       <Probe />
       <div ref={setHost} data-testid="control-host" />
       <ControlBandProvider host={host}>{mounted ? <Outlet /> : null}</ControlBandProvider>
@@ -236,4 +239,19 @@ test("pending Save disables the band actions and controls; a failed Save keeps t
   await waitFor(() => expect(f.appearance().dirty).toBe(false));
   expect(f.patchPreferences).toHaveBeenCalledTimes(2);
   expectClean();
+});
+
+test("a locked app theme says why, disables the theme choice and its options, and keeps the scheme editable", async () => {
+  const f = await fixture({ appearance: { ...saved, themeId: ink.definition.id, options: undefined } },
+    { themeId: paper.definition.id, colorScheme: "light", themeLocked: true });
+  expect(screen.getByText(/This app uses its own theme/)).toBeTruthy();
+  expect(f.appearance().effectiveThemeId).toBe(paper.definition.id);
+  for (const name of [/paper.label/, /ink.label/]) {
+    const control = radio(name);
+    expect(control.hasAttribute("disabled") || control.getAttribute("aria-disabled") === "true").toBe(true);
+  }
+  expect(screen.queryByLabelText("Brand color")).toBeNull();
+  fireEvent.click(radio("Dark"));
+  await waitFor(() => expect(f.appearance().currentPreferences.colorScheme).toBe("dark"));
+  expect(f.appearance().effectiveThemeId).toBe(paper.definition.id);
 });

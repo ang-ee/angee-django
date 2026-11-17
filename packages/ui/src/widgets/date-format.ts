@@ -1,7 +1,7 @@
 /**
  * The one owner of human dates and times. The rule: every list, row, facts line
  * and day label is absolute (`formatDate`, `formatDateTime`, `formatTime`,
- * `formatDayLabel`, `formatMonth`); relative time (`formatRelativeTime`,
+ * `formatDayLabel`, `formatMonth`, `formatDateParts`); relative time (`formatRelativeTime`,
  * `RelativeTime`) belongs only to a live header — a chat, a running job — whose
  * value keeps moving while the page is open. Never `toLocale*`, never a date-fns
  * `format` with a literal pattern, never a raw ISO string as user text.
@@ -184,6 +184,30 @@ export function formatMonth(value: DateFormatValue, options: HumanDateOptions = 
     year: "numeric",
     ...(options.timeZone ? { timeZone: options.timeZone } : {}),
   }).format(date);
+}
+
+/** A date's calendar parts, each localized on its own: the short month, the day of the month and the year. */
+export interface DateParts {
+  month: string;
+  day: string;
+  year: string;
+}
+
+/** The localized parts of a date ("Sep", "28", "2026"), for a layout that sets them apart, such as a date tile.
+ * @kind null
+ * @reason Format utility: converts data to display or storage text.
+ */
+export function formatDateParts(value: DateFormatValue, options: HumanDateOptions = {}): DateParts | null {
+  const date = dateFromValue(value);
+  if (!date) return null;
+  const parts = new Intl.DateTimeFormat(localeCode(options.locale), {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+    ...(options.timeZone ? { timeZone: options.timeZone } : {}),
+  }).formatToParts(date);
+  const part = (type: Intl.DateTimeFormatPartTypes) => parts.find((entry) => entry.type === type)?.value ?? "";
+  return { month: part("month"), day: part("day"), year: part("year") };
 }
 
 /** The calendar day of an instant in a zone, as a sortable key ("2026-09-30"). */

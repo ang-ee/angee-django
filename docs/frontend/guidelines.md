@@ -316,8 +316,9 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
 - **An app root declares itself; the deployment selects the app.** A
   top-level menu root is an app. It may declare `home` (a route name inside
   the root), `brand` (`{ name, mark }`, with `mark` a registered glyph; it
-  defaults to the root's label and icon), `theme` (an installed theme id), and
-  `railExpanded` (the desktop rail's default expansion).
+  defaults to the root's label and icon), `theme` (an installed theme id),
+  `themeLocked` (`true` beside `theme`) and `railExpanded` (the desktop rail's
+  default expansion).
   They layer like any menu field, so a dependent addon or `ANGEE_UI.menus`
   overrides them, and an included app drops them. The deployment's
   `ANGEE_UI.shell` selects what the console shows; products never name
@@ -349,7 +350,11 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
   guarded: only a menu `remove` makes a page unavailable. Rail, login, public
   mark and document title read the selected brand through `useRuntimeBrand`;
   shell components hard-code no identity. The selected theme is the appearance
-  default, and the person's own choice still wins. The rail likewise takes its
+  default, and the person's own choice still wins, unless the declaration that
+  supplies the theme sets `themeLocked`: then that theme and its options win
+  within the app, the person's color scheme still applies, their saved theme
+  is kept for other apps, and Appearance says why. A lock travels with the theme
+  it is declared beside; `ANGEE_UI.shell.theme` never locks. The rail likewise takes its
   selected app's `railExpanded` default only when no expansion preference is saved;
   undeclared, it starts expanded at desktop widths. Visiting a route without
   selecting an app does not apply that app's rail default.
@@ -847,7 +852,7 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
   state. A renderer that knows its final geometry owns a shape-preserving
   skeleton built from `Skeleton` and one `SkeletonStatus`; retain settled content
   during background refresh. The renderer owns loading/error so callers describe
-  only the happy path (cf. `preview/builtins.tsx` `FileText`). `RecordHeader` owns a record's pending and unavailable title (`loading`, `loadingLabel`, `unavailable`): a page passes its read's state, never a title skeleton or a failed-read title of its own, and a failed read ends the skeleton beside the page's error surface. A control owns its pending state: `Select loading` and `Combobox.Status loading` while options load, `Button loading` for a pending verb; never loading copy in a placeholder or a reason. A pane list's pending rows are `PaneRowsSkeleton`, never hand-drawn row blocks.
+  only the happy path (cf. `PreviewFileContent` in `preview/builtins.tsx`). `RecordHeader` owns a record's pending and unavailable title (`loading`, `loadingLabel`, `unavailable`): a page passes its read's state, never a title skeleton or a failed-read title of its own, and a failed read ends the skeleton beside the page's error surface. A control owns its pending state: `Select loading` and `Combobox.Status loading` while options load, `Button loading` for a pending verb; never loading copy in a placeholder or a reason. A pane list's pending rows are `PaneRowsSkeleton`, never hand-drawn row blocks.
 - Forms are declarative even when they branch: a `<Field showWhen={(values) => …}>`
   predicate (mirroring `Action.visibleWhen`) drives a discriminated form — a `kind`
   select that swaps the body — and a hidden field is never submitted. Reach for a
@@ -1432,6 +1437,10 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
   `text-sm` (14), `text-15`, `text-base` (16), `text-lg` (18), `text-22`, `text-28`,
   `text-34` — every step reads a public `--fs-*`/`--lh-*` theme token. Tailwind's
   `text-xs` is not bridged; 12px is `text-12`. No arbitrary `text-[Npx]`.
+- **Headings read the display face:** the `display`, `title` and `heading` roles of
+  [`textRoleVariants`](../../packages/ui/src/ui/text.tsx) carry `font-display`, the
+  theme's `--font-family-display`, which follows `--font-family-sans` when unset. A
+  heading takes the role rather than spelling `font-display` beside its own size.
 - **Control heights are tokens:** `h-control-xs` (28px) is the pane control — tabs,
   toggles, pane toolbar buttons, tree rows, select triggers; `h-btn-sm/md/lg` are
   26/30/36. Never a raw `h-7`/`size-7` on a control.

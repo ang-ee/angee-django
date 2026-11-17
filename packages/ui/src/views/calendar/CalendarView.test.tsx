@@ -42,6 +42,7 @@ vi.mock("@fullcalendar/react", async () => {
 vi.mock("@fullcalendar/daygrid", () => ({ default: { name: "dayGrid" } }));
 vi.mock("@fullcalendar/timegrid", () => ({ default: { name: "timeGrid" } }));
 vi.mock("@fullcalendar/interaction", () => ({ default: { name: "interaction" } }));
+vi.mock("@fullcalendar/list", () => ({ default: { name: "list" } }));
 
 interface FcEvent {
   id: string;
@@ -113,6 +114,13 @@ describe("CalendarView", () => {
     render(<CalendarView view="day" range={RANGE} occurrences={[]} />);
     await screen.findByTestId("fc");
     expect(surface().initialView).toBe("timeGridDay");
+  });
+
+  test("maps list mode to FullCalendar's month list with its plugin loaded", async () => {
+    render(<CalendarView view="list" range={RANGE} occurrences={[EDITABLE]} />);
+    expect(await screen.findByText("Design review")).toBeTruthy();
+    expect(surface().initialView).toBe("listMonth");
+    expect((fcMock.lastProps?.plugins as { name: string }[]).map((plugin) => plugin.name)).toContain("list");
   });
 
   test("switches FullCalendar when the controlled view changes", async () => {

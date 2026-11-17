@@ -3,7 +3,7 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, test, vi } from "vitest";
 
-import { MessagePartsView, type MessagePartFile } from "./index";
+import { MessageHtmlFrame, MessagePartsView, type MessagePartFile } from "./index";
 
 function fileUrl(file: MessagePartFile): string {
   return `/files/${file.id}`;
@@ -155,5 +155,24 @@ describe("MessagePartsView", () => {
 
     expect(screen.queryByRole("link", { name: /payload\.txt/ })).toBeNull();
     expect(screen.getByText("payload.txt")).toBeTruthy();
+  });
+});
+
+describe("MessageHtmlFrame", () => {
+  test("sandboxes the body, sets its language and resolves cid references", () => {
+    render(<MessageHtmlFrame title="Body" lang="es-MX" html={'<p>Hola</p><img src="cid:logo@one">'}
+      inlineUrls={{ "logo@one": "data:image/png;base64,AAAA" }} />);
+    const frame = screen.getByTitle("Body");
+    expect(frame.getAttribute("sandbox")).toBe("");
+    const srcdoc = frame.getAttribute("srcdoc") ?? "";
+    expect(srcdoc).toContain('<html lang="es-MX">');
+    expect(srcdoc).toContain("default-src 'none'");
+    expect(srcdoc).toContain('src="data:image/png;base64,AAAA"');
+    expect(srcdoc).not.toContain("cid:logo@one");
+  });
+
+  test("drops a language that is not a language tag", () => {
+    render(<MessageHtmlFrame title="Body" lang={'en" onload="x'} html="<p>Hi</p>" />);
+    expect(screen.getByTitle("Body").getAttribute("srcdoc")).toContain("<html><head>");
   });
 });
