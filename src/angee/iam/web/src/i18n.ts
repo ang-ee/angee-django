@@ -51,6 +51,11 @@ export const enIamMessages: Record<string, string> = {
   "signInLink.continue": "Sign in with your link",
   "signInLink.refusedTitle": "This sign-in link cannot be used",
   "signInLink.refused": "It may be used, expired or replaced by a newer one. Open the latest link from your email, ask for a new one, or sign in with your password.",
+  "signInLink.unreachableTitle": "Could not reach the server",
+  "signInLink.unreachable": "Your link may still work. Check your connection and try again.",
+  "signInLink.retry": "Try again",
+  "signInLink.signedInAs": "You are signed in as {name}.",
+  "signInLink.proceed": "Continue",
 
   // Overview dashboard — metric band.
   "overview.metric.users": "Users",

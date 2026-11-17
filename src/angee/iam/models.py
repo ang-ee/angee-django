@@ -19,9 +19,10 @@ import secrets
 from collections.abc import Mapping
 from copy import copy
 from datetime import timedelta
+from email.utils import parseaddr
 from functools import partial
 from typing import Any, ClassVar, Self, cast
-from urllib.parse import urlencode, urlsplit
+from urllib.parse import urlencode
 
 from django.apps import apps
 from django.conf import settings
@@ -33,6 +34,7 @@ from django.core import checks
 from django.core.exceptions import ImproperlyConfigured, ValidationError
 from django.core.mail import EmailMessage, mailers
 from django.core.mail.handler import DEFAULT_MAILER_ALIAS
+from django.core.validators import validate_email
 from django.db import IntegrityError, models, transaction
 from django.db.models import Exists, F, OuterRef, Q, TextField
 from django.db.models.functions import Cast
@@ -70,6 +72,7 @@ from angee.base.models.identity import PublicIdentity, instance_from_public_id
 from angee.base.models.locks import OptimisticLockMixin
 from angee.base.models.roles import role_anchor
 from angee.base.models.timestamps import auto_now_stamps
+from angee.base.origins import public_origin
 from angee.base.querysets import AngeeQuerySet
 from angee.iam.events import person_created, sign_in_link_sent
 from angee.iam.identity import user_label
@@ -969,18 +972,22 @@ class User(AbstractBaseUser, RebacPermissionsMixin, OptimisticLockMixin, AngeeDa
         """Email an active, unprotected person a single-use sign-in link.
 
         Permission and eligibility are checked on the locked row, as for
-        :meth:`issue_password`, and the account needs an email address: the
-        link goes to ``email`` only. The row keeps the token's keyed digest,
-        never the token. The email leaves through Django's default mailer once
-        the link commits, so inside a caller's transaction it is sent only if
-        that transaction commits, and a mailer failure raises from that commit.
-        The newest link is the only one that signs in.
+        :meth:`issue_password`, and the account needs a valid email address:
+        the link goes to ``email`` only. A link issued within
+        ``ANGEE_IAM_SIGN_IN_LINK_COOLDOWN`` seconds of the account's previous
+        one is refused. The row keeps the token's keyed digest, never the token.
+        The email leaves through Django's default mailer once the link commits,
+        so inside a caller's transaction it is sent only if that transaction
+        commits, and a mailer failure raises from that commit. The newest link
+        the mailer accepted is the only one that signs in.
         """
 
         with transaction.atomic():
             user = self._lock_for_account_action(str(UserAccountAction.ISSUE_SIGN_IN_LINK), expected_revision=None)
-            if not user.email:
-                raise ValidationError("This account has no email address to send a sign-in link to.")
+            try:
+                validate_email(user.email)
+            except ValidationError:
+                raise ValidationError("This account has no valid email address to send a sign-in link to.") from None
             links = cast(Any, apps.get_model("iam", "SignInLink")).objects
             link, token = links.issue(user, actor=self.effective_actor(strict=True)[0])
             transaction.on_commit(partial(link.send, token))
@@ -1118,18 +1125,36 @@ class User(AbstractBaseUser, RebacPermissionsMixin, OptimisticLockMixin, AngeeDa
         return self.first_name
 
 
-def _public_origin() -> str | None:
-    """Return ``ANGEE_PUBLIC_ORIGIN`` when it is a bare ``http(s)://host[:port]`` origin, else ``None``."""
+def _default_sender_usable() -> bool:
+    """Whether ``DEFAULT_FROM_EMAIL`` names a valid address, as messaging's outbound sender requires."""
 
-    origin = str(settings.ANGEE_PUBLIC_ORIGIN or "").rstrip("/")
-    parts = urlsplit(origin)
-    if parts.scheme in {"http", "https"} and parts.netloc and not (parts.path or parts.query or parts.fragment):
-        return origin
-    return None
+    _name, address = parseaddr(str(settings.DEFAULT_FROM_EMAIL))
+    try:
+        validate_email(address)
+    except ValidationError:
+        return False
+    return True
+
+
+def _token_parts(token: str) -> tuple[str, str]:
+    """Split a token into its account public id and secret; both are empty for a malformed one."""
+
+    selector, _, secret = token.partition(".") if len(token) <= _SIGN_IN_TOKEN_MAX_LENGTH else ("", "", "")
+    return (selector, secret) if selector and secret else ("", "")
+
+
+class SignInLinkSpent(Exception):
+    """A genuine sign-in link that can no longer sign in.
+
+    It is used, expired or retired, no longer its account's newest sent link,
+    bound to account facts that have since changed, or for an account that is
+    inactive or protected. Its holder had the real link, so this refusal is
+    not a guess.
+    """
 
 
 class SignInLinkManager[LinkT: SignInLink](AngeeManager[LinkT]):
-    """Issue and redeem sign-in links, always as system work.
+    """Issue, redeem and retire sign-in links, always as system work.
 
     Not a GraphQL surface: ``User.issue_sign_in_link`` issues a link under the
     account's lock and IAM's ``SignInLinkBackend`` redeems one.
@@ -1139,61 +1164,91 @@ class SignInLinkManager[LinkT: SignInLink](AngeeManager[LinkT]):
     def issue(self, user: Any, *, actor: SubjectRef | None) -> tuple[LinkT, str]:
         """Store a fresh link for ``user`` and return it with its token, the token's only copy.
 
-        The caller holds ``user``'s row lock and has admitted the issue. The
-        token is ``<user public id>.<secret>``; the row keeps the secret's keyed
-        digest (:meth:`SignInLink.token_digest`) and ``created_by`` is ``actor``.
+        The caller holds ``user``'s row lock and has admitted the issue. A link
+        within ``ANGEE_IAM_SIGN_IN_LINK_COOLDOWN`` seconds of the account's
+        previous one is refused. The token is ``<user public id>.<secret>``; the
+        row keeps the secret's keyed digest and the account digest
+        (:meth:`SignInLink.token_digest`, :meth:`SignInLink.account_digest`),
+        and ``created_by`` is ``actor``.
         """
 
-        secret = secrets.token_urlsafe(32)
-        link = self.model(
-            user=user,
-            token_hash=self.model.token_digest(user, secret),
-            expires_at=timezone.now() + timedelta(seconds=int(settings.ANGEE_IAM_SIGN_IN_LINK_TTL)),
-        )
-        if actor is not None:
-            link.with_actor(actor)
+        now = timezone.now()
+        cooldown = timedelta(seconds=int(settings.ANGEE_IAM_SIGN_IN_LINK_COOLDOWN))
         with system_context(reason="iam.sign_in_link.issue"):
+            if cooldown and self.filter(user=user, created_at__gt=now - cooldown).exists():
+                raise ValidationError("A sign-in link was sent to this account moments ago; wait to send another.")
+            secret = secrets.token_urlsafe(32)
+            link = self.model(
+                user=user,
+                token_hash=self.model.token_digest(user.pk, secret),
+                account_hash=self.model.account_digest(user),
+                expires_at=now + timedelta(seconds=int(settings.ANGEE_IAM_SIGN_IN_LINK_TTL)),
+            )
+            if actor is not None:
+                link.with_actor(actor)
             link.save()
         return link, f"{user.public_id}.{secret}"
 
-    @sensitive_variables("token", "secret")
+    @sensitive_variables("token", "secret", "digest")
     def redeem(self, token: str) -> Any | None:
-        """Consume ``token`` and return the person it signs in, or ``None`` for every refusal alike.
+        """Consume ``token`` and return the person it signs in.
 
-        Only the account's newest link counts, read under the account's lock,
-        so issuing a link retires every older one. Its digest must match in
-        constant time, it must be unused and unexpired, and the account must
-        still be an active, unprotected person with the email the link was
-        sent to. A conditional update consumes it, so a token signs in once on
-        every database backend.
+        ``None`` means the token matches no link of a person, as a guess does;
+        :class:`SignInLinkSpent` means it matches one that can no longer sign
+        in. The token's account public id is not a secret, and an unknown one
+        refuses like a wrong secret. The secret's digest is compared with every
+        link of the account through ``constant_time_compare``, and only the
+        newest link the mailer accepted signs in. It must be unused and
+        unexpired, its account facts (:meth:`SignInLink.account_digest`)
+        unchanged, and its account an active, unprotected person. The account's
+        row lock serializes redemption with issuing, and a conditional update
+        consumes the link, so a token signs in once on every database backend.
         """
 
-        selector, _, secret = token.partition(".")
-        if not selector or not secret or len(token) > _SIGN_IN_TOKEN_MAX_LENGTH:
-            return None
+        selector, secret = _token_parts(token)
         reason = "iam.sign_in_link.redeem"
-        users = get_user_model().objects.system_context(reason=reason).active_people().lock_if_supported()
+        users = get_user_model().objects.system_context(reason=reason).people().lock_if_supported()
         with transaction.atomic(), system_context(reason=reason):
-            user = instance_from_public_id(get_user_model(), selector, queryset=users)
+            user = instance_from_public_id(get_user_model(), selector, queryset=users) if selector else None
             if user is None:
                 return None
-            link = self.filter(user=user).order_by("-pk").first()
-            digest = self.model.token_digest(user, secret)
-            if link is None or not constant_time_compare(link.token_hash, digest):
+            digest = self.model.token_digest(user.pk, secret)
+            links = list(self.filter(user=user).order_by("-pk"))
+            matched = None
+            for link in links:
+                if constant_time_compare(link.token_hash, digest):
+                    matched = link
+            if matched is None:
                 return None
             now = timezone.now()
-            if link.used_at is not None or link.expires_at <= now:
-                return None
-            if user.protected_against(None):
-                return None
-            consumed = self.filter(pk=link.pk, used_at__isnull=True).update(
+            current = next((link for link in links if link.sent_at is not None), None)
+            if (
+                matched is not current
+                or matched.used_at is not None
+                or matched.expires_at <= now
+                or not constant_time_compare(matched.account_hash, self.model.account_digest(user))
+                or not user.is_active
+                or user.protected_against(None)
+            ):
+                raise SignInLinkSpent
+            consumed = self.filter(pk=matched.pk, used_at__isnull=True).update(
                 used_at=now,
                 **auto_now_stamps(self.model, now),
             )
             if consumed != 1:
-                return None
+                raise SignInLinkSpent
         logger.info("Signed in user %s with a sign-in link.", user.pk)
         return user
+
+    def retire(self, user: Any) -> int:
+        """Expire ``user``'s unused links now, so none of them signs in later; the rows stay."""
+
+        now = timezone.now()
+        with system_context(reason="iam.sign_in_link.retire"):
+            return self.filter(user=user, used_at__isnull=True, expires_at__gt=now).update(
+                expires_at=now,
+                **auto_now_stamps(self.model, now),
+            )
 
 
 _SIGN_IN_TOKEN_MAX_LENGTH = 256
@@ -1201,6 +1256,9 @@ _SIGN_IN_TOKEN_MAX_LENGTH = 256
 
 _SIGN_IN_LINK_SALT = "angee.iam.sign_in_link"
 """``salted_hmac`` key salt of the stored token digest."""
+
+_SIGN_IN_ACCOUNT_SALT = "angee.iam.sign_in_link.account"
+"""``salted_hmac`` key salt of the stored account digest."""
 
 SIGN_IN_LINK_SUBJECT = "Your sign-in link"
 """Subject of the email that carries a sign-in link."""
@@ -1212,20 +1270,24 @@ class SignInLink(AuditMixin, AngeeModel, concrete=True):
     Internal to IAM: no public id, no GraphQL surface, no REBAC resource type.
     ``User.issue_sign_in_link`` issues links and IAM's ``SignInLinkBackend``
     redeems them through :class:`SignInLinkManager`. A row keeps the token's
-    keyed digest, never the token; when it expires; when the mailer accepted it
-    (``sent_at``); and when it signed in (``used_at``). ``created_by`` is the
-    issuer, empty for a system issue. Rows stay as the issue record, and only
-    the account's newest link signs in.
+    keyed digest, never the token; a digest of the account facts the link is
+    bound to; when it expires; when the mailer accepted it (``sent_at``); and
+    when it signed in (``used_at``). ``created_by`` is the issuer, empty for a
+    system issue. Rows stay as the issue record, and only the account's newest
+    sent link signs in.
 
     Django's ``PasswordResetTokenGenerator`` derives its tokens from account
     state: two links issued for one account stay valid together until the
     account next signs in or changes its password, and nothing records who
     issued them. Retiring the previous link on reissue and the issuer record
-    need a row.
+    need a row. ``SECRET_KEY`` keys both digests and ``salted_hmac`` ignores
+    ``SECRET_KEY_FALLBACKS``, so rotating the key voids every outstanding link.
     """
 
     user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="sign_in_links")
     token_hash = models.CharField(max_length=64)
+    # Rows issued before this column existed keep the empty default and read as spent.
+    account_hash = models.CharField(max_length=64, default="")
     expires_at = models.DateTimeField()
     sent_at = models.DateTimeField(null=True, blank=True)
     used_at = models.DateTimeField(null=True, blank=True)
@@ -1238,26 +1300,42 @@ class SignInLink(AuditMixin, AngeeModel, concrete=True):
         abstract = True
 
     @staticmethod
-    def token_digest(user: Any, secret: str) -> str:
-        """Return the stored digest of ``secret``, keyed by ``SECRET_KEY`` and bound to the account and its email.
+    def token_digest(user_pk: Any, secret: str) -> str:
+        """Return the stored digest of ``secret`` for the account ``user_pk``, keyed by ``SECRET_KEY``."""
 
-        A changed email therefore retires every link sent to the old address.
+        return salted_hmac(_SIGN_IN_LINK_SALT, f"{user_pk}\x00{secret}", algorithm="sha256").hexdigest()
+
+    @staticmethod
+    def account_digest(user: Any) -> str:
+        """Return the digest of the account facts a link is bound to: email, password and last sign-in.
+
+        As in Django's ``PasswordResetTokenGenerator``, a new email address, a
+        password set or changed and any sign-in each retire the account's
+        outstanding links.
         """
 
-        value = f"{user.pk}\x00{user.email}\x00{secret}"
-        return salted_hmac(_SIGN_IN_LINK_SALT, value, algorithm="sha256").hexdigest()
+        last_login = "" if user.last_login is None else user.last_login.replace(microsecond=0, tzinfo=None)
+        value = f"{user.pk}\x00{user.email}\x00{user.password}\x00{last_login}"
+        return salted_hmac(_SIGN_IN_ACCOUNT_SALT, value, algorithm="sha256").hexdigest()
+
+    @staticmethod
+    def token_account(token: str) -> str:
+        """Return the account public id ``token`` names, or ``""``: the per-account key for login throttling."""
+
+        return _token_parts(token)[0]
 
     @classmethod
     def deliverable(cls) -> bool:
-        """Whether this deployment can build and send links: a usable public origin and Django's default mailer."""
+        """Whether this deployment can build and send links: a usable public origin, sender and default mailer."""
 
-        return _public_origin() is not None and DEFAULT_MAILER_ALIAS in mailers
+        origin = public_origin(settings.ANGEE_PUBLIC_ORIGIN, debug=settings.DEBUG)
+        return origin is not None and _default_sender_usable() and DEFAULT_MAILER_ALIAS in mailers
 
     @staticmethod
     def url_for(token: str) -> str:
         """Return the public URL that redeems ``token``; the token rides the fragment, which no request carries."""
 
-        origin = _public_origin()
+        origin = public_origin(settings.ANGEE_PUBLIC_ORIGIN, debug=settings.DEBUG)
         if origin is None:
             raise ImproperlyConfigured(SIGN_IN_LINK_UNAVAILABLE_MESSAGE)
         return f"{origin}{SIGN_IN_LINK_PATH}#{urlencode({'token': token})}"
@@ -1268,8 +1346,10 @@ class SignInLink(AuditMixin, AngeeModel, concrete=True):
 
         The message is rendered here and handed to Django's default mailer as
         plain text; neither it nor the token is stored or logged. Once the
-        mailer accepts it, ``sent_at`` is stamped and ``sign_in_link_sent``
-        fires. A mailer failure propagates and leaves ``sent_at`` empty.
+        mailer accepts it, ``sent_at`` is stamped, which makes it the account's
+        current link, and ``sign_in_link_sent`` fires. A mailer failure
+        propagates and leaves ``sent_at`` empty, so the previously sent link
+        keeps working.
         """
 
         user = cast(Any, self).user

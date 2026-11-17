@@ -735,7 +735,7 @@ requires-dist = [
     { name = "angee-graphql", editable = "src/angee/graphql" },
     { name = "angee-resources", editable = "src/angee/resources" },
     { name = "angee-web", editable = "src/angee/web" },
-    { name = "django-axes", specifier = ">=8.0" },
+    { name = "django-axes", specifier = ">=9.0" },
 ]
 
 [[package]]

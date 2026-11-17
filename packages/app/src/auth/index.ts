@@ -15,3 +15,4 @@ export {
   type OAuthCallbackProps,
 } from "./OAuthCallback";
 export { safeRedirectPath } from "./safe-redirect";
+export { useSignInRedirect } from "./sign-in-redirect";

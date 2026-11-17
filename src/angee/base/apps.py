@@ -79,11 +79,13 @@ class BaseConfig(AppConfig):
         from angee.base.checks import (
             check_database_routers,
             check_ownership,
+            check_public_origin,
             check_rebac_caveats,
         )
 
         checks.register(check_settings, checks.Tags.models)
         checks.register(check_database_routers, checks.Tags.models)
+        checks.register(check_public_origin, checks.Tags.security)
 
         checks.register(check_ownership, checks.Tags.models)
         checks.register(check_rebac_caveats, checks.Tags.models)

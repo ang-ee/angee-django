@@ -12,6 +12,7 @@ from rebac.schema import FieldBinding, PermExpr, Schema
 from rebac.schema.parser import parse_zed
 
 from angee.base.models.ownership import OwnerMixin
+from angee.base.origins import public_origin
 from angee.base.permissions import declared_rebac_definition, declared_rebac_schema, declared_schema_path
 
 
@@ -34,6 +35,28 @@ def check_database_routers(
             f"found aliases {sorted(settings.DATABASES)!r} and routers {settings.DATABASE_ROUTERS!r}.",
             hint="Remove additional database aliases and routers; Angee uses Django's default database.",
             id="angee.E050",
+        )
+    ]
+
+
+def check_public_origin(
+    app_configs: Sequence[AppConfig] | None = None,
+    **kwargs: object,
+) -> list[checks.CheckMessage]:
+    """Report an ``ANGEE_PUBLIC_ORIGIN`` that is set but is not a valid public origin.
+
+    Such a value is neither trusted for CSRF nor used to build links.
+    """
+
+    del app_configs, kwargs
+    value = getattr(settings, "ANGEE_PUBLIC_ORIGIN", "")
+    if not value or public_origin(value, debug=settings.DEBUG) is not None:
+        return []
+    return [
+        checks.Error(
+            f"ANGEE_PUBLIC_ORIGIN {value!r} is not a valid public origin.",
+            hint="Use https://host[:port] (http only with DEBUG), without user info, a wildcard or a path.",
+            id="angee.E051",
         )
     ]
 

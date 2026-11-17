@@ -158,20 +158,40 @@ live in code docstrings.
 
 - IAM sends sign-in links: a person without a password signs in once through
   an emailed link. `User.issue_sign_in_link()` is an account verb with its own
-  `auth/user#issue_sign_in_link` permission (admin by default) and the usual
-  protected-account refusal; the console mutation is `issue_user_sign_in_link`.
-  The new internal `iam.SignInLink` row keeps a keyed digest, the issuer,
-  `expires_at`, `sent_at` and `used_at`, never the token; only an account's
-  newest link signs in. The link goes to `User.email` through Django's
-  `MAILERS["default"]` once the row commits. Redemption is
-  `authenticate(sign_in_token=...)` through `angee.iam.auth.SignInLinkBackend`,
-  so django-axes throttles it, behind the public `redeem_sign_in_link`
-  mutation and IAM's public `/sign-in-link` route. New settings:
-  `ANGEE_PUBLIC_ORIGIN` (fed by the environment variable of that name) and
-  `ANGEE_IAM_SIGN_IN_LINK_TTL`. Upgrade: compose and author the `iam`
-  migration for the new table, then re-sync the permission schema (iam
-  revision 25). Projects whose `AUTHENTICATION_BACKENDS` replace IAM's list
-  add `angee.iam.auth.SignInLinkBackend`.
+  `auth/user#issue_sign_in_link` permission (admin by default), the usual
+  protected-account refusal, a valid-email check and a per-account cooldown
+  (`ANGEE_IAM_SIGN_IN_LINK_COOLDOWN`). The console mutation is
+  `issue_user_sign_in_link`. The new internal `iam.SignInLink` row keeps a
+  keyed token digest, a digest of the account facts it is bound to (email,
+  password, last sign-in), the issuer, `expires_at`, `sent_at` and `used_at`,
+  never the token. Only an account's newest sent link signs in, and
+  deactivation retires its links. The link goes to `User.email` through
+  Django's `MAILERS["default"]` once the row commits. Redemption is
+  `authenticate()` through `angee.iam.auth.SignInLinkBackend` with
+  `sign_in_credentials(token)`, behind the public `redeem_sign_in_link`
+  mutation and IAM's public `/sign-in-link` route. A request now makes one
+  sign-in attempt: `login` and `redeem_sign_in_link` share
+  `angee.iam.auth.authenticate_once`, and a second attempt in the same request
+  (aliased or batched fields) is refused. IAM now owns the django-axes policy
+  (axes 9 or later): `AXES_COOLOFF_TIME` (one hour; lockouts were permanent;
+  a successful sign-in clears no failures), and username and whitelist
+  callables, so link attempts are recorded under the account public id they
+  name and a genuine spent link is not a failure. `ANGEE_PUBLIC_ORIGIN` is now
+  a base setting, fed by the environment variable of that name or authored,
+  with one rule (`angee.base.origins.public_origin`): only a bare `https`
+  origin (`http` only under `DEBUG`) joins the CSRF trusted origins, so an
+  origin authored in `settings.yaml` is now trusted too, and `angee.E051`
+  reports an invalid one (an `http` origin without `DEBUG` now fails the
+  check). Browser error reports drop URL fragments, frame locations included.
+  `safeRedirectPath` resolves a `next` value as the browser does and accepts
+  only a same-origin result, closing `/%09/host`-style escapes.
+  `useSignInRedirect` (`@angee/app/auth`) is the post-sign-in navigation
+  `LoginPage` uses. Upgrade: compose and author the
+  `iam` migration for the new table, then re-sync the permission schema (iam
+  revision 25). Projects whose `AUTHENTICATION_BACKENDS` replace IAM's list add
+  `angee.iam.auth.SignInLinkBackend`; projects with their own
+  `AXES_WHITELIST_CALLABLE` or `AXES_USERNAME_CALLABLE` keep theirs and lose
+  the link exemptions.
 
 - Tags gain categories. `tags.TagCategory` (name, description, a fractional
   `position`, an optional `max_per_record`) groups the vocabulary for every
