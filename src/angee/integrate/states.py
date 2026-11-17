@@ -24,6 +24,13 @@ if TYPE_CHECKING:
 UNSET = object()
 """Omitted record binding; ``None`` explicitly clears the target."""
 
+EXTERNAL_KEY_LENGTH = 512
+"""The longest remote identity: a ``RecordLink.external_key``, and so a ``SyncStream.partition``.
+
+A child stream's partition is its container's external key, one fact, so both
+columns take this one length; the driver refuses a longer record identity.
+"""
+
 
 class StreamKind(models.TextChoices):
     """Whether a stream carries append-only events or mutable replicas."""
@@ -48,10 +55,16 @@ class StreamPhase(models.TextChoices):
 
 
 class StreamState(models.TextChoices):
-    """Reopening a closed generation starts a fresh baseline."""
+    """Reopening a closed generation starts a fresh baseline.
+
+    A retired generation's container link stopped observing (tombstoned or
+    withdrawn), so it is no longer drained; it reopens only once its container is
+    live again (``SyncStreamManager.bump_generation``).
+    """
 
     OPEN = "open", "Open"
     CLOSED = "closed", "Closed"
+    RETIRED = "retired", "Retired"
 
 
 class LinkStatus(models.TextChoices):
@@ -114,17 +127,31 @@ class StreamDefinition:
     authoritative: bool = False
     mapping_version: int = 1
     """Increase when mapping changes require a fresh baseline of existing records."""
+    holds_containers: bool = False
+    """Whether this stream's records are containers of other partitions; a changed value updates the stream."""
+    container: RecordLink | None = None
+    """The parent stream's link whose record this partition belongs to.
+
+    The partition is the container's external key. An unavailable container
+    pauses this stream; one that stops observing retires it.
+    """
 
     @classmethod
     def from_stream(cls, stream: SyncStream) -> StreamDefinition:
         """Read declaration facts from a persisted generation without another field inventory."""
 
-        return cls(**{item.name: deepcopy(getattr(stream, item.name)) for item in fields(cls)})
+        return cls(**{item.name: _independent(getattr(stream, item.name)) for item in fields(cls)})
 
     def stream_fields(self) -> dict[str, Any]:
         """Return independent values suitable for creating a stream generation."""
 
-        return {item.name: deepcopy(getattr(self, item.name)) for item in fields(self)}
+        return {item.name: _independent(getattr(self, item.name)) for item in fields(self)}
+
+
+def _independent(value: Any) -> Any:
+    """Copy a declaration value; a row such as the container keeps its identity."""
+
+    return value if isinstance(value, models.Model) else deepcopy(value)
 
 
 class SyncFailure(BaseModel):

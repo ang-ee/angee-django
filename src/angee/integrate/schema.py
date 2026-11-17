@@ -1003,16 +1003,14 @@ class IntegrateCredentialMutation:
     def delete_credential(self, id: PublicID, confirm: bool = False) -> DeletePreview:
         """Delete the credential, then best-effort revoke remotely after commit."""
 
-        def prepare_delete(credential: Any) -> None:
-            Credential.objects.prepare_disconnect(credential)
-
         with transaction.atomic():
             return delete_by_public_id(
                 Credential,
                 str(id),
                 reason="integrate.graphql.credential.delete",
                 confirm=confirm,
-                before_delete=prepare_delete,
+                # The preview flow deletes the row itself; it runs the retire verb's preparation first.
+                before_delete=Credential.objects.prepare_disconnect,
                 queryset=Credential.objects.for_write(),
             )
 

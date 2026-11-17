@@ -86,6 +86,20 @@ a declaration never changes an existing stream.
 A declared snapshot with no reconciliation interval closes after its baseline;
 explicit resync opens a new generation. Missing cadence alone never means read-once.
 
+A [container](../../../docs/glossary.md#backend) (an address book, a
+calendar) is a record of a parent stream, declared with
+[`holds_containers`](states.py), and the partition of a child stream whose
+declaration names the container's link (`StreamDefinition.container`). The
+container row is created on the parent's apply path like any record. A container is live, and its child
+declared, only while
+[`RecordLinkQuerySet.live_containers`](models.py) admits it: a container whose
+absence is being counted pauses its child, and one that stops observing retires
+it ([`SyncStreamManager.retire_children`](models.py)); the retirement pass
+tombstones the child's links and deletes nothing. The
+[driver](streams.py) (`sync_bridge`) owns ordering, deadlines and re-declaration.
+
+A replica identity longer than [`EXTERNAL_KEY_LENGTH`](states.py) can hold no link: the
+driver records one coalesced stream failure for it, and the rest of the page applies.
 Several inbound problems can coexist. For one record link, new source or mapping
 evidence closes older versions of the same non-conflict problem while retaining
 their history. Stream-level event failures remain independent.

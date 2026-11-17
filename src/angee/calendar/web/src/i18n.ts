@@ -8,6 +8,11 @@ export const enCalendarMessages: Record<string, string> = {
   "source.calendar": "{calendar} · {party}",
   "reschedule.failed": "Could not reschedule the event.",
   "picker.startOwn": "Create my calendar",
+  "connection.name": "Name",
+  "connection.connect.menu": "Add a calendar",
+  "connection.action.sync": "Sync now",
+  "connection.action.unsubscribe": "Unsubscribe",
+  "connection.group.lastSync": "Last sync",
 };
 
 export const useCalendarT = createNamespaceT("calendar", enCalendarMessages);

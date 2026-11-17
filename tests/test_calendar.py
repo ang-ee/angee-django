@@ -451,12 +451,13 @@ def test_an_event_zone_keeps_its_wall_clock_on_a_calendar_in_another_zone(db: No
     assert [o.start for o in after] == [o.start for o in occurrences]
 
 
-def test_an_event_rule_repeats_at_most_hourly_on_every_save_path(db: None) -> None:
+def test_an_event_rule_repeats_at_most_daily_on_every_save_path(db: None) -> None:
     calendar = _calendar()
 
-    with pytest.raises(ValidationError) as raised:
-        _place(calendar, _utc(2026, 7, 6, 9), _utc(2026, 7, 6, 10), recurrence="FREQ=SECONDLY")
-    assert "recurrence" in raised.value.message_dict
+    for rule in ("FREQ=HOURLY", "FREQ=SECONDLY"):
+        with pytest.raises(ValidationError) as raised:
+            _place(calendar, _utc(2026, 7, 6, 9), _utc(2026, 7, 6, 10), recurrence=rule)
+        assert "recurrence" in raised.value.message_dict
     # A sync's plain ORM save is refused too.
     with system_context(reason="tests.calendar.sync"), pytest.raises(ValidationError), transaction.atomic():
         CalendarEvent.objects.create(

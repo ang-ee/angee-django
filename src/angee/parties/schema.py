@@ -320,7 +320,6 @@ class ContactFolderType(AngeeNode):
 
     name: auto
     directory: "DirectoryType | None"
-    source_href: auto
     created_at: auto
     updated_at: auto
 
@@ -899,8 +898,8 @@ _CONTACT_FOLDER_RESOURCE = hasura_model_resource(
     ContactFolderType,
     model=Folder,
     name="contact_folders",
-    filterable=["id", "directory", "name", "source_href", "updated_at"],
-    sortable=["directory", "name", "source_href", "created_at", "updated_at"],
+    filterable=["id", "directory", "name", "updated_at"],
+    sortable=["directory", "name", "created_at", "updated_at"],
     aggregatable=["id"],
     insert=False,
     update=False,
