@@ -56,6 +56,15 @@ evidence=(DecisionRecordReference.of(file),), note="...")` stores `answered_for`
 the represented record grants nothing. Every participant (the answerer, requester and
 active assignees) must read each reference, as asking requires of the question's
 context, or the answer is refused.
+`decision.withdraw(actor=actor, reason="...")` closes a question with an empty verdict
+in the asking owner's system context and keeps the reason as `verdict_context.reason`.
+`Decision.objects.supersede(decision, request, actor=actor, reason="...")` replaces an
+open question in one transaction, again only in the asking owner's system context: it
+asks `request`, withdraws the old question with the reason and links the replacement as
+`superseded_by`, so one question stays open and a stale answer to the old one meets the
+revision refusal. A question a requesting record retains (`requester_querysets`, a
+workflow step's) belongs to that asker, so supersede refuses it. Escalation is a
+supersede naming the escalation's assignees; no question changes in place.
 Decisions execute no proposal actions. The asker consumes the answer through the
 records' owners. Free correction means editing the record and then choosing the
 alternative that keeps its current values.

@@ -57,6 +57,9 @@ class Decision(OptimisticLockMixin, AppendOnlyModel, AngeeDataModel, concrete=Tr
     answered_at = models.DateTimeField(null=True, blank=True)
     answered_for = models.JSONField(null=True, blank=True)
     verdict_context = models.JSONField(null=True, blank=True)
+    superseded_by = models.OneToOneField(
+        "decisions.Decision", on_delete=models.PROTECT, null=True, blank=True, related_name="+",
+    )
     objects = DecisionManager()
 
     @classmethod
@@ -83,9 +86,10 @@ class Decision(OptimisticLockMixin, AppendOnlyModel, AngeeDataModel, concrete=Tr
         rebac_resource_type = "decisions/decision"
         constraints = [models.CheckConstraint(
             condition=models.Q(verdict__isnull=True, verdict_values__isnull=True, answered_by__isnull=True,
-                               answered_at__isnull=True, answered_for__isnull=True, verdict_context__isnull=True)
+                               answered_at__isnull=True, answered_for__isnull=True, verdict_context__isnull=True,
+                               superseded_by__isnull=True)
             | (models.Q(verdict__isnull=False, answered_at__isnull=False)
-               & (models.Q(verdict=[]) | models.Q(answered_by__isnull=False))
+               & (models.Q(verdict=[]) | models.Q(answered_by__isnull=False, superseded_by__isnull=True))
                & (~models.Q(verdict=[]) | models.Q(verdict_values__isnull=True, answered_for__isnull=True))),
             name="decisions_verdict_consistent",
         )]
@@ -105,35 +109,48 @@ class Decision(OptimisticLockMixin, AppendOnlyModel, AngeeDataModel, concrete=Tr
         if self.verdict is None:
             return ""
         if not self.verdict:
-            return "Withdrawn"
+            return "Superseded" if self.superseded_by_id is not None else "Withdrawn"
         return "; ".join(alternative["label"] for alternative in self.proposal["alternatives"]
                          if alternative["key"] in self.verdict)
 
     def __str__(self) -> str:
         return self.kind_label
 
-    def withdraw(self, *, actor: Any) -> Self:
-        """An authorized asking owner withdraws this question in a named system context."""
+    def withdraw(self, *, actor: Any, reason: str = "") -> Self:
+        """An authorized asking owner withdraws this question in a named system context.
+
+        ``reason`` is kept as the closing ``verdict_context`` reason. Withdrawing a
+        closed question changes nothing.
+        """
         if not is_sudo():
             raise PermissionDenied("Withdrawal requires the authorized asking owner's system context.")
+        row, withdrawing, _closed = self._withdraw(actor=actor, reason=reason)
+        return row.with_actor(withdrawing) if withdrawing is not None else row
+
+    def _withdraw(self, *, actor: Any, reason: str, superseded_by: Any = None) -> tuple[Self, Any, bool]:
+        """Close this question with an empty verdict if it is still open; callers hold the asker's system context."""
         # Cleanup must still close a retired principal's retained questions.
         actor = actor if actor is not None else current_actor()
         withdrawing = _user(actor, active=False) if actor is not None else None
         rows = type(self).objects
         with transaction.atomic(), system_context(reason="decisions.withdraw"):
             row = rows.filter(pk=self.pk).lock_if_supported().get()
-            if row.is_open:
+            closed = row.is_open and bool(
                 rows.filter(pk=self.pk).open().owner_update(
                     verdict=[],
                     answered_by=withdrawing,
                     answered_at=Now(),
+                    verdict_context=DecisionContext(reason=reason).model_dump(mode="json") if reason.strip() else None,
+                    superseded_by=superseded_by,
                     revision=F("revision") + 1,
                     updated_at=Now(),
                 )
+            )
+            if closed:
                 row.refresh_from_db()
                 publish_change(row, action="update", update_fields=None)
                 decision_answered.send(sender=type(row), decision=row)
-        return row.with_actor(withdrawing) if withdrawing is not None else row
+        return row, withdrawing, closed
 
     def decide(
         self,
