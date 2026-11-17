@@ -26,6 +26,9 @@ export const CalendarListDocument = graphql(`
     calendars(order_by: [{ name: asc }], limit: 200) {
       id
       name
+      party {
+        display_name
+      }
     }
   }
 `);

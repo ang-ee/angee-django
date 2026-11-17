@@ -16,6 +16,7 @@ function CalendarEventForm({ resource: _resource, ...props }: RegisteredFormProp
         <Field name="end" />
         <Field name="all_day" />
         <Field name="recurrence" />
+        <Field name="timezone" />
       </Group>
       <Group label={t("form.details")} columns={2}>
         <Field name="location" />

@@ -4,7 +4,7 @@ import type { AnyCalendarWindowSource, ResourceRecordHrefLookup } from "@angee/u
 export const OCCURRENCE_SOURCES = "calendar.events#occurrence-sources";
 
 /** What a contributed occurrence source reads from the calendar page that shows it. */
-export interface CalendarSourceContext {
+export interface OccurrenceSourceContext {
   /** The signed-in viewer's public user id; blank when nobody is signed in. */
   viewerId: string;
   /** Opens a record of any routed model through the resource-route owner. */
@@ -13,14 +13,15 @@ export interface CalendarSourceContext {
 
 /**
  * One occurrence source an addon overlays on the calendar page. The page calls it
- * with its context and fetches the returned source beside its own events; a source
- * with a `key` and a `label` gets a toolbar toggle that hides it.
+ * with its context and fetches the returned source beside its own events. The
+ * source's key is the container child's id, which the page sets, so a source
+ * with a `label` gets a toolbar toggle under the id the addon declared.
  */
-export type CalendarSourceContribution = (context: CalendarSourceContext) => AnyCalendarWindowSource;
+export type OccurrenceSourceContribution = (context: OccurrenceSourceContext) => Omit<AnyCalendarWindowSource, "key">;
 
 declare module "@angee/ui/runtime" {
   interface ContainerKinds {
     /** Occurrence sources the calendar page overlays on its events (`calendar.events#occurrence-sources`). */
-    "occurrence-sources": CalendarSourceContribution;
+    "occurrence-sources": OccurrenceSourceContribution;
   }
 }

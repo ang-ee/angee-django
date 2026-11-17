@@ -5,6 +5,7 @@ export const enCalendarMessages: Record<string, string> = {
   "form.description": "Description",
   "form.details": "Details",
   "occurrence.busy": "Busy",
+  "source.calendar": "{calendar} · {party}",
   "reschedule.failed": "Could not reschedule the event.",
 };
 

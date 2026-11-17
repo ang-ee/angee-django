@@ -1,5 +1,5 @@
 import * as React from "react";
-import type { CalendarSourceContribution } from "@angee/calendar";
+import type { OccurrenceSourceContribution } from "@angee/calendar";
 import { TASK_MODEL } from "@angee/projects";
 import { calendarWindowSource, formatDateStorage, type Occurrence, type ResourceRecordHrefLookup } from "@angee/ui";
 
@@ -40,9 +40,8 @@ function DueTasksLabel(): React.ReactElement {
 }
 
 /** The viewer's open tasks by due date, overlaid on the calendar page (`calendar.events#occurrence-sources`). */
-export const dueTasksCalendarSource: CalendarSourceContribution = ({ viewerId, recordHref }) =>
+export const dueTasksCalendarSource: OccurrenceSourceContribution = ({ viewerId, recordHref }) =>
   calendarWindowSource({
-    key: "projects-calendar.due-tasks",
     label: <DueTasksLabel />,
     document: CalendarDueTasksDocument,
     variables: (window) => ({

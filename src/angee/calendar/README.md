@@ -110,11 +110,12 @@ A calendar is the access root of its events.
 
 The fragment ships the Calendar app:
 
-- the calendar page, with one toggle per calendar the viewer reads;
+- the calendar page, with one toggle per listed calendar, named with its owning party;
 - the event form;
 - the calendar list and record pages, with the platform's share control.
 
 Other addons overlay their own dated rows on the calendar page by contributing an
-occurrence source to the `calendar.events#occurrence-sources` container. The
+occurrence source (an `OccurrenceSourceContribution`) to the `calendar.events#occurrence-sources`
+container; the source's toggle key is the contribution's child id. The
 [`projects_calendar`](../projects_calendar/README.md) bridge contributes the
 viewer's open tasks by due date.

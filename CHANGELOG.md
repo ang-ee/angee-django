@@ -10,6 +10,23 @@ live in code docstrings.
 
 ## Unreleased — shared addon contracts, native embeddings and graph retrieval
 
+- `angee.calendar` is the framework calendar, moved from arpee's `arp.calendar`
+  and reshaped: a `Calendar` belongs to a `parties.Party` and is the access root
+  of its events, an exception to a recurring event is an override row (`series`,
+  `original_start`), attendees are `parties.Handle` rows with the organizer as a
+  role, calendars share as reader, editor or free/busy, and a `refuse` calendar
+  rejects overlapping busy time. The [calendar README](src/angee/calendar/README.md)
+  lists what it expresses. `angee.projects_calendar` overlays the viewer's due tasks
+  on the calendar page; projects no longer depends on a calendar.
+  `Recurrence.get_last_occurrence` returns where a rule with `UNTIL` or `COUNT` ends.
+  **Host upgrade:** the `calendar` app label carries the deleted `arp.calendar`'s
+  migration history and no data moves (clean slate). Each host writes a `calendar`
+  migration (`0003`) that purges the old event, attendee and history rows and the
+  `arp.calendar` resource-ledger rows, then applies the generated schema
+  operations; then run `rebac --skip-checks sync --prune-stale --yes` (calendar
+  revision 2, arp revision 6) and `resources load`. Add `angee.calendar` (and
+  `angee.projects_calendar` where projects is composed) to `INSTALLED_APPS` in
+  place of `arp.calendar`.
 - `angee.scheduling` owns due rules: a `DueRule` (`angee.scheduling.due`) names due
   anchors the subject supplies later and labelled terms measured from them; the
   [scheduling README](src/angee/scheduling/README.md) lists what a rule expresses.

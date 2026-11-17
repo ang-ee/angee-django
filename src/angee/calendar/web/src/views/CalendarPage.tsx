@@ -6,12 +6,10 @@ import {
   ResourceList,
   calendarWindowBounds,
   calendarWindowSource,
-  errorMessage,
+  useActionResultRun,
   useContainer,
   useResourceRecordHrefLookup,
-  useRouteHref,
   useRuntimeAuth,
-  useToast,
   type AnyCalendarWindowSource,
   type ListColumn,
   type Occurrence,
@@ -21,7 +19,7 @@ import {
 import { CalendarListDocument, EventOccurrencesDocument } from "../documents.console";
 import { useCalendarT } from "../i18n";
 import { CALENDAR_MODEL, EVENT_MODEL } from "../resources";
-import { OCCURRENCE_SOURCES, type CalendarSourceContribution } from "../sources";
+import { OCCURRENCE_SOURCES, type OccurrenceSourceContribution } from "../sources";
 import { calendarEventForm } from "./CalendarEventForm";
 
 type OccurrenceRow = DocumentType<typeof EventOccurrencesDocument>["event_occurrences"][number];
@@ -45,49 +43,47 @@ const EVENT_MODELS = [EVENT_MODEL];
  *
  * The windowed surface (`@angee/ui`) owns the fetch and window gating, period
  * navigation, quick-create, marker navigation, loading/error/retry and the source
- * toggles. The page declares one source per calendar the viewer reads (labelled, so
- * the toolbar toggles it: the calendar filter), one unlabelled source for busy time
- * on calendars the viewer only sees free/busy of, and the sources other addons
- * contribute to `calendar.events#occurrence-sources`. The calendar sources share one
- * document and its window variables, so they are one request; each keeps its own
- * calendar's occurrences.
+ * toggles. The page declares:
+ *
+ * - one labelled source per listed calendar (its name and owning party), which the
+ *   toolbar toggles: the calendar filter;
+ * - one unlabelled source for occurrences of calendars the list does not name;
+ * - the sources other addons contribute to `calendar.events#occurrence-sources`,
+ *   each keyed by its container child id.
+ *
+ * The calendar sources share one document and its window variables, so they are one
+ * request. Whether an occurrence is busy time only is the server's answer
+ * (`redacted`); the list supplies labels only.
  */
 export function CalendarPage(): React.ReactElement {
   const t = useCalendarT();
-  const toast = useToast();
-  const routeHref = useRouteHref();
   const recordHref = useResourceRecordHrefLookup();
   // A contributed source reads the viewer (its own rows); signed out, it asks for none.
   const viewerId = useRuntimeAuth().user?.id ?? "";
-  const contributions = useContainer<CalendarSourceContribution>(OCCURRENCE_SOURCES);
+  const contributions = useContainer<OccurrenceSourceContribution>(OCCURRENCE_SOURCES);
   const calendars = useAuthoredQuery(CalendarListDocument, undefined, { models: CALENDAR_MODELS });
   const [reschedule] = useActionMutation<ActionFieldName>("reschedule_event", { invalidateModels: EVENT_MODELS });
+  const settle = useActionResultRun();
 
   const onReschedule = React.useCallback<NonNullable<ResourceListCalendarSpec["onReschedule"]>>(
     async (occurrence, start, end) => {
-      try {
-        const outcome = await reschedule(occurrence.event_sqid, {
-          start: start.toISOString(),
-          end: (end ?? start).toISOString(),
-        });
-        if (!outcome?.ok) throw new Error(outcome?.message || t("reschedule.failed"));
-      } catch (error) {
-        toast.danger({ title: t("reschedule.failed"), description: errorMessage(error, t("reschedule.failed")) });
-        // Re-throw so the surface reverts its optimistic move or resize.
-        throw error;
-      }
+      const outcome = await settle(() =>
+        reschedule(occurrence.event_sqid, { start: start.toISOString(), end: (end ?? start).toISOString() }),
+      );
+      // The settle owner has told the viewer; throwing makes the surface revert the move.
+      if (!outcome?.ok) throw new Error(outcome?.message || t("reschedule.failed"));
     },
-    [reschedule, toast, t],
+    [reschedule, settle, t],
   );
 
   const sources = React.useMemo<readonly AnyCalendarWindowSource[]>(() => {
     const listed = calendars.data?.calendars ?? [];
-    const readable = new Set(listed.map((calendar) => calendar.id));
-    // Redacted busy time shows as "Busy" and opens nothing; an event opens its row.
+    const named = new Set(listed.map((calendar) => calendar.id));
+    // Busy time shows as "Busy" and opens nothing; an event opens its row.
     const project = (row: OccurrenceRow): Occurrence => ({
       ...row,
       title: row.redacted ? t("occurrence.busy") : row.title,
-      to: row.redacted ? undefined : routeHref("calendar.event", { id: row.event_sqid }),
+      to: row.redacted ? undefined : recordHref(EVENT_MODEL, row.event_sqid),
     });
     const events = (keep: (row: OccurrenceRow) => boolean, toggle?: { key: string; label: string }) =>
       calendarWindowSource({
@@ -100,12 +96,15 @@ export function CalendarPage(): React.ReactElement {
     const context = { viewerId, recordHref };
     return [
       ...listed.map((calendar) =>
-        events((row) => row.calendar === calendar.id, { key: calendar.id, label: calendar.name }),
+        events((row) => row.calendar === calendar.id, {
+          key: calendar.id,
+          label: calendar.party ? t("source.calendar", { calendar: calendar.name, party: calendar.party.display_name }) : calendar.name,
+        }),
       ),
-      events((row) => !readable.has(row.calendar)),
-      ...contributions.map((entry) => entry.content(context)),
+      events((row) => !named.has(row.calendar)),
+      ...contributions.map((entry) => calendarWindowSource({ ...entry.content(context), key: entry.id })),
     ];
-  }, [calendars.data, contributions, recordHref, routeHref, t, viewerId]);
+  }, [calendars.data, contributions, recordHref, t, viewerId]);
 
   const calendar = React.useMemo<ResourceListCalendarSpec>(
     () => ({

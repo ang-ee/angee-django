@@ -15,7 +15,7 @@ import { calendarForm } from "./views/CalendarForm";
 
 export { CALENDAR_MODEL, EVENT_MODEL } from "./resources";
 /** The occurrence-source seam other addons contribute their dated rows to. */
-export { OCCURRENCE_SOURCES, type CalendarSourceContext, type CalendarSourceContribution } from "./sources";
+export { OCCURRENCE_SOURCES, type OccurrenceSourceContext, type OccurrenceSourceContribution } from "./sources";
 
 const CALENDAR_ID = "calendar";
 
@@ -25,7 +25,7 @@ const calendarRoutes: readonly BaseAddonRoute[] = [
     "/calendar",
     lazyRouteComponent(() => import("./views/CalendarPage"), "CalendarPage"),
     EVENT_MODEL,
-    { detailName: "calendar.event", menu: "calendar.events" },
+    { menu: "calendar.events" },
   ),
   ...resourcePageRoutes(
     "calendar.calendars",
