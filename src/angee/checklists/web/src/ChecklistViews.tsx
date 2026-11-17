@@ -38,13 +38,26 @@ export const CHECKLIST_FIELDS: readonly string[] = [
     .map((field) => `checklist.items.${field}`),
 ];
 
+/** Each status's label key: the type requires one for every status, and each key is a literal. */
+const CHECKLIST_STATUS_LABELS = {
+  passed: "status.passed",
+  risk: "status.risk",
+  conflict: "status.conflict",
+  unresolved: "status.unresolved",
+  not_checked: "status.not_checked",
+  not_applicable: "status.not_applicable",
+} as const satisfies Record<ChecklistStatus, string>;
+
 function isKnownStatus(status: string): status is ChecklistStatus {
   return (CHECKLIST_STATUSES as readonly string[]).includes(status);
 }
 
 export function useChecklistStatusLabel(): (status: string) => string {
   const t = useChecklistsT();
-  return React.useCallback((status: string) => t(isKnownStatus(status) ? `status.${status}` : "status.unknown"), [t]);
+  return React.useCallback(
+    (status: string) => t(isKnownStatus(status) ? CHECKLIST_STATUS_LABELS[status] : "status.unknown"),
+    [t],
+  );
 }
 
 type ChecklistItem = ChecklistFields["items"][number];
