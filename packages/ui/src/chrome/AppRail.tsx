@@ -210,7 +210,7 @@ function AppRailBody({
           onOpen={expandable && !expanded ? toggleExpanded : undefined} />}
         {expanded && !singleApp ? (
           <span className="min-w-0 flex-1 truncate text-13 font-semibold text-on-rail-hi">
-            {t("chrome.apps")}
+            {brand?.name ?? t("chrome.apps")}
           </span>
         ) : null}
         {expanded && expandable ? (
