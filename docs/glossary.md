@@ -369,7 +369,8 @@ each, and starts one run with no subject for the latest due occurrence. Older mi
 occurrences are recorded as skipped. See [the workflows README](../src/angee/workflows/README.md).
 
 **Run hold** — a run's most urgent step hold (`error`, then `run`, then
-`decision`). The run console's Incidents view lists runs held on `error` or `run`.
+`decision`); a run with a replacement holds nothing. The run console's Incidents view
+lists runs held on `error` or `run`.
 
 **Node** — a keyed graph declaration naming a step, its bindings and outgoing
 edges in a `Definition` document.

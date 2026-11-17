@@ -432,10 +432,15 @@ class WorkflowRun(RecordRefMixin, AngeeDataModel, concrete=True):
 
     hold_order = ("error", "run", "decision")
     """Step holds from most to least urgent: an operator's error, another run, then a person."""
+    incident_holds = ("error", "run")
+    """The holds an operator answers: the run console's Incidents view lists them."""
 
     @property
     def hold(self) -> str | None:
-        """The run's reader-facing hold: its most urgent step hold in :attr:`hold_order`."""
+        """The run's reader-facing hold: its most urgent step hold in :attr:`hold_order`.
+
+        A run with a replacement (``reprocesses``) holds nothing; the replacement carries it.
+        """
         if "_hold" in self.__dict__:
             return self.__dict__["_hold"]
         return type(self).system_queryset().filter(pk=self.pk).annotate(
@@ -443,20 +448,43 @@ class WorkflowRun(RecordRefMixin, AngeeDataModel, concrete=True):
         ).values_list("_hold", flat=True).get()
 
     @classmethod
-    def hold_expression(cls) -> models.Subquery:
-        """Read each run's most urgent step hold in one correlated expression, for filters and lists."""
+    def _held_steps(cls, *holds: str) -> Any:
+        """This run's steps holding one of ``holds``, correlated to the outer run row."""
         step_model = cls._meta.get_field("step_runs").related_model
         assert step_model is not None and issubclass(step_model, StepRun)
-        urgency = models.Case(
-            *(models.When(_hold=hold, then=models.Value(rank)) for rank, hold in enumerate(cls.hold_order)),
-            output_field=models.IntegerField(),
+        return cast(Any, step_model.system_queryset()).filter(run_id=models.OuterRef("pk")).holding(*holds)
+
+    @classmethod
+    def _replaced(cls) -> models.Exists:
+        """Whether a replacement reprocesses the outer run row."""
+        return models.Exists(cls.system_queryset().filter(reprocess_of=models.OuterRef("pk")))
+
+    @classmethod
+    def hold_expression(cls) -> models.Case:
+        """Read each run's most urgent step hold in one correlated expression, for lists.
+
+        Urgency ranks the steps' own status and waiting kind (``StepRun.hold_states``)
+        through :attr:`hold_order`.
+        """
+        step_model = cls._meta.get_field("step_runs").related_model
+        assert step_model is not None and issubclass(step_model, StepRun)
+        urgency = models.Case(*(
+            models.When(status=status, waiting_kind=kind, then=models.Value(cls.hold_order.index(hold)))
+            for (status, kind), hold in step_model.hold_states.items()
+        ), output_field=models.IntegerField())
+        held = cls._held_steps().order_by(urgency, "pk").values("_hold")[:1]
+        return models.Case(
+            models.When(cls._replaced(), then=models.Value(None)),
+            default=models.Subquery(held), output_field=models.CharField(null=True),
         )
-        held = (
-            step_model.system_queryset().filter(run_id=models.OuterRef("pk"))
-            .annotate(_hold=step_model.hold_expression()).filter(_hold__isnull=False)
-            .order_by(urgency, "pk").values("_hold")[:1]
+
+    @classmethod
+    def incident_expression(cls) -> models.ExpressionWrapper:
+        """Whether a run holds on one of :attr:`incident_holds` and has no replacement, as two ``EXISTS`` tests."""
+        return models.ExpressionWrapper(
+            models.Q(models.Exists(cls._held_steps(*cls.incident_holds))) & ~models.Q(cls._replaced()),
+            output_field=models.BooleanField(),
         )
-        return models.Subquery(held, output_field=models.CharField(null=True))
 
     def _lock_run_subject(self, *, required: bool = True) -> RunSubject | None:
         """Lock this root run's opted-in subject after the caller has locked the run."""

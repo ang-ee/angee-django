@@ -970,6 +970,18 @@ class StepRunQuerySet[T: StepRun](AngeeQuerySet[T]):
         """Select declared node rows, excluding map item rows."""
         return self.exclude(node_key__endswith=MAP_BODY_SUFFIX)
 
+    def holding(self, *holds: str) -> Any:
+        """Select rows holding one of ``holds`` (any reader-facing hold when none is named), annotated ``_hold``.
+
+        The rows' state narrows the set first (``StepRun.hold_states``), so the full
+        hold rule, with its routed-failure check, evaluates only rows that can hold.
+        """
+        narrowed = Q(pk__in=[])
+        for (status, kind), hold in self.model.hold_states.items():
+            if not holds or hold in holds:
+                narrowed |= Q(status=status, waiting_kind=kind)
+        return self.filter(narrowed).annotate(_hold=self.model.hold_expression()).filter(_hold__isnull=False)
+
     def graph_rows(self) -> Any:
         """Project failure reasons and map progress without loading row payloads."""
         return self.defer("input", "output", "state").annotate(

@@ -31,9 +31,10 @@ export default defineBaseAddon({
     ...resourcePageRoutes("workflows.triggers", "/workflows/triggers", lazyRouteComponent(() => import("./TriggersPage"), "TriggersPage"), TRIGGER_MODEL),
     ...resourcePageRoutes("workflows.trigger-events", "/workflows/trigger-events", lazyRouteComponent(() => import("./TriggerEventsPage"), "TriggerEventsPage"), TRIGGER_EVENT_MODEL),
   ],
-  // Incidents: runs held on an operator's error or on another run (`WorkflowRun.hold`).
+  // Incidents: runs held on an operator's error or on another run, without a replacement
+  // (`WorkflowRun.incident_expression`).
   resourceViews: [
-    { id: "workflows.incidents", label: "Incidents", resource: RUN_MODEL, filter: { hold: { inList: ["error", "run"] } } },
+    { id: "workflows.incidents", label: "Incidents", resource: RUN_MODEL, filter: { is_incident: { exact: true } } },
   ],
   menus: {
     // Decisions is workflows' human-review inbox; it lives under Workflows.

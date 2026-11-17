@@ -76,7 +76,9 @@ readable ancestors. `ctx.note(message, tone="info")` adds a small recorded note.
 The three reader-facing `StepRun.hold` states are `decision`, `run` and `error`;
 timer, record-change and map scheduling remain internal wait mechanics.
 A run's `hold` is its most urgent step hold: `error`, then `run`, then `decision`.
-The run console's **Incidents** view lists the runs held on `error` or `run`.
+A run with a replacement holds nothing; the replacement carries the hold. The run
+console's **Incidents** view lists the runs held on `error` or `run`
+(`WorkflowRun.incident_expression`, filter `is_incident`).
 
 A [`Schedule`](triggers.py) trigger (`source: schedule`) names a recurrence instead of a
 model and condition: `recurrence` (an RRULE that `angee.scheduling` expands),
