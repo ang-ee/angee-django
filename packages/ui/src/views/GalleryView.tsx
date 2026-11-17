@@ -6,7 +6,7 @@ import { useUiT } from "../i18n";
 import { useInAppLink } from "../lib/in-app-link";
 import { cn } from "../lib/cn";
 import { dragSourceProps, type DndPayload } from "../lib/dnd";
-import { Card, CardSelection, cardFrameVariants, type CardFrame } from "../ui/card";
+import { Card, CardSelection, cardFrameVariants, cardTitleVariants, type CardFrame } from "../ui/card";
 import { Skeleton, SkeletonStatus } from "../ui/skeleton";
 import { textRoleVariants } from "../ui/text";
 import { ListEmpty } from "./resource/resource-view-list-body";
@@ -340,7 +340,7 @@ function DefaultCardBody<TRow extends Row>({
         )}
       </div>
       <div className="p-2">
-        <h3 className="truncate text-13 font-medium text-fg">{title}</h3>
+        <h3 className={cn(cardTitleVariants({ density: "sm" }), "truncate")}>{title}</h3>
         {subtitle ? (
           <p className={textRoleVariants({ role: "caption", truncate: true })}>{subtitle}</p>
         ) : null}

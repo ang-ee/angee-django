@@ -8,7 +8,7 @@ import { useUiT } from "../../../i18n";
 import { Glyph } from "../../../chrome/Glyph";
 import { cn } from "../../../lib/cn";
 import type { Tone } from "../../../lib/tones";
-import { Card, CardSelection, cardFrameVariants, type CardFrame } from "../../../ui/card";
+import { Card, CardSelection, cardFrameVariants, cardTitleVariants, type CardFrame } from "../../../ui/card";
 import type { ResourceViewGroup } from "../resource-view-model";
 import { ListCellContent, readPath, type RowGroup } from "../resource-view-list-body";
 import { columnTone } from "../../page";
@@ -205,6 +205,9 @@ function BoardRowCardContent<TRow extends Row>({
   );
 }
 
+/** A default card's title line, on the shared card title role. */
+const CARD_TITLE_CLASS = cn(cardTitleVariants({ density: "sm" }), "block min-w-0 truncate");
+
 /** The default card: the first column not used for grouping as its title, then up to three detail rows. */
 export function DefaultBoardCardBody<TRow extends Row>({
   columns,
@@ -224,7 +227,7 @@ export function DefaultBoardCardBody<TRow extends Row>({
   return (
     <>
       {titleColumn ? (
-        <span className="block min-w-0 truncate text-sm font-semibold text-fg">
+        <span className={CARD_TITLE_CLASS}>
           <ListCellContent
             column={titleColumn}
             row={row}
@@ -261,7 +264,7 @@ export function DeclaredBoardCardBody<TRow extends Row>({
 }): React.ReactElement {
   const [title, ...details] = columns;
   return <>
-    {title ? <span className="block min-w-0 truncate text-sm font-semibold text-fg">
+    {title ? <span className={CARD_TITLE_CLASS}>
       <ListCellContent column={title} row={row} metadata={modelMetadata} />
     </span> : null}
     {details.filter((column) => {
