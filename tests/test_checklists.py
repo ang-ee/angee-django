@@ -846,3 +846,43 @@ def test_edges_with_a_teardown_never_block_their_targets_deletion(db: None) -> N
     del db
     assert not ChecklistEvidence.blocks_target_delete(Report)
     assert not ChecklistResult.blocks_target_delete(Inspection)
+
+
+def test_deleting_evidence_reads_the_policy_once_whatever_it_supports(world: Any) -> None:
+    """The edge index is read once per deletion; each supported result adds only its publication."""
+
+    def deleting(results: int) -> tuple[int, int]:
+        with system_context(reason="tests.checklists.delete_cost"):
+            evidence = Report.objects.create(name=f"Survey {results}")
+        _grant(evidence, "reader", world.writer)
+        for key in ("owner", "signature", "totals")[:results]:
+            _record(world, key, "passed", evidence=(evidence,))
+        with system_context(reason="tests.checklists.delete_cost"), CaptureQueriesContext(connection) as captured:
+            Report.objects.filter(pk=evidence.pk).delete()
+        return len(captured), sum("rebac_schemageneration" in query["sql"] for query in captured)
+
+    with system_context(reason="tests.checklists.delete_cost"):
+        Report.objects.filter(pk=Report.objects.create(name="Warm").pk).delete()
+    (none, guards), (one, one_guards), (three, three_guards) = deleting(0), deleting(1), deleting(3)
+    assert guards == one_guards == three_guards
+    # One result read and the two deletes; then one record-view read per published deletion.
+    assert one - none <= 3
+    assert three - one <= 2
+
+
+@pytest.mark.parametrize("deleted", ["child", "parent"])
+def test_deleting_a_multi_table_child_deletes_its_results_once(world: Any, deleted: str) -> None:
+    """The child's deletion collects its canonical parent too; the teardown runs per instance and is idempotent."""
+
+    admin = create_platform_admin(f"crane-admin-{deleted}")
+    with system_context(reason="tests.checklists.child_delete"):
+        crane = CraneInspection.objects.create(name="Tower crane", notes="")
+    _grant(crane.inspection_ptr, "writer", world.writer)
+    with actor_context(world.writer):
+        crane.checklist_record("load", "risk", "Rated below the load.", evidence=(world.report,))
+        crane.checklist_record("owner", "passed")
+    kept = _record(world, "owner", "passed")
+    with actor_context(admin):
+        (CraneInspection if deleted == "child" else Inspection).objects.get(pk=crane.pk).delete()
+    assert set(ChecklistResult._base_manager.values_list("pk", flat=True)) == {kept.pk}
+    assert not ChecklistEvidence._base_manager.exists()
