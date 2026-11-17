@@ -2,11 +2,15 @@
 
 Scheduling owns "what day is it" (:class:`~angee.scheduling.apps.SchedulingConfig`).
 A zone is stored and exchanged as its IANA name, never as a ``tzinfo``, so the same
-value crosses a model column, a GraphQL ``String``, a form and a Pydantic input. A
-blank name means the project ``TIME_ZONE``. :func:`zone_names` is the admission set;
-:data:`ZoneName` (Pydantic) and :class:`~angee.scheduling.fields.TimeZoneField`
-(Django) both read it, and :func:`zone_info` turns a name into the ``tzinfo`` that
-computation uses.
+value crosses a model column, a GraphQL ``String``, a form and a Pydantic input.
+
+**Blank names no zone.** A blank zone takes its context's zone, and the project
+``TIME_ZONE`` when the context names none: a row's ``TimeZoneField`` has no context,
+so blank is the project zone; a due-rule term's blank zone is its anchor's.
+
+:func:`get_zone_names` is the admission set; :data:`ZoneName` (Pydantic) and
+:class:`~angee.scheduling.fields.TimeZoneField` (Django) both read it, and
+:func:`get_zone_info` turns a name into the ``tzinfo`` that computation uses.
 """
 
 from __future__ import annotations
@@ -25,7 +29,7 @@ ZONE_NAME_MESSAGE = "Choose an IANA time zone name, such as Europe/Brussels."
 
 
 @cache
-def zone_names() -> frozenset[str]:
+def get_zone_names() -> frozenset[str]:
     """Return the IANA names the installed time zone database lists.
 
     ``Factory`` is left out: it is the database's placeholder for an unset zone,
@@ -39,7 +43,7 @@ def zone_names() -> frozenset[str]:
 def validate_zone_name(name: str) -> None:
     """Raise Django's :class:`~django.core.exceptions.ValidationError` unless the name is blank or listed."""
 
-    if name and name not in zone_names():
+    if name and name not in get_zone_names():
         raise ValidationError(ZONE_NAME_MESSAGE, code="invalid_time_zone")
 
 
@@ -54,11 +58,15 @@ def _admit_zone_name(name: str) -> str:
 
 
 ZoneName = Annotated[str, AfterValidator(_admit_zone_name)]
-"""An IANA zone name or blank (the project ``TIME_ZONE``), for Pydantic values and inputs."""
+"""An IANA zone name, or blank to take the context's zone, for Pydantic values and inputs."""
 
 
-def zone_info(name: str = "") -> tzinfo:
-    """Return the zone a name stands for: the named IANA zone, or the project ``TIME_ZONE`` when blank."""
+def get_zone_info(name: str = "") -> tzinfo:
+    """Return the zone a name stands for: the named IANA zone, or the project ``TIME_ZONE`` when blank.
+
+    Resolve a context's blank first (a term's zone falls back to its anchor's); this is
+    the end of every chain.
+    """
 
     if not name:
         return timezone.get_default_timezone()

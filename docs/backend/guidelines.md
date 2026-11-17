@@ -1475,26 +1475,29 @@ retains its native routing contract.
 ### Due rules and time zones
 
 - **"When is this due" has one owner.** [`angee.scheduling.due`](../../src/angee/scheduling/due.py)
-  owns due rules as values: named due anchors, calendar and counter offsets,
-  alignment, `earliest`/`latest` terms, warn and grace windows, repeat and
-  forecasts. A consumer row stores a `DueRuleField` beside its own date or instant
-  column and a JSON basis column, resolves with `DueRule.resolve`, and writes the
-  point and `Due.basis`. Do not add anchor, offset or alignment columns to a
-  consumer model, or a resolver of its own.
+  owns due rules as values; the [scheduling README](../../src/angee/scheduling/README.md)
+  lists what a rule expresses and the consumer recipes. A consumer row stores a
+  `DueRuleField` beside its own date or instant column and a JSON basis column,
+  resolves with `DueRule.resolve`, and writes the point and `Due.as_json()`. Do not
+  add anchor, offset or alignment columns to a consumer model, a resolver of its
+  own, or a status ladder of its own: a hand-set date reads its status through a
+  one-term rule.
 - **The subject owns its anchors.** The model that learns a date (a project's
   start, a completion, a reading) supplies it by name; scheduling owns no anchors,
-  counters or rates. An unknown anchor leaves the rule pending, with no point.
-- **Status is computed on read, never stored.** `Due.status(now=…, counters=…)`
+  counters or rates.
+- **Status is computed on read, never stored.** `Due.get_status(now=…, counters=…)`
   reads the stored basis; a stored status goes stale as time passes. A set-level
-  read, such as an overdue list, compares the stored date column in a queryset.
+  read, such as an overdue list, may compare the stored date column in a queryset
+  only for rules whose terms are all dated and resolved; a counter term without a
+  forecast, or a pending anchor, makes the stored date a bound, not the point.
 - **Counter amounts stay in the counter's unit.** A rule never converts units; the
   consumer reads its counter through `angee.uom`'s `Uom.convert` when units differ.
 - **A time zone is stored as its IANA name.** A model composes
   [`TimeZoneField`](../../src/angee/scheduling/fields.py) and a Pydantic input
-  annotates `ZoneName` ([zones](../../src/angee/scheduling/zones.py)); blank means
-  the project `TIME_ZONE`, and `zone_info` returns the `tzinfo`. Do not check zone
-  strings against a private `available_timezones()` copy or call `ZoneInfo` on
-  unchecked input.
+  annotates `ZoneName` ([zones](../../src/angee/scheduling/zones.py)); a blank zone
+  takes its context's zone and finally the project `TIME_ZONE`, and
+  `get_zone_info` returns the `tzinfo`. Do not check zone strings against a private
+  `available_timezones()` copy or call `ZoneInfo` on unchecked input.
 
 ### Migration history
 

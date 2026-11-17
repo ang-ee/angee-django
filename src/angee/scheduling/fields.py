@@ -52,7 +52,7 @@ class TimeZoneField(models.CharField):
 
     The stored value is the name (``"Europe/Brussels"``), never a ``tzinfo``, so
     it crosses GraphQL and forms as a string;
-    :func:`~angee.scheduling.zones.zone_info` turns it into the zone computation
+    :func:`~angee.scheduling.zones.get_zone_info` turns it into the zone computation
     uses. ``full_clean`` rejects a name the installed time zone database does not
     list (:func:`~angee.scheduling.zones.validate_zone_name`). The column defaults to
     blank-allowed, so "the project's zone" needs no opt-in.
@@ -81,11 +81,14 @@ class DueRuleField(models.JSONField):
     A consumer row composes it beside its own date or instant column and a JSON
     basis column. The stored value is the rule's canonical JSON
     (:meth:`~angee.scheduling.due.DueRule.as_json`): assigning a ``DueRule`` or its
-    JSON stores that form, and ``full_clean`` (the Hasura write path) and
-    ``save`` refuse a rule its schema rejects, each message naming the path inside
-    the rule. ``DueRule.model_validate(row.due_rule)`` reads the typed rule. The
-    column crosses GraphQL and forms as ``JSON``. Lookups receive their operand as
-    given, so key transforms and containment queries keep working on the JSON.
+    JSON stores that form, and ``full_clean`` (the Hasura write path) and an
+    instance ``save`` (including ``create`` and ``bulk_create``, which run
+    ``pre_save``) refuse a rule its schema rejects, each message naming the path
+    inside the rule. ``QuerySet.update()`` and ``bulk_update`` skip ``pre_save``:
+    they store a ``DueRule`` in canonical form but write JSON as given, unchecked.
+    ``DueRule.from_json(row.due_rule)`` reads the typed rule (``None`` when blank).
+    The column crosses GraphQL and forms as ``JSON``. Lookups receive their operand
+    as given, so key transforms and containment queries keep working on the JSON.
     """
 
     description = "Due rule"

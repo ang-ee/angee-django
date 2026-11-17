@@ -25,7 +25,7 @@ from pydantic import ValidationError as PydanticValidationError
 
 from angee.scheduling.fields import RecurrenceField, TimeZoneField
 from angee.scheduling.recurrence import Recurrence
-from angee.scheduling.zones import ZoneName, zone_info
+from angee.scheduling.zones import ZoneName, get_zone_info
 
 with isolate_apps("angee.scheduling"):
 
@@ -280,19 +280,19 @@ def test_named_zone_drives_expansion_instead_of_the_project_zone() -> None:
         pytest.param("", _utc(2026, 7, 6, 9), None, id="single-passed"),
     ],
 )
-def test_after_returns_the_first_occurrence_strictly_after_a_moment(
+def test_the_occurrence_after_a_moment_is_strictly_after_it(
     rule: str, moment: datetime, expected: datetime | None
 ) -> None:
-    assert Recurrence(rule).after(_utc(2026, 7, 6, 9), moment) == expected
+    assert Recurrence(rule).get_occurrence_after(_utc(2026, 7, 6, 9), moment) == expected
 
 
 @override_settings(TIME_ZONE="UTC")
-def test_after_unrolls_in_the_named_zone() -> None:
+def test_the_occurrence_after_unrolls_in_the_named_zone() -> None:
     """Monthly on the 31st, in a zone: the next occurrence keeps the local clock and skips short months."""
 
     barbados = ZoneInfo("America/Barbados")
     start = datetime(2026, 1, 31, 14, tzinfo=barbados)
-    following = Recurrence("FREQ=MONTHLY").after(start, start, zone="America/Barbados")
+    following = Recurrence("FREQ=MONTHLY").get_occurrence_after(start, start, zone="America/Barbados")
     assert following == datetime(2026, 3, 31, 14, tzinfo=barbados)
     assert following is not None and following.tzinfo is UTC
 
@@ -315,11 +315,11 @@ def test_time_zone_field_and_zone_name_refuse_an_unlisted_name(name: str) -> Non
 
 
 @override_settings(TIME_ZONE="America/New_York")
-def test_zone_info_reads_a_blank_name_as_the_project_zone() -> None:
-    assert zone_info("") == ZoneInfo("America/New_York")
-    assert zone_info("Europe/Brussels") == ZoneInfo("Europe/Brussels")
+def test_get_zone_info_reads_a_blank_name_as_the_project_zone() -> None:
+    assert get_zone_info("") == ZoneInfo("America/New_York")
+    assert get_zone_info("Europe/Brussels") == ZoneInfo("Europe/Brussels")
     with pytest.raises(ValidationError):
-        zone_info("Nowhere/Town")
+        get_zone_info("Nowhere/Town")
 
 
 def test_time_zone_field_crosses_graphql_as_a_string() -> None:
