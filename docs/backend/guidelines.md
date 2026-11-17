@@ -687,7 +687,12 @@ data through REBAC, never a queryset bypass.
   only the vocabulary. An edge is read by whoever reads both the tag and the
   record. `TagAssignment.check`
   fails startup when the taggable models and the declared relations differ. The
-  tags addon names no other addon's model.
+  tags addon names no other addon's model. A `TagCategory` groups the vocabulary
+  for every taggable type and may cap how many of its tags one record holds;
+  [`TagAssignmentManager.require_category_maximum`](../../src/angee/tags/models.py)
+  is the one check, run by the edge verbs under the record's row lock and by the
+  saves that file a tag or lower a maximum
+  ([tags](../../src/angee/tags/README.md#the-maximum-per-record)).
 - **Raise through the model's access owner.** `require_access(permission, actor=None)`
   delegates to native REBAC checks. An explicit actor stays bound to the instance;
   omitting it preserves native instance and ambient scope precedence. Verbs resolve

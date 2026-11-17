@@ -10,6 +10,19 @@ live in code docstrings.
 
 ## Unreleased — shared addon contracts, native embeddings and graph retrieval
 
+- Tags gain categories. `tags.TagCategory` (name, description, a fractional
+  `position`, an optional `max_per_record`) groups the vocabulary for every
+  taggable type, and `Tag.category` files a tag under at most one of them
+  (nullable; deleting a category un-files its tags). Tag administrators curate
+  categories as they curate tags (`tags/tag_category`; tags revision 8). One
+  check, `TagAssignmentManager.require_category_maximum`, refuses a record over a
+  category's maximum: `attach` and `set_for` run it under the record's row lock,
+  a tag save that writes `category` and a category save that writes
+  `max_per_record` run it over the category's records, and a merge into a capped
+  category refuses tags filed elsewhere. The console gains a categories page, a
+  `category` column, facet and form field on tags, and `angee.tags.recordTags`
+  shows one picker per category. Hosts author a migration for `tags`
+  (`TagCategory`, `Tag.category`) and re-sync the permission schema.
 - A record-visibility file takes its access from its attached records, its
   direct viewers and admins. Its owner (the uploader, by default) holds it while
   the upload is a draft, which the record edge needs, and once it is published

@@ -1227,8 +1227,10 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
   metadata projects `tags` as a writable relation list to `tags.Tag`, so the form
   edits it as its standard to-many chips field: a pick or removal dirties the
   form, Save writes the id list with the row (the backend diffs the edges in the
-  row's transaction) and Discard drops it, on create forms too. No tags-specific
-  widget exists; the list cell keeps the shared relation-list chips.
+  row's transaction) and Discard drops it, on create forms too. The list cell
+  keeps the shared relation-list chips. Only a record whose scalar fields are
+  read-only places the `angee.tags.recordTags` widget instead: it writes through
+  the independent `tag`/`untag` verbs and shows one picker per tag category.
 - **Resource relation pickers support server-backed search.** Compose
   `RelationFieldWidget`; its
   [relation-options owner](../../packages/ui/src/views/relation/relation-options.ts)
