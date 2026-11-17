@@ -347,12 +347,12 @@ export function createApp(input: CreateAppInput): AngeeApp {
       return definition.id;
     })),
   });
-  // The selected app's theme is the default until the person picks their own, unless the app
-  // locks it; the build's theme options belong to the build's theme.
-  const selectedAppearance = selection.theme === undefined || selection.theme === input.appearance?.themeId
+  // The selected app's theme is the default until the person picks their own; the build's
+  // theme options belong to the build's theme. Only the selection can lock it.
+  const appearance = selection.theme === undefined || selection.theme === input.appearance?.themeId
     ? input.appearance
     : { ...input.appearance, themeId: selection.theme, options: undefined };
-  const appearance = selection.themeLocked ? { ...selectedAppearance, themeLocked: true } : selectedAppearance;
+  const themeLocked = selection.themeLocked === true;
   // Optional links (`maybe`, record destinations) skip unavailable pages; authored links still build.
   const runtimeRouteHref = unavailable.size
     ? createRouteHref(routeDescriptors, { unavailable: new Set(unavailable.keys()) })
@@ -658,6 +658,7 @@ export function createApp(input: CreateAppInput): AngeeApp {
           authSchema={authSchema}
           loginPath={loginPath}
           appearance={appearance}
+          themeLocked={themeLocked}
         >
           <Outlet />
         </AppFrame>
@@ -906,12 +907,14 @@ function AppFrame({
   authSchema,
   loginPath,
   appearance,
+  themeLocked,
   children,
 }: {
   viewAs: ViewAsProvider;
   authSchema: string;
   loginPath: string;
   appearance?: HostAppearanceDefaults;
+  themeLocked: boolean;
   children: ReactNode;
 }): ReactNode {
   const { auth: identityAuth, identity } = useRuntimeAuthState();
@@ -958,6 +961,7 @@ function AppFrame({
           logoutAction={logoutAction}
           loginPath={loginPath}
           appearance={appearance}
+          themeLocked={themeLocked}
         >
           {children}
         </RuntimeSessionProvider>
@@ -971,12 +975,14 @@ function RuntimeSessionProvider({
   logoutAction,
   loginPath,
   appearance,
+  themeLocked,
   children,
 }: {
   auth: AuthState;
   logoutAction: ReturnType<typeof useLogoutAction>;
   loginPath: string;
   appearance?: HostAppearanceDefaults;
+  themeLocked: boolean;
   children: ReactNode;
 }): ReactNode {
   const userPreferences = useUserPreferences();
@@ -986,7 +992,7 @@ function RuntimeSessionProvider({
   );
   return (
     <AppRuntimeProvider runtime={runtime}>
-      <AppearanceProvider host={appearance}>{children}</AppearanceProvider>
+      <AppearanceProvider host={appearance} themeLocked={themeLocked}>{children}</AppearanceProvider>
     </AppRuntimeProvider>
   );
 }

@@ -6,20 +6,24 @@ import { describe, expect, test } from "vitest";
 import { DateTile } from "./DateTile";
 
 describe("DateTile", () => {
-  test("reads the month over the day, with the full date as the tooltip and the spoken text", () => {
+  test("reads the month over the day; the full date is the face's tooltip and is spoken once", () => {
     const { container } = render(<DateTile value="2026-09-28T22:30:00Z" timeZone="UTC" />);
     const time = container.querySelector("time")!;
-    expect(time.getAttribute("datetime")).toBe("2026-09-28T22:30:00.000Z");
-    expect(time.getAttribute("title")).toBe("Sep 28, 2026");
-    expect(screen.getByText("Sep").getAttribute("aria-hidden")).toBe("true");
+    expect(time.getAttribute("datetime")).toBe("2026-09-28");
+    expect(time.hasAttribute("title")).toBe(false);
+    const face = screen.getByText("Sep").parentElement!;
+    expect(face.getAttribute("aria-hidden")).toBe("true");
+    expect(face.getAttribute("title")).toBe("Sep 28, 2026");
     expect(screen.getByText("28").className).toContain("font-display");
+    expect(screen.getAllByText("Sep 28, 2026")).toHaveLength(1);
     expect(screen.getByText("Sep 28, 2026").className).toContain("sr-only");
   });
 
-  test("takes the calendar day in the given time zone", () => {
-    render(<DateTile value="2026-09-28T22:30:00Z" timeZone="Pacific/Kiritimati" />);
+  test("takes the calendar day in the given time zone, for the face and datetime", () => {
+    const { container } = render(<DateTile value="2026-09-28T22:30:00Z" timeZone="Pacific/Kiritimati" />);
     expect(screen.getByText("Sep")).toBeTruthy();
     expect(screen.getByText("29")).toBeTruthy();
+    expect(container.querySelector("time")!.getAttribute("datetime")).toBe("2026-09-29");
   });
 
   test("shows the pending state for a missing or unreadable date", () => {

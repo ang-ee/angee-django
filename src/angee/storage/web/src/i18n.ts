@@ -27,7 +27,6 @@ export const enStorageMessages: Record<string, string> = {
   "preview.pages": "Pages",
   "preview.pdfPrev": "Previous page",
   "preview.pdfNext": "Next page",
-  "preview.fetchFailed": "The file could not be fetched ({status}).",
   "preview.decodeFailed": "The photo could not be decoded.",
 
   // Primary-pane folder navigator landmark.

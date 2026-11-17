@@ -58,11 +58,6 @@ export interface HostAppearanceDefaults {
   colorScheme?: ColorSchemePreference;
   options?: ThemeOptionsEnvelope;
   fingerprint?: string;
-  /**
-   * The selected app locks `themeId`: it and its `options` win over the person's
-   * theme and options, which stay saved for other apps. Their color scheme still applies.
-   */
-  themeLocked?: boolean;
 }
 
 export interface AppearanceState {
@@ -114,7 +109,16 @@ export interface AppearancePreferenceRead {
  * @kind null
  * @reason Provider infrastructure: Appearance context.
  */
-export function AppearanceProvider({ children, host = DEFAULT_HOST }: { children: ReactNode; host?: HostAppearanceDefaults }): ReactNode {
+export function AppearanceProvider({ children, host = DEFAULT_HOST, themeLocked: lockRequested = false }: {
+  children: ReactNode;
+  host?: HostAppearanceDefaults;
+  /**
+   * The selected app locks the host theme: it and the host options win over the
+   * person's theme and options, which stay saved for other apps; their color scheme
+   * still applies. Only the app selection sets it, never the build defaults.
+   */
+  themeLocked?: boolean;
+}): ReactNode {
   const runtime = useAppRuntime();
   const auth = useRuntimeAuth();
   const userPreferences = useRuntimeUserPreferences();
@@ -141,10 +145,10 @@ export function AppearanceProvider({ children, host = DEFAULT_HOST }: { children
   const system = useSystemColorScheme();
   const hostThemeId = host.themeId ?? null;
   const hostTheme = hostThemeId ? catalogue.get(hostThemeId) ?? null : null;
-  const themeLocked = host.themeLocked === true && hostThemeId !== null;
-  const savedAppearance = resolveAppearance(preferences, saved.notice, catalogue, host, system);
+  const savedAppearance = resolveAppearance(preferences, saved.notice, catalogue, host, system, lockRequested);
+  const { themeLocked } = savedAppearance;
   const { effectiveThemeId, effectiveTheme, colorSchemePreference, colorScheme, effectiveTokens, effectiveOptions, notice } =
-    draft ? resolveAppearance(draft, null, catalogue, host, system) : savedAppearance;
+    draft ? resolveAppearance(draft, null, catalogue, host, system, lockRequested) : savedAppearance;
   let hostOptions: ThemeOptionsEnvelope | undefined;
   if (hostTheme?.definition.options) {
     try {
@@ -163,7 +167,8 @@ export function AppearanceProvider({ children, host = DEFAULT_HOST }: { children
   }, [colorScheme, effectiveThemeId, effectiveTokens, resolvingIdentity]);
 
   useEffect(() => {
-    if (resolvingIdentity) return;
+    // A locked app's theme is not the person's; the device's next first paint follows their own choice.
+    if (resolvingIdentity || themeLocked) return;
     writeAppearanceCache({
       schema: APPEARANCE_CACHE_SCHEMA,
       fingerprint: host.fingerprint ?? "",
@@ -172,7 +177,7 @@ export function AppearanceProvider({ children, host = DEFAULT_HOST }: { children
       colorSchemePreference: savedAppearance.colorSchemePreference,
       tokenLayers: savedAppearance.tokenLayers,
     });
-  }, [auth.user?.id, savedAppearance, host.fingerprint, resolvingIdentity]);
+  }, [auth.user?.id, savedAppearance, host.fingerprint, resolvingIdentity, themeLocked]);
 
   const update = useCallback(async (
     apply: (current: AppearancePreferences) => AppearancePreferences | undefined,
@@ -308,18 +313,20 @@ export function AppearanceProvider({ children, host = DEFAULT_HOST }: { children
 }
 
 /** Resolve both live appearance and the saved-only boot cache through one path. */
-function resolveAppearance(preferences: AppearancePreferences, notice: AppearanceState["notice"], catalogue: ReadonlyMap<string, ThemeContribution>, host: HostAppearanceDefaults, system: ColorScheme) {
+function resolveAppearance(preferences: AppearancePreferences, notice: AppearanceState["notice"], catalogue: ReadonlyMap<string, ThemeContribution>, host: HostAppearanceDefaults, system: ColorScheme, lockRequested: boolean) {
   const hostTheme = host.themeId ? catalogue.get(host.themeId) : undefined;
-  // A locked app theme replaces the person's theme and its options, never their scheme.
-  const locked = host.themeLocked === true && Boolean(host.themeId);
-  const selectedThemeId = locked ? host.themeId : preferences.themeId ?? host.themeId;
+  // A locked app theme replaces the person's theme and its options, never their scheme;
+  // the person's options are not in play, so their invalidity is no notice here.
+  const themeLocked = lockRequested && Boolean(host.themeId);
+  if (themeLocked && notice === "options-invalid") notice = null;
+  const selectedThemeId = themeLocked ? host.themeId : preferences.themeId ?? host.themeId;
   const selectedTheme = selectedThemeId ? catalogue.get(selectedThemeId) : undefined;
   if (selectedThemeId && !selectedTheme) notice ??= "theme-unavailable";
   const effectiveTheme = selectedTheme ?? hostTheme ?? null;
   const effectiveThemeId = effectiveTheme?.definition.id ?? null;
   const colorSchemePreference = preferences.colorScheme ?? host.colorScheme ?? "system";
   const colorScheme = colorSchemePreference === "system" ? system : colorSchemePreference;
-  const requestedOptions = locked || preferences.themeId === undefined ? host.options : preferences.options;
+  const requestedOptions = themeLocked || preferences.themeId === undefined ? host.options : preferences.options;
   let tokenLayers: ThemeTokenLayers = { shared: {}, light: {}, dark: {} };
   let effectiveOptions: ThemeOptionsEnvelope | undefined;
   if (effectiveTheme) {
@@ -334,7 +341,7 @@ function resolveAppearance(preferences: AppearancePreferences, notice: Appearanc
     if (effectiveTheme.definition.options) effectiveOptions = { version: resolved.version, value: resolved.value };
   }
   const effectiveTokens = { ...tokenLayers.shared, ...tokenLayers[colorScheme] };
-  return { effectiveThemeId, effectiveTheme, colorSchemePreference, colorScheme, tokenLayers, effectiveTokens, effectiveOptions, notice };
+  return { effectiveThemeId, effectiveTheme, colorSchemePreference, colorScheme, tokenLayers, effectiveTokens, effectiveOptions, notice, themeLocked };
 }
 
 /**
