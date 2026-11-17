@@ -2,7 +2,10 @@
 
 The agents addon owns the session runner seam but no implementation. Provider
 addons return ACP-shaped updates through the caller-supplied sink and return
-opaque replay state without teaching the catalogue about their SDK types.
+opaque replay state without teaching the catalogue about their SDK types. A
+``tool_call`` update's ``title`` is the called tool's name, the key
+``AgentTurn.tool_calls`` reads saved calls by, and a settled call's ``status``
+is ACP's ``completed`` only when the tool succeeded, ``failed`` otherwise.
 """
 
 from __future__ import annotations
