@@ -24,34 +24,58 @@ live in code docstrings.
 
 - A triage task's hold may carry a wake date, an awaited user, both or neither:
   `TaskWork.snooze(until=None, *, awaiting=None, expected_revision=None)` takes the
-  write and revision check accept and decline take, and reads the persisted stage
-  under the row lock. `TaskWork.wake(reason="manual", *, message=None,
-  expected_revision=None)` ends a hold and sends `angee.work.events.task_woken`
-  (`task`, `reason` of `due`, `reply` or `manual`, `message`), so a consumer asks
-  its review again there. New columns `snoozed_at` (set exactly while held; the
-  triage inbox filters by it) and `snoozed_awaiting` (the awaited user). The due
-  job and the chatter listener wake row by row through
-  `TaskWorkQuerySet.wake_each`, with history and a revision bump, where they used
-  bulk updates; `wake_from_chatter_thread` is replaced by `wake_on_chatter_reply`,
-  which wakes only a hold awaiting the message's author, so the reviewer's own
-  comment and a hold awaiting nobody are no longer woken by chatter. Leaving
-  triage ends a hold. GraphQL `snooze_task(task, until, expected_revision)` makes
-  `until` optional; `wake_task(task, expected_revision)` is new, with its MCP
-  tool. Upgrade: a host authors the migration for the two columns, then a data
-  migration over its historical models that marks existing holds and clears holds
-  left outside triage, for example
-  `Task.objects.filter(snoozed_until__isnull=False, stage__category="triage").update(snoozed_at=F("updated_at"))`
-  and `Task.objects.filter(snoozed_until__isnull=False).exclude(stage__category="triage").update(snoozed_until=None, snoozed_by=None)`.
+  write and revision check accept and decline take, reads the persisted stage
+  under the row lock and refuses a hold awaiting its own holder.
+  `TaskWork.wake(reason="manual", *, message=None, expected_revision=None)` ends a
+  hold and sends `angee.work.events.task_woken` (`task`, `reason` of `due`, `reply`
+  or `manual`, `message`); the task carries no instance sudo and keeps the waking
+  actor, and a consumer asks its review again there. New columns `snoozed_at` (set
+  exactly while held; the triage inbox filters by it) and `snoozed_awaiting` (the
+  awaited user); `snoozed_until` is no longer editable. One rule decides a reply,
+  `TaskWorkQuerySet.wake_replied(message, replier_id=)`: a hold wakes only on its
+  awaited user's message, so the reviewer's own comment and any message to a hold
+  awaiting nobody wake nothing; such a hold wakes only at its date or by hand.
+  `wake_from_chatter_thread` is replaced by `wake_on_chatter_reply`. The due job
+  and the reply paths wake row by row through `TaskWorkQuerySet.wake_each`, with
+  history and a revision bump, where they used bulk updates; a failing row is
+  logged and stays held for the next run without failing the others or the
+  message that woke it. `held()` leaves out trashed tasks. Leaving triage ends a
+  hold. GraphQL `snooze_task(task, until, expected_revision)` makes `until`
+  optional; `wake_task(task, expected_revision)` is new, with its MCP tool.
+  Upgrade: a host authors the schema migration for the two columns and the
+  `snoozed_until` option, then a data migration that marks existing holds and
+  clears holds left outside triage, through the historical model and the schema
+  editor's alias:
+
+  ```python
+  def mark_holds(apps, schema_editor):
+      tasks = apps.get_model("projects", "Task")._base_manager.using(schema_editor.connection.alias)
+      held = tasks.filter(snoozed_until__isnull=False)
+      held.filter(stage__category="triage").update(snoozed_at=models.F("updated_at"))
+      held.exclude(stage__category="triage").update(snoozed_until=None, snoozed_by=None)
+  ```
+
+  `snoozed_at = updated_at` only approximates when each hold began. A migrated hold
+  whose wake date has already passed wakes on the due job's first run, and each
+  wake sends `task_woken`.
 - Intake asks a requester to clarify a request: `Task.clarify(question, *, to=None,
-  reply_by=None, expected_revision=None)` (GraphQL `clarify_task`) posts the
-  question as a task comment, also replies on the request's source message when
-  the requester has no admitted account and the request came by email on a
-  channel with an outbound sender (the reviewer needs the channel's `reply`), and
-  holds the task awaiting the requester. A requester's inbound message on a
-  conversation intake already captured is that request's reply: it files no new
-  request and task, and wakes the task's hold. `intake_requester_domains =
-  ["*"]` gives every claimed webform address a passwordless account on capture.
-  The intake Task donor `TaskIntakeFilters` is renamed `TaskIntake`.
+  reply_by=None, expected_revision=None)` (GraphQL `clarify_task`) locks the task,
+  gives a requester without an account a passwordless one
+  (`Need.provide_requester_account`, the linking the `["*"]` policy uses: no
+  credential, admission or membership), holds the task awaiting that account,
+  posts the question as a task comment, and also emails it as a reply on the
+  request's source message when the requester has no admitted account and the
+  request came as an email with a sender on a channel with an outbound sender (the
+  reviewer needs the channel's `reply`); a requester reachable neither way is
+  refused. `to` names the request to ask about. An inbound email answering a
+  message on a request's conversation (its `In-Reply-To` resolved there), from
+  that request's sender while its task is in triage, is the request's reply: it
+  files no new request and task, and wakes the hold when it awaits that
+  requester's account. A fresh email that only reuses a subject, and any email
+  after accept or decline, is a new request. `intake_requester_domains = ["*"]`
+  gives every claimed webform address a passwordless, unadmitted account on
+  capture; the intake README states its trust model. The intake Task donor
+  `TaskIntakeFilters` is renamed `TaskIntake`.
 
 - A record-visibility file takes its access from its attached records, its
   direct viewers and admins. Its owner (the uploader, by default) holds it while

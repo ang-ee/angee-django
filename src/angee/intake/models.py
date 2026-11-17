@@ -1093,13 +1093,14 @@ class TaskIntake(Composable, extends="projects.Task"):
         awaits that account, so only their reply wakes it, on the task's chatter
         or on their own conversation (``TaskWorkQuerySet.wake_replied``);
         ``reply_by`` passing wakes it with ``due``. A hold never awaits the asker.
-        After the hold, the question is a comment on the task's chatter addressed
-        to the requester; one without an admitted account also gets it as a reply
-        on their request's source message when that came by email on a channel
-        with an outbound sender. Messaging does not yet address an email reply to
-        its parent's sender (``MessageManager.compose_reply``), so a requester who
-        cannot reply on the task is refused rather than held for an answer that
-        cannot come.
+        After the hold, the question is a comment on the task's chatter, addressed
+        to the requester when their account may reply there. A requester without
+        an admitted account also gets it by email when their request came as an
+        email with a sender, on a channel with an outbound sender: messaging's
+        ``compose_reply`` addresses, titles and threads that reply and queues its
+        delivery, so the answer returns onto the request's conversation. A
+        requester reachable neither way is refused rather than held for an
+        answer that cannot come.
         """
 
         question = str(question or "").strip()
@@ -1121,12 +1122,8 @@ class TaskIntake(Composable, extends="projects.Task"):
             raise ValidationError(
                 {"to": "The requester can neither reply on this task nor be reached by email; approve their access."}
             )
-        if not posts:
-            raise ValidationError(
-                {"to": "Email questions cannot reach a requester yet; approve their access to ask them on the task."}
-            )
         cast("TaskWork", self).snooze(reply_by, awaiting=account, expected_revision=expected_revision)
-        self.message_post(question, recipient_user_ids=(account.pk,))
+        self.message_post(question, recipient_user_ids=(account.pk,) if posts else ())
         if route is not None:
             source, sender = route
             message_model = apps.get_model("messaging", "Message")
@@ -1170,13 +1167,21 @@ class TaskIntake(Composable, extends="projects.Task"):
 
     @staticmethod
     def _email_reply_route(requests: list[Need]) -> tuple[Message, Any] | None:
-        """Return the first emailed request's source message and its channel's outbound sender handle."""
+        """Return the first emailed request's source message and its channel's outbound sender handle.
+
+        A request qualifies when ``compose_reply`` can address its reply: an email
+        with a sender, on a channel whose outbound sender is configured and connected.
+        """
 
         handle_model = apps.get_model("parties", "Handle")
         email = handle_model.Platform.EMAIL
         for need in requests:
             source = need.source_message
-            if source is None or source.platform != email:
+            if (
+                source is None
+                or source.sender_id is None
+                or source.message_type != type(source).MessageKind.EMAIL
+            ):
                 continue
             channel = source.transport_channel(reason="intake.clarify.channel")
             if channel is None:

@@ -8,6 +8,7 @@ from django.utils import timezone
 from rebac import PermissionDenied, actor_context, system_context
 
 from angee.base.models.locks import StaleRevisionError
+from angee.base.permissions import actor_user_id
 from angee.work.events import task_woken
 from tests.native_work import WorkCase
 
@@ -35,6 +36,21 @@ class TaskHoldTests(WorkCase):
             yield events
         finally:
             task_woken.disconnect(dispatch_uid="tests.work.holds.observe")
+
+    @contextmanager
+    def refusing(self, task):
+        """Make a consumer's re-review of ``task`` fail, as a broken receiver would."""
+
+        def refuse(sender, task, **kwargs):
+            if task.pk == refused_pk:
+                raise RuntimeError("The re-review failed.")
+
+        refused_pk = task.pk
+        task_woken.connect(refuse, weak=False, dispatch_uid="tests.work.holds.refuse")
+        try:
+            yield
+        finally:
+            task_woken.disconnect(dispatch_uid="tests.work.holds.refuse")
 
     def hold(self, task):
         return self.Task._base_manager.values_list(
@@ -162,3 +178,87 @@ class TaskHoldTests(WorkCase):
         self.assertTrue(result["wake_task"]["ok"], result)
         self.assertEqual(events, [(task.pk, "manual", None)])
         self.assertIsNone(self.graphql(HOLD, {"id": task.sqid}, user=self.manager)["project_tasks_by_pk"]["snoozed_at"])
+
+    def test_a_hold_never_awaits_its_holder(self):
+        task = self.task("Triage")
+        with self.assertRaisesMessage(ValidationError, "cannot await the user who holds it"):
+            self.snooze(task, awaiting=self.manager)
+        self.assertIsNone(self.hold(task)[0])
+
+    def test_a_failing_re_review_leaves_its_hold_held_and_the_due_job_wakes_the_rest(self):
+        first, second = self.task("Triage"), self.task("Triage")
+        for task in (first, second):
+            self.snooze(task, timezone.now() + timedelta(hours=1))
+        now = timezone.now() + timedelta(hours=2)
+        with self.refusing(first), system_context(reason="tests.work.holds.isolation"):
+            with self.assertLogs("angee.work.models", "ERROR"):
+                self.assertEqual(self.Task.work.wake_due_snoozes(now=now), 1)
+        self.assertIsNotNone(self.hold(first)[0])
+        self.assertIsNone(self.hold(second)[0])
+        with system_context(reason="tests.work.holds.retry"):
+            self.assertEqual(self.Task.work.wake_due_snoozes(now=now), 1)
+        self.assertIsNone(self.hold(first)[0])
+
+    def test_a_failing_re_review_never_rejects_the_reply_that_woke_it(self):
+        task = self.task("Triage")
+        self.snooze(task, awaiting=self.owner)
+        with self.refusing(task), actor_context(self.owner), self.assertLogs("angee.work.models", "ERROR"):
+            reply = self.as_user(task).message_post("Next week.")
+        self.assertTrue(type(reply)._base_manager.filter(pk=reply.pk).exists())
+        self.assertIsNotNone(self.hold(task)[0])
+
+    def test_the_woken_task_carries_no_instance_sudo_and_keeps_the_waking_actor(self):
+        due, manual = self.task("Triage"), self.task("Triage")
+        self.snooze(due, timezone.now() + timedelta(hours=1))
+        self.snooze(manual)
+        seen = {}
+
+        def observe(sender, task, reason, **kwargs):
+            seen[reason] = (task.is_sudo(), actor_user_id(task.actor()))
+
+        task_woken.connect(observe, weak=False, dispatch_uid="tests.work.holds.payload")
+        try:
+            with system_context(reason="tests.work.holds.payload"):
+                self.Task.work.wake_due_snoozes(now=timezone.now() + timedelta(hours=2))
+            with actor_context(self.manager):
+                self.as_user(manual, self.manager).wake()
+        finally:
+            task_woken.disconnect(dispatch_uid="tests.work.holds.payload")
+        self.assertFalse(seen["due"][0])
+        self.assertEqual(seen["manual"], (False, self.manager.pk))
+
+    def test_marking_a_duplicate_ends_a_hold_without_a_wake(self):
+        task, canonical = self.task("Triage"), self.task("Ready")
+        self.snooze(task, awaiting=self.owner)
+        with self.woken() as events, actor_context(self.manager):
+            self.as_user(task, self.manager).mark_duplicate(self.as_user(canonical, self.manager))
+        self.assertEqual(events, [])
+        self.assertEqual(self.hold(task)[:4], (None, None, None, None))
+
+    def test_a_removed_task_keeps_its_hold_and_wakes_only_once_restored(self):
+        task = self.task("Triage")
+        self.snooze(task, timezone.now() + timedelta(hours=1))
+        now = timezone.now() + timedelta(hours=2)
+        with actor_context(self.owner):
+            row = self.as_user(task)
+            row.remove(expected_revision=row.revision)
+        with system_context(reason="tests.work.holds.removed"):
+            self.assertFalse(self.Task.work.held().filter(pk=task.pk).exists())
+            self.assertEqual(self.Task.work.wake_due_snoozes(now=now), 0)
+        self.assertIsNotNone(self.hold(task)[0])
+        with actor_context(self.owner):
+            row = self.as_user(task)
+            row.restore(expected_revision=row.revision)
+        with system_context(reason="tests.work.holds.restored"):
+            self.assertEqual(self.Task.work.wake_due_snoozes(now=now), 1)
+
+    def test_hold_mutations_refuse_a_caller_who_cannot_write_the_task(self):
+        task = self.task("Triage")
+        self.snooze(task, awaiting=self.owner)
+        before = self.hold(task)
+        for user in (self.viewer, self.outsider):
+            for document, name in ((WAKE, "wake_task"), (SNOOZE, "snooze_task")):
+                with self.subTest(user=user.username, mutation=name):
+                    result = self.graphql(document, {"task": task.sqid}, user=user)[name]
+                    self.assertFalse(result["ok"], result)
+        self.assertEqual(self.hold(task), before)
