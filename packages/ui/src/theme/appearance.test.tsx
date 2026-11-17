@@ -74,11 +74,13 @@ function renderAppearance({
   available = true,
   status = "authenticated",
   defaults = host,
+  themeLocked = false,
 }: {
   preferences?: RuntimeUserPreferences;
   available?: boolean;
   status?: RuntimeAuthState["status"];
   defaults?: HostAppearanceDefaults;
+  themeLocked?: boolean;
 } = {}) {
   let stored = preferences;
   let committed: (next: RuntimeUserPreferences) => void = () => undefined;
@@ -93,7 +95,7 @@ function renderAppearance({
       themes: [paper, ink],
       auth: { status, user: status === "authenticated" ? { id: "actor-1", name: "Example" } : null, hasRole: () => false },
       userPreferences: { available, preferences, patchPreferences },
-    }}><AppearanceProvider host={defaults}>{children}</AppearanceProvider></AppRuntimeProvider>;
+    }}><AppearanceProvider host={defaults} themeLocked={themeLocked}>{children}</AppearanceProvider></AppRuntimeProvider>;
   };
   return { ...renderHook(useAppearance, { wrapper }), patchPreferences, stored: () => stored };
 }
@@ -397,7 +399,7 @@ test("immediate scheme changes preserve malformed saved options until an explici
 });
 
 test("a locked app theme wins over the person's theme and options but keeps their scheme", () => {
-  const { result } = renderAppearance({ defaults: { ...host, themeLocked: true } });
+  const { result } = renderAppearance({ themeLocked: true });
   expect(result.current.themeLocked).toBe(true);
   expect(result.current.effectiveThemeId).toBe(ink.definition.id);
   expect(result.current.effectiveColorSchemePreference).toBe("light");
@@ -407,7 +409,27 @@ test("a locked app theme wins over the person's theme and options but keeps thei
 });
 
 test("a lock with no app theme leaves the person's theme in place", () => {
-  const { result } = renderAppearance({ defaults: { colorScheme: "dark", themeLocked: true } });
+  const { result } = renderAppearance({ defaults: { colorScheme: "dark" }, themeLocked: true });
   expect(result.current.themeLocked).toBe(false);
   expect(result.current.effectiveThemeId).toBe(paper.definition.id);
+});
+
+test("a locked app never writes its theme into the device's boot cache", () => {
+  renderAppearance({ themeLocked: true });
+  expect(window.localStorage.getItem(APPEARANCE_CACHE_KEY)).toBeNull();
+});
+
+test("the person's invalid options raise no notice under a lock", () => {
+  const preferences = { appearance: { ...saved, options: { future: true } } };
+  expect(renderAppearance({ preferences }).result.current.notice).toBe("options-invalid");
+  cleanup();
+  expect(renderAppearance({ preferences, themeLocked: true }).result.current.notice).toBeNull();
+});
+
+test("reset under a lock deletes the person's preference and keeps the locked theme", async () => {
+  const { result, stored } = renderAppearance({ themeLocked: true });
+  await act(async () => result.current.reset());
+  expect(stored()).toEqual({ unrelated: { keep: true } });
+  expect(result.current.effectiveThemeId).toBe(ink.definition.id);
+  expect(document.documentElement.dataset).toMatchObject({ themeId: ink.definition.id, colorScheme: "dark" });
 });

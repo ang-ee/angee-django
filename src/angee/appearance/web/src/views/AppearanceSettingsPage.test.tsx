@@ -37,6 +37,7 @@ const { containers } = composeAddons([appearanceAddon], { canonicalModelLabel: (
 async function fixture(
   initial: RuntimeUserPreferences = { appearance: saved, unrelated: true },
   hostDefaults: HostAppearanceDefaults = { themeId: paper.definition.id, colorScheme: "light" },
+  themeLocked = false,
 ) {
   let stored = initial;
   let current!: AppearanceState;
@@ -57,7 +58,7 @@ async function fixture(
       themes: [paper, ink], containers,
       auth: { status: "authenticated", user: { id: "actor-1", name: "Example" }, hasRole: () => false },
       userPreferences: { available: true, preferences, patchPreferences },
-    }}><AppearanceProvider host={hostDefaults}><ModalsHost>
+    }}><AppearanceProvider host={hostDefaults} themeLocked={themeLocked}><ModalsHost>
       <Probe />
       <div ref={setHost} data-testid="control-host" />
       <ControlBandProvider host={host}>{mounted ? <Outlet /> : null}</ControlBandProvider>
@@ -243,12 +244,14 @@ test("pending Save disables the band actions and controls; a failed Save keeps t
 
 test("a locked app theme says why, disables the theme choice and its options, and keeps the scheme editable", async () => {
   const f = await fixture({ appearance: { ...saved, themeId: ink.definition.id, options: undefined } },
-    { themeId: paper.definition.id, colorScheme: "light", themeLocked: true });
+    { themeId: paper.definition.id, colorScheme: "light" }, true);
   expect(screen.getByText(/This app uses its own theme/)).toBeTruthy();
   expect(f.appearance().effectiveThemeId).toBe(paper.definition.id);
   for (const name of [/paper.label/, /ink.label/]) {
     const control = radio(name);
     expect(control.hasAttribute("disabled") || control.getAttribute("aria-disabled") === "true").toBe(true);
+    const reason = document.getElementById(control.getAttribute("aria-describedby") ?? "");
+    expect(reason?.textContent).toMatch(/This app uses its own theme/);
   }
   expect(screen.queryByLabelText("Brand color")).toBeNull();
   fireEvent.click(radio("Dark"));
