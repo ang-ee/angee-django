@@ -24,10 +24,29 @@ function scrubBreadcrumb(breadcrumb: Breadcrumb): Breadcrumb {
   return { ...breadcrumb, data };
 }
 
-/** Drop the URL fragment from the page address an event records. */
+/** Drop URL fragments from the page address and the stack frame locations an event records. */
 function scrubEvent(event: ErrorEvent): ErrorEvent {
   const url = event.request?.url;
-  return typeof url === "string" ? { ...event, request: { ...event.request, url: withoutFragment(url) } } : event;
+  const values = event.exception?.values?.map((value) => {
+    const frames = value.stacktrace?.frames;
+    if (!frames) return value;
+    return {
+      ...value,
+      stacktrace: {
+        ...value.stacktrace,
+        frames: frames.map((frame) => ({
+          ...frame,
+          ...(frame.filename === undefined ? {} : { filename: withoutFragment(frame.filename) }),
+          ...(frame.abs_path === undefined ? {} : { abs_path: withoutFragment(frame.abs_path) }),
+        })),
+      },
+    };
+  });
+  return {
+    ...event,
+    ...(typeof url === "string" ? { request: { ...event.request, url: withoutFragment(url) } } : {}),
+    ...(values && event.exception ? { exception: { ...event.exception, values } } : {}),
+  };
 }
 
 /**
@@ -37,7 +56,8 @@ function scrubEvent(event: ErrorEvent): ErrorEvent {
  * Without a DSN the SDK chunk is never imported and React keeps its default
  * handlers. A failure to load or start the SDK is reported to the console and
  * never stops the application from booting. Every app's reports leave URL
- * fragments out of navigation breadcrumbs and event addresses.
+ * fragments out of navigation breadcrumbs, event addresses and stack frame
+ * locations, since a page URL can name an inline script's frames.
  */
 export async function startErrorReporting(input: ErrorReportingInput | undefined): Promise<RootOptions> {
   if (!input?.dsn) return {};

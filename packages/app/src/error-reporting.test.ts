@@ -97,6 +97,26 @@ test("leaves URL fragments, which can carry a sign-in token, out of breadcrumbs 
   expect(beforeSend({ message: "no request" })).toEqual({ message: "no request" });
 });
 
+test("leaves URL fragments out of stack frame locations, and accepts exceptions without frames", async () => {
+  const startErrorReporting = await load();
+  await startErrorReporting({ dsn: "https://key@sentry.example.invalid/1" });
+  const [options] = sentry.init.mock.calls[0] ?? [];
+  const { beforeSend } = options as { beforeSend: (event: object) => Record<string, unknown> };
+  const page = "https://app.example.test/sign-in-link";
+
+  expect(beforeSend({
+    exception: { values: [{ type: "Error", stacktrace: { frames: [
+      { filename: `${page}#token=usr_abc.secret`, abs_path: `${page}#token=usr_abc.secret`, lineno: 3 },
+      { filename: "https://app.example.test/assets/app.js", lineno: 9 },
+    ] } }] },
+  }).exception).toEqual({ values: [{ type: "Error", stacktrace: { frames: [
+    { filename: page, abs_path: page, lineno: 3 },
+    { filename: "https://app.example.test/assets/app.js", lineno: 9 },
+  ] } }] });
+  expect(beforeSend({ exception: { values: [{ type: "Error", value: "no frames" }] } }))
+    .toEqual({ exception: { values: [{ type: "Error", value: "no frames" }] } });
+});
+
 test("boots without reporting when the SDK cannot start", async () => {
   const startErrorReporting = await load();
   const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
