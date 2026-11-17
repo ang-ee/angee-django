@@ -501,6 +501,8 @@ export const enUiMessages: Record<string, string> = {
   "message.parts.attachment": "Attachment",
   "message.parts.inlineImage": "Inline image",
   "message.parts.htmlBody": "HTML message body",
+  "message.html.remoteImagesBlocked": "Remote images are hidden to protect your privacy.",
+  "message.html.loadRemoteImages": "Load remote images",
   "chat.typing": "Agent is thinking…",
   "chat.reasoning.label": "Thinking",
   "chat.tool.input": "Input",
