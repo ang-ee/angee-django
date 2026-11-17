@@ -47,7 +47,7 @@ class _VenueType:
 class _VenueQuery:
     @strawberry.field
     def venue(self) -> _VenueType:
-        return _Venue(timezone="America/Puerto_Rico")
+        return _Venue(timezone="America/Barbados")
 
 
 def _utc(year: int, month: int, day: int, hour: int = 0, minute: int = 0) -> datetime:
@@ -290,14 +290,14 @@ def test_after_returns_the_first_occurrence_strictly_after_a_moment(
 def test_after_unrolls_in_the_named_zone() -> None:
     """Monthly on the 31st, in a zone: the next occurrence keeps the local clock and skips short months."""
 
-    pr = ZoneInfo("America/Puerto_Rico")
-    start = datetime(2026, 1, 31, 14, tzinfo=pr)
-    following = Recurrence("FREQ=MONTHLY").after(start, start, zone="America/Puerto_Rico")
-    assert following == datetime(2026, 3, 31, 14, tzinfo=pr)
+    barbados = ZoneInfo("America/Barbados")
+    start = datetime(2026, 1, 31, 14, tzinfo=barbados)
+    following = Recurrence("FREQ=MONTHLY").after(start, start, zone="America/Barbados")
+    assert following == datetime(2026, 3, 31, 14, tzinfo=barbados)
     assert following is not None and following.tzinfo is UTC
 
 
-@pytest.mark.parametrize("name", ["America/Puerto_Rico", "UTC", ""])
+@pytest.mark.parametrize("name", ["America/Barbados", "UTC", ""])
 def test_time_zone_field_admits_listed_and_blank_names(name: str) -> None:
     assert TimeZoneField().clean(name, None) == name
 
@@ -329,4 +329,4 @@ def test_time_zone_field_crosses_graphql_as_a_string() -> None:
     assert "timezone: String!" in str(schema)
     result = schema.execute_sync("{ venue { timezone } }")
     assert result.errors is None
-    assert result.data == {"venue": {"timezone": "America/Puerto_Rico"}}
+    assert result.data == {"venue": {"timezone": "America/Barbados"}}
