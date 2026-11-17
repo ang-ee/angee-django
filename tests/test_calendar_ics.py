@@ -13,11 +13,13 @@ import logging
 from collections.abc import Iterator
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta, tzinfo
+from pathlib import Path
 from time import perf_counter
 from typing import Any
 from zoneinfo import ZoneInfo
 
 import httpx2
+import icalendar
 import pytest
 from django.core.cache import caches
 from django.core.exceptions import ValidationError
@@ -1133,6 +1135,179 @@ def test_a_handle_merge_converges_whichever_attendee_the_feed_lists_first(subscr
     subscription.sweep()
     assert subscription.poll() == 0
     assert subscription.failures() == {}
+
+
+def _make_unexpandable(event: Any, **columns: Any) -> None:
+    """Store columns no save path admits now, as a row written before the rule would be."""
+
+    CalendarEvent.system_queryset().filter(pk=event.pk).update(series_end=None, **columns)
+
+
+@pytest.mark.parametrize(
+    ("columns", "window"),
+    [
+        pytest.param(
+            {"start": datetime(1995, 1, 1, 9, tzinfo=UTC), "end": datetime(1995, 1, 1, 10, tzinfo=UTC),
+             "recurrence": "FREQ=DAILY"},
+            (datetime(2026, 3, 1, tzinfo=UTC), datetime(2026, 4, 2, tzinfo=UTC)),
+            id="series-too-long",
+        ),
+        pytest.param(
+            # The 28 December occurrence would end four days later, past the last date.
+            {"start": datetime(9999, 12, 25, tzinfo=UTC), "end": datetime(9999, 12, 29, tzinfo=UTC),
+             "recurrence": "FREQ=DAILY;COUNT=5"},
+            (datetime(9999, 12, 20, tzinfo=UTC), datetime(9999, 12, 29, 12, tzinfo=UTC)),
+            id="occurrence-end-out-of-range",
+        ),
+    ],
+)
+def test_a_row_the_calendar_cannot_expand_never_fails_a_read_or_another_save(
+    subscription: Subscription,
+    columns: dict[str, Any],
+    window: tuple[datetime, datetime],
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    subscription.poll()
+    with system_context(reason="tests.ics"):
+        Calendar.objects.filter(pk=subscription.calendar.pk).update(overlap_policy="refuse")
+        _make_unexpandable(subscription.events()["berlin@example.test"], **columns)
+        with caplog.at_level(logging.WARNING, logger="angee.calendar.models"):
+            shown = CalendarEvent.objects.filter(calendar=subscription.calendar).occurrences(*window)
+
+    # The read returns the other rows; the skipped one is logged once.
+    assert all(occurrence.title != "Berlin sync" for occurrence in shown)
+    assert len([record for record in caplog.records if "cannot be expanded" in record.getMessage()]) == 1
+    if window[0].year == 2026:
+        assert {occurrence.title for occurrence in shown} >= {"Standup", "Launch"}
+    # A new event saved to the refusing calendar is judged against every other row.
+    late = LAUNCH.replace("launch@example.test", "late@example.test").replace(
+        "DTSTART:20260401T120000Z", "DTSTART:20260402T120000Z"
+    ).replace("DTEND:20260401T130000Z", "DTEND:20260402T130000Z")
+    subscription.feed.body = _feed(STANDUP, MOVED, HOLIDAY, LAUNCH, late)
+    subscription.poll()
+    assert "late@example.test" in subscription.events()
+
+
+def test_saving_an_open_series_a_read_would_refuse_is_refused(subscription: Subscription) -> None:
+    old = """BEGIN:VEVENT
+UID:old@example.test
+DTSTART:19950101T090000Z
+DTEND:19950101T100000Z
+RRULE:FREQ=DAILY
+SUMMARY:Since 1995
+END:VEVENT"""
+    subscription.feed.body = _feed(STANDUP, MOVED, HOLIDAY, BERLIN_EVENT, LAUNCH, old)
+
+    subscription.poll()
+
+    assert subscription.failures() == {"old@example.test": ["invalid_record"]}
+
+
+def _zone(name: str, rule: str, *, start: str = "19700101T000000", nested: str = "") -> str:
+    return (
+        f"BEGIN:VTIMEZONE\nTZID:{name}\nBEGIN:STANDARD\nDTSTART:{start}\nTZOFFSETFROM:+0100\n"
+        f"TZOFFSETTO:+0100\nRRULE:{rule}\n{nested}END:STANDARD\nEND:VTIMEZONE"
+    )
+
+
+def test_a_feed_zone_counts_its_true_transitions(subscription: Subscription) -> None:
+    year_one = icalendar.Calendar.from_ical(_zone("Ancient", "FREQ=YEARLY", start="00010101T000000").encode())
+    [ancient] = year_one.walk("VTIMEZONE")
+    # Every year from 1 to icalendar's 2038 end is a transition.
+    assert ics_backend._transitions(ancient, 10_000) == 2038
+
+    days = ",".join(str(day) for day in range(1, 29))
+    every_day = f"FREQ=YEARLY;BYMONTH=1,2,3,4,5,6,7,8,9,10,11,12;BYMONTHDAY={days}"
+    event = (
+        "BEGIN:VEVENT\nUID:busy@example.test\nDTSTART;TZID=Busy:20260701T090000\n"
+        "DTEND;TZID=Busy:20260701T100000\nSUMMARY:Busy\nEND:VEVENT"
+    )
+    defined = _zone("Busy", every_day).replace("\n", "\r\n") + "\r\n"
+    subscription.feed.body = _feed(event, zone="").replace("END:VTIMEZONE\r\n", "END:VTIMEZONE\r\n" + defined, 1)
+    subscription.poll()
+
+    # A yearly rule whose BY parts unroll every day for 69 years: never built, read in the calendar's zone.
+    calendar_zone = get_zone_info(subscription.calendar.timezone)
+    assert subscription.events()["busy@example.test"].start == _utc(2026, 7, 1, 9, zone=calendar_zone)
+
+    # A nested observance counts too (icalendar's own parse refuses one in a feed, so it is built here).
+    nested_zone = icalendar.Timezone({"TZID": "Nested"})
+    standard = icalendar.TimezoneStandard({"DTSTART": datetime(1970, 1, 1), "RRULE": {"FREQ": "YEARLY"}})
+    nested = icalendar.Component({"DTSTART": datetime(1970, 1, 1), "RRULE": {"FREQ": "SECONDLY"}})
+    nested.name = "X-OBSERVANCE"
+    standard.add_component(nested)
+    nested_zone.add_component(standard)
+    assert ics_backend._transitions(nested_zone, 5_000) > 5_000
+
+
+def test_two_subscriptions_to_one_feed_share_a_credential_and_one_purge_spares_the_other(
+    subscription: Subscription, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    subscription.poll()
+    monkeypatch.setattr(celery_app, "send_task", lambda name, **options: None)
+    owner = subscription.source.owner
+    twin = subscribe_calendar(owner, name="Team again", url="webcal://feeds.example.test/team.ics")
+    assert twin.credential_id == subscription.source.credential_id
+    _poll(twin)
+
+    with system_context(reason="tests.ics"):
+        CalendarSource.objects.get(pk=subscription.source.pk).unsubscribe()
+    assert purge_unsubscribed_sources() == 6
+
+    # The twin keeps the shared credential and still syncs.
+    with system_context(reason="tests.ics"):
+        assert Credential.objects.filter(pk=twin.credential_id).exists()
+    subscription.feed.etags = False
+    _poll(twin)
+
+
+def test_the_reconciler_goes_on_past_a_source_whose_purge_fails(
+    subscription: Subscription, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    subscription.poll()
+    monkeypatch.setattr(celery_app, "send_task", lambda name, **options: None)
+    with mock_transport(FakeFeed(_feed(LAUNCH))):
+        other = subscribe_calendar(create_user("other-subscriber"), name="Other", url="https://feeds.example.test/b.ics")
+        _poll(other)
+    with system_context(reason="tests.ics"):
+        CalendarSource.objects.get(pk=subscription.source.pk).unsubscribe()
+        CalendarSource.objects.get(pk=other.pk).unsubscribe()
+    purge = CalendarSource.purge
+
+    def failing(self: Any) -> int:
+        if self.pk == subscription.source.pk:
+            raise RuntimeError("purge failed")
+        return purge(self)
+
+    monkeypatch.setattr(CalendarSource, "purge", failing)
+
+    assert purge_unsubscribed_sources() == 1
+    with system_context(reason="tests.ics"):
+        failed = CalendarSource.objects.get(pk=subscription.source.pk)
+    assert failed.runtime_status == "error"
+
+
+def test_every_parse_path_runs_against_a_deadline(subscription: Subscription, monkeypatch: pytest.MonkeyPatch) -> None:
+    subscription.poll()
+    monkeypatch.setattr(ics_backend, "_PARSE_SECONDS", -1.0)
+    backend = IcsCalendarBackend(CalendarSource.objects.sudo(reason="tests.ics").get(pk=subscription.source.pk))
+
+    # An identity read before any extraction knows no sync deadline: it gets the parse budget.
+    with system_context(reason="tests.ics"), pytest.raises(IcsError, match="took too long"):
+        backend.read_keys(subscription.stream(), ["launch@example.test"])
+
+
+def test_a_feed_body_that_names_a_server_file_is_never_read_from_disk(
+    subscription: Subscription, tmp_path: Path
+) -> None:
+    local = tmp_path / "local.ics"
+    local.write_text(_feed(LAUNCH))
+    subscription.feed.body = str(local)
+
+    with pytest.raises(BridgeSyncError) as refused:
+        subscription.poll()
+
+    assert "not valid iCalendar" in str(refused.value)
 
 
 # --- poison input --------------------------------------------------------------

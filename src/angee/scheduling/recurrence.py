@@ -17,9 +17,16 @@ within about 30 years of it (``never_occurs``), probed in bounded time. One cap,
 :data:`MAX_OCCURRENCES`, bounds every expansion and every ``COUNT``:
 :meth:`Recurrence.occurrences` and :meth:`Recurrence.get_last_occurrence` count every
 occurrence from ``DTSTART``, not only those in the window, and refuse a series that
-passes it (``series_too_long``); :meth:`Recurrence.occurrences_after` refuses more
-unless the caller pages with ``limit``. An expansion that reaches past the
-representable dates is refused (``out_of_range``), never overflowed.
+passes it (``series_too_long``), and refuse a window further from the start than
+``MAX_OCCURRENCES`` of the rule's periods before walking at all, so a sparse rule's
+steps are bounded too. :meth:`Recurrence.occurrences_after` refuses more unless
+the caller pages with ``limit``. An expansion that reaches past the representable
+dates is refused (``out_of_range``), never overflowed.
+
+Two helpers still walk from ``DTSTART`` uncounted, through dateutil's own
+``after``/``xafter``: :meth:`Recurrence.get_occurrence_after` (its cost grows with
+the distance from the start to ``moment``) and :meth:`Recurrence.occurrences_after`
+(its ``limit`` counts only the window's results). Their callers bound the distance.
 
 Parsing and expansion are delegated to ``python-dateutil`` (``rrulestr``), the
 stack's owner of RFC-5545. The timezone/window contract is documented on
@@ -31,7 +38,7 @@ from __future__ import annotations
 import re
 from collections.abc import Callable, Iterable, Iterator
 from datetime import UTC, datetime, timedelta
-from functools import cache, wraps
+from functools import lru_cache, wraps
 
 from dateutil.parser import parse
 from dateutil.rrule import rrule, rruleset, rrulestr
@@ -59,7 +66,7 @@ _GREGORIAN_CYCLE_YEARS = 400
 """The Gregorian calendar repeats every 400 years: weekdays, leap days and week numbers alike."""
 
 
-@cache
+@lru_cache(maxsize=1024)
 def _matches_no_day(rule: str) -> bool:
     """Whether a single RRULE's day filters can never select a day.
 
@@ -88,9 +95,10 @@ def _rules(compiled: rrule | rruleset) -> list[rrule]:
 def _in_range[**P, R](method: Callable[P, R]) -> Callable[P, R]:
     """Refuse an expansion that reaches past the representable dates as a ``ValidationError``, never an overflow.
 
-    A moment near year 1 or 9999 can leave Python's range once moved into a zone;
-    the caller (a form, a sync's record) then refuses that one rule instead of
-    failing whatever it was part of.
+    A moment near year 1 or 9999 can leave Python's range once moved into a zone.
+    The refusal is that one row's: a save (a form, a sync's record) refuses it, and
+    a read over many rows skips it (``CalendarEventQuerySet.moments``) rather than
+    fail whatever it was part of.
     """
 
     @wraps(method)
@@ -105,6 +113,39 @@ def _in_range[**P, R](method: Callable[P, R]) -> Callable[P, R]:
     return bounded
 
 
+_LONGEST_PERIOD = (
+    timedelta(days=366),
+    timedelta(days=31),
+    timedelta(weeks=1),
+    timedelta(days=1),
+    timedelta(hours=1),
+    timedelta(minutes=1),
+    timedelta(seconds=1),
+)
+"""The longest span of one period of each frequency, in :attr:`Recurrence.FREQUENCIES` order."""
+
+
+def _series_too_long() -> ValidationError:
+    return ValidationError(
+        f"This recurrence passes {MAX_OCCURRENCES} occurrences from its start.", code="series_too_long"
+    )
+
+
+def _reach(compiled: rrule | rruleset, anchor: datetime) -> datetime | None:
+    """Return how far :data:`MAX_OCCURRENCES` of the rule's periods reach from ``anchor``; ``None`` past the range.
+
+    A sparse rule (a February 29 filter on a daily rule) costs dateutil one step a
+    period whether or not it matches, so a span refused here, before any walk,
+    bounds the steps as well as the occurrences.
+    """
+
+    span = min(_LONGEST_PERIOD[rule._freq] * rule._interval for rule in _rules(compiled)) * MAX_OCCURRENCES
+    try:
+        return anchor + span
+    except OverflowError:
+        return None
+
+
 def _from_start(moments: Iterable[datetime], before: datetime | None = None) -> Iterator[datetime]:
     """Yield a series' occurrences from its start, stopping at ``before``, counting every one against the cap.
 
@@ -117,9 +158,7 @@ def _from_start(moments: Iterable[datetime], before: datetime | None = None) -> 
         if before is not None and moment >= before:
             return
         if index >= MAX_OCCURRENCES:
-            raise ValidationError(
-                f"This recurrence passes {MAX_OCCURRENCES} occurrences from its start.", code="series_too_long"
-            )
+            raise _series_too_long()
         yield moment
 
 
@@ -166,14 +205,20 @@ class Recurrence:
         A blank rule is valid (non-recurring). Otherwise the rule is parsed for its
         grammar alone, anchored at a fixed date and the result discarded — validity
         is ``dtstart``-agnostic, so no start date is required to reject a malformed
-        rule. ``finest`` (one of :attr:`FREQUENCIES`) refuses rules that repeat more
-        often, and a ``COUNT`` over :data:`MAX_OCCURRENCES` is refused. Given the
-        series' ``dtstart`` (expanded in ``zone``), a rule with no occurrence within
+        rule. Only one bare ``RRULE`` value is a rule (the field's contract): a rule
+        set, or ``DTSTART``, ``EXDATE`` or ``RDATE`` lines, are refused. ``finest``
+        (one of :attr:`FREQUENCIES`) refuses rules that repeat more often, and a
+        ``COUNT`` over :data:`MAX_OCCURRENCES` is refused. Given the series'
+        ``dtstart`` (expanded in ``zone``), a rule with no occurrence within
         :data:`NEVER_OCCURS_HORIZON` of it is refused too (``never_occurs``).
         """
 
         if not self.rule:
             return
+        if any(mark in self.rule for mark in ("\n", "\r", ":")):
+            raise ValidationError(
+                "Enter one bare recurrence rule (FREQ=…), without DTSTART, EXDATE or RDATE lines.", code="invalid"
+            )
         try:
             rules = _rules(self._compile(_VALIDATION_ANCHOR))
         except (ValueError, TypeError, OverflowError) as exc:
@@ -229,7 +274,11 @@ class Recurrence:
         if self.never_occurs():
             return []
         if self.rule:
-            candidates = list(_from_start(self._compile(anchor), before))
+            compiled = self._compile(anchor)
+            reach = _reach(compiled, anchor)
+            if reach is not None and before > reach:
+                raise _series_too_long()
+            candidates = list(_from_start(compiled, before))
         else:
             candidates = [anchor]
         return [
@@ -309,6 +358,7 @@ class Recurrence:
             found = found[:cap]
         return found
 
+    @_in_range
     def never_occurs(self, dtstart: datetime | None = None, *, zone: str = "") -> bool:
         """Whether a non-blank rule yields nothing: never, or, given ``dtstart``, not within 30 years of it.
 
@@ -360,9 +410,16 @@ class Recurrence:
         if self.never_occurs():
             return None
         compiled = self._compile(anchor)
-        if not all(rule._count is not None or rule._until is not None for rule in _rules(compiled)):
+        rules = _rules(compiled)
+        if not all(rule._count is not None or rule._until is not None for rule in rules):
             return None
-        series = list(_from_start(compiled))
+        reach = _reach(compiled, anchor)
+        if reach is not None and any(rule._until is not None and rule._until > reach for rule in rules):
+            raise _series_too_long()
+        series = list(_from_start(compiled, reach))
+        if isinstance(compiled, rrule) and compiled._count is not None and len(series) < compiled._count:
+            # A COUNT the reach cut short is a series too long to read whole.
+            raise _series_too_long()
         return series[-1].astimezone(UTC) if series else None
 
     def _compile(self, anchor: datetime) -> rrule | rruleset:

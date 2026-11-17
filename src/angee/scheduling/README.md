@@ -31,17 +31,23 @@ the project zone when it is blank. An hourly or finer rule follows the wall cloc
 through a DST change: the missing hour in spring lands on the next instant, which
 counts once, and the repeated hour in autumn runs once.
 
-Expansion is bounded. A rule whose day filters can never match
+Expansion is bounded. A rule is one bare `RRULE` value: a rule set, or `DTSTART`,
+`EXDATE` or `RDATE` lines, are invalid. A rule whose day filters can never match
 (`BYMONTH=2;BYMONTHDAY=30`) is recognised in one 400-year calendar cycle and expands
-to nothing, instead of letting dateutil scan to year 9999. Given a start,
-`validate(dtstart=…, zone=…)` refuses a rule with no occurrence within about 30
-years of it (`never_occurs`). One cap, `MAX_OCCURRENCES` (10,000), bounds every
-rule: a `COUNT` over it is invalid; `occurrences` and `get_last_occurrence` count
-every occurrence from the series' start, not only those in the window, and refuse
-a series that passes the cap (`series_too_long`) with a `ValidationError`, never
-truncated; `occurrences_after` refuses more unless the caller pages with `limit`
-and resumes after the last occurrence it got. An expansion that reaches past the
-representable dates is refused (`out_of_range`). A consumer whose rows must not
+to nothing, instead of letting dateutil scan to year 9999; given a start,
+`validate` also refuses a rule with no occurrence within about 30 years of it
+(`never_occurs`), probed in bounded time. One cap, `MAX_OCCURRENCES` (10,000),
+bounds every rule: a `COUNT` over it is invalid, and `occurrences` and
+`get_last_occurrence` count every occurrence from the series' start, refusing a
+series that passes the cap (`series_too_long`) with a `ValidationError`, never
+truncated. A window further from the start than `MAX_OCCURRENCES` of the rule's
+periods is refused before any walk, so a sparse rule's steps are bounded too. An
+expansion that reaches past the representable dates is refused (`out_of_range`).
+`occurrences_after` refuses more unless the caller pages with `limit` and resumes
+after the last occurrence it got. Two helpers still walk from the start uncounted,
+through dateutil's own `after`: `get_occurrence_after` (its cost grows with the
+distance to `moment`) and `occurrences_after` (whose `limit` counts only the
+window's results); their callers bound the distance. A consumer whose rows must not
 repeat too often declares `RecurrenceField(finest_frequency=…)` (a calendar event
 repeats at most daily); other consumers keep every frequency.
 

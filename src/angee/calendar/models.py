@@ -42,6 +42,7 @@ writes, cancels or removes its events (:meth:`Calendar.takes_write`).
 
 from __future__ import annotations
 
+import logging
 from collections import defaultdict
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, replace
@@ -91,7 +92,7 @@ from angee.calendar.choices import (
     EventVisibility,
     OverlapPolicy,
 )
-from angee.integrate.models import Bridge, IntegrationCreateMode, IntegrationLifecycle
+from angee.integrate.models import Bridge, IntegrationCreateMode, IntegrationLifecycle, IntegrationRuntimeStatus
 from angee.integrate.states import StreamDefinition, StreamDirection, StreamKind
 from angee.jobs.enqueue import enqueue_task
 from angee.messaging.models import ThreadedModelMixin
@@ -183,6 +184,8 @@ def _same_local_day(moment: datetime, old_tz: Any, new_tz: Any) -> datetime:
     return timezone.make_aware(datetime.combine(moment.astimezone(old_tz).date(), time.min), new_tz)
 
 
+logger = logging.getLogger(__name__)
+
 OUT_OF_RANGE_MESSAGE = "Choose a date the calendar can reach (years 1 to 9999)."
 """The refusal of a moment, or an occurrence's end, outside the representable range."""
 
@@ -197,6 +200,43 @@ def _earlier(moment: datetime, span: timedelta) -> datetime:
     """Return ``moment - span``, or the earliest reachable instant when that falls before it."""
 
     return moment - span if moment - _EARLIEST > span else _EARLIEST
+
+
+UNEXPANDABLE = frozenset({"series_too_long", "out_of_range"})
+"""The refusals that make one row unexpandable; a read over many rows skips that row (R-R2)."""
+
+
+def _codes(error: ValidationError) -> set[str]:
+    """Return the codes a ``ValidationError`` carries, whatever its form."""
+
+    items = (
+        [item for messages in error.error_dict.values() for item in messages]
+        if hasattr(error, "error_dict")
+        else error.error_list
+    )
+    return {item.code for item in items if item.code}
+
+
+def _row_moments(
+    row: CalendarEvent, window_start: datetime, window_end: datetime, replaced: set[datetime]
+) -> list[EventMoment]:
+    """Return one annotated row's shown moments meeting ``[window_start, window_end)``, minus ``replaced``."""
+
+    zone = cast(Any, row).occurrence_zone
+    if row.recurrence:
+        lower = _earlier(window_start, row.end - row.start + timedelta(days=1))
+        starts = Recurrence(row.recurrence).occurrences(row.start, lower, window_end, zone=zone)
+        starts = [start for start in starts if start not in replaced]
+    else:
+        starts = [row.start]
+    moments = []
+    for start in starts:
+        end = row.occurrence_end(start, zone=zone)
+        if start < window_end and (end > window_start or start >= window_start):
+            moments.append(
+                EventMoment(row, cast(Any, row).occurrence_calendar, cast(Any, row).occurrence_series or "", start, end)
+            )
+    return moments
 
 
 def _intervals_meet(left: Sequence[tuple[datetime, datetime]], right: Sequence[tuple[datetime, datetime]]) -> bool:
@@ -460,7 +500,10 @@ class CalendarEventQuerySet(AngeeHistoryQuerySet[Any]):
         and a calendar filter do). The row set is bounded on both ends: a row
         starting at or after ``window_end`` cannot meet it, and neither can a single
         row ending before ``window_start`` nor a series whose stored
-        ``series_end`` is at or before it. An open-ended series is always read.
+        ``series_end`` is at or before it. An open-ended series is always read. A row
+        whose expansion is refused (:data:`UNEXPANDABLE`: a series past the cap from
+        its start, an occurrence past the representable dates) is skipped and logged,
+        so it never fails the read or another row's overlap check.
         """
 
         window_start, window_end = _clamped(window_start), _clamped(window_end)
@@ -497,17 +540,18 @@ class CalendarEventQuerySet(AngeeHistoryQuerySet[Any]):
         for row in rows:
             if row.status == EventStatus.CANCELLED:
                 continue
-            zone = row.occurrence_zone
-            if row.recurrence:
-                lower = _earlier(window_start, row.end - row.start + timedelta(days=1))
-                starts = Recurrence(row.recurrence).occurrences(row.start, lower, window_end, zone=zone)
-                starts = [start for start in starts if start not in replaced[row.pk]]
-            else:
-                starts = [row.start]
-            for start in starts:
-                end = row.occurrence_end(start, zone=zone)
-                if start < window_end and (end > window_start or start >= window_start):
-                    moments.append(EventMoment(row, row.occurrence_calendar, row.occurrence_series or "", start, end))
+            try:
+                moments.extend(_row_moments(row, window_start, window_end, replaced[row.pk]))
+            except ValidationError as error:
+                codes = _codes(error)
+                if not codes or not codes <= UNEXPANDABLE:
+                    raise
+                # One row the calendar cannot expand never fails the read: it is skipped, and logged once.
+                logger.warning(
+                    "Calendar event %s is skipped: its occurrences cannot be expanded (%s).",
+                    row.sqid,
+                    ", ".join(sorted(codes)),
+                )
         return moments
 
     def occurrences(self, window_start: datetime, window_end: datetime) -> list[EventOccurrence]:
@@ -899,11 +943,11 @@ class CalendarEvent(
         """
 
         super().clean()
-        errors: dict[str, str] = {}
+        errors: dict[str, Any] = {}
         for name in ("start", "end"):
             moment = getattr(self, name)
             if moment is not None and not _EARLIEST <= moment <= _LATEST:
-                errors[name] = OUT_OF_RANGE_MESSAGE
+                errors[name] = ValidationError(OUT_OF_RANGE_MESSAGE, code="out_of_range")
         if errors:
             raise ValidationError(errors)
         if self.end is not None and self.start is not None and self.end < self.start:
@@ -939,10 +983,14 @@ class CalendarEvent(
         if calendar is not None and not calendar.takes_write():
             raise ValidationError(READ_ONLY_CALENDAR)
 
-    def delete_blocker(self) -> str | None:
-        """Refuse deleting an event the calendar does not let this caller write (:meth:`Calendar.takes_write`)."""
+    def delete_blocker(self, *, takes_write: bool | None = None) -> str | None:
+        """Refuse deleting an event the calendar does not let this caller write (:meth:`Calendar.takes_write`).
 
-        if not self.calendar.takes_write():
+        ``takes_write`` is the calendar's answer when the caller already holds it (a
+        queryset delete reads it once per calendar).
+        """
+
+        if not (self.calendar.takes_write() if takes_write is None else takes_write):
             return READ_ONLY_CALENDAR
         return cast(Any, super()).delete_blocker()
 
@@ -1010,9 +1058,36 @@ class CalendarEvent(
 
         if not self.recurrence:
             return False
+        return moment in self.instances(moment, moment, zone=zone)
+
+    def instances(self, first: datetime, last: datetime, *, zone: str | None = None) -> set[datetime]:
+        """Return this master's instances in ``[first, last]``, expanded once in ``zone`` (its expansion zone).
+
+        The recurrence owner counts every occurrence from the start, so a moment
+        far from it is refused (``series_too_long``) rather than walked to; a bound
+        past the representable dates is refused (``out_of_range``).
+        """
+
         zone = self.expansion_zone if zone is None else zone
-        instant = timedelta(microseconds=1)
-        return moment in Recurrence(self.recurrence).occurrences(self.start, moment, moment + instant, zone=zone)
+        try:
+            end = last + timedelta(microseconds=1)
+        except OverflowError as error:
+            raise ValidationError(OUT_OF_RANGE_MESSAGE, code="out_of_range") from error
+        return set(Recurrence(self.recurrence).occurrences(self.start, first, end, zone=zone))
+
+    def _refuse_unreadable_series(self) -> None:
+        """Refuse an open-ended series a read would already refuse: save and read agree (R-R2).
+
+        A read walks the series from its start; past the recurrence owner's cap
+        before now plus :attr:`overlap_horizon`, every read of it is refused, so
+        saving it is refused too.
+        """
+
+        horizon = _clamped(max(timezone.now(), self.start) + self.overlap_horizon)
+        try:
+            Recurrence(self.recurrence).occurrences(self.start, horizon, horizon, zone=self.expansion_zone)
+        except ValidationError as error:
+            raise ValidationError({"recurrence": error.error_list}) from None
 
     def save(self, *args: Any, **kwargs: Any) -> None:
         """Persist under the calendar's lock: write, carry a changed series' overrides along, then check overlap.
@@ -1043,6 +1118,8 @@ class CalendarEvent(
         if schedule_changes:
             self.validate_rule()
             self.series_end = self._derive_series_end()
+            if self.recurrence and self.series_end is None:
+                self._refuse_unreadable_series()
             if update_fields is not None:
                 kwargs["update_fields"] = [*update_fields, "series_end"]
         using = kwargs.get("using") or router.db_for_write(type(self), instance=self)
@@ -1113,8 +1190,10 @@ class CalendarEvent(
         ``previous_start`` in ``previous_zone`` to the current ``start`` in its
         expansion zone. An override that still names an instance keeps it; one that
         no longer does is detached as a standalone event when it carries edits, so
-        nothing is lost, and deleted when it is a cancellation. Overrides move in the
-        shift's direction, so two never claim the same instance at once. An override a
+        nothing is lost, and deleted when it is a cancellation; one moved past the
+        representable dates is no instance. The new schedule's instances are expanded
+        once for every override. Overrides move in the shift's direction, so two
+        never claim the same instance at once. An override a
         sync still links (a protecting record edge names it) is left to that sync,
         neither detached nor deleted: a stranded one suppresses no instance.
         """
@@ -1125,12 +1204,21 @@ class CalendarEvent(
             tzinfo=None
         )
         order = "-original_start" if shift > timedelta(0) else "original_start"
-        for override in type(self)._base_manager.filter(series_id=self.pk).order_by(order, "pk"):
+        overrides = list(type(self)._base_manager.filter(series_id=self.pk).order_by(order, "pk"))
+        moves: dict[Any, datetime | None] = {}
+        for override in overrides:
             # The check constraint keeps an override's original_start set.
             original = cast(datetime, override.original_start)
-            local = original.astimezone(old_tz).replace(tzinfo=None) + shift
-            moved = timezone.make_aware(local, new_tz).astimezone(UTC)
-            if self.is_instance(moved, zone=zone):
+            try:
+                local = original.astimezone(old_tz).replace(tzinfo=None) + shift
+                moves[override.pk] = timezone.make_aware(local, new_tz).astimezone(UTC)
+            except OverflowError:
+                moves[override.pk] = None
+        landed = [moved for moved in moves.values() if moved is not None]
+        instances = self.instances(min(landed), max(landed), zone=zone) if landed else set()
+        for override in overrides:
+            moved = moves[override.pk]
+            if moved is not None and moved in instances:
                 if moved == override.original_start:
                     continue
                 override.original_start = moved
@@ -1226,7 +1314,7 @@ class CalendarEvent(
             end_local = datetime.combine(end_local_date, time.min)
             return timezone.make_aware(end_local, tz).astimezone(UTC)
         except OverflowError as error:
-            raise ValidationError({"end": OUT_OF_RANGE_MESSAGE}, code="out_of_range") from error
+            raise ValidationError(OUT_OF_RANGE_MESSAGE, code="out_of_range") from error
 
     def occurrence_id(self, start: datetime, *, series: str = "") -> str:
         """Return the stable id of this row's occurrence at ``start`` (see :class:`EventOccurrence`).
@@ -1546,14 +1634,16 @@ class CalendarSource(Bridge, inherits="integrate.Integration"):
 
         Returns how many events went. Runs as the ``calendar.purge_source`` job, and
         again from the reconciler while anything is left (:meth:`purge_unsubscribed`),
-        as this source's own work (:meth:`Calendar.takes_write`), in the driver's lock
-        order: the source's events streams first, by primary key, then each calendar,
-        then their links and events. A sync page still in flight waits on its stream
-        and then finds the source disconnected (``CalendarBackend.prepare_page``), so
+        as this source's own work (:meth:`Calendar.takes_write`), in integrate's lock
+        order: the integration row (``lock_capability``), then the source's events
+        streams by primary key, then each calendar, then their links and events. A
+        sync page still in flight waits on its stream and then finds the source
+        disconnected (``CalendarBackend.prepare_page``), so
         nothing it extracted re-creates an event. Each calendar's writability is read
         once; its events' links are released in bulk (``RecordLinkManager.release_targets``)
-        and the events deleted. The feed credential is detached and retired
-        through its owner (``CredentialManager.retire``). The calendars stay, archived,
+        and the events deleted. The feed credential is detached, and retired through
+        its owner once nothing else attaches it (``CredentialManager.retire_unattached``:
+        two subscriptions to one feed share it). The calendars stay, archived,
         with their history and statements; deleting the source row itself needs an
         integrate stream teardown, which does not exist yet. A source that is
         connected again is not purged.
@@ -1568,10 +1658,10 @@ class CalendarSource(Bridge, inherits="integrate.Integration"):
             system_context(reason="calendar.source.purge"),
             transaction.atomic(),
         ):
+            source = self.lock_capability()
             list(
                 streams.system_queryset(lock=("self",)).filter(integration_id=self.pk, key=EVENTS_STREAM).order_by("pk")
             )
-            source = type(self).system_queryset().get(pk=self.pk)
             if source.lifecycle != IntegrationLifecycle.DISCONNECTED:
                 return 0
             owned = [
@@ -1589,7 +1679,7 @@ class CalendarSource(Bridge, inherits="integrate.Integration"):
             credential = source.credential
             if credential is not None:
                 source.attach_credential(None)
-                apps.get_model("integrate", "Credential").objects.retire(credential)
+                apps.get_model("integrate", "Credential").objects.retire_unattached(credential)
         return per_model.get(events._meta.label, 0)
 
     @classmethod
@@ -1598,7 +1688,9 @@ class CalendarSource(Bridge, inherits="integrate.Integration"):
 
         The reconciler behind :meth:`purge`: a purge job that failed, or never ran,
         is retried until nothing is left. A replica is an event on the source's
-        calendars, or a feed credential still attached.
+        calendars, or a feed credential still attached. Each source is purged on its
+        own: one that fails is logged, reported on its runtime status, and retried
+        next run, and the others go on.
         """
 
         events = apps.get_model("calendar", "CalendarEvent")
@@ -1606,7 +1698,16 @@ class CalendarSource(Bridge, inherits="integrate.Integration"):
             pk__in=events.system_queryset().values("calendar__source_id")
         )
         pending = cls.system_queryset().filter(lifecycle=IntegrationLifecycle.DISCONNECTED).filter(replicas)
-        return sum(source.purge() for source in pending.order_by("pk"))
+        purged = 0
+        for source in pending.order_by("pk"):
+            try:
+                purged += source.purge()
+            except Exception:  # noqa: BLE001 — one source's failure must not jam the others' purges.
+                logger.exception("Purging calendar source %s failed; the next run retries it.", source.pk)
+                source.report_status(
+                    IntegrationRuntimeStatus.ERROR, error="The unsubscribe purge failed; it is retried hourly."
+                )
+        return purged
 
     def calendars_stream(self) -> StreamDefinition:
         """Declare the stream of the remote calendars this source serves: one record per calendar.

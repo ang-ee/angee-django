@@ -62,11 +62,13 @@ from collections import Counter
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
 from datetime import UTC, date, datetime, time, timedelta, tzinfo
+from itertools import islice, takewhile
 from time import monotonic
 from typing import Any
 from urllib.parse import urlsplit
 
 import icalendar
+from dateutil.rrule import rrulestr
 from django.apps import apps
 from django.core.exceptions import ValidationError
 from django.utils import timezone
@@ -102,11 +104,17 @@ _REPORTED_STATUSES = frozenset({304, *range(400, 600)})
 _EVENTS_PER_FEED = 10_000
 """The most events a feed may produce, cancelled instances included; a larger feed fails its poll."""
 
+_PARSE_SECONDS = 60.0
+"""How long one parse may run when no sync deadline is known yet (an identity read before extraction)."""
+
 _TIMEZONES_PER_FEED = 100
 """The most VTIMEZONEs a feed may define; a larger feed fails its poll before it is parsed."""
 
-_TRANSITIONS_PER_ZONE = 1_000
-"""The most transitions (observances and their ``RDATE`` values) one feed-defined VTIMEZONE may name."""
+_TRANSITIONS_PER_ZONE = 5_000
+"""The most transitions one feed-defined VTIMEZONE may unroll (``Timezone.to_tz``), every observance counted."""
+
+_ZONE_RULE_END = datetime(2038, 12, 31, tzinfo=UTC)
+"""Where icalendar ends a zone rule that states no ``UNTIL`` or ``COUNT`` (its zoneinfo provider's default)."""
 
 _CONFERENCE_PROPERTIES = (
     "CONFERENCE",
@@ -182,6 +190,7 @@ class IcsCalendarBackend(CalendarBackend):
     defaults = {"vendor": "ics", "poll_interval": 3600}
 
     _snapshot: _Snapshot | None = None
+    _deadline: float | None = None
 
     def discover(self) -> list[ParsedCalendar]:
         """Return the feed, the source's one remote calendar, named as subscribed."""
@@ -200,6 +209,8 @@ class IcsCalendarBackend(CalendarBackend):
         absence sweep's to find (:meth:`event_keys`).
         """
 
+        if deadline is not None:
+            self._deadline = deadline
         cursor = dict(stream.cursor or {})
         if "after" in cursor:
             snapshot = self._events_now(stream)
@@ -210,7 +221,7 @@ class IcsCalendarBackend(CalendarBackend):
             result = self._fetch({} if baseline else cursor)
             if result.status_code == 304:
                 return StreamPage((), cursor)
-            held = self._snapshot = self._read_snapshot(stream, result, deadline=deadline)
+            held = self._snapshot = self._read_snapshot(stream, result)
         elif not baseline and any(held.validators.values()) and held.validators == _validators(cursor):
             return StreamPage((), cursor)
         return self.page(stream, held.payloads, page_bound, after=None, cursor=held.validators)
@@ -239,13 +250,16 @@ class IcsCalendarBackend(CalendarBackend):
             self._snapshot = self._read_snapshot(stream, self._fetch({}))
         return self._snapshot
 
-    def _read_snapshot(self, stream: Any, result: DownloadResult, *, deadline: float | None = None) -> _Snapshot:
+    def _read_snapshot(self, stream: Any, result: DownloadResult) -> _Snapshot:
         """Parse a fetched feed into its snapshot, kept with the validators it was served with.
 
-        ``deadline`` is the sync's (a monotonic instant): a parse that reaches it
-        stops, and the next sync reads the feed again.
+        Every parse runs against a deadline: the sync's, which this adapter keeps from
+        its first extraction (continuing pages, identity reads and the sweep included),
+        else :data:`_PARSE_SECONDS` from now. A parse that reaches it stops, and the
+        next sync reads the feed again.
         """
 
+        deadline = self._deadline if self._deadline is not None else monotonic() + _PARSE_SECONDS
         return _Snapshot(
             {"etag": result.headers.get("etag", ""), "last_modified": result.headers.get("last-modified", "")},
             self._observe_feed(_read(result.content), zone=self.get_calendar(stream).timezone, deadline=deadline),
@@ -400,16 +414,52 @@ def _bounded_definition(component: Any) -> bool:
     """Whether a feed-defined VTIMEZONE builds in bounded memory: yearly rules, and few transitions.
 
     ``Timezone.to_tz`` unrolls every observance's rule and ``RDATE`` into
-    transitions, so a secondly rule would exhaust memory before it returned.
+    transitions, so a secondly rule would exhaust memory before it returned; this
+    counts them first (:func:`_transitions`).
     """
 
-    transitions = 0
-    for observance in component.subcomponents:
-        for rule in _values(observance, "RRULE"):
-            if [str(freq).upper() for freq in rule.get("FREQ", [])] != ["YEARLY"]:
-                return False
-        transitions += 1 + sum(len(rdate.dts) for rdate in _values(observance, "RDATE"))
-    return transitions <= _TRANSITIONS_PER_ZONE
+    return _transitions(component, _TRANSITIONS_PER_ZONE) <= _TRANSITIONS_PER_ZONE
+
+
+def _transitions(component: Any, cap: int) -> int:
+    """Count the transitions ``Timezone.to_tz`` would unroll for ``component``, stopping just past ``cap``.
+
+    Every observance counts, nested ones included (``walk()``, the VTIMEZONE itself
+    excluded): its ``DTSTART``, each ``RDATE``, and each instance of its ``RRULE`` up
+    to icalendar's own end (the rule's ``UNTIL`` or ``COUNT``, else
+    :data:`_ZONE_RULE_END`). A yearly rule from year 1 counts as the 2,038 it is.
+    A rule finer than yearly, or one that does not parse, counts past the cap at once.
+    """
+
+    total = 0
+    for observance in component.walk():
+        if observance is component:
+            continue
+        rules = _values(observance, "RRULE")
+        if rules:
+            for rule in rules:
+                total += _rule_transitions(observance, rule, cap - total + 1)
+        else:
+            total += 1 + sum(len(rdate.dts) for rdate in _values(observance, "RDATE"))
+        if total > cap:
+            break
+    return total
+
+
+def _rule_transitions(observance: Any, rule: Any, limit: int) -> int:
+    """Count one observance rule's transitions, at most ``limit``; ``limit`` for a rule refused outright."""
+
+    if [str(freq).upper() for freq in rule.get("FREQ", [])] != ["YEARLY"]:
+        return limit
+    try:
+        start = observance["DTSTART"].dt
+        anchor = datetime.combine(start, time.min) if not isinstance(start, datetime) else start
+        compiled = rrulestr(rule.to_ical().decode(), dtstart=anchor.replace(tzinfo=UTC))
+        ends = {"UNTIL", "COUNT"} & {str(key).upper() for key in rule}
+        moments = compiled if ends else takewhile(lambda moment: moment <= _ZONE_RULE_END, compiled)
+        return sum(1 for _moment in islice(moments, limit))
+    except Exception:  # noqa: BLE001 — a rule icalendar could not unroll either counts as refused.
+        return limit
 
 
 def _iana_name(tzid: str) -> str:
@@ -466,7 +516,8 @@ def _read(content: bytes) -> Any:
     if counts["VTIMEZONE"] > _TIMEZONES_PER_FEED:
         raise IcsError(f"The calendar feed defines more than {_TIMEZONES_PER_FEED} time zones.")
     try:
-        feed = icalendar.Calendar.from_ical(text)
+        # Bytes: icalendar reads a one-line str as a file path on this server.
+        feed = icalendar.Calendar.from_ical(text.encode())
     except Exception as error:  # noqa: BLE001 — any parser refusal is the same operator message.
         raise IcsError("The calendar feed is not valid iCalendar.") from error
     if feed.name != "VCALENDAR":
