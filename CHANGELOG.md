@@ -15,9 +15,12 @@ live in code docstrings.
   of its events, an exception to a recurring event is an override row (`series`,
   `original_start`), attendees are `parties.Handle` rows with the organizer as a
   role, calendars share as reader, editor or free/busy, and a `refuse` calendar
-  rejects overlapping busy time. The [calendar README](src/angee/calendar/README.md)
-  lists what it expresses. `angee.projects_calendar` overlays the viewer's due tasks
-  on the calendar page; projects no longer depends on a calendar.
+  rejects overlapping busy time. The event form offers the calendars the viewer
+  writes, defaults to the only one, and offers a user with none their own personal
+  calendar (`Calendar.objects.ensure_personal`), never creating one unasked. The
+  [calendar README](src/angee/calendar/README.md) lists what it expresses.
+  `angee.projects_calendar` overlays the viewer's due tasks on the calendar page;
+  projects no longer depends on a calendar.
   `Recurrence.get_last_occurrence` returns where a series ends, `None` when any
   rule it holds is open-ended. Recurrence is bounded for every consumer: a `COUNT`
   over `Recurrence.OCCURRENCE_LIMIT` is invalid and an expansion past the limit

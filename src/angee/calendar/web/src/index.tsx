@@ -10,6 +10,7 @@ import { CalendarCog, CalendarDays, CalendarRange } from "lucide-react";
 import { enCalendarMessages } from "./i18n";
 import { CALENDAR_MODEL, EVENT_MODEL } from "./resources";
 import { OCCURRENCE_SOURCES } from "./sources";
+import { CALENDAR_PICKER_WIDGET, calendarPickerWidget } from "./views/CalendarPicker";
 import { calendarEventForm } from "./views/CalendarEventForm";
 import { calendarForm } from "./views/CalendarForm";
 
@@ -50,6 +51,8 @@ const calendar = defineBaseAddon({
     [EVENT_MODEL]: calendarEventForm,
     [CALENDAR_MODEL]: calendarForm,
   },
+  // An event's calendar: the calendars its viewer writes, or their own on request.
+  widgets: { [CALENDAR_PICKER_WIDGET]: calendarPickerWidget },
   i18n: { calendar: enCalendarMessages },
   icons: {
     "calendar-app": CalendarDays,

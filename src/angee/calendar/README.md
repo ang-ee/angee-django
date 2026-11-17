@@ -18,6 +18,12 @@ by whoever may edit its party, and the demo data seeds the ones the demo needs. 
 consumer that wants a default calendar per record of its own creates it in its own
 addon.
 
+**A personal calendar on request.** `Calendar.objects.ensure_personal(user)` (the
+`ensure_personal_calendar` verb) returns the user's own calendar, on their person
+and owned by them, creating it the first time under their own create gate. It locks
+the person first, so it is idempotent. The event form offers it to a user who has
+no calendar to write to; nothing calls it for them.
+
 ## Events
 
 A `CalendarEvent` belongs to one calendar. It stores one master row with an
@@ -29,7 +35,8 @@ An event's calendar, series and instance are set once.
 A series owns its overrides. When a master's start, all-day flag, rule or zone changes,
 or the calendar zone it follows changes, each override's instance moves with the
 master's wall clock. An override that no longer matches an instance becomes a
-standalone event if it carries edits, and is deleted if it was a cancellation. A
+standalone event if it carries edits, and is deleted if it was a cancellation. One
+a sync still links (a record link names it) is left for that sync to remove. A
 cancelled master hides its moved instances too.
 
 - **Status** is `confirmed`, `tentative` or `cancelled`; a cancelled event shows no
@@ -112,15 +119,19 @@ A calendar is the access root of its events.
   details, and nothing for free events.
 - An event's readers read its attendees' addresses.
 - **Platform admins** reach every calendar.
-- **Consumers** widen `read_granted`, `write`, `share` and `delete` from their own
-  `permissions.extends.zed`, as a company scope does.
+- **Consumers** widen `read_granted`, `write`, `share`, `delete` and `transfer` from
+  their own `permissions.extends.zed`, as a company scope does.
+- **Writable calendars:** the `calendars` resource filters on `writable` (the
+  viewer's `write`), which is what an event may be added to.
 
 ## Web
 
 The fragment ships the Calendar app:
 
 - the calendar page, with one toggle per listed calendar, named with its owning party;
-- the event form;
+- the event form, whose calendar picker (`angee.calendar.calendarPicker`) offers the
+  calendars the viewer writes, defaults to the only one, leaves a choice of several
+  to the viewer, and offers a viewer with none "Create my calendar";
 - the calendar list and record pages, with the platform's share control.
 
 Other addons overlay their own dated rows on the calendar page by contributing an

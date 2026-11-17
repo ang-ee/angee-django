@@ -32,3 +32,13 @@ export const CalendarListDocument = graphql(`
     }
   }
 `);
+
+// The event form's calendar choice: the calendars the viewer may write, at most two,
+// which tells none (offer their own), one (the default) and a choice apart.
+export const WritableCalendarsDocument = graphql(`
+  query WritableCalendars {
+    calendars(where: { writable: { _eq: true } }, order_by: [{ name: asc }], limit: 2) {
+      id
+    }
+  }
+`);

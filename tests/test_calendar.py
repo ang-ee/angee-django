@@ -196,6 +196,17 @@ def test_a_series_expansion_includes_its_overrides(dst_series: tuple[Any, ...]) 
     assert [o.event_sqid for o in _series(master, _ny(2026, 3, 8), _ny(2026, 3, 18))] == [moved.sqid]
 
 
+def test_an_event_without_a_calendar_is_refused_on_its_calendar_field(db: None) -> None:
+    """No calendar is chosen for the actor: a row without one fails on ``calendar``, not as a form-wide error."""
+
+    del db
+    with system_context(reason="tests.calendar.validate"), pytest.raises(ValidationError) as raised:
+        CalendarEvent(title="Unplaced", start=_utc(2026, 7, 6, 9), end=_utc(2026, 7, 6, 10)).full_clean()
+
+    assert "calendar" in raised.value.message_dict
+    assert "__all__" not in raised.value.message_dict
+
+
 @pytest.mark.parametrize(
     ("fields", "error"),
     [

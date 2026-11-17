@@ -7,6 +7,7 @@ export const enCalendarMessages: Record<string, string> = {
   "occurrence.busy": "Busy",
   "source.calendar": "{calendar} · {party}",
   "reschedule.failed": "Could not reschedule the event.",
+  "picker.startOwn": "Create my calendar",
 };
 
 export const useCalendarT = createNamespaceT("calendar", enCalendarMessages);

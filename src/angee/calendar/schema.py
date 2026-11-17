@@ -21,6 +21,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import replace
 from datetime import datetime
+from functools import partial
 from typing import Any, cast
 
 import strawberry
@@ -32,11 +33,12 @@ from rebac.field_visibility import check_field_access
 from rebac.resources import resource_id_attr
 from strawberry import auto
 
+from angee.calendar.models import Calendar as CalendarSource
 from angee.calendar.models import CalendarEvent as CalendarEventSource
 from angee.calendar.models import EventOccurrence, EventTransparency
 from angee.graphql.access import ChangeReadGate
 from angee.graphql.actions import ActionResult, action_guard, authorized_action_target, session_user
-from angee.graphql.capabilities import permissions_field
+from angee.graphql.capabilities import permission_expression, permissions_field
 from angee.graphql.data.hasura import AngeeHasuraWriteBackend, hasura_model_resource, public_pk_decoder
 from angee.graphql.events import ChangeEvent, ChangePayload
 from angee.graphql.ids import PublicID, require_instance_for_id
@@ -47,8 +49,8 @@ from angee.iam.schema import UserType
 from angee.parties.schema import HandleType, PartyType
 from angee.tags.schema import TaggedNode, tags_input_extensions
 
-Calendar = apps.get_model("calendar", "Calendar")
-# The composed model, typed by the source contract it composes (its manager and occurrence read).
+# The composed models, typed by the source contracts they compose (their managers and reads).
+Calendar = cast("type[CalendarSource]", apps.get_model("calendar", "Calendar"))
 CalendarEvent = cast("type[CalendarEventSource]", apps.get_model("calendar", "CalendarEvent"))
 EventAttendee = apps.get_model("calendar", "EventAttendee")
 Party = apps.get_model("parties", "Party")
@@ -199,7 +201,9 @@ _CALENDAR_RESOURCE = hasura_model_resource(
     CalendarType,
     model=Calendar,
     name="calendars",
-    filterable=["id", "party", "name", "overlap_policy"],
+    # `writable`: the calendars the actor may add events to, as the event form's picker offers them.
+    filterable=["id", "party", "name", "overlap_policy", "writable"],
+    filter_expressions={"writable": partial(permission_expression, name="write")},
     sortable=["name", "created_at", "updated_at"],
     aggregatable=["id"],
     groupable=["party", "overlap_policy"],
@@ -312,12 +316,27 @@ class CalendarEventActionMutation:
         return ActionResult(ok=True, message="Event rescheduled.", id=event.sqid)
 
 
+@strawberry.type
+class CalendarActionMutation:
+    """The verb that gives a user without a calendar their own."""
+
+    @strawberry.mutation
+    @action_guard("Creating your calendar failed.")
+    def ensure_personal_calendar(self, info: strawberry.Info) -> ActionResult:
+        """Return the signed-in user's personal calendar, creating it on first use."""
+
+        calendar = Calendar.objects.ensure_personal(session_user(info))
+        return ActionResult(ok=True, message="Your calendar is ready.", id=calendar.sqid)
+
+
 _RESOURCES = (_CALENDAR_RESOURCE, _EVENT_RESOURCE, _ATTENDEE_RESOURCE)
 
 schemas = {
     "console": {
         "query": [*[resource.query for resource in _RESOURCES], CalendarQuery],
-        "mutation": [*[resource.mutation for resource in _RESOURCES], CalendarEventActionMutation],
+        "mutation": [
+            *[resource.mutation for resource in _RESOURCES], CalendarActionMutation, CalendarEventActionMutation,
+        ],
         "subscription": [
             changes(Calendar, field="calendarChanged"),
             changes(CalendarEvent, field="calendarEventChanged", read_gate=FreeBusyChangeReadGate),

@@ -302,3 +302,72 @@ def test_sharing_is_managed_by_writers_only(world: SimpleNamespace) -> None:
         _as(w.reader, w.calendar).grant_record_access("editor", w.reader)
 
     assert list(Calendar.objects.with_actor(w.stranger).filter(pk=w.calendar.pk)) == [w.calendar]
+
+
+# --- starting an event: which calendar --------------------------------------------
+
+_WRITABLE = """
+query { calendars(where: {writable: {_eq: true}}, order_by: [{name: asc}]) { id } }
+"""
+
+_ENSURE_PERSONAL = "mutation { ensure_personal_calendar { ok message id } }"
+
+_INSERT_WITHOUT_CALENDAR = """
+mutation ($start: DateTime!, $end: DateTime!) {
+  insert_calendar_events_one(object: {title: "Unplaced", start: $start, end: $end}) { id }
+}
+"""
+
+
+def _writable(actor: Any) -> list[str]:
+    rows = result_data(execute_schema(_console(), _WRITABLE, {}, user=actor))["calendars"]
+    return [row["id"] for row in rows]
+
+
+def _insert_without_calendar(actor: Any) -> Any:
+    variables = {"start": _utc(22, 9).isoformat(), "end": _utc(22, 10).isoformat()}
+    return execute_schema(_console(), _INSERT_WITHOUT_CALENDAR, variables, user=actor)
+
+
+@pytest.mark.parametrize(
+    ("seat", "offered"),
+    [
+        pytest.param("stranger", (), id="none"),
+        pytest.param("reader", (), id="a-reader-is-offered-none"),
+        pytest.param("editor", ("calendar",), id="one"),
+        pytest.param("holder", ("held", "calendar"), id="two"),
+    ],
+)
+def test_the_event_form_offers_the_calendars_the_actor_may_write(
+    world: SimpleNamespace, seat: str, offered: tuple[str, ...],
+) -> None:
+    """The picker lists writable calendars; the form defaults only when there is exactly one.
+
+    Whatever is offered, an insert without a calendar is refused naming its
+    ``calendar`` input: the field is required (``ID!``), which is also what makes
+    the form mark it required before it sends anything.
+    """
+
+    w = world
+    actor = getattr(w, seat)
+
+    assert _writable(actor) == [getattr(w, name).sqid for name in offered]
+    refused = _insert_without_calendar(actor)
+    assert refused.errors and "required field 'calendar'" in refused.errors[0].message
+
+
+def test_a_user_without_a_calendar_starts_their_own_once(world: SimpleNamespace) -> None:
+    """The verb creates one personal calendar, the user's person's and owned by the user, and then returns it."""
+
+    w = world
+    assert _writable(w.stranger) == []
+
+    first = result_data(execute_schema(_console(), _ENSURE_PERSONAL, {}, user=w.stranger))["ensure_personal_calendar"]
+    again = result_data(execute_schema(_console(), _ENSURE_PERSONAL, {}, user=w.stranger))["ensure_personal_calendar"]
+
+    assert first["ok"] is True and again["id"] == first["id"]
+    assert _writable(w.stranger) == [first["id"]]
+    with system_context(reason="tests.calendar.access.read"):
+        created = Calendar.objects.get(sqid=first["id"])
+        assert Calendar.objects.filter(owner=w.stranger).count() == 1
+        assert (created.owner_id, created.party_id) == (w.stranger.pk, Person.objects.get(user=w.stranger).pk)

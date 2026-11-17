@@ -36,12 +36,13 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, time, timedelta
 from typing import Any, ClassVar, Self, cast
 
+from django.apps import apps
 from django.core.exceptions import ValidationError
 from django.db import models, router, transaction
 from django.db.models import F, Q, Value
 from django.db.models.functions import Coalesce, NullIf
 from django.utils import timezone
-from rebac import permission_expression
+from rebac import permission_expression, system_context
 
 from angee.base.fields.state import StateField
 from angee.base.fields.text import ColorField
@@ -188,6 +189,32 @@ def _intervals_meet(left: Sequence[tuple[datetime, datetime]], right: Sequence[t
     return False
 
 
+class CalendarManager[CalendarT: Calendar](AngeeHistoryManager[CalendarT]):
+    """Own the calendar a user starts with."""
+
+    def ensure_personal(self, user: Any) -> CalendarT:
+        """Return ``user``'s own personal calendar, creating it once when there is none.
+
+        A personal calendar belongs to the user's person and is owned by the user. The
+        person comes from :meth:`~angee.parties.managers.PartyManager.for_user`, the
+        one-person-per-user owner, and its row is locked before the lookup, so two
+        concurrent calls converge on one calendar. The calendar is created under the
+        user's own create gate (their person's ``write``), never as system work: a user
+        invokes this, it backfills nothing.
+        """
+
+        person_model = apps.get_model("parties", "Person")
+        with transaction.atomic():
+            with system_context(reason="calendar.ensure_personal.person"):
+                person = person_model.objects.for_user(user)
+            person_model.system_queryset(lock=("self",)).get(pk=person.pk)
+            scoped = self.with_actor(user)
+            existing = scoped.filter(party_id=person.pk, owner=user).order_by("pk").first()
+            if existing is not None:
+                return existing
+            return scoped.create(party_id=person.pk, name=person.display_name or user.get_username())
+
+
 class Calendar(OwnerMixin, HistoryMixin, AngeeDataModel, concrete=True):
     """One party's calendar: the container its events belong to and take access from.
 
@@ -212,6 +239,8 @@ class Calendar(OwnerMixin, HistoryMixin, AngeeDataModel, concrete=True):
     color = ColorField(max_length=32, blank=True, default="")
     timezone = TimeZoneField()
     overlap_policy = StateField(choices_enum=OverlapPolicy, default=OverlapPolicy.ACCEPT)
+
+    objects = CalendarManager()
 
     class Meta:
         """Django model options for a calendar."""
