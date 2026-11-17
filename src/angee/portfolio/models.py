@@ -8,7 +8,7 @@ upstream rows only when this addon is composed.
 
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from typing import TYPE_CHECKING, Any, ClassVar, Self
 
 from django.apps import apps
@@ -164,7 +164,7 @@ class Product(OwnerMixin, HistoryMixin, AngeeDataModel, concrete=True):
         )
 
     # Promotion lineage stays on the original retained identity.
-    merge_policies = {"originated_from": MergePolicy.KEEP}
+    merge_policies: ClassVar[Mapping[str, Any]] = {"originated_from": MergePolicy.KEEP}
 
     def __str__(self) -> str:
         """Return the Product name."""
