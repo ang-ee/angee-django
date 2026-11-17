@@ -739,6 +739,11 @@ data through REBAC, never a queryset bypass.
 - **Login throttling belongs at the IAM auth seam.** Do not add per-view or
   per-test throttles; IAM composes `django-axes` at the `authenticate(request=...)`
   backend/signal path, so the password GraphQL mutation stays a thin caller.
+  Every credential a person presents is an authentication backend: a sign-in
+  link redeems through [`SignInLinkBackend`](../../src/angee/iam/auth.py) under
+  the same throttle. Name a credential keyword so Django's cleanser masks it
+  (`token`, `key`, `secret`, `password`) before `user_login_failed` receivers
+  see it.
 - **Person accounts have one factory.** Actor-requested accounts go through
   [`UserManager.create_person`](../../src/angee/iam/models.py), whose `create`
   permission owns admission; ingress without an actor uses
@@ -751,8 +756,8 @@ data through REBAC, never a queryset bypass.
   account is renamed.
   `create_user` stays the trusted bootstrap and OIDC path.
 - **Managed accounts change through IAM's account verbs.** `User.set_active`,
-  `rename`, `issue_password` and `reset_password` lock the row, check their own
-  Zed permission, the expected revision and the shared
+  `rename`, `issue_password`, `issue_sign_in_link` and `reset_password` lock
+  the row, check their own Zed permission, the expected revision and the shared
   `User.account_action_blockers`, then write elevated; the `account_actions`
   projection batches the same conditions. Every verb refuses a protected
   account: staff, superusers, the actor's own and effective members of

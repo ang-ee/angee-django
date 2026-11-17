@@ -10,6 +10,22 @@ live in code docstrings.
 
 ## Unreleased — shared addon contracts, native embeddings and graph retrieval
 
+- IAM sends sign-in links: a person without a password signs in once through
+  an emailed link. `User.issue_sign_in_link()` is an account verb with its own
+  `auth/user#issue_sign_in_link` permission (admin by default) and the usual
+  protected-account refusal; the console mutation is `issue_user_sign_in_link`.
+  The new internal `iam.SignInLink` row keeps a keyed digest, the issuer,
+  `expires_at`, `sent_at` and `used_at`, never the token; only an account's
+  newest link signs in. The link goes to `User.email` through Django's
+  `MAILERS["default"]` once the row commits. Redemption is
+  `authenticate(sign_in_token=...)` through `angee.iam.auth.SignInLinkBackend`,
+  so django-axes throttles it, behind the public `redeem_sign_in_link`
+  mutation and IAM's public `/sign-in-link` route. New settings:
+  `ANGEE_PUBLIC_ORIGIN` (fed by the environment variable of that name) and
+  `ANGEE_IAM_SIGN_IN_LINK_TTL`. Upgrade: compose and author the `iam`
+  migration for the new table, then re-sync the permission schema (iam
+  revision 25). Projects whose `AUTHENTICATION_BACKENDS` replace IAM's list
+  add `angee.iam.auth.SignInLinkBackend`.
 - A record-visibility file takes its access from its attached records, its
   direct viewers and admins. Its owner (the uploader, by default) holds it while
   the upload is a draft, which the record edge needs, and once it is published

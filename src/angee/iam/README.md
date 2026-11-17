@@ -58,10 +58,12 @@ confirmed opening verb.
 
 Saved User records inherit IAM's account verbs as `iam.User#actions-menu`
 children: deactivate/reactivate (`set_user_active`), rename (`rename_user`,
-name fields only), give access (`issue_user_password`) and reset access
-(`reset_user_password`). Each takes a confirmation and the revision the client
-read (issue excepted), checks its own Zed permission on `auth/user`
-(`set_active`, `rename`, `issue_password`, `reset_password`; admin by default)
+name fields only), give access (`issue_user_password`), reset access
+(`reset_user_password`) and send a sign-in link (`issue_user_sign_in_link`,
+below). Each takes a confirmation and the revision the client
+read (the issue verbs excepted), checks its own Zed permission on `auth/user`
+(`set_active`, `rename`, `issue_password`, `reset_password`,
+`issue_sign_in_link`; admin by default)
 and refuses protected accounts: the actor's own, staff, superusers and effective
 members of `iam/protected:main#member`. Issue and reset return the username with
 a one-time secret, shown only in a read-only `usePrompt` reveal with a copy
@@ -97,6 +99,44 @@ definition iam/protected {
     permission member = manager->effective_member
 }
 ```
+
+## Sign-in links
+
+A person can sign in without a password through an emailed link that works once.
+`User.issue_sign_in_link()` is an account verb like `issue_password`: it locks
+the row, checks the `issue_sign_in_link` permission (admin by default, unioned
+into `active_account` and `nonstaff_account`) and refuses protected, inactive,
+service and emailless accounts. It stores a `SignInLink` row with a keyed digest
+of the token, bound to the account and its email, never the token itself. Once
+that row commits, the link goes to the account's `email` through Django's
+default mailer as plain text. The row then records `sent_at`, and
+`sign_in_link_sent` fires with the account and the row. The issuer never sees
+the link, and `created_by` records who issued it. System callers issue under
+`system_context`, which leaves `created_by` empty. The console mutation is
+`issue_user_sign_in_link` (an `ActionResult`), offered through
+`account_actions` as `issue_sign_in_link`.
+
+Only the account's newest link signs in, so issuing again retires older links;
+rows stay as the issue record. A link expires after `ANGEE_IAM_SIGN_IN_LINK_TTL`
+seconds (three days by default). It stops working if the account's email
+changes, or if the account becomes inactive, staff, a superuser or otherwise
+protected. Redemption is Django's
+`authenticate(request, sign_in_token=...)` through `SignInLinkBackend`, so
+django-axes counts and locks out failed links as it does passwords. Django
+masks the credential before `user_login_failed` receivers see it. The public
+mutation `redeem_sign_in_link(token)` signs the person in; every refusal is the
+same `ok: false`.
+
+Links open `ANGEE_PUBLIC_ORIGIN` + `/sign-in-link#token=...`. The token rides
+the fragment, which no request, access log or referrer carries. IAM's public
+`/sign-in-link` route renders the login page, with the link as its sign-in
+method. It clears the token from the address bar and redeems it only when the
+person clicks, so a mail scanner that opens the link does not spend it. The
+password form stays below it as the fallback. A deployment without a usable
+`ANGEE_PUBLIC_ORIGIN` (`https://host`, no path) or a `MAILERS["default"]`
+mailer offers no link and refuses the verb. Turn off the email provider's click
+tracking for these messages: a tracking redirect would record the link.
+One-time passwords remain the path for an account that cannot receive email.
 
 ## Presence
 
