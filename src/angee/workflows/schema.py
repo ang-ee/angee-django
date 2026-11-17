@@ -180,6 +180,7 @@ class WorkflowRunType(RecordReferenceNode):
     )
     error: str | None
     failure_reason: str | None = strawberry_django.field(only=["outcome", "error", "output"])
+    hold: str | None = strawberry_django.field(annotate={"_hold": WorkflowRun.hold_expression()})
     request_key: auto
     created_at: auto
     updated_at: auto
@@ -594,7 +595,9 @@ _RUN_RESOURCE = hasura_model_resource(
         "trigger_event",
         "created_at",
         "finished_at",
+        "hold",
     ],
+    filter_expressions={"hold": WorkflowRun.hold_expression()},
     record_ref_filters=("subject_model", "subject_id"),
     record_ref_requires_read=True,
     sortable=["created_at", "updated_at", "finished_at", "status"],

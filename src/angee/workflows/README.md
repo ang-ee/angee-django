@@ -75,6 +75,8 @@ Admission inputs use the same relation with no step. `step.records` and
 readable ancestors. `ctx.note(message, tone="info")` adds a small recorded note.
 The three reader-facing `StepRun.hold` states are `decision`, `run` and `error`;
 timer, record-change and map scheduling remain internal wait mechanics.
+A run's `hold` is its most urgent step hold: `error`, then `run`, then `decision`.
+The run console's **Incidents** view lists the runs held on `error` or `run`.
 
 A [`Schedule`](triggers.py) trigger (`source: schedule`) names a recurrence instead of a
 model and condition: `recurrence` (an RRULE that `angee.scheduling` expands),

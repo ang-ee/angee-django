@@ -127,6 +127,7 @@ export const enWorkflowsMessages = {
   "run.noEvidence": "No retained evidence.",
   "run.redactedEvidence": "Record unavailable",
   "run.failureReason": "Failure reason",
+  "run.hold": "Held on",
   "run.parent": "Parent run",
   "trigger.title": "Trigger",
   "trigger.plural": "Triggers",

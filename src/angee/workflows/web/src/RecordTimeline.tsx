@@ -163,17 +163,15 @@ export function RecordTimelineView({ data, openCount, set = false, drillIn = fal
   </div>;
 }
 
-/** The run's state word, derived from its status and the holds its steps carry; the composed
+/** The run's state word, from its status and the run's own hold (`WorkflowRun.hold`); the composed
  * status vocabulary (workflows contributes the run-state words) decides the tone. */
 const UNKNOWN_STATE_TONE = { unknown: "neutral" } as const;
 function RunStatus({ run, compact = false }: { run: TimelineRun; compact?: boolean }) {
   const t = useWorkflowsT();
-  const holds = runSteps(run).flatMap((step) => step.hold ? [step.hold] : []);
   const status = optionToken(run.status);
   const state = status === "canceled" || status === "interrupted" ? "stopped" : status === "failed" ? "error"
     : status === "succeeded" ? "plan_complete" : status === "running" ? "plan_running"
-    : status === "waiting" ? holds.includes("error") ? "error" : holds.includes("run") ? "run"
-      : holds.includes("decision") ? "decision" : "waiting" : "unknown";
+    : status === "waiting" ? run.hold ?? "waiting" : "unknown";
   const badge = <StatusBadge value={state} tone={UNKNOWN_STATE_TONE}>{state === "plan_complete" && run.outcome_label || t(`timeline.status.${state}`)}</StatusBadge>;
   if (compact) return badge;
   return <div className="grid gap-1">{badge}

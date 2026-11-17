@@ -428,6 +428,34 @@ class WorkflowRun(RecordRefMixin, AngeeDataModel, concrete=True):
         ).order_by("rank", "map_index", "pk").only("status", "output")
         return next((reason for row in rows if (reason := row.failure_reason)), None)
 
+    hold_order = ("error", "run", "decision")
+    """Step holds from most to least urgent: an operator's error, another run, then a person."""
+
+    @property
+    def hold(self) -> str | None:
+        """The run's reader-facing hold: its most urgent step hold in :attr:`hold_order`."""
+        if "_hold" in self.__dict__:
+            return self.__dict__["_hold"]
+        return type(self).system_queryset().filter(pk=self.pk).annotate(
+            _hold=self.hold_expression(),
+        ).values_list("_hold", flat=True).get()
+
+    @classmethod
+    def hold_expression(cls) -> models.Subquery:
+        """Read each run's most urgent step hold in one correlated expression, for filters and lists."""
+        step_model = cls._meta.get_field("step_runs").related_model
+        assert step_model is not None and issubclass(step_model, StepRun)
+        urgency = models.Case(
+            *(models.When(_hold=hold, then=models.Value(rank)) for rank, hold in enumerate(cls.hold_order)),
+            output_field=models.IntegerField(),
+        )
+        held = (
+            step_model.system_queryset().filter(run_id=models.OuterRef("pk"))
+            .annotate(_hold=step_model.hold_expression()).filter(_hold__isnull=False)
+            .order_by(urgency, "pk").values("_hold")[:1]
+        )
+        return models.Subquery(held, output_field=models.CharField(null=True))
+
     def _lock_run_subject(self, *, required: bool = True) -> RunSubject | None:
         """Lock this root run's opted-in subject after the caller has locked the run."""
         if self.parent_step_id is not None:

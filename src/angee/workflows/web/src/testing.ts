@@ -33,7 +33,7 @@ export const runResourceFixture = testDataResource("workflows.WorkflowRun", {
   typeNames: { filter: "workflowrun_bool_exp", order: "workflowrun_order_by",
     groupBySpec: "workflowrunGroupBySpec", groupOrder: "workflowrunGroupOrder", having: "workflowrunHaving" },
   recordRepresentation: "display_name",
-  fields: [...["id", "display_name", "subject_id", "subject_model", "created_at", "finished_at", "outcome", "outcome_label"].map((name) => ({
+  fields: [...["id", "display_name", "subject_id", "subject_model", "created_at", "finished_at", "outcome", "outcome_label", "hold"].map((name) => ({
     name, kind: "scalar" as const, scalar: "String", readable: true, aggregatable: false,
     creatable: false, updatable: false, requiredOnCreate: false,
   })), { name: "version", kind: "relation", relationObject: true, relationModelLabel: "workflows.WorkflowVersion",
@@ -61,6 +61,7 @@ export const runResourceFixture = testDataResource("workflows.WorkflowRun", {
     ].map((name) => [name, testQueryField(name)])),
     status: testQueryField("status", { kind: "enum", values: runStates,
       filter: { field: "status", scalar: "String", values: [], valueMap: statusValues, operators: ["exact", "inList"] } }),
+    hold: testQueryField("hold", { filter: { field: "hold", scalar: "String", values: [], operators: ["exact", "inList", "isNull"] } }),
     "version.workflow": testQueryField("version.workflow", { kind: "relation", scalar: "ID",
       relation: { model: "workflows.Workflow", identityPath: "version.workflow.id", labelPath: "version.workflow.name" },
       row: { path: "version.workflow.id", paths: ["version.workflow.id", "version.workflow.name"] },
