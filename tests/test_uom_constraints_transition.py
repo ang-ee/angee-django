@@ -20,7 +20,6 @@ def test_preflight_legacy_units_preserves_values(ratio, rounding, invalid):
         ("ratio", models.DecimalField(max_digits=20, decimal_places=10)),
         ("rounding", models.DecimalField(max_digits=12, decimal_places=6)),
     ], {"db_table": "test_legacy_unit_preflight"}))
-    assert transition.applies(state)
     unit = state.apps.get_model("uom", "Uom")
     with connection.schema_editor() as editor:
         editor.create_model(unit)

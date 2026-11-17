@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import importlib
+import json
 import os
 from datetime import timedelta
 from pathlib import Path
@@ -14,12 +15,13 @@ import pytest
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
 from django.db import DataError
+from django.test import RequestFactory
 from django.utils import timezone
 from rebac import system_context
 
 from angee.graphql.testing.documents import execute_schema, result_data
 from angee.integrate.models import IntegrationLifecycle, IntegrationRuntimeStatus
-from angee.storage_integrate.connect import create_local_folder_mount
+from angee.storage import views as storage_views
 from angee.storage_integrate.models import MountMode
 from angee.storage_integrate.mounts import LocalFolderMountBackend
 from tests.conftest import (
@@ -36,6 +38,7 @@ from tests.conftest import (
 )
 
 storage_integrate_schema = importlib.import_module("angee.storage_integrate.schema")
+storage_schema = importlib.import_module("angee.storage.schema")
 
 BASE_MTIME_NS = 1_700_000_000_000_000_000
 
@@ -110,13 +113,16 @@ def _connect(
     mode: MountMode,
     name: str,
 ) -> Mount:
-    """Provision one real local-folder Mount through the public use-case."""
+    """Provision one real local-folder Mount through the Mount manager."""
 
-    return create_local_folder_mount(
-        env.owner,
-        name=name,
-        path=str(root),
-        mode=mode,
+    return _provision(env, str(root), mode=mode, name=name)
+
+
+def _provision(env: SimpleNamespace, root: str, *, mode: MountMode, name: str, **values: Any) -> Mount:
+    """Provision a local-folder Mount as ``connect_mount`` does."""
+
+    return Mount.objects.provision(
+        env.owner, backend_class="local_folder", name=name, root=root, mode=mode, **values
     )
 
 
@@ -154,11 +160,11 @@ def _details(mount: Mount) -> dict[str, Any]:
     return dict(mount.sync_progress["details"])
 
 
-def _assert_path_error(error: pytest.ExceptionInfo[ValidationError], text: str) -> None:
-    """Assert a connect refusal is keyed to the path input."""
+def _assert_root_error(error: pytest.ExceptionInfo[ValidationError], text: str) -> None:
+    """Assert a connect refusal is keyed to the root input."""
 
-    assert set(error.value.message_dict) == {"path"}
-    assert text in " ".join(error.value.message_dict["path"])
+    assert set(error.value.message_dict) == {"root"}
+    assert text in " ".join(error.value.message_dict["root"])
 
 
 def test_connect_reference_provisions_read_only_backend_and_owned_drive(
@@ -206,6 +212,100 @@ def test_connect_copy_reuses_managed_backend_and_stamps_drive_owner(
     assert queued_mounts == [(mount, {})]
 
 
+def test_connect_copy_stores_in_a_chosen_writable_backend_the_actor_reads(
+    mount_env: SimpleNamespace,
+    queued_mounts: list[Any],
+) -> None:
+    """A copy mount may store in another writable backend; a reference mount or a read-only target is refused."""
+
+    archive_root = mount_env.tmp_path / "archive"
+    archive_root.mkdir()
+    reference_root = mount_env.tmp_path / "read-only"
+    reference_root.mkdir()
+    with system_context(reason="test mount copy targets"):
+        archive = Backend._base_manager.create(
+            slug="archive",
+            label="Archive",
+            backend_class="local",
+            backend_config={"root": str(archive_root)},
+            created_by=mount_env.owner,
+        )
+        read_only = Backend._base_manager.create(
+            slug="read-only",
+            label="Read only",
+            backend_class="local_folder",
+            backend_config={"root": str(reference_root)},
+            created_by=mount_env.owner,
+        )
+        retired = Backend._base_manager.create(
+            slug="retired",
+            label="Retired",
+            backend_class="local",
+            backend_config={"root": str(archive_root)},
+            is_archived=True,
+            created_by=mount_env.owner,
+        )
+    source = mount_env.tmp_path / "copy-target"
+    _write(source / "kept.txt", b"kept", mtime_ns=BASE_MTIME_NS)
+
+    for mode, target, field in (
+        (MountMode.REFERENCE, archive, "copy_backend"),
+        (MountMode.COPY, read_only, "copy_backend"),
+        (MountMode.COPY, retired, "copy_backend"),
+    ):
+        with pytest.raises(ValidationError) as refused:
+            _provision(mount_env, str(source), mode=mode, name="Refused", copy_backend=target)
+        assert set(refused.value.message_dict) == {field}
+    assert queued_mounts == []
+
+    mount = _provision(mount_env, str(source), mode=MountMode.COPY, name="Archived", copy_backend=archive)
+    assert mount.drive.backend_id == archive.pk
+    assert mount.drive.prefix == "mounts/archived"
+    assert _run_sync(mount) == 1
+    [row] = _files(mount.drive)
+    assert (archive_root / row.storage_path).read_bytes() == b"kept"
+
+
+def test_storage_backends_project_whether_they_take_new_objects(
+    mount_env: SimpleNamespace,
+    queued_mounts: list[Any],
+) -> None:
+    """``writable`` tells a copy-target picker which backends store new objects."""
+
+    root = mount_env.tmp_path / "projected"
+    root.mkdir()
+    mount = _connect(mount_env, root, mode=MountMode.REFERENCE, name="Projected")
+    listed = result_data(
+        execute_schema(
+            addon_schema(storage_schema.schemas, "console"),
+            "query { backends { slug writable } }",
+            user=mount_env.owner,
+        )
+    )["backends"]
+    with system_context(reason="test projected backend slug"):
+        external = mount.drive.backend.slug
+    assert {row["slug"]: row["writable"] for row in listed} == {"managed": True, external: False}
+
+
+def test_a_reference_file_changed_since_the_sync_is_refused_rather_than_truncated(
+    mount_env: SimpleNamespace,
+    queued_mounts: list[Any],
+) -> None:
+    """A download whose source no longer has the indexed size answers 502 instead of a cut-short body."""
+
+    root = mount_env.tmp_path / "changing"
+    _write(root / "grown.txt", b"short", mtime_ns=BASE_MTIME_NS)
+    mount = _connect(mount_env, root, mode=MountMode.REFERENCE, name="Changing")
+    assert _run_sync(mount) == 1
+    row = _file_map(mount.drive)["grown.txt"]
+    token = row.issue_download_token(mount_env.owner)
+    request = RequestFactory().get(f"/storage/download/grown.txt?token={token}")
+
+    (root / "grown.txt").write_bytes(b"much longer than when it was indexed")
+    refused = storage_views.download(request, row.filename)
+    assert (refused.status_code, json.loads(refused.content)["code"]) == (502, "unavailable")
+
+
 def test_connect_refusals_are_field_keyed_for_unsafe_or_duplicate_roots(
     mount_env: SimpleNamespace,
     queued_mounts: list[Any],
@@ -219,16 +319,11 @@ def test_connect_refusals_are_field_keyed_for_unsafe_or_duplicate_roots(
     assert len(queued_mounts) == 1
     with pytest.raises(ValidationError) as duplicate_error:
         _connect(mount_env, duplicate, mode=MountMode.COPY, name="Again")
-    _assert_path_error(duplicate_error, "already mounted")
+    _assert_root_error(duplicate_error, "already mounted")
 
     with pytest.raises(ValidationError) as relative_error:
-        create_local_folder_mount(
-            mount_env.owner,
-            name="Relative",
-            path="relative/folder",
-            mode=MountMode.REFERENCE,
-        )
-    _assert_path_error(relative_error, "absolute")
+        _provision(mount_env, "relative/folder", mode=MountMode.REFERENCE, name="Relative")
+    _assert_root_error(relative_error, "absolute")
 
     media_root = mount_env.tmp_path / "media"
     media_source = media_root / "source"
@@ -236,7 +331,7 @@ def test_connect_refusals_are_field_keyed_for_unsafe_or_duplicate_roots(
     settings.MEDIA_ROOT = media_root
     with pytest.raises(ValidationError) as media_error:
         _connect(mount_env, media_source, mode=MountMode.REFERENCE, name="Media")
-    _assert_path_error(media_error, "MEDIA_ROOT")
+    _assert_root_error(media_error, "MEDIA_ROOT")
 
     data_root = mount_env.tmp_path / "data"
     data_source = data_root / "source"
@@ -245,7 +340,7 @@ def test_connect_refusals_are_field_keyed_for_unsafe_or_duplicate_roots(
     settings.ANGEE_DATA_DIR = data_root
     with pytest.raises(ValidationError) as data_error:
         _connect(mount_env, data_source, mode=MountMode.REFERENCE, name="Data")
-    _assert_path_error(data_error, "ANGEE_DATA_DIR")
+    _assert_root_error(data_error, "ANGEE_DATA_DIR")
 
 
 def test_browse_mount_source_dispatches_local_neutral_locations(
@@ -270,7 +365,7 @@ def test_browse_mount_source_dispatches_local_neutral_locations(
     assert len(queued_mounts) == 1
 
     direct = LocalFolderMountBackend.browse()
-    listing = Mount.objects.browse_source("local_folder")
+    listing = Mount.objects.browse_source(mount_env.owner, "local_folder")
 
     assert direct.location == listing.location
     assert all(entry.blocked_reason != "Already mounted" for entry in direct.entries)
@@ -292,7 +387,7 @@ def test_browse_mount_source_dispatches_local_neutral_locations(
     assert not entries[".Library"].is_mountable
 
     with pytest.raises(ValidationError) as unknown_backend:
-        Mount.objects.browse_source("missing")
+        Mount.objects.browse_source(mount_env.owner, "missing")
     assert "backend_class" in unknown_backend.value.message_dict
 
 
@@ -454,6 +549,7 @@ def test_reference_duplicate_content_is_counted_and_retried_each_sync(
         "unchanged": 0,
         "duplicates": 1,
         "errors": 0,
+        "skipped": 0,
         "trashed": 0,
         "vanished": 0,
         "scanned": 2,
@@ -754,8 +850,8 @@ def test_mount_graphql_connect_sync_list_and_non_admin_reader_denials(
         execute_schema(
             schema,
             """
-            mutation Connect($path: String!, $mode: MountMode!) {
-              connect_local_folder(name: "GraphQL mount", path: $path, mode: $mode) {
+            mutation Connect($root: String!, $mode: MountMode!) {
+              connect_mount(backend_class: "local_folder", name: "GraphQL mount", source_root: $root, mode: $mode) {
                 id
                 mode
                 drive
@@ -763,10 +859,10 @@ def test_mount_graphql_connect_sync_list_and_non_admin_reader_denials(
               }
             }
             """,
-            {"path": str(root), "mode": "REFERENCE"},
+            {"root": str(root), "mode": "REFERENCE"},
             user=admin,
         )
-    )["connect_local_folder"]
+    )["connect_mount"]
     assert connected["mode"] == "REFERENCE"
     assert connected["lifecycle"] == "CONNECTED"
     assert len(queued_mounts) == 1
@@ -833,11 +929,11 @@ def test_mount_graphql_connect_sync_list_and_non_admin_reader_denials(
     denied_connect = execute_schema(
         schema,
         """
-        mutation($path: String!, $mode: MountMode!) {
-          connect_local_folder(name: "Denied", path: $path, mode: $mode) { id }
+        mutation($root: String!, $mode: MountMode!) {
+          connect_mount(backend_class: "local_folder", name: "Denied", source_root: $root, mode: $mode) { id }
         }
         """,
-        {"path": str(root), "mode": "COPY"},
+        {"root": str(root), "mode": "COPY"},
         user=reader,
     )
     assert denied_connect.errors is not None

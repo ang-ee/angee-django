@@ -23,6 +23,7 @@ from angee.integrate.credentials import CredentialKind, StaticTokenCredentialHan
 from angee.integrate.models import AccountStatus
 from angee.integrate.oauth.client import OAuthClientProtocol
 from angee.integrate.oauth.errors import CLIENT_NOT_CONFIGURED, TOKEN_EXCHANGE_FAILED, OAuthFlowError
+from angee.integrate.oauth.providers import GenericOAuth2
 from tests.conftest import (
     Credential,
     ExternalAccount,
@@ -211,6 +212,7 @@ def test_authorize_url_reads_no_client_secret_and_omits_an_empty_scope() -> None
         authorize_endpoint = "https://provider.example/oauth/authorize"
         supports_pkce = True
         authorize_param_values = {"audience": "https://api.example", "client_id": "spoofed", "state": "spoofed"}
+        provider = GenericOAuth2
 
         @property
         def client_secret(self) -> str:
@@ -319,6 +321,7 @@ def test_connection_managers_are_idempotent_and_delegate_static_token_material()
             oauth_client,
             CredentialKind.STATIC_TOKEN,
             {"api_key": "second-key"},
+            external_account=second_account,
         )
 
         assert second_credential.pk == first_credential.pk

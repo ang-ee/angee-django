@@ -1,0 +1,14 @@
+build-system = { requires = ["hatch-angee>=1.1,<2"], build-backend = "hatch_angee" }
+
+[project]
+name = "angee-projects-calendar"
+version = "3.0.0"
+description = "Show the viewer's due tasks on the calendar page"
+keywords = ["projects", "tasks", "calendar", "due date"]
+dependencies = ["angee-calendar>=3,<4", "angee-projects>=3,<4", "angee-web>=3,<4"]
+dynamic = ["entry-points"]
+
+[tool.angee]
+
+[tool.angee.platform]
+category = "Productivity"

@@ -1,0 +1,16 @@
+# Demo attendees (demo tier): the organizer is the attendee whose role is
+# `organizer`, at most one per event. Rows reload idempotently on the
+# (event, handle) unique constraint through the xref ledger.
+_meta:
+  model: calendar.EventAttendee
+rows:
+  - xref: standup_alice
+    fields: { event: calendar.standup, handle: calendar.alice_email, role: organizer, response: accepted }
+  - xref: standup_bob
+    fields: { event: calendar.standup, handle: calendar.bob_email }
+  - xref: kickoff_alice
+    fields: { event: calendar.kickoff, handle: calendar.alice_email, role: organizer, response: accepted }
+  - xref: kickoff_ada
+    fields: { event: calendar.kickoff, handle: calendar.ada_email }
+  - xref: kickoff_grace
+    fields: { event: calendar.kickoff, handle: calendar.grace_email, role: optional, response: tentative }

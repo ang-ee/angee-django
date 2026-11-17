@@ -43,37 +43,42 @@ export function useOAuthAuthorization(): OAuthAuthorization {
   const invalidates = useResourceInvalidates(models);
   const [complete, completion] = useAuthoredMutation(IntegrateConnectAccountComplete, { invalidateModels: models, invalidates });
 
-  const authorize = React.useCallback(async (start: OAuthAuthorizationStart, title: React.ReactNode): Promise<boolean> => {
-    if (!start.authorize_url) throw new Error(t("providers.connect.startError"));
-    if (start.mode !== "manual") {
-      window.location.assign(start.authorize_url);
-      return false;
-    }
-    // The provider only displays the code (no redirect back), so this tab stays alive
-    // and the user pastes the `code#state` it shows. The link is a real user gesture,
-    // so it is never popup-blocked.
-    const response = await prompt({
-      title,
-      body: <span>
-        <NavLink href={start.authorize_url} target="_blank" rel="noreferrer" variant="inline">
-          {t("providers.connect.openAuthorize")}
-        </NavLink>
-        {t("providers.connect.instructions")}
-      </span>,
-      fields: [{
-        name: "pasted",
-        label: t("providers.connect.codeLabel"),
-        placeholder: t("providers.connect.codePlaceholder"),
-      }],
-    });
-    if (!response) return false;
-    if (!start.redirect_uri) throw new Error(t("providers.connect.stateIncomplete"));
-    const grant = parseManualCode(response.pasted, start.state ?? "", t);
-    const completed = await complete({ ...grant, redirectUri: start.redirect_uri });
-    const account = completed?.connect_account_complete;
-    if (!account) throw new Error(t("providers.connect.stateIncomplete"));
-    if (account.error) throw new Error(account.error);
-    return true;
+  const authorize = React.useCallback(async (first: OAuthAuthorizationStart, title: React.ReactNode): Promise<boolean> => {
+    const run = async (start: OAuthAuthorizationStart): Promise<boolean> => {
+      if (!start.authorize_url) throw new Error(t("providers.connect.startError"));
+      if (start.mode !== "manual") {
+        window.location.assign(start.authorize_url);
+        return false;
+      }
+      // The provider only displays the code (no redirect back), so this tab stays alive
+      // and the user pastes the `code#state` it shows. The link is a real user gesture,
+      // so it is never popup-blocked.
+      const response = await prompt({
+        title,
+        body: <span>
+          <NavLink href={start.authorize_url} target="_blank" rel="noreferrer" variant="inline">
+            {t("providers.connect.openAuthorize")}
+          </NavLink>
+          {t("providers.connect.instructions")}
+        </span>,
+        fields: [{
+          name: "pasted",
+          label: t("providers.connect.codeLabel"),
+          placeholder: t("providers.connect.codePlaceholder"),
+        }],
+      });
+      if (!response) return false;
+      if (!start.redirect_uri) throw new Error(t("providers.connect.stateIncomplete"));
+      const grant = parseManualCode(response.pasted, start.state ?? "", t);
+      const completed = await complete({ ...grant, redirectUri: start.redirect_uri });
+      const account = completed?.connect_account_complete;
+      if (!account) throw new Error(t("providers.connect.stateIncomplete"));
+      // A grant without the refresh token it needs: the server restarted the connect asking for consent.
+      if (account.restart?.authorize_url) return run(account.restart);
+      if (account.error) throw new Error(account.error);
+      return true;
+    };
+    return run(first);
   }, [complete, prompt, t]);
 
   return { authorize, completing: completion.fetching, models };

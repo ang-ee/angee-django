@@ -31,13 +31,26 @@ class AdapterContractError(TypeError):
     """A bridge implementation violated the record-sync contract."""
 
 
-class IntegrationImpl(ImplBase):
+class OAuthConnectIntent:
+    """How a capability's implementation connects: its OAuth client and the scopes it needs.
+
+    ``oauth_client`` is the client slug (``{vendor}`` expands to the integration's
+    vendor; blank means no OAuth connect). ``oauth_scopes`` are the scopes needed
+    beyond that client's default scopes; each must be in its ``scopes_catalogue``
+    (``OAuthClient.requested_scopes``). Every capability implementation base
+    composes this one declaration.
+    """
+
+    oauth_client: ClassVar[str] = ""
+    oauth_scopes: ClassVar[tuple[str, ...]] = ()
+
+
+class IntegrationImpl(OAuthConnectIntent, ImplBase):
     """Base descriptor for one row-selected integration implementation."""
 
     category = "none"
     label = "Integration"
     icon = ""
-    oauth_client: ClassVar[str] = ""
     requires_connection_discovery: ClassVar[bool] = False
     """Opt into the asynchronous discover/apply connection lifecycle."""
 

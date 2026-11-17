@@ -123,7 +123,22 @@ authentication for both token-request formats. `OAuthClient.token_identity_keys`
 names the non-secret token-response keys connect reads the account from when
 userinfo cannot; token material is never among them. Presets seed both through
 `defaults`, like the other registration fields.
-Product presets and registrations belong to their capability addons.
+Product presets and registrations belong to their capability addons; a vendor
+whose one client serves several capabilities has its own addon
+([`integrate_google`](../integrate_google/__init__.py)).
+
+One client serves every consumer of a provider: a capability declares its client
+and scopes once (`OAuthConnectIntent` in [`impl.py`](impl.py)). The owners of the
+connect rules are `OAuthClient.requested_scopes` (scopes),
+`CredentialManager.upsert_for_user` (one credential per external account and the
+grant checks), `Integration.attach_connection` (the account binding),
+`Integration.admit_credential` (which credentials a capability accepts, asked on
+every attachment), `OAuthProviderType.authorize_params` (the prompt),
+[`connect.complete_account_connect`](connect.py) (account identity: userinfo, the
+`token_identity_keys`, then the verified ID token) and
+`connect.complete_external_account_link` (the consent restart). A credential stored
+without an account, before credentials were per account, and the integrations it
+serves without a binding bind to the first account that connects.
 
 Connection adapters declare `IntegrationImpl.requires_connection_discovery = True`
 to opt into asynchronous `discover_connection`/`apply_discovery`. Manual and
@@ -139,8 +154,8 @@ connect and OIDC login/link pass them to
 `OAuthClientProtocol.fetch_userinfo(access_token, params=…)`.
 Provider proofs and query vocabulary stay in the provider addon. Connect and
 OIDC login/link share `OAuthClientProtocol.exchange_identity`, which exchanges,
-refines and reads userinfo. OIDC verifies the nonce-bound ID token from the code
-exchange, independently of the refined material stored for API access.
+refines and reads userinfo. OIDC login verifies the nonce-bound ID token from the
+code exchange, independently of the refined material stored for API access.
 Server-side signing reads confidential material only
 through `OAuthClientProtocol.confidential_client_secret()`; public clients are
 refused before secret storage is accessed; confidential clients without a secret
@@ -155,7 +170,12 @@ configuration fields, never client secrets. OIDC
 metadata discovery resolves OAuth endpoints independently of connection
 discovery. Host
 settings are applied through `oauth_clients` after resources load.
-`Credential.is_reconnect_required` uses status, failed refresh and expiry.
+`Credential.is_reconnect_required` uses status, failed refresh or mint, and expiry.
+A `jwt_bearer` credential holds a provider signing key (a pasted key file, such as a
+Google service-account key) and mints one access token per scope set through the
+JWT bearer grant (RFC 7523); consumers call `Credential.auth_headers(scopes=...)`.
+Only a refusal of the key or identity marks it failed, re-entering the key file
+clears that, and the signing key is never its generic secret.
 `Credential.refreshable` derives refreshability from the current client and grant
 material; it is never stored as a copy of client policy. Ordinary access-token
 expiry with a refresh grant does not ask for new consent.

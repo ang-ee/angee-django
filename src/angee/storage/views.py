@@ -2,15 +2,18 @@
 
 from __future__ import annotations
 
-from collections.abc import Collection
-from typing import Literal
+import logging
+import os
+from collections.abc import AsyncIterator, Collection
+from typing import IO, Any, Literal
 
+from asgiref.sync import sync_to_async
 from django.apps import apps
-from django.http import FileResponse, HttpRequest, JsonResponse
+from django.http import HttpRequest, JsonResponse, StreamingHttpResponse
 from django.http.response import HttpResponseBase
 from django.utils.cache import get_conditional_response, patch_cache_control, patch_vary_headers
 from django.utils.csp import CSP, build_policy
-from django.utils.http import quote_etag
+from django.utils.http import content_disposition_header, quote_etag
 from django.views.decorators.csp import csp_override
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_http_methods
@@ -26,6 +29,8 @@ from angee.storage.uploads import (
     renders_inline,
 )
 
+logger = logging.getLogger(__name__)
+
 DOWNLOAD_CSP: dict[str, Collection[str] | str | Literal[True]] = {
     "default-src": [CSP.NONE],
     "style-src": [CSP.UNSAFE_INLINE],
@@ -36,6 +41,9 @@ DOWNLOAD_CSP: dict[str, Collection[str] | str | Literal[True]] = {
 ``sandbox`` gives the document an opaque origin; the inline style a browser's own
 image page uses is all it allows. A page embedding the file is unaffected.
 """
+
+DOWNLOAD_BLOCK_BYTES = 64 * 1024
+"""Bytes read from storage per streamed download block."""
 
 VIEWER_CSP = {"default-src": [CSP.NONE], "media-src": [CSP.SELF], "style-src": [CSP.UNSAFE_INLINE]}
 """The policy on a type the browser opens in its own viewer (PDF, text, audio, video).
@@ -89,7 +97,12 @@ def download(request: HttpRequest, filename: str) -> HttpResponseBase:
     (:func:`~angee.storage.uploads.renders_inline`); every other type downloads as
     an attachment. A viewer type carries :data:`VIEWER_CSP`, every other response
     :data:`DOWNLOAD_CSP`, and all of them ``nosniff`` from Django's
-    ``SecurityMiddleware``.
+    ``SecurityMiddleware``. The bytes stream as an async iterator reading one
+    block at a time in a worker thread, so a slow or remote backend never blocks
+    the event loop nor buffers the whole file; the row's size is the length,
+    and a stored file whose real size differs is refused rather than truncated.
+    A backend that refuses to open the bytes is answered 404, 403 or 502
+    (:func:`_storage_refusal`), never 500.
     """
 
     del filename  # cosmetic save-as name; the token identifies the file
@@ -106,11 +119,82 @@ def download(request: HttpRequest, filename: str) -> HttpResponseBase:
     content_type = mime_type.mime_type if mime_type is not None else FALLBACK_MIME
     if conditional := get_conditional_response(request, etag=etag):
         return _download_cache_response(conditional, etag, content_type)
-    stream = row.open_stream()
-    response = FileResponse(
-        stream, filename=row.filename, content_type=content_type, as_attachment=not renders_inline(content_type)
-    )
+    try:
+        body = _StoredBytes.open(row)
+    except OSError as error:
+        return _storage_refusal(row, error)
+    response = StreamingHttpResponse(body, content_type=content_type)
+    response["Content-Length"] = str(row.size_bytes)
+    disposition = content_disposition_header(not renders_inline(content_type), row.filename)
+    if disposition:
+        response["Content-Disposition"] = disposition
     return _download_cache_response(response, etag, content_type)
+
+
+def _storage_refusal(row: Any, error: OSError) -> JsonResponse:
+    """Answer a backend's refusal to open stored bytes: missing 404, refused 403, otherwise 502.
+
+    The status and code follow the upload flow's errors; the backend's own
+    message, which may name a path or a remote reason, goes to the log only.
+    """
+
+    refusal: type[exceptions.UploadError] | None = None
+    if isinstance(error, FileNotFoundError):
+        refusal, message = exceptions.UploadTargetNotFound, "The stored file is missing."
+    elif isinstance(error, PermissionError):
+        refusal, message = exceptions.UploadDenied, "The storage refused to serve this file."
+    else:
+        message = "The storage could not serve this file."
+    status, code = (refusal.status_code, refusal.code) if refusal is not None else (502, "unavailable")
+    logger.warning("storage.download: %s refused %s: %s", type(error).__name__, row.sqid, error)
+    return JsonResponse({"error": message, "code": code}, status=status)
+
+
+class _StoredBytes:
+    """A download body: a row's stored bytes, read block by block off the event loop.
+
+    Django registers its ``close`` as a response closer, so the stream closes
+    when the response does, read or not; finishing the read closes it too.
+    """
+
+    def __init__(self, stream: IO[bytes]) -> None:
+        """Hold one open stream of stored bytes."""
+
+        self.stream = stream
+
+    @classmethod
+    def open(cls, row: Any) -> _StoredBytes:
+        """Open ``row``'s bytes, refusing a stream whose real size is not the size it was indexed with.
+
+        A reference mount's source can change between syncs; serving it under the
+        indexed length would truncate the response. A stream that cannot report
+        its size (a remote reader) is trusted to its backend's own checks.
+        """
+
+        stream = row.open_stream()
+        try:
+            size = os.fstat(stream.fileno()).st_size
+        except AttributeError, OSError:
+            return cls(stream)
+        if size != row.size_bytes:
+            stream.close()
+            raise OSError("The stored file changed since the last sync.")
+        return cls(stream)
+
+    async def __aiter__(self) -> AsyncIterator[bytes]:
+        """Yield the bytes block by block from a worker thread, then close the stream."""
+
+        read = sync_to_async(self.stream.read, thread_sensitive=False)
+        try:
+            while block := await read(DOWNLOAD_BLOCK_BYTES):
+                yield block
+        finally:
+            await sync_to_async(self.close, thread_sensitive=False)()
+
+    def close(self) -> None:
+        """Close the stream; closing twice is harmless."""
+
+        self.stream.close()
 
 
 def _download_cache_response(response: HttpResponseBase, etag: str, content_type: str) -> HttpResponseBase:

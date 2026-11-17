@@ -10,6 +10,147 @@ live in code docstrings.
 
 ## Unreleased — shared addon contracts, native embeddings and graph retrieval
 
+- Storage mounts read Google Drive: `angee.storage_integrate_google_drive` mounts
+  My Drive, a folder or a shared drive, in place (read-only) or copied into a chosen
+  writable backend, reading with one of the connecting user's Google accounts that
+  granted `drive.readonly`; Google-native documents and shortcuts are skipped and
+  counted. One `connect_mount(backend_class, name, source_root, mode, credential_id,
+  copy_backend_id)` mutation replaces `connect_local_folder` and the per-backend
+  connect mutations, and `mount_backend(backend_class)` tells the dialog what a
+  backend asks for. A mount's root is its backend's source token
+  (`MountBackend.source_root`), `MountEntry.storage_key` keeps a file's row across
+  renames and moves, `Backend.writable` and `ExternalStorageBackend` own read-only
+  serving, and a refused download answers 404, 403 or 502 instead of 500.
+- Integration follow-ups across the OAuth, credential and mount owners:
+  - every token request (the authorization-code and refresh grants, the JSON shim and
+    the JWT bearer assertion grant, now `angee.integrate.oauth.client.jwt_bearer_grant`)
+    maps its failures once and keeps the response's real HTTP status, so a JSON 429 on
+    an OAuth refresh is transient instead of failing the credential; a token endpoint
+    the address policy refuses is the permanent `endpoint_not_allowed` refusal;
+  - `CredentialKindHandler.carry_forward` decides what a new grant keeps of a
+    credential's stored material (the OAuth kind keeps its refresh token);
+  - a code exchange whose response omits `scope` granted the requested scopes
+    (RFC 6749 §5.1), so the credential records them;
+  - `connect_account_start(scopes:)` requests a consumer's scopes, `@angee/integrate`
+    exports `ConnectAccountButton` and `useConnectAccountStart`, and the Drive account
+    picker connects another account with `drive.readonly`;
+  - `Integration.admit_credential` is asked on every attachment; a Mount admits only
+    an account its backend reads with (`Mount.reads_with`);
+  - `angee.integrate.http.retry_after` is the one `Retry-After` parser (delay-seconds
+    or a future HTTP-date, at most a day); posts, Notion and Google Drive compose it,
+    and posts keeps its one-minute fallback;
+  - the Anthropic, work, uom and WhatsApp migration templates carry named placeholder
+    dependencies and no `applies()`; the Anthropic rehome gains its reverse, `restore`.
+- `angee.calendar` is the framework calendar, moved from arpee's `arp.calendar`
+  and reshaped: a `Calendar` belongs to a `parties.Party` and is the access root
+  of its events, an exception to a recurring event is an override row (`series`,
+  `original_start`), attendees are `parties.Handle` rows with the organizer as a
+  role, calendars share as reader, editor or free/busy, and a `refuse` calendar
+  rejects overlapping busy time. The event form offers the calendars the viewer
+  writes, defaults to the only one, and offers a user with none their own personal
+  calendar (`Calendar.objects.ensure_personal`), never creating one unasked. The
+  [calendar README](src/angee/calendar/README.md) lists what it expresses.
+  `angee.projects_calendar` overlays the viewer's due tasks on the calendar page;
+  projects no longer depends on a calendar.
+  `Recurrence.get_last_occurrence` returns where a series ends, `None` when any
+  rule it holds is open-ended. Recurrence is bounded for every consumer: a `COUNT`
+  over `MAX_OCCURRENCES` (10,000) is invalid and an expansion past it
+  raises `ValidationError` instead of running on; `RecurrenceField(finest_frequency=…)`
+  refuses finer rules (a calendar event repeats at most hourly).
+  **Host upgrade:** the `calendar` app label carries the deleted `arp.calendar`'s
+  migration history and no data moves (clean slate). Each host writes a `calendar`
+  migration (`0003`) that purges the old event, attendee and history rows and the
+  `arp.calendar` resource-ledger rows, then applies the generated schema
+  operations; then run `rebac --skip-checks sync --prune-stale --yes` (calendar
+  revision 3, arp revision 7) and `resources load`. Add `angee.calendar` (and
+  `angee.projects_calendar` where projects is composed) to `INSTALLED_APPS` in
+  place of `arp.calendar`.
+- One Google OAuth client per deployment serves every Google feature. The new
+  `angee.integrate_google` addon owns the `google` provider preset and seeds the
+  deployment's blank `google` client and Google's public `gemini` client
+  ([Register the deployment's Google client](docs/howto/google-oauth-client.md)).
+  `iam_integrate_oidc` depends on it and no longer ships `GoogleType` or the demo
+  `google` row; it turns sign-in on for a `google` row the load creates, never for
+  an existing one.
+- A resource entry may declare `create_only` fields: they reach a row only when
+  the load creates it (through any of its entries or an owner verb), never an
+  adopted, existing or re-applied row, and they stay out of the row hash like
+  transition-owned state. Adding it to a shipped entry re-applies that entry's
+  existing rows once.
+  `angee.resources.models.move_seed_ledger` moves seed ledger rows to the addon
+  that now ships them in a data migration; the Anthropic and Gemini steps use it.
+- Consumers declare the scopes they need (`IntegrationImpl.oauth_scopes`).
+  Credentials are keyed by (user, OAuth client, external account), so one user
+  connects several accounts through one client, and an integration stays bound to
+  the account it was connected as (`account_switch_refused`). The integration
+  resource's `account` is no longer updatable: the binding follows the credential,
+  and only ownership transfer releases it, detaching the previous owner's
+  credential and disconnecting the integration in the same transaction. When the
+  provider can be asked for consent again (`OAuthProviderType.authorize_params`),
+  a connect whose grant lacks the refresh token a refreshable client needs restarts
+  asking for it (`consent_required`); one whose grant drops a scope an attached
+  integration uses is refused (`scope_not_granted`). Retired provider keys
+  (`OAuthProviderType.retired`) still load but are not offered for new clients.
+- `integrate.OAuthClient` owns `issuer` and `jwks_uri`, and ID-token verification
+  (with `ANGEE_OIDC_JWKS_TTL` and `pyjwt`) moved into `integrate`; the fake
+  OpenID provider moved to `angee.integrate.testing.oidc`.
+- **Upgrade.** Projects author the schema migration: the two credential constraints
+  replace `uniq_integrate_credential_user_oauth_client`, and `issuer`/`jwks_uri`
+  move to the base model (new columns where the login addon was absent). The
+  reverse migration fails once any user holds two accounts at one client. For the
+  data, copy the migration templates into `runtime/<app_label>/migrations/` and
+  replace their placeholder dependencies with the host's own migrations:
+  - `integrate_google/compose_migrations/integrate/align_google_clients.py` fills the
+    preset's endpoints, catalogue and `include_granted_scopes` on existing
+    `google`-type clients (the demo row included), never replacing client ids,
+    secrets or values an operator set;
+  - `integrate_google/compose_migrations/resources/rehome_gemini_seed.py` moves the
+    `oauth_gemini` seed's ledger row from `integrate` to `integrate_google` (its
+    content is unchanged), so the row is not re-applied;
+  - bridges `posts_integrate_youtube/compose_migrations/integrate/move_youtube_client_to_google.py`,
+    before `align_google_clients` (see its README).
+- **Re-applied seed rows.** On the first provision after upgrading, the
+  `oauth_google` seed adopts an existing `google`/`prod` client and sets its
+  provider type, display name and icon; without the ledger step, the `oauth_gemini`
+  row re-applies its released values. No other OAuth seed row changes.
+
+- `MCPServer.authorization_for(agent)` owns the whole `Authorization` value an MCP
+  server receives, for the in-process transport and the provisioned `.mcp.json`
+  alike. Breaking for consumers and provisioned agents:
+  - the container env var is renamed `ANGEE_MCP_BEARER_<sqid>` →
+    `ANGEE_MCP_AUTHORIZATION_<sqid>` and now carries the whole header value
+    (`Bearer …` or `Basic …`); `.mcp.json` renders `"Authorization": "${VAR}"`;
+  - `Agent.mcp_bearer_env` is renamed `Agent.mcp_authorization_env`, and
+    `MCPServer.config_entry(bearer_env=…)` takes `authorization_env=…`;
+  - `MCPServer.bearer_for` mints only an internal server's per-agent bearer and
+    refuses other placements, which receive `authorization_for`;
+  - an external server sends its credential's own header: a basic-auth credential
+    sends `Basic`, and a static token or OAuth sends `Bearer` (refreshed first);
+    before, every kind's secret was sent as `Bearer`;
+  - MCP credential kinds are restricted, and `MCPServer.clean` enforces it at save.
+    External servers take a static token, OAuth or basic auth. An internal server
+    takes only an active static token of at least 32 characters (stripped) that no
+    other server, agent or integration references; an external server may not hold an
+    internal key;
+  - the internal HMAC now binds the server's sqid, an empty or weak key mints and
+    verifies nothing (no `<sqid>.<HMAC("", sqid)>` forgery), and revoking the key cuts
+    every agent bearer off.
+
+  Reprovision every agent with MCP servers. Reprovision now re-renders the
+  workspace's `.mcp.json` (`OperatorDaemon.update_workspace`, `PATCH /workspaces/{name}`)
+  and refuses a locally modified one rather than overwriting it. The demo internal
+  server's key is generated at load by the `agents.mcpserverkey` resource kind; the
+  committed `demo-mcp-bearer-token` credential row is gone (an existing database keeps it
+  orphaned until deleted).
+- `integrate` gains the `jwt_bearer` credential kind: a pasted provider key file (a
+  Google service-account key is one accepted vocabulary) minting per-scope access
+  tokens through the RFC 7523 JWT bearer grant, via `Credential.auth_headers(scopes=…)`
+  or `Credential.scoped_access_token(scopes)`. `CredentialKindHandler` gains `clean`,
+  `probe`, `mint_access_token` and `records_failure`. A `jwt_bearer` credential's
+  `secret_value()` is empty, so its signing key is never revealed or sent as a bearer.
+  `Integration.probe_credential()` refuses any credential that needs reconnecting
+  ("Reconnect this account.") before the kind's probe.
+
 - Notion connections connect through Notion's public-integration OAuth from the
   saved record's **Connect** action; an internal integration's API token remains an
   alternative. `angee.knowledge_integrate_notion` installs a `notion` OAuth

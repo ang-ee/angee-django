@@ -10,7 +10,7 @@ differ between them (OAuth vs OIDC protocol).
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, cast
 
@@ -54,12 +54,17 @@ def issue_flow(
     next_path: str = "/",
     flow: state.StateFlow = state.StateFlow.CONNECT,
     integration_id: str = "",
+    oauth_scopes: Sequence[str] = (),
+    granted_scopes: Sequence[str] = (),
+    login_hint: str = "",
+    consent: bool = False,
 ) -> tuple[str, state.StateRecord, str, str]:
     """Issue and session-bind state for one redirect flow.
 
     Returns ``(state_token, record, effective_redirect_uri, mode)``. The client
     owns whether the browser-proposed redirect works or a manual paste is needed;
-    the effective redirect is what we issue, sign, and exchange.
+    the effective redirect is what we issue, sign, and exchange. The record asks
+    for ``OAuthClient.requested_scopes(oauth_scopes, granted=granted_scopes)``.
     """
 
     oauth_client.require_configured()
@@ -71,6 +76,10 @@ def issue_flow(
         next_path=next_path,
         flow=flow,
         integration_id=integration_id,
+        scopes=tuple(oauth_client.requested_scopes(oauth_scopes, granted=granted_scopes)),
+        oauth_scopes=tuple(oauth_scopes),
+        login_hint=login_hint,
+        consent=consent,
     )
     session = cast(Any, request).session
     session[f"{_SESSION_OAUTH_CLIENT_PREFIX}{state_token}"] = str(oauth_client.sqid)
@@ -87,9 +96,17 @@ def start(
     next_path: str = "/",
     flow: state.StateFlow = state.StateFlow.CONNECT,
     integration_id: str = "",
+    oauth_scopes: Sequence[str] = (),
+    granted_scopes: Sequence[str] = (),
+    login_hint: str = "",
+    consent: bool = False,
     authorize_url_builder: Callable[[OAuthClient, str, state.StateRecord, str], str] | None = None,
 ) -> OAuthStart:
-    """Issue state and return the browser redirect facts for one OAuth/OIDC flow."""
+    """Issue state and return the browser redirect facts for one OAuth/OIDC flow.
+
+    Without ``authorize_url_builder`` the flow is an account connect
+    (``_connect_authorize_url``).
+    """
 
     state_token, record, effective_redirect_uri, mode = issue_flow(
         request,
@@ -99,13 +116,47 @@ def start(
         next_path=next_path,
         flow=flow,
         integration_id=integration_id,
+        oauth_scopes=oauth_scopes,
+        granted_scopes=granted_scopes,
+        login_hint=login_hint,
+        consent=consent,
     )
-    builder = authorize_url_builder or _default_authorize_url
+    builder = authorize_url_builder or _connect_authorize_url
     return OAuthStart(
         authorize_url=builder(oauth_client, state_token, record, effective_redirect_uri),
         state=state_token,
         mode=mode,
         redirect_uri=effective_redirect_uri,
+    )
+
+
+def restart_with_consent(
+    request: HttpRequest,
+    oauth_client: OAuthClient,
+    record: state.StateRecord,
+    *,
+    authorize_url_builder: Callable[[OAuthClient, str, state.StateRecord, str], str] | None = None,
+) -> OAuthStart:
+    """Start the consumed flow again, asking the provider for consent.
+
+    The completion refused a grant without the refresh token it needs
+    (``ConsentRequired``); the new flow keeps the kind, user, scopes, hint, target
+    and redirect of the first, and the builder its start used (connect by default).
+    """
+
+    return start(
+        request,
+        oauth_client,
+        record.redirect_uri,
+        user_id=record.user_id,
+        next_path=record.next_path or "/",
+        flow=record.flow,
+        integration_id=record.integration_id,
+        oauth_scopes=record.oauth_scopes,
+        granted_scopes=record.scopes,
+        login_hint=record.login_hint,
+        consent=True,
+        authorize_url_builder=authorize_url_builder,
     )
 
 
@@ -173,17 +224,25 @@ def pkce_challenge(code_verifier: str | None) -> str | None:
     return create_s256_code_challenge(code_verifier)
 
 
-def _default_authorize_url(
+def _connect_authorize_url(
     oauth_client: OAuthClient,
     state_token: str,
     record: state.StateRecord,
     redirect_uri: str,
 ) -> str:
-    """Return the standard OAuth authorize URL for one started flow."""
+    """Return the account-connect authorize URL, hinting the account the consumer expects.
 
+    The provider preset owns the prompt (``OAuthProviderType.authorize_params``);
+    providers ignore authorize parameters they do not know (RFC 6749 §3.1).
+    """
+
+    extras = {"login_hint": record.login_hint} if record.login_hint else {}
     return OAuthClientProtocol(oauth_client).authorize_url(
         state=state_token,
         redirect_uri=redirect_uri,
-        scopes=oauth_client.default_scope_values,
+        scopes=record.scopes,
         code_challenge=pkce_challenge(record.code_verifier),
+        flow=record.flow,
+        consent=record.consent,
+        **extras,
     )

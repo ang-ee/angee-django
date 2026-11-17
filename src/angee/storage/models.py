@@ -214,11 +214,21 @@ class Backend(AuditMixin, ArchiveMixin, AngeeDataModel, concrete=True):
         return {key: expand(item) for key, item in dict(self.backend_config or {}).items()}
 
     @property
+    def writable(self) -> bool:
+        """Whether new objects may be stored here: the selected ``StorageBackend`` class's ``writable``.
+
+        Read from the class, so answering builds no backend instance.
+        """
+
+        return bool(self.get_backend_class_impl().writable)
+
+    @property
     def storage(self) -> StorageBackend:
         """Return the resolved backend instance, cached per row, implementation and config.
 
         The cache key includes the resolved config, so rotating an env-backed
         credential takes effect on the next lookup without a worker restart.
+        The instance carries this row's identity (``StorageBackend.backend_row``).
         """
 
         config = self.resolved_config()
@@ -229,6 +239,8 @@ class Backend(AuditMixin, ArchiveMixin, AngeeDataModel, concrete=True):
             self._storage_cache[key] = cached
             return cached
         instance = backend_class(backend_config=config)
+        # The cache outlives this row instance: hand the backend the row's identity only.
+        instance.backend_row = cast("Backend", type(self).from_db(self._state.db, [self._meta.pk.attname], [self.pk]))
         self._storage_cache[key] = instance
         while len(self._storage_cache) > _STORAGE_CACHE_MAX_SIZE:
             self._storage_cache.popitem(last=False)
@@ -704,7 +716,7 @@ class FileQuerySet[FileT: File](TrashQuerySet[FileT], OwnerQuerySet[FileT], Ange
     """REBAC-scoped reads for file rows; ``trashed()`` backs the Trash smart folder."""
 
     def trash_missing_external(self, drive: Any, present_paths: Collection[str]) -> int:
-        """Soft-trash this selection's live rows in ``drive`` whose external path vanished."""
+        """Soft-trash this selection's live rows in ``drive`` whose backend key the external source no longer lists."""
 
         present = {str(path) for path in present_paths}
         with system_context(reason="storage.file.trash_missing_external"):
@@ -1047,12 +1059,14 @@ class FileManager[FileT: File](_FileManagerBase[FileT]):
         existing_pk: Any = None,
         owner_id: Any = None,
     ) -> FileT:
-        """Upsert one externally-owned object by its drive-relative path.
+        """Upsert one externally-owned object by its backend key (``storage_path``).
 
         External bytes are already present, so this path creates READY rows
-        directly. Path is the identity; the drive's content-hash uniqueness
-        remains authoritative and reports a second path with identical bytes
-        as :class:`~angee.storage.exceptions.ExternalDuplicate`.
+        directly. The backend key is the identity: a drive-relative path for a
+        folder, or a stable source id; the row's folder and filename place it.
+        The drive's content-hash uniqueness remains authoritative and reports a
+        second key with identical bytes as
+        :class:`~angee.storage.exceptions.ExternalDuplicate`.
         """
 
         path = str(storage_path).strip()
@@ -1509,10 +1523,11 @@ class File(TaggedModel, TrashMixin, OwnerMixin, HistoryMixin, AngeeDataModel, co
     def local_path(self) -> Path | None:
         """Return this file's real on-disk path when its backend exposes one.
 
-        Reference-mode mounts store rows at real filesystem paths (a
-        ``FileSystemStorage`` rooted at the mount folder), which lets a mount
-        extractor open the bytes in place; object-store backends have no local
-        path and return ``None``. This owns the backend probe so no caller
+        A reference mount of a local folder stores rows at backend keys that
+        are real filesystem paths (a ``FileSystemStorage`` rooted at the mount
+        folder), which lets a mount extractor open the bytes in place; backends
+        whose keys name no local file (object stores, remote sources) return
+        ``None``. This owns the backend probe so no caller
         reaches into the storage shape from outside.
         """
 

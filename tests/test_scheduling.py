@@ -288,6 +288,59 @@ def test_the_occurrence_after_a_moment_is_strictly_after_it(
 
 
 @override_settings(TIME_ZONE="UTC")
+@pytest.mark.parametrize(
+    ("rule", "expected"),
+    [
+        pytest.param("FREQ=WEEKLY;COUNT=3", _utc(2026, 7, 20, 9), id="count"),
+        pytest.param("FREQ=WEEKLY;UNTIL=20260716T000000Z", _utc(2026, 7, 13, 9), id="until"),
+        pytest.param("FREQ=WEEKLY", None, id="open-ended"),
+        pytest.param("", _utc(2026, 7, 6, 9), id="single"),
+    ],
+)
+def test_the_last_occurrence_is_where_a_bounded_rule_ends(rule: str, expected: datetime | None) -> None:
+    assert Recurrence(rule).get_last_occurrence(_utc(2026, 7, 6, 9)) == expected
+
+
+@override_settings(TIME_ZONE="UTC")
+def test_a_rule_set_with_one_open_ended_member_never_ends() -> None:
+    """Boundedness is read from the parsed rules, so a bounded first line cannot hide an endless second."""
+
+    assert Recurrence("FREQ=DAILY;COUNT=2\nFREQ=DAILY").get_last_occurrence(_utc(2026, 7, 6, 9)) is None
+
+
+@override_settings(TIME_ZONE="UTC")
+def test_recurrence_refuses_more_occurrences_than_its_limit_and_never_truncates() -> None:
+    huge = Recurrence(f"FREQ=DAILY;COUNT={MAX_OCCURRENCES + 1}")
+
+    with pytest.raises(ValidationError):
+        huge.validate()
+    with pytest.raises(ValidationError):
+        huge.get_last_occurrence(_utc(2026, 7, 6, 9))
+    with pytest.raises(ValidationError):
+        Recurrence("FREQ=HOURLY").occurrences(_utc(2026, 1, 1), _utc(2026, 1, 1), _utc(2032, 1, 1))
+
+
+@pytest.mark.parametrize(
+    ("rule", "refused"),
+    [
+        pytest.param("FREQ=HOURLY", False, id="hourly"),
+        pytest.param("FREQ=MINUTELY", True, id="minutely"),
+        pytest.param("FREQ=SECONDLY", True, id="secondly"),
+    ],
+)
+def test_a_frequency_floor_refuses_finer_rules(rule: str, refused: bool) -> None:
+    field = RecurrenceField(finest_frequency="HOURLY")
+
+    if refused:
+        with pytest.raises(ValidationError):
+            field.clean(rule, None)
+    else:
+        assert field.clean(rule, None) == rule
+    # Without a floor every frequency stays valid.
+    assert RecurrenceField().clean(rule, None) == rule
+
+
+@override_settings(TIME_ZONE="UTC")
 def test_the_occurrence_after_unrolls_in_the_named_zone() -> None:
     """Monthly on the 31st, in a zone: the next occurrence keeps the local clock and skips short months."""
 

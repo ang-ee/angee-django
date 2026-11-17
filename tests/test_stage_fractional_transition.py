@@ -4,7 +4,13 @@ import pytest
 from django.db import IntegrityError, connection, models, transaction
 from django.db.migrations.state import ModelState, ProjectState
 
-from angee.work.compose_migrations.work.stage_fractional_position import Migration, applies
+from angee.work.compose_migrations.work.stage_fractional_position import Migration
+
+
+def _has_queue_position_constraint(state: ProjectState) -> bool:
+    """Whether the work stage in ``state`` already carries the per-queue position constraint."""
+    constraints = state.models[("work", "stage")].options.get("constraints", ())
+    return any(constraint.name == "uq_work_stage_queue_position" for constraint in constraints)
 
 
 @pytest.fixture(autouse=True)
@@ -47,10 +53,10 @@ def test_work_stage_transition_preserves_legacy_rows_and_orders_ties():
         rows = [stage.objects.create(queue=first_queue, name="First"),
                 stage.objects.create(queue=first_queue, name="Second"),
                 stage.objects.create(queue=second_queue, name="Other")]
-        assert applies(state)
+        assert not _has_queue_position_constraint(state)
         with connection.schema_editor() as editor:
             final = Migration("stage_fractional_position", "work").apply(state, editor)
-        assert not applies(final)
+        assert _has_queue_position_constraint(final)
         upgraded = final.apps.get_model("work", "Stage")
         assert list(upgraded.objects.order_by("pk").values_list("pk", "name", "position")) == [
             (rows[0].pk, "First", 1024), (rows[1].pk, "Second", 2048), (rows[2].pk, "Other", 1024),
@@ -91,11 +97,11 @@ def test_work_stage_transition_flushes_referencing_rows_before_constraint():
         first = stage.objects.create(queue=owner)
         second = stage.objects.create(queue=owner)
         reference = stage_use.objects.create(stage=second)
-        assert applies(state) and Migration.atomic
+        assert not _has_queue_position_constraint(state) and Migration.atomic
         with connection.schema_editor() as editor:
             final = Migration("stage_fractional_position", "work").apply(state, editor)
         upgraded = final.apps.get_model("work", "Stage")
-        assert not applies(final)
+        assert _has_queue_position_constraint(final)
         assert list(upgraded.objects.order_by("pk").values_list("pk", "position")) == [
             (first.pk, 1024), (second.pk, 2048),
         ]

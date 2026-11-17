@@ -233,13 +233,13 @@ export {
   calendarWindowSource,
   type AnyCalendarWindowSource,
   type CalendarWindowBounds,
+  type CalendarWindowOptions,
   type CalendarWindowSource,
   type UseCalendarWindowResult,
 } from "./calendar/use-calendar-window";
 export {
   CalendarCollectionSurface,
   type CalendarCollectionSurfaceProps,
-  type CalendarWindowFetch,
 } from "./calendar/calendar-collection-surface";
 export {
   Tree,

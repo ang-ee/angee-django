@@ -33,6 +33,12 @@ export function OAuthConnectCallbackPage(): ReactNode {
   const complete = useCallback<CallbackExchange>(
     async (args) => {
       const payload = (await connectAccountComplete(args))?.connect_account_complete;
+      if (payload?.restart?.authorize_url) {
+        // The grant lacked the refresh token it needs; the server started the same
+        // connect again asking for consent. Leave the page while it stays pending.
+        window.location.assign(payload.restart.authorize_url);
+        return new Promise<never>(() => {});
+      }
       if (payload && !payload.error) return { ok: true, next: payload.next };
       return { ok: false, error: payload?.error ?? copy.failure };
     },

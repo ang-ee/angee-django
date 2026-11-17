@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, ClassVar
 
 from angee.base.implementations import ImplBase
 
 if TYPE_CHECKING:
     from angee.integrate.oauth.client import OAuthClientProtocol
+    from angee.integrate.oauth.state import StateFlow
 
 
 class OAuthProviderType(ImplBase):
@@ -18,6 +19,26 @@ class OAuthProviderType(ImplBase):
     category = "oauth"
     label = "OAuth provider"
     icon = "auth"
+    retired: ClassVar[bool] = False
+    """A compatibility key kept so existing rows load; never offered for a new client."""
+
+    @classmethod
+    def authorize_params(cls, flow: StateFlow, configured: Mapping[str, str], *, consent: bool) -> dict[str, str]:
+        """Return this provider's authorize parameters for one browser flow.
+
+        The provider owns its prompt policy. ``consent`` is set when a connect
+        restarts to obtain a refresh token the first grant lacked; a provider that
+        can ask for consent again adds its own parameter.
+        """
+
+        del flow, consent
+        return dict(configured)
+
+    @classmethod
+    def issuers(cls, issuer: str) -> tuple[str, ...]:
+        """Return the ID-token ``iss`` values that name this client's configured ``issuer``."""
+
+        return (issuer,)
 
     @classmethod
     def token_params(cls, grant_type: str, configured: Mapping[str, Any]) -> dict[str, Any]:

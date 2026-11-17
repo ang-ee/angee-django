@@ -8,6 +8,7 @@ export {
   mergeModelLabelInventory,
 } from "./canonical-model-label";
 export {
+  canonicalResourceModelLabels,
   refineInvalidationParams,
   resourceInvalidationTargets,
   useCanonicalResourceModelLabels,

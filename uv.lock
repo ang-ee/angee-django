@@ -19,6 +19,7 @@ members = [
     "angee-appearance",
     "angee-appearance-integrate",
     "angee-base",
+    "angee-calendar",
     "angee-checklists",
     "angee-dashboards",
     "angee-decisions",
@@ -29,6 +30,7 @@ members = [
     "angee-intake",
     "angee-integrate",
     "angee-integrate-github",
+    "angee-integrate-google",
     "angee-integrate-iphone",
     "angee-integrate-vcs",
     "angee-jobs",
@@ -51,6 +53,7 @@ members = [
     "angee-portfolio",
     "angee-posts",
     "angee-projects",
+    "angee-projects-calendar",
     "angee-proposals",
     "angee-proposals-work",
     "angee-provenance",
@@ -61,6 +64,7 @@ members = [
     "angee-spaces",
     "angee-storage",
     "angee-storage-integrate",
+    "angee-storage-integrate-google-drive",
     "angee-storage-integrate-iphone",
     "angee-tags",
     "angee-theme-angee",
@@ -137,6 +141,7 @@ dependencies = [
     { name = "angee-appearance" },
     { name = "angee-appearance-integrate" },
     { name = "angee-base" },
+    { name = "angee-calendar" },
     { name = "angee-checklists" },
     { name = "angee-dashboards" },
     { name = "angee-decisions" },
@@ -147,6 +152,7 @@ dependencies = [
     { name = "angee-intake" },
     { name = "angee-integrate" },
     { name = "angee-integrate-github" },
+    { name = "angee-integrate-google" },
     { name = "angee-integrate-iphone" },
     { name = "angee-integrate-vcs" },
     { name = "angee-jobs" },
@@ -169,6 +175,7 @@ dependencies = [
     { name = "angee-portfolio" },
     { name = "angee-posts" },
     { name = "angee-projects" },
+    { name = "angee-projects-calendar" },
     { name = "angee-proposals" },
     { name = "angee-proposals-work" },
     { name = "angee-provenance" },
@@ -179,6 +186,7 @@ dependencies = [
     { name = "angee-spaces" },
     { name = "angee-storage" },
     { name = "angee-storage-integrate" },
+    { name = "angee-storage-integrate-google-drive" },
     { name = "angee-storage-integrate-iphone" },
     { name = "angee-tags" },
     { name = "angee-theme-angee" },
@@ -242,6 +250,7 @@ requires-dist = [
     { name = "angee-appearance", editable = "src/angee/appearance" },
     { name = "angee-appearance-integrate", editable = "src/angee/appearance_integrate" },
     { name = "angee-base", editable = "src/angee/base" },
+    { name = "angee-calendar", editable = "src/angee/calendar" },
     { name = "angee-checklists", editable = "src/angee/checklists" },
     { name = "angee-dashboards", editable = "src/angee/dashboards" },
     { name = "angee-decisions", editable = "src/angee/decisions" },
@@ -252,6 +261,7 @@ requires-dist = [
     { name = "angee-intake", editable = "src/angee/intake" },
     { name = "angee-integrate", editable = "src/angee/integrate" },
     { name = "angee-integrate-github", editable = "src/angee/integrate_github" },
+    { name = "angee-integrate-google", editable = "src/angee/integrate_google" },
     { name = "angee-integrate-iphone", editable = "src/angee/integrate_iphone" },
     { name = "angee-integrate-vcs", editable = "src/angee/integrate_vcs" },
     { name = "angee-jobs", editable = "src/angee/jobs" },
@@ -274,6 +284,7 @@ requires-dist = [
     { name = "angee-portfolio", editable = "src/angee/portfolio" },
     { name = "angee-posts", editable = "src/angee/posts" },
     { name = "angee-projects", editable = "src/angee/projects" },
+    { name = "angee-projects-calendar", editable = "src/angee/projects_calendar" },
     { name = "angee-proposals", editable = "src/angee/proposals" },
     { name = "angee-proposals-work", editable = "src/angee/proposals_work" },
     { name = "angee-provenance", editable = "src/angee/provenance" },
@@ -284,6 +295,7 @@ requires-dist = [
     { name = "angee-spaces", editable = "src/angee/spaces" },
     { name = "angee-storage", editable = "src/angee/storage" },
     { name = "angee-storage-integrate", editable = "src/angee/storage_integrate" },
+    { name = "angee-storage-integrate-google-drive", editable = "src/angee/storage_integrate_google_drive" },
     { name = "angee-storage-integrate-iphone", editable = "src/angee/storage_integrate_iphone" },
     { name = "angee-tags", editable = "src/angee/tags" },
     { name = "angee-theme-angee", editable = "src/angee/theme_angee" },
@@ -546,6 +558,37 @@ requires-dist = [
 provides-extras = ["testing"]
 
 [[package]]
+name = "angee-calendar"
+version = "3.0.0"
+source = { editable = "src/angee/calendar" }
+dependencies = [
+    { name = "angee-base" },
+    { name = "angee-graphql" },
+    { name = "angee-iam" },
+    { name = "angee-messaging" },
+    { name = "angee-parties" },
+    { name = "angee-provenance" },
+    { name = "angee-resources" },
+    { name = "angee-scheduling" },
+    { name = "angee-tags" },
+    { name = "angee-web" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "angee-base", editable = "src/angee/base" },
+    { name = "angee-graphql", editable = "src/angee/graphql" },
+    { name = "angee-iam", editable = "src/angee/iam" },
+    { name = "angee-messaging", editable = "src/angee/messaging" },
+    { name = "angee-parties", editable = "src/angee/parties" },
+    { name = "angee-provenance", editable = "src/angee/provenance" },
+    { name = "angee-resources", editable = "src/angee/resources" },
+    { name = "angee-scheduling", editable = "src/angee/scheduling" },
+    { name = "angee-tags", editable = "src/angee/tags" },
+    { name = "angee-web", editable = "src/angee/web" },
+]
+
+[[package]]
 name = "angee-checklists"
 version = "3.0.0"
 source = { editable = "src/angee/checklists" }
@@ -745,20 +788,20 @@ source = { editable = "src/angee/iam_integrate_oidc" }
 dependencies = [
     { name = "angee-iam" },
     { name = "angee-integrate" },
+    { name = "angee-integrate-google" },
     { name = "angee-parties" },
     { name = "angee-web" },
     { name = "django-compose" },
-    { name = "pyjwt", extra = ["crypto"] },
 ]
 
 [package.metadata]
 requires-dist = [
     { name = "angee-iam", editable = "src/angee/iam" },
     { name = "angee-integrate", editable = "src/angee/integrate" },
+    { name = "angee-integrate-google", editable = "src/angee/integrate_google" },
     { name = "angee-parties", editable = "src/angee/parties" },
     { name = "angee-web", editable = "src/angee/web" },
     { name = "django-compose", specifier = ">=0.1.0.dev10,<0.2" },
-    { name = "pyjwt", extras = ["crypto"], specifier = ">=2.15" },
 ]
 
 [[package]]
@@ -811,6 +854,8 @@ dependencies = [
     { name = "django-compose" },
     { name = "httpcore2" },
     { name = "httpx2" },
+    { name = "joserfc" },
+    { name = "pyjwt", extra = ["crypto"] },
     { name = "qrcode", extra = ["pil"] },
 ]
 
@@ -828,6 +873,8 @@ requires-dist = [
     { name = "django-compose", specifier = ">=0.1.0.dev10,<0.2" },
     { name = "httpcore2", specifier = ">=2.10,<3" },
     { name = "httpx2", specifier = ">=2.10,<3" },
+    { name = "joserfc", specifier = ">=1.6.8" },
+    { name = "pyjwt", extras = ["crypto"], specifier = ">=2.15" },
     { name = "qrcode", extras = ["pil"], specifier = ">=8.2" },
 ]
 
@@ -841,6 +888,17 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [{ name = "angee-integrate-vcs", editable = "src/angee/integrate_vcs" }]
+
+[[package]]
+name = "angee-integrate-google"
+version = "3.0.0"
+source = { editable = "src/angee/integrate_google" }
+dependencies = [
+    { name = "angee-integrate" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "angee-integrate", editable = "src/angee/integrate" }]
 
 [[package]]
 name = "angee-integrate-iphone"
@@ -1395,6 +1453,23 @@ requires-dist = [
 ]
 
 [[package]]
+name = "angee-projects-calendar"
+version = "3.0.0"
+source = { editable = "src/angee/projects_calendar" }
+dependencies = [
+    { name = "angee-calendar" },
+    { name = "angee-projects" },
+    { name = "angee-web" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "angee-calendar", editable = "src/angee/calendar" },
+    { name = "angee-projects", editable = "src/angee/projects" },
+    { name = "angee-web", editable = "src/angee/web" },
+]
+
+[[package]]
 name = "angee-proposals"
 version = "3.0.0"
 source = { editable = "src/angee/proposals" }
@@ -1620,6 +1695,25 @@ requires-dist = [
     { name = "angee-base", editable = "src/angee/base" },
     { name = "angee-integrate", editable = "src/angee/integrate" },
     { name = "angee-storage", editable = "src/angee/storage" },
+    { name = "angee-web", editable = "src/angee/web" },
+]
+
+[[package]]
+name = "angee-storage-integrate-google-drive"
+version = "3.0.0"
+source = { editable = "src/angee/storage_integrate_google_drive" }
+dependencies = [
+    { name = "angee-integrate" },
+    { name = "angee-storage" },
+    { name = "angee-storage-integrate" },
+    { name = "angee-web" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "angee-integrate", editable = "src/angee/integrate" },
+    { name = "angee-storage", editable = "src/angee/storage" },
+    { name = "angee-storage-integrate", editable = "src/angee/storage_integrate" },
     { name = "angee-web", editable = "src/angee/web" },
 ]
 
