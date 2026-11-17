@@ -140,6 +140,21 @@ An addon can specialize existing copy and declare named resource views:
 }
 ```
 
+A shipped view opening on `board` or `gallery` draws the model's registered card
+when the page declares none. An addon registers that card once, for a model it
+may not own; app creation refuses a second card for the same model:
+
+```tsx
+containers: {
+  "notes.Note#card": {
+    "desk.note-card": {
+      content: { render: (row, context) => <NoteCard row={row} lane={context.laneId} />, frame: "flush" },
+      requiredFields: ["title", "cover_url", "status"],
+    },
+  },
+},
+```
+
 The referenced app (a root or an included app, flattened ones too), route, menu
 IDs, message keys and metadata fields or filterable predicates must exist.
 Duplicate vocabulary scopes fail composition. A page composes the scopes of

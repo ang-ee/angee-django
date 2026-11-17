@@ -5,6 +5,8 @@ import { developmentMode } from "../lib/development-mode";
 import { orderById, positionSiblings } from "../lib/position";
 import type { BuiltInResourceViewKind } from "../views/resource/model/capabilities";
 import type { ResourceViewKindCapabilities } from "../views/resource/model/capabilities";
+import type { CardRenderer } from "../views/resource/resource-view-types";
+import type { CardFrame } from "../ui/card";
 import type { ChatterTabContent, DrawerContribution, DrawerEdge, TimelineKindContent, RelatedGroupContent } from "./contracts";
 import { isPresent, sessionPermitted, useAppRuntime } from "./runtime";
 
@@ -26,6 +28,8 @@ export interface ContainerKinds {
   chrome: ReactNode;
   /** The view kinds a resource collection's switcher offers. */
   views: ResourceViewKindContent;
+  /** A model's card on its board and gallery kinds (`<app.Model>#card`), one per model. */
+  card: ResourceCardContent;
   /** Collection utilities beside a resource view's toolbar. */
   utilities: ReactNode;
   /** Notices below the console navigation, above the page controls. */
@@ -82,6 +86,18 @@ export interface ResourceViewKindContent {
   capabilities: ResourceViewKindCapabilities;
   /** A contributed kind's body; it reads the collection's filter and state through `useResourceView()`. */
   render?: ComponentType<{ resource: string }>;
+}
+
+/**
+ * A model's card, registered once as the one child of `<app.Model>#card`: the
+ * board and gallery kinds of that model's lists draw it wherever the page
+ * declares no card of its own. The child's `requiredFields` name the fields the
+ * card reads, which the list selects.
+ */
+export interface ResourceCardContent {
+  render: CardRenderer;
+  /** How the card's content meets its frame; each surface's default when omitted. */
+  frame?: CardFrame;
 }
 
 /** When a render-time verb applies: an app or route on the active trail. */

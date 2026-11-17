@@ -32,6 +32,7 @@ export {
   type CoreContainer,
   type ResolveContainerOptions,
   type ResourceViewKindContent,
+  type ResourceCardContent,
   type DockedDrawerContent,
 } from "./containers";
 export {

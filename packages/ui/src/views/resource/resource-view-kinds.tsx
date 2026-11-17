@@ -25,6 +25,8 @@ const BUILT_IN_KINDS: Readonly<Record<BuiltInResourceViewKind, { labelKey: strin
  * such as `nexus.graph`; layers narrow either with `only` and `hide` (G-18).
  * `#utilities` holds collection utilities beside the toolbar.
  * `#search` holds shortcut declarations and page extras; the box is never a child.
+ * `#card` holds a model's card for its board and gallery kinds, one child per
+ * model address (`<app.Model>#card`), checked at app creation.
  * @kind contribution
  */
 export const RESOURCE_CONTAINERS: readonly CoreContainer[] = [
@@ -38,6 +40,7 @@ export const RESOURCE_CONTAINERS: readonly CoreContainer[] = [
   },
   { address: "resource#utilities", models: true },
   { address: "resource#search", models: true, extras: true },
+  { address: "resource#card", models: true },
 ];
 
 const ResourceViewKindsContext = React.createContext<ReadonlyMap<string, ResourceViewKindContent>>(

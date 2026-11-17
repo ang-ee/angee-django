@@ -9,7 +9,7 @@ import {
 import type { Row } from "@angee/metadata";
 import { useUiT } from "../../../i18n";
 import { useValueStable } from "../../../lib/use-value-stable";
-import { modelChain, useAppRuntime, useContainer, useResourceRecordMatchFields, type ResourceViewKindContent } from "../../../runtime";
+import { modelChain, useAppRuntime, useContainer, useResourceRecordMatchFields, type ComposedContainerChild, type ResourceCardContent, type ResourceViewKindContent } from "../../../runtime";
 import { withResourceViewScope, useResourceViewMaybe, type ResourceViewContextValue } from "../resource-view-context";
 import { DEFAULT_TEXT_FILTER_FIELD, Filter, isBuiltInResourceViewKind } from "../resource-view-model";
 import { ResourceViewKindsProvider, useOfferedResourceViewKinds, useResourceViewKindContent } from "../resource-view-kinds";
@@ -175,6 +175,28 @@ function useResourceModels(resource: string, canonical: string | null | undefine
   return React.useMemo(() => modelChain(canonical, resource), [canonical, resource]);
 }
 
+/**
+ * The model's registered card (`<app.Model>#card`): the most specific model's
+ * child wins over its MTI parent's. A page that declares a card of its own
+ * (`renderCard`, `boardCard` or `gallery`) keeps it.
+ */
+function useModelCard(
+  resource: string,
+  canonical: string | null | undefined,
+  pageDeclaresCard: boolean,
+): ComposedContainerChild<ResourceCardContent> | undefined {
+  const models = useResourceModels(resource, canonical);
+  const cards = useContainer<ResourceCardContent>("resource#card", { models });
+  return React.useMemo(() => {
+    if (pageDeclaresCard) return undefined;
+    for (const model of [...models].reverse()) {
+      const card = cards.find((child) => child.address === `${model}#card`);
+      if (card) return card;
+    }
+    return undefined;
+  }, [cards, models, pageDeclaresCard]);
+}
+
 const NO_GROUPS: readonly never[] = [];
 
 function ListViewBody<TRow extends Row = Row>({
@@ -219,8 +241,8 @@ function ListViewBody<TRow extends Row = Row>({
   toolbarActions,
   bulkActions,
   cardActions,
-  renderCard,
-  cardFrame,
+  renderCard: pageRenderCard,
+  cardFrame: pageCardFrame,
   emptyContent,
   className,
   presentation = "page",
@@ -246,6 +268,10 @@ function ListViewBody<TRow extends Row = Row>({
   const modelMetadata = source ? null : discoveredMetadata;
   const textFilterField = declaredTextField === undefined && !modelMetadata ? DEFAULT_TEXT_FILTER_FIELD : declaredTextField;
   const recordMatchFields = useResourceRecordMatchFields(source ? "" : resource);
+  const modelCard = useModelCard(source ? "" : resource, modelMetadata?.resource?.canonicalLabel,
+    Boolean(pageRenderCard || boardCard || gallery));
+  const renderCard = pageRenderCard ?? modelCard?.content.render;
+  const cardFrame = pageCardFrame ?? modelCard?.content.frame;
   // A declared filter option names the fields its rows need while its filter is active.
   const activeFilter = Filter.from(Filter.combineOptional(resourceView.baseFilter, resourceView.state.filter));
   const filterOptionFields = (explicitFilterOptions ?? []).flatMap(
@@ -255,6 +281,7 @@ function ListViewBody<TRow extends Row = Row>({
     ...(fields ?? []), ...filterOptionFields, ...recordMatchFields,
     ...(boardCard ? [boardCard.title, ...(boardCard.fields ?? [])] : []),
     ...[gallery?.image, gallery?.title, gallery?.subtitle].filter((field): field is string => Boolean(field)),
+    ...(modelCard?.requiredFields ?? []),
   ]);
   // The Calendar kind is offered only where the page declares occurrence sources;
   // the switcher's options derive from that (list, board and gallery always).

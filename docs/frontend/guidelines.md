@@ -1676,6 +1676,7 @@ the toolbar through `RecordChromeContext.toolbarHost`
 | `resource#views` | view kinds a collection's switcher offers | `ResourceViewKindContent` |
 | `resource#utilities` | collection utilities beside a resource view's toolbar | `ReactNode` |
 | `resource#search` | separate controls over the list search model; page shortcuts are `page.*` extras | `SearchShortcut` |
+| `<model>#card` | the model's one card on its board and gallery kinds where the page declares none; `requiredFields` names what it reads | `ResourceCardContent` |
 | `record#aside` | context-aside tabs (`strip: true`) and drill-ins (`strip: false`, with a target) | `ChatterTabContent` |
 | `timeline#kinds` | presentation of a timeline kind a Python source implements | `TimelineKindContent` |
 | `reference#preview`, `<model>#preview` | opt-in record previews composed by `RecordReferencePreview`; addon content reads `useRecordReference` identity/navigation | React node |
@@ -1882,7 +1883,15 @@ presets, selection, bulk actions and record links; it never groups. Board and
 gallery share one card seam: `renderCard(row, context)` draws a card on either
 (the context names the surface, lane, drag and selection state), `cardFrame`
 picks the `inset` or `flush` frame, `boardCard` and `gallery` declare default
-card fields, and with none the gallery draws the board's column card. An addon
+card fields, and with none the gallery draws the board's column card. A model's
+card is registered once as the one child of `<app.Model>#card` (content
+`{ render, frame? }`, its `requiredFields` joining the list's selection); every
+list of that model whose page declares no card draws it, so a shipped view
+naming `view: "gallery"` or `"board"` needs no page code. An addon may register
+the card of a model it does not own; replacing another addon's card removes it
+first (`remove: true`), since app creation refuses two cards for one model, a
+card on `resource#card`, and fields the model lacks. The most specific model's
+card wins over its MTI parent's. An addon
 contributes a kind as a `<model>#views` child with a namespaced id. Its
 `ResourceViewKindContent` carries `label` (or a ui `labelKey`), `icon`,
 `capabilities` (which collection controls apply while it is active) and

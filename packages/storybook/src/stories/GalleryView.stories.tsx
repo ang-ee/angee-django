@@ -1,6 +1,13 @@
 import type { ReactElement } from "react";
 import type { Meta, StoryObj } from "@storybook/react-vite";
-import { GalleryView, ResourceList, type ResourceListProps } from "@angee/ui";
+import {
+  GalleryView,
+  RESOURCE_CONTAINERS,
+  ResourceList,
+  containersFromChildren,
+  type ResourceCardContent,
+  type ResourceListProps,
+} from "@angee/ui";
 
 import { columns, createTaskStorySchemas, taskCard, type TaskRow } from "./task-collection-fixture";
 
@@ -24,6 +31,31 @@ export const ColumnCard: Story = {
  * the same flush card draws each record, with selection and links kept. */
 export const OneCardOnBothSurfaces: Story = {
   render: () => <TaskGallery renderCard={taskCard} cardFrame="flush" />,
+};
+
+/** The task card as an addon registers it: content typed for any row of its model. */
+const taskModelCard: ResourceCardContent = {
+  render: (row, context) => taskCard(row as TaskRow, context),
+  frame: "flush",
+};
+
+/** The model's card registered once, as an addon does in its manifest
+ * (`containers: { "pm.Task#card": { … } }`): the page declares no card, and the
+ * gallery and board kinds both draw it, in the frame it names. */
+export const RegisteredModelCard: Story = {
+  parameters: {
+    angeeFixture: () => ({
+      schemas: createTaskStorySchemas(),
+      runtime: {
+        containers: containersFromChildren(RESOURCE_CONTAINERS, {
+          "pm.Task#card": {
+            "demo.task": { content: taskModelCard, requiredFields: ["stage"] },
+          },
+        }),
+      },
+    }),
+  },
+  render: () => <TaskGallery />,
 };
 
 function TaskGallery({ renderCard, cardFrame }: Pick<ResourceListProps<TaskRow>, "renderCard" | "cardFrame">): ReactElement {

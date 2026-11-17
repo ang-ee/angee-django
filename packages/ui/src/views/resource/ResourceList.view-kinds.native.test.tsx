@@ -7,7 +7,7 @@ import { testDataResource, testQueryField, testResourceQuery } from "@angee/meta
 import { afterEach, expect, test, vi } from "vitest";
 
 import { ModalsHost, ToastProvider } from "../../feedback";
-import { AppRuntimeProvider, containersFromChildren, type ComposedContainers, type ContainerRule, type ResourceViewKindContent } from "../../runtime";
+import { AppRuntimeProvider, containersFromChildren, type ComposedContainers, type ContainerRule, type ResourceCardContent, type ResourceViewKindContent } from "../../runtime";
 import { createUiTestProviders } from "../../testing";
 import { defaultWidgets } from "../../widgets";
 import { ResourceList } from "./ResourceList";
@@ -38,10 +38,14 @@ const graph: ResourceViewKindContent = {
   capabilities: { grouping: false, pagination: false, columns: false, filter: true },
 };
 
-function composed(rules: (Omit<ContainerRule, "exempt" | "rank"> & { rank?: number })[] = []): ComposedContainers {
+function composed(
+  rules: (Omit<ContainerRule, "exempt" | "rank"> & { rank?: number })[] = [],
+  children: Parameters<typeof containersFromChildren>[1] = {},
+): ComposedContainers {
   const containers = containersFromChildren(RESOURCE_CONTAINERS, {
     "notes.Note#views": { "nexus.graph": { content: graph, sequence: 15 } },
     "tasks.Task#views": { "nexus.timeline": { content: { ...graph, label: "Timeline" } } },
+    ...children,
   });
   return { ...containers, rules: rules.length ? { "resource#views": rules.map((rule, index) => ({ rank: index, ...rule, exempt: [] })) } : {} };
 }
@@ -115,4 +119,23 @@ test("with no card declared, the gallery draws the list's column card in an inse
   const cards = document.querySelectorAll("[data-slot='gallery-card']");
   expect(cards).toHaveLength(2);
   expect(cards[0]?.getAttribute("data-frame")).toBe("inset");
+});
+
+const noteCard: ResourceCardContent = {
+  render: (row, context) => <span>Card of {String(row.title)} on the {context.kind}</span>,
+  frame: "flush",
+};
+
+test("a model's registered card draws its gallery and board with no page code; the page's own card wins", async () => {
+  const cards = composed([], { "notes.Note#card": { "skin.note": { content: noteCard, requiredFields: ["title"] } } });
+  renderCollection(cards, { defaultView: "gallery" });
+  expect(await screen.findByText("Card of First note on the gallery")).toBeTruthy();
+  expect(document.querySelector("[data-slot='gallery-card']")?.getAttribute("data-frame")).toBe("flush");
+  fireEvent.click(screen.getByRole("button", { name: "Board view" }));
+  expect(await screen.findByText("Card of First note on the board")).toBeTruthy();
+  expect(document.querySelector("[data-slot='board-card']")?.getAttribute("data-frame")).toBe("flush");
+  cleanup();
+  renderCollection(cards, { defaultView: "gallery", renderCard: (row) => <span>Page card of {String(row.title)}</span> });
+  expect(await screen.findByText("Page card of First note")).toBeTruthy();
+  expect(screen.queryByText(/^Card of/)).toBeNull();
 });

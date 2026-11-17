@@ -2566,6 +2566,32 @@ test("a mount serves the mounted page in the borrowing app, which keeps its link
   } finally { root.unmount(); host.remove(); }
 });
 
+test("a model's card is its one child at <app.Model>#card, reading fields the model has", () => {
+  const card = { render: () => null };
+  const notes = testDataResource("notes.Note", { fields: [{ name: "title", kind: "scalar", scalar: "String", readable: true,
+    aggregatable: false, creatable: false, updatable: false, requiredOnCreate: false }] });
+  const input = (...addons: BaseAddon[]): CreateAppInput => ({
+    ...testAppInput([{
+      id: "desk",
+      routes: resourcePageRoutes("desk.all", "/desk", EmptyPage, "notes.Note"),
+      menus: { desk: { route: "desk.all" } },
+    }, ...addons]),
+    schemas: testSchemasWithConsoleResources([notes]),
+  });
+  const cards: BaseAddon = { id: "cards", containers: { "notes.Note#card": { "cards.note": { content: card, requiredFields: ["title"] } } } };
+  expect(() => createApp(input(cards))).not.toThrow();
+  expect(() => createApp(input(cards, { id: "skin", containers: { "notes.Note#card": { "skin.note": { content: card } } } })))
+    .toThrow(/Cards "cards.note" and "skin.note" are both declared for "notes.Note"; a model has one card/);
+  // A layer replaces a model's card by removing the one its dependency declared.
+  expect(() => createApp(input(cards, { id: "skin", dependsOn: ["cards"], containers: { "notes.Note#card": {
+    "cards.note": { remove: true }, "skin.note": { content: card },
+  } } }))).not.toThrow();
+  expect(() => createApp(input({ id: "cards", containers: { "resource#card": { "cards.any": { content: card } } } })))
+    .toThrow(/a card belongs to one model/);
+  expect(() => createApp(input({ id: "cards", containers: { "notes.Note#card": { "cards.note": { content: card, requiredFields: ["missing"] } } } })))
+    .toThrow(/Card "cards.note" of "notes.Note" reads unknown fields "missing"/);
+});
+
 test("a preset opening on a contributed view kind needs a resource#views child offering it", () => {
   const preset = { id: "desk.graph", label: "Graph", resource: "notes.Note", view: "nexus.graph" as const };
   const graph = { label: "Graph", icon: "network", capabilities: { grouping: false, pagination: false, columns: false, filter: true } };

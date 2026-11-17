@@ -383,6 +383,28 @@ export function createApp(input: CreateAppInput): AngeeApp {
       if (!valid) throw failure ?? new Error(`Unknown resource "${modelLabel}" in search shortcut "${child.id}".`);
     }
   }
+  // A model's card (`<app.Model>#card`) is its one child there, reading fields the model has.
+  for (const [address, children] of Object.entries(composed.containers.children)) {
+    if (!address.endsWith("#card") || children.length === 0) continue;
+    const modelLabel = address.slice(0, -"#card".length);
+    if (modelLabel === "resource") {
+      throw new Error(`Card "${children[0]!.id}" is declared on "resource#card"; a card belongs to one model ("<app.Model>#card").`);
+    }
+    if (children.length > 1) {
+      throw new Error(`Cards ${children.map((child) => `"${child.id}"`).join(" and ")} are both declared for "${modelLabel}"; a model has one card, so remove one.`);
+    }
+    const card = children[0]!;
+    const models = Object.values(schemas).flatMap((schema) => {
+      const model = schema.fieldMetadata.labels[modelLabel];
+      return model ? [model] : [];
+    });
+    if (models.length === 0) throw new Error(`Card "${card.id}" is declared for unknown model "${modelLabel}".`);
+    const unknown = (card.requiredFields ?? []).filter((field) => !models.some((model) =>
+      model.fields[field.split(".")[0]!] || model.resource.query.fields[field]));
+    if (unknown.length > 0) {
+      throw new Error(`Card "${card.id}" of "${modelLabel}" reads unknown fields ${unknown.map((field) => `"${field}"`).join(", ")}.`);
+    }
+  }
   for (const preset of Object.values(composed.resourceViews)) {
     const models = Object.values(schemas).flatMap((schema) => {
       const model = schema.fieldMetadata.labels[preset.resource];
