@@ -2941,13 +2941,16 @@ class Integration(StatementSourceMixin, ImplDefaultsMixin, OwnerMixin, AngeeData
         Detaching, attaching a credential that names no account, or an explicit
         ``account=None`` keeps the binding; only ownership transfer releases it.
         ``discovery_generation`` is reserved for the apply step already holding
-        this row's lock. Ordinary callers always enter connection discovery.
+        this row's lock. Ordinary callers always enter connection discovery. The
+        capability admits every credential first (:meth:`admit_credential`).
         """
 
         resolved_account: Any = _UNSET if account is None else account
         if resolved_account is _UNSET and credential is not None and credential.external_account_id is not None:
             resolved_account = credential.external_account
         if self.pk is None:
+            if credential is not None:
+                self.admit_credential(credential)
             self._set_connection_fields(credential=credential, account=resolved_account)
             if credential is not None and connect_disconnected and self.lifecycle == IntegrationLifecycle.DISCONNECTED:
                 self.lifecycle_transitions.force_state(
@@ -2958,6 +2961,8 @@ class Integration(StatementSourceMixin, ImplDefaultsMixin, OwnerMixin, AngeeData
             return
         with system_context(reason="integrate.connection.attach"), transaction.atomic():
             row = self.lock_capability()
+            if credential is not None:
+                row.admit_credential(credential)
             if resolved_account is not _UNSET and row.account is not None and row.account_id != resolved_account.pk:
                 if row.account.provider_identity != resolved_account.provider_identity:
                     raise OAuthFlowError(ACCOUNT_SWITCH_REFUSED, 409)
@@ -2977,6 +2982,17 @@ class Integration(StatementSourceMixin, ImplDefaultsMixin, OwnerMixin, AngeeData
                 row.await_discovery()
             apps.get_model("integrate", "Credential").objects.delete_unattached_derived(derived_pk)
         self.refresh_from_db()
+
+    def admit_credential(self, credential: Any) -> None:
+        """Refuse ``credential`` before it attaches to this capability, raising ``ValidationError`` on ``credential``.
+
+        :meth:`attach_connection` asks the capability row on every attachment, so
+        no path (connect, the console's credential patch, a reconnect) skips it.
+        The base admits any credential; a capability whose reads need a particular
+        registration or grant overrides it.
+        """
+
+        del credential
 
     @transition(
         lifecycle,

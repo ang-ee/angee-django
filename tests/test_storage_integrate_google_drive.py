@@ -25,6 +25,7 @@ from django.utils import timezone
 from rebac import system_context
 
 from angee.graphql.testing.documents import execute_schema, result_data
+from angee.integrate.credentials import CredentialKind
 from angee.integrate.models import IntegrationLifecycle
 from angee.integrate.testing.http import mock_transport
 from angee.storage import exceptions as storage_exceptions
@@ -34,6 +35,7 @@ from angee.storage_integrate_google_drive.backends import GoogleDriveStorageBack
 from angee.storage_integrate_google_drive.client import FOLDER_MIME, GoogleDriveError
 from tests.conftest import (
     Backend,
+    Credential,
     Drive,
     ExternalAccount,
     File,
@@ -902,6 +904,28 @@ def test_accounts_without_the_drive_scope_are_neither_offered_nor_admitted(
     with pytest.raises(ValidationError) as refused:
         _connect(drive_env, "f-scoped", credential=narrow)
     assert set(refused.value.message_dict) == {"credential"}
+
+
+def test_a_mount_admits_on_every_attachment_only_an_account_its_backend_reads_with(
+    drive_env: SimpleNamespace, queued_mounts: list[Any]
+) -> None:
+    """Re-attaching another vendor's token, a static token or a grant without the Drive scope is refused."""
+
+    drive_env.drive.folder("f-admitted", "Admitted")
+    mount = _connect(drive_env, "f-admitted")
+    with system_context(reason="test Google Drive mount re-attachment"):
+        github = OAuthClient.objects.create(slug="github", display_name="GitHub", client_id="github-cid")
+        static = Credential.objects.create_local_credential(
+            drive_env.owner, kind=CredentialKind.STATIC_TOKEN, name="pat", material={"api_key": "pat"},
+        )
+    foreign = _connect_account(github, drive_env.owner, "github-owner")
+    narrow = _connect_account(drive_env.google, drive_env.owner, "google-narrow", scope="openid email")
+    for refused in (foreign, static, narrow):
+        with pytest.raises(ValidationError) as raised:
+            mount.attach_credential(refused)
+        assert set(raised.value.message_dict) == {"credential"}
+        mount.refresh_from_db()
+        assert mount.credential_id == drive_env.credential.pk
 
 
 def test_copy_mode_keeps_a_renamed_or_moved_file_by_its_drive_id(

@@ -110,28 +110,17 @@ class MountManager[MountT: Mount](_MountManagerBase[MountT]):
             return None
 
     def connectable_credentials(self, user: AbstractBaseUser, backend_class: str) -> models.QuerySet[Credential]:
-        """Return ``user``'s connected OAuth credentials a backend may read its source with.
-
-        Only a backend that requires a credential has any: only of the OAuth
-        registration its Mount connects through, so one vendor's token is never
-        sent to another's API, and only those whose grant covers the backend's
-        ``oauth_scopes``.
-        """
+        """Return ``user``'s connected credentials a backend may read its source with (``Mount.reads_with``)."""
 
         impl = self.backend_impl(backend_class)
         credential_model = apps.get_model("integrate", "Credential")
         if not impl.requires_credential:
             return cast("models.QuerySet[Credential]", credential_model.objects.none())
-        with system_context(reason="storage_integrate.mount.oauth_slug"):
-            oauth_slug = self.build(backend_class).connection_oauth_slug(impl.label)
-        accounts = credential_model.objects.connected_for(user).filter(
-            kind=CredentialKind.OAUTH,
-            oauth_client__slug=oauth_slug,
-        )
-        required = set(impl.oauth_scopes)
-        # JSON containment is not portable to SQLite; a user's accounts are few.
-        granted = [pk for pk, scopes in accounts.values_list("pk", "granted_scopes") if required <= set(scopes or ())]
-        return cast("models.QuerySet[Credential]", accounts.filter(pk__in=granted))
+        mount = self.build(backend_class)
+        accounts = credential_model.objects.connected_for(user).filter(kind=CredentialKind.OAUTH)
+        # The grant's scopes are JSON, whose containment is not portable to SQLite; a user's accounts are few.
+        readable = [account.pk for account in accounts.select_related("oauth_client") if mount.reads_with(account)]
+        return cast("models.QuerySet[Credential]", accounts.filter(pk__in=readable))
 
     def browse_source(
         self,
@@ -361,6 +350,39 @@ class Mount(Bridge, inherits="integrate.Integration"):
         """Return the selected mount backend bound to this row."""
 
         return cast(MountBackend, self.live_impl)
+
+    def admit_credential(self, credential: Any) -> None:
+        """Admit only an account this mount's backend reads with (:meth:`reads_with`).
+
+        Integrate asks on every attachment, so neither the console's credential
+        patch nor a re-attachment can point a Mount at a token of another vendor
+        or one that lacks the backend's scopes.
+        """
+
+        label = type(self).objects.backend_impl(self.backend_class).label
+        if not self.reads_with(credential):
+            raise ValidationError({"credential": f"This account cannot read a {label}."})
+
+    def reads_with(self, credential: Any) -> bool:
+        """Whether the backend may read with ``credential``.
+
+        Only a backend that requires a credential reads with one, and only with an
+        OAuth credential of the registration this Mount connects through, so one
+        vendor's token is never sent to another's API, whose grant covers the
+        backend's ``oauth_scopes``.
+        """
+
+        impl = type(self).objects.backend_impl(self.backend_class)
+        if not impl.requires_credential or credential.kind != CredentialKind.OAUTH:
+            return False
+        with system_context(reason="storage_integrate.mount.oauth_slug"):
+            oauth_slug = self.connection_oauth_slug(impl.label)
+            client = credential.oauth_client
+        return (
+            client is not None
+            and client.slug == oauth_slug
+            and set(impl.oauth_scopes) <= set(credential.granted_scopes or ())
+        )
 
     def _next_sync_at(self, *, now: Any) -> Any:
         """Keep manual mounts unscheduled unless polling is explicitly enabled."""
