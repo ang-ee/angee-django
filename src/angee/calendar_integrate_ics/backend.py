@@ -89,7 +89,7 @@ from angee.integrate.http import DownloadResult, OutboundBudget
 from angee.integrate.net import AddressNotAllowedError, AddressResolutionError, is_unsafe_address, parse_http_url
 from angee.integrate.states import StreamPhase
 from angee.integrate.streams import StreamPage
-from angee.scheduling.recurrence import Recurrence
+from angee.scheduling.recurrence import Recurrence, moment_after
 from angee.scheduling.zones import get_zone_info, get_zone_names
 
 FEED_KEY = "feed"
@@ -105,7 +105,7 @@ _EVENTS_PER_FEED = 10_000
 """The most events a feed may produce, cancelled instances included; a larger feed fails its poll."""
 
 _PARSE_SECONDS = 60.0
-"""How long one parse may run when no sync deadline is known yet (an identity read before extraction)."""
+"""How long one parse may run when no sync names a deadline (a direct identity read)."""
 
 _TIMEZONES_PER_FEED = 100
 """The most VTIMEZONEs a feed may define; a larger feed fails its poll before it is parsed."""
@@ -190,7 +190,6 @@ class IcsCalendarBackend(CalendarBackend):
     defaults = {"vendor": "ics", "poll_interval": 3600}
 
     _snapshot: _Snapshot | None = None
-    _deadline: float | None = None
 
     def discover(self) -> list[ParsedCalendar]:
         """Return the feed, the source's one remote calendar, named as subscribed."""
@@ -209,8 +208,6 @@ class IcsCalendarBackend(CalendarBackend):
         absence sweep's to find (:meth:`event_keys`).
         """
 
-        if deadline is not None:
-            self._deadline = deadline
         cursor = dict(stream.cursor or {})
         if "after" in cursor:
             snapshot = self._events_now(stream)
@@ -254,12 +251,12 @@ class IcsCalendarBackend(CalendarBackend):
         """Parse a fetched feed into its snapshot, kept with the validators it was served with.
 
         Every parse runs against a deadline: the sync's, which this adapter keeps from
-        its first extraction (continuing pages, identity reads and the sweep included),
-        else :data:`_PARSE_SECONDS` from now. A parse that reaches it stops, and the
-        next sync reads the feed again.
+        the cycle (``CalendarBackend.deadline``: first and continuing pages, identity
+        reads and the sweep alike), else :data:`_PARSE_SECONDS` from now when no sync
+        names one. A parse that reaches it stops, and the next sync reads the feed again.
         """
 
-        deadline = self._deadline if self._deadline is not None else monotonic() + _PARSE_SECONDS
+        deadline = self.deadline if self.deadline is not None else monotonic() + _PARSE_SECONDS
         return _Snapshot(
             {"etag": result.headers.get("etag", ""), "last_modified": result.headers.get("last-modified", "")},
             self._observe_feed(_read(result.content), zone=self.get_calendar(stream).timezone, deadline=deadline),
@@ -324,15 +321,14 @@ class IcsCalendarBackend(CalendarBackend):
         """
 
         components = list(feed.walk("VEVENT"))
-        zones = _Zones(feed)
+        zones = _Zones(feed, deadline=deadline)
         feed_zone = zones.feed_zone
         local = feed_zone or zone
         masters = {_text(component, "UID"): component for component in components if "RECURRENCE-ID" not in component}
         exceptions: dict[str, dict[str, Any]] = {}
         events: dict[str, tuple[int, dict[str, Any]]] = {}
         for component in components:
-            if deadline is not None and monotonic() > deadline:
-                raise IcsError("The calendar feed took too long to read; the next sync reads it again.", transient=True)
+            _check_deadline(deadline)
             uid = _text(component, "UID")
             if not uid:
                 digest = hashlib.sha256(component.to_ical()).hexdigest()
@@ -384,14 +380,16 @@ class _Zones:
     TZID falls back to the feed's ``X-WR-TIMEZONE`` (``feed_zone``), and without
     one to this feed's own ``VTIMEZONE`` (``Timezone.to_tz`` without lookup), which
     has no IANA name. A definition built in unbounded memory (a transition rule
-    finer than yearly, or more than :data:`_TRANSITIONS_PER_ZONE` transitions) is
-    never built: its moments read in the calendar's zone.
+    finer than yearly, a rule that never matches, or more than
+    :data:`_TRANSITIONS_PER_ZONE` transitions) is never built: its moments read in
+    the calendar's zone. Counting runs against the parse's ``deadline``.
     """
 
-    def __init__(self, feed: Any) -> None:
+    def __init__(self, feed: Any, *, deadline: float | None = None) -> None:
         self._components = {str(component.get("TZID", "")).strip(): component for component in feed.walk("VTIMEZONE")}
         self.feed_zone = _iana_name(_text(feed, "X-WR-TIMEZONE"))
         """The feed's ``X-WR-TIMEZONE`` as an IANA name, or blank."""
+        self._deadline = deadline
         self._resolved: dict[str, tuple[str, tzinfo | None]] = {}
 
     def resolve(self, tzid: str) -> tuple[str, tzinfo | None]:
@@ -401,7 +399,8 @@ class _Zones:
             name = _iana_name(tzid) or self.feed_zone
             zone: tzinfo | None = get_zone_info(name) if name else None
             component = self._components.get(tzid.strip())
-            if zone is None and component is not None and _bounded_definition(component):
+            if zone is None and component is not None and _bounded_definition(component, self._deadline):
+                _check_deadline(self._deadline)
                 try:
                     zone = component.to_tz(lookup_tzid=False)
                 except Exception:  # noqa: BLE001 — an unusable definition leaves the zone unknown.
@@ -410,35 +409,48 @@ class _Zones:
         return self._resolved[tzid]
 
 
-def _bounded_definition(component: Any) -> bool:
+def _check_deadline(deadline: float | None) -> None:
+    """Stop a parse that reached the sync's deadline, as a transient refusal the next sync retries."""
+
+    if deadline is not None and monotonic() > deadline:
+        raise IcsError("The calendar feed took too long to read; the next sync reads it again.", transient=True)
+
+
+def _bounded_definition(component: Any, deadline: float | None = None) -> bool:
     """Whether a feed-defined VTIMEZONE builds in bounded memory: yearly rules, and few transitions.
 
     ``Timezone.to_tz`` unrolls every observance's rule and ``RDATE`` into
     transitions, so a secondly rule would exhaust memory before it returned; this
-    counts them first (:func:`_transitions`).
+    counts them first (:func:`_transitions`). A definition that passes holds at
+    most :data:`_TRANSITIONS_PER_ZONE` transitions, which bounds ``to_tz``'s own
+    walk of the same rules: the second walk is bounded by the first's count.
     """
 
-    return _transitions(component, _TRANSITIONS_PER_ZONE) <= _TRANSITIONS_PER_ZONE
+    return _transitions(component, _TRANSITIONS_PER_ZONE, deadline) <= _TRANSITIONS_PER_ZONE
 
 
-def _transitions(component: Any, cap: int) -> int:
+def _transitions(component: Any, cap: int, deadline: float | None = None) -> int:
     """Count the transitions ``Timezone.to_tz`` would unroll for ``component``, stopping just past ``cap``.
 
-    Every observance counts, nested ones included (``walk()``, the VTIMEZONE itself
-    excluded): its ``DTSTART``, each ``RDATE``, and each instance of its ``RRULE`` up
-    to icalendar's own end (the rule's ``UNTIL`` or ``COUNT``, else
+    Every observance counts at least once, nested ones included (``walk()``, the
+    VTIMEZONE itself excluded), so a flood of observances reaches the cap: its
+    ``DTSTART``, each ``RDATE``, and each instance of its ``RRULE`` up to
+    icalendar's own end (the rule's ``UNTIL`` or ``COUNT``, else
     :data:`_ZONE_RULE_END`). A yearly rule from year 1 counts as the 2,038 it is.
-    A rule finer than yearly, or one that does not parse, counts past the cap at once.
+    A rule finer than yearly, one whose day filters never match (the recurrence
+    owner's ``never_occurs``), or one that does not parse counts past the cap at
+    once. Each observance first checks the parse's ``deadline``.
     """
 
     total = 0
     for observance in component.walk():
         if observance is component:
             continue
+        _check_deadline(deadline)
         rules = _values(observance, "RRULE")
         if rules:
-            for rule in rules:
-                total += _rule_transitions(observance, rule, cap - total + 1)
+            unrolled = sum(_rule_transitions(observance, rule, cap - total + 1) for rule in rules)
+            total += max(1, unrolled)
         else:
             total += 1 + sum(len(rdate.dts) for rdate in _values(observance, "RDATE"))
         if total > cap:
@@ -452,9 +464,12 @@ def _rule_transitions(observance: Any, rule: Any, limit: int) -> int:
     if [str(freq).upper() for freq in rule.get("FREQ", [])] != ["YEARLY"]:
         return limit
     try:
+        text = rule.to_ical().decode()
+        if Recurrence(text).never_occurs():
+            return limit
         start = observance["DTSTART"].dt
         anchor = datetime.combine(start, time.min) if not isinstance(start, datetime) else start
-        compiled = rrulestr(rule.to_ical().decode(), dtstart=anchor.replace(tzinfo=UTC))
+        compiled = rrulestr(text, dtstart=anchor.replace(tzinfo=UTC))
         ends = {"UNTIL", "COUNT"} & {str(key).upper() for key in rule}
         moments = compiled if ends else takewhile(lambda moment: moment <= _ZONE_RULE_END, compiled)
         return sum(1 for _moment in islice(moments, limit))
@@ -598,7 +613,7 @@ def _events(
         }
     )
     if excluded:
-        until = excluded[-1] + timedelta(microseconds=1)
+        until = moment_after(excluded[-1], timedelta(microseconds=1)) or excluded[-1]
         instances = set(Recurrence(recurrence).occurrences(start, start, until, zone=expansion))
         observed.extend(
             (

@@ -314,6 +314,13 @@ class CalendarBackend(BridgeImpl, HttpClientMixin):
 
     _page: _EventsPage | None = None
 
+    deadline: float | None = None
+    """The sync's deadline (a monotonic instant) this adapter's cycle runs to, once the driver names one.
+
+    ``streams`` and ``extract`` receive it; an identity read or the absence sweep,
+    which the driver calls without one, reads it here.
+    """
+
     def discover(self) -> list[ParsedCalendar]:
         """Return the remote calendars this source serves, each with its stable key."""
 
@@ -354,8 +361,10 @@ class CalendarBackend(BridgeImpl, HttpClientMixin):
         return sorted(key for key in set(keys) if after is None or key > after)
 
     def streams(self, *, deadline: float | None = None) -> Iterable[StreamDefinition]:
-        """Declare the calendars stream, then each discovered calendar's events stream."""
+        """Declare the calendars stream, then each discovered calendar's events stream; keep the cycle's deadline."""
 
+        if deadline is not None:
+            self.deadline = deadline
         yield self.bridge.calendars_stream()
         for remote in sorted(self.discover(), key=lambda item: item.key):
             yield self.bridge.events_stream(remote)
@@ -368,6 +377,8 @@ class CalendarBackend(BridgeImpl, HttpClientMixin):
         guards a page extracted before).
         """
 
+        if deadline is not None:
+            self.deadline = deadline
         if not self._subscribed():
             return StreamPage((), dict(stream.cursor or {}))
         if stream.key != CALENDARS_STREAM:
