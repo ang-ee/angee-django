@@ -1762,6 +1762,7 @@ version = "3.0.0"
 source = { editable = "src/angee/storage_integrate_google_drive" }
 dependencies = [
     { name = "angee-integrate" },
+    { name = "angee-integrate-google" },
     { name = "angee-storage" },
     { name = "angee-storage-integrate" },
     { name = "angee-web" },
@@ -1770,6 +1771,7 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "angee-integrate", editable = "src/angee/integrate" },
+    { name = "angee-integrate-google", editable = "src/angee/integrate_google" },
     { name = "angee-storage", editable = "src/angee/storage" },
     { name = "angee-storage-integrate", editable = "src/angee/storage_integrate" },
     { name = "angee-web", editable = "src/angee/web" },
