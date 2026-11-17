@@ -54,7 +54,11 @@ class TaskHoldTests(WorkCase):
 
     def hold(self, task):
         return self.Task._base_manager.values_list(
-            "snoozed_at", "snoozed_until", "snoozed_by", "snoozed_awaiting", "stage_id",
+            "snoozed_at",
+            "snoozed_until",
+            "snoozed_by",
+            "snoozed_awaiting",
+            "stage_id",
         ).get(pk=task.pk)
 
     def snooze(self, task, *args, user=None, **kwargs):
@@ -85,8 +89,10 @@ class TaskHoldTests(WorkCase):
             self.snooze(task, user=self.outsider)
         with self.assertRaisesMessage(ValidationError, "Only a task in triage can be snoozed."):
             self.snooze(self.task("Ready"))
-        for when, text in ((timezone.now() - timedelta(minutes=1), "in the future"),
-                           (timezone.now().replace(tzinfo=None) + timedelta(days=1), "timezone")):
+        for when, text in (
+            (timezone.now() - timedelta(minutes=1), "in the future"),
+            (timezone.now().replace(tzinfo=None) + timedelta(days=1), "timezone"),
+        ):
             with self.subTest(until=when), self.assertRaisesMessage(ValidationError, text):
                 self.snooze(task, when)
         self.assertIsNone(self.hold(task)[0])

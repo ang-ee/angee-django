@@ -69,10 +69,12 @@ live in code docstrings.
   request came as an email with a sender on a channel with an outbound sender (the
   reviewer needs the channel's `reply`); a requester reachable neither way is
   refused. `to` names the request to ask about. An inbound email answering a
-  message on a request's conversation (its `In-Reply-To` resolved there), from
-  that request's sender while its task is in triage, is the request's reply: it
-  files no new request and task, and wakes the hold when it awaits that
-  requester's account. A fresh email that only reuses a subject, and any email
+  message on a request's conversation (its `In-Reply-To` resolved there), while
+  its task is in triage, from that request's sender or from an address its
+  `Reply-To` named (`Need.reply_to_addresses`), is the request's reply: it files
+  no new request and task, and wakes the hold when it awaits that requester's
+  account. A relayed request's requester is its `Reply-To` address, which their
+  account is created for. A fresh email that only reuses a subject, and any email
   after accept or decline, is a new request. `intake_requester_domains = ["*"]`
   gives every claimed webform address a passwordless, unadmitted account on
   capture; the intake README states its trust model. The intake Task donor

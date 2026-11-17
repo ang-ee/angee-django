@@ -59,7 +59,7 @@ def refusing(task):
         task_woken.disconnect(dispatch_uid="tests.intake.review.refuse")
 
 
-def email(channel, external_id, *, sender=REQUESTER, subject="Room booking", in_reply_to=""):
+def email(channel, external_id, *, sender=REQUESTER, subject="Room booking", in_reply_to="", headers=()):
     """Ingest one email on ``channel`` as messaging's transports do."""
 
     parsed = ParsedMessage(
@@ -67,6 +67,7 @@ def email(channel, external_id, *, sender=REQUESTER, subject="Room booking", in_
         platform="email",
         subject=subject,
         in_reply_to=in_reply_to,
+        headers=tuple(headers),
         sender=ParsedHandle(platform="email", value=sender),
         body=ParsedPart(type="text/plain", role="body", text=f"Body of {external_id}"),
     )
@@ -93,11 +94,15 @@ class RequesterReplyTests(TransactionTestCase):
 
         with system_context(reason="tests.intake.review.requester"):
             requester = get_user_model().objects.create_person_as_system(
-                username="booking-requester", email=REQUESTER, reason="tests.intake.review.requester",
+                username="booking-requester",
+                email=REQUESTER,
+                reason="tests.intake.review.requester",
             )
             party = apps.get_model("parties", "Party").objects.for_user(requester)
             handle = apps.get_model("parties", "Handle").objects.upsert(
-                platform="email", value=REQUESTER, created_by_id=requester.pk,
+                platform="email",
+                value=REQUESTER,
+                created_by_id=requester.pk,
             )
             party.with_actor(requester).confirm_statement(aspect="handle", handle=handle, values={})
         return requester
@@ -135,8 +140,11 @@ class RequesterReplyTests(TransactionTestCase):
     def test_another_sender_answering_the_conversation_files_their_own_request(self):
         first = email(self.channel, "booking@example.test")
         email(
-            self.channel, "colleague@example.test", sender="colleague@example.test",
-            subject="Re: Room booking", in_reply_to=first.external_id,
+            self.channel,
+            "colleague@example.test",
+            sender="colleague@example.test",
+            subject="Re: Room booking",
+            in_reply_to=first.external_id,
         )
         self.assertEqual(self.Need._base_manager.count(), 2)
 
@@ -192,8 +200,9 @@ class RequesterDomainTests(TransactionTestCase):
     def test_the_wildcard_stands_alone(self):
         channel = self.webform()
         channel.intake_requester_domains = ["*", "example.com"]
-        with system_context(reason="tests.intake.review.wildcard"), self.assertRaisesMessage(
-            ValidationError, 'Use "*" alone'
+        with (
+            system_context(reason="tests.intake.review.wildcard"),
+            self.assertRaisesMessage(ValidationError, 'Use "*" alone'),
         ):
             channel.clean()
 
@@ -211,9 +220,14 @@ class ClarifyTests(IntakeAccessCase):
             return task.clarify(question, expected_revision=kwargs.pop("expected_revision", task.revision), **kwargs)
 
     def comments(self, task):
-        return apps.get_model("messaging", "Message")._base_manager.filter(
-            thread=task.message_thread(create=False), message_type="comment",
-        ).order_by("pk")
+        return (
+            apps.get_model("messaging", "Message")
+            ._base_manager.filter(
+                thread=task.message_thread(create=False),
+                message_type="comment",
+            )
+            .order_by("pk")
+        )
 
     def admitted(self, user):
         need = self.need(email="", party=self.party(user))
@@ -223,11 +237,16 @@ class ClarifyTests(IntakeAccessCase):
     def channel(self, backend_class="email"):
         with system_context(reason="tests.intake.review.channel"):
             vendor, _created = apps.get_model("integrate", "Vendor").objects.get_or_create(
-                slug=backend_class, defaults={"display_name": backend_class.title()},
+                slug=backend_class,
+                defaults={"display_name": backend_class.title()},
             )
             return apps.get_model("messaging", "Channel").objects.create(
-                vendor=vendor, owner=self.owner, display_name="Bookings", backend_class=backend_class,
-                lifecycle="connected", config={"from_email": "Bookings <bookings@example.test>"},
+                vendor=vendor,
+                owner=self.owner,
+                display_name="Bookings",
+                backend_class=backend_class,
+                lifecycle="connected",
+                config={"from_email": "Bookings <bookings@example.test>"},
                 intake_queue=self.queue,
             )
 
@@ -287,6 +306,44 @@ class ClarifyTests(IntakeAccessCase):
         self.assertEqual(events, [(task.pk, "reply", answer.pk)])
         self.assertEqual(self.Need._base_manager.count(), 1)
 
+    @override_settings(
+        ANGEE_EMAIL_DELIVERY_CONFIGURED=True,
+        MAILERS={"default": {"BACKEND": "django.core.mail.backends.locmem.EmailBackend"}},
+    )
+    def test_a_relayed_requester_is_asked_at_their_reply_to_and_only_their_answer_wakes_the_task(self):
+        channel = self.channel()
+        request = email(
+            channel,
+            "relayed@example.test",
+            sender="relay@example.test",
+            headers=(("Reply-To", "Requester <requester@example.test>"),),
+        )
+        need = self.Need._base_manager.get(source_message=request)
+        self.assertEqual((need.reply_to_addresses(), need.requester_address()), ((REQUESTER,), REQUESTER))
+        task = self.clarify(need)
+        account = self.User._base_manager.get(email=REQUESTER)
+        self.assertFalse(self.User._base_manager.filter(email="relay@example.test").exists())
+        self.assertEqual(task.snoozed_awaiting_id, account.pk)
+
+        question = apps.get_model("messaging", "Message")._base_manager.get(direction="outbound")
+        self.assertTrue(deliver_message(question._meta.label_lower, question.pk, question.external_id)["delivered"])
+        (sent,) = mail.outbox
+        self.assertEqual([parseaddr(address)[1].lower() for address in sent.to], [REQUESTER])
+
+        with woken() as events:
+            stranger = email(
+                channel,
+                "stranger@example.test",
+                sender="someone@example.test",
+                subject="Dates",
+                in_reply_to=question.external_id,
+            )
+            self.assertEqual(events, [])
+            self.assertTrue(self.Need._base_manager.filter(source_message=stranger).exists())
+            answer = email(channel, "answer@example.test", subject="Dates", in_reply_to=question.external_id)
+        self.assertEqual(events, [(task.pk, "reply", answer.pk)])
+        self.assertFalse(self.Need._base_manager.filter(source_message=answer).exists())
+
     def test_a_requester_reachable_neither_way_is_refused_and_gets_no_account(self):
         need = self.need(email="", party=self.party(self.reader))
         before = self.task(need).revision
@@ -303,7 +360,10 @@ class ClarifyTests(IntakeAccessCase):
 
     def test_a_request_with_no_requester_is_refused(self):
         with self.assertRaisesMessage(ValidationError, "This task has no requester to ask."):
-            self.clarify(self.need(email="new@example.test"))
+            self.clarify(self.need(email=""))
+        with self.assertRaisesMessage(ValidationError, "neither reply on this task nor be reached by email"):
+            self.clarify(self.need(email="claimed@example.test"))
+        self.assertFalse(self.User._base_manager.filter(email="claimed@example.test").exists())
 
     def test_the_request_to_ask_about_is_named_when_several_requesters_filed_the_task(self):
         need = self.admitted(self.reader)
@@ -343,7 +403,9 @@ class ClarifyTests(IntakeAccessCase):
         task = self.task(need)
         self.assertEqual((task.snoozed_at, self.comments(task).count()), (None, 0))
         data = self.graphql(
-            CLARIFY, {"task": task.sqid, "question": "Which room?", "revision": task.revision}, user=self.owner,
+            CLARIFY,
+            {"task": task.sqid, "question": "Which room?", "revision": task.revision},
+            user=self.owner,
         )
         self.assertTrue(data["clarify_task"]["ok"], data)
         self.assertEqual(self.task(need).snoozed_awaiting_id, self.reader.pk)
@@ -371,7 +433,9 @@ class RequestPositionTests(IntakeAccessCase):
             self.assertEqual(task.stage_id, delivering.pk)
             with system_context(reason="tests.intake.review.phase"):
                 phase = apps.get_model("projects", "Milestone").objects.create(
-                    project=project, name="Review", active_stage=reviewing,
+                    project=project,
+                    name="Review",
+                    active_stage=reviewing,
                 )
             project.with_actor(self.owner).set_current_milestone(phase)
         task.refresh_from_db()

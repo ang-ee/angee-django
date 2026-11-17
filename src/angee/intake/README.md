@@ -34,9 +34,12 @@ One rule decides which message wakes the hold, and work owns it
 (`TaskWorkQuerySet.wake_replied`): only the awaited account's reply. On chatter
 that is a message the account posts. By email it is an inbound message that
 answers a message on the request's own conversation (its `In-Reply-To` resolved
-there) from the request's sender, while the task is still in triage; intake
+there), while the task is still in triage, from the request's sender or from an
+address the request's `Reply-To` named, where a relayed requester (a web form, a
+mailing list) answers; no other sender on the thread is the requester. Intake
 takes it as that request's reply, files nothing new and names the account to
-work. A fresh email that only reuses a subject, or any email after the review
+work. For a relayed request the requester's address, and so their account, is
+the `Reply-To` one, never the relay's. A fresh email that only reuses a subject, or any email after the review
 ended, is a new request. Work sends `task_woken` with reason `reply` and the
 message, and a consumer that reviews requests asks its review again there. A
 hold awaiting nobody wakes only at its date or by hand. "Clarifying" is a hold

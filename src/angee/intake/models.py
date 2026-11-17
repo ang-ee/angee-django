@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 from collections.abc import Callable, Mapping
 from datetime import datetime
+from email.utils import getaddresses
 from types import NotImplementedType
 from typing import TYPE_CHECKING, Any, ClassVar, Final, Self, cast
 
@@ -231,9 +232,11 @@ class NeedManager[NeedT: Need](_NeedManagerBase[NeedT]):
 
         An inbound message replies to a request when it answers a message on a
         conversation bound as a task's source (its ``In-Reply-To`` resolved a
-        ``parent`` there), that task is still in triage, and it comes from the
-        sender, through handle merges, of one of the task's captured requests. It
-        files no new request: the thread already holds it as the task's evidence,
+        ``parent`` there), that task is still in triage, and it comes from one of
+        the task's captured requests: from its sender, through handle merges, or
+        from an address its ``Reply-To`` named (``Need.reply_to_addresses``), where
+        a relayed requester answers. Any other sender on the thread is not the
+        requester. It files no new request: the thread already holds it as the task's evidence,
         and work wakes the task's hold when it awaits that requester's account
         (``TaskWorkQuerySet.wake_replied``). Any other message is a new request: a
         fresh one that only reuses a subject, and one that arrives after the
@@ -258,16 +261,19 @@ class NeedManager[NeedT: Need](_NeedManagerBase[NeedT]):
                 role=attachment_model.AttachmentRole.SOURCE,
                 content_type=ContentType.objects.get_for_model(task_model),
             ).values("object_id")
-            senders = type(sender)._base_manager.redirect_group(sender.canonical()).values("pk")
-            requests = list(
-                self.model._base_manager.filter(
-                    task_id__in=models.Subquery(bound),
-                    task__stage__category=triage,
-                    source_message__sender_id__in=senders,
-                )
-                .select_related("party")
+            senders = set(type(sender)._base_manager.redirect_group(sender.canonical()).values_list("pk", flat=True))
+            address = str(sender.canonical().value or "").strip().lower()
+            candidates = (
+                self.model._base_manager.filter(task_id__in=models.Subquery(bound), task__stage__category=triage)
+                .select_related("party", "source_message")
                 .order_by("pk")
             )
+            requests = [
+                need
+                for need in candidates
+                if need.source_message is not None
+                and (need.source_message.sender_id in senders or address in need.reply_to_addresses())
+            ]
             repliers = {need.task_id: need.requester_account_id() for need in requests if need.task_id is not None}
         tasks = task_model.work.sudo(reason="intake.need.requester_reply.wake")
         for task_id, account_id in sorted(repliers.items()):
@@ -762,16 +768,35 @@ class Need(ResourceLoadMixin, HistoryMixin, OptimisticLockMixin, AuditMixin, Ang
         account = self._account_for_party(self.party_id)
         return account.pk if account is not None else None
 
+    def reply_to_addresses(self) -> tuple[str, ...]:
+        """Return the lower-case addresses the emailed request's ``Reply-To`` names, in header order.
+
+        A relayed request (a web form, a mailing list) names its requester here;
+        messaging's email reply goes to these addresses before the sender
+        (``MessageManager.compose_reply``), so the requester answers from one of them.
+        """
+
+        source = self.source_message
+        if source is None or source.platform != "email":
+            return ()
+        with system_context(reason="intake.need.reply_to"):
+            values = source.source_header_values("reply-to")
+        addresses = (address.strip().lower() for _name, address in getaddresses(values))
+        return tuple(dict.fromkeys(address for address in addresses if "@" in address))
+
     def requester_address(self) -> str:
-        """Return the address the requester gave: the claimed email, else the sender of an emailed request."""
+        """Return the requester's address: the claimed email, else an emailed request's Reply-To, else its sender."""
 
         if self.claimed_email:
             return self.claimed_email
+        reply_to = self.reply_to_addresses()
+        if reply_to:
+            return reply_to[0]
         source = self.source_message
         sender = source.sender if source is not None else None
         if source is None or sender is None or source.platform != "email":
             return ""
-        return str(sender.canonical().value or "")
+        return str(sender.canonical().value or "").strip().lower()
 
     def provide_requester_account(self, *, reason: str) -> Any:
         """Return the requester's account, giving a requester without one a passwordless person.
@@ -1156,10 +1181,13 @@ class TaskIntake(Composable, extends="projects.Task"):
 
     @staticmethod
     def _requester_key(need: Need) -> tuple[str, Any] | None:
-        """Identify a request's requester: its party, else the sender of its source message."""
+        """Identify a request's requester: its party, else their address, else the sender of its source message."""
 
         if need.party_id is not None:
             return ("party", need.party_id)
+        address = need.requester_address()
+        if address:
+            return ("address", address.lower())
         source = need.source_message
         if source is not None and source.sender is not None:
             return ("sender", source.sender.canonical().pk)
@@ -1177,11 +1205,7 @@ class TaskIntake(Composable, extends="projects.Task"):
         email = handle_model.Platform.EMAIL
         for need in requests:
             source = need.source_message
-            if (
-                source is None
-                or source.sender_id is None
-                or source.message_type != type(source).MessageKind.EMAIL
-            ):
+            if source is None or source.sender_id is None or source.message_type != type(source).MessageKind.EMAIL:
                 continue
             channel = source.transport_channel(reason="intake.clarify.channel")
             if channel is None:
