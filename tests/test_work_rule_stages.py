@@ -93,17 +93,22 @@ class RuleStageTests(WorkCase):
                 with self.assertRaises(ValidationError):
                     getattr(stage, operation)()
 
-    def test_stage_edits_preserve_mappings_and_promoted_tasks(self):
+    def test_stage_edits_preserve_mappings_and_never_change_the_queue(self):
         task = self.task()
         with actor_context(self.owner):
             project = self.as_user(task).promote_to_project()
         with system_context(reason="tests.work.stage_configuration"):
             self.Milestone.objects.create(project=project, name="Delivery", active_stage=self.stages["Final"])
             other = self.Queue.objects.create(name="Other", key="OTHER", owner=self.manager, provision_stages=False)
-            for fields in ({"rule_owned": False}, {"queue": other}):
-                for operation in ("clean", "save"):
-                    stage = self.Stage._base_manager.get(pk=self.stages["Final"].pk)
-                    for name, value in fields.items():
-                        setattr(stage, name, value)
-                    with self.subTest(fields=fields, operation=operation), self.assertRaises(ValidationError):
-                        getattr(stage, operation)()
+            for operation in ("clean", "save"):
+                stage = self.Stage._base_manager.get(pk=self.stages["Final"].pk)
+                stage.rule_owned = False
+                with self.subTest(operation=operation), self.assertRaises(ValidationError):
+                    getattr(stage, operation)()
+            # Mapped or holding tasks, a stage never leaves its queue, even for a system write.
+            for name in ("Final", "Ready"):
+                stage = self.Stage._base_manager.get(pk=self.stages[name].pk)
+                stage.queue = other
+                with self.subTest(stage=name), self.assertRaisesMessage(ValidationError, "immutable"):
+                    stage.save()
+                self.assertEqual(self.Stage._base_manager.get(pk=stage.pk).queue_id, self.queue.pk)

@@ -332,12 +332,13 @@ class StageQuerySet[StageT: Stage](RowLockQuerySet[StageT], AngeeQuerySet[StageT
 StageManager = AngeeManager.from_queryset(StageQuerySet)
 
 
-class Stage(RowLockMixin, StagePrimitive, AuditMixin, AngeeDataModel, concrete=True):
+class Stage(RowLockMixin, StagePrimitive, ImmutableFieldsMixin, AuditMixin, AngeeDataModel, concrete=True):
     """One ordered, user-named pipeline stage owned by a queue.
 
     Triage and duplicate stages are system rows: provisioning and resource loads
     own their name and category, and no user write — the queue's stage lines
-    included — may change them, delete such a stage, or create one.
+    included — may change them, delete such a stage, or create one. A stage never
+    leaves its queue, so the tasks resting in it stay in their queue's pipeline.
     """
 
     row_lock_cascade_parent = "queue"
@@ -345,6 +346,7 @@ class Stage(RowLockMixin, StagePrimitive, AuditMixin, AngeeDataModel, concrete=T
 
     sqid_prefix = "wst_"
     container_field_name = "queue"
+    immutable_fields = ("queue_id",)
     locked_rows_label = "Triage and duplicate stages"
 
     class StageCategory(models.TextChoices):
@@ -510,7 +512,7 @@ class Stage(RowLockMixin, StagePrimitive, AuditMixin, AngeeDataModel, concrete=T
         self._validate_configuration()
 
     def _validate_configuration(self) -> None:
-        """Keep stage edits consistent with defaults, phase mappings and promoted tasks."""
+        """Keep stage edits consistent with the queue's default and its phase mappings."""
 
         if self._state.adding:
             return
@@ -526,15 +528,8 @@ class Stage(RowLockMixin, StagePrimitive, AuditMixin, AngeeDataModel, concrete=T
             pass
         else:
             assert milestones is not None
-            mappings = milestones._base_manager.filter(active_stage_id=self.pk)
-            if not self.rule_owned and mappings.exists():
+            if not self.rule_owned and milestones._base_manager.filter(active_stage_id=self.pk).exists():
                 raise ValidationError({"rule_owned": "A mapped stage must remain rule-owned."})
-            if (
-                mappings.filter(project__converted_from__queue__isnull=False)
-                .exclude(project__converted_from__queue_id=self.queue_id)
-                .exists()
-            ):
-                raise ValidationError({"queue": "A mapped stage must remain in its source task's queue."})
 
     def locked_fields(self) -> tuple[str, ...]:
         """Lock a system stage's identity; its tone, order and rule flags stay editable."""

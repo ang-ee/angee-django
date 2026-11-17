@@ -213,13 +213,14 @@ class StagedModelMixin[StageT: Stage = Stage](models.Model):
     stage_scope_fields: ClassVar[tuple[str, ...]] = ()
     """Record fields the stage model's :meth:`Stage.for_record` reads (e.g. ``("job",)``).
 
-    A save or :meth:`clean` judges scope and applicability only when it changes
-    the record's binding: on create, or when the stage, the container or one of
-    these fields differs from the committed row.  A record resting in a stage
-    that was later narrowed away from it therefore stays editable; moving it, or
-    changing an input listed here, is judged again.  An override that reads a
-    record field it does not list here lets a change of that field leave the
-    record in a stage that does not apply.
+    Every save and :meth:`clean` requires the stage to belong to the record's
+    container.  Applicability is judged only when the write changes the record's
+    binding: on create, or when the stage, the container or one of these fields
+    differs from the committed row.  A record resting in a stage that was later
+    narrowed away from it therefore stays editable; moving it, or changing an
+    input listed here, is judged again.  An override that reads a record field it
+    does not list here lets a change of that field leave the record in a stage
+    that does not apply.
     """
 
     stage_entered_at = models.DateTimeField(null=True, blank=True, editable=False)
@@ -264,17 +265,11 @@ class StagedModelMixin[StageT: Stage = Stage](models.Model):
         stage_id = getattr(self, f"{self.stage_field_name}_id", None)
         if stage_id is None:
             return
-        container_field = self._stage_container_field()
-        record, container_label = self._meta.verbose_name, container_field.verbose_name
-        container = self.stage_container()
-        if container is None:
-            raise ValidationError({container_field.name: f"A staged {record} requires its {container_label}."})
         stage_model = self.stage_model()
         if stage_model.for_record(self).filter(pk=stage_id).exists():
             return
-        if not stage_model.for_container(container).filter(pk=stage_id).exists():
-            raise ValidationError({self.stage_field_name: f"Stage must belong to the {record}'s {container_label}."})
-        raise ValidationError({self.stage_field_name: f"Stage does not apply to this {record}."})
+        self._validate_stage_container(stage_model._base_manager.filter(pk=stage_id).first())
+        raise ValidationError({self.stage_field_name: f"Stage does not apply to this {self._meta.verbose_name}."})
 
     def writes_stage(self, update_fields: Iterable[str] | None) -> bool:
         """Whether a save with ``update_fields`` writes the stage; a create or a full save always does."""
@@ -337,12 +332,16 @@ class StagedModelMixin[StageT: Stage = Stage](models.Model):
         otherwise a snapshot carrying the written fields from ``self`` and every
         other field from ``persisted``.  A consumer checks its own same-row
         invariants on ``stored`` so a partial save from a stale instance is judged
-        on what it writes; stage scope and applicability are already checked there
-        when the save changes the binding (:attr:`stage_scope_fields`).
+        on what it writes; the stage's container is already checked there, and its
+        applicability when the save changes the binding (:attr:`stage_scope_fields`).
         """
 
     def clean(self) -> None:
-        """Admit and project the pending stage move, run model cleaning, then judge a changed binding's scope."""
+        """Admit and project the pending stage move, run model cleaning, then judge the stage's scope.
+
+        The stage's container is judged on every clean; applicability only when
+        the binding changes.
+        """
 
         persisted = self._persisted_row(lock=False)
         previous, following = self._admit_stage_move(
@@ -350,6 +349,7 @@ class StagedModelMixin[StageT: Stage = Stage](models.Model):
         )
         self.project_stage(previous, following)
         super().clean()
+        self._validate_stage_container(following)
         if self._rebinds_stage(persisted):
             self.validate_stage_scope()
 
@@ -360,8 +360,9 @@ class StagedModelMixin[StageT: Stage = Stage](models.Model):
         save must write exactly that stage.  The committed row is read once under
         the row lock; a partial save is judged on the row it stores (see
         :meth:`validate_stored_row`), so admission, scope and applicability never
-        trust a stale instance's unwritten fields.  Scope and applicability are
-        judged when that row changes the binding (:attr:`stage_scope_fields`).
+        trust a stale instance's unwritten fields.  That row's stage must belong to
+        its container on every save; applicability is judged when the row changes
+        the binding (:attr:`stage_scope_fields`).
         """
 
         stage_attname = f"{self.stage_field_name}_id"
@@ -378,6 +379,7 @@ class StagedModelMixin[StageT: Stage = Stage](models.Model):
             previous, following = self._admit_stage_move(
                 persisted, getattr(stored, stage_attname), manual=False, admitted=admitted_stage is not None
             )
+            stored._validate_stage_container(following)
             if stored._rebinds_stage(persisted):
                 stored.validate_stage_scope()
             self.validate_stored_row(persisted, stored)
@@ -438,6 +440,24 @@ class StagedModelMixin[StageT: Stage = Stage](models.Model):
                 field.set_cached_value(stored, field.get_cached_value(self))
         self.carry_instance_facts(stored)
         return stored
+
+    def _validate_stage_container(self, stage: StageT | None) -> None:
+        """Reject a stage outside this record's container; ``stage`` is the loaded row of the record's stage.
+
+        Container membership is the record's integrity, so it is judged on every
+        write from the row the caller already holds, never only when the binding
+        changes; a missing row belongs to no container.
+        """
+
+        if getattr(self, f"{self.stage_field_name}_id", None) is None:
+            return
+        container_field = self._stage_container_field()
+        record, container_label = self._meta.verbose_name, container_field.verbose_name
+        container_id = getattr(self, container_field.attname)
+        if container_id is None:
+            raise ValidationError({container_field.name: f"A staged {record} requires its {container_label}."})
+        if stage is None or getattr(stage, type(stage).container_field().attname) != container_id:
+            raise ValidationError({self.stage_field_name: f"Stage must belong to the {record}'s {container_label}."})
 
     def _rebinds_stage(self, persisted: Self | None) -> bool:
         """Whether this row changes the stage, the container or a :attr:`stage_scope_fields` input; a create does."""

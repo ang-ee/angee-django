@@ -243,6 +243,26 @@ def test_a_narrowed_stage_leaves_its_resting_records_editable(pipeline: Any) -> 
         other.save()
 
 
+def test_a_stage_outside_the_record_container_is_refused_on_every_write(pipeline: Any) -> None:
+    """Container membership is integrity, judged on every write; only applicability waits for a rebinding."""
+
+    container, stages = pipeline
+    other = PipelineContainer.objects.create()
+    record = PipelineRecord.objects.create(container=container, stage=stages["Doing"])
+    record.container = other
+    with pytest.raises(ValidationError, match="record's container"):
+        record.save(update_fields=("container",))
+    assert PipelineRecord.objects.get(pk=record.pk).container_id == container.pk, "moving the container is judged"
+
+    PipelineStage.objects.filter(pk=stages["Doing"].pk).update(container=other)
+    resting = PipelineRecord.objects.get(pk=record.pk)
+    resting.note = "Edited after its stage left"
+    for write in (resting.full_clean, resting.save, lambda: resting.save(update_fields=("note",))):
+        with pytest.raises(ValidationError, match="record's container"):
+            write()
+    assert PipelineRecord.objects.get(pk=record.pk).note == "", "a stage that left its container refuses every write"
+
+
 def test_a_record_admitted_into_a_reserved_stage_stays_editable(pipeline: Any) -> None:
     """A write that keeps the stage is no move, so the stage owner is not asked to admit it again."""
 

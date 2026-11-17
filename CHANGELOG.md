@@ -91,14 +91,19 @@ live in code docstrings.
   `writes_stage`, the `carry_instance_facts(stored)` and
   `validate_stored_row(persisted, stored)` hooks and `save(admitted_stage=...)`. A
   save reads the committed row once under its lock and judges a partial save on
-  the row it stores. A save or `clean()` judges scope and applicability only when
-  it changes the stage, the container or a `stage_scope_fields` input, so a record
-  resting in a stage later narrowed away from it stays editable; a record whose
-  `Stage.for_record` override reads its own fields lists them there. Admission
-  asks `validate_transition` only about a move: a write that keeps the stage is
-  not admitted, so an override drops any same-stage guard. `work` composes it (its
-  private transition read, provisioning loop and same-stage guard are gone;
-  `Stage.validate_transition` takes the new signature).
+  the row it stores. Every save and `clean()` requires the stage to belong to the
+  record's container, read from the stage row admission already loads, so a record
+  whose stage moved to another container refuses every write. Applicability is
+  judged only when the write changes the stage, the container or a
+  `stage_scope_fields` input, so a record resting in a stage later narrowed away
+  from it stays editable; a record whose `Stage.for_record` override reads its own
+  fields lists them there. Admission asks `validate_transition` only about a move:
+  a write that keeps the stage is not admitted, so an override drops any
+  same-stage guard. `work` composes it (its private transition read, provisioning
+  loop and same-stage guard are gone; `Stage.validate_transition` takes the new
+  signature), and a work stage's `queue` is write-once (`ImmutableFieldsMixin`),
+  which replaces the narrower check that kept only a phase-mapped stage in its
+  source task's queue.
   Projects run `makemigrations` for the new columns. Existing staged rows keep a
   null `stage_entered_at` until their next move; a project that wants dwell time
   at once authors an optional data migration setting `stage_entered_at` to
