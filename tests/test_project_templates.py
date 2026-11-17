@@ -10,6 +10,8 @@ import pytest
 from django.contrib.auth import get_user_model
 from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import ValidationError
+from django.db import connection
+from django.test.utils import CaptureQueriesContext
 from django.utils import timezone
 from rebac import (
     PermissionDenied,
@@ -25,7 +27,7 @@ from angee.graphql.schema import GraphQLSchemas
 from angee.graphql.testing.documents import graphql_request
 from angee.projects.testing.models import Milestone, Project, Task, TaskRelation
 from angee.provenance.contrib.angee.exceptions import CreationKeyConflict
-from angee.scheduling.due import Align, Due, DueRule, Offset, Term
+from angee.scheduling.due import Align, DueRule, Offset, Term
 from angee.tags.testing.models import Tag, TagAssignment
 from tests.test_projects_statements import Source
 from tests.test_projects_statements import system_of_record as system_of_record  # noqa: F401 -- autouse
@@ -85,7 +87,12 @@ def template() -> SimpleNamespace:
             assignee_role="host",
             due_rule=BEFORE_FIRST_SLOT,
         )
-        fixed = Task.objects.create(title="Book the room", project=project, due_date=date(2026, 1, 20))
+        fixed = Task.objects.create(
+            title="Book the room",
+            project=project,
+            due_date=date(2026, 1, 20),
+            visibility="restricted",
+        )
         closed = Task.objects.create(title="Old step", project=project)
         TaskRelation.objects.create(task=brief, related_task=reminder, kind="blocks")
     with actor_context(owner):
@@ -114,7 +121,7 @@ def _create(template: Any, actor: Any, key: str = "first", **options: Any) -> An
 def test_a_template_holds_rules_without_dates(template: SimpleNamespace) -> None:
     reminder = Task._base_manager.get(pk=template.reminder.pk)
     assert (reminder.due_date, reminder.due_at) == (None, None)
-    assert Due.from_json(reminder.due_basis).pending == ("first_slot",)
+    assert reminder.rule_due().pending == ("first_slot",)
     assert Task._base_manager.get(pk=template.brief.pk).due_date is None
 
 
@@ -146,6 +153,7 @@ def test_a_copy_carries_phases_open_tasks_relations_and_tags_but_no_dates(templa
     assert tasks["Outline the brief"].parent_id == tasks["Write the brief"].pk
     assert tasks["Write the brief"].milestone_id == phases["Setup"].pk
     assert tasks["Book the room"].due_date is None
+    assert (tasks["Book the room"].visibility, tasks["Write the brief"].visibility) == ("restricted", "inherited")
     assert all(row.status == "open" and not row.carries_statements() for row in tasks.values())
     assert _tags(tasks["Write the brief"]) == {"Writing"}
     relation = TaskRelation._base_manager.get(task__project=project)
@@ -233,9 +241,10 @@ def test_templates_stay_out_of_attention_overdue_and_ordinary_lists(template: Si
     with actor_context(template.owner):
         live = Project.objects.create(title="Live project")
         Task.objects.create(title="Live step", project=live, assignee=template.owner)
+        Task.objects.create(title="Loose step", assignee=template.owner)  # about no project
         Milestone.objects.create(project=live, name="Late", target_date=date(2020, 1, 1))
     waiting = Task.objects.waiting_on(template.owner).system_context(reason="tests.projects.templates.waiting")
-    assert set(waiting.values_list("title", flat=True)) == {"Live step"}
+    assert set(waiting.values_list("title", flat=True)) == {"Live step", "Loose step"}
     assert list(Milestone.objects.overdue().system_context(reason="tests.overdue").values_list("name", flat=True)) == [
         "Late",
     ]
@@ -251,7 +260,8 @@ def test_templates_stay_out_of_attention_overdue_and_ordinary_lists(template: Si
     assert result.errors is None, result.errors
     assert [row["id"] for row in result.data["projects"]] == [live.sqid]
     assert [row["id"] for row in result.data["templates"]] == [template.project.sqid]
-    assert {row["title"] for row in result.data["project_tasks"]} == {"Live step"}
+    # A task about no project is never a template's: the filter keeps it.
+    assert {row["title"] for row in result.data["project_tasks"]} == {"Live step", "Loose step"}
 
 
 def test_graphql_creates_from_a_template_and_hands_a_date_back_to_its_rule(template: SimpleNamespace) -> None:
@@ -315,3 +325,65 @@ def test_a_trusted_system_write_creates_from_a_template(template: SimpleNamespac
     assert Project._base_manager.get(pk=project.pk).created_from_template_id == template.project.pk
     assert Task._base_manager.filter(project=project).count() == 4
     assert Milestone._base_manager.filter(project=project).count() == 2
+
+
+def test_a_task_born_project_needs_write_on_the_task() -> None:
+    owner, reader = _user("promoted-template-owner"), _user("promoted-reader")
+    with actor_context(owner):
+        plan = Project.objects.create(title="Intake template", is_template=True)
+        source = Task.objects.create(title="Someone else's request")
+    _grant(plan, "reader", reader)
+    _grant(source, "reader", reader)
+    with actor_context(reader), pytest.raises(PermissionDenied):
+        Project.objects.create_from_template(
+            Project.objects.get(pk=plan.pk),
+            idempotency_key="denied",
+            task=Task.objects.get(pk=source.pk),
+        )
+    assert not Project._base_manager.filter(converted_from=source).exists()
+
+
+def test_the_template_flag_refuses_work_history_and_moves_rule_dates() -> None:
+    owner = _user("template-flag")
+    with actor_context(owner):
+        worked = Project.objects.create(title="Worked project")
+        done = Task.objects.create(title="Done step", project=worked)
+        Task.objects.get(pk=done.pk).complete()
+        live = Project.objects.create(title="Live project")
+        follower = Task.objects.create(title="Follower", project=live, due_rule=WEEK_AFTER_CREATION)
+    with actor_context(owner), pytest.raises(ValidationError, match="closed tasks"):
+        row = Project.objects.get(pk=worked.pk)
+        row.is_template = True
+        row.save(update_fields=("is_template", "updated_at"))
+    dated = Task._base_manager.get(pk=follower.pk).due_date
+    assert dated is not None
+
+    def flag(value: bool) -> None:
+        with actor_context(owner):
+            row = Project.objects.get(pk=live.pk)
+            row.is_template = value
+            row.save(update_fields=("is_template", "updated_at"))
+
+    flag(True)  # a template supplies no anchors: its rules wait
+    assert Task._base_manager.get(pk=follower.pk).due_date is None
+    flag(False)
+    assert Task._base_manager.get(pk=follower.pk).due_date == dated
+
+
+def test_the_copy_resolves_every_row_against_one_anchor_map() -> None:
+    owner = _user("template-cost")
+
+    def anchor_reads(steps: int) -> int:
+        with actor_context(owner):
+            plan = Project.objects.create(title=f"Plan {steps}", is_template=True)
+            for index in range(steps):
+                Task.objects.create(title=f"Step {index}", project=plan, due_rule=WEEK_AFTER_CREATION)
+        with CaptureQueriesContext(connection) as queries:
+            project = _create(plan, owner, key=f"cost-{steps}")
+        assert Task._base_manager.filter(project=project, due_date__isnull=False).count() == steps
+        # A row reading its project's anchors on its own selects only them.
+        return sum(
+            1 for query in queries.captured_queries if '"due_anchors"' in query["sql"] and '"title"' not in query["sql"]
+        )
+
+    assert anchor_reads(3) == anchor_reads(9)
