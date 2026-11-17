@@ -83,6 +83,8 @@ class DecisionType(AngeeNode):
     verdict_label: str = strawberry_django.field(only=["verdict", "proposal"])
     answered_by: UserType | None = actor_scoped_to_one("answered_by")
     answered_at: auto
+    answered_for: JSON | None
+    verdict_context: JSON | None
     revision: auto
     created_at: auto
     updated_at: auto
@@ -142,10 +144,14 @@ class DecisionMutation:
     @action_guard("Could not decide.", camel_case_keys=False, result_type=DecideResult)
     def decide(
         self, info: strawberry.Info, id: PublicID, chosen: list[str], revision: int, values: JSON | None = None,
+        on_behalf_of: JSON | None = None, evidence: JSON | None = None, note: str = "",
     ) -> DecideResult:
         decision = authorized_permission_target(info, Decision, id, "act")
         actor = get_current_user(info)
-        answered = decision.decide(actor=actor, revision=revision, chosen=chosen, values=values)
+        answered = decision.decide(
+            actor=actor, revision=revision, chosen=chosen, values=values,
+            on_behalf_of=on_behalf_of, evidence=evidence or (), note=note,
+        )
         return DecideResult(ok=True, message="Decision recorded.", id=answered.sqid, decision_row=answered)
 
 

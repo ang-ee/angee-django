@@ -48,6 +48,14 @@ verdict in authored order, increments the optimistic revision and emits
 Non-workflow askers apply there, so refusal rolls the verdict back. Workflow
 subscribers schedule their wake after commit and apply when the step resumes. The Python revision is optional; the card's
 GraphQL mutation requires its observed revision. Invalid choices write nothing.
+An answer may be given for a represented record of any model, such as a party who
+answered by phone: `decide(..., on_behalf_of=DecisionRecordReference.of(record),
+evidence=(DecisionRecordReference.of(file),), note="...")` stores `answered_for` and
+`verdict_context` (a `DecisionContext` whose `reason` is the note and whose
+`references` are the evidence). `answered_by` stays the actor and `act` still decides;
+the represented record grants nothing. Every participant (the answerer, requester and
+active assignees) must read each reference, as asking requires of the question's
+context, or the answer is refused.
 Decisions execute no proposal actions. The asker consumes the answer through the
 records' owners. Free correction means editing the record and then choosing the
 alternative that keeps its current values.

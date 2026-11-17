@@ -21,9 +21,10 @@ from angee.base.models.locks import OptimisticLockMixin
 from angee.base.permissions import actor_user_id, require_rebac_queryset
 from angee.base.refs import RecordRef, record_view_refs
 from angee.base.signals import publish_change
-from angee.decisions.contracts import DecisionProposal
+from angee.decisions.contracts import DecisionContext, DecisionProposal, DecisionRecordReference
 from angee.decisions.managers import DecisionManager, DecisionRecordManager
 from angee.decisions.signals import decision_answered
+from angee.provenance.evidence import readable_records
 
 
 def _user(actor: Any, *, active: bool = True) -> Any:
@@ -54,6 +55,8 @@ class Decision(OptimisticLockMixin, AppendOnlyModel, AngeeDataModel, concrete=Tr
         settings.AUTH_USER_MODEL, on_delete=models.PROTECT, null=True, blank=True, related_name="+",
     )
     answered_at = models.DateTimeField(null=True, blank=True)
+    answered_for = models.JSONField(null=True, blank=True)
+    verdict_context = models.JSONField(null=True, blank=True)
     objects = DecisionManager()
 
     @classmethod
@@ -79,11 +82,11 @@ class Decision(OptimisticLockMixin, AppendOnlyModel, AngeeDataModel, concrete=Tr
         abstract = True
         rebac_resource_type = "decisions/decision"
         constraints = [models.CheckConstraint(
-            condition=models.Q(verdict__isnull=True, verdict_values__isnull=True,
-                               answered_by__isnull=True, answered_at__isnull=True)
+            condition=models.Q(verdict__isnull=True, verdict_values__isnull=True, answered_by__isnull=True,
+                               answered_at__isnull=True, answered_for__isnull=True, verdict_context__isnull=True)
             | (models.Q(verdict__isnull=False, answered_at__isnull=False)
                & (models.Q(verdict=[]) | models.Q(answered_by__isnull=False))
-               & (~models.Q(verdict=[]) | models.Q(verdict_values__isnull=True))),
+               & (~models.Q(verdict=[]) | models.Q(verdict_values__isnull=True, answered_for__isnull=True))),
             name="decisions_verdict_consistent",
         )]
 
@@ -139,12 +142,28 @@ class Decision(OptimisticLockMixin, AppendOnlyModel, AngeeDataModel, concrete=Tr
         chosen: Sequence[str],
         revision: int | None = None,
         values: object = None,
+        on_behalf_of: object = None,
+        evidence: object = (),
+        note: str = "",
     ) -> Self:
         """Record one final verdict on this question. Proposal actions belong to the asker.
 
         ``values`` maps a concern's public id to its field values; it is validated here.
+        ``on_behalf_of`` is a ``DecisionRecordReference`` to the record the answer is
+        given for, any model, stored as ``answered_for``; ``answered_by`` stays the
+        actor, whose ``act`` permission still decides. ``evidence`` references and
+        ``note`` record how the answer was obtained, as ``verdict_context``. Every
+        participant (the answerer, requester and active assignees) must read each
+        reference, as asking requires of the question's context.
         """
         answering = _user(actor)
+        try:
+            answered_for = TypeAdapter(DecisionRecordReference | None).validate_python(on_behalf_of)
+            answer_context = DecisionContext(
+                reason=note, references=TypeAdapter(tuple[DecisionRecordReference, ...]).validate_python(evidence),
+            )
+        except ValueError as error:
+            raise ValidationError({"evidence": str(error)}) from error
         rows = type(self).objects
         with transaction.atomic():
             with system_context(reason="decisions.decide"):
@@ -154,6 +173,9 @@ class Decision(OptimisticLockMixin, AppendOnlyModel, AngeeDataModel, concrete=Tr
                     row.require_revision(revision)
                 if not row.is_open:
                     raise ValidationError({"revision": "The decision has changed; reload it."})
+                references = (*answer_context.records(), *((answered_for,) if answered_for is not None else ()))
+                if references:
+                    readable_records(references, row._participants(answering))
                 try:
                     validated = TypeAdapter(dict[str, dict[str, JsonValue]]).validate_python(
                         {} if values is None else values
@@ -199,6 +221,11 @@ class Decision(OptimisticLockMixin, AppendOnlyModel, AngeeDataModel, concrete=Tr
                         answered_by=answering,
                         answered_at=Now(),
                         verdict_values=validated or None,
+                        answered_for=answered_for.model_dump(mode="json") if answered_for is not None else None,
+                        verdict_context=(
+                            answer_context.model_dump(mode="json")
+                            if answer_context.reason or answer_context.references else None
+                        ),
                         revision=F("revision") + 1,
                         updated_at=Now(),
                     )
@@ -210,6 +237,14 @@ class Decision(OptimisticLockMixin, AppendOnlyModel, AngeeDataModel, concrete=Tr
             with actor_context(answering):
                 decision_answered.send(sender=type(row), decision=answered)
         return answered
+
+    def _participants(self, answering: Any) -> tuple[Any, ...]:
+        """The answerer, then this question's active requester and assignees; read in the verb's system context."""
+        named = {
+            pk for pk in (self.requester_id, *self.assignees.values_list("pk", flat=True))
+            if pk is not None and pk != answering.pk
+        }
+        return (answering, *get_user_model().system_queryset().filter(pk__in=named, is_active=True).order_by("pk"))
 
     def validate_verdict(self, chosen: tuple[Any, ...], *, actor: Any) -> None:
         """Allow composed policy to refuse an answer before its verdict is retained."""
