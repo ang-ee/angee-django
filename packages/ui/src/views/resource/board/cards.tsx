@@ -27,7 +27,10 @@ interface BoardRowCardProps<TRow extends Row> {
   cardActionContext: CardActionContext;
   dragEnabled: boolean;
   sortable: boolean;
+  /** The lane's drag-and-drop key. */
   laneId: string;
+  /** The lane's group value a card renderer reads (`RowGroup.identity`). */
+  laneIdentity?: string | null;
   renderCard?: CardRenderer<TRow>;
   /** Defaults to the board's `inset` frame. */
   frame?: CardFrame;
@@ -107,7 +110,7 @@ function BoardRowCardContent<TRow extends Row>({
   cardActions,
   cardActionContext,
   dragEnabled,
-  laneId,
+  laneIdentity,
   renderCard,
   frame = "inset",
   selected = false,
@@ -163,7 +166,12 @@ function BoardRowCardContent<TRow extends Row>({
         onRecordOpen={onRecordOpen ? () => onRecordOpen(row.original) : undefined}
       >
         {renderCard ? (
-          renderCard(row.original, { kind: "board", laneId: laneId === "" ? null : laneId, dragging: isDragging, selected })
+          renderCard(row.original, {
+            kind: "board",
+            ...(laneIdentity === undefined ? {} : { laneId: laneIdentity }),
+            dragging: isDragging,
+            selected,
+          })
         ) : (
           <DefaultBoardCardBody
             columns={columns}

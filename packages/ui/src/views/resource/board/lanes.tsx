@@ -145,6 +145,7 @@ export function BoardLane<TRow extends Row>({
           dragEnabled={dragEnabled}
           sortable={sortable}
           laneId={group.key}
+          laneIdentity={group.identity}
           renderCard={renderCard}
           frame={cardFrame}
           selected={selectedIds.has(row.id)}

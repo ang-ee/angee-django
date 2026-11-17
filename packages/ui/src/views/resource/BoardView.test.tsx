@@ -116,6 +116,7 @@ interface DemoRow extends Row {
 function lane(rows: readonly DemoRow[]): RowGroup<DemoRow> {
   return {
     key: "data",
+    identity: "data",
     label: "Data",
     path: [],
     depth: 0,
@@ -225,12 +226,16 @@ describe("BoardView", () => {
   });
 
   test("renderCard receives the board context: its surface, lane and drag state", () => {
-    const renderCard = vi.fn((row: DemoRow) => <span>{row.label}</span>);
+    const renderCard = vi.fn((row: DemoRow, _context: unknown) => <span>{row.label}</span>);
     renderBoard({ renderCard });
     expect(renderCard).toHaveBeenCalledWith(
       expect.objectContaining({ id: "1" }),
       expect.objectContaining({ kind: "board", laneId: "data", dragging: false }),
     );
+    // A lane is the group's identity, never its renderer key; an ungrouped board's lane has none.
+    renderCard.mockClear();
+    renderBoard({ renderCard, groups: [{ ...lane([{ id: "1", label: "Notes" }]), key: "root", identity: undefined }] });
+    expect(renderCard.mock.calls[0]?.[1]).not.toHaveProperty("laneId");
   });
 
   test("builds the card on the shared recipe: an inset frame by default, flush on request", () => {

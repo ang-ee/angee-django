@@ -53,7 +53,7 @@ export function GroupedBoardBody<TRow extends Row>({
   // Depth delimits each header's children in the surface-owned stream. Rendering
   // the same hierarchy keeps subgroup controls reachable even while collapsed.
   // A record's lane is the nearest header's bucket identity, as a card renderer reads it.
-  function renderItems(start: number, end: number, laneId: string): React.ReactNode[] {
+  function renderItems(start: number, end: number, lane: string | null | undefined): React.ReactNode[] {
     const children: React.ReactNode[] = [];
     for (let index = start; index < end; index += 1) {
       const item = items[index]!;
@@ -78,7 +78,8 @@ export function GroupedBoardBody<TRow extends Row>({
               <div className="flex flex-col gap-2 px-2 pb-2">
                 {item.pager ? <GroupedScopePager pager={item.pager} label={item.label}
                   onPageChange={setScopePage} onPageSizeChange={setScopePageSize} t={t} /> : null}
-                {item.expandable ? renderItems(index + 1, next, identity == null ? "" : String(identity)) : (
+                {item.expandable ? renderItems(index + 1, next,
+                  identity === undefined ? undefined : identity === null || identity === "" ? null : String(identity)) : (
                   <p className="text-13 text-fg-muted">{item.unavailableMessage ?? t("list.itemsUnavailable")}</p>
                 )}
               </div>
@@ -96,7 +97,7 @@ export function GroupedBoardBody<TRow extends Row>({
             cardActions={cardActions} cardActionContext={cardActionContext} renderCard={renderCard}
             frame={cardFrame} selected={selectedIds.has(item.row.id)}
             onToggleSelected={onToggleSelected ? (next) => onToggleSelected(item.row.id, next, item.row.original) : undefined}
-            dragEnabled={false} sortable={false} laneId={laneId} />);
+            dragEnabled={false} sortable={false} laneId="" laneIdentity={lane} />);
           break;
         case "skeleton":
           children.push(<SkeletonStatus key={item.itemKey} loadingLabel={t("list.loading")} className="grid gap-2">
@@ -111,5 +112,5 @@ export function GroupedBoardBody<TRow extends Row>({
     return children;
   }
 
-  return <div className={BOARD_SCROLL_SURFACE_CLASS}>{renderItems(0, items.length, "")}</div>;
+  return <div className={BOARD_SCROLL_SURFACE_CLASS}>{renderItems(0, items.length, undefined)}</div>;
 }
