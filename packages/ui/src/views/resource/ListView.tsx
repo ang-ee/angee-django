@@ -12,6 +12,8 @@ export type {
   ListChrome,
   CalendarViewSpec,
   CardActionContext,
+  CardRenderContext,
+  CardRenderer,
   ListEmptyAction,
   ListEmptyContent,
   ListEmptyState,

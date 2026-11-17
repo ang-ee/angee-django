@@ -24,6 +24,8 @@ export {
   type BoardCardSpec,
   type ListChrome,
   type CardActionContext,
+  type CardRenderContext,
+  type CardRenderer,
   type ListEmptyAction,
   type ListEmptyContent,
   type ListEmptyState,

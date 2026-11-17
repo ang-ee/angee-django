@@ -224,6 +224,15 @@ describe("BoardView", () => {
     expect(screen.getByRole("button", { name: "act Notes" })).toBeTruthy();
   });
 
+  test("renderCard receives the board context: its surface, lane and drag state", () => {
+    const renderCard = vi.fn((row: DemoRow) => <span>{row.label}</span>);
+    renderBoard({ renderCard });
+    expect(renderCard).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "1" }),
+      expect.objectContaining({ kind: "board", laneId: "data", dragging: false }),
+    );
+  });
+
   test("wires dnd-kit pointer and keyboard sensors when card moves are enabled", () => {
     const onCardMove = vi.fn();
     renderBoard({

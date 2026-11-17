@@ -138,6 +138,22 @@ export interface CardActionContext {
   refresh: () => void;
 }
 
+/**
+ * What a card renderer knows about the card it draws: the surface (`gallery`
+ * or `board`), the board lane it sits in, whether it is being dragged and
+ * whether the collection has it selected. One renderer serves both surfaces.
+ */
+export interface CardRenderContext {
+  kind: "gallery" | "board";
+  /** The board lane's id; `null` for the lane of records with no value. */
+  laneId?: string | null;
+  dragging?: boolean;
+  selected?: boolean;
+}
+
+/** Draw one card's body; the surface keeps the frame, link, selection and actions. */
+export type CardRenderer<TRow extends Row = Row> = (row: TRow, context: CardRenderContext) => ReactNode;
+
 export interface ListEmptyAction {
   label: ReactNode;
   href?: string;
@@ -322,10 +338,11 @@ export interface ListViewProps<TRow extends Row = Row> {
   ) => ReactNode;
   /** Optional action content rendered in each board card footer. */
   cardActions?: (row: TRow, context: CardActionContext) => ReactNode;
-  /** Optional board card body override — a rich card (description, chips, badges)
-   * instead of the default title + key/value rows. Board view only; the lane
-   * grouping, frame link/click, and the `cardActions` footer are unchanged. */
-  renderCard?: (row: TRow) => ReactNode;
+  /** Card body override for the board and the gallery — a rich card (art,
+   * description, chips, badges) instead of the default title + key/value rows.
+   * The context names the surface, lane and selection; the lane grouping, frame
+   * link/click, selection and the `cardActions` footer are unchanged. */
+  renderCard?: CardRenderer<TRow>;
   /** Empty-state content shown when the list has no rows. */
   emptyContent?: ListEmptyContent;
   /** Class name applied to the collection renderer root. */

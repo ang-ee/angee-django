@@ -53,6 +53,13 @@ describe("GalleryView", () => {
     );
   });
 
+  test("renderCard receives the gallery context with the card's selection", () => {
+    const renderCard = vi.fn((row: Cover) => <span>{row.title}</span>);
+    render(<GalleryView<Cover> rows={ROWS} renderCard={renderCard} selectedIds={new Set(["b"])} />);
+    expect(renderCard).toHaveBeenCalledWith(ROWS[0], { kind: "gallery", selected: false });
+    expect(renderCard).toHaveBeenCalledWith(ROWS[1], { kind: "gallery", selected: true });
+  });
+
   test("falls back to the title initial when no image field is given", () => {
     render(<GalleryView<Cover> rows={ROWS} />);
     expect(screen.getByText("O")).toBeTruthy();

@@ -10,13 +10,14 @@ import { Checkbox } from "../ui/checkbox";
 import { Skeleton, SkeletonStatus } from "../ui/skeleton";
 import { textRoleVariants } from "../ui/text";
 import { ListEmpty } from "./resource/resource-view-list-body";
-import type { ListEmptyContent } from "./resource/resource-view-types";
+import type { CardRenderer, ListEmptyContent } from "./resource/resource-view-types";
 
 /**
  * The card-grid View — a frameless sibling of `ListView` that renders each row
  * as a thumbnail card (image + title + subtitle). Composed inside a `ResourceList`
  * which owns the toolbar, or standalone over a row array. `renderCard`
- * overrides the card body; selection mirrors the list's `selected` set.
+ * overrides the card body (its context says `kind: "gallery"` and whether the
+ * card is selected); selection mirrors the list's `selected` set.
  */
 export interface GalleryViewProps<TRow extends Row = Row> {
   rows?: readonly TRow[];
@@ -29,7 +30,7 @@ export interface GalleryViewProps<TRow extends Row = Row> {
   /** Field holding the stable row id. */
   rowKey?: keyof TRow & string;
   /** Override the card body. */
-  renderCard?: (row: TRow) => ReactNode;
+  renderCard?: CardRenderer<TRow>;
   /** Optional actions rendered in a footer outside the card's navigation target. */
   cardActions?: (row: TRow) => ReactNode;
   /** Navigation target for a card — renders it as a link (mirrors `rowHref`). */
@@ -162,7 +163,7 @@ function GalleryCard<TRow extends Row>({
   imageField?: keyof TRow & string;
   titleField?: keyof TRow & string;
   subtitleField?: keyof TRow & string;
-  renderCard?: (row: TRow) => ReactNode;
+  renderCard?: CardRenderer<TRow>;
   actions?: ReactNode;
   href?: string;
   dragPayload?: DndPayload | null;
@@ -203,7 +204,7 @@ function GalleryCard<TRow extends Row>({
       dragProps={dragProps}
       cardClass={cardClass}
     >
-      {renderCard ? renderCard(row) : <DefaultCardBody
+      {renderCard ? renderCard(row, { kind: "gallery", selected }) : <DefaultCardBody
         row={row} imageField={imageField} title={title} subtitleField={subtitleField}
       />}
     </GalleryCardFrame>

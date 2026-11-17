@@ -34,6 +34,7 @@ import { ResourceListFrame } from "./ResourceListFrame";
 import { columnsWithMetadataDefaults } from "./model-metadata-defaults";
 import {
   listChromeState,
+  type CardRenderer,
   type ListSearchDeclaration,
   type ListEmptyContent,
   type ResourceCollectionPresentation,
@@ -104,7 +105,7 @@ export interface RowsGalleryConfig<TRow extends StringIdRow = StringIdRow> {
   image?: keyof TRow & string;
   title?: keyof TRow & string;
   subtitle?: keyof TRow & string;
-  renderCard?: (row: TRow) => React.ReactNode;
+  renderCard?: CardRenderer<TRow>;
 }
 
 type RowLayout = "list" | "grid";

@@ -12,7 +12,7 @@ import type { ResourceViewGroup } from "../resource-view-model";
 import { ListCellContent, readPath, type RowGroup } from "../resource-view-list-body";
 import { columnTone } from "../../page";
 import type { ColumnDescriptor } from "../../page";
-import type { CardActionContext } from "../resource-view-types";
+import type { CardActionContext, CardRenderer } from "../resource-view-types";
 import { BOARD_CARD_SHELL_CLASS } from "./view";
 interface BoardRowCardProps<TRow extends Row> {
   columns: readonly ColumnDescriptor<TRow>[];
@@ -27,7 +27,7 @@ interface BoardRowCardProps<TRow extends Row> {
   dragEnabled: boolean;
   sortable: boolean;
   laneId: string;
-  renderCard?: (row: TRow) => React.ReactNode;
+  renderCard?: CardRenderer<TRow>;
 }
 
 export function BoardRowCard<TRow extends Row>(
@@ -101,6 +101,7 @@ function BoardRowCardContent<TRow extends Row>({
   cardActions,
   cardActionContext,
   dragEnabled,
+  laneId,
   renderCard,
   drag,
 }: BoardRowCardProps<TRow> & { drag: BoardCardDrag }): React.ReactElement {
@@ -143,7 +144,7 @@ function BoardRowCardContent<TRow extends Row>({
             onRecordOpen={onRecordOpen ? () => onRecordOpen(row.original) : undefined}
           >
             {renderCard ? (
-              renderCard(row.original)
+              renderCard(row.original, { kind: "board", laneId: laneId === "" ? null : laneId, dragging: isDragging })
             ) : (
               <DefaultBoardCardBody
                 columns={columns}

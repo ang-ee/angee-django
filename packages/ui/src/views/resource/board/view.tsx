@@ -8,7 +8,7 @@ import type { ResourceViewContextValue } from "../resource-view-context";
 import type { ResourceViewGroup } from "../resource-view-model";
 import { ListEmpty, readPath, type RowGroup } from "../resource-view-list-body";
 import type { ColumnDescriptor } from "../../page";
-import type { BoardCardPlacement, BoardOrder, CardActionContext, ListEmptyContent } from "../resource-view-types";
+import type { BoardCardPlacement, BoardOrder, CardActionContext, CardRenderer, ListEmptyContent } from "../resource-view-types";
 import { boardMoveForDrop } from "../board-ordering";
 import { flattenLeaves } from "./cards";
 import { boardCollisionDetection, boardDragData, boardDropTarget } from "./dnd";
@@ -42,10 +42,10 @@ export interface BoardViewProps<TRow extends Row = Row> {
   ) => void | Promise<void>;
   /** Lane-footer create seam; the resource page opens its existing create form. */
   onCreateInLane?: (laneId: string | null, rank?: number) => void;
-  /** Override the card body (mirrors `GalleryView.renderCard`) — for a rich card
-   * (description, chips, badges) instead of the default title + key/value rows. The
-   * lane grouping, frame link/click, selection, and the `cardActions` footer stay. */
-  renderCard?: (row: TRow) => React.ReactNode;
+  /** Override the card body (the same renderer `GalleryView.renderCard` takes) — for a
+   * rich card (description, chips, badges) instead of the default title + key/value rows.
+   * The lane grouping, frame link/click, selection, and the `cardActions` footer stay. */
+  renderCard?: CardRenderer<TRow>;
 }
 
 export function BoardView<TRow extends Row = Row>(
@@ -138,7 +138,7 @@ function BoardRows<TRow extends Row>({
     order?: BoardOrder,
   ) => void | Promise<void>;
   onCreateInLane?: (laneId: string | null, rank?: number) => void;
-  renderCard?: (row: TRow) => React.ReactNode;
+  renderCard?: CardRenderer<TRow>;
 }): React.ReactElement {
   const t = useUiT();
   const leaves = groups.flatMap(flattenLeaves);

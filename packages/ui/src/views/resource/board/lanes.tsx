@@ -15,7 +15,7 @@ import { StatusDot } from "../../../ui/status-icon";
 import type { ResourceViewGroup } from "../resource-view-model";
 import { type RowGroup } from "../resource-view-list-body";
 import type { ColumnDescriptor } from "../../page";
-import type { CardActionContext } from "../resource-view-types";
+import type { CardActionContext, CardRenderer } from "../resource-view-types";
 import { boardAppendRank } from "../board-ordering";
 import { BoardRowCard, laneDotTone } from "./cards";
 import { BOARD_SCROLL_SURFACE_CLASS } from "./view";
@@ -113,7 +113,7 @@ export function BoardLane<TRow extends Row>({
   collapsed: boolean;
   onCollapsedChange: (collapsed: boolean) => void;
   onCreateInLane?: (laneId: string | null, rank?: number) => void;
-  renderCard?: (row: TRow) => React.ReactNode;
+  renderCard?: CardRenderer<TRow>;
 }): React.ReactElement {
   const t = useUiT();
   const tone = laneDotTone(group, groupStack, columns);
