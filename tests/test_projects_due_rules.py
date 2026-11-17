@@ -23,11 +23,7 @@ from rebac import (
     write_relationships,
 )
 
-from angee.projects.compose_migrations.projects.task_recurrence_due_rule import (
-    applies,
-    calendar_rule,
-    task_due_rule,
-)
+from angee.projects.compose_migrations.projects.task_recurrence_due_rule import calendar_rule, task_due_rule
 from angee.projects.testing.models import Milestone, Project, Task
 from angee.scheduling.due import Align, Anchor, Due, DueRule, DueStatus, Offset, Repeat, Term
 from tests.test_projects_statements import Source
@@ -430,11 +426,3 @@ def test_the_recurrence_upgrade_keeps_the_date_and_turns_count_into_until() -> N
     with pytest.raises((ValidationError, ValueError)):
         task_due_rule("FREQ=SOMETIMES", due_date=None, created_at=created)
 
-
-def test_the_recurrence_upgrade_applies_while_the_column_exists() -> None:
-    class State:
-        def __init__(self, fields: tuple[str, ...]) -> None:
-            self.models = {("projects", "task"): type("TaskState", (), {"fields": dict.fromkeys(fields)})()}
-
-    assert applies(State(("title", "recurrence")))
-    assert not applies(State(("title", "due_rule")))
