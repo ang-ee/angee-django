@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, ClassVar
 
 from angee.base.implementations import ImplBase
 
@@ -19,6 +19,8 @@ class OAuthProviderType(ImplBase):
     category = "oauth"
     label = "OAuth provider"
     icon = "auth"
+    retired: ClassVar[bool] = False
+    """A compatibility key kept so existing rows load; never offered for a new client."""
 
     @classmethod
     def authorize_params(cls, flow: StateFlow, configured: Mapping[str, str], *, consent: bool) -> dict[str, str]:

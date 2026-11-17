@@ -100,6 +100,7 @@ class AngeeResource(resources.ModelResource):
         self._instances: dict[str, models.Model | None] = {}
         self._row_hashes: dict[str, str] = {}
         self._hash_skips: set[str] = set()
+        self._creating: set[str] = set()
         super().__init__()
         for field in self.fields.values():
             if isinstance(field.widget, XrefWidgetMixin):
@@ -138,6 +139,7 @@ class AngeeResource(resources.ModelResource):
         self._validate_headers(list(dataset.headers or []))
         self._validate_headers(list(self.entry.create_only), declared="create_only field(s)")
         self._hash_skips = set()
+        self._creating.clear()
         self._instances.clear()
         self._row_hashes.clear()
         self._prime_existing_ledgers(dataset)
@@ -215,9 +217,11 @@ class AngeeResource(resources.ModelResource):
         row: Mapping[str, Any],
         **kwargs: Any,
     ) -> None:
-        """Restore auto-managed source values and upsert the ledger row."""
+        """Restore auto-managed source values, record a created row for the load, and upsert the ledger row."""
 
         xref = self.entry.normalize_xref(row.get("_xref"), kwargs["row_number"])
+        if xref in self._creating and (created := _created_in_load.get()) is not None:
+            created.add((instance._meta.label_lower, instance.pk))
         self._restore_auto_fields(instance, row)
         self._existing_ledgers[xref] = self.ledger_model.objects.upsert_target(
             entry=self.entry,
@@ -234,8 +238,14 @@ class AngeeResource(resources.ModelResource):
         row: Mapping[str, Any],
         **kwargs: Any,
     ) -> None:
-        """Select imported columns for saving and mark them before impl defaults."""
+        """Select imported columns for saving and mark them before impl defaults.
 
+        A row the load found nothing to adopt for is remembered as created, whether
+        the native save or an owner verb (``resource_class``) persists it.
+        """
+
+        if instance._state.adding:
+            self._creating.add(self.entry.normalize_xref(row.get("_xref"), kwargs["row_number"]))
         del kwargs
         imported_fields = {
             field.attribute
@@ -259,8 +269,6 @@ class AngeeResource(resources.ModelResource):
 
         if is_create:
             instance.save()
-            if (created := _created_in_load.get()) is not None:
-                created.add((instance._meta.label_lower, instance.pk))
         else:
             instance.save(update_fields=update_fields_with_auto_now(instance, self._update_fields))
 

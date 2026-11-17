@@ -1732,17 +1732,17 @@ _INTEGRATION_RESOURCE = hasura_model_resource(
         "lifecycle",
         "runtime_status",
     ],
-    updatable=["vendor", "credential", "account"],
+    # The account binding follows the credential (``Integration.attach_connection``).
+    updatable=["vendor", "credential"],
     insert=False,
     field_id_decode={
         "vendor": public_pk_decoder(Vendor),
         "credential": public_pk_decoder(Credential),
-        "account": public_pk_decoder(ExternalAccount),
     },
     get_queryset=partial(IntegrationType.get_queryset, Integration.objects),
     write_backend=IntegrationWriteBackend(
         Integration,
-        public_id_fields=("vendor", "credential", "account"),
+        public_id_fields=("vendor", "credential"),
     ),
 )
 _WEBHOOK_SUBSCRIPTION_RESOURCE = hasura_model_resource(

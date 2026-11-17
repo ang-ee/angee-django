@@ -193,7 +193,9 @@ def _resource_entry(app_config: AppConfig, declaration: object) -> dict[str, Any
     if "adopt" in entry:
         entry["adopt"] = _resource_adopt_value(entry["adopt"])
     if "create_only" in entry:
-        entry["create_only"] = _resource_create_only_value(entry["create_only"])
+        entry["create_only"] = _resource_create_only_value(
+            entry["create_only"], adopt=entry.get("adopt", False), kind=entry.get("kind", ROW_KIND),
+        )
     if "model" in entry and entry["model"] is not None:
         entry["model"] = str(entry["model"])
     if "encoding" in entry:
@@ -226,15 +228,23 @@ def _resource_adopt_value(value: object) -> AdoptDeclaration:
     return bool(value)
 
 
-def _resource_create_only_value(value: object) -> tuple[str, ...]:
-    """Return the field names an entry seeds only into rows its load creates."""
+def _resource_create_only_value(value: object, *, adopt: object, kind: object) -> tuple[str, ...]:
+    """Return the field names a row entry seeds only into rows its load creates.
 
+    An adoption field identifies the row, so it cannot also be create-only.
+    """
+
+    if str(kind) != ROW_KIND:
+        raise ImproperlyConfigured(f"create_only applies to row entries, not {kind!r} entries")
     names = (value,) if isinstance(value, str) else value
     if not isinstance(names, Iterable) or isinstance(names, bytes | Mapping):
         raise ImproperlyConfigured("create_only must name fields")
     fields = tuple(str(item) for item in names)
     if not fields:
         raise ImproperlyConfigured("create_only must name at least one field")
+    adopted = {adopt} if isinstance(adopt, str) else set(adopt) if isinstance(adopt, tuple) else set()
+    if overlap := sorted(adopted & set(fields)):
+        raise ImproperlyConfigured(f"create_only cannot name adoption field(s): {', '.join(overlap)}")
     return fields
 
 
@@ -310,18 +320,22 @@ class ResourceEntry:
         """Return an entry from a resource declaration, resolving its source type."""
 
         source_key = _source_key(declaration)
+        kind = _entry_kind(declaration.get("kind", ROW_KIND))
+        adopt = _resource_adopt_value(declaration["adopt"]) if "adopt" in declaration else False
         return cls(
             addon=addon,
             tier=tier,
             source_key=source_key,
             source_value=str(declaration[source_key]),
             model=declaration.get("model"),
-            kind=_entry_kind(declaration.get("kind", ROW_KIND)),
+            kind=kind,
             encoding=declaration.get("encoding", "utf-8"),
             depends_on=declaration.get("depends_on", ()),
-            adopt=_resource_adopt_value(declaration["adopt"]) if "adopt" in declaration else False,
+            adopt=adopt,
             create_only=(
-                _resource_create_only_value(declaration["create_only"]) if "create_only" in declaration else ()
+                _resource_create_only_value(declaration["create_only"], adopt=adopt, kind=kind)
+                if "create_only" in declaration
+                else ()
             ),
         )
 

@@ -754,7 +754,7 @@ def test_console_resource_metadata_declares_integration_surface() -> None:
         "labelPath": "vendor.display_name",
     }
     assert "groupAliases" not in integration
-    assert integration["updateFields"] == ["vendor", "credential", "account"]
+    assert integration["updateFields"] == ["vendor", "credential"]
     kind_field = {field["name"]: field for field in integration["fields"]}["kind"]
     assert kind_field["kind"] == "scalar"
     assert integration["query"]["fields"]["concrete_type"]["filter"] is not None
@@ -986,19 +986,26 @@ def test_integration_update_delete_are_admin_only(
     integration_id = _public_id(conn)
     update_integration = """
         mutation UpdateIntegration($id: String!) {
-          update_integrations_by_pk(pk_columns: {id: $id}, _set: {account: null}) {
-            account { external_id }
+          update_integrations_by_pk(pk_columns: {id: $id}, _set: {credential: null}) {
+            credential { id }
             vendor { slug }
           }
         }
     """
+    # The account binding follows the credential; it is not a settable field.
+    account_patch = """
+        mutation PatchAccount($id: String!) {
+          update_integrations_by_pk(pk_columns: {id: $id}, _set: {account: null}) { id }
+        }
+    """
+    assert execute_schema(console_schema, account_patch, {"id": _public_id(conn)}, user=admin).errors
 
     assert execute_schema(console_schema, update_integration, {"id": integration_id}, user=plain).errors is not None
 
     updated = _data(execute_schema(console_schema, update_integration, {"id": integration_id}, user=admin))[
         "update_integrations_by_pk"
     ]
-    assert updated == {"account": None, "vendor": {"slug": "conn-crud"}}
+    assert updated == {"credential": None, "vendor": {"slug": "conn-crud"}}
 
     delete_integration = """
         mutation DeleteIntegration($id: String!) {

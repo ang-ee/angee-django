@@ -40,6 +40,9 @@ class GoogleType(OAuthProviderType):
 
         params = super().authorize_params(flow, configured, consent=consent)
         prompts = params.get("prompt", "").split()
+        if "none" in prompts:
+            # An operator's prompt=none admits no other value (OIDC Core §3.1.2.1).
+            return params
         if flow == StateFlow.CONNECT:
             prompts.append("select_account")
         if consent:

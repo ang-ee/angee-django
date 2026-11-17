@@ -1024,7 +1024,6 @@ def test_complete_account_connect_falls_back_to_token_response_account(db: None)
     oauth_client = _oauth_client(
         slug="token-account",
         oidc=False,
-        supports_refresh=False,
         external_id_claim="account.uuid",
         email_claim="account.email_address",
         display_name_claim="account.display_name",
@@ -1264,7 +1263,7 @@ def test_userinfo_claims_merge_into_link_and_login_claims(db: None) -> None:
         "preferred_username": "id-token-name",
         "groups": ["ops"],
     }
-    provider = OidcProvider(token={"access_token": "access", "refresh_token": "refresh"}, userinfo={
+    provider = OidcProvider(userinfo={
         "sub": "sub-merged",
         "email": "userinfo@example.com",
         "preferred_username": "userinfo-name",
@@ -1395,10 +1394,7 @@ def test_complete_link_binds_to_state_user_after_session_swap(db: None) -> None:
         user_id=str(start_user.pk),
         flow="link",
     )
-    provider = OidcProvider(
-        token={"access_token": "access", "refresh_token": "refresh"},
-        id_claims={"sub": "sub-swapped", "email": "start@example.com", "nonce": record.nonce},
-    )
+    provider = OidcProvider(id_claims={"sub": "sub-swapped", "email": "start@example.com", "nonce": record.nonce})
 
     with mock_transport(provider):
         result = identity.complete_link(
@@ -1676,7 +1672,7 @@ def test_oidc_link_refines_the_grant_before_userinfo_and_credential_persistence(
         "generic_oauth2": "tests.integrate_fixtures.RefiningProvider",
     }), system_context(reason="test refined OIDC link"):
         user = get_user_model().objects.create_user(username="refined-link")
-        client = _oauth_client("refined-link-client", supports_refresh=False)
+        client = _oauth_client("refined-link-client")
         state_token, record = oauth_state.issue(
             client, "https://app.example/callback", user_id=str(user.pk), flow="link",
         )
@@ -1711,7 +1707,8 @@ def test_oidc_link_refines_the_grant_before_userinfo_and_credential_persistence(
 def test_connect_completion_without_a_refresh_token_returns_the_consent_restart() -> None:
     with system_context(reason="test consent restart payload"):
         user = get_user_model().objects.create_user(username="consent-restart-payload")
-        client = _oauth_client("consent-restart-payload")
+        # Google can be asked for consent again; a generic provider cannot.
+        client = _oauth_client("consent-restart-payload", provider_type="google")
     request = graphql_request(user, session=True)
     token, _record, redirect = _bound_flow(request, client, oauth_state.StateFlow.CONNECT, user)
 
@@ -1732,7 +1729,7 @@ def test_connect_completion_without_a_refresh_token_returns_the_consent_restart(
 def test_link_completion_without_a_refresh_token_returns_the_consent_restart() -> None:
     with system_context(reason="test link consent restart"):
         user = get_user_model().objects.create_user(username="link-consent-restart")
-        client = _oauth_client("link-consent-restart")
+        client = _oauth_client("link-consent-restart", provider_type="google")
     request = graphql_request(user, session=True)
     token, record, redirect = _bound_flow(request, client, oauth_state.StateFlow.LINK, user)
     provider = OidcProvider(id_claims={"sub": "link-subject", "nonce": record.nonce})

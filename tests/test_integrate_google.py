@@ -18,12 +18,8 @@ from angee.integrate.oauth.client import OAuthClientProtocol
 from angee.integrate.oauth.errors import OAuthFlowError
 from angee.integrate.testing.http import mock_transport
 from angee.integrate.testing.oidc import OidcProvider
-from angee.integrate_google.compose_migrations.integrate.align_google_clients import (
-    PRESET_ENDPOINT_FIELDS,
-    align_google_clients,
-)
-from angee.integrate_google.compose_migrations.resources.rehome_google_oauth_resources import rehome
 from angee.integrate_google.providers import GoogleType
+from angee.integrate_google.upgrades import PRESET_ENDPOINT_FIELDS, align_google_clients, rehome_gemini_seed
 from angee.resources.entries import ResourceEntry, resource_manifest_for
 from angee.resources.testing.models import Resource
 from tests.conftest import OAuthClient
@@ -165,13 +161,13 @@ def test_gemini_ledger_rehome_preserves_identity_and_refuses_a_competing_ledger(
     )
     with system_context(reason="test Gemini ledger rehome"):
         row = Resource.objects.create(source_addon="angee.integrate", **values)
-        rehome(apps, SimpleNamespace(connection=connection))
+        rehome_gemini_seed(apps, SimpleNamespace(connection=connection))
         row.refresh_from_db()
         assert (row.source_addon, row.content_hash) == ("angee.integrate_google", "retained-hash")
 
         Resource.objects.create(source_addon="angee.integrate", **values)
         with pytest.raises(RuntimeError, match="Both angee.integrate and angee.integrate_google"), transaction.atomic():
-            rehome(apps, SimpleNamespace(connection=connection))
+            rehome_gemini_seed(apps, SimpleNamespace(connection=connection))
 
 
 @pytest.mark.django_db

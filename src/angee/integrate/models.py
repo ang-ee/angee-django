@@ -72,6 +72,7 @@ from angee.base.permissions import actor_user_id, instance_actor
 from angee.base.refs import generic_pointer_target
 from angee.base.serialization import canonical_json
 from angee.graphql.capabilities import held_permissions
+from angee.graphql.mixins import ImplementationChoicesMixin
 from angee.integrate.constants import DISCOVERY_ATTEMPT_LIMIT, DISCOVERY_TASK, DISCOVERY_TASK_EXPIRES
 from angee.integrate.credentials import CredentialKind, CredentialKindHandler
 from angee.integrate.discovery import ConnectionDiscovery
@@ -102,6 +103,7 @@ from angee.integrate.oauth.errors import (
     OAuthFlowError,
 )
 from angee.integrate.oauth.providers import OAuthProviderType
+from angee.integrate.oauth.state import StateFlow
 from angee.integrate.registry import models_with
 from angee.integrate.signals import discovery_finished
 from angee.integrate.states import (
@@ -319,7 +321,7 @@ class OAuthClientManager[OAuthClientT: OAuthClient](_OAuthClientManagerBase[OAut
             raise ValueError(f"ANGEE_INTEGRATE_OAUTH_CLIENTS entry {index} is missing required field(s): {names}")
 
 
-class OAuthClient(ImplDefaultsMixin, AuditMixin, AngeeDataModel, concrete=True):
+class OAuthClient(ImplementationChoicesMixin, ImplDefaultsMixin, AuditMixin, AngeeDataModel, concrete=True):
     """OAuth2 client registration for connecting an external account.
 
     The base of the connection substrate: enough to run the authorization-code and
@@ -404,6 +406,14 @@ class OAuthClient(ImplDefaultsMixin, AuditMixin, AngeeDataModel, concrete=True):
                 name="uniq_integrate_oauth_client_slug_environment",
             ),
         )
+
+    @classmethod
+    def include_impl_choice(cls, field_name: str, implementation: type[object]) -> bool:
+        """Keep retired provider keys out of the provider picker."""
+
+        if field_name == "provider_type" and issubclass(implementation, OAuthProviderType):
+            return not implementation.retired
+        return super().include_impl_choice(field_name, implementation)
 
     def __str__(self) -> str:
         """Return the configured OAuth client display name or slug environment."""
@@ -497,6 +507,14 @@ class OAuthClient(ImplDefaultsMixin, AuditMixin, AngeeDataModel, concrete=True):
         """Return configured provider-specific authorize parameters."""
 
         return self._string_mapping(self.authorize_params)
+
+    def asks_consent_again(self, flow: StateFlow) -> bool:
+        """Whether this provider can be asked for consent again on ``flow``, so restarting with consent helps."""
+
+        configured = self.authorize_param_values
+        return self.provider.authorize_params(flow, configured, consent=True) != self.provider.authorize_params(
+            flow, configured, consent=False,
+        )
 
     @property
     def token_param_values(self) -> dict[str, Any]:
@@ -1106,12 +1124,7 @@ class CredentialManager[CredentialT: Credential](_CredentialManagerBase[Credenti
 
         with system_context(reason=self._REASON), transaction.atomic():
             if account_id is not None and not self.filter(**identity).exists():
-                legacy = self.filter(user_id=user.pk, oauth_client_id=oauth_client.pk, external_account__isnull=True)
-                legacy_pks = list(legacy.values_list("pk", flat=True))
-                if legacy.update(external_account_id=account_id):
-                    integration_model.objects.filter(credential_id__in=legacy_pks, account__isnull=True).update(
-                        account_id=account_id,
-                    )
+                self._adopt_unlinked(user, oauth_client, external_account, served)
             existing = self.filter(**identity).only("pk").first()
             integrations = []
             if existing is not None and reconnect:
@@ -1159,6 +1172,33 @@ class CredentialManager[CredentialT: Credential](_CredentialManagerBase[Credenti
                     # Re-consent invalidates resource tokens derived from the old grant.
                     integration.attach_connection(instance, connect_disconnected=False)
         return instance
+
+    def _adopt_unlinked(self, user: Any, oauth_client: Any, external_account: Any, served: Any) -> None:
+        """Give the user's account-less credential at this client to its first connected account.
+
+        Such a row predates per-account credentials; the integrations it serves
+        without a binding bind to that account too. Integrations lock before the
+        credential, the order every attachment takes; saves keep their history.
+        """
+
+        legacy = self.filter(user_id=user.pk, oauth_client_id=oauth_client.pk, external_account__isnull=True).first()
+        if legacy is None:
+            return
+        integrations = [integration.lock_capability() for integration in served(legacy.pk)]
+        legacy = self.lock_if_supported().get(pk=legacy.pk)
+        if legacy.external_account_id is not None:
+            return
+        # As in a reconnect, an integration that attached it meanwhile is locked after the credential.
+        locked = {integration.pk for integration in integrations}
+        integrations += [
+            integration.lock_capability() for integration in served(legacy.pk) if integration.pk not in locked
+        ]
+        legacy.external_account = external_account
+        legacy.save(update_fields=["external_account", "updated_at"])
+        for integration in integrations:
+            if integration.credential_id == legacy.pk and integration.account_id is None:
+                integration.account = external_account
+                integration.save(update_fields=["account", "updated_at"])
 
     @staticmethod
     def _oauth_credential_name(oauth_client: OAuthClient, external_account: ExternalAccount | None) -> str:
@@ -2262,19 +2302,27 @@ class Integration(StatementSourceMixin, ImplDefaultsMixin, OwnerMixin, AngeeData
             raise PermissionDenied("Integration OAuth Connect is unavailable to the current user.")
 
     def transfer_ownership(self, user: Any) -> Self:
-        """Transfer ownership and release the account binding, so the new owner connects their own account.
+        """Transfer ownership and release the previous owner's connection, so the new owner connects their own.
 
-        The previous owner's account no longer constrains Connect nor hints it.
+        In the same transaction an integration running on the previous owner's
+        credential is detached from it and disconnected, and the account binding
+        is released, so that account no longer constrains Connect nor hints it.
         """
 
         previous_owner_id = self.owner_id
         with transaction.atomic():
             super().transfer_ownership(user)
-            if self.owner_id != previous_owner_id and self.account_id is not None:
-                with system_context(reason="integrate.integration.transfer.release_account"):
-                    row = self.lock_capability()
-                    row.account = None
-                    row.save(update_fields=["account", "updated_at"])
+            if self.owner_id != previous_owner_id:
+                with system_context(reason="integrate.integration.transfer.release_connection"):
+                    target = self.concrete_capability()
+                    credential = target.load_connection_credential()
+                    if credential is not None and credential.user_id == previous_owner_id:
+                        target.attach_connection(None)
+                        target.set_lifecycle(IntegrationLifecycle.DISCONNECTED)
+                    row = target.lock_capability()
+                    if row.account_id is not None:
+                        row.account = None
+                        row.save(update_fields=["account", "updated_at"])
                 self.refresh_from_db()
         return self
 
@@ -2615,16 +2663,21 @@ class Integration(StatementSourceMixin, ImplDefaultsMixin, OwnerMixin, AngeeData
 
         fields = dict(fields)
         credential_id = fields.pop("credential_id", _UNSET)
-        if credential_id is not _UNSET:
+        account_id = fields.pop("account_id", None)
+        if credential_id is not _UNSET or account_id is not None:
+            # The account binding follows the credential; only ``attach_connection``
+            # changes it, and a null account keeps it (``transfer_ownership`` releases it).
             actor = instance_actor(self)
             credentials = apps.get_model("integrate", "Credential").objects.for_write()
             accounts = apps.get_model("integrate", "ExternalAccount").objects.for_write()
             if actor is not None:
                 credentials = credentials.with_actor(actor)
                 accounts = accounts.with_actor(actor)
-            credential = None if credential_id is None else credentials.get(pk=credential_id)
-            account_id = fields.pop("account_id", _UNSET)
-            account = account_id if account_id is _UNSET or account_id is None else accounts.get(pk=account_id)
+            if credential_id is _UNSET:
+                credential = self.load_connection_credential()
+            else:
+                credential = None if credential_id is None else credentials.get(pk=credential_id)
+            account = _UNSET if account_id is None else accounts.get(pk=account_id)
             self.concrete_capability().attach_connection(credential, account=account)
             self.refresh_from_db()
         if "lifecycle" in fields:
@@ -2722,14 +2775,14 @@ class Integration(StatementSourceMixin, ImplDefaultsMixin, OwnerMixin, AngeeData
         The row stays bound to the provider identity it was connected as: under
         the row lock, a credential or ``account`` of another identity (issuer, or
         client without one, plus subject) is refused with ``account_switch_refused``.
-        Detaching, or attaching a credential that names no account, keeps the
-        binding; ownership transfer releases it. ``discovery_generation`` is
-        reserved for the apply step already holding this row's lock. Ordinary
-        callers always enter connection discovery.
+        Detaching, attaching a credential that names no account, or an explicit
+        ``account=None`` keeps the binding; only ownership transfer releases it.
+        ``discovery_generation`` is reserved for the apply step already holding
+        this row's lock. Ordinary callers always enter connection discovery.
         """
 
-        resolved_account = account
-        if account is _UNSET and credential is not None and credential.external_account_id is not None:
+        resolved_account: Any = _UNSET if account is None else account
+        if resolved_account is _UNSET and credential is not None and credential.external_account_id is not None:
             resolved_account = credential.external_account
         if self.pk is None:
             self._set_connection_fields(credential=credential, account=resolved_account)
@@ -2742,11 +2795,8 @@ class Integration(StatementSourceMixin, ImplDefaultsMixin, OwnerMixin, AngeeData
             return
         with system_context(reason="integrate.connection.attach"), transaction.atomic():
             row = self.lock_capability()
-            if resolved_account is not _UNSET and resolved_account is not None and row.account_id not in (
-                None, resolved_account.pk,
-            ):
-                bound = type(resolved_account)._base_manager.select_related("oauth_client").get(pk=row.account_id)
-                if bound.provider_identity != resolved_account.provider_identity:
+            if resolved_account is not _UNSET and row.account is not None and row.account_id != resolved_account.pk:
+                if row.account.provider_identity != resolved_account.provider_identity:
                     raise OAuthFlowError(ACCOUNT_SWITCH_REFUSED, 409)
             derived_pk = row.credential_id if row.discovery_credential_id not in (None, row.credential_id) else None
             if discovery_generation is not None:

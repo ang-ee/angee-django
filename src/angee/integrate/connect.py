@@ -148,7 +148,6 @@ def complete_account_connect(
         external_id = oauth_client.external_id_from_claims(claims)
     if not external_id:
         raise OAuthFlowError(EXTERNAL_ACCOUNT_RESOLUTION_FAILED, 400)
-    defaults = set(oauth_client.default_scope_values)
     return complete_external_account_link(
         oauth_client,
         user=user,
@@ -159,7 +158,7 @@ def complete_account_connect(
         integration_id=record.integration_id,
         reason="integrate.oauth.connect",
         flow_record=record,
-        required_scopes=[scope for scope in record.scopes if scope not in defaults],
+        required_scopes=record.oauth_scopes,
     )
 
 
@@ -178,10 +177,11 @@ def complete_external_account_link(
 ) -> AccountConnectCompletion:
     """Link an external account to ``user`` and store its OAuth credential (``connect_oauth``).
 
-    A browser flow passes its consumed ``flow_record``: its first attempt must
-    bring the refresh token a refreshable client needs, or ``ConsentRequired``
-    asks the caller to restart it with consent; a consent attempt stores what the
-    provider gave.
+    A browser flow passes its consumed ``flow_record``. When its provider can be
+    asked for consent again (``OAuthClient.asks_consent_again``), a first attempt
+    must bring the refresh token a refreshable client needs, or ``ConsentRequired``
+    asks the caller to restart it with consent; a consent attempt, or a provider
+    that cannot be asked, stores what it gave.
     """
 
     Account = cast(Any, apps.get_model("integrate", "ExternalAccount"))
@@ -193,7 +193,11 @@ def complete_external_account_link(
             tokens=tokens,
             claims=claims,
             reason=reason,
-            require_refresh_token=flow_record is not None and not flow_record.consent,
+            require_refresh_token=(
+                flow_record is not None
+                and not flow_record.consent
+                and oauth_client.asks_consent_again(flow_record.flow)
+            ),
             required_scopes=required_scopes,
         )
     except OAuthFlowError as error:

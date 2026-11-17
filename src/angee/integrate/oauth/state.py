@@ -44,7 +44,8 @@ class StateFlow(StrEnum):
 class StateRecord:
     """Cached data needed to complete one OAuth/OIDC redirect.
 
-    ``scopes`` are the scopes the authorization request asks for; ``login_hint``
+    ``scopes`` are the scopes the authorization request asks for, of which
+    ``oauth_scopes`` are the consumer's own, the ones its grant must cover; ``login_hint``
     names the account a connect expects, when its consumer knows it; ``consent``
     marks a connect restarted to ask the provider for consent again.
     """
@@ -59,6 +60,7 @@ class StateRecord:
     flow: StateFlow = StateFlow.LOGIN
     integration_id: str = ""
     scopes: tuple[str, ...] = ()
+    oauth_scopes: tuple[str, ...] = ()
     login_hint: str = ""
     consent: bool = False
 
@@ -72,6 +74,7 @@ def issue(
     flow: StateFlow = StateFlow.LOGIN,
     integration_id: str = "",
     scopes: tuple[str, ...] = (),
+    oauth_scopes: tuple[str, ...] = (),
     login_hint: str = "",
     consent: bool = False,
 ) -> tuple[str, StateRecord]:
@@ -90,6 +93,7 @@ def issue(
         flow=flow,
         integration_id=integration_id,
         scopes=scopes,
+        oauth_scopes=oauth_scopes,
         login_hint=login_hint,
         consent=consent,
     )

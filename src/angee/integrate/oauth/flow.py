@@ -77,6 +77,7 @@ def issue_flow(
         flow=flow,
         integration_id=integration_id,
         scopes=tuple(oauth_client.requested_scopes(oauth_scopes, granted=granted_scopes)),
+        oauth_scopes=tuple(oauth_scopes),
         login_hint=login_hint,
         consent=consent,
     )
@@ -151,7 +152,8 @@ def restart_with_consent(
         next_path=record.next_path or "/",
         flow=record.flow,
         integration_id=record.integration_id,
-        oauth_scopes=record.scopes,
+        oauth_scopes=record.oauth_scopes,
+        granted_scopes=record.scopes,
         login_hint=record.login_hint,
         consent=True,
         authorize_url_builder=authorize_url_builder,

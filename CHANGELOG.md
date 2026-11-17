@@ -18,17 +18,24 @@ live in code docstrings.
   `google` row; it turns sign-in on for a `google` row the load creates, never for
   an existing one.
 - A resource entry may declare `create_only` fields: they reach a row only when
-  the load creates it (through any of its entries), never an adopted, existing or
-  re-applied row, and they stay out of the row hash like transition-owned state.
+  the load creates it (through any of its entries or an owner verb), never an
+  adopted, existing or re-applied row, and they stay out of the row hash like
+  transition-owned state. Adding it to a shipped entry re-applies that entry's
+  existing rows once.
   `angee.resources.models.move_seed_ledger` moves seed ledger rows to the addon
   that now ships them in a data migration; the Anthropic and Gemini steps use it.
 - Consumers declare the scopes they need (`IntegrationImpl.oauth_scopes`).
   Credentials are keyed by (user, OAuth client, external account), so one user
   connects several accounts through one client, and an integration stays bound to
-  the account it was connected as (`account_switch_refused`). A connect whose
-  grant lacks the refresh token a refreshable client needs restarts asking for
-  consent (`consent_required`); one whose grant drops a scope an attached
-  integration uses is refused (`scope_not_granted`).
+  the account it was connected as (`account_switch_refused`). The integration
+  resource's `account` is no longer updatable: the binding follows the credential,
+  and only ownership transfer releases it, detaching the previous owner's
+  credential and disconnecting the integration in the same transaction. When the
+  provider can be asked for consent again (`OAuthProviderType.authorize_params`),
+  a connect whose grant lacks the refresh token a refreshable client needs restarts
+  asking for it (`consent_required`); one whose grant drops a scope an attached
+  integration uses is refused (`scope_not_granted`). Retired provider keys
+  (`OAuthProviderType.retired`) still load but are not offered for new clients.
 - `integrate.OAuthClient` owns `issuer` and `jwks_uri`, and ID-token verification
   (with `ANGEE_OIDC_JWKS_TTL` and `pyjwt`) moved into `integrate`; the fake
   OpenID provider moved to `angee.integrate.testing.oidc`.
@@ -37,15 +44,15 @@ live in code docstrings.
     `uniq_integrate_credential_user_oauth_client`, and `issuer`/`jwks_uri` move to
     the base model (new columns where the login addon was absent). The reverse
     migration fails once any user holds two accounts at one client.
-  - `angee.integrate_google.compose_migrations.integrate.align_google_clients`:
-    fills the preset's endpoints, catalogue and `include_granted_scopes` on
-    existing `google`-type clients (the demo row included), never replacing client
-    ids, secrets or values an operator set.
-  - `angee.integrate_google.compose_migrations.resources.rehome_google_oauth_resources`:
-    the `oauth_gemini` seed moved from `integrate` to `integrate_google` with its
-    content unchanged; the step moves its ledger so the row is not re-applied.
-  - bridges `posts_integrate_youtube.compose_migrations.integrate.move_youtube_client_to_google`
-    (see its README).
+  - `RunPython` data upgrades in `angee.integrate_google.upgrades`:
+    `align_google_clients` fills the preset's endpoints, catalogue and
+    `include_granted_scopes` on existing `google`-type clients (the demo row
+    included), never replacing client ids, secrets or values an operator set;
+    `rehome_gemini_seed` moves the `oauth_gemini` seed's ledger row from
+    `integrate` to `integrate_google` (its content is unchanged), so the row is not
+    re-applied.
+  - bridges `angee.posts_integrate_youtube.upgrades.move_youtube_client` (see its
+    README).
 - **Re-applied seed rows.** On the first provision after upgrading, the
   `oauth_google` seed adopts an existing `google`/`prod` client and sets its
   provider type, display name and icon; without the ledger step, the `oauth_gemini`

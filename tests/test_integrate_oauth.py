@@ -46,7 +46,7 @@ def test_addon_refines_grant_through_authlib_before_identity_or_persistence(refu
         user = create_user("grant-user")
         client = OAuthClient.objects.create(
             slug="extension", provider_type="generic_oauth2", display_name="Extension", client_id="application",
-            client_secret="fake", token_endpoint="https://provider.example/token", supports_refresh=False,
+            client_secret="fake", token_endpoint="https://provider.example/token",
             userinfo_endpoint="https://provider.example/profile", authorize_endpoint="https://provider.example/auth",
         )
         assert client._meta.get_field("provider_type").registered_keys() == ("generic_oauth2",)

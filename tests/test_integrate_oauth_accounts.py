@@ -7,7 +7,7 @@ from typing import Any
 from urllib.parse import parse_qs, urlsplit
 
 import pytest
-from django.db import connection
+from django.db import connection, transaction
 from rebac import actor_context, system_context
 
 from angee.graphql.testing.documents import graphql_request
@@ -200,7 +200,7 @@ def test_the_binding_survives_detach_and_follows_the_identity_across_clients_of_
     assert refused.value.code == ACCOUNT_SWITCH_REFUSED
 
 
-def test_ownership_transfer_releases_the_account_binding() -> None:
+def test_ownership_transfer_hands_the_recipient_an_unbound_integration() -> None:
     bridge, client = _bridge("binding-transfer")
     first = _connect(client, bridge.owner, "account-one")
     bridge.attach_credential(first.credential)
@@ -210,7 +210,35 @@ def test_ownership_transfer_releases_the_account_binding() -> None:
     bridge.with_actor(admin).transfer_ownership(recipient)
 
     bridge.refresh_from_db()
-    assert (bridge.owner_id, bridge.account_id) == (recipient.pk, None)
+    # The integration no longer runs on the previous owner's grant, nor is bound to their account.
+    assert (bridge.owner_id, bridge.account_id, bridge.credential_id) == (recipient.pk, None, None)
+    assert bridge.lifecycle == "disconnected"
+    with actor_context(recipient):
+        assert bridge.can_connect(recipient)
+
+
+def test_the_binding_cannot_be_patched_away_or_switched(monkeypatch) -> None:
+    monkeypatch.setattr(celery_app, "send_task", lambda name, **options: None)
+    bridge, client = _bridge("binding-patch")
+    first = _connect(client, bridge.owner, "account-one")
+    second = _connect(client, bridge.owner, "account-two")
+    bridge.attach_credential(first.credential)
+    bridge.refresh_from_db()
+
+    def patch(fields: dict[str, Any]) -> None:
+        with actor_context(bridge.owner), transaction.atomic():
+            bridge.with_actor(bridge.owner).prepare_patch(fields)
+
+    # A null account keeps the binding, so another account's credential is still refused.
+    with pytest.raises(OAuthFlowError) as refused:
+        patch({"credential_id": second.credential.pk, "account_id": None})
+    assert refused.value.code == ACCOUNT_SWITCH_REFUSED
+    with pytest.raises(OAuthFlowError) as switched:
+        patch({"account_id": second.account.pk})
+    assert switched.value.code == ACCOUNT_SWITCH_REFUSED
+    patch({"credential_id": None, "account_id": None})
+    bridge.refresh_from_db()
+    assert (bridge.credential_id, bridge.account_id) == (None, first.account.pk)
 
 
 def test_consumer_scopes_join_the_defaults_and_must_be_in_the_catalogue() -> None:
@@ -287,6 +315,31 @@ def test_a_grant_that_drops_a_served_integrations_scope_is_refused(monkeypatch) 
     assert refused.value.code == SCOPE_NOT_GRANTED
     first.credential.refresh_from_db()
     assert first.credential.granted_scopes == ["openid", "email", "calendar"]
+
+
+def test_previously_granted_extras_are_asked_for_but_never_required(monkeypatch) -> None:
+    bridge, client = _bridge("granted-extras")
+    first = _connect(client, bridge.owner, "account-one", scope="openid email mail")
+    bridge.attach_credential(first.credential)
+    with system_context(reason="test detach bound integration"):
+        ConnectionBridge.objects.filter(pk=bridge.pk).update(credential=None, lifecycle="disconnected")
+    bridge.refresh_from_db()
+    monkeypatch.setattr(ConnectionAdapter, "oauth_scopes", ("calendar",))
+
+    started = _start(bridge, client)
+    assert _authorize_params(started)["scope"] == ["openid email calendar mail"]
+    # The user unticks the old mail scope; nothing uses it, so the connect succeeds.
+    completed = _connect(client, bridge.owner, "account-one", scope="openid email calendar", state_token=started.state)
+
+    assert completed.credential.granted_scopes == ["openid", "email", "calendar"]
+
+
+def test_a_provider_that_cannot_be_asked_for_consent_stores_what_it_gave() -> None:
+    bridge, client = _bridge("no-consent-prompt")
+
+    stored = _connect(client, bridge.owner, "account-one", refresh=None)
+
+    assert "refresh_token" not in stored.credential.reveal()
 
 
 def test_a_grant_without_a_refresh_token_restarts_the_connect_asking_for_consent() -> None:
@@ -425,3 +478,36 @@ def test_racing_first_connects_keep_the_refresh_token_on_postgresql() -> None:
     with system_context(reason="test racing result"):
         stored = Credential.objects.get(user=user, oauth_client=client, external_account=account)
     assert stored.reveal()["refresh_token"] == "kept"
+
+
+@pytest.mark.django_db(transaction=True)
+def test_legacy_adoption_racing_an_attach_binds_without_deadlock_on_postgresql(monkeypatch) -> None:
+    if connection.vendor != "postgresql":
+        pytest.skip("PostgreSQL row locks")
+    monkeypatch.setattr(celery_app, "send_task", lambda name, **options: None)
+    bridge, client = _bridge("adoption-race")
+    user = bridge.owner
+    with system_context(reason="test legacy credential race"):
+        legacy = Credential.objects.upsert_for_user(user, client, CredentialKind.OAUTH, {"access_token": "legacy"})
+        ConnectionBridge.objects.filter(pk=bridge.pk).update(credential=legacy)
+        other = ConnectionBridge.objects.create(vendor=bridge.vendor, owner=user, lifecycle="disconnected")
+
+    def attach() -> str:
+        ConnectionBridge.objects.get(pk=other.pk).attach_credential(Credential.objects.get(pk=legacy.pk))
+        return "attached"
+
+    def adopt() -> str:
+        _connect(client, user, "account-one")
+        return "adopted"
+
+    # Both writers lock integrations before the credential, so neither deadlocks.
+    assert sorted(_race(attach, adopt)) == ["adopted", "attached"]
+
+    with system_context(reason="test legacy credential race result"):
+        adopted = Credential.objects.select_related("external_account").get(pk=legacy.pk)
+        bridge.refresh_from_db()
+        other.refresh_from_db()
+    assert adopted.external_account.external_id == "account-one"
+    assert bridge.account_id == adopted.external_account_id
+    # An attach that read the credential before adoption committed stays unbound until its next connect.
+    assert other.credential_id == legacy.pk and other.account_id in (None, adopted.external_account_id)

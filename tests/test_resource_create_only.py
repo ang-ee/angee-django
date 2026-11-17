@@ -6,9 +6,13 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from django.apps import apps
+from django.core.exceptions import ImproperlyConfigured
 from rebac import system_context
 
+from angee.resources.entries import ResourceEntry
 from angee.resources.exceptions import ResourceLoadError
+from angee.resources.loader import AngeeResource
 from angee.resources.testing.models import Resource
 from tests.conftest import OAuthClient, make_addon
 
@@ -86,6 +90,46 @@ def test_a_row_another_entry_creates_in_the_same_load_counts_as_created(tmp_path
     _load(_addon(tmp_path, files, entries))
 
     assert _client().is_enabled is existing
+
+
+def test_a_row_an_owner_verb_persists_counts_as_created(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    native_save = AngeeResource.save_instance
+
+    def verb_save(resource: Any, instance: Any, is_create: bool, row: Any, **kwargs: Any) -> None:
+        """Persist a new row as an owner verb does: a separate saved object the loader adopts."""
+
+        if not is_create:
+            native_save(resource, instance, is_create, row, **kwargs)
+            return
+        resource.before_save_instance(instance, row, **kwargs)
+        values = {field.attname: getattr(instance, field.attname) for field in instance._meta.concrete_fields}
+        values.pop(instance._meta.pk.attname)
+        resource.adopt_persisted_instance(instance, type(instance).objects.create(**values), row, **kwargs)
+
+    monkeypatch.setattr(AngeeResource, "save_instance", verb_save)
+    files = {SEED: _row("client", display_name="Seeded"), POLICY: _row("client_policy", is_enabled="false")}
+    entries = [
+        _seed_entry(),
+        {"path": POLICY, "adopt": ["slug", "environment"], "create_only": ["is_enabled"], "depends_on": SEED},
+    ]
+
+    _load(_addon(tmp_path, files, entries))
+
+    assert _client().is_enabled is False
+
+
+@pytest.mark.parametrize(
+    ("declaration", "message"),
+    [
+        ({"adopt": ["slug", "environment"], "create_only": ["slug"]}, "adoption field"),
+        ({"kind": "grants", "create_only": ["subject"]}, "row entries"),
+    ],
+)
+def test_create_only_is_refused_on_adoption_fields_and_grant_entries(
+    declaration: dict[str, Any], message: str,
+) -> None:
+    with pytest.raises(ImproperlyConfigured, match=message):
+        ResourceEntry.from_declaration(apps.get_app_config("integrate"), "install", {"path": SEED, **declaration})
 
 
 def test_an_unknown_create_only_field_is_refused(tmp_path: Path) -> None:

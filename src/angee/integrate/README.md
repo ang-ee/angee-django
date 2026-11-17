@@ -127,9 +127,11 @@ and scopes once (`OAuthConnectIntent` in [`impl.py`](impl.py)). The owners of th
 connect rules are `OAuthClient.requested_scopes` (scopes),
 `CredentialManager.upsert_for_user` (one credential per external account and the
 grant checks), `Integration.attach_connection` (the account binding),
-`OAuthProviderType.authorize_params` (the prompt) and
-[`connect.complete_account_connect`](connect.py) (account identity and the consent
-restart).
+`OAuthProviderType.authorize_params` (the prompt),
+[`connect.complete_account_connect`](connect.py) (account identity) and
+`connect.complete_external_account_link` (the consent restart). A credential stored
+without an account, before credentials were per account, and the integrations it
+serves without a binding bind to the first account that connects.
 
 Connection adapters declare `IntegrationImpl.requires_connection_discovery = True`
 to opt into asynchronous `discover_connection`/`apply_discovery`. Manual and
