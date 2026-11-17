@@ -680,6 +680,46 @@ def test_a_fragment_grant_cannot_reach_a_trashed_file(drive: Any) -> None:
     assert check_derived_permissions() == []
 
 
+def test_a_record_upload_follows_its_task_while_an_inherited_file_stays_its_owners(drive: Any) -> None:
+    """The uploader owns a record upload but reaches it only through the task, and loses it with the task."""
+
+    uploader = get_user_model().objects.create_user(username="storage-record-uploader")
+    with system_context(reason="test storage record upload"):
+        project = Project.objects.create(title="Hiring", owner=drive.alice)
+        task = Task.objects.create(title="Candidate", project=project, owner=drive.alice, assignee=uploader)
+        personal, _created = File.objects.ingest_bytes(
+            b"personal notes", filename="notes.txt", owner_id=uploader.pk, drive_id=str(drive.sqid),
+        )
+    with actor_context(drive.alice):
+        drive.with_actor(drive.alice).grant_record_access("editor", uploader)
+    with actor_context(uploader):
+        draft = File.objects.draft(
+            filename="cv.png", mime_type="image/png", size_bytes=len(PNG_BYTES), drive_id=str(drive.sqid),
+            visibility=storage_models.FileVisibility.RECORD, record=task,
+        )
+        File.objects.for_upload_token(draft.issue_upload_token()).receive_bytes(BytesIO(PNG_BYTES))
+        cv = File.objects.all().from_public_id(str(draft.sqid)).finalize(
+            expected_hash=PNG_SHA256, expected_size=len(PNG_BYTES),
+        )
+    assert (cv.upload_state, cv.owner_id, personal.owner_id) == (UploadState.READY, uploader.pk, uploader.pk)
+
+    def reach(row: Any) -> tuple[bool, ...]:
+        bound = row.with_actor(uploader)
+        listed = File.objects.with_actor(uploader).filter(pk=row.pk).exists()
+        return (*(bound.has_access(action) for action in ("read", "write", "share", "delete", "transfer")), listed)
+
+    assert reach(cv) == (True,) * 6, "the assignee manages its upload through the task"
+    token = cv.issue_download_token(actor=uploader)
+    with actor_context(drive.alice):
+        drive.with_actor(drive.alice).revoke_record_access("editor", uploader)
+    with system_context(reason="test storage record upload leaves the task"):
+        Task._base_manager.filter(pk=task.pk).update(assignee=None)
+    assert reach(cv) == (False,) * 6, "losing the task loses its record file, whoever owns it"
+    with pytest.raises(exceptions.UploadDenied):
+        File.objects.for_download_token(token)
+    assert reach(personal) == (True,) * 6, "an inherited file stays its owner's"
+
+
 def test_storage_resource_metadata_exposes_delete_previews() -> None:
     """Storage's custom delete verbs are advertised to refine/resource actions."""
 

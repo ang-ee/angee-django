@@ -10,6 +10,29 @@ live in code docstrings.
 
 ## Unreleased — shared addon contracts, native embeddings and graph retrieval
 
+- A record-visibility file takes its access from its attached records, its
+  direct viewers and admins. Its owner (the uploader, by default) holds it while
+  the upload is a draft, which the record edge needs, and once it is published
+  manages it only while its records let the owner write it, so whoever loses the
+  record loses its record files, the ones they uploaded included. An inherited
+  file keeps its owner's access. `storage/file` gains the `inherited_owner` and
+  `draft_owner` relations and the `owner_writer` permission, which `transfer` and
+  `delete` use. An unattached record file is reachable only by its viewers and
+  admins, so narrowing one leaves its owner without it. Operators re-sync the
+  permission schema: storage revision 13.
+- A record's chatter thread has no owner. `ThreadAttachmentManager.ensure_for_record`
+  no longer makes the record's creator its owner, and releases the owner an
+  existing chatter thread still carries the next time the record attaches it, as
+  it already did for broadcasting hosts. The creator keeps its attribution
+  (`created_by`) and reaches the thread, its messages, parts and their files only
+  through the record (`messaging/thread#chatter_read`). A record type that
+  contributes no `chatter_read` arm (the `ThreadedModelMixin.thread_attachments`
+  contract) now lends its chatter's generic reads (part files, follower
+  identities, colleague pickers) to nobody but admins, where its creator used to
+  reach them as owner. Upgrade: such a record owner contributes the arm, and a
+  host releases the owners existing chatter threads carry with a data migration
+  over its historical models, for example
+  `Thread.objects.filter(attachments__role="chatter").exclude(owner=None).update(owner=None)`.
 - `ThreadedModelMixin.thread_moderate_access` (default `write`) names the record
   permission chatter moderation requires: editing and deleting other people's
   comments, trashing and restoring comments, listing the removed ones and managing

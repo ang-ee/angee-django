@@ -747,8 +747,9 @@ class Thread(
     def broadcasts_changes(self) -> bool:
         """Whether this thread's changes reach the generic ``changes`` subscription.
 
-        Record chatter stays off the generic surface: its own ``owner``/``admin`` read
-        would otherwise deliver change events to a subject who cannot read the record.
+        Record chatter stays off the generic surface: its thread's own grants and
+        admin read would otherwise deliver change events to a subject who cannot read
+        the record.
         A host opts back in per model (a chat room): ``host_broadcasts_changes``, stamped
         from :attr:`ThreadedModelMixin.thread_broadcasts_changes` at attachment, streams
         the thread's changes to its members (who hold ``messaging/thread.reader``) while

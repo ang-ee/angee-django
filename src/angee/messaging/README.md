@@ -7,7 +7,10 @@ The current record owns read, post and moderation admission through the record
 permissions its model declares on `ThreadedModelMixin`: `thread_read_access`
 (default `read`), `thread_post_access` and `thread_moderate_access` (both default
 `write`). A record whose `write` reaches people who must not edit, delete or trash
-other people's comments names a narrower `thread_moderate_access`. Messaging contributes comments,
+other people's comments names a narrower `thread_moderate_access`. A record's
+chatter thread has no owner, so the record's creator keeps nothing of it, its
+messages, parts or files after losing the record; the record lends its readers the
+thread through `messaging/thread#chatter_read`. Messaging contributes comments,
 its existing composer, and linked source conversations to the framework Activity
 stream; provenance contributes record history independently through the same owner.
 

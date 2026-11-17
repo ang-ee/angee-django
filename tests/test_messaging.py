@@ -1043,11 +1043,12 @@ def test_threaded_model_create_autofollows_its_author_without_a_creation_message
     assert not ThreadFollower.objects.unread_messages(thread, user=user).exists()
 
 
-def test_a_row_inserted_under_its_querysets_scope_owns_its_thread(db: None) -> None:
+def test_a_row_inserted_under_its_querysets_scope_creates_its_thread(db: None) -> None:
     """A queryset's pinned actor or system scope writes the row's chatter without an ambient scope.
 
-    The pinned actor owns the new thread as an ambient actor does; an elevated
-    insert has no creator to subscribe, so its thread waits for the first post.
+    The pinned actor creates the new thread as an ambient actor does, and neither
+    owns it: record chatter takes its access from the record. An elevated insert
+    has no creator to subscribe, so its thread waits for the first post.
     """
 
     del db
@@ -1065,7 +1066,8 @@ def test_a_row_inserted_under_its_querysets_scope_owns_its_thread(db: None) -> N
     with system_context(reason="test queryset-scoped creation assertions"):
         threads = {ticket.title: ticket.message_thread(create=False) for ticket in (ambient, pinned, elevated)}
     assert not Message._base_manager.exists()
-    assert threads["Ambient case"].owner_id == threads["Pinned case"].owner_id == user.pk
+    assert threads["Ambient case"].created_by_id == threads["Pinned case"].created_by_id == user.pk
+    assert threads["Ambient case"].owner_id is threads["Pinned case"].owner_id is None
     assert threads["Elevated case"] is None
 
 

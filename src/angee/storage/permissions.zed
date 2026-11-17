@@ -1,7 +1,7 @@
 // Authorization schema for the storage addon.
 // @rebac_package: storage
 // @rebac_package_version: 0.1.0
-// @rebac_schema_revision: 12
+// @rebac_schema_revision: 13
 
 // Roles-as-namespace anchor, mirroring operator/role: `includes` lets one
 // storage role imply another, and resources gate on `effective_member` so
@@ -79,11 +79,15 @@ definition storage/folder {
     permission write__owner = transfer
 }
 
-// `owner` is independent of upload attribution. `viewer` grants read
-// reach for content-addressed dedup hits where another owner reuses the bytes.
-// No `create`
-// permission: rows enter through File.objects.draft, which gates on drive
-// write itself.
+// `owner` is independent of upload attribution and, like the drive and folder,
+// grants an inherited file. A record-visibility file takes its access from its
+// attached records, its direct `viewer` grants and admins: its owner (its
+// uploader by default) holds it while the upload is a draft, which the record
+// edge needs before it can lend anything, then manages it only while the records
+// let the owner write it (`owner_writer`), so losing the record loses the file.
+// `viewer` grants read reach for content-addressed dedup hits where another
+// owner reuses the bytes. No `create` permission: rows enter through
+// File.objects.draft, which gates on drive write itself.
 //
 // Fragments union their arms into `read_granted`, `write_granted` and
 // `share_granted`; `read`, `write` and `share` are derived here alone and sealed
@@ -95,6 +99,8 @@ definition storage/file {
     relation inherited_drive: storage/drive // rebac:field={"path":"drive","filters":{"visibility":"inherited"}}
     relation inherited_folder: storage/folder // rebac:field={"path":"folder","filters":{"visibility":"inherited"}}
     relation owner:  auth/user // rebac:field=owner
+    relation inherited_owner: auth/user // rebac:field={"path":"owner","filters":{"visibility":"inherited"}}
+    relation draft_owner: auth/user // rebac:field={"path":"owner","filters":{"upload_state":"draft"}}
     relation viewer: auth/user | auth/group#member | auth/user:*
     relation admin:  angee/role // rebac:const=admin
     relation trashed: storage/file // rebac:const={"target_id":"trashed","filters":{"is_trashed":true}}
@@ -103,15 +109,18 @@ definition storage/file {
     // authenticated. Arrow-only through `trashed`; never check it directly.
     permission conceal = authenticated
     permission withheld = trashed->conceal
-    permission read_granted = inherited_drive->read + inherited_folder->read + owner + viewer + admin->member
-    permission write_granted = inherited_drive->write + inherited_folder->write + owner + admin->member
-    permission share_granted = inherited_drive->share + owner + admin->member
+    permission read_granted = inherited_drive->read + inherited_folder->read + inherited_owner + draft_owner + viewer + admin->member
+    permission write_granted = inherited_drive->write + inherited_folder->write + inherited_owner + draft_owner + admin->member
+    permission share_granted = inherited_drive->share + inherited_owner + admin->member
     permission read   = (read_granted - withheld) + delete
     permission write  = (write_granted - withheld) + delete
     permission share  = (share_granted - withheld) + delete
-    permission transfer = owner + admin->member
+    // The owner while it may write the file: always for an inherited file, and
+    // for a record file only through its records' write.
+    permission owner_writer = owner & write_granted
+    permission transfer = owner_writer + admin->member
     permission write__owner = transfer
-    permission delete = owner + inherited_drive->write + admin->member
+    permission delete = owner_writer + inherited_drive->write + admin->member
 }
 
 // The attachment target is a GenericForeignKey to any record. The app that owns
