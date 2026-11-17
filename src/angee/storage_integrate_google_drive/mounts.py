@@ -168,10 +168,13 @@ class GoogleDriveMountBackend(MountBackend):
         return self.client.open_media(entry.storage_key)
 
     def storage_backend_spec(self) -> tuple[str, dict[str, Any]]:
-        """Serve reference bytes from Drive through the Mount rooted here, with its own credential."""
+        """Serve reference bytes from Drive through the Mount whose drive is stored on that backend row.
+
+        The backend needs no configuration: it finds its Mount by its own row.
+        """
 
         # This key belongs to ANGEE_STORAGE_BACKEND_CLASSES, not the Mount registry.
-        return "google_drive", {"root": self._checked_root().id}
+        return "google_drive", {}
 
     def _walked(self) -> _DriveWalk:
         """Walk the mounted folder once per sync, depth first with siblings in name order.

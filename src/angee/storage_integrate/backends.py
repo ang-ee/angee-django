@@ -5,12 +5,15 @@ from __future__ import annotations
 import logging
 from collections.abc import Mapping
 from pathlib import Path
-from typing import Any, ClassVar
+from typing import TYPE_CHECKING, Any, ClassVar
 
 from django.core.exceptions import ImproperlyConfigured
 from django.core.files.storage import FileSystemStorage
 
 from angee.storage.backends import StorageBackend
+
+if TYPE_CHECKING:
+    from django.db.models import Model
 
 logger = logging.getLogger(__name__)
 
@@ -70,10 +73,10 @@ class ExternalStorageBackend(StorageBackend):
 class LocalFolderBackend(ExternalStorageBackend, FileSystemStorage):
     """Read-only filesystem backend rooted at an externally-owned folder."""
 
-    def __init__(self, *, backend_config: Mapping[str, Any] | None = None) -> None:
+    def __init__(self, *, backend_config: Mapping[str, Any] | None = None, backend_row: Model | None = None) -> None:
         """Bind the required external root without creating or changing it."""
 
-        StorageBackend.__init__(self, backend_config=backend_config)
+        StorageBackend.__init__(self, backend_config=backend_config, backend_row=backend_row)
         root = str(self.backend_config.get("root") or "").strip()
         if not root:
             raise ImproperlyConfigured("LocalFolderBackend requires backend_config['root'].")

@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import AsyncIterator, Collection
-from typing import IO, Literal
+from typing import IO, Any, Literal
 
 from asgiref.sync import sync_to_async
 from django.apps import apps
@@ -26,6 +27,8 @@ from angee.storage.uploads import (
     opens_in_viewer,
     renders_inline,
 )
+
+logger = logging.getLogger(__name__)
 
 DOWNLOAD_CSP: dict[str, Collection[str] | str | Literal[True]] = {
     "default-src": [CSP.NONE],
@@ -95,7 +98,9 @@ def download(request: HttpRequest, filename: str) -> HttpResponseBase:
     :data:`DOWNLOAD_CSP`, and all of them ``nosniff`` from Django's
     ``SecurityMiddleware``. The bytes stream as an async iterator reading one
     block at a time in a worker thread, so a slow or remote backend never blocks
-    the event loop nor buffers the whole file; the row's size is the length.
+    the event loop nor buffers the whole file; the row's size is the length. A
+    backend that refuses to open the bytes is answered 404, 403 or 502
+    (:func:`_storage_refusal`), never 500.
     """
 
     del filename  # cosmetic save-as name; the token identifies the file
@@ -112,13 +117,35 @@ def download(request: HttpRequest, filename: str) -> HttpResponseBase:
     content_type = mime_type.mime_type if mime_type is not None else FALLBACK_MIME
     if conditional := get_conditional_response(request, etag=etag):
         return _download_cache_response(conditional, etag, content_type)
-    stream = row.open_stream()
+    try:
+        stream = row.open_stream()
+    except OSError as error:
+        return _storage_refusal(row, error)
     response = StreamingHttpResponse(_stream_blocks(stream), content_type=content_type)
     response["Content-Length"] = str(row.size_bytes)
     disposition = content_disposition_header(not renders_inline(content_type), row.filename)
     if disposition:
         response["Content-Disposition"] = disposition
     return _download_cache_response(response, etag, content_type)
+
+
+def _storage_refusal(row: Any, error: OSError) -> JsonResponse:
+    """Answer a backend's refusal to open stored bytes: missing 404, refused 403, otherwise 502.
+
+    The status and code follow the upload flow's errors; the backend's own
+    message, which may name a path or a remote reason, goes to the log only.
+    """
+
+    refusal: type[exceptions.UploadError] | None = None
+    if isinstance(error, FileNotFoundError):
+        refusal, message = exceptions.UploadTargetNotFound, "The stored file is missing."
+    elif isinstance(error, PermissionError):
+        refusal, message = exceptions.UploadDenied, "The storage refused to serve this file."
+    else:
+        message = "The storage could not serve this file."
+    status, code = (refusal.status_code, refusal.code) if refusal is not None else (502, "unavailable")
+    logger.warning("storage.download: %s refused %s: %s", type(error).__name__, row.sqid, error)
+    return JsonResponse({"error": message, "code": code}, status=status)
 
 
 async def _stream_blocks(stream: IO[bytes]) -> AsyncIterator[bytes]:

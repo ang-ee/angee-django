@@ -2,11 +2,9 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
 from typing import Any, BinaryIO
 
 from django.apps import apps
-from django.core.exceptions import ImproperlyConfigured
 from rebac import system_context
 
 from angee.integrate.models import IntegrationLifecycle
@@ -19,22 +17,15 @@ from angee.storage_integrate_google_drive.mounts import GoogleDriveMountBackend
 class GoogleDriveStorageBackend(ExternalStorageBackend):
     """Read a reference mount's files from Google Drive by storage key, which is the Drive file id.
 
-    ``backend_config["root"]`` names the mounted Drive folder; it holds no
-    credential. Each read finds the one reference Mount rooted there and serves
-    only while that Mount is connected and this backend's configuration is the
-    one its drive is stored on, reading with the Mount's own credential as it is
-    now. A second backend row configured alike would make the binding ambiguous,
-    so both refuse rather than lend the Mount's access. Every refusal is an
-    ``OSError``. The bytes stay in Drive (:class:`ExternalStorageBackend`).
+    It holds no configuration and no credential. It serves the one reference
+    Mount whose drive is stored on this backend's own row (``backend_row``, which
+    ``Backend.storage`` passes), only while that Mount is connected, reading with
+    the Mount's own credential as it is now; any other row reaches nothing.
+    Refusals are ``OSError``s: missing or trashed is ``FileNotFoundError``, a
+    refused binding ``PermissionError``, and a Drive refusal or a file changed
+    since the last sync :class:`DriveFileError`. The bytes stay in Drive
+    (:class:`ExternalStorageBackend`).
     """
-
-    def __init__(self, *, backend_config: Mapping[str, Any] | None = None) -> None:
-        """Bind the mounted folder without reading anything."""
-
-        super().__init__(backend_config=backend_config)
-        self.root = str(self.backend_config.get("root") or "").strip()
-        if not self.root:
-            raise ImproperlyConfigured("GoogleDriveStorageBackend requires backend_config['root'].")
 
     def open_external(self, name: str) -> BinaryIO:
         """Open one indexed Drive file now: refuse it trashed in Drive or changed since it was indexed."""
@@ -43,7 +34,7 @@ class GoogleDriveStorageBackend(ExternalStorageBackend):
         try:
             item = client.get(name)
             if item.trashed:
-                raise DriveFileError("This file is in the Google Drive trash.")
+                raise FileNotFoundError("This file is in the Google Drive trash.")
             indexed = self._indexed_hash(mount, name)
             if item.sha256 and indexed and item.sha256.lower() != indexed:
                 raise DriveFileError("This Google Drive file changed since the mount last synced.")
@@ -72,37 +63,28 @@ class GoogleDriveStorageBackend(ExternalStorageBackend):
             raise DriveFileError(error.public_message) from error
 
     def _mount_client(self) -> tuple[Any, GoogleDriveClient]:
-        """Return the connected reference Mount this backend serves and a client on its credential, or refuse."""
+        """Return the connected reference Mount stored on this row and a client on its credential, or refuse."""
 
+        if self.backend_row is None:
+            raise PermissionError("This Google Drive storage is not bound to a storage backend row.")
         mount_model = apps.get_model("storage_integrate", "Mount")
-        backend_model = apps.get_model("storage", "Backend")
         with system_context(reason="storage_integrate_google_drive.storage.mount"):
-            mounts = list(
-                mount_model.objects.for_roots((self.root,))
-                .filter(backend_class=GoogleDriveMountBackend.key, mode=MountMode.REFERENCE)
-                .select_related("drive__backend")[:2]
+            mount = (
+                mount_model.objects.filter(
+                    drive__backend_id=self.backend_row.pk,
+                    backend_class=GoogleDriveMountBackend.key,
+                    mode=MountMode.REFERENCE,
+                )
+                .order_by("pk")
+                .first()
             )
-            # The storage owner hands a backend no handle on its own row, so the
-            # row is the one google_drive backend configured for this root.
-            rows = list(
-                backend_model.objects.filter(
-                    backend_class=GoogleDriveMountBackend.key, backend_config__root=self.root
-                ).values_list("pk", "backend_config")[:2]
-            )
-            mount = mounts[0] if len(mounts) == 1 else None
-            bound = (
-                mount is not None
-                and len(rows) == 1
-                and rows[0] == (mount.drive.backend_id, self.backend_config)
-            )
-            if not bound:
-                raise DriveFileError("No Google Drive mount is served by this storage.")
-            assert mount is not None  # bound requires it.
+            if mount is None:
+                raise PermissionError("No Google Drive mount is stored on this storage backend.")
             if mount.lifecycle != IntegrationLifecycle.CONNECTED:
-                raise DriveFileError("The Google Drive mount of this storage is not connected.")
+                raise PermissionError("The Google Drive mount of this storage is not connected.")
             credential = mount.load_connection_credential()
         if credential is None:
-            raise DriveFileError("The Google Drive mount of this storage has no account.")
+            raise PermissionError("The Google Drive mount of this storage has no account.")
         return mount, GoogleDriveClient(credential)
 
     @staticmethod

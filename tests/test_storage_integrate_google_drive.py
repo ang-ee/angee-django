@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import importlib
+import json
 import re
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
@@ -16,8 +17,10 @@ from urllib.parse import unquote
 
 import httpx2
 import pytest
+from asgiref.sync import async_to_sync
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
+from django.test import RequestFactory
 from django.utils import timezone
 from rebac import system_context
 
@@ -25,7 +28,9 @@ from angee.graphql.testing.documents import execute_schema, result_data
 from angee.integrate.models import IntegrationLifecycle
 from angee.integrate.testing.http import mock_transport
 from angee.storage import exceptions as storage_exceptions
+from angee.storage import views
 from angee.storage_integrate.models import MountMode
+from angee.storage_integrate_google_drive.backends import GoogleDriveStorageBackend
 from angee.storage_integrate_google_drive.client import FOLDER_MIME, GoogleDriveError
 from tests.conftest import (
     Backend,
@@ -375,7 +380,7 @@ def test_reference_mount_indexes_drive_checksums_streams_on_open_and_refuses_wri
     with system_context(reason="test Google Drive mount provisioning"):
         assert mount.vendor.slug == "google"
         assert mount.drive.backend.backend_class == "google_drive"
-        assert mount.drive.backend.backend_config == {"root": "f-projects"}
+        assert mount.drive.backend.backend_config == {}
 
     assert _run_sync(mount) == 2
     assert fake.downloads == []
@@ -719,27 +724,61 @@ def test_serving_reads_with_the_mounts_own_credential_while_it_is_connected(
     assert set(fake.bearers) == {"lender-token"}
 
     with system_context(reason="test Google Drive forged backends"):
-        forged_elsewhere = Backend._base_manager.create(
-            slug="forged-elsewhere", label="Forged", backend_class="google_drive", backend_config={"root": "f-none"},
+        genuine = mount.drive.backend
+        forged = Backend._base_manager.create(
+            slug="forged", label="Forged", backend_class="google_drive", backend_config={},
             created_by=drive_env.owner,
         )
-        with pytest.raises(OSError):
-            _read(forged_elsewhere.storage, "x-served")
         twin = Backend._base_manager.create(
-            slug="forged-twin", label="Twin", backend_class="google_drive", backend_config={"root": "f-served"},
+            slug="twin", label="Twin", backend_class="google_drive", backend_config=genuine.backend_config,
             created_by=drive_env.owner,
         )
-        with pytest.raises(OSError):
-            _read(twin.storage, "x-served")
-        with pytest.raises(OSError):
-            _read(storage, "x-served")
-        twin.delete()
+        for imposter in (forged.storage, twin.storage, GoogleDriveStorageBackend()):
+            with pytest.raises(PermissionError):
+                _read(imposter, "x-served")
     assert _read(storage, "x-served") == b"served"
 
     with system_context(reason="test Google Drive mount disconnected"):
         mount.disconnect()
-    with pytest.raises(OSError):
+    with pytest.raises(PermissionError):
         _read(storage, "x-served")
+
+
+async def _streamed_body(response: Any) -> bytes:
+    """Collect a download's asynchronously streamed body."""
+
+    return b"".join([block async for block in response.streaming_content])
+
+
+def test_a_refused_download_answers_a_clean_status(drive_env: SimpleNamespace, queued_mounts: list[Any]) -> None:
+    """The download view answers a trashed file 404, a Drive refusal 502 and a disconnected mount 403, never 500."""
+
+    fake = drive_env.drive
+    fake.folder("f-download", "Download")
+    fake.file("x-fine", "fine.txt", b"fine", parent="f-download")
+    fake.file("x-binned", "binned.txt", b"binned", parent="f-download")
+    fake.file("x-blocked", "blocked.txt", b"blocked", parent="f-download")
+    mount = _connect(drive_env, "f-download", name="Download")
+    assert _run_sync(mount) == 3
+    rows = _rows(mount.drive)
+
+    def download(key: str) -> Any:
+        token = rows[key].issue_download_token(drive_env.owner)
+        return views.download(RequestFactory().get(f"/storage/download/{key}?token={token}"), rows[key].filename)
+
+    fine = download("x-fine")
+    assert fine.status_code == 200
+    assert async_to_sync(_streamed_body)(fine) == b"fine"
+    fake.items["x-binned"].trashed = True
+    fake.items["x-blocked"].refused = "cannotDownloadFile"
+    for key, status, code in (("x-binned", 404, "not_found"), ("x-blocked", 502, "unavailable")):
+        refused = download(key)
+        assert (refused.status_code, json.loads(refused.content)["code"]) == (status, code)
+
+    with system_context(reason="test Google Drive download of a disconnected mount"):
+        mount.disconnect()
+    denied = download("x-fine")
+    assert (denied.status_code, json.loads(denied.content)["code"]) == (403, "denied")
 
 
 def test_serving_opens_eagerly_and_refuses_a_trashed_or_changed_file(
