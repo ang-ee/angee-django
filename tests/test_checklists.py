@@ -930,3 +930,24 @@ def test_deleting_a_multi_table_child_deletes_its_results_once(world: Any, delet
         (CraneInspection if deleted == "child" else Inspection).objects.get(pk=crane.pk).delete()
     assert set(ChecklistResult._base_manager.values_list("pk", flat=True)) == {kept.pk}
     assert not ChecklistEvidence._base_manager.exists()
+
+
+def test_assessing_one_record_reads_statuses_and_results_in_one_statement(world: Any) -> None:
+    """An unoptimized read (a mutation payload) costs the record fetch's one revision guard and one statement."""
+
+    _record(world, "owner", "passed", "Owner confirmed.", evidence=(world.report,))
+    _record(world, "signature", "risk", "Signature smudged.", evidence=(world.hidden,))
+    _assess(world, world.auditor)
+    with CaptureQueriesContext(connection) as captured:
+        assessed = _assess(world, world.auditor)
+    assert len(captured) <= 2
+    items = {item.key: item for item in assessed.items}
+    assert (items["owner"].status, items["owner"].detail) == ("passed", "Owner confirmed.")
+    loaded = items["owner"].result
+    assert loaded is not None
+    stored = ChecklistResult._base_manager.get(pk=loaded.pk)
+    assert [getattr(loaded, field.attname) for field in ChecklistResult._meta.concrete_fields] == [
+        getattr(stored, field.attname) for field in ChecklistResult._meta.concrete_fields
+    ]
+    assert [(ref.model, ref.id) for ref in items["owner"].evidence] == [("checklistdemo.Report", world.report.sqid)]
+    assert (items["signature"].status, items["signature"].result) == ("not_checked", None)
