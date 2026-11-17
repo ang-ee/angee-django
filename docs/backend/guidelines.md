@@ -1218,9 +1218,11 @@ exception closes the rows as failed. Tests inherit a boundary from the root
   [`VaultManager.create_from`](../../src/angee/knowledge/models.py)). Each owner
   names what its copy carries through a cooperative hook (`template_copy_values`)
   and inserts through its own save, so contributors' insert lifecycles run;
-  grants, statements, bindings and absolute dates never copy. The copied rows
-  are the vocabulary the copy was born with: later template edits change only
-  later copies.
+  grants, statements, bindings and absolute dates never copy, and tags copy
+  through their owner (`TagAssignmentManager.copy`). Ordinary lists compose the
+  template exclusion with their caller's scope rather than letting it be
+  replaced. The copied rows are the vocabulary the copy was born with: later
+  template edits change only later copies.
 - **Ownership:** `owner` has one spelling. A grant root composes `OwnerMixin`,
   so `owner` is transferable access in a column and `created_by` remains
   attribution. Its Zed backs `owner` with that column and declares its transfer
@@ -1481,12 +1483,13 @@ retains its native routing contract.
 - **The subject owns its anchors.** The model that learns a date (a project's
   start, a completion, a reading) supplies it by name; scheduling owns no anchors,
   counters or rates.
-- **A hand or stated date wins over the rule; the basis keeps the rule's value.**
-  A row follows its rule while its date equals the basis point, so anchor moves
-  and rule edits move it; a person's edit or a source's stated date that differs
-  stays until a reset verb hands the date back
-  ([`RuleDatedMixin`](../../src/angee/projects/models.py)). No flag records the
-  source: the row's own columns answer it.
+- **A person's or a source's date holds the row; the basis keeps the rule's value.**
+  Writing a rule-dated row's date (a person's edit, a source's stated `schedule`)
+  holds it at that value, even one equal to the rule's; anchor moves and rule edits
+  then move only rows that are not held, and a reset verb releases the hold as the
+  rule's own write, recording no person's stance
+  ([`RuleDatedMixin`](../../src/angee/projects/models.py)). The hold is a key in the
+  basis (`held`), not a column, because no read filters on it.
 - **Status is computed on read, never stored.** `Due.get_status(now=…, counters=…)`
   reads the stored basis; a stored status goes stale as time passes. A set-level
   read, such as an overdue list, may compare the stored date column in a queryset
