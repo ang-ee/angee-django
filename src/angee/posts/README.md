@@ -165,6 +165,6 @@ is contributed through the model's `hasura_filterable_fields` declaration.
 
 Feeds use integrate's `FORM` creation catalogue and existing add-integration page.
 Backend implementation defaults supply vendor and platform identity. The saved
-feed's `posts.Feed#actions` Connect child composes integrate's shared
-`ConnectOAuthButton` with `CONNECT_RECORD_FIELDS` and its `ConnectIntegration`
-document. It returns to that feed after OAuth and reloads the record.
+feed's `posts.Feed#actions` Connect child is integrate's
+`connectIntegrationAction()`. It returns to that feed after OAuth and reloads the
+record.

@@ -225,6 +225,30 @@ live in code docstrings.
   `Integration.probe_credential()` refuses any credential that needs reconnecting
   ("Reconnect this account.") before the kind's probe.
 
+- Notion connections connect through Notion's public-integration OAuth from the
+  saved record's **Connect** action; an internal integration's API token remains an
+  alternative. `angee.knowledge_integrate_notion` installs a `notion` OAuth
+  registration whose `notion` preset seeds Notion's endpoints, per-user `owner`,
+  HTTP Basic client authentication and token-response identity; the deployment
+  supplies the client id and secret. `OAuthClient` gains
+  `token_endpoint_auth_method` (`client_secret_post` or `client_secret_basic`,
+  honoured by both token-request formats) and `token_identity_keys` (the non-secret
+  token-response keys connect reads the account from when userinfo cannot; token
+  material is never among them). Projects author the `integrate` migration that
+  adds both columns. The token-response keys were previously hard-coded as
+  `account`/`organization` for every registration; Anthropic's install rows now
+  declare them, and a resource reload updates existing rows.
+- `connectIntegrationAction()` in `@angee/integrate` is the saved record's OAuth
+  Connect child a vendor addon contributes at its own model's `#actions`; posts
+  composes it, so `FeedConnectAction` and the `ConnectIntegration` re-export are
+  removed.
+- The Notion Markdown converter supports embeds, link previews and meeting notes,
+  labels links that export no text by their kind, and removes the tabs Notion nests
+  a heading's, paragraph's, quote's or container's children by (lists keep theirs;
+  fences and tables keep their opener's). Toggle-heading children are no longer
+  rendered as code, and pages carrying those blocks are no longer quarantined. The
+  Notion mapping version advances, so the next sync re-reads every connection.
+
 - `Message.objects.compose_reply` composes an email reply as a complete envelope:
   addressed to the parent's `Reply-To` when it carries one, else its sender (RFC
   5322 §3.6.2; `Message.reply_addresses(actor=)` is the one reader of `Reply-To`:

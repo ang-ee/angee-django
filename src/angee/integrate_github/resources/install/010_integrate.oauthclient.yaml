@@ -4,7 +4,7 @@
 #
 # GitHub OAuth Apps have no public client — every deployment registers its own at
 # https://github.com/settings/developers and the app's callback URL must be the
-# console's `/integrate/connect/callback`. So this seed carries everything that is
+# console's `/integrate/oauth/callback`. So this seed carries everything that is
 # the same everywhere (endpoints, scopes, claims) and leaves `client_id` /
 # `client_secret` blank: the row reads `needs_client` until an admin pastes the
 # two values from their own app, instead of asking them to hand-enter a dozen

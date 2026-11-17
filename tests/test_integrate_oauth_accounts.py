@@ -401,7 +401,9 @@ def test_connect_identifies_the_account_from_the_id_token_without_userinfo() -> 
 
 
 def test_token_response_identity_precedes_the_id_token_for_a_client_without_an_issuer() -> None:
-    bridge, client = _bridge("token-identity", issuer="", jwks_uri="", external_id_claim="account.uuid")
+    bridge, client = _bridge(
+        "token-identity", issuer="", jwks_uri="", external_id_claim="account.uuid", token_identity_keys=["account"],
+    )
     provider = OidcProvider(
         issuer=ISSUER, client_id=client.client_id,
         token={"access_token": "a", "refresh_token": "r", "account": {"uuid": "token-account"}},

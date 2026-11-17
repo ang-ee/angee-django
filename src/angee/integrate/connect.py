@@ -136,10 +136,10 @@ def complete_account_connect(
     )
     external_id = oauth_client.external_id_from_claims(claims)
     if not external_id:
-        # Restricted tokens may be unable to call userinfo. Anthropic's one-year
-        # inference-only exchange returns the stable ``account`` mapping in the
-        # token response instead, so use that provider-authenticated metadata as
-        # a fallback without persisting it as credential secret material.
+        # A provider without a usable userinfo read can identify the account in
+        # its token response; the registration declares those keys
+        # (``OAuthClient.token_identity_keys``). Use that provider-authenticated
+        # metadata as a fallback without persisting it as credential secret material.
         token_claims = protocol.token_response_claims
         external_id = oauth_client.external_id_from_claims(token_claims)
         if external_id:

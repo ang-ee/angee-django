@@ -1,0 +1,8 @@
+# Notion's public-integration registration; the deployment supplies its client id and secret.
+- xref: oauth_notion
+  slug: notion
+  environment: prod
+  provider_type: notion
+  display_name: Notion
+  icon: integration
+  is_enabled: true

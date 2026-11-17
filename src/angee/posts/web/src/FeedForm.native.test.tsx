@@ -6,7 +6,7 @@ import { testDataResource } from "@angee/metadata/testing";
 import { refineFieldsFromPaths } from "@angee/refine";
 import { CONNECT_RECORD_FIELDS } from "@angee/integrate";
 import { containerChildren } from "@angee/app/testing";
-import { AppRuntimeProvider, FORM_CONTAINERS, ModalsHost, ToastProvider, containersFromChildren, createRouteHref, defaultWidgets } from "@angee/ui";
+import { AppRuntimeProvider, FORM_CONTAINERS, ModalsHost, ToastProvider, containersFromChildren, defaultWidgets } from "@angee/ui";
 import { createUiTestProviders } from "@angee/ui/testing";
 import { afterEach, expect, test, vi } from "vitest";
 
@@ -43,12 +43,11 @@ function fixture({ replyHold = null, connectable = false }: { replyHold?: number
     attached: true, authorize_url: "", error: null, mode: "redirect", state: "", redirect_uri: "",
   } } }));
   const update = vi.fn(async ({ variables }: { variables: Record<string, unknown> }) => ({ data: { ...row, ...variables } }));
-  const router = createRouter({ routeTree: createRootRoute(), history: createMemoryHistory({ initialEntries: ["/"] }) });
+  const router = createRouter({ routeTree: createRootRoute(), history: createMemoryHistory({ initialEntries: ["/feeds/feed"] }) });
   render(<Provider dataProvider={{ getOne, custom, update }}><RouterContextProvider router={router}>
     <AppRuntimeProvider runtime={{ widgets: defaultWidgets,
       containers: containersFromChildren(FORM_CONTAINERS, Object.fromEntries(Object.keys(posts.containers ?? {})
         .map((address) => [address, Object.fromEntries(containerChildren(posts, address))]))),
-      routeHref: createRouteHref([{ name: "posts.feeds", path: "/resolved/feeds" }]),
     }}><ModalsHost><ToastProvider>
       <feedForm.Component resource="posts.Feed" id="feed" />
     </ToastProvider></ModalsHost></AppRuntimeProvider>
@@ -90,12 +89,12 @@ test("a dirty feed keeps Connect visible but disabled", async () => {
   expect(f.custom).not.toHaveBeenCalled();
 });
 
-test("Connect uses the route owner's href and the saved feed identity", async () => {
+test("Connect returns to the current record page with the saved feed identity", async () => {
   const f = fixture({ connectable: true });
   fireEvent.click(await screen.findByRole("button", { name: "Connect" }));
   await waitFor(() => expect(f.custom).toHaveBeenCalledOnce());
   expect(f.custom.mock.calls[0]?.[0]).toEqual(expect.objectContaining({ meta: expect.objectContaining({ gqlVariables: {
-    resource: "posts.Feed", id: "feed", redirectUri: `${window.location.origin}/integrate/oauth/callback`, next: "/resolved/feeds",
+    resource: "posts.Feed", id: "feed", redirectUri: `${window.location.origin}/integrate/oauth/callback`, next: "/feeds/feed",
   } }) }));
   expect(await screen.findByText("Connection saved", { selector: "h2" })).toBeTruthy();
 });
