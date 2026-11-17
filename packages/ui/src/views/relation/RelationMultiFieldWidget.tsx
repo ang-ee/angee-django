@@ -43,6 +43,10 @@ export interface RelationMultiFieldWidgetProps {
   filters?: readonly CrudFilter[];
   /** Hasura condition narrowing the related rows offered by the picker. */
   where?: Record<string, unknown>;
+  /** Related-row field whose value groups the offered rows under headings (e.g. `category.name`). */
+  optionGroupField?: string;
+  /** Related-row number ordering those groups (e.g. `category.position`). */
+  optionGroupOrderField?: string;
   /**
    * Explicit inline-create configuration. Overrides the default derived from the
    * related model's metadata, exactly as `RelationFieldWidget` does; pass null to
@@ -77,6 +81,8 @@ export function RelationMultiFieldWidget({
   relation,
   filters,
   where,
+  optionGroupField,
+  optionGroupOrderField,
   create,
   "aria-label": ariaLabel,
   controlRef,
@@ -93,6 +99,8 @@ export function RelationMultiFieldWidget({
     where,
     sort: true,
     searchText,
+    optionGroupField,
+    optionGroupOrderField,
   });
   // Loaded related records carry their own labels, also outside the option page;
   // bare ids (seeded by an action, or past the first page) are read for theirs.

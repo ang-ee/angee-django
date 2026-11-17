@@ -8,6 +8,7 @@ import { SelectPrimitive, SelectValue, SelectIcon, SelectList, SelectItem, Selec
 import { widgetControlPresentationProps } from "../ui/widget-control";
 import { widgetLabel } from "./label";
 import {
+  groupOptions,
   optionLabel,
   optionTextLabel,
   relationIdList,
@@ -82,11 +83,14 @@ function Many2ManyChipsEdit({
     && (onSearchChange !== undefined || !needle || labelText(option).toLocaleLowerCase().includes(needle)));
   const exact = options.some((option) => labelText(option).trim().toLocaleLowerCase() === needle);
   const creatable = text !== "" && !exact;
-  const offered = [
-    ...matches.map((option) => option.value),
+  // Grouped options list under their headings in group order; the create items close the list.
+  const groups = groupOptions(matches);
+  const grouped = groups.some((group) => group.label !== null);
+  const createItems = [
     ...(onCreate && creatable ? [CREATE_ITEM] : []),
     ...(onCreateAndEdit && creatable ? [CREATE_AND_EDIT_ITEM] : []),
   ];
+  const offered = [...groups.flatMap((group) => group.options.map((option) => option.value)), ...createItems];
   // Nothing left to pick and nothing typed opens no list: an empty "No options" panel is a dead end.
   const shown = open && (offered.length > 0 || text !== "");
   const search = (next: string) => {
@@ -94,6 +98,12 @@ function Many2ManyChipsEdit({
     onSearchChange?.(next);
   };
   const remove = (id: string) => onChange?.(selected.filter((item) => item !== id));
+  const renderItem = (item: string) => <Combobox.Item key={item} value={item} size={sizing.size}>
+    <Combobox.ItemText>
+      {item === CREATE_ITEM ? t("relation.create", { query: text })
+        : item === CREATE_AND_EDIT_ITEM ? t("relation.createAndEdit") : optionLabel(options, item)}
+    </Combobox.ItemText>
+  </Combobox.Item>;
   return (
     <Combobox.Root<string, true> multiple autoHighlight
       value={selected} items={[...selected, ...offered]} filteredItems={offered} filter={null}
@@ -125,12 +135,15 @@ function Many2ManyChipsEdit({
       </Combobox.Chips>
       <Combobox.Popup anchor={boxRef} size={sizing.size}>
         <Combobox.List>
-          {(item: string) => <Combobox.Item key={item} value={item} size={sizing.size}>
-            <Combobox.ItemText>
-              {item === CREATE_ITEM ? t("relation.create", { query: text })
-                : item === CREATE_AND_EDIT_ITEM ? t("relation.createAndEdit") : optionLabel(options, item)}
-            </Combobox.ItemText>
-          </Combobox.Item>}
+          {grouped ? <>
+            {groups.map((group) => <Combobox.Group key={group.label ?? ""} items={group.options.map((option) => option.value)}>
+              <Combobox.GroupLabel>{group.label ?? t("options.otherGroup")}</Combobox.GroupLabel>
+              <Combobox.Collection>{renderItem}</Combobox.Collection>
+            </Combobox.Group>)}
+            {createItems.length ? <Combobox.Group items={createItems}>
+              <Combobox.Collection>{renderItem}</Combobox.Collection>
+            </Combobox.Group> : null}
+          </> : renderItem}
         </Combobox.List>
         <Combobox.Empty />
       </Combobox.Popup>

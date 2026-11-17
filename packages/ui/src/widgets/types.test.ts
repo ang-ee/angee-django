@@ -1,9 +1,30 @@
 import { createElement } from "react";
 import { describe, expect, test } from "vitest";
 
-import { optionLabel, optionTextLabel, relationValueId } from "./types";
+import { groupOptions, optionLabel, optionTextLabel, relationValueId, type WidgetOption } from "./types";
 
 describe("widget option helpers", () => {
+  test("groups options by their group order, keeping first appearance among equals and ungrouped last", () => {
+    const options: WidgetOption[] = [
+      { value: "loose", label: "Loose" },
+      { value: "partner", label: "Partner", group: "Relationship", groupOrder: 2 },
+      { value: "unordered", label: "Unordered", group: "Misc" },
+      { value: "enterprise", label: "Enterprise", group: "Segment", groupOrder: 1 },
+      { value: "prospect", label: "Prospect", group: "Relationship", groupOrder: 2 },
+    ];
+    const groups = groupOptions(options);
+    expect(groups.map((group) => [group.label, group.options.map((option) => option.value)])).toEqual([
+      ["Segment", ["enterprise"]],
+      ["Relationship", ["partner", "prospect"]],
+      ["Misc", ["unordered"]],
+      [null, ["loose"]],
+    ]);
+    // With no grouped option, one unlabelled group holds them all.
+    const flat: WidgetOption[] = [{ value: "a", label: "A" }];
+    expect(groupOptions(flat)).toEqual([{ label: null, options: flat }]);
+    expect(groupOptions<WidgetOption>([])).toEqual([{ label: null, options: [] }]);
+  });
+
   test("resolves option labels and falls back to the raw value", () => {
     expect(optionLabel([{ value: "draft", label: "Draft" }], "draft")).toBe(
       "Draft",

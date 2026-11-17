@@ -688,6 +688,7 @@ export const enUiMessages: Record<string, string> = {
   "many2many.add": "Add record",
   "many2many.options": "Show options",
   "many2many.record": "record",
+  "options.otherGroup": "Other",
   "tagInput.label": "Tags",
   "deletePreview.title": "Delete {count} records?",
   "deletePreview.description":

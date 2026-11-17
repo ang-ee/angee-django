@@ -91,6 +91,10 @@ export function useSearchCatalog<TRow extends Row>(input: UseSearchCatalogInput<
       return [{ field: name, label: field.label ?? contributed?.label ?? fieldLabel(name, undefined),
         source: declared?.options ? "declared" : contributed?.source ?? "scalar",
         ...(contributed?.group !== undefined ? { group: contributed.group } : {}),
+        ...(contributed?.optionGroupField ? {
+          optionGroupField: contributed.optionGroupField,
+          ...(contributed.optionGroupOrderField ? { optionGroupOrderField: contributed.optionGroupOrderField } : {}),
+        } : {}),
         ...(relation && axis ? { relation, optionForValue: (value: string, label: React.ReactNode = value) => {
           const bucket = { key: { [axis.groupBy().valueKey]: value } };
           const filter = axis.drill(bucket);

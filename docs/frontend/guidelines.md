@@ -1222,7 +1222,12 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
   its baseline, so it is not dirty. A `kind:"list"` field with *no* relation target
   (a plain string array) stays the `tagInput`. This mirrors the to-one
   `relationFieldInfo` + `RelationFieldWidget` — compose those, never hand-roll a
-  relation-list control.
+  relation-list control. `optionGroupField` and `optionGroupOrderField` (related-row
+  paths, as `optionDescriptionField` is) group the offered rows under headings: on
+  `RelationMultiFieldWidget` and on a relation `Facet`, whose panel reads its
+  options' related rows once while it is open. Options carry `group` and
+  `groupOrder`, and `groupOptions` orders them, ungrouped last; tags group by
+  `category.name` in `category.position` order.
 - **Tags show only where an owner places them, never as a chatter tab, and save
   with the record.** An owner composes the backend's `TaggedModel` on the model
   and declares its type's `tags/tag_assignment` relation, `TaggedNode` on its

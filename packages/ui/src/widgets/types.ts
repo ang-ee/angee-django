@@ -30,6 +30,10 @@ export interface VisibilityAction {
 export interface WidgetOption {
   value: string;
   label: ReactNode;
+  /** The heading this option lists under in a picker, as a filter option's `group` is. */
+  group?: string;
+  /** Orders the groups (lower first); options of one group share it. */
+  groupOrder?: number;
   /** The option's own `#rrggbb` colour (a related record's `color`), filling its chip. */
   color?: string;
   disabled?: boolean;
@@ -116,6 +120,37 @@ export function canonicalOptionValue(
     (option) => optionToken(option.value) === lower,
   );
   return matches.length === 1 ? matches[0]?.value : undefined;
+}
+
+/**
+ * Options under their groups: groups by `groupOrder` (ordered groups first, then in
+ * first-appearance order), options in their given order within a group, and the
+ * ungrouped options last under a `null` label. With no grouped option, one
+ * `null` group holds them all, so a picker renders a flat list.
+ * @kind null
+ * @reason Format utility: converts data to display or storage text.
+ */
+export function groupOptions<TOption extends { group?: string; groupOrder?: number }>(
+  options: readonly TOption[],
+): readonly { label: string | null; options: readonly TOption[] }[] {
+  const groups = new Map<string, { label: string; order: number; first: number; options: TOption[] }>();
+  const ungrouped: TOption[] = [];
+  options.forEach((option, index) => {
+    if (!option.group) {
+      ungrouped.push(option);
+      return;
+    }
+    const group = groups.get(option.group)
+      ?? { label: option.group, order: option.groupOrder ?? Number.POSITIVE_INFINITY, first: index, options: [] };
+    group.options.push(option);
+    groups.set(option.group, group);
+  });
+  const ordered = [...groups.values()].sort((left, right) =>
+    left.order === right.order ? left.first - right.first : left.order < right.order ? -1 : 1);
+  return [
+    ...ordered.map(({ label, options: grouped }) => ({ label, options: grouped })),
+    ...(ungrouped.length > 0 || ordered.length === 0 ? [{ label: null, options: ungrouped }] : []),
+  ];
 }
 
 /**
