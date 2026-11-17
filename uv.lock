@@ -29,6 +29,7 @@ members = [
     "angee-intake",
     "angee-integrate",
     "angee-integrate-github",
+    "angee-integrate-google",
     "angee-integrate-iphone",
     "angee-integrate-vcs",
     "angee-jobs",
@@ -147,6 +148,7 @@ dependencies = [
     { name = "angee-intake" },
     { name = "angee-integrate" },
     { name = "angee-integrate-github" },
+    { name = "angee-integrate-google" },
     { name = "angee-integrate-iphone" },
     { name = "angee-integrate-vcs" },
     { name = "angee-jobs" },
@@ -252,6 +254,7 @@ requires-dist = [
     { name = "angee-intake", editable = "src/angee/intake" },
     { name = "angee-integrate", editable = "src/angee/integrate" },
     { name = "angee-integrate-github", editable = "src/angee/integrate_github" },
+    { name = "angee-integrate-google", editable = "src/angee/integrate_google" },
     { name = "angee-integrate-iphone", editable = "src/angee/integrate_iphone" },
     { name = "angee-integrate-vcs", editable = "src/angee/integrate_vcs" },
     { name = "angee-jobs", editable = "src/angee/jobs" },
@@ -745,20 +748,20 @@ source = { editable = "src/angee/iam_integrate_oidc" }
 dependencies = [
     { name = "angee-iam" },
     { name = "angee-integrate" },
+    { name = "angee-integrate-google" },
     { name = "angee-parties" },
     { name = "angee-web" },
     { name = "django-compose" },
-    { name = "pyjwt", extra = ["crypto"] },
 ]
 
 [package.metadata]
 requires-dist = [
     { name = "angee-iam", editable = "src/angee/iam" },
     { name = "angee-integrate", editable = "src/angee/integrate" },
+    { name = "angee-integrate-google", editable = "src/angee/integrate_google" },
     { name = "angee-parties", editable = "src/angee/parties" },
     { name = "angee-web", editable = "src/angee/web" },
     { name = "django-compose", specifier = ">=0.1.0.dev10,<0.2" },
-    { name = "pyjwt", extras = ["crypto"], specifier = ">=2.15" },
 ]
 
 [[package]]
@@ -812,6 +815,7 @@ dependencies = [
     { name = "httpcore2" },
     { name = "httpx2" },
     { name = "joserfc" },
+    { name = "pyjwt", extra = ["crypto"] },
     { name = "qrcode", extra = ["pil"] },
 ]
 
@@ -830,6 +834,7 @@ requires-dist = [
     { name = "httpcore2", specifier = ">=2.10,<3" },
     { name = "httpx2", specifier = ">=2.10,<3" },
     { name = "joserfc", specifier = ">=1.6.8" },
+    { name = "pyjwt", extras = ["crypto"], specifier = ">=2.15" },
     { name = "qrcode", extras = ["pil"], specifier = ">=8.2" },
 ]
 
@@ -843,6 +848,17 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [{ name = "angee-integrate-vcs", editable = "src/angee/integrate_vcs" }]
+
+[[package]]
+name = "angee-integrate-google"
+version = "3.0.0"
+source = { editable = "src/angee/integrate_google" }
+dependencies = [
+    { name = "angee-integrate" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "angee-integrate", editable = "src/angee/integrate" }]
 
 [[package]]
 name = "angee-integrate-iphone"

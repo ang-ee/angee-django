@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, ClassVar, cast
 
 from django.core.exceptions import ValidationError
@@ -71,16 +70,15 @@ class CredentialOidc(Composable, extends="integrate.Credential"):
 
 
 class OAuthClientOidc(Composable, extends="integrate.OAuthClient"):
-    """OpenID Connect login extension for ``integrate.OAuthClient``.
+    """OpenID Connect login policy extension for ``integrate.OAuthClient``.
 
     The composer folds these fields into the single OAuth client table when the
     OIDC login addon is installed. Presence is no longer a separate 1:1 row:
-    ``login_enabled`` is the discriminator for public login/link flows.
+    ``login_enabled`` is the discriminator for public login/link flows. The OIDC
+    metadata that verifies an ID token (issuer, JWKS) is the base client's.
     """
 
     hasura_insertable_fields: ClassVar[tuple[str, ...]] = (
-        "issuer",
-        "jwks_uri",
         "login_enabled",
         "link_on_email_match",
         "create_on_login",
@@ -89,8 +87,6 @@ class OAuthClientOidc(Composable, extends="integrate.OAuthClient"):
     hasura_readable_fields: ClassVar[tuple[str, ...]] = hasura_insertable_fields
     hasura_updatable_fields: ClassVar[tuple[str, ...]] = hasura_insertable_fields
 
-    issuer = models.URLField(blank=True)
-    jwks_uri = models.URLField(blank=True)
     login_enabled = models.BooleanField(default=False, db_index=True)
     link_on_email_match = models.BooleanField(default=False)
     create_on_login = models.BooleanField(default=False)
@@ -136,15 +132,3 @@ class OAuthClientOidc(Composable, extends="integrate.OAuthClient"):
 
         clients = cls.login_picker_queryset(cls._base_manager.all())
         return rows.filter(status=AccountStatus.ACTIVE, oauth_client_id__in=clients.values("pk"))
-
-    DISCOVERY_FIELDS = {
-        "issuer": "issuer",
-        "jwks_uri": "jwks_uri",
-    }
-    """Discovery-document keys projected onto OIDC login fields."""
-
-    def fill_extension_fields_from_discovery(self, discovery: Mapping[str, Any]) -> bool:
-        """Fill blank OIDC fields from a discovery document; return whether changed."""
-
-        changed = self.fill_discovery_fields(discovery, self.DISCOVERY_FIELDS)
-        return super().fill_extension_fields_from_discovery(discovery) or changed

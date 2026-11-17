@@ -35,6 +35,7 @@ def test_anthropic_resource_rehome_refuses_competing_ledger_identity():
                       content_hash="retained", target_model="integrate.OAuthClient", target_id="ocl_existing")
         old = Resource.objects.create(source_addon="angee.integrate", **values)
         Resource.objects.create(source_addon="angee.agents_integrate_anthropic", **values)
-        with pytest.raises(RuntimeError, match="Both Integrate and Anthropic"), transaction.atomic():
+        refused = pytest.raises(RuntimeError, match="Both angee.integrate and angee.agents_integrate_anthropic")
+        with refused, transaction.atomic():
             rehome(apps, SimpleNamespace(connection=connection))
         assert Resource.objects.filter(pk=old.pk, source_addon="angee.integrate").exists()

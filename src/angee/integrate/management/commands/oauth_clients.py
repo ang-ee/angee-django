@@ -13,7 +13,7 @@ class Command(BaseCommand):
 
     A thin dispatcher: ``OAuthClientManager.sync_from_settings`` owns reading the
     setting, validating entries, and the idempotent upsert of the OAuth base fields.
-    The OIDC refinement is owned and seeded by the ``iam_integrate_oidc`` addon. The
+    Login policy is owned and seeded by the ``iam_integrate_oidc`` addon. The
     host owns putting secrets into that setting (from the environment); this command
     only triggers the sync after ``migrate``.
     """

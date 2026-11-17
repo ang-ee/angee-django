@@ -28,6 +28,7 @@ dependencies = [
     "angee-intake==3.0.0",
     "angee-integrate==3.0.0",
     "angee-integrate-github==3.0.0",
+    "angee-integrate-google==3.0.0",
     "angee-integrate-iphone==3.0.0",
     "angee-integrate-vcs==3.0.0",
     "angee-jobs==3.0.0",
@@ -142,6 +143,7 @@ angee-iam-integrate-oidc = {workspace = true}
 angee-intake = {workspace = true}
 angee-integrate = {workspace = true}
 angee-integrate-github = {workspace = true}
+angee-integrate-google = {workspace = true}
 angee-integrate-iphone = {workspace = true}
 angee-integrate-vcs = {workspace = true}
 angee-jobs = {workspace = true}
@@ -292,6 +294,12 @@ forbidden_modules = [
   "angee.workflows", "angee.workflows_agents", "angee.workflows_extraction", "angee.workflows_integrate",
   "angee.workflows_messaging", "angee.workflows_parties", "angee.workflows_posts",
 ]
+
+[[tool.importlinter.contracts]]
+name = "OAuth and its vendor presets do not import the login addon"
+type = "forbidden"
+source_modules = ["angee.integrate", "angee.integrate_google"]
+forbidden_modules = ["angee.iam_integrate_oidc"]
 
 [[tool.importlinter.contracts]]
 name = "Serving modules never import build owners"

@@ -39,6 +39,7 @@ export const IntegrateConnectAccountComplete = graphql(`
       error
       account { id display_name }
       credential { id display_name status }
+      restart { authorize_url mode state redirect_uri }
     }
   }
 `);

@@ -70,7 +70,7 @@ from angee.integrate.errors import IntegrationError
 from angee.integrate.mixins import SyncStateMixin
 from angee.integrate.models import Bridge, IntegrationCreateMode, IntegrationManager
 from angee.integrate.oauth import flow, state
-from angee.integrate.oauth.errors import PROVIDER_UNAVAILABLE, OAuthFlowError
+from angee.integrate.oauth.errors import PROVIDER_UNAVAILABLE, ConsentRequired, OAuthFlowError
 from angee.integrate.oauth.registrations import OAuthRegistrationExtension, operation_registration_slugs
 from angee.integrate.states import ConflictKeep, StreamState, SyncFailure, SyncFailureKind, SyncFailureStatus
 
@@ -312,6 +312,8 @@ class OAuthClientType(AngeeNode):
     environment: auto
     client_id: auto
     discovery_url: auto
+    issuer: auto
+    jwks_uri: auto
     authorize_endpoint: auto
     token_endpoint: auto
     revoke_endpoint: auto
@@ -468,6 +470,8 @@ class ConnectAccountResult:
     claims: JSON | None = None
     error: str | None = None
     error_code: str | None = None
+    restart: OAuthStartPayload | None = None
+    """With ``consent_required``: the same connect started again asking for consent; follow it."""
 
 
 @strawberry.type
@@ -582,6 +586,8 @@ _OAUTH_CLIENT_RESOURCE = hasura_model_resource(
         "client_secret",
         "environment",
         "discovery_url",
+        "issuer",
+        "jwks_uri",
         "authorize_endpoint",
         "token_endpoint",
         "revoke_endpoint",
@@ -613,6 +619,8 @@ _OAUTH_CLIENT_RESOURCE = hasura_model_resource(
         "client_secret",
         "environment",
         "discovery_url",
+        "issuer",
+        "jwks_uri",
         "authorize_endpoint",
         "token_endpoint",
         "revoke_endpoint",
@@ -803,8 +811,8 @@ class ConnectionMutation:
     def discover_oauth_endpoints(self, id: PublicID) -> ActionResult:
         """Fetch OIDC metadata and fill this client's blank endpoints.
 
-        The resolved authorize/token/userinfo endpoints (and any composed extension
-        endpoints, e.g. OIDC issuer/JWKS) are persisted on the OAuth client row, so
+        The resolved authorize/token/userinfo endpoints, OIDC issuer and JWKS URI
+        are persisted on the OAuth client row, so
         the operator never types them by hand. Requires a discovery URL on the row.
         """
 
@@ -843,6 +851,14 @@ class ConnectionMutation:
             Integration.objects.attach_completed_connect(
                 result.integration_id, result.user, result.credential,
                 exposed_model_labels=_exposed_model_labels(info),
+            )
+        except ConsentRequired as refused:
+            try:
+                restart = flow.restart_with_consent(request, oauth_client, refused.record)
+            except OAuthFlowError as error:
+                return ConnectAccountResult(error=error.public_message, error_code=error.code)
+            return ConnectAccountResult(
+                error=refused.public_message, error_code=refused.code, restart=OAuthStartPayload.from_start(restart),
             )
         except OAuthFlowError as error:
             if error.transient:
@@ -1113,7 +1129,7 @@ class IntegrationConnectionMixin:
         extensions=[PermissionsExtension(("write",))],
         annotate={
             f"_connection_{name}": partial(_credential_projection, name)
-            for name in ("status", "expires_at", "last_refresh_status")
+            for name in ("status", "expires_at", "last_refresh_status", "granted_scopes")
         },
     )
     def credential_status(self) -> str | None:
@@ -1717,17 +1733,17 @@ _INTEGRATION_RESOURCE = hasura_model_resource(
         "lifecycle",
         "runtime_status",
     ],
-    updatable=["vendor", "credential", "account"],
+    # The account binding follows the credential (``Integration.attach_connection``).
+    updatable=["vendor", "credential"],
     insert=False,
     field_id_decode={
         "vendor": public_pk_decoder(Vendor),
         "credential": public_pk_decoder(Credential),
-        "account": public_pk_decoder(ExternalAccount),
     },
     get_queryset=partial(IntegrationType.get_queryset, Integration.objects),
     write_backend=IntegrationWriteBackend(
         Integration,
-        public_id_fields=("vendor", "credential", "account"),
+        public_id_fields=("vendor", "credential"),
     ),
 )
 _WEBHOOK_SUBSCRIPTION_RESOURCE = hasura_model_resource(

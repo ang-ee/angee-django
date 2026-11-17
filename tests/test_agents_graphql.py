@@ -1667,12 +1667,17 @@ def test_connect_inference_provider_uses_provider_backend_oauth_client(db: None)
             authorize_endpoint="https://provider.example/authorize",
             token_endpoint="https://provider.example/token",
         )
+        account = ExternalAccount.objects.link(oauth_client, "anthropic-account", owner=provider.owner)
         credential = Credential.objects.upsert_for_user(
             provider.owner,
             oauth_client,
             str(CredentialKind.OAUTH),
             {"access_token": "anthropic-token"},
+            external_account=account,
         )
+        # The provider stays connected as that account, so its live credential is reused.
+        type(provider).objects.filter(pk=provider.pk).update(account=account)
+        provider.refresh_from_db()
         assert provider.connect_oauth_client("Inference provider").pk == oauth_client.pk
     mutation = """
         mutation ConnectProvider($id: ID!) {
@@ -1693,7 +1698,7 @@ def test_connect_inference_provider_uses_provider_backend_oauth_client(db: None)
         "error": None,
         "integration": {
             "lifecycle": "CONNECTED",
-            "credential": {"display_name": "Anthropic Personal"},
+            "credential": {"display_name": "Anthropic Personal (anthropic-account)"},
         },
     }
     provider.refresh_from_db()

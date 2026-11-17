@@ -118,7 +118,20 @@ The provider's `refine_grant(protocol, tokens)` runs after code exchange and
 before profile lookup or credential persistence. It can call
 `OAuthClientProtocol.exchange_grant(grant_type, **grant)` for an additional
 wire exchange. Those names distinguish refinement from a token request.
-Product presets and registrations belong to their capability addons.
+Product presets and registrations belong to their capability addons; a vendor
+whose one client serves several capabilities has its own addon
+([`integrate_google`](../integrate_google/__init__.py)).
+
+One client serves every consumer of a provider: a capability declares its client
+and scopes once (`OAuthConnectIntent` in [`impl.py`](impl.py)). The owners of the
+connect rules are `OAuthClient.requested_scopes` (scopes),
+`CredentialManager.upsert_for_user` (one credential per external account and the
+grant checks), `Integration.attach_connection` (the account binding),
+`OAuthProviderType.authorize_params` (the prompt),
+[`connect.complete_account_connect`](connect.py) (account identity) and
+`connect.complete_external_account_link` (the consent restart). A credential stored
+without an account, before credentials were per account, and the integrations it
+serves without a binding bind to the first account that connects.
 
 Connection adapters declare `IntegrationImpl.requires_connection_discovery = True`
 to opt into asynchronous `discover_connection`/`apply_discovery`. Manual and
@@ -134,8 +147,8 @@ connect and OIDC login/link pass them to
 `OAuthClientProtocol.fetch_userinfo(access_token, params=…)`.
 Provider proofs and query vocabulary stay in the provider addon. Connect and
 OIDC login/link share `OAuthClientProtocol.exchange_identity`, which exchanges,
-refines and reads userinfo. OIDC verifies the nonce-bound ID token from the code
-exchange, independently of the refined material stored for API access.
+refines and reads userinfo. OIDC login verifies the nonce-bound ID token from the
+code exchange, independently of the refined material stored for API access.
 Server-side signing reads confidential material only
 through `OAuthClientProtocol.confidential_client_secret()`; public clients are
 refused before secret storage is accessed; confidential clients without a secret

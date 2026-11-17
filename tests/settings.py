@@ -37,6 +37,7 @@ INSTALLED_APPS = [
     "tests.iam_app.TestIAMConfig",
     "angee.integrate",
     "angee.integrate_vcs",
+    "angee.integrate_google",
     "angee.iam_integrate_oidc",
     "angee.agents",
     "angee.agents_integrate_anthropic",

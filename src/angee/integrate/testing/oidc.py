@@ -1,4 +1,4 @@
-"""A fake OpenID provider for tests of OIDC login, account linking and OAuth connect."""
+"""A fake OpenID provider for tests of OAuth connect, ID-token verification and OIDC login."""
 
 from __future__ import annotations
 
@@ -28,7 +28,9 @@ class OidcProvider:
 
     Pass it as the ``mock_transport`` handler (``angee.integrate.testing.http``). Under
     ``issuer`` it serves discovery, the JWKS, the token endpoint for form and JSON
-    grants, userinfo and revocation, at the paths ``metadata`` advertises. The token
+    grants, userinfo and revocation, at the paths ``metadata`` advertises; it answers
+    by the last path segment, so a preset's own endpoints (Google's JWKS at
+    ``certs``) reach it too. The token
     endpoint answers ``token``; with ``id_claims`` it adds an RS256 ID token signed by
     the key the JWKS publishes, so login runs PyJWT's real verification.
     """
@@ -70,7 +72,7 @@ class OidcProvider:
         endpoint = request.url.path.rsplit("/", 1)[-1]
         if endpoint == "openid-configuration":
             return httpx2.Response(200, json=self.metadata)
-        if endpoint == "jwks":
+        if endpoint in {"jwks", "certs"}:
             public = RSAAlgorithm.to_jwk(signing_key().public_key(), as_dict=True)
             return httpx2.Response(200, json={"keys": [{**public, "kid": KEY_ID, "use": "sig"}]})
         if endpoint == "token":

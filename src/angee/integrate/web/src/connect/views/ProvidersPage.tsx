@@ -96,6 +96,8 @@ export function ProvidersPage(): React.ReactElement {
         </Group>
         <Group label={t("providers.group.endpoints")} columns={2}>
           <Field name="discovery_url" />
+          <Field name="issuer" />
+          <Field name="jwks_uri" />
           <Field name="authorize_endpoint" />
           <Field name="token_endpoint" />
           <Field name="revoke_endpoint" />

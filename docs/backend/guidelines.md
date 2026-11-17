@@ -1626,6 +1626,15 @@ retains its native routing contract.
   Seeds must omit those fields to preserve their live values.
   Unchanged rows with hashes from the previous state-inclusive rule migrate
   only their ledger hash; changed seed values or keys still trigger import.
+- **A seed field an operator owns after creation is declared `create_only` on its entry.**
+  The [resource loader](../../src/angee/resources/loader.py) applies it only to a row
+  the current load creates, through any entry (`load_scope`), and never to an
+  adopted, existing or re-applied row; like transition-owned state it stays out of
+  the row hash. A row an owner verb persists (`resource_class`) counts as created
+  when the load found none to adopt. Put such rows in their own entry, so other rows keep their policy: adding
+  `create_only` to a shipped entry changes its rows' hashes, so each existing row is
+  re-applied once (without the create-only fields). An adoption field cannot be
+  create-only, and grant entries take none.
 - **Demo resource tiers are additive across installed addons.** A deployment that
   needs demo rows but not one permissive seed must exclude that exact entry with
   `ANGEE_RESOURCE_EXCLUDED_ENTRIES`, keyed as `addon.name:resources/path.yaml`;
