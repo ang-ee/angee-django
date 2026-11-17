@@ -16,7 +16,6 @@ from collections.abc import Collection, Iterator
 from dataclasses import dataclass, replace
 from datetime import date, timedelta
 from io import StringIO
-from types import SimpleNamespace
 from typing import Any
 from unittest.mock import patch
 from urllib.parse import urljoin
@@ -26,12 +25,10 @@ import httpcore2
 import httpx2
 import pytest
 import vobject
-from django.apps import apps
-from django.apps.registry import Apps
 from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.core.management import call_command
-from django.db import connection, models
+from django.db import connection
 from django.db.models.fetch_modes import FetchMode
 from django.test.utils import CaptureQueriesContext
 from django.utils import timezone
@@ -72,7 +69,6 @@ from angee.parties.backends import (
     contact_from_projection,
     contact_projection,
 )
-from angee.parties.compose_migrations.parties.addressbook_links import adopt_addressbooks
 from angee.parties_integrate_carddav import backend as carddav_backend
 from angee.parties_integrate_carddav.backend import (
     _DAV_RESPONSE_CAP,
@@ -2611,101 +2607,77 @@ def test_an_address_book_rename_restates_its_folder_and_a_persons_rename_outrank
     assert (folder.name, _stated_name(folder, book)) == ("Mine", "Family")
 
 
-def test_a_removed_address_book_retires_its_contacts_stream_and_marks_its_contacts_absent(
+def test_an_address_book_name_longer_than_a_folder_name_is_truncated(replica: Replica) -> None:
+    replica.server.books[_BOOK] = "N" * 300
+    assert sync_bridge(replica.directory) == 2  # The renamed book and the contact baseline.
+    folder = Folder.objects.get(directory=replica.directory)
+    assert folder.name == "N" * Folder._meta.get_field("name").max_length
+    assert RecordLink.objects.get(stream=replica.addressbooks).status == LinkStatus.CURRENT
+
+
+def test_a_removed_address_book_pauses_its_contacts_then_retires_them_once_its_absence_is_confirmed(
     replica: Replica,
 ) -> None:
     person, link = replica.baseline()
     folder = Folder.objects.get(directory=replica.directory)
     book = RecordLink.objects.get(stream=replica.addressbooks, external_key=_BOOK)
+    work = f"{_BASE}books/work/"
+    replica.server.books[work] = "Work"  # The listing stays non-empty, so the missing book is evidence.
+    sync_bridge(replica.directory)
     del replica.server.books[_BOOK]
-    replica.server.requests.clear()
 
-    assert sync_bridge(replica.directory) == 1
-    for row in (book, replica.stream, link):
-        row.refresh_from_db()
-    assert (book.status, replica.stream.state) == (LinkStatus.TOMBSTONE, StreamState.RETIRED)
-    assert (link.status, link.absence_count, link.target_object_id) == (LinkStatus.UNAVAILABLE, 1, str(person.pk))
-    assert not [request for request in replica.server.requests if request[1].startswith(_BOOK)]
+    for confirmed in (False, True):
+        replica.server.requests.clear()
+        assert sync_bridge(replica.directory) == 0
+        for row in (book, replica.stream, link):
+            row.refresh_from_db()
+        assert not [request for request in replica.server.requests if request[1].startswith(_BOOK)]
+        assert [(item.key, item.partition) for item in replica.backend.streams()] == [
+            ("addressbooks", ""),
+            ("contacts", work),
+        ]
+        if not confirmed:
+            # One missed listing only pauses the book's contacts.
+            assert (book.status, book.absence_count, replica.stream.state) == (
+                LinkStatus.UNAVAILABLE,
+                1,
+                StreamState.OPEN,
+            )
+            assert link.status == LinkStatus.CURRENT
+    assert (book.status, replica.stream.state, replica.stream.reconcile_state) == (
+        LinkStatus.TOMBSTONE,
+        StreamState.RETIRED,
+        {},
+    )
+    assert (link.status, link.target_object_id) == (LinkStatus.TOMBSTONE, str(person.pk))
     assert Person.objects.filter(pk=person.pk).exists() and Folder.objects.filter(pk=folder.pk).exists()
-    asserted = Folder.statements.model.StatementStatus.ASSERTED
-    assert not Folder.statements.filter(subject=folder, link=book, status=asserted).current().exists()
-    assert [item.key for item in replica.backend.streams()] == ["addressbooks"]
 
 
-class LegacyFolder(models.Model):
-    """The folder row an upgrading project's history still carries: found by its ``source_href``."""
-
-    name = models.CharField(max_length=200)
-    directory_id = models.BigIntegerField(null=True)
-    source_href = models.CharField(max_length=1024, blank=True, default="")
-
-    class Meta:
-        apps = Apps()
-        app_label = "parties"
-        db_table = "test_legacy_parties_folder"
-
-
-def test_the_upgrade_adopts_each_folder_as_its_address_book_without_losing_or_refetching_a_contact(
-    db: None,
+def test_a_failed_discovery_raises_and_leaves_every_address_book_in_place(
+    replica: Replica, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    del db
-    server = FakeDav()
-    with system_context(reason="test address-book upgrade"), mock_transport(server.handle_request):
-        directory = make_integration(
-            "carddav-upgrade", model=Directory, backend_class="carddav", config={"server_url": _BASE}
-        )
-        backend = CardDavDirectoryBackend(directory)
-        # Today's rows: a folder found by its href beside a contacts stream synced to a delta cursor.
-        folder = Folder._base_manager.create(name="Contacts", directory=directory, created_by=directory.owner)
-        scaffold = current_stream(directory, "addressbooks", kind=StreamKind.RECORD_REPLICA)
-        holder = RecordLink.objects.observe(scaffold, _BOOK, target=folder)
-        contacts = SyncStream.objects.current(directory, directory.contacts_stream(holder))
-        contacts = advance_stream(contacts, backend).stream
-        SyncStream._base_manager.filter(pk=contacts.pk).update(container=None, last_reconciled_at=timezone.now())
-        RecordLink._base_manager.filter(pk=holder.pk).delete()
-        SyncStream._base_manager.filter(pk=scaffold.pk).delete()
-        contact = RecordLink.objects.get(stream=contacts, external_key="ada")
-        before = (
-            Folder._base_manager.values().get(pk=folder.pk),
-            RecordLink._base_manager.values().get(pk=contact.pk),
-            list(Person.objects.values_list("pk", "display_name")),
-            SyncStream._base_manager.values_list("cursor", "generation").get(pk=contacts.pk),
-        )
-        with connection.schema_editor() as editor:
-            editor.create_model(LegacyFolder)
-        try:
-            LegacyFolder.objects.create(id=folder.pk, name=folder.name, directory_id=directory.pk, source_href=_BOOK)
+    replica.baseline()
+    book = RecordLink.objects.get(stream=replica.addressbooks, external_key=_BOOK)
+    original = replica.server.handle_request
 
-            def historical(app_label: str, model_name: str) -> Any:
-                legacy = (app_label, model_name) == ("parties", "Folder")
-                return LegacyFolder if legacy else apps.get_model(app_label, model_name)
+    def unavailable(request: httpx2.Request) -> httpx2.Response:
+        if request.method == "PROPFIND" and b"current-user-principal" in request.content:
+            return httpx2.Response(503)
+        return original(request)
 
-            adopt_addressbooks(SimpleNamespace(get_model=historical), SimpleNamespace(connection=connection))
-        finally:
-            with connection.schema_editor() as editor:
-                editor.delete_model(LegacyFolder)
+    monkeypatch.setattr(replica.server, "handle_request", unavailable)
+    with pytest.raises(BridgeSyncError) as refused:
+        sync_bridge(replica.directory)
+    assert [failure.definition.key for failure in refused.value.failures] == ["addressbooks"]
+    book.refresh_from_db()
+    replica.stream.refresh_from_db()
+    assert (book.status, book.absence_count, replica.stream.state) == (LinkStatus.CURRENT, 0, StreamState.OPEN)
 
-        addressbooks = SyncStream.objects.current_for_bridge(directory, "addressbooks").get()
-        book = RecordLink.objects.get(stream=addressbooks)
-        assert (addressbooks.kind, addressbooks.direction) == (StreamKind.RECORD_REPLICA, StreamDirection.PULL)
-        assert (book.external_key, book.target) == (_BOOK, folder)
-        assert set(SyncStream._base_manager.filter(key="contacts").values_list("container_id", flat=True)) == {book.pk}
-        assert (
-            Folder._base_manager.values().get(pk=folder.pk),
-            RecordLink._base_manager.values().get(pk=contact.pk),
-            list(Person.objects.values_list("pk", "display_name")),
-            SyncStream._base_manager.values_list("cursor", "generation").get(pk=contacts.pk),
-        ) == before
 
-        server.requests.clear()
-        assert sync_bridge(directory) == 1  # The adopted address book states its name once.
-        assert not [request for request in server.requests if "addressbook-multiget" in request[3]]
-        assert _stated_name(folder, book) == "Contacts"
-        contact.refresh_from_db()
-        assert (contact.applied_base_id, contact.target_object_id) == (
-            before[1]["applied_base_id"],
-            before[1]["target_object_id"],
-        )
-        assert SyncStream._base_manager.get(pk=contacts.pk).container_id == book.pk
-        assert sync_bridge(directory) == 0
-        assert list(Person.objects.values_list("pk", "display_name")) == before[2]
+def test_an_empty_listing_confirms_no_address_book_absence(replica: Replica) -> None:
+    replica.baseline()
+    sync_bridge(replica.directory)  # Completes the first daily contact sweep.
+    replica.server.books.clear()
+    assert sync_bridge(replica.directory) == 0
+    book = RecordLink.objects.get(stream=replica.addressbooks, external_key=_BOOK)
+    assert (book.status, book.absence_count) == (LinkStatus.CURRENT, 0)

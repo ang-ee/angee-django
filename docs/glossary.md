@@ -201,6 +201,14 @@ on its `RecordLink` (or on the `SyncStream` when no link exists) with kind, code
 source hash, mapping version, details, attempts, retry and resolution. The one
 noun for that state; "discrepancy" is retired.
 
+**Container (sync)** — a record of a parent stream that is also the partition of
+a child stream: an address book holding its contacts, a calendar its events. The
+child names the container's `RecordLink` (`SyncStream.container`). The container
+is live while it observes a bound target with no absence counted; an unavailable
+one pauses its child, and one that stops observing retires it (a terminal
+`RETIRED` generation). Distinct from a composition container (a contributed UI
+slot).
+
 **Rule / Seed** — provenance's persisted non-user principals: `Rule` (one row per
 registered rule or matcher, kind RULE, created by the owning resource
 declaration) and `Seed` (one row per seed load, kind SEED). They assert the

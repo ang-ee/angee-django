@@ -22,6 +22,7 @@ from django.db.models.fields.json import KeyTextTransform
 from django.db.models.functions import Coalesce
 
 from angee.base.serialization import canonical_json_sha256
+from angee.integrate.errors import IntegrationError
 from angee.integrate.http import HttpClientMixin
 from angee.integrate.impl import AdapterContractError, BridgeImpl
 from angee.integrate.states import LinkStatus, StreamDefinition, StreamKind, StreamPhase
@@ -224,33 +225,41 @@ class DirectoryBackend(BridgeImpl, HttpClientMixin):
         """
 
         yield StreamDefinition(ADDRESSBOOKS, kind=StreamKind.RECORD_REPLICA)
-        # Links follow their stream's current generation, so the key alone selects them.
-        addressbooks = (
-            apps.get_model("integrate", "RecordLink")
-            .objects.filter(
-                stream__integration_id=self.bridge.pk, stream__key=ADDRESSBOOKS, target_object_id__isnull=False
-            )
-            .observing()
-            .select_related("stream")
-            .order_by("external_key")
-        )
-        for addressbook in addressbooks:
+        for addressbook in apps.get_model("integrate", "RecordLink").objects.containers_of(self.bridge, ADDRESSBOOKS):
             yield self.bridge.contacts_stream(addressbook)
 
     def extract(self, stream: Any, page_bound: int, *, deadline: float | None = None) -> StreamPage:
-        """Compare the complete address-book listing with its links; contacts page through the source."""
+        """Compare the complete address-book listing with its links; contacts page through the source.
+
+        A book the listing omits is reported absent on the listing's last page,
+        so it pauses its contacts and retires them only once its absence is
+        confirmed. An empty listing while books are known confirms nothing.
+        """
 
         if stream.key != ADDRESSBOOKS:
             return self.extract_contacts(stream, page_bound, deadline=deadline)
-        changes = self._addressbook_changes(stream, self.discover())
-        return StreamPage(changes[:page_bound], {}, exhausted=len(changes) <= page_bound)
+        books = self.discover()
+        changes = self._addressbook_changes(stream, books)
+        exhausted = len(changes) <= page_bound
+        absent = ()
+        if exhausted and books:
+            listed = {book.href for book in books}
+            absent = tuple(
+                stream.links.observing().exclude(external_key__in=listed).order_by("pk").values_list(
+                    "external_key", flat=True
+                )
+            )
+        return StreamPage(changes[:page_bound], {}, exhausted=exhausted, absent=absent)
 
     def read_keys(self, stream: Any, keys: Sequence[str]) -> Iterable[RecordChange]:
         """Read address books from the listing, or one book's contacts through the source."""
 
         if stream.key != ADDRESSBOOKS:
             return self.read_contacts(stream, keys)
-        return self._addressbook_changes(stream, self.discover(), keys=keys)
+        books = self.discover()
+        if not books:
+            raise IntegrationError("The address-book listing came back empty; retrying later.", transient=True)
+        return self._addressbook_changes(stream, books, keys=keys)
 
     def extract_contacts(self, stream: Any, page_bound: int, *, deadline: float | None = None) -> StreamPage:
         """Fetch one bounded page of an address book's contacts outside transactions."""
@@ -267,10 +276,10 @@ class DirectoryBackend(BridgeImpl, HttpClientMixin):
     ) -> list[RecordChange]:
         """Map the listing to address-book records, or to the requested identities.
 
-        A listing is complete: a book no longer listed is a tombstone. A baseline
-        re-reads each listed book once per generation; later, only a new, renamed
-        or revived book is a record. The local side is the name the link states,
-        so a person's rename is not a local change of this pull-only stream.
+        A baseline reads each listed book once per generation; later, only a
+        new, renamed or reappearing book is a record. A requested identity the
+        listing omits is a tombstone. The local side is the name the link
+        states, so a person's rename is not a local change of this pull-only stream.
         """
 
         links = {link.external_key: link for link in stream.links.order_by("pk")}
@@ -278,18 +287,16 @@ class DirectoryBackend(BridgeImpl, HttpClientMixin):
         folders = apps.get_model("parties", "Folder").objects
         baseline = stream.phase == StreamPhase.BASELINE
         changes = []
-        for href in sorted(set(listed) | set(links)) if keys is None else keys:
+        for href in sorted(listed) if keys is None else keys:
             book, link = listed.get(href), links.get(href)
             payload = {"href": href} if book is None else {"href": href, "name": book.name}
-            if keys is None and (
-                (book is None and (link is None or link.status == LinkStatus.TOMBSTONE))
-                or (
-                    book is not None
-                    and link is not None
-                    and link.status != LinkStatus.TOMBSTONE
-                    and link.source_payload == payload
-                    and (not baseline or link.last_verified_generation == stream.generation)
-                )
+            if (
+                keys is None
+                and link is not None
+                and link.status != LinkStatus.TOMBSTONE
+                and not link.absence_count
+                and link.source_payload == payload
+                and (not baseline or link.last_verified_generation == stream.generation)
             ):
                 continue
             target = link.target if link is not None else None

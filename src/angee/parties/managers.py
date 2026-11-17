@@ -2229,9 +2229,11 @@ class FolderManager[FolderT: Folder](AngeeHistoryManager[FolderT]):
         stream. A new folder belongs to that directory and its owner; the link is
         bound before the statement so the directory is admitted to state it.
         Survivorship applies the name, so a person's rename keeps outranking it.
-        Database work only, inside the stream's page transaction.
+        A name longer than the folder's is truncated, never refused. Database
+        work only, inside the stream's page transaction.
         """
 
+        name = name[: self.model._meta.get_field("name").max_length]
         integration = link.stream.integration
         folder = link.target if isinstance(link.target, self.model) else None
         with transaction.atomic():

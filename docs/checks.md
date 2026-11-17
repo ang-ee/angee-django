@@ -58,13 +58,18 @@ model registry to make a missing native type visible. The composed typing host
 is isolated from the running stack and pytest's bare source-model settings.
 
 Projects author data upgrades as ordinary Django migrations with explicit
-dependencies, historical models and the schema editor's database alias. Compose
-preserves those files. The [native-history tests](../tests/test_native_initial_history.py)
+dependencies, historical models and the schema editor's database alias, copying an
+addon's migration template from `compose_migrations/<app_label>/` and pinning their
+own dependencies ([project migration history](composer.md#project-migration-history)).
+Compose preserves those files. A template's test applies its `Migration` through
+Django's `MigrationExecutor` against migration state, never live models, forwards
+and back (the [address-book template test](../tests/test_parties_addressbook_upgrade.py)).
+The [native-history tests](../tests/test_native_initial_history.py)
 cover initial authoring, project data operations and preservation across rebuilds;
 the [migration-policy tests](../tests/test_runtime_migrations.py) cover Resources'
-retirement policy and the native drop guard. Previously shipped transition sources
-are historical upgrade assets only; retire them after the supported upgrade cutoff
-and preserve Python imports still required by retained migration history.
+retirement policy and the native drop guard. Retire a template after its
+upgrade cutoff and preserve Python imports still required by retained migration
+history.
 
 Framework import boundaries are `[tool.importlinter]` contracts in
 [`pyproject.toml`](../pyproject.toml), checked by `lint-imports`.

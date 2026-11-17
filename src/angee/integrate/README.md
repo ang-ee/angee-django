@@ -86,23 +86,17 @@ a declaration never changes an existing stream.
 A declared snapshot with no reconciliation interval closes after its baseline;
 explicit resync opens a new generation. Missing cadence alone never means read-once.
 
-A container (an address book, a calendar) is a record of a parent stream and
-the partition of a child stream. The child's declaration names the container's
-link (`StreamDefinition.container`, persisted as `SyncStream.container`); its
-partition is the link's external key, on the same bridge, and never changes.
-`streams()` declares from local state and writes nothing: the container row is
-created and updated on the parent stream's apply path like any record, with its
-link, statements and history, and a child is declared only while its container
-link observes its target (`RecordLinkQuerySet.observing`). `sync_bridge` drains a
-parent stream before its children in the same cycle and declares again after a
-wave whose replicas applied records, so a new container's children drain at
-once; partitions without a declared parent keep their order and parallelism.
-When a container link is tombstoned, its child streams retire
-(`SyncStreamManager.retire_children`): a retired generation is no longer drained,
-and each of its links is marked absent once under the child's absence policy,
-with the adapter's `on_absent` hook, so targets follow their normal absence or
-tombstone path and nothing is deleted. A later declaration of the revived
-container reopens the child as a new baseline generation.
+A [container](../../../docs/glossary.md#backend) (an address book, a
+calendar) is a record of a parent stream and the partition of a child stream,
+whose declaration names the container's link
+([`StreamDefinition.container`](states.py)). The container row is created on the
+parent's apply path like any record. A container is live, and its child
+declared, only while
+[`RecordLinkQuerySet.live_containers`](models.py) admits it: a container whose
+absence is being counted pauses its child, and one that stops observing retires
+it ([`SyncStreamManager.retire_children`](models.py)); the retirement pass
+tombstones the child's links and deletes nothing. The
+[driver](streams.py) (`sync_bridge`) owns ordering, deadlines and re-declaration.
 
 Several inbound problems can coexist. For one record link, new source or mapping
 evidence closes older versions of the same non-conflict problem while retaining

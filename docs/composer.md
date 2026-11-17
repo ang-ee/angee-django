@@ -185,19 +185,25 @@ history. Review and commit schema changes before provisioning.
 
 Data upgrades use native `RunPython` or `RunSQL` operations with explicit Django
 dependencies. Use the historical `apps` registry and the schema editor's database
-alias. Addon releases describe required data upgrades; the project authors them
-against its own retained history. Fresh installations need only their applicable
+alias. An addon that needs a data upgrade ships a migration template at
+`src/angee/<addon>/compose_migrations/<app_label>/<name>.py`: typed forward and
+reverse callables and a `Migration` whose operations use them, with a documented
+placeholder dependency list and never `__latest__`. The project copies the module
+into `runtime/<app_label>/migrations/`, replaces the placeholders with its own
+explicit leaves and keeps the bytes; its history stays its own. django-compose 0.1
+has no automatic runtime-migration seam, so hosts copy templates by hand, as the
+release's CHANGELOG entry directs. The addon keeps a template until the
+CHANGELOG's stated upgrade cutoff. Fresh installations need only their applicable
 initialization, not completed upgrades from older deployments.
 
 The django-compose 0.1 migration cutoff removes transition discovery, baseline
 assertions and adoption. Remove `COMPOSE_TRANSITION_SOURCE` from project settings
-and `[tool.angee.migrations.initial_baseline]` from package metadata. Previously
-shipped `compose_migrations/` files are historical upgrade assets, not compiler
-inputs. Before upgrading an existing project, inventory pending data operations
-and author any still required into its native history. Retained materialized
-migrations continue as ordinary Django files; preserve their bytes and required
-Python imports. Do not create empty origins to certify work already represented
-by the project's native history.
+and `[tool.angee.migrations.initial_baseline]` from package metadata. The compiler
+never reads `compose_migrations/`. Before upgrading an existing project, inventory
+pending data operations and author any still required into its native history.
+Retained materialized migrations continue as ordinary Django files; preserve their
+bytes and required Python imports. Do not create empty origins to certify work
+already represented by the project's native history.
 
 `MIGRATION_MODULES` is Django's routing contract. The compiler preserves tracked
 histories, including history-only apps whose source addon has been removed.

@@ -50,8 +50,9 @@ class StreamPhase(models.TextChoices):
 class StreamState(models.TextChoices):
     """Reopening a closed generation starts a fresh baseline.
 
-    A retired generation's container link was tombstoned, so it is no longer
-    drained; a later declaration of its revived container reopens it.
+    A retired generation's container link stopped observing (tombstoned or
+    withdrawn), so it is no longer drained; it reopens only once its container is
+    live again (``SyncStreamManager.bump_generation``).
     """
 
     OPEN = "open", "Open"
@@ -122,8 +123,8 @@ class StreamDefinition:
     container: RecordLink | None = None
     """The parent stream's link whose record this partition belongs to.
 
-    The partition is the container's external key. The driver drains the parent
-    stream before this one, and the container's tombstone retires this stream.
+    The partition is the container's external key. An unavailable container
+    pauses this stream; one that stops observing retires it.
     """
 
     @classmethod

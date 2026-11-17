@@ -1,24 +1,33 @@
-"""Address books become records: each folder's ``source_href`` becomes its address-book link.
+"""Migration template: address books become records, each folder's ``source_href`` its link.
 
-Run after integrate's ``SyncStream.container`` column exists and before the folder
-column is dropped (the operations below). Each folder with a ``source_href`` is
-adopted into its directory's ``addressbooks`` stream: a ``RecordLink`` whose
-external key is the href targets the folder, and every generation of the
-matching contacts stream (same directory, partition = the href) names that link
-as its container. No folder, contact, contact link or cursor changes, so nothing
-is downloaded again. The adopted link carries no observation yet, so the next
-sync applies each address book once, which states its name on the folder.
+Copy this module into the project's ``runtime/parties/migrations/``, replace the
+placeholder dependencies with the project's own explicit leaves, and keep its
+bytes. It runs after the integrate migration that adds ``SyncStream.container``
+and before the folder column is dropped (the operations below).
+
+Each folder with a ``source_href`` is adopted into its directory's
+``addressbooks`` stream: a ``RecordLink`` whose external key is the href targets
+the folder, and every generation of the matching contacts stream (same directory,
+partition = the href) names that link as its container. No folder, contact,
+contact link or cursor changes, so nothing is downloaded again. The adopted link
+carries no observation yet, so the next sync applies each listed address book
+once, which states its name on the folder. Running it again adopts nothing twice.
+The reverse restores ``source_href`` from the adopted links' external keys.
 
 Historical models keep ``Meta.ordering`` on ``sqid``, which migration state does
-not carry, so the update clears the ordering.
+not carry, so every update clears the ordering.
 """
 
 from django.db import migrations
+from django.db.backends.base.schema import BaseDatabaseSchemaEditor
+from django.db.migrations.state import StateApps
 
 ADDRESSBOOKS = "addressbooks"
 
 
-def adopt_addressbooks(apps, schema_editor):
+def adopt_addressbooks(apps: StateApps, schema_editor: BaseDatabaseSchemaEditor) -> None:
+    """Adopt each folder's href as its address-book link and the container of its contacts stream."""
+
     alias = schema_editor.connection.alias
     folders = apps.get_model("parties", "Folder")._base_manager.using(alias)
     streams = apps.get_model("integrate", "SyncStream")._base_manager.using(alias)
@@ -55,10 +64,31 @@ def adopt_addressbooks(apps, schema_editor):
         ).order_by().update(container_id=link.pk)
 
 
+def restore_source_hrefs(apps: StateApps, schema_editor: BaseDatabaseSchemaEditor) -> None:
+    """Write each adopted address book's external key back to its folder's ``source_href``."""
+
+    alias = schema_editor.connection.alias
+    folders = apps.get_model("parties", "Folder")._base_manager.using(alias)
+    links = apps.get_model("integrate", "RecordLink")._base_manager.using(alias)
+    adopted = links.filter(
+        stream__key=ADDRESSBOOKS,
+        target_content_type__app_label="parties",
+        target_content_type__model="folder",
+    ).order_by("pk")
+    for link in adopted.values("target_object_id", "external_key"):
+        folders.filter(pk=link["target_object_id"]).order_by().update(source_href=link["external_key"])
+
+
 class Migration(migrations.Migration):
-    dependencies = [("parties", "__latest__"), ("integrate", "__latest__")]
+    # Placeholders: replace with this project's explicit leaves, the parties migration
+    # this follows and the integrate migration that adds ``SyncStream.container``.
+    dependencies = [
+        ("parties", "0000_parties_leaf"),
+        ("integrate", "0000_syncstream_container"),
+    ]
     operations = [
-        migrations.RunPython(adopt_addressbooks, migrations.RunPython.noop),
+        migrations.RunPython(adopt_addressbooks, restore_source_hrefs),
         migrations.RemoveConstraint("folder", "uq_folder_directory_source"),
         migrations.RemoveField("folder", "source_href"),
     ]
+

@@ -98,10 +98,11 @@ source addon contributes one adapter class, its registry key and its tests. Refe
    `reconcile_interval`, `absence_threshold`, `tombstone_retention`, `snapshot`, `authoritative`, `mapping_version`, `config`,
    `container`; `StreamDefinition` in `src/angee/integrate/states.py`). If a partition is itself a record of another
    stream (an address book, a calendar) → declare that parent stream, create the container row in its `apply_record`,
-   and declare one child per observing container link with `container=<link>` and `partition=<link external key>`
-   (`DirectoryBackend.streams` in `src/angee/parties/backends.py`); the driver drains parents first and retires the
-   children of a tombstoned container. `extract` returns one page and the cursor that covers it; the
-   driver commits both. If the source is a mutable replica → return `RecordChange` rows and implement
+   report a complete listing's misses as `StreamPage.absent`, and declare one child per
+   `RecordLink.objects.containers_of(bridge, key)` link with `container=<link>` and `partition=<link external key>`
+   (`DirectoryBackend.streams` in `src/angee/parties/backends.py`); the driver pauses the child of an unavailable
+   container and retires the child of one that stops observing. `extract` returns one page and the cursor that
+   covers it; the driver commits both. If the source is a mutable replica → return `RecordChange` rows and implement
    `enumerate_keys`, `read_keys` (set `supports_identity_reads = True`) and, for two-way, `local_changes` +
    `write_back` (`src/angee/integrate/impl.py`). If the capability base already applies →
    inherit `apply_record`; otherwise apply through the domain's idempotent ingest verb and return

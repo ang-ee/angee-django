@@ -5,9 +5,11 @@ A Directory composes the [record-sync driver](../integrate/README.md). Its
 book's RecordLink targets the folder and is the container of that book's
 `contacts` stream, whose partition is the book's href. The directory states the
 folder's name through that link ([FolderManager.ingest_addressbook](managers.py)),
-so a person's rename outranks a remote one. A book missing from the listing is a
-tombstone that retires its contacts stream and marks its contacts absent; folders
-and parties stay. `streams()` declares from local state only. RecordLink owns
+so a person's rename outranks a remote one. A book missing from the listing
+pauses its contacts; once its absence is confirmed it retires its contacts
+stream, whose contacts are tombstoned, while folders and parties stay. An empty
+listing confirms nothing, and a refused discovery raises. `streams()` declares
+from local state only. RecordLink owns
 external identity and wire payloads. Party rows remain independent of any one
 directory.
 
