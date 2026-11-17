@@ -180,6 +180,7 @@ class WorkflowRunType(RecordReferenceNode):
     )
     error: str | None
     failure_reason: str | None = strawberry_django.field(only=["outcome", "error", "output"])
+    hold: str | None = strawberry_django.field(annotate={"_hold": WorkflowRun.hold_expression()})
     request_key: auto
     created_at: auto
     updated_at: auto
@@ -301,6 +302,11 @@ class StepRunType(AngeeNode):
     def can_retry(self, info: strawberry.Info) -> bool:
         """Project the same model rule checked by the retry action."""
         return bool(cast(Any, self).can_retry(get_current_user(info)))
+
+    @strawberry_django.field(only=["status", "node_key", "run_id"], prefetch_related=_STEP_POLICY_VERSION)
+    def can_reprocess_from(self, info: strawberry.Info) -> bool:
+        """Project the same model rule checked by the reprocess-from-step action."""
+        return bool(cast(Any, self).can_reprocess_from(get_current_user(info)))
 
     @strawberry_django.field(
         only=["node_key", "page_index", "run_id"],
@@ -470,13 +476,19 @@ class TriggerEnablePreviewType:
 class TriggerType(AngeeNode):
     """A workflow's editable event admission policy and server-owned activation."""
 
-    display_name: str = strawberry_django.field(resolver=AngeeNode.display_name, only=["source", "model_label"])
+    display_name: str = strawberry_django.field(
+        resolver=AngeeNode.display_name, only=["source", "model_label", "recurrence"],
+    )
     workflow: WorkflowType | None = actor_scoped_to_one("workflow")
     source: auto
     model_label: auto
     source_model: str = strawberry_django.field(only=["source", "model_label"])
     condition: JSON
+    recurrence: auto
+    recurrence_start: auto
+    recurrence_zone: auto
     enabled: auto
+    enabled_at: auto
     disabled_reason: auto
 
     @strawberry_django.field
@@ -526,9 +538,11 @@ class TriggerEventType(RecordReferenceNode):
 
     trigger: TriggerType | None = actor_scoped_to_one("trigger")
     started_run: WorkflowRunType | None = actor_scoped_to_one("started_run")
+    occurs_at: auto
     changed_at: auto
     evaluated_at: auto
     admitted_at: auto
+    skipped_at: auto
     rejection: auto
 
     record_model: str | None = strawberry_django.field(
@@ -581,7 +595,9 @@ _RUN_RESOURCE = hasura_model_resource(
         "trigger_event",
         "created_at",
         "finished_at",
+        "hold",
     ],
+    filter_expressions={"hold": WorkflowRun.hold_expression()},
     record_ref_filters=("subject_model", "subject_id"),
     record_ref_requires_read=True,
     sortable=["created_at", "updated_at", "finished_at", "status"],
@@ -651,12 +667,18 @@ _TRIGGER_INSERT = (
     "source",
     "model_label",
     "condition",
+    "recurrence",
+    "recurrence_start",
+    "recurrence_zone",
     *declared_hasura_resource_fields(Trigger, "hasura_insertable_fields"),
 )
 _TRIGGER_UPDATE = (
     "source",
     "model_label",
     "condition",
+    "recurrence",
+    "recurrence_start",
+    "recurrence_zone",
     *declared_hasura_resource_fields(Trigger, "hasura_updatable_fields"),
 )
 _TRIGGER_RESOURCE = hasura_model_resource(
@@ -686,10 +708,10 @@ _TRIGGER_RESOURCE = hasura_model_resource(
 _TRIGGER_EVENT_RESOURCE = hasura_model_resource(
     TriggerEventType,
     model=TriggerEvent,
-    filterable=["id", "trigger", "started_run", "admitted_at"],
+    filterable=["id", "trigger", "started_run", "admitted_at", "skipped_at"],
     record_ref_filters=("record_model", "record_id"),
     record_ref_requires_read=True,
-    sortable=["changed_at", "evaluated_at", "admitted_at"],
+    sortable=["occurs_at", "changed_at", "evaluated_at", "admitted_at"],
     aggregatable=["id"],
     insert=False,
     update=False,
@@ -769,6 +791,15 @@ class WorkflowActionMutation:
         run = authorized_action_target(info, WorkflowRun, id, "write")
         replacement = WorkflowRun.objects.reprocess(run, actor=get_current_user(info))
         return ActionResult(ok=True, message="Run reprocessed.", id=replacement.sqid)
+
+    @strawberry.mutation
+    @action_guard("Reprocess run failed.")
+    def reprocess_workflow_run_from_step(self, info: strawberry.Info, id: PublicID) -> ActionResult:
+        """Start a replacement for a terminal run from one of its visible steps as the requesting operator."""
+        step_run = authorized_permission_target(info, StepRun, id, "read")
+        run = authorized_action_target(info, WorkflowRun, step_run.run.sqid, "write")
+        replacement = WorkflowRun.objects.reprocess(run, actor=get_current_user(info), from_node=step_run.node_key)
+        return ActionResult(ok=True, message="Run reprocessed from the step.", id=replacement.sqid)
 
     @strawberry.mutation
     @action_guard("Retry step failed.")

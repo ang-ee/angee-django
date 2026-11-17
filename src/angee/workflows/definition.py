@@ -1328,6 +1328,32 @@ class Definition(BaseModel):
         """Return control ancestors through the shared cycle-tolerant graph walk."""
         return self._walk(self.graph, self.graph[key])
 
+    def descendants(self, key: str) -> set[str]:
+        """Return ``key`` and every node its routes reach, through the same graph walk."""
+        following: dict[str, set[str]] = {node: set() for node in self.graph}
+        for target, sources in self.graph.items():
+            for source in sources:
+                following[source].add(target)
+        return self._walk(following, [key])
+
+    def reusable_rows[R: StepRow](self, rows: Iterable[R], from_node: str) -> list[R]:
+        """Return the retained rows a reprocess from ``from_node`` copies.
+
+        The node and every node it reaches run again. Each other row that settled
+        with a routed result (succeeded, skipped, or failed through a declared
+        error route) is reused, map items with their map; an unsettled row or an
+        unrouted failure is planned afresh.
+        """
+        if from_node not in self.nodes:
+            raise ValidationError("A reprocess starts at a declared node.")
+        rerun = self.descendants(from_node)
+        settled = {StepRunStatus.SUCCEEDED, StepRunStatus.SKIPPED, StepRunStatus.FAILED}
+        return [
+            row for row in rows
+            if row.node_key.partition(".")[0] not in rerun and row.status in settled
+            and not self.unrouted_failure([row])
+        ]
+
     def unrouted_failure(self, rows: Iterable[StepRow]) -> bool:
         """Whether a failed node has no declared route for its built-in failure."""
         return any(

@@ -79,6 +79,7 @@ def test_execution_resources_expose_reads_without_engine_crud(schema):
         "start_workflow_run",
         "cancel_workflow_run",
         "reprocess_workflow_run",
+        "reprocess_workflow_run_from_step",
         "retry_step",
         "retry_step_accepting_duplicate",
         "enable_workflow_trigger",

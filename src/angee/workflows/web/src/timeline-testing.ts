@@ -33,27 +33,27 @@ export function timelineFixture(state: TimelineState = "decision"): TimelineSele
   review.decision = decision;
   review.records = [{ id: "wsrec_7", label: "Review notes", operation: "read", record_model: "notes.Note", record_id: "nte_7" }];
   const run: Run = {
-    id: "wfr_review", display_name: "Record review", status: "WAITING", origin: "MANUAL", outcome_label: "", failure_reason: null,
+    id: "wfr_review", display_name: "Record review", status: "WAITING", hold: "decision", origin: "MANUAL", outcome_label: "", failure_reason: null,
     version: { workflow: { display_name: "Record review" } },
     created_at: at, finished_at: null, stopped_at: null, output: {}, can_cancel: true, run_as: { display_name: "River" },
     subject_model: null, subject_id: null,
     parent_step: null, trigger_event: null, graph: { nodes: [], edges: [] }, graph_step_runs: [],
   };
   if (state === "clean") {
-    run.status = "SUCCEEDED"; run.can_cancel = false; run.finished_at = at;
+    run.status = "SUCCEEDED"; run.hold = null; run.can_cancel = false; run.finished_at = at;
     decision.is_open = false; decision.verdict = ["accept"]; decision.answered_by = { display_name: "River" }; decision.answered_at = at;
     decision.verdict_label = "Use proposed name";
     review.outcome = "accepted"; review.outcome_label = "Use proposed name";
     for (const node of nodes) if (node.plan !== "optional") { node.plan = "done"; if (node.step_run) { node.step_run.status = "SUCCEEDED"; node.step_run.hold = null; } }
     nodes[8] = node("finish", "Finish the plan", 8, "done"); nodes[9]!.plan = "not_run";
   } else if (state === "error" || state === "run") {
-    review.decision = null; review.hold = state;
+    review.decision = null; review.hold = state; run.hold = state;
     if (state === "error") { review.status = "FAILED"; review.failure_reason = "The operation could not finish."; review.can_retry = true; run.status = "FAILED"; run.failure_reason = "A parallel branch failed."; }
     else review.awaited_run = { id: "wfr_child", display_name: "Related record check", status: "WAITING" };
   } else if (state === "stopped" || state === "interrupted") {
     if (state === "stopped") run.status = "CANCELED";
     else (run as { status: string }).status = "INTERRUPTED";
-    run.can_cancel = false; run.finished_at = at; run.stopped_at = state === "stopped" ? at : null;
+    run.hold = null; run.can_cancel = false; run.finished_at = at; run.stopped_at = state === "stopped" ? at : null;
     review.status = "CANCELED"; review.hold = null; nodes[7]!.plan = "done"; nodes[8]!.plan = nodes[9]!.plan = "not_run";
     decision.is_open = false; decision.verdict = []; decision.answered_by = { display_name: "River" }; decision.answered_at = at;
   }

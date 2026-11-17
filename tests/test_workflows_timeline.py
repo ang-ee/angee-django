@@ -359,6 +359,33 @@ def test_three_holds_are_queryable(schema, review, child_graph, register_step):
     for hold in ("decision", "run", "error"):
         data = result_data(execute_schema(schema, query, {"where": {"hold": {"_eq": hold}}}, user=actor))
         assert data["steprun"] and all(row["hold"] == hold for row in data["steprun"])
+    expected = {decision_run.sqid: "decision", parent.sqid: "run", failed.sqid: "error"}
+    assert {run: WorkflowRun.system_queryset().get(sqid=run).hold for run in expected} == expected
+    # The incidents view: runs held on an operator's error or on another run.
+    incidents = result_data(execute_schema(
+        schema, 'query { workflowrun(where: {hold: {_in: ["error", "run"]}}) { id hold } }', user=actor,
+    ))["workflowrun"]
+    assert {row["id"]: row["hold"] for row in incidents} == {parent.sqid: "run", failed.sqid: "error"}
+
+
+def test_a_run_holds_on_its_most_urgent_step_hold(review, register_step):
+    class Fail(Step[None, None, None]):
+        key = "timeline_parallel_failure"
+        def run(self, ctx):
+            raise ValueError("Needs an operator")
+    register_step(Fail)
+    run, step = start_review(review, graph={"nodes": {
+        "entry": {"step": "echo", "next": {"done": ["review", "pause"]}},
+        "review": {"step": "question", "input": {}},
+        "pause": {"step": "pause", "next": {"done": "failure"}},
+        "failure": {"step": Fail.key, "input": {}},
+    }})
+    assert step.hold == "decision" and WorkflowRun.system_queryset().get(pk=run.pk).hold == "decision"
+    runner.tick()
+    assert run_until(run).status == "failed"
+    holds = {row.node_key: row.hold for row in StepRun.system_queryset().filter(run=run)}
+    assert holds["review"] == "decision" and holds["failure"] == "error"
+    assert WorkflowRun.system_queryset().get(pk=run.pk).hold == "error"
 
 
 def test_a_routed_failure_is_done_and_does_not_hold_the_next_question(review, schema, register_step):

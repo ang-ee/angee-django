@@ -363,6 +363,14 @@ protected link identifies its parent step, prior run, or trigger event when one
 caused it. A manual run has no cause. A cited cause stays retained until its
 dependent effects are pruned.
 
+**Schedule trigger** — a trigger whose source is `schedule`: the workflow tick
+records its recurrence's occurrences, one ledger row each, and starts one run with no
+subject for the latest due occurrence. Older missed occurrences are recorded as
+skipped. See [the workflows README](../src/angee/workflows/README.md).
+
+**Run hold** — a run's most urgent step hold (`error`, then `run`, then
+`decision`). The run console's Incidents view lists runs held on `error` or `run`.
+
 **Node** — a keyed graph declaration naming a step, its bindings and outgoing
 edges in a `Definition` document.
 

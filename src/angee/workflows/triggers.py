@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import Hashable
+from collections.abc import Hashable, Sequence
 from contextvars import Context
 from dataclasses import dataclass, field, replace
+from datetime import datetime
 from inspect import getattr_static
 from typing import TYPE_CHECKING, Any, ClassVar, cast
 
@@ -15,8 +16,9 @@ from django.core import checks
 from django.core.exceptions import FieldDoesNotExist, ImproperlyConfigured, PermissionDenied, ValidationError
 from django.db import DatabaseError, transaction
 from django.db.models import F, Model, Q
-from django.db.models.functions import Now
+from django.db.models.functions import Coalesce, Now
 from django.db.models.signals import post_save
+from django.utils import timezone
 from django.utils.text import capfirst
 from rebac import (
     ObjectRef,
@@ -185,12 +187,14 @@ class RecordChangedOptIn:
 
 
 class TriggerSource(ImplBase):
-    """An event's model and scope; domain policy belongs to Trigger extensions.
+    """An event's model and scope, or a schedule's occurrences; domain policy belongs to Trigger extensions.
 
     Signal adapters and explicit bulk writers call ``dispatch(model, record)``
     inside their write transaction to feed admission and watches together.
     A registered subclass of a registered source refines it under another key
     and shares its native event: the base alone connects and dispatches.
+    A ``scheduled`` source observes no saves; the workflow tick records its
+    trigger's recurrence occurrences instead.
     """
     registry_setting: ClassVar[str] = "ANGEE_WORKFLOW_TRIGGER_SOURCE_CLASSES"
 
@@ -198,6 +202,8 @@ class TriggerSource(ImplBase):
     fields: ClassVar[tuple[str, ...]] = ()
     watch_only: ClassVar[bool] = False
     """Observe saves for step watches without becoming an admission source."""
+    scheduled: ClassVar[bool] = False
+    """Admit the trigger's recurrence occurrences on the workflow tick, with no record."""
     scope_fields: ClassVar[tuple[str, ...]] = ()
     """Trigger fields whose edits invalidate its contributed grants."""
 
@@ -426,6 +432,31 @@ class RecordChanged(TriggerSource):
             cls.dispatch(sender, instance, created_batch=created_batch)
 
 
+class Schedule(TriggerSource):
+    """The trigger's own recurrence: one run per due occurrence, about no record.
+
+    The workflow tick records each enabled schedule's occurrences after the later
+    of its enablement and its last recorded occurrence. Only the latest due one is
+    admitted; earlier ones, missed while workers were down, are recorded as skipped.
+    The schedule grants the workflow principal nothing: its runs reach what the
+    principal already may.
+    """
+
+    key = "schedule"
+    label = "Schedule"
+    scheduled = True
+
+    @classmethod
+    def validate_model(cls, model: Any) -> None:
+        """A schedule observes no model's saves."""
+        raise ValidationError("A schedule observes no record saves.")
+
+    @classmethod
+    def grant_targets(cls, trigger: Any) -> tuple[TriggerGrantTarget, ...]:
+        """A schedule admits no record, so it delegates no record scope."""
+        return ()
+
+
 def check_record_changed_models(**kwargs: Any) -> list[checks.CheckMessage]:
     """Reject opted-in models lacking their required source grant declaration."""
     del kwargs
@@ -442,11 +473,13 @@ def check_record_changed_models(**kwargs: Any) -> list[checks.CheckMessage]:
 
 
 class TriggerEventQuerySet[T: TriggerEvent](AngeeQuerySet[T]):
-    """Pending admission is a re-armed, never-admitted ledger fact."""
+    """Pending admission is a re-armed, never-admitted, never-skipped ledger fact."""
 
     def pending(self) -> Any:
         """A later save retries a rejection; admission survives run pruning."""
-        return self.filter(Q(evaluated_at__isnull=True) | Q(changed_at__gt=F("evaluated_at")), admitted_at=None)
+        return self.filter(
+            Q(evaluated_at__isnull=True) | Q(changed_at__gt=F("evaluated_at")), admitted_at=None, skipped_at=None,
+        )
 
 
 _TriggerEventManagerBase = AngeeManager.from_queryset(TriggerEventQuerySet)
@@ -495,6 +528,25 @@ class TriggerEventManager[T: TriggerEvent](_TriggerEventManagerBase[T]):
                         )
             except Exception:
                 logger.exception("Workflow trigger capture failed.")
+
+    def record_occurrences(self, trigger: Any, occurrences: Sequence[datetime]) -> int:
+        """Retain a schedule's due occurrences; only the latest awaits admission.
+
+        After downtime only the latest missed occurrence runs: every older one still
+        pending is skipped, whether recorded now, by an earlier tick, or before the
+        trigger's current enablement. The ``(trigger, occurs_at)`` identity makes
+        repeated recording a no-op. Return how many occurrences this call was given.
+        """
+        rows = self.system_context(reason="workflows.schedule")
+        if occurrences:
+            rows.bulk_create(
+                [self.model(trigger=trigger, occurs_at=moment) for moment in sorted(set(occurrences))],
+                ignore_conflicts=True,
+            )
+        current = max(occurrences, default=trigger.enabled_at)
+        if current is not None:
+            rows.filter(trigger=trigger, occurs_at__lt=current).pending().update(skipped_at=Now())
+        return len(occurrences)
 
 
 class TriggerQuerySet[T: Trigger](AngeeQuerySet[T]):
@@ -568,8 +620,8 @@ class TriggerManager[T: Trigger](_TriggerManagerBase[T]):
             raise ValidationError("Publish the workflow before enabling its trigger.")
         trigger.source_class.check_access(trigger, actor)
         targets = tuple(trigger.source_class.grant_targets(trigger))
-        if not targets:
-            raise ValidationError("The trigger source must declare at least one grant target.")
+        if not targets and not trigger.source_class.scheduled:
+            raise ValidationError("A record source must declare at least one grant target.")
         if len(set(targets)) != len(targets):
             raise ValidationError("The trigger source declared a duplicate grant target.")
         for target in targets:
@@ -613,7 +665,7 @@ class TriggerManager[T: Trigger](_TriggerManagerBase[T]):
             targets = self._enable_targets(current, actor)
             self.reconcile_grants(current, targets)
             self.model.system_queryset().filter(pk=current.pk).update(
-                enabled=True, disabled_reason="",
+                enabled=True, disabled_reason="", enabled_at=Coalesce(F("enabled_at"), Now()),
             )
             current.refresh_from_db()
             return current
@@ -664,7 +716,7 @@ class TriggerManager[T: Trigger](_TriggerManagerBase[T]):
 
     def _disable(self, trigger: Any, reason: str) -> None:
         self.model.system_queryset().filter(pk=trigger.pk).update(
-            enabled=False, disabled_reason=reason,
+            enabled=False, disabled_reason=reason, enabled_at=None,
         )
         self.reconcile_grants(trigger, ())
 
@@ -674,6 +726,8 @@ class TriggerManager[T: Trigger](_TriggerManagerBase[T]):
         Native saves already hold their record before capture. Sharing that order
         lets domain admission hooks write it without a record/event lock cycle.
         Busy records stay pending; deleted records proceed to a durable rejection.
+        A schedule's occurrence has no record: its run has no subject and its
+        request key is the occurrence instant.
         An isolated context drops a caller's ambient bypass before actor hooks.
         """
         if is_sudo():
@@ -685,7 +739,7 @@ class TriggerManager[T: Trigger](_TriggerManagerBase[T]):
             ).first()
             if event is None:
                 return False
-            record_model = event.record_content_type.model_class()
+            record_model = event.record_content_type.model_class() if event.record_content_type_id else None
             if record_model is not None:
                 records = record_model.system_queryset().filter(pk=event.record_object_id)
                 if records.lock_if_supported(no_key=True, skip_locked=True).first() is None and records.exists():
@@ -716,17 +770,24 @@ class TriggerManager[T: Trigger](_TriggerManagerBase[T]):
                 principal = trigger.workflow.user
                 with transaction.atomic(), actor_context(principal):
                     trigger.with_actor(principal)
-                    if current.record_content_type_id != ContentType.objects.get_for_model(model).pk:
-                        raise ValidationError("The source model changed after this event was recorded.")
-                    queryset = model.objects.with_actor(principal)
-                    record = condition(queryset).filter(pk=current.record_object_id).first()
-                    if record is None:
-                        raise PermissionDenied("The record is inaccessible or no longer matches the condition.")
+                    record = None
+                    if model is None:
+                        if current.occurs_at is None:
+                            raise ValidationError("A schedule admits only its own occurrences.")
+                        identity = current.occurs_at.isoformat()
+                    else:
+                        if current.record_content_type_id != ContentType.objects.get_for_model(model).pk:
+                            raise ValidationError("The source model changed after this event was recorded.")
+                        queryset = model.objects.with_actor(principal)
+                        record = condition(queryset).filter(pk=current.record_object_id).first()
+                        if record is None:
+                            raise PermissionDenied("The record is inaccessible or no longer matches the condition.")
+                        identity = public_id_of(record)
                     trigger.source_class.check_access(trigger, principal, record)
                     trigger.admit_record(record, actor=principal)
                     apps.get_model("workflows", "WorkflowRun").objects.start(
                         trigger.workflow, actor=principal, subject=record, input=trigger.admission_input(record),
-                        request_key=f"trigger:{public_id_of(trigger)}:{public_id_of(record)}",
+                        request_key=f"trigger:{public_id_of(trigger)}:{identity}",
                         trigger_event=current,
                     )
             except PublisherAuthorityDenied as error:
@@ -753,6 +814,32 @@ class TriggerManager[T: Trigger](_TriggerManagerBase[T]):
                 evaluated_at=F("changed_at"), admitted_at=Now(), rejection="",
             )
             return True
+
+    def record_occurrences(self) -> int:
+        """Record every enabled schedule's due occurrences, each trigger under its own lock.
+
+        The tick calls this before :meth:`drain`, so a due occurrence is admitted in
+        the same tick. A trigger another transaction holds waits for the next tick;
+        one broken schedule cannot stop the others. Return how many occurrences
+        were recorded.
+        """
+        keys = [source.key for source in TriggerSource.registered() if source.scheduled]
+        candidates = list(
+            self.model.system_queryset().filter(enabled=True, source__in=keys)
+            .order_by("pk").values_list("pk", flat=True)
+        ) if keys else []
+        events = apps.get_model("workflows", "TriggerEvent").objects
+        recorded = 0
+        for pk in candidates:
+            try:
+                with transaction.atomic(), system_context(reason="workflows.schedule"):
+                    trigger = (self.model.system_queryset().filter(pk=pk, enabled=True)
+                               .lock_if_supported(no_key=True, skip_locked=True).first())
+                    if trigger is not None:
+                        recorded += events.record_occurrences(trigger, trigger.due_occurrences(timezone.now()))
+            except Exception:
+                logger.exception("Workflow schedule capture failed for trigger %s.", pk)
+        return recorded
 
     def drain(self) -> int:
         """Examine an ordered, bounded batch; one broken event cannot stop later rows."""

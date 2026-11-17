@@ -52,6 +52,7 @@ from angee.workflows.states import (
     ERROR_OUTCOME,
     AttemptResult,
     NodeKey,
+    NoteTone,
     RunOrigin,
     RunRelation,
     RunStatus,
@@ -599,12 +600,20 @@ class WorkflowRunManager[T: WorkflowRun](_WorkflowRunManagerBase[T]):
         parent_step: Any = None,
         relation: str | None = None,
         trigger_event: Any = None,
+        from_node: str | None = None,
     ) -> Any:
-        """Insert the pinned version, origin and sole cause together, or replay the same request."""
+        """Insert the pinned version, origin and sole cause together, or replay the same request.
+
+        A reprocess ``from_node`` runs on the reprocessed run's version and starts
+        with copies of the steps that node cannot reach (``Definition.reusable_rows``),
+        each noting its reuse; the first plan then readies the node.
+        """
 
         actor = workflow.require_access("start", actor)
         if actor is None:
             raise PermissionDenied("A run requires an actor.")
+        if from_node is not None and reprocess_of is None:
+            raise ValidationError("Only a reprocess starts from a node.")
         if (parent_step is None and relation is not None) or (
             parent_step is not None and relation not in RunRelation.values
         ):
@@ -659,6 +668,12 @@ class WorkflowRunManager[T: WorkflowRun](_WorkflowRunManagerBase[T]):
             version = version or workflow.published
             if version is None or version.workflow_id != workflow.pk:
                 raise ValidationError("A published version of this workflow is required.")
+            reused = []
+            if from_node is not None:
+                if version.pk != reprocess_of.version_id:
+                    raise ValidationError("A reprocess from a node runs on the reprocessed run's version.")
+                prior = reprocess_of.step_runs.system_context(reason="workflows.start")
+                reused = version.definition.reusable_rows(prior.order_by("rank", "map_index", "pk"), from_node)
             principal_workflow = (
                 apps.get_model("workflows", "Workflow").system_queryset().filter(user_id=principal_id).first()
                 if principal_id is not None else None
@@ -691,6 +706,13 @@ class WorkflowRunManager[T: WorkflowRun](_WorkflowRunManagerBase[T]):
                 evidence_model(run=run, content_type=source.content_type, object_id=source.object_id)
                 for source in sorted(targets, key=lambda item: (item.content_type.pk, item.object_id))
             )
+            if reused:
+                steps = run.step_runs.system_context(reason="workflows.start")
+                reuse = {"tone": str(NoteTone.INFO), "message": f"Reused from {reprocess_of}."}
+                steps.bulk_create([steps.model(
+                    run=run, node_key=row.node_key, map_index=row.map_index, rank=row.rank, status=row.status,
+                    outcome=row.outcome, input=row.input, output=row.output, notes=[*row.notes, reuse],
+                ) for row in reused])
             with self.hold(run.pk) as locked:
                 locked.admit_subject()
                 runner.advance(locked)
@@ -746,8 +768,14 @@ class WorkflowRunManager[T: WorkflowRun](_WorkflowRunManagerBase[T]):
                 raise ValidationError("The run is still running; retry cancellation.") from error
             raise
 
-    def reprocess(self, run: Any, *, actor: Any = None) -> Any:
-        """Reprocess a terminal run on the current publication as its requesting operator."""
+    def reprocess(self, run: Any, *, actor: Any = None, from_node: str | None = None) -> Any:
+        """Reprocess a terminal run as its requesting operator; the retained run never changes.
+
+        The replacement runs on the current publication. From a node, it runs on the
+        retained run's version instead: that node and every node it reaches run
+        again, and the settled steps it cannot reach are reused. The node must be a
+        declared step of the run that ran.
+        """
 
         actor = run.require_access("write", actor)
         with self.hold(run.pk) as retained:
@@ -757,7 +785,16 @@ class WorkflowRunManager[T: WorkflowRun](_WorkflowRunManagerBase[T]):
                 workflow = retained.version.workflow
                 model = retained.subject_model_class
                 subject = model.system_queryset().get(pk=retained.subject_object_id) if model is not None else None
-            return self.start(workflow, actor=actor, subject=subject, input=retained.input, reprocess_of=retained)
+                version = None
+                if from_node is not None:
+                    step = retained.step_runs.filter(node_key=from_node, map_index=0).first()
+                    if step is None or not step.starts_reprocess:
+                        raise ValidationError("A reprocess starts at a step of the run that ran.")
+                    version = retained.version
+            return self.start(
+                workflow, actor=actor, subject=subject, input=retained.input, reprocess_of=retained,
+                version=version, from_node=from_node,
+            )
 
     def prune(self) -> int:
         """Delete bounded old owned trees, marking protected roots for a later retry."""

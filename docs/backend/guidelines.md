@@ -634,8 +634,9 @@ data through REBAC, never a queryset bypass.
   implementation changes. A refused trigger disables with a reason; a refused
   child start fails its step. The enable preview shows prospective grants and
   workflow monitor readers through REBAC's native subject lookup.
-  A `TriggerSource` declares its grant targets; a model captured by
-  `record_changed` explicitly opts in and declares its own grant targets.
+  A record `TriggerSource` declares its grant targets; a model captured by
+  `record_changed` explicitly opts in and declares its own grant targets. A
+  schedule admits no record and grants nothing.
   Enablement writes listable, revocable tuples to the workflow principal, not
   an implicit permission on the enabling user. Workflow monitoring grants
   readers access to triggered runs; per-reader record references remain redacted
@@ -2313,7 +2314,9 @@ bridge advisory lock as polling and delivery settlement.
   tick recovery. An already-running IO sibling retains its result without
   planning, and retry replans from all retained rows.
   Reprocessing records its predecessor and uses the requesting actor on the
-  current publication. Artifacts reference actor-readable records without
+  current publication; reprocessing from a node keeps the predecessor's version,
+  reuses the settled steps the node cannot reach and runs the rest again.
+  Artifacts reference actor-readable records without
   granting access to them. Admission retains the subject and each declared
   record-reference input as shared `DerivedFrom` evidence, after checking the
   run actor's standing read access. Run readers see those references through the

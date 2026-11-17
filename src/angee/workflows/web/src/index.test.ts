@@ -20,7 +20,7 @@ test("flattens Decisions into Workflows' top bar while the rail keeps one app", 
   expect(tree.roots.map((node) => node.id)).toEqual(["workflows"]);
   const workflows = tree.byId.get("workflows")!;
   expect(workflows.appChildren()).toEqual([]);
-  expect(workflows.menuItems().map((node) => node.label)).toEqual(["Runs", "Decisions", "Studio"]);
+  expect(workflows.menuItems().map((node) => node.label)).toEqual(["Runs", "Incidents", "Decisions", "Studio"]);
   expect(tree.byId.get("decisions.queue")?.children?.map((node) => node.label)).toEqual(["Inbox", "Waiting on me", "All decisions"]);
   expect(tree.byId.get("workflows.studio")?.children?.map((node) => node.id)).toEqual(["workflows.catalogue", "workflows.triggers"]);
 });
