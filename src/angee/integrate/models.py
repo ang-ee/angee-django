@@ -64,6 +64,7 @@ from angee.base.locks import LockKey, record_lock_key, task_lock, task_lock_is_h
 from angee.base.models.audit import AuditMixin
 from angee.base.models.base import AngeeDataModel, record_display_label
 from angee.base.models.implementations import ImplDefaultsMixin
+from angee.base.models.locks import ImmutableFieldsMixin
 from angee.base.models.merge_references import MergePolicy, references
 from angee.base.models.ownership import OwnerMixin, OwnerQuerySet
 from angee.base.models.refs import RecordRefMixin
@@ -107,6 +108,7 @@ from angee.integrate.oauth.state import StateFlow
 from angee.integrate.registry import models_with
 from angee.integrate.signals import discovery_finished
 from angee.integrate.states import (
+    EXTERNAL_KEY_LENGTH,
     UNSET,
     ConflictKeep,
     LinkStatus,
@@ -4584,12 +4586,34 @@ class SyncStreamQuerySet[SyncStreamT: SyncStream](AngeeHistoryQuerySet[SyncStrea
         rows = self.sudo(reason="integrate.stream.current_for_bridge").filter(integration_id=bridge.pk)
         if key is not None:
             rows = rows.filter(key=key)
+        return rows.latest_generations().order_by("key", "partition")
+
+    def latest_generations(self) -> Self:
+        """Keep each selected partition's current epoch, whatever its state."""
+
         latest = (
-            rows.filter(key=OuterRef("key"), partition=OuterRef("partition"))
+            self.model._base_manager.filter(
+                integration_id=OuterRef("integration_id"), key=OuterRef("key"), partition=OuterRef("partition")
+            )
             .order_by("-generation")
             .values("generation")[:1]
         )
-        return rows.filter(generation=Subquery(latest)).order_by("key", "partition")
+        return self.filter(generation=Subquery(latest))
+
+    def retiring(self, stream: models.Model) -> Self:
+        """The current child streams of ``stream`` with a pending retirement pass and a container still gone.
+
+        A container that observes again pauses its child's pass, which the child's
+        reopening drops (:meth:`SyncStreamManager.bump_generation`).
+        """
+
+        return (
+            self.filter(container__stream=stream, state=StreamState.RETIRED)
+            .exclude(reconcile_state={})
+            .exclude(RecordLinkQuerySet.observing_rule("container__"))
+            .latest_generations()
+            .order_by("key", "partition")
+        )
 
 
 _SyncStreamManagerBase = AngeeHistoryManager.from_queryset(SyncStreamQuerySet)
@@ -4601,7 +4625,7 @@ class SyncStreamManager[SyncStreamT: SyncStream](_SyncStreamManagerBase[SyncStre
     def lock_current(self, stream: Any, *, fenced_to: Any = None) -> Any:
         """Fence one page against epoch changes inside the caller's transaction.
 
-        The stream row lock is shared with epoch retirement. A stale extracted
+        The stream row lock is shared with epoch changes. A stale extracted
         page must fail before any domain records or cursor state are applied.
         """
 
@@ -4615,7 +4639,7 @@ class SyncStreamManager[SyncStreamT: SyncStream](_SyncStreamManagerBase[SyncStre
                 partition=locked.partition,
                 generation__gt=locked.generation,
             ).exists():
-                raise RuntimeError("The extracted page belongs to a retired stream generation.")
+                raise RuntimeError("The extracted page belongs to a superseded stream generation.")
             if fenced_to is not None and locked.operation_fence != fenced_to.operation_fence:
                 raise RuntimeError("Stream state changed during external work; retry the operation.")
             return locked
@@ -4641,6 +4665,11 @@ class SyncStreamManager[SyncStreamT: SyncStream](_SyncStreamManagerBase[SyncStre
         ``authoritative`` is the declaration's fact: a changed declaration flips the
         current generation through :meth:`set_authoritative`, so an adapter never
         flips it from inside a page.
+        A child stream's ``container`` is a live container link
+        (:meth:`RecordLinkQuerySet.live_containers`) of a stream of the same bridge,
+        whose external key is the partition. A stream declared before containers
+        existed adopts it once; otherwise it never changes. A retired generation is
+        reopened by :meth:`bump_generation`.
         """
 
         if definition.absence_threshold < 1:
@@ -4650,8 +4679,16 @@ class SyncStreamManager[SyncStreamT: SyncStream](_SyncStreamManagerBase[SyncStre
         integration_model = self.model.integration.field.related_model
         if bridge._meta.proxy or integration_model not in bridge._meta.get_parent_list():
             raise ValidationError("A stream bridge must be a concrete Integration child.")
+        container = definition.container
+        links = self.model.container.field.related_model.objects
         with system_context(reason="integrate.stream.current"), transaction.atomic():
             cast(Any, bridge).lock_capability()
+            if container is not None and not links.filter(
+                pk=container.pk, external_key=definition.partition, stream__integration_id=bridge.pk
+            ).live_containers().exists():
+                raise ValidationError(
+                    "A child stream's partition is the external key of a live container link of its bridge."
+                )
             identity = {
                 "integration_id": bridge.pk,
                 "key": definition.key,
@@ -4662,6 +4699,12 @@ class SyncStreamManager[SyncStreamT: SyncStream](_SyncStreamManagerBase[SyncStre
                 return self.create(integration_id=bridge.pk, **definition.stream_fields())
             if stream.kind != definition.kind:
                 raise ValidationError("A stream's kind cannot change between declarations.")
+            if container is not None and stream.container_id is None:
+                stream.container = container
+                stream.allow_immutable_save("container_id")
+                stream.save(update_fields=["container", "updated_at"])
+            if stream.container_id != (container.pk if container is not None else None):
+                raise ValidationError("A stream's container cannot change between declarations.")
             if stream.mapping_version is None:
                 applied_version = stream.links.filter(applied_at__isnull=False).aggregate(
                     version=models.Min("mapping_version"),
@@ -4672,6 +4715,7 @@ class SyncStreamManager[SyncStreamT: SyncStream](_SyncStreamManagerBase[SyncStre
                 stream.direction != definition.direction
                 or stream.snapshot != definition.snapshot
                 or definition.mapping_version > stream.mapping_version
+                or stream.state == StreamState.RETIRED
             ):
                 stream = self.bump_generation(
                     stream,
@@ -4682,6 +4726,9 @@ class SyncStreamManager[SyncStreamT: SyncStream](_SyncStreamManagerBase[SyncStre
             elif stream.mapping_version != definition.mapping_version:
                 stream.mapping_version = definition.mapping_version
                 stream.save(update_fields=["mapping_version", "updated_at"])
+            if stream.holds_containers != definition.holds_containers:
+                stream.holds_containers = definition.holds_containers
+                stream.save(update_fields=["holds_containers", "updated_at"])
             change_authority = stream.authoritative != definition.authoritative
         return self.set_authoritative(stream, definition.authoritative) if change_authority else stream
 
@@ -4696,13 +4743,21 @@ class SyncStreamManager[SyncStreamT: SyncStream](_SyncStreamManagerBase[SyncStre
     ) -> Any:
         """Create one new baseline while retaining identities and history.
 
-        Concurrent requests against a retired epoch return its successor. Links
-        follow the current epoch without changing their verification marker.
+        Concurrent requests against a superseded epoch return its successor. Links
+        follow the current epoch without changing their verification marker. An
+        open predecessor closes. A retired generation reopens only while its
+        container is live (:meth:`RecordLinkQuerySet.live_containers`); otherwise it
+        is returned unchanged, so no resync, cursor expiry or declaration revives a
+        child whose container is gone. A reopened one stays retired, its pending
+        retirement pass dropped: the new baseline verifies its links again.
         """
 
         with system_context(reason="integrate.stream.bump_generation"), transaction.atomic():
             latest = self._lock_latest(stream)
             if latest.pk != stream.pk:
+                return latest
+            retired = latest.state == StreamState.RETIRED
+            if retired and not latest.links.model.objects.filter(pk=latest.container_id).live_containers().exists():
                 return latest
             definition = replace(
                 StreamDefinition.from_stream(latest),
@@ -4719,9 +4774,12 @@ class SyncStreamManager[SyncStreamT: SyncStream](_SyncStreamManagerBase[SyncStre
                 inbound=deepcopy(latest.inbound),
             )
             latest.links.model.objects.filter(stream=latest).update(stream=successor)
-            latest.state = StreamState.CLOSED
+            if latest.state == StreamState.OPEN:
+                latest.state = StreamState.CLOSED
+            if retired:
+                latest.reconcile_state = {}
             latest.inbound = []
-            latest.save(update_fields=["state", "inbound", "updated_at"])
+            latest.save(update_fields=["state", "inbound", "reconcile_state", "updated_at"])
             return successor
 
     def request_resync(self, stream: Any) -> Any:
@@ -4796,8 +4854,8 @@ class SyncStreamManager[SyncStreamT: SyncStream](_SyncStreamManagerBase[SyncStre
 
         with system_context(reason="integrate.stream.advance"), transaction.atomic():
             locked = self.lock_current(stream)
-            if locked.state == StreamState.CLOSED:
-                raise ValidationError("A closed stream requires a new generation before advancement.")
+            if locked.state != StreamState.OPEN:
+                raise ValidationError("A closed or retired stream requires a new generation before advancement.")
             locked.cursor = cursor
             locked.cursor_expires_at = cursor_expires_at
             locked.last_advanced_at = timezone.now()
@@ -4811,16 +4869,69 @@ class SyncStreamManager[SyncStreamT: SyncStream](_SyncStreamManagerBase[SyncStre
                 setattr(stream, field, getattr(locked, field))
             return stream
 
+    def retire_children(self, stream: Any) -> int:
+        """Retire the current child streams whose container link in ``stream`` stopped observing.
 
-class SyncStream(SyncStateMixin, AuditMixin, AngeeDataModel, concrete=True):
+        Runs inside the parent's page transaction and flips each child's state
+        only: a retired generation is no longer drained, and its
+        ``reconcile_state`` starts a retirement pass, which
+        :func:`~angee.integrate.streams.reconcile_stream` runs in bounded, resumable
+        batches, tombstoning the child's links (roots before compound children)
+        with the adapter's ``on_absent``; nothing is deleted. A container that is
+        only unavailable pauses its child instead: the child is neither declared
+        nor retired. A retired stream seeds no retirement of its own children.
+        Returns how many streams retired.
+        """
+
+        if stream.state == StreamState.RETIRED:
+            return 0
+
+        with system_context(reason="integrate.stream.retire_children"), transaction.atomic():
+            children = (
+                self.filter(container__stream=stream)
+                .exclude(RecordLinkQuerySet.observing_rule("container__"))
+                .exclude(state=StreamState.RETIRED)
+                .latest_generations()
+                .only("pk")
+                .order_by("key", "partition")
+            )
+            retired = 0
+            for child in children:
+                locked = self.lock_current(child)
+                locked.state = StreamState.RETIRED
+                locked.reconcile_state = {"started_at": timezone.now().isoformat(), "phase": "roots", "after": None}
+                locked.save(update_fields=["state", "reconcile_state", "updated_at"])
+                retired += 1
+            return retired
+
+
+class SyncStream(ImmutableFieldsMixin, SyncStateMixin, AuditMixin, AngeeDataModel, concrete=True):
     """An epoch's opaque progress and adapter-owned policy for one partition."""
 
     sqid_prefix = "sst_"
+    immutable_fields = ("container_id",)
     integration = models.ForeignKey("integrate.Integration", on_delete=models.PROTECT, related_name="sync_streams")
     key = models.CharField(max_length=160)
-    partition = models.CharField(max_length=255, blank=True)
+    partition = models.CharField(max_length=EXTERNAL_KEY_LENGTH, blank=True)
+    container = models.ForeignKey(
+        "integrate.RecordLink", null=True, blank=True, on_delete=models.PROTECT, related_name="child_streams"
+    )
+    """The parent stream's link whose record holds this partition (an address book, a calendar).
+
+    Its external key is the partition, and it never changes (a stream declared
+    before containers existed adopts it once, :meth:`SyncStreamManager.current`).
+    A child of a container created in this cycle drains after the wave that
+    created it; a container that stops observing retires this stream
+    (:meth:`SyncStreamManager.retire_children`).
+    """
     kind = StateField(choices_enum=StreamKind)
     direction = StateField(choices_enum=StreamDirection)
+    holds_containers = models.BooleanField(default=False)
+    """Whether this stream's records are containers of child streams (address books, calendars).
+
+    Only such a stream makes the driver declare again after a wave, when one of
+    its links became a live container.
+    """
     snapshot = models.BooleanField(default=False)
     authoritative = models.BooleanField(default=False)
     """Whether this stream's source is the system of record for the aspects it asserts.
@@ -4978,6 +5089,51 @@ class RecordLinkQuerySet[RecordLinkT: RecordLink](AngeeHistoryQuerySet[RecordLin
 
         return self.filter(Q(last_seen_at__isnull=True) | Q(last_seen_at__lt=started))
 
+    @staticmethod
+    def observing_rule(path: str = "") -> Q:
+        """The observing rule on the link at ``path`` (``"container__"`` from a stream): not tombstoned or withdrawn."""
+
+        return Q(**{f"{path}tombstoned_at__isnull": True}) & ~Q(
+            **{f"{path}status__in": (LinkStatus.TOMBSTONE, LinkStatus.WITHDRAWN)}
+        )
+
+    @classmethod
+    def live_container_rule(cls, path: str = "") -> Q:
+        """The live-container rule on the link at ``path``: observing, bound to a target, no absence counted."""
+
+        return cls.observing_rule(path) & Q(**{f"{path}target_object_id__isnull": False, f"{path}absence_count": 0})
+
+    def observing(self) -> Self:
+        """Identities that still observe their target: neither tombstoned nor withdrawn.
+
+        A container that stops observing retires the child streams it holds.
+        """
+
+        return self.filter(self.observing_rule())
+
+    def live_containers(self) -> Self:
+        """Links that can hold a child stream now: observing, bound to a target and seen in full.
+
+        The one rule for declaring, opening and reopening a child stream. A
+        container whose absence is being counted only pauses its child: it is not
+        live, yet still observing, so the child is neither declared nor retired.
+        """
+
+        return self.filter(self.live_container_rule())
+
+    def containers_of(self, bridge: models.Model, key: str) -> Self:
+        """The live container links of ``bridge``'s ``key`` stream, in key order, each with its stream.
+
+        Links follow their stream's current generation, so the key selects them.
+        """
+
+        return (
+            self.filter(stream__integration_id=bridge.pk, stream__key=key)
+            .live_containers()
+            .select_related("stream")
+            .order_by("external_key")
+        )
+
     def absence_candidates(self, *, started: datetime, children: bool) -> Self:
         """Select a sweep's unseen roots, or the children of the roots it found missing."""
 
@@ -4987,10 +5143,15 @@ class RecordLinkQuerySet[RecordLinkT: RecordLink](AngeeHistoryQuerySet[RecordLin
         parents = self.filter(parent__isnull=True, absence_count__gt=0).unseen_since(started)
         return rows.filter(parent_id__in=parents.values("pk"))
 
-    def with_sync_evidence(self) -> Self:
-        """Load the protected application projection; state is already on the link."""
+    def with_sync_evidence(self, *, source_payload: bool = False) -> Self:
+        """Load the protected application projection; state is already on the link.
+
+        ``source_payload`` also loads the link's latest observation, for a caller
+        that compares it with a new one.
+        """
+        deferred = ("mapped_payload", "applied_base__source_payload")
         return self.select_related("applied_base", "parent", "stream").defer(
-            "source_payload", "mapped_payload", "applied_base__source_payload"
+            *deferred if source_payload else ("source_payload", *deferred)
         )
 
     def with_open_failures(self, *, include_source: bool = False) -> Self:
@@ -5260,11 +5421,17 @@ class RecordLinkManager[RecordLinkT: RecordLink](_RecordLinkManagerBase[RecordLi
             setattr(link, name, getattr(locked, name))
         return locked
 
-    def mark_absent(self, stream: Any, keys: Iterable[str]) -> int:
-        """Count a bounded batch of missing keys, retaining tombstones.
+    def mark_absent(self, stream: Any, keys: Iterable[str], *, confirmed: bool = False) -> tuple[Any, ...]:
+        """Count a bounded batch of missing keys; return the links whose status the absence changed.
 
         Children may be included only after their parent has absence evidence;
         the sweep supplies bounded child batches after marking missing roots.
+        A link turns UNAVAILABLE, then TOMBSTONE once its count reaches the
+        stream's ``absence_threshold``; a failed link counts but keeps its status.
+        A ``confirmed`` absence (its container is gone) closes the link's open
+        failures, conflicts included, and tombstones it at once, so a retired
+        stream keeps no open failure. The returned transitions are what the
+        adapter's ``on_absent`` receives.
         """
 
         with system_context(reason="integrate.record.mark_absent"), transaction.atomic():
@@ -5275,16 +5442,21 @@ class RecordLinkManager[RecordLinkT: RecordLink](_RecordLinkManagerBase[RecordLi
                 .order_by("pk")
                 .lock_if_supported()
             )
-            count = 0
+            changed = []
             for link in rows:
+                previous = link.status
+                if confirmed:
+                    for failure in link.failures(open_only=True):
+                        link.resolve_failure(failure.slot, conflict=True)
                 link.absence_count += 1
                 if link.status != LinkStatus.FAILED:
                     link.status = LinkStatus.UNAVAILABLE
-                    if link.absence_count >= stream.absence_threshold:
+                    if confirmed or link.absence_count >= stream.absence_threshold:
                         link.status, link.tombstoned_at = LinkStatus.TOMBSTONE, timezone.now()
                 link.save(update_fields=["absence_count", "status", "tombstoned_at", "updated_at"])
-                count += 1
-            return count
+                if link.status != previous:
+                    changed.append(link)
+            return tuple(changed)
 
     def tombstone(self, link: Any) -> Any:
         """Retain a confirmed remote deletion; never delete the identity."""
@@ -5342,7 +5514,7 @@ class RecordLink(
         return bool(self.stream.authoritative)
 
     parent = models.ForeignKey("self", null=True, blank=True, on_delete=models.PROTECT, related_name="children")
-    external_key = models.CharField(max_length=512)
+    external_key = models.CharField(max_length=EXTERNAL_KEY_LENGTH)
     asserted_by = models.TextField(blank=True, editable=False)
     target_content_type = models.ForeignKey(
         ContentType, null=True, blank=True, on_delete=models.PROTECT, related_name="+"
@@ -5433,13 +5605,10 @@ class RecordLink(
         ]
         observing = (
             type(self)
-            ._base_manager.filter(
-                target_content_type_id=self.target_content_type_id,
-                target_object_id=self.target_object_id,
-                tombstoned_at__isnull=True,
-            )
+            .objects.sudo(reason="integrate.link_evidence_siblings")
+            .filter(target_content_type_id=self.target_content_type_id, target_object_id=self.target_object_id)
+            .observing()
             .exclude(pk=self.pk)
-            .exclude(status__in=(LinkStatus.TOMBSTONE, LinkStatus.WITHDRAWN))
             .select_related("stream__integration")
             .order_by("pk")
         )
@@ -5560,8 +5729,11 @@ class RecordLink(
             if not row.is_open:
                 return row
             stream = link.stream
-            if stream.state == StreamState.CLOSED:
-                raise ValidationError("Resync the closed stream before resolving its conflict.")
+            if stream.state != StreamState.OPEN:
+                raise ValidationError(
+                    "Conflicts resolve on an open stream: resync a closed one; a retired one reopens when its"
+                    " container returns."
+                )
             owner = link.parent if link.parent is not None else link
             adapter = stream.integration.concrete_capability().capability_impl
             keys = frozenset((owner.external_key,))

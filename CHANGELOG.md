@@ -10,6 +10,80 @@ live in code docstrings.
 
 ## Unreleased — shared addon contracts, native embeddings and graph retrieval
 
+- An `angee.integrate` stream names its container: `StreamDefinition.container`,
+  persisted as `SyncStream.container` (a `PROTECT` key to `integrate.RecordLink`,
+  `related_name="child_streams"`), is the parent stream's link whose record
+  holds the partition; the partition is its external key. The container is
+  immutable on the model; a stream declared before containers existed adopts it
+  once. The parent declares `holds_containers` (`SyncStream.holds_containers`).
+  `SyncStream.partition` widens to 512 characters: a child's partition is its
+  container's external key, so both take `integrate.states.EXTERNAL_KEY_LENGTH`;
+  the driver refuses a longer replica identity once, as a coalesced stream
+  failure, and the page goes on.
+  `RecordLinkQuerySet.observing_rule()` and `live_container_rule()` (observing,
+  bound to a target, no absence counted) are the one rule for joined reads,
+  `observing()`, `live_containers()` and `containers_of(bridge, key)` apply it.
+  A container missing from a complete listing (`StreamPage.absent`) counts
+  against the parent's absence threshold: an unavailable container pauses its
+  child, which is neither declared nor retired; a container that stops observing
+  (tombstoned or withdrawn) retires it. Retirement flips the child to
+  `StreamState.RETIRED` inside the parent's page
+  (`SyncStreamManager.retire_children`); a bounded, resumable pass over
+  `reconcile_state` then tombstones the child's links and closes their open
+  failures (`RecordLinkManager.mark_absent(..., confirmed=True)`) with
+  `on_absent`, nothing is deleted, and the pass pauses while the container
+  observes again (reopening drops it). `mark_absent` now returns the links whose
+  status changed.
+  `bump_generation` reopens a retired generation only while its container is
+  live, and `reset_stream` reports a retired one exhausted. `sync_bridge` drains
+  every declared partition in its first wave, a container-held partition only
+  after the stream holding its container applied its pages and sweep (in holder
+  depth order, or concurrently once that worker finished), runs the holders'
+  retirement passes last, declares again only after a container-holding stream
+  gained a live container, and opens no partition and starts no wave after its
+  deadline. A cyclic or self-held container declaration fails fast. New
+  `RecordLinkQuerySet.observing()` and `SyncStreamQuerySet.latest_generations()`.
+  A page of a superseded generation is refused as a "superseded stream generation".
+  `ImmutableFieldsMixin` checks only the immutable fields a partial save's
+  `update_fields` writes.
+- `angee.parties` address books are records of the directory's `addressbooks`
+  stream: each book's link targets its `Folder` (`FolderManager.ingest_addressbook`,
+  which truncates an over-long name) and holds its contacts stream; both
+  declarations live on `DirectoryBackend` (`addressbooks_stream`,
+  `contacts_stream`). The folder's name is an `identity` statement, so a person's
+  rename outranks a remote one; `Folder` composes statements and history, and
+  `parties/folder#write_statements` admits the directory (parties revision 20).
+  A book missing from one listing pauses its contacts; once its absence is
+  confirmed it is tombstoned, its statements are withdrawn (as a read tombstone
+  withdraws them) and its contacts stream retires. An empty listing confirms
+  nothing. CardDAV discovery raises when the server refuses the principal or
+  home-set request instead of falling back to the server URL.
+  Removed: `Folder.source_href` and `uq_folder_directory_source`,
+  `FolderManager.sync_addressbook`, `Directory.addressbook_stream`, GraphQL
+  `ContactFolderType.source_href`, and the `folder` argument of
+  `PartyManager.ingest_contact`, which now takes the page's `stream` and finds
+  its folder through that stream's container. `StatedRecordMixin` moves from
+  `angee.projects.models` (which still imports it) to `angee.integrate.mixins`,
+  beside `LinkedRecordMixin`, the `record_links` relation `Party` composes;
+  `Folder` composes `StatedRecordMixin`. A source backend implements `discover`,
+  `extract_contacts` and `read_contacts`.
+  Upgrade: a host runs `makemigrations integrate` for the `container` and
+  `holds_containers` columns and the widened `partition`, copies the migration template
+  `src/angee/parties/compose_migrations/parties/addressbook_links.py` into
+  `runtime/parties/migrations/` and pins its placeholder dependencies to its own
+  leaves, then runs `makemigrations` for the folder's history and statement
+  tables, `migrate` and `rebac sync`. Every folder, contact and link is kept and
+  nothing is downloaded again. A folder whose href is longer than a link's
+  external key never synced; the template skips it and logs a warning. The first
+  sync states each listed book's name on its folder, so a folder renamed after
+  the last sync before the upgrade takes the directory's name. A book removed
+  before the upgrade misses its first listing then: its contacts pause in that
+  sync, unopened, and retire on the sync that confirms its absence (the second,
+  at the default threshold of two). The template reverses by restoring each
+  folder's `source_href`. Upgrade cutoff: the template ships through the 3.x
+  releases and is removed in 4.0; a host upgrading from an earlier release
+  applies it through a 3.x release first.
+
 - Storage mounts read Google Drive: `angee.storage_integrate_google_drive` mounts
   My Drive, a folder or a shared drive, in place (read-only) or copied into a chosen
   writable backend, reading with one of the connecting user's Google accounts that

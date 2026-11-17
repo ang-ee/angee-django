@@ -109,9 +109,18 @@ class BridgeImpl(IntegrationImpl):
     def streams(self, *, deadline: float | None = None) -> Iterable[StreamDefinition]:
         """Declare each independently ordered partition exactly once.
 
-        The generic sync declares once per cycle. A workflow cycle declares once per
-        drained partition (``workflows_integrate.StreamStage``), so an adapter synced
-        through one declares from local state, without transport.
+        An adapter that holds containers declares from local state and writes
+        nothing: a partition held by a record of another stream names that
+        record's link as its ``container`` and is declared only while the link is
+        a live container (``RecordLinkQuerySet.containers_of``); the row the
+        container targets is created on the parent stream's apply path. Adapters
+        without containers may declare by discovery: IMAP and Slack list their
+        mailboxes and conversations over transport, and Notion's declaration
+        still ensures its vault, a write recorded as debt.
+        The generic sync declares at the start of a cycle and again after a wave in
+        which container links appeared. A workflow cycle declares once per drained
+        partition (``workflows_integrate.StreamStage``), so an adapter synced through
+        one declares from local state, without transport.
         """
         raise AdapterContractError("Stream adapters must declare their partitions.")
 

@@ -239,8 +239,8 @@ exclude = [
   # the abstract sources instead.
   "**/runtime",
   # Materialized addon migration sources are pinned by digest and immutable.
+  # Addon migration templates (compose_migrations/) are source and stay checked.
   "**/runtime_migrations",
-  "**/compose_migrations",
 ]
 
 [tool.ruff.lint]
@@ -363,9 +363,10 @@ files = ["src/angee"]
 ignore_missing_imports = true
 mypy_path = ["src", ".mypy_cache"]
 warn_unused_ignores = true
-# Historical addon migrations are digest-pinned executable artifacts, like the
+# Materialized addon migrations are digest-pinned executable artifacts, like the
 # Ruff boundary above; integrity and execution tests validate their bodies.
-exclude = ["(^|/)(runtime_migrations|compose_migrations)/"]
+# Addon migration templates (compose_migrations/) are typed source and checked.
+exclude = ["(^|/)runtime_migrations/"]
 
 [[tool.mypy.overrides]]
 module = ["simple_history.*", "django_sqids.*"]
@@ -373,7 +374,7 @@ module = ["simple_history.*", "django_sqids.*"]
 follow_untyped_imports = true
 
 [[tool.mypy.overrides]]
-module = ["*.runtime_migrations.*", "*.compose_migrations.*"]
+module = ["*.runtime_migrations.*"]
 # Integrity tests still import typed Migration contracts. Preserve those types
 # and caller diagnostics without re-checking immutable historical source bodies.
 follow_imports = "silent"
