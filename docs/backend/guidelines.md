@@ -1855,11 +1855,15 @@ importing the composed model toolkit.
 [`RetainedGenericRelation`](../../src/angee/base/fields/relations.py) owns the
 native reverse relation's exclusion from automatic collection.
 Each edge declares `on_target_delete` as `CASCADE`, `PROTECT`, or `SET_NULL`; a
-model needing row-aware cleanup implements `teardown_for_target(target)`. The
-foundation target-delete receiver invokes that one declaration for instance and
-queryset deletion paths, whether the target names the edge through a reverse
+model needing row-aware cleanup implements `teardown_for_target(target)` instead,
+which never blocks the target's deletion. The foundation target-delete receiver
+invokes that one declaration for instance and queryset deletion paths, once per
+collected instance (an MTI child's deletion also collects its canonical parent, so
+a teardown is idempotent), whether the target names the edge through a reverse
 relation or the edge's schema declares the target's type. An append-only edge,
-whose collection refuses bulk deletes, cascades through its teardown.
+whose collection refuses bulk deletes, cascades through its teardown and the
+owner's bulk `owner_delete`, under a named system context when the deleter needs
+no authority on the edge rows.
 [`RecordReferenceNode`](../../src/angee/graphql/relations.py) and
 `with_record_reference_access` project it into GraphQL under the current
 reader's scope. A hidden target yields null identity fields; its model and ID
