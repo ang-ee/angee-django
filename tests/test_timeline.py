@@ -77,8 +77,8 @@ def test_cursor_round_trips_and_orders_the_page_totally() -> None:
 @override_settings(ANGEE_TIMELINE_KINDS=KINDS)
 def test_kinds_resolve_once_each_in_sequence_order() -> None:
     assert [kind.id for kind in timeline_kinds()] == [
-        "workflows.run", "decisions.decision", "provenance.change", "messaging.comment", "projects.task",
-        "messaging.conversation",
+        "workflows.run", "decisions.decision", "decisions.reminder", "provenance.change", "messaging.comment",
+        "projects.task", "messaging.conversation",
     ]
 
 
@@ -121,7 +121,8 @@ def test_union_pages_sources_and_counts_the_whole_scope() -> None:
     assert f'"{apps.get_model("workflows", "WorkflowRun")._meta.db_table}"' not in statements[0]
     page = data["timeline"]
     assert [kind["id"] for kind in page["kinds"]] == [
-        "workflows.run", "decisions.decision", "provenance.change", "projects.task", "messaging.conversation",
+        "workflows.run", "decisions.decision", "decisions.reminder", "provenance.change", "projects.task",
+        "messaging.conversation",
     ]
     counts = {kind["id"]: kind["count"] for kind in page["kinds"]}
     assert counts["provenance.change"] >= 3

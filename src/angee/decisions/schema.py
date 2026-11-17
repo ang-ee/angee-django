@@ -86,6 +86,9 @@ class DecisionType(AngeeNode):
     answered_for: JSON | None
     verdict_context: JSON | None
     superseded_by: DecisionType | None = actor_scoped_to_one("superseded_by")
+    due_at: auto
+    remind_after: auto
+    reminded_at: auto
     revision: auto
     created_at: auto
     updated_at: auto
@@ -106,13 +109,14 @@ class DecisionType(AngeeNode):
 
 _DECISIONS = hasura_model_resource(
     DecisionType, model=Decision, name="decisions",
-    filterable=["id", "kind", "assignees", "requester", "is_open", "can_act",
+    filterable=["id", "kind", "assignees", "requester", "is_open", "is_overdue", "can_act", "due_at",
                 *declared_hasura_resource_fields(Decision, "hasura_filterable_fields")],
-    sortable=["id", "created_at"], aggregatable=["id"], groupable=["kind"],
+    sortable=["id", "created_at", "due_at"], aggregatable=["id"], groupable=["kind"],
     insert=False, update=False, delete=False,
     field_id_decode={"assignees": public_pk_decoder(Decision._meta.get_field("assignees").related_model)},
     filter_expressions={
         "is_open": Decision.objects.open_expression(),
+        "is_overdue": Decision.objects.overdue_expression(),
         "can_act": partial(permission_expression, name="act"),
     },
 )

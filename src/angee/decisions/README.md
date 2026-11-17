@@ -65,6 +65,18 @@ asks `request`, withdraws the old question with the reason and links the replace
 revision refusal. A question a requesting record retains (`requester_querysets`, a
 workflow step's) belongs to that asker, so supersede refuses it. Escalation is a
 supersede naming the escalation's assignees; no question changes in place.
+
+A request may carry `due_at` and `remind_after`, aware instants the asker supplies;
+decisions does no date arithmetic on them and they stay fixed once asked. The
+resource's `is_overdue` filter selects open questions past `due_at`, derived when read.
+`decision.remind()` stamps `reminded_at` once and sends `decision_reminder_due` inside
+its transaction, in the asker's or the reminder sweep's system context; the revision
+does not move. The `decisions.remind_due` beat task reminds, every minute, each open
+question whose `remind_after` has passed. A question a requesting record retains keeps
+its asker's own timing and is skipped. Delivering a reminder belongs to the signal's
+receivers in an addon above decisions, after commit. The record timeline shows the
+reminder as a `decisions.reminder` line beside its question's line.
+
 Decisions execute no proposal actions. The asker consumes the answer through the
 records' owners. Free correction means editing the record and then choosing the
 alternative that keeps its current values.

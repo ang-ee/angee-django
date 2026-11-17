@@ -1,5 +1,6 @@
 """Question admission and the decision selections."""
 
+from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
 from django.apps import apps
@@ -7,6 +8,7 @@ from django.contrib.auth import get_user_model
 from django.core.exceptions import PermissionDenied, ValidationError
 from django.db import transaction
 from django.db.models import BooleanField, Exists, ExpressionWrapper, OuterRef, Q
+from django.db.models.functions import Now
 from rebac import check_permission, generic_target, system_context, to_subject_ref
 from rebac.actors import is_sudo
 
@@ -30,6 +32,10 @@ class DecisionQuerySet[T: Decision](AppendOnlyQuerySet[T], AngeeQuerySet[T]):
 
     def open(self) -> Any:
         return self.filter(verdict__isnull=True)
+
+    def overdue_expression(self) -> ExpressionWrapper:
+        """Open past its due instant; derived when read, never stored."""
+        return ExpressionWrapper(Q(verdict__isnull=True, due_at__lt=Now()), output_field=BooleanField())
 
     def waiting_on(self, actor: Any) -> Any:
         """Open questions this actor may act on, assigned to them or unassigned."""
@@ -86,6 +92,22 @@ _DecisionManagerBase = AngeeManager.from_queryset(DecisionQuerySet)
 
 
 class DecisionManager[T: Decision](_DecisionManagerBase[T]):
+    def remind_due(self, *, now: datetime) -> int:
+        """Remind each open question whose ``remind_after`` has passed, once; the reminder sweep's system work.
+
+        A question a requesting record retains keeps its asker's own timing (a workflow
+        step wakes by its deadline), so the sweep leaves it alone.
+        """
+        rows = self.model.system_queryset()
+        due = rows.open().filter(remind_after__lte=now, reminded_at__isnull=True).exclude(
+            pk__in=rows.held_by_requesting_records().values("pk"),
+        )
+        reminded = 0
+        for decision in due.order_by("pk"):
+            decision.remind()
+            reminded += 1
+        return reminded
+
     def ask(self, request: DecisionRequest, *, actor: Any) -> Any:
         """Admit one question after checking its participants' standing read access."""
         request = DecisionRequest.model_validate(request)
@@ -131,6 +153,8 @@ class DecisionManager[T: Decision](_DecisionManagerBase[T]):
                     requester=requester,
                     proposal=request.proposal.model_dump(mode="json"),
                     context=request.context.model_dump(mode="json"),
+                    due_at=request.due_at,
+                    remind_after=request.remind_after,
                 )
             decision.assignees.set(assignees)
             link = apps.get_model("decisions", "DecisionRecord")

@@ -23,7 +23,7 @@ from angee.base.refs import RecordRef, record_view_refs
 from angee.base.signals import publish_change
 from angee.decisions.contracts import DecisionContext, DecisionProposal, DecisionRecordReference
 from angee.decisions.managers import DecisionManager, DecisionRecordManager
-from angee.decisions.signals import decision_answered
+from angee.decisions.signals import decision_answered, decision_reminder_due
 from angee.provenance.evidence import readable_records
 
 
@@ -60,6 +60,9 @@ class Decision(OptimisticLockMixin, AppendOnlyModel, AngeeDataModel, concrete=Tr
     superseded_by = models.OneToOneField(
         "decisions.Decision", on_delete=models.PROTECT, null=True, blank=True, related_name="+",
     )
+    due_at = models.DateTimeField(null=True, blank=True)
+    remind_after = models.DateTimeField(null=True, blank=True)
+    reminded_at = models.DateTimeField(null=True, blank=True)
     objects = DecisionManager()
 
     @classmethod
@@ -92,6 +95,10 @@ class Decision(OptimisticLockMixin, AppendOnlyModel, AngeeDataModel, concrete=Tr
                & (models.Q(verdict=[]) | models.Q(answered_by__isnull=False, superseded_by__isnull=True))
                & (~models.Q(verdict=[]) | models.Q(verdict_values__isnull=True, answered_for__isnull=True))),
             name="decisions_verdict_consistent",
+        )]
+        indexes = [models.Index(
+            fields=("remind_after",), condition=models.Q(verdict__isnull=True, reminded_at__isnull=True),
+            name="decisions_reminder_due",
         )]
 
     @property
@@ -151,6 +158,29 @@ class Decision(OptimisticLockMixin, AppendOnlyModel, AngeeDataModel, concrete=Tr
                 publish_change(row, action="update", update_fields=None)
                 decision_answered.send(sender=type(row), decision=row)
         return row, withdrawing, closed
+
+    def remind(self) -> Self:
+        """Stamp this open question's reminder and announce it once, in an asker's or the sweep's system context.
+
+        ``reminded_at`` is written once, so a repeated or concurrent reminder, or one on
+        a closed question, writes and sends nothing. The revision stays: a reminder
+        changes no answer. ``decision_reminder_due`` fires inside the transaction;
+        delivering the reminder belongs to its receivers, after commit.
+        """
+        if not is_sudo():
+            raise PermissionDenied("Reminding requires the asking owner's or the reminder sweep's system context.")
+        rows = type(self).objects
+        with transaction.atomic(), system_context(reason="decisions.remind"):
+            row = rows.filter(pk=self.pk).lock_if_supported().get()
+            if row.is_open and row.reminded_at is None and (
+                rows.filter(pk=self.pk, reminded_at__isnull=True).open().owner_update(
+                    reminded_at=Now(), updated_at=Now(),
+                )
+            ):
+                row.refresh_from_db()
+                publish_change(row, action="update", update_fields=None)
+                decision_reminder_due.send(sender=type(row), decision=row)
+        return row
 
     def decide(
         self,
