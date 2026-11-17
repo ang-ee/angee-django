@@ -61,7 +61,10 @@ export const runResourceFixture = testDataResource("workflows.WorkflowRun", {
     ].map((name) => [name, testQueryField(name)])),
     status: testQueryField("status", { kind: "enum", values: runStates,
       filter: { field: "status", scalar: "String", values: [], valueMap: statusValues, operators: ["exact", "inList"] } }),
-    hold: testQueryField("hold", { filter: { field: "hold", scalar: "String", values: [], operators: ["exact", "inList", "isNull"] } }),
+    hold: testQueryField("hold", { filter: { field: "hold", scalar: "String", values: [], operators: ["exact", "ne", "inList", "isNull"] } }),
+    // Filter-only, as the run resource declares it: the Incidents preset filters on it.
+    is_incident: testQueryField("is_incident", { scalar: "Boolean", nullable: false, row: null,
+      filter: { field: "is_incident", scalar: "Boolean", values: [], operators: ["exact", "ne"] } }),
     "version.workflow": testQueryField("version.workflow", { kind: "relation", scalar: "ID",
       relation: { model: "workflows.Workflow", identityPath: "version.workflow.id", labelPath: "version.workflow.name" },
       row: { path: "version.workflow.id", paths: ["version.workflow.id", "version.workflow.name"] },
