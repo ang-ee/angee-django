@@ -600,8 +600,10 @@ The caller revision replaces its source ref; dependency revisions remain explici
 The full declared Python collection runs once across six `stack-shard` jobs,
 using native pytest-split `least_duration` assignment. Without stored consumer
 timings, the plugin balances test counts with equal weights. Each shard renders
-its own host, resolves native distribution requirements, composes/provisions it, and
+and composes its own host, resolves native distribution requirements, and
 collects the declared Python paths with `python_files=test*.py` on PostgreSQL.
+Only group 1 provisions the host database, for its smoke; the test shards never
+read it.
 Four native pytest-xdist workers use `--dist worksteal` inside each shard, so long
 consumer intake modules can use every worker. Each worker loads the configured
 host through its authored `settings` module; pytest-django owns its separate test

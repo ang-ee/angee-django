@@ -485,7 +485,9 @@ jobs:
           uv run --no-sync python manage.py makemigrations --check --dry-run
           uv run --no-sync python manage.py compose --check
           uv run --no-sync python manage.py schema --check
+      # Only the smoke reads the host database; consumer shards test in pytest-django's own.
       - name: Provision the composed stack
+        if: ${{ matrix.group == 1 }}
         working-directory: stack
         run: |
           uv run --no-sync python manage.py provision
