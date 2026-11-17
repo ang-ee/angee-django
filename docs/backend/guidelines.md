@@ -1284,8 +1284,11 @@ exception closes the rows as failed. Tests inherit a boundary from the root
   container default the record cannot hold falls back through
   `Stage.resolve_default_fallback` over the applicable stages. The record names
   the fields that override reads in `stage_scope_fields` (as a hierarchy names its
-  `hierarchy_scope_fields`). A save or `clean()` judges scope and applicability
-  only when it changes the stage, the container or one of those fields against the
+  `hierarchy_scope_fields`). Every save and `clean()` requires the stage to belong
+  to the record's container, read from the stage row admission already loads; a
+  concrete stage keeps its container write-once (`ImmutableFieldsMixin`), so a
+  stage never moves out from under its records. Applicability is judged only when
+  the write changes the stage, the container or one of those fields against the
   committed row, so a record resting in a stage later narrowed away from it stays
   editable. *Admission:* the mixin reads the committed row once under the row lock
   and asks `Stage.validate_transition(previous, following, *, manual, admitted, adding)`

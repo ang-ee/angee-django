@@ -65,7 +65,6 @@ from rebac.resources import model_resource_type
 
 from angee.base.locks import task_locks_are_cross_process
 from angee.base.managers import AngeeManager
-from angee.base.models.audit import AuditMixin
 from angee.base.models.base import AngeeModel
 from angee.base.models.identity import instances_from_public_ids
 from angee.base.models.ownership import OwnerQuerySet
@@ -1033,7 +1032,7 @@ class ThreadManager[ThreadT: Thread](_ThreadManagerBase[ThreadT]):
         the same converge-on-unique contract the old column constraint provided.
         Channel-bound inserts skip personal ownership through the model's save;
         their access follows the channel while creation attribution remains intact.
-        ``ownerless`` inserts a thread nobody owns (a record's chatter without a creator).
+        ``ownerless`` inserts a thread nobody owns (a record's chatter).
         """
 
         # Identity resolution is system bookkeeping (the callers gate reads at their
@@ -1265,7 +1264,10 @@ class ThreadAttachmentManager[ThreadAttachmentT: ThreadAttachment](AngeeHistoryM
         two concurrent first-posts converge on one row instead of the second raising
         an ``IntegrityError`` — ``select_for_update`` cannot lock a row that does not
         exist yet, so a lock-then-create cannot serialise the first insert. The
-        record's label is interned as the thread's title fragment.
+        record's label is interned as the thread's title fragment. A chatter thread
+        is the record's bookkeeping and has no owner: the record lends its access
+        (``chatter_read``), so nobody keeps it after losing the record. Its creator
+        remains its attribution.
         """
 
         if record.pk is None:
@@ -1274,8 +1276,9 @@ class ThreadAttachmentManager[ThreadAttachmentT: ThreadAttachment](AngeeHistoryM
         # opt-in onto the thread so broadcasts_changes() is O(1) at publish time and
         # never re-resolves the polymorphic target.
         host_broadcasts = isinstance(record, ThreadedModelMixin) and record.thread_broadcasts_changes
+        chatter = role == self.model.AttachmentRole.CHATTER
         if existing := self.for_record(record, role=role):
-            self._reconcile_broadcast_state(existing.thread, host_broadcasts=host_broadcasts)
+            self._reconcile_record_thread(existing.thread, chatter=chatter, host_broadcasts=host_broadcasts)
             return existing
         content_type, object_id = generic_pointer_target(record)
         _assert_canonical_composes_thread_mixin(record, content_type)
@@ -1286,32 +1289,21 @@ class ThreadAttachmentManager[ThreadAttachmentT: ThreadAttachment](AngeeHistoryM
         # A chatter edge is the record's own thread: the record's verb has admitted
         # the actor, and the edge and its thread are written as system rows. A
         # source edge is created under the actor, who needs write on the record.
-        elevated = (
-            system_context(reason="messaging.thread_attachment.chatter")
-            if role == self.model.AttachmentRole.CHATTER else nullcontext()
-        )
-        # A record's chatter belongs to the record's creator, never to whoever first
-        # follows or posts: ownership is standing access the record does not grant.
-        creator_id = (
-            record.created_by_id
-            if role == self.model.AttachmentRole.CHATTER and isinstance(record, AuditMixin) else None
-        )
-        owned = {"owner_id": creator_id} if creator_id is not None else {}
+        elevated = system_context(reason="messaging.thread_attachment.chatter") if chatter else nullcontext()
         with elevated, transaction.atomic():
             title_fragment = fragment_model.objects.upsert(text=title_text) if title_text else None
             thread, _created = thread_model.objects.get_or_create_by_external_id(
                 platform=Handle.Platform.OTHER,
                 external_id=external_id,
-                ownerless=role == self.model.AttachmentRole.CHATTER and creator_id is None,
+                ownerless=chatter,
                 defaults={
-                    **owned,
                     "title_id": title_fragment.pk if title_fragment is not None else None,
                     "modality": thread_model.Modality.GROUP,
                     "visibility": thread_model.Visibility.PRIVATE,
                     "host_broadcasts_changes": host_broadcasts,
                 },
             )
-            self._reconcile_broadcast_state(thread, host_broadcasts=host_broadcasts)
+            self._reconcile_record_thread(thread, chatter=chatter, host_broadcasts=host_broadcasts)
             attachment, _created = self.model._base_manager.get_or_create(
                 content_type_id=content_type.pk,
                 object_id=object_id,
@@ -1328,18 +1320,20 @@ class ThreadAttachmentManager[ThreadAttachmentT: ThreadAttachment](AngeeHistoryM
             return attachment
 
     @staticmethod
-    def _reconcile_broadcast_state(thread: Any, *, host_broadcasts: bool) -> None:
-        """Heal a record thread's broadcast state to match its host, in place.
+    def _reconcile_record_thread(thread: Any, *, chatter: bool, host_broadcasts: bool) -> None:
+        """Heal a record thread's broadcast state and ownership to match its role and host, in place.
 
-        Broadcasting hosts release personal thread ownership so their live access
-        follows membership. The enclosing record operation owns authorization;
-        the base release seam retains the original creation attribution.
+        A record's chatter and a broadcasting host's thread have no owner: their
+        access follows the record or the host's membership, never a person who
+        could outlive it, so an owner such a thread still carries is released.
+        The enclosing record operation owns authorization; the base release seam
+        retains the original creation attribution.
         """
 
         if thread.host_broadcasts_changes != host_broadcasts:
             type(thread)._base_manager.filter(pk=thread.pk).update(host_broadcasts_changes=host_broadcasts)
             thread.host_broadcasts_changes = host_broadcasts
-        if host_broadcasts and thread.owner_id is not None:
+        if (chatter or host_broadcasts) and thread.owner_id is not None:
             type(thread).objects.filter(pk=thread.pk).release(get_user_model()(pk=thread.owner_id))
             thread.owner = None
 

@@ -36,7 +36,7 @@ from angee.graphql.relations import actor_scoped_public_id, actor_scoped_to_one
 from angee.graphql.testing.documents import execute_schema, result_data
 from angee.storage import exceptions, views
 from angee.storage import schema as storage_schema
-from angee.storage.models import FileAttachmentManager, FileVisibility
+from angee.storage.models import FileAttachmentManager, FileVisibility, UploadState
 from angee.storage.uploads import DOWNLOAD_TOKEN_MAX_AGE, DOWNLOAD_TOKEN_SALT, DOWNLOAD_TOKEN_WINDOW
 from angee.tags.testing.models import Tag, TagAssignment
 from tests.conftest import (
@@ -89,7 +89,14 @@ def test_the_policy_decides_every_storage_permission(drive: Any) -> None:
         record = File.objects.create(
             drive=drive, filename="r.txt", content_hash="b" * 64, owner=alice, visibility=FileVisibility.RECORD,
         )
-        write_relationships([RelationshipTuple(to_object_ref(record), "viewer", to_subject_ref(people["named"]))])
+        published = File.objects.create(
+            drive=drive, filename="p.txt", content_hash="e" * 64, owner=alice, visibility=FileVisibility.RECORD,
+            upload_state=UploadState.READY,
+        )
+        write_relationships([
+            RelationshipTuple(to_object_ref(row), "viewer", to_subject_ref(people["named"]))
+            for row in (record, published)
+        ])
         in_folder = File.objects.create(drive=drive, folder=owned_folder, filename="f.txt", content_hash="c" * 64)
         attachment = FileAttachment.objects.attach(inherited, drive)
         tag = TagAssignment.objects.create(
@@ -129,7 +136,11 @@ def test_the_policy_decides_every_storage_permission(drive: Any) -> None:
             (inherited, "transfer", "alice admin", "editor"),
             (inherited, "write__owner", "alice", "editor"),
             (inherited, "delete", "alice editor", "viewer"),
+            # The owner holds its record draft; a published record file is its records', viewers' and admins'.
             (record, "read", "alice named", "viewer"),
+            (record, "write", "alice", "named"),
+            (published, "read", "named admin", "alice viewer"),
+            *((published, action, "admin", "alice") for action in ("write", "share", "delete", "transfer")),
             (in_folder, "read", "folder-owner", "outsider"),
             (in_folder, "write", "folder-owner", "outsider"),
             (attachment, "read", "viewer", "outsider"),
@@ -186,6 +197,9 @@ def test_record_files_query_requires_record_and_file_read_and_uploads_need_the_a
             owner=drive.alice, upload_state="ready",
         )
         attachment = FileAttachment.objects.attach(file, drive)
+        # Drives lend record files nothing and a published record file's owner reads it only
+        # through its records, so the drive's writer reads this one as a named viewer.
+        file.grant_record_access("viewer", drive.alice)
     with actor_context(drive.alice):
         drive.with_actor(drive.alice).grant_record_access("viewer", reader)
     schema = addon_schema(storage_schema.schemas, "public")
@@ -241,8 +255,8 @@ def test_file_attachments_redact_unreadable_records_and_recheck_revocation(drive
     assert read(reader) == [{
         "id": str(edge.sqid), "model_label": "storage.Drive", "record_id": str(drive.sqid),
     }]
-    with actor_context(drive.alice):
-        file.with_actor(drive.alice).revoke_record_access("viewer", reader)
+    with system_context(reason="test.storage.reverse_attachments.revoke"):
+        file.revoke_record_access("viewer", reader)
     assert read(reader) == []
 
 
@@ -470,7 +484,9 @@ def test_attach_converges_on_canonical_parent_and_proxy_with_actor_scoped_result
     assert first.content_type.model_class() is MtiParent
 
 
-def test_narrowing_removes_container_access_but_keeps_owner_and_named_viewer(drive: Any) -> None:
+def test_narrowing_removes_container_and_owner_access_but_keeps_named_viewer(drive: Any) -> None:
+    """A published record file takes its access from its records: an unattached one keeps only its viewers."""
+
     row = _proxy_upload(drive, PNG_BYTES)
     reader, named = create_user("container-reader"), create_user("named-file-viewer")
     with actor_context(drive.alice):
@@ -486,7 +502,7 @@ def test_narrowing_removes_container_access_but_keeps_owner_and_named_viewer(dri
         row.with_actor(drive.alice).set_visibility(FileVisibility.RECORD)
     assert not row.with_actor(reader).has_access("read")
     assert row.with_actor(named).has_access("read")
-    assert row.with_actor(drive.alice).has_access("read")
+    assert not row.with_actor(drive.alice).has_access("read")
     with pytest.raises(exceptions.UploadDenied):
         File.objects.for_download_token(token)
     assert File.objects.for_download_token(row.issue_download_token(actor=named)).pk == row.pk
