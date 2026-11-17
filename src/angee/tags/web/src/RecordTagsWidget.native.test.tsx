@@ -61,20 +61,49 @@ test.each([{ readOnly: true }, { permissions: ["read"] }])("read-only tags keep 
   expect(f.custom).not.toHaveBeenCalled();
 });
 
-test("each category holds its own picker, in category order, before the uncategorised tags", async () => {
+const RELATIONSHIP = { id: "cat", name: "Relationship", position: 1024, max_per_record: 1, is_archived: false };
+
+function categorisedFixture({ permissions = ["read"], readOnly = true } = {}) {
+  const custom = vi.fn(async (_request: { meta?: Record<string, unknown> }) => ({ data: { tag: [{ id: "assignment" }], untag: true } }));
   const getList = vi.fn(async ({ resource }: { resource: string }) => resource === "tagcategorys"
-    ? { data: [{ id: "cat", name: "Relationship", is_archived: false }], total: 1 }
-    : { data: [{ id: "tag", name: "Urgent", category: { id: "cat" } }, { id: "loose", name: "Loose", category: null }], total: 2 });
-  render(<categorised.Provider dataProvider={{ custom: vi.fn(), getOne: vi.fn(), getList }}><AppRuntimeProvider runtime={{}}>
+    ? { data: [RELATIONSHIP], total: 1 }
+    : { data: [
+      { id: "tag", name: "Urgent", category: RELATIONSHIP },
+      { id: "calm", name: "Calm", category: RELATIONSHIP },
+      { id: "loose", name: "Loose", category: null },
+    ], total: 3 });
+  render(<categorised.Provider dataProvider={{ custom, getOne: vi.fn(), getList }}><AppRuntimeProvider runtime={{}}>
     <ModalsHost><ToastProvider><RecordChromeProvider value={{
       resource: "notes.Note", canonicalResource: "notes.Note", dataProviderName: "console", recordId: "note",
-      record: { id: "note", tags: [{ id: "tag", name: "Urgent" }, { id: "loose", name: "Loose" }], permissions: ["read"] },
+      record: { id: "note", tags: [{ id: "tag", name: "Urgent" }, { id: "loose", name: "Loose" }], permissions },
       formReadOnly: false,
-    }}><Widget readOnly /></RecordChromeProvider></ToastProvider></ModalsHost>
+    }}><Widget readOnly={readOnly} /></RecordChromeProvider></ToastProvider></ModalsHost>
   </AppRuntimeProvider></categorised.Provider>);
-  const field = (label: string) => screen.getByText(label, { selector: "span" }).parentElement as HTMLElement;
-  await waitFor(() => expect(within(field("Relationship")).getByText("Urgent")).toBeTruthy());
+  return { custom };
+}
+
+const field = (label: string) => screen.getByText(label, { selector: "span" }).parentElement as HTMLElement;
+
+test("each category holds its own labelled picker with its maximum, before the uncategorised tags", async () => {
+  categorisedFixture();
+  const group = await screen.findByRole("group", { name: "Tags" });
+  await waitFor(() => expect(within(field("Relationship tags")).getByText("Urgent")).toBeTruthy());
+  expect(within(field("Relationship tags")).getByText("At most 1 tag")).toBeTruthy();
   expect(within(field("Other tags")).getByText("Loose")).toBeTruthy();
-  expect(within(field("Relationship")).queryByText("Loose")).toBeNull();
-  expect(screen.queryByText("Tags", { selector: "span" })).toBeNull();
+  expect(within(field("Relationship tags")).queryByText("Loose")).toBeNull();
+  // Category pickers come first, in category order; the uncategorised tags close the group.
+  expect(within(group).getAllByText(/ tags$/, { selector: "span" }).map((label) => label.childNodes[0]?.textContent))
+    .toEqual(["Relationship tags", "Other tags"]);
+});
+
+test("a pick at a maximum of one replaces the held tag, untagging before tagging", async () => {
+  const f = categorisedFixture({ permissions: ["write"], readOnly: false });
+  const picker = await screen.findByRole("combobox", { name: "Relationship tags" });
+  fireEvent.input(picker, { target: { value: "cal" }, inputType: "insertText" });
+  fireEvent.click(await screen.findByRole("option", { name: "Calm" }));
+  await waitFor(() => expect(f.custom).toHaveBeenCalledTimes(2));
+  expect(f.custom.mock.calls.map((call) => call[0]?.meta?.gqlVariables)).toEqual([
+    { type: "notes/note", id: "note", tags: ["tag"] },
+    { type: "notes/note", id: "note", tags: ["calm"] },
+  ]);
 });

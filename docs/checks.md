@@ -102,7 +102,8 @@ messaging with its [channel owner](../tests/test_messaging_channel_concurrency.p
 [portfolio report](../tests/test_portfolio_concurrency.py) locks, proposals,
 sequences, spaces, storage with its
 [window-aligned download URLs and expiry](../tests/test_storage_access_campaign.py),
-the system queryset, work and [task ordering](../tests/test_composed_work.py) locks,
+the system queryset, the [tag category maximum's](../tests/test_tags_categories_concurrency.py)
+filing locks, work and [task ordering](../tests/test_composed_work.py) locks,
 integrate streams, [scheduler row locks](../tests/test_integrate_scheduler.py) and workflow
 integrate steps, the
 [grouped rows](../tests/test_group_rows.py) partitions, the
