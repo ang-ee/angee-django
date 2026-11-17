@@ -411,6 +411,35 @@ def test_a_never_occurs_probe_at_the_end_of_time_is_refused_not_overflowed() -> 
     assert refused.value.code == "out_of_range"
 
 
+def test_a_span_too_long_to_represent_reaches_past_every_date_and_stays_valid() -> None:
+    once_in_three_centuries = Recurrence("FREQ=YEARLY;INTERVAL=300")
+    start = _utc(2026, 1, 1, 9)
+
+    once_in_three_centuries.validate(dtstart=start)
+    assert once_in_three_centuries.occurrences(start, _utc(2026, 1, 1), _utc(2027, 1, 1), zone="UTC") == [start]
+
+
+def test_a_bounded_series_read_across_its_last_occurrence_is_never_refused() -> None:
+    capped = Recurrence("FREQ=DAILY;COUNT=10000")
+    start = _utc(2026, 1, 1, 9)
+    last = datetime(2053, 5, 18, 9, tzinfo=UTC)  # the 10,000th day, inclusive of the start
+
+    window = capped.occurrences(start, datetime(2053, 5, 15, tzinfo=UTC), datetime(2053, 6, 1, tzinfo=UTC), zone="UTC")
+
+    assert window[-1] == last and len(window) == 4
+    assert capped.get_last_occurrence(start, zone="UTC") == last
+
+
+def test_the_spring_gap_instant_of_an_hourly_rule_counts_once() -> None:
+    hourly = Recurrence("FREQ=HOURLY")
+    start = datetime(2026, 3, 8, 0, tzinfo=ZoneInfo("America/New_York"))
+
+    moments = hourly.occurrences(start, start, start + (datetime(2026, 3, 8, 6) - datetime(2026, 3, 8)),
+                                 zone="America/New_York")
+
+    assert len(moments) == len(set(moments))
+
+
 def test_an_open_daily_series_twenty_years_on_still_expands_and_one_past_the_cap_refuses() -> None:
     daily = Recurrence("FREQ=DAILY")
     start = _utc(2026, 1, 1, 9)

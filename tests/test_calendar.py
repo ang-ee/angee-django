@@ -784,3 +784,40 @@ def test_a_user_gives_their_own_person_a_calendar_and_holds_it(db: None) -> None
         calendar = Calendar.objects.create(party=person, name="Mine")
 
     assert list(Calendar.objects.with_actor(user).filter(pk=calendar.pk)) == [calendar]
+
+
+@pytest.mark.parametrize("year", [9998, 9999])
+def test_an_open_series_near_the_last_date_saves_or_is_refused_never_overflows(db: None, year: int) -> None:
+    for policy in ("accept", "refuse"):
+        calendar = _calendar(zone="UTC", overlap_policy=policy)
+        try:
+            _event(calendar, start=datetime(year, 1, 1, 9, tzinfo=UTC), end=datetime(year, 1, 1, 10, tzinfo=UTC),
+                   recurrence="FREQ=DAILY")
+        except ValidationError:
+            pass
+
+
+def test_a_bounded_series_lasting_days_saves_on_a_refusing_calendar(db: None) -> None:
+    calendar = _calendar(zone="UTC", overlap_policy="refuse")
+
+    # Its last occurrence ends past its reach: a bounded series read across its own end is never refused.
+    event = _event(calendar, start=_utc(2026, 1, 1, 9), end=_utc(2026, 1, 3, 9), recurrence="FREQ=DAILY;COUNT=10000")
+
+    assert event.series_end == datetime(2053, 5, 20, 9, tzinfo=UTC)
+
+
+def test_clearing_a_masters_rule_detaches_the_override_of_its_first_instance(db: None) -> None:
+    calendar = _calendar(zone="UTC")
+    master = _event(calendar, start=_utc(2026, 7, 6, 9), end=_utc(2026, 7, 6, 10), recurrence="FREQ=WEEKLY;COUNT=3")
+    first = _event(
+        calendar, start=_utc(2026, 7, 6, 11), end=_utc(2026, 7, 6, 12), series=master,
+        original_start=master.start, title="Moved first",
+    )
+
+    with system_context(reason="tests.calendar.clear"):
+        master.recurrence = ""
+        master.save()
+        first.refresh_from_db()
+
+    # A single row has no instances: its own start is no longer one the override may name.
+    assert (first.series_id, first.original_start, first.title) == (None, None, "Moved first")

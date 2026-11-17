@@ -1099,11 +1099,20 @@ class CredentialManager[CredentialT: Credential](_CredentialManagerBase[Credenti
         """Retire ``credential`` once nothing attaches it (:meth:`retire`); return whether it went.
 
         A credential shared by several integrations (two subscriptions to one feed
-        keep one) stays while any of them still attaches it.
+        keep one) stays while any of them still attaches it. The credential row is
+        locked first, inside the caller's transaction, so two callers that each
+        detach one sharer serialize here: the second waits, sees both detaches, and
+        retires it. An attach takes the same row's key-share lock, so it serializes
+        with this check too.
         """
 
-        if not self.unattached().filter(pk=credential.pk).exists():
-            return False
+        if not connection.in_atomic_block:
+            raise RuntimeError("Retiring an unattached credential requires the caller's transaction.")
+        with system_context(reason="integrate.credential.retire_unattached"):
+            if self.filter(pk=credential.pk).lock_if_supported().first() is None:
+                return False
+            if not self.unattached().filter(pk=credential.pk).exists():
+                return False
         return self.retire(credential)
 
     def delete_unattached_derived(self, credential_pk: int | None) -> None:

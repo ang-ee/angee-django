@@ -11,10 +11,11 @@ from __future__ import annotations
 import hashlib
 import logging
 from collections.abc import Iterator
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta, tzinfo
 from pathlib import Path
-from time import perf_counter
+from time import monotonic, perf_counter
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -23,7 +24,7 @@ import icalendar
 import pytest
 from django.core.cache import caches
 from django.core.exceptions import ValidationError
-from django.db import transaction
+from django.db import connection, transaction
 from django.db.models import ProtectedError
 from rebac import actor_context, system_context
 
@@ -49,6 +50,7 @@ from angee.jobs.celery import app as celery_app
 from angee.messaging.testing.models import Handle, Person
 from angee.scheduling.zones import get_zone_info
 from tests.conftest import Credential, create_user
+from tests.lock_waits import submit, wait_for_lock
 
 pytestmark = pytest.mark.django_db(transaction=True)
 
@@ -1175,10 +1177,10 @@ def test_a_row_the_calendar_cannot_expand_never_fails_a_read_or_another_save(
     with system_context(reason="tests.ics"):
         Calendar.objects.filter(pk=subscription.calendar.pk).update(overlap_policy="refuse")
         _make_unexpandable(subscription.events()["berlin@example.test"], **columns)
-        with caplog.at_level(logging.WARNING, logger="angee.calendar.models"):
+        with caplog.at_level(logging.DEBUG, logger="angee.calendar.models"):
             shown = CalendarEvent.objects.filter(calendar=subscription.calendar).occurrences(*window)
 
-    # The read returns the other rows; the skipped one is logged once.
+    # The read returns the other rows; the skipped one is noted once, at debug level.
     assert all(occurrence.title != "Berlin sync" for occurrence in shown)
     assert len([record for record in caplog.records if "cannot be expanded" in record.getMessage()]) == 1
     if window[0].year == 2026:
@@ -1187,9 +1189,12 @@ def test_a_row_the_calendar_cannot_expand_never_fails_a_read_or_another_save(
     late = LAUNCH.replace("launch@example.test", "late@example.test").replace(
         "DTSTART:20260401T120000Z", "DTSTART:20260402T120000Z"
     ).replace("DTEND:20260401T130000Z", "DTEND:20260402T130000Z")
-    subscription.feed.body = _feed(STANDUP, MOVED, HOLIDAY, LAUNCH, late)
+    clash = LAUNCH.replace("launch@example.test", "clash@example.test").replace("SUMMARY:Launch", "SUMMARY:Clash")
+    subscription.feed.body = _feed(STANDUP, MOVED, HOLIDAY, LAUNCH, late, clash)
     subscription.poll()
     assert "late@example.test" in subscription.events()
+    # A real overlap beside the skipped row is still refused.
+    assert subscription.failures() == {"clash@example.test": ["invalid_record"]}
 
 
 def test_saving_an_open_series_a_read_would_refuse_is_refused(subscription: Subscription) -> None:
@@ -1264,6 +1269,13 @@ def test_two_subscriptions_to_one_feed_share_a_credential_and_one_purge_spares_t
     subscription.feed.etags = False
     _poll(twin)
 
+    # Purging the last subscriber retires it.
+    with system_context(reason="tests.ics"):
+        CalendarSource.objects.get(pk=twin.pk).unsubscribe()
+    assert purge_unsubscribed_sources() == 6
+    with system_context(reason="tests.ics"):
+        assert not Credential.objects.filter(pk=twin.credential_id).exists()
+
 
 def test_the_reconciler_goes_on_past_a_source_whose_purge_fails(
     subscription: Subscription, monkeypatch: pytest.MonkeyPatch
@@ -1312,6 +1324,109 @@ def test_a_feed_body_that_names_a_server_file_is_never_read_from_disk(
         subscription.poll()
 
     assert "not valid iCalendar" in str(refused.value)
+
+
+def test_an_open_series_near_the_last_date_never_fails_a_page(subscription: Subscription) -> None:
+    subscription.poll()
+    with system_context(reason="tests.ics"):
+        Calendar.objects.filter(pk=subscription.calendar.pk).update(overlap_policy="refuse")
+    edge = """BEGIN:VEVENT
+UID:edge@example.test
+DTSTART:99980101T090000Z
+DTEND:99980101T100000Z
+RRULE:FREQ=DAILY
+SUMMARY:Edge
+END:VEVENT"""
+    subscription.feed.body = _feed(STANDUP, MOVED, HOLIDAY, BERLIN_EVENT, LAUNCH, edge)
+
+    subscription.poll()
+
+    # It lands, or is quarantined on its own; the page never fails.
+    assert set(subscription.failures()) <= {"edge@example.test"}
+    assert "launch@example.test" in subscription.events()
+
+
+def test_a_bounded_master_with_a_stale_exdate_past_its_reach_lands(subscription: Subscription) -> None:
+    stale = STANDUP.replace(
+        "EXDATE;TZID=America/New_York:20260316T090000", "EXDATE;TZID=America/New_York:20260316T090000,23000101T090000"
+    )
+    subscription.feed.body = _feed(stale, MOVED, HOLIDAY, BERLIN_EVENT, LAUNCH)
+
+    subscription.poll()
+
+    assert subscription.failures() == {}
+    assert "standup@example.test" in subscription.events()
+
+
+def _parsed_zone(rule: str, *, start: str = "19700101T000000") -> Any:
+    [zone] = icalendar.Calendar.from_ical(_zone("Probe", rule, start=start).encode()).walk("VTIMEZONE")
+    return zone
+
+
+def test_a_feed_zone_observance_is_counted_in_bounded_time(subscription: Subscription) -> None:
+    # A rule whose day filters never match is refused through the recurrence owner, at once.
+    began = perf_counter()
+    assert ics_backend._transitions(_parsed_zone("FREQ=YEARLY;BYMONTH=2;BYMONTHDAY=30"), 5_000) > 5_000
+    assert perf_counter() - began < 0.5
+    # A sparse rule counts its true transitions: the leap days from 1970 to 2038.
+    assert ics_backend._transitions(_parsed_zone("FREQ=YEARLY;BYMONTH=2;BYMONTHDAY=29"), 5_000) == 17
+    # A flood of observances reaches the cap: each counts at least once.
+    flood = icalendar.Timezone({"TZID": "Flood"})
+    for _index in range(5_001):
+        flood.add_component(icalendar.TimezoneStandard({"DTSTART": datetime(1970, 1, 1)}))
+    assert ics_backend._transitions(flood, 5_000) > 5_000
+
+
+def test_each_parse_path_stops_at_the_sync_deadline(subscription: Subscription) -> None:
+    subscription.poll()
+    subscription.feed.etags = False
+    past = monotonic() - 1
+
+    # The feed parse, on extraction.
+    backend = IcsCalendarBackend(CalendarSource.objects.sudo(reason="tests.ics").get(pk=subscription.source.pk))
+    with system_context(reason="tests.ics"), pytest.raises(IcsError, match="took too long"):
+        advance_stream(subscription.stream(), backend, deadline=past)
+    # Zone resolution, observance by observance.
+    feed = ics_backend._read(_custom_zone_feed("-0500", "-0400").encode())
+    with pytest.raises(IcsError, match="took too long"):
+        ics_backend._Zones(feed, deadline=past).resolve("Custom Zone")
+    # An identity read keeps the deadline its cycle's streams() received.
+    reader = IcsCalendarBackend(CalendarSource.objects.sudo(reason="tests.ics").get(pk=subscription.source.pk))
+    with system_context(reason="tests.ics"):
+        list(reader.streams(deadline=past))
+        with pytest.raises(IcsError, match="took too long"):
+            reader.read_keys(subscription.stream(), ["launch@example.test"])
+
+
+@pytest.mark.skipif(connection.vendor != "postgresql", reason="Real PostgreSQL row locks are required.")
+def test_two_purges_racing_on_a_shared_credential_retire_it_exactly_once(
+    subscription: Subscription, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    subscription.poll()
+    monkeypatch.setattr(celery_app, "send_task", lambda name, **options: None)
+    twin = subscribe_calendar(subscription.source.owner, name="Twin", url="webcal://feeds.example.test/team.ics")
+    _poll(twin)
+    credential_id = twin.credential_id
+    with system_context(reason="tests.ics"):
+        for pk in (subscription.source.pk, twin.pk):
+            CalendarSource.objects.filter(pk=pk).update(lifecycle="disconnected")
+
+    def contend() -> int:
+        with system_context(reason="tests.ics.contender"):
+            return CalendarSource.objects.get(pk=twin.pk).purge()
+
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        with system_context(reason="tests.ics.holder"), transaction.atomic():
+            # The first purge holds the credential row until this block commits.
+            CalendarSource.objects.get(pk=subscription.source.pk).purge()
+            contender, pid = submit(pool, contend)
+            wait_for_lock(pid, contender)
+            assert Credential.objects.filter(pk=credential_id).exists()
+        contender.result(timeout=10)
+
+    # The second purge waited, saw both detaches, and retired it.
+    with system_context(reason="tests.ics"):
+        assert not Credential.objects.filter(pk=credential_id).exists()
 
 
 # --- poison input --------------------------------------------------------------

@@ -49,6 +49,7 @@ from dataclasses import dataclass, replace
 from datetime import UTC, datetime, time, timedelta
 from typing import Any, ClassVar, Self, cast
 
+from celery.exceptions import SoftTimeLimitExceeded
 from django.apps import apps
 from django.conf import settings
 from django.core.cache import caches
@@ -102,7 +103,7 @@ from angee.provenance.contrib.angee.managers import AngeeHistoryManager
 from angee.provenance.contrib.angee.querysets import AngeeHistoryQuerySet
 from angee.provenance.statements import Aspect, SourceKind, StatementRecords, StatementsMixin
 from angee.scheduling.fields import RecurrenceField, TimeZoneField
-from angee.scheduling.recurrence import Recurrence
+from angee.scheduling.recurrence import Recurrence, moment_after
 from angee.scheduling.zones import get_zone_info
 from angee.tags.models import TaggedModel
 
@@ -199,7 +200,7 @@ def _clamped(moment: datetime) -> datetime:
 def _earlier(moment: datetime, span: timedelta) -> datetime:
     """Return ``moment - span``, or the earliest reachable instant when that falls before it."""
 
-    return moment - span if moment - _EARLIEST > span else _EARLIEST
+    return max(moment_after(moment, -span) or _EARLIEST, _EARLIEST)
 
 
 UNEXPANDABLE = frozenset({"series_too_long", "out_of_range"})
@@ -502,8 +503,8 @@ class CalendarEventQuerySet(AngeeHistoryQuerySet[Any]):
         row ending before ``window_start`` nor a series whose stored
         ``series_end`` is at or before it. An open-ended series is always read. A row
         whose expansion is refused (:data:`UNEXPANDABLE`: a series past the cap from
-        its start, an occurrence past the representable dates) is skipped and logged,
-        so it never fails the read or another row's overlap check.
+        its start, an occurrence past the representable dates) is skipped, noted at
+        debug level, so it never fails the read or another row's overlap check.
         """
 
         window_start, window_end = _clamped(window_start), _clamped(window_end)
@@ -546,8 +547,9 @@ class CalendarEventQuerySet(AngeeHistoryQuerySet[Any]):
                 codes = _codes(error)
                 if not codes or not codes <= UNEXPANDABLE:
                     raise
-                # One row the calendar cannot expand never fails the read: it is skipped, and logged once.
-                logger.warning(
+                # One row the calendar cannot expand never fails the read: it is skipped. Its source's
+                # ingest already quarantined it, so each read notes it only at debug level.
+                logger.debug(
                     "Calendar event %s is skipped: its occurrences cannot be expanded (%s).",
                     row.sqid,
                     ", ".join(sorted(codes)),
@@ -1056,24 +1058,34 @@ class CalendarEvent(
     def is_instance(self, moment: datetime, *, zone: str | None = None) -> bool:
         """Whether ``moment`` is an instance of this master's rule, expanded in ``zone`` (its expansion zone)."""
 
-        if not self.recurrence:
-            return False
         return moment in self.instances(moment, moment, zone=zone)
 
     def instances(self, first: datetime, last: datetime, *, zone: str | None = None) -> set[datetime]:
         """Return this master's instances in ``[first, last]``, expanded once in ``zone`` (its expansion zone).
+
+        A row without a rule has none: its own start is no instance of a series.
 
         The recurrence owner counts every occurrence from the start, so a moment
         far from it is refused (``series_too_long``) rather than walked to; a bound
         past the representable dates is refused (``out_of_range``).
         """
 
+        if not self.recurrence:
+            return set()
         zone = self.expansion_zone if zone is None else zone
-        try:
-            end = last + timedelta(microseconds=1)
-        except OverflowError as error:
-            raise ValidationError(OUT_OF_RANGE_MESSAGE, code="out_of_range") from error
+        end = moment_after(last, timedelta(microseconds=1))
+        if end is None:
+            raise ValidationError(OUT_OF_RANGE_MESSAGE, code="out_of_range")
         return set(Recurrence(self.recurrence).occurrences(self.start, first, end, zone=zone))
+
+    def horizon_end(self, since: datetime) -> datetime:
+        """Return where :attr:`overlap_horizon` from ``since`` ends, within the dates the calendar reaches.
+
+        The one horizon an open-ended series is judged to, at save and in the
+        overlap check; a start near the last date ends the horizon there.
+        """
+
+        return min(moment_after(since, self.overlap_horizon) or _LATEST, _LATEST)
 
     def _refuse_unreadable_series(self) -> None:
         """Refuse an open-ended series a read would already refuse: save and read agree (R-R2).
@@ -1083,7 +1095,7 @@ class CalendarEvent(
         saving it is refused too.
         """
 
-        horizon = _clamped(max(timezone.now(), self.start) + self.overlap_horizon)
+        horizon = self.horizon_end(max(timezone.now(), self.start))
         try:
             Recurrence(self.recurrence).occurrences(self.start, horizon, horizon, zone=self.expansion_zone)
         except ValidationError as error:
@@ -1277,7 +1289,7 @@ class CalendarEvent(
             return [(self.start, self.end)]
         zone = self.expansion_zone
         # The horizon stops short of the largest date, so a far-future start cannot overflow it.
-        stop = self.series_end or min(self.start, _LATEST - self.overlap_horizon) + self.overlap_horizon
+        stop = self.series_end or self.horizon_end(self.start)
         starts = Recurrence(self.recurrence).occurrences(self.start, self.start, stop, zone=zone)
         replaced: set[datetime] = set()
         if self.pk is not None:
@@ -1692,6 +1704,8 @@ class CalendarSource(Bridge, inherits="integrate.Integration"):
         for source in pending.order_by("pk"):
             try:
                 purged += source.purge()
+            except SoftTimeLimitExceeded:
+                raise
             except Exception:  # noqa: BLE001 — one source's failure must not jam the others' purges.
                 logger.exception("Purging calendar source %s failed; the next run retries it.", source.pk)
                 source.report_status(
