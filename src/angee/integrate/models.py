@@ -93,7 +93,9 @@ from angee.integrate.oauth.discovery import discovery_document as oidc_metadata_
 from angee.integrate.oauth.errors import (
     ACCOUNT_SWITCH_REFUSED,
     CLIENT_NOT_CONFIGURED,
+    CONSENT_REQUIRED,
     INVALID_STATE,
+    SCOPE_NOT_GRANTED,
     SCOPE_NOT_IN_CATALOGUE,
     OAuthFlowError,
 )
@@ -469,13 +471,15 @@ class OAuthClient(ImplDefaultsMixin, AuditMixin, AngeeDataModel, concrete=True):
 
         return self._string_list(self.scopes_catalogue)
 
-    def requested_scopes(self, consumer_scopes: Iterable[str] = ()) -> list[str]:
+    def requested_scopes(self, consumer_scopes: Iterable[str] = (), *, granted: Iterable[str] = ()) -> list[str]:
         """Return this client's default scopes followed by the extra scopes a consumer needs.
 
         One registration serves every consumer of a provider, so each consumer
         (``IntegrationImpl.oauth_scopes``) adds its own scopes to the defaults. A
         consumer may ask only for scopes the registration offers in
         ``scopes_catalogue``; anything else is refused before the provider redirect.
+        ``granted`` are the scopes the account's current grant holds; the offered
+        ones are asked for again, so one consumer never narrows another's grant.
         """
 
         defaults = self.default_scope_values
@@ -485,7 +489,7 @@ class OAuthClient(ImplDefaultsMixin, AuditMixin, AngeeDataModel, concrete=True):
             raise OAuthFlowError(
                 SCOPE_NOT_IN_CATALOGUE, 400, f"{self.slug} does not offer scope(s): {', '.join(missing)}",
             )
-        return requested
+        return list(dict.fromkeys([*requested, *(scope for scope in granted if scope in offered)]))
 
     @property
     def authorize_param_values(self) -> dict[str, str]:
@@ -691,6 +695,8 @@ class ExternalAccountManager[ExternalAccountT: ExternalAccount](_ExternalAccount
         tokens: dict[str, Any],
         claims: dict[str, Any],
         reason: str = "integrate.oauth.connect",
+        require_refresh_token: bool = False,
+        required_scopes: Iterable[str] = (),
     ) -> ExternalAccountT:
         """Link ``user``'s verified provider identity and store its OAuth credential in one transaction.
 
@@ -698,7 +704,8 @@ class ExternalAccountManager[ExternalAccountT: ExternalAccount](_ExternalAccount
         ``(user, provider, account)`` upsert, so a reconnect replaces that account's
         grant in place and never touches another account's. Raises
         ``ValidationError`` (``account_already_linked``) when another user owns the
-        identity.
+        identity. ``require_refresh_token`` and ``required_scopes`` are the
+        upsert's grant checks; a refusal links nothing.
         """
 
         email = oauth_client.email_from_claims(claims) or ""
@@ -718,6 +725,8 @@ class ExternalAccountManager[ExternalAccountT: ExternalAccount](_ExternalAccount
                 CredentialKind.OAUTH,
                 tokens,
                 external_account=account,
+                require_refresh_token=require_refresh_token,
+                required_scopes=required_scopes,
             )
             account.save(update_fields=["credential", "updated_at"])
         return account
@@ -854,6 +863,18 @@ class ExternalAccount(OwnerMixin, AngeeDataModel, concrete=True):
         return self.email or self.display_name or self.external_id
 
     @property
+    def provider_identity(self) -> tuple[str, str]:
+        """Identify the person behind this account: the client's OIDC issuer, or the client, and the subject.
+
+        Two clients of one issuer share the identity of one subject, so a
+        connection may move between them; without an issuer, subjects compare
+        within one client only.
+        """
+
+        issuer = self.oauth_client.issuer
+        return (issuer or f"oauth_client:{self.oauth_client_id}", self.external_id)
+
+    @property
     def provider_slug(self) -> str:
         """Return the originating OAuth client's slug."""
 
@@ -905,6 +926,7 @@ class CredentialQuerySet[CredentialT: Credential](AngeeHistoryQuerySet[Credentia
                 "status",
                 "expires_at",
                 "last_refresh_status",
+                "granted_scopes",
                 "kind",
                 "oauth_client__supports_refresh",
             )
@@ -1041,15 +1063,24 @@ class CredentialManager[CredentialT: Credential](_CredentialManagerBase[Credenti
         *,
         external_account: Any | None = None,
         reconnect: bool = True,
+        require_refresh_token: bool = False,
+        required_scopes: Iterable[str] = (),
         **fields: Any,
     ) -> Any:
         """Create or update one ``(user, oauth_client, external_account)`` credential (connect/login flow).
 
         Each account a user connects at a provider has its own credential, so a
-        second account never replaces the first. An OAuth grant that carries no
-        refresh token keeps the stored one: a provider may issue a refresh token on
-        first consent only (RFC 6749 §5.1, §6). A reconnect re-attaches the
-        integrations whose discovered material derives from the replaced grant.
+        second account never replaces the first. A row stored without an account
+        (before credentials were per account) is adopted by the first account that
+        connects, never orphaned beside a new one. The row is updated under its own
+        lock; an OAuth grant that carries no refresh token keeps the one that row
+        stores, since a provider may issue one on first consent only (RFC 6749
+        §5.1, §6). ``require_refresh_token`` refuses (``consent_required``) a grant
+        that would leave a refreshable client's credential without one. A grant that
+        reports its scopes must cover ``required_scopes`` and those of every
+        integration the credential serves (``scope_not_granted``). A refusal writes
+        nothing. A reconnect re-attaches the integrations whose discovered material
+        derives from the replaced grant.
         """
 
         handler = CredentialKind(kind).handler
@@ -1066,43 +1097,62 @@ class CredentialManager[CredentialT: Credential](_CredentialManagerBase[Credenti
         if not str(create_values.get("name") or ""):
             create_values["name"] = self._oauth_credential_name(oauth_client, external_account)
         identity = {"user_id": user.pk, "oauth_client_id": oauth_client.pk, "external_account_id": account_id}
+        integration_model = apps.get_model("integrate", "Integration")
+
+        def served(credential_pk: int) -> Any:
+            return integration_model.objects.filter(
+                Q(credential_id=credential_pk) | Q(discovery_credential_id=credential_pk),
+            ).order_by("pk")
+
         with system_context(reason=self._REASON), transaction.atomic():
+            if account_id is not None and not self.filter(**identity).exists():
+                legacy = self.filter(user_id=user.pk, oauth_client_id=oauth_client.pk, external_account__isnull=True)
+                legacy_pks = list(legacy.values_list("pk", flat=True))
+                if legacy.update(external_account_id=account_id):
+                    integration_model.objects.filter(credential_id__in=legacy_pks, account__isnull=True).update(
+                        account_id=account_id,
+                    )
             existing = self.filter(**identity).only("pk").first()
             integrations = []
-            if existing is not None:
-                affected = (
-                    apps.get_model("integrate", "Integration")
-                    .objects.filter(
-                        Q(credential_id=existing.pk) | Q(discovery_credential_id=existing.pk),
-                    )
-                    .order_by("pk")
-                )
-                if reconnect:
-                    # Match Retry/Resume: concrete integration and ancestors,
-                    # then the source credential. Refresh-only writes never
-                    # touch integrations and may already hold the credential lock.
-                    integrations = [integration.lock_capability() for integration in affected]
-                existing = self.lock_if_supported().get(pk=existing.pk)
+            if existing is not None and reconnect:
+                # Match Retry/Resume: concrete integration and ancestors, then the
+                # source credential. Refresh-only writes never touch integrations
+                # and may already hold the credential lock.
+                integrations = [integration.lock_capability() for integration in served(existing.pk)]
+            instance, created = self.lock_if_supported().get_or_create(**identity, defaults=create_values)
+            stored_refresh = ""
+            if not created:
                 # An attachment cannot commit while the credential is locked (its
                 # foreign-key check needs the row), so this read is final. A late
-                # arrival attached between the two reads; it is locked after the
-                # credential, as its re-attachment below would lock it anyway.
+                # arrival is locked after the credential, as its re-attachment below
+                # would lock it anyway.
                 if reconnect:
                     locked = {integration.pk for integration in integrations}
                     integrations += [
-                        integration.lock_capability() for integration in affected if integration.pk not in locked
+                        integration.lock_capability()
+                        for integration in served(instance.pk)
+                        if integration.pk not in locked
                     ]
                 if handler.kind == CredentialKind.OAUTH and not material.get("refresh_token"):
-                    if stored_refresh := existing.reveal().get("refresh_token"):
+                    stored_refresh = str(instance.reveal().get("refresh_token") or "")
+                    if stored_refresh:
                         operation_values["material"] = self.model.encode_material(
                             {**material, "refresh_token": stored_refresh},
                         )
-            instance, _created = self.update_or_create(
-                **identity,
-                defaults={**operation_values, **update_values},
-                create_defaults=create_values,
-            )
-            if reconnect and existing is not None:
+                values = {**operation_values, **update_values}
+                for name, value in values.items():
+                    setattr(instance, name, value)
+                instance.save(update_fields=[*values, "updated_at"])
+            refreshable_client = handler.kind == CredentialKind.OAUTH and oauth_client.supports_refresh
+            if require_refresh_token and refreshable_client and not (material.get("refresh_token") or stored_refresh):
+                raise OAuthFlowError(CONSENT_REQUIRED, 409)
+            if "granted_scopes" in update_values:
+                needed = set(required_scopes).union(
+                    *(integration.connection_oauth_scopes for integration in integrations),
+                )
+                if missing := sorted(needed - set(update_values["granted_scopes"])):
+                    raise OAuthFlowError(SCOPE_NOT_GRANTED, 409, f"Scope(s) not granted: {', '.join(missing)}")
+            if reconnect and not created:
                 for integration in integrations:
                     if integration.credential_id == instance.pk:
                         continue
@@ -1813,10 +1863,8 @@ class IntegrationManager[IntegrationT: Integration](_IntegrationManagerBase[Inte
     ) -> None:
         """Attach completed OAuth state only to its one owned, exposed concrete capability.
 
-        An integration connected as one account at this client is never re-pointed
-        at another account: its synced state belongs to the first, so the connect
-        is refused with ``account_switch_refused``. The new account's credential
-        stays connected for the user.
+        ``attach_connection`` refuses another account than the one the target is
+        bound to; the new account's credential stays connected for the user.
         """
 
         if not integration_sqid:
@@ -1839,9 +1887,6 @@ class IntegrationManager[IntegrationT: Integration](_IntegrationManagerBase[Inte
                 raise OAuthFlowError(INVALID_STATE, 400)
         except (PermissionDenied, ValueError) as error:
             raise OAuthFlowError(INVALID_STATE, 400) from error
-        bound = target.bound_account(credential.oauth_client_id)
-        if bound is not None and bound.pk != credential.external_account_id:
-            raise OAuthFlowError(ACCOUNT_SWITCH_REFUSED, 409)
         if credential.pk != target.credential_id or target.lifecycle == IntegrationLifecycle.DISCONNECTED:
             target.attach_credential(credential)
 
@@ -2039,9 +2084,19 @@ class Integration(StatementSourceMixin, ImplDefaultsMixin, OwnerMixin, AngeeData
 
     @property
     def connection_oauth_scopes(self) -> tuple[str, ...]:
-        """Return the scopes this capability needs beyond its OAuth client's defaults."""
+        """Return the scopes this capability needs beyond its OAuth client's defaults; none without one."""
 
+        if (self.declared_concrete_model() or type(self)) is apps.get_model("integrate", "Integration"):
+            return ()
         return tuple(self.capability_impl_class.oauth_scopes)
+
+    @property
+    def lacks_oauth_scopes(self) -> bool:
+        """Whether the attached grant misses scopes this capability needs, so Connect can add them."""
+
+        scopes = self.connection_oauth_scopes
+        credential = self._credential_health() if scopes else None
+        return credential is not None and not set(scopes) <= set(credential.granted_scopes or ())
 
     def bound_account(self, oauth_client: Any) -> ExternalAccount | None:
         """Return the external account this integration is connected as at ``oauth_client`` (a row or pk)."""
@@ -2091,7 +2146,7 @@ class Integration(StatementSourceMixin, ImplDefaultsMixin, OwnerMixin, AngeeData
         )
         return {
             f"_connection_{name}": Subquery(credential.values(name)[:1])
-            for name in ("status", "expires_at", "last_refresh_status")
+            for name in ("status", "expires_at", "last_refresh_status", "granted_scopes")
         }
 
     @classmethod
@@ -2179,17 +2234,19 @@ class Integration(StatementSourceMixin, ImplDefaultsMixin, OwnerMixin, AngeeData
         write_access: bool | None = None,
         ready_slugs: Collection[str] | None = None,
     ) -> bool:
-        """OAuth Connect requires ownership, write, registration and consent need.
+        """OAuth Connect requires ownership, write, registration and a consent need.
 
-        A healthy grant with failed discovery is repaired by Retry, so that row
-        never offers both Retry and Connect.
+        Consent is needed without a credential, when the grant needs renewed
+        consent, or when it lacks scopes the capability now declares. A healthy
+        grant with failed discovery is repaired by Retry, so that row never offers
+        both Retry and Connect.
         """
 
         subject = to_subject_ref(actor) if actor is not None else instance_actor(self)
         return (
             self.owner_id == actor_user_id(subject)
             and (check_permission("write", self, actor=actor).allowed if write_access is None else write_access)
-            and (self.credential_id is None or self.is_reconnect_required)
+            and (self.credential_id is None or self.is_reconnect_required or self.lacks_oauth_scopes)
             and self.is_oauth_connectable(ready_slugs=ready_slugs)
         )
 
@@ -2199,6 +2256,23 @@ class Integration(StatementSourceMixin, ImplDefaultsMixin, OwnerMixin, AngeeData
         self.require_access("write", actor)
         if not self.can_connect(actor):
             raise PermissionDenied("Integration OAuth Connect is unavailable to the current user.")
+
+    def transfer_ownership(self, user: Any) -> Self:
+        """Transfer ownership and release the account binding, so the new owner connects their own account.
+
+        The previous owner's account no longer constrains Connect nor hints it.
+        """
+
+        previous_owner_id = self.owner_id
+        with transaction.atomic():
+            super().transfer_ownership(user)
+            if self.owner_id != previous_owner_id and self.account_id is not None:
+                with system_context(reason="integrate.integration.transfer.release_account"):
+                    row = self.lock_capability()
+                    row.account = None
+                    row.save(update_fields=["account", "updated_at"])
+                self.refresh_from_db()
+        return self
 
     def can_pause(self) -> bool:
         """Whether the guarded Pause verb is eligible for this row."""
@@ -2314,7 +2388,7 @@ class Integration(StatementSourceMixin, ImplDefaultsMixin, OwnerMixin, AngeeData
         model = apps.get_model("integrate", "Credential")
         if "_connection_credential" in self.__dict__:
             return cast(Credential | None, self.__dict__["_connection_credential"])
-        fields = ("status", "expires_at", "last_refresh_status")
+        fields = ("status", "expires_at", "last_refresh_status", "granted_scopes")
         if all(f"_connection_{field}" in self.__dict__ for field in fields):
             values = {field: self.__dict__[f"_connection_{field}"] for field in fields}
             if values["status"] is None:
@@ -2641,13 +2715,18 @@ class Integration(StatementSourceMixin, ImplDefaultsMixin, OwnerMixin, AngeeData
     ) -> None:
         """Own every credential attachment, including a fenced derived credential.
 
-        ``discovery_generation`` is reserved for the apply step already holding
-        this row's lock. Ordinary callers always enter connection discovery.
+        The row stays bound to the provider identity it was connected as: under
+        the row lock, a credential or ``account`` of another identity (issuer, or
+        client without one, plus subject) is refused with ``account_switch_refused``.
+        Detaching, or attaching a credential that names no account, keeps the
+        binding; ownership transfer releases it. ``discovery_generation`` is
+        reserved for the apply step already holding this row's lock. Ordinary
+        callers always enter connection discovery.
         """
 
-        resolved_account = (
-            (None if credential is None else credential.external_account) if account is _UNSET else account
-        )
+        resolved_account = account
+        if account is _UNSET and credential is not None and credential.external_account_id is not None:
+            resolved_account = credential.external_account
         if self.pk is None:
             self._set_connection_fields(credential=credential, account=resolved_account)
             if credential is not None and connect_disconnected and self.lifecycle == IntegrationLifecycle.DISCONNECTED:
@@ -2659,6 +2738,12 @@ class Integration(StatementSourceMixin, ImplDefaultsMixin, OwnerMixin, AngeeData
             return
         with system_context(reason="integrate.connection.attach"), transaction.atomic():
             row = self.lock_capability()
+            if resolved_account is not _UNSET and resolved_account is not None and row.account_id not in (
+                None, resolved_account.pk,
+            ):
+                bound = type(resolved_account)._base_manager.select_related("oauth_client").get(pk=row.account_id)
+                if bound.provider_identity != resolved_account.provider_identity:
+                    raise OAuthFlowError(ACCOUNT_SWITCH_REFUSED, 409)
             derived_pk = row.credential_id if row.discovery_credential_id not in (None, row.credential_id) else None
             if discovery_generation is not None:
                 if row.discovery_generation != discovery_generation or not row.discovery_pending:

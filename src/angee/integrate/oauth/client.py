@@ -47,6 +47,7 @@ from angee.integrate.oauth.errors import (
     TOKEN_EXCHANGE_FAILED,
     OAuthFlowError,
 )
+from angee.integrate.oauth.state import StateFlow
 
 if TYPE_CHECKING:
     from angee.integrate.models import OAuthClient
@@ -114,16 +115,20 @@ class OAuthClientProtocol:
         redirect_uri: str,
         scopes: Iterable[str],
         code_challenge: str | None = None,
+        flow: StateFlow = StateFlow.CONNECT,
+        consent: bool = False,
         **extras: str,
     ) -> str:
         """Return the provider authorization URL for one OAuth code flow.
 
-        ``extras`` are the flow's own authorize parameters (``prompt``,
-        ``login_hint``); they replace the registration's configured values.
+        The provider preset owns the authorize parameters of ``flow``
+        (``OAuthProviderType.authorize_params``); ``extras`` are the flow's
+        own facts, such as ``login_hint``.
         """
 
         return self._grant_uri(
-            state=state, redirect_uri=redirect_uri, scopes=scopes, code_challenge=code_challenge, **extras,
+            state=state, redirect_uri=redirect_uri, scopes=scopes, code_challenge=code_challenge,
+            flow=flow, consent=consent, **extras,
         )
 
     def exchange_code(
@@ -444,6 +449,8 @@ class OAuthClientProtocol:
         redirect_uri: str,
         scopes: Iterable[str],
         code_challenge: str | None,
+        flow: StateFlow,
+        consent: bool = False,
         **extras: str,
     ) -> str:
         """Build the authorization URL with Authlib's ``prepare_grant_uri`` (OIDC adds ``nonce``).
@@ -459,11 +466,10 @@ class OAuthClientProtocol:
         challenge = code_challenge if self.oauth_client.supports_pkce else None
         if not challenge and not self._client_secret():
             raise OAuthFlowError(CLIENT_NOT_CONFIGURED, 400, "OAuth client needs PKCE or a client secret.")
-        params = {
-            key: value
-            for key, value in self.oauth_client.authorize_param_values.items()
-            if key not in _GRANT_URI_ARGUMENTS
-        }
+        configured = self.oauth_client.provider.authorize_params(
+            flow, self.oauth_client.authorize_param_values, consent=consent,
+        )
+        params = {key: value for key, value in configured.items() if key not in _GRANT_URI_ARGUMENTS}
         if challenge:
             params.update(code_challenge=challenge, code_challenge_method="S256")
         params.update(extras)

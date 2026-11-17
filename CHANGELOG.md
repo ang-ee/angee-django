@@ -11,37 +11,40 @@ live in code docstrings.
 ## Unreleased — shared addon contracts, native embeddings and graph retrieval
 
 - One Google OAuth client per deployment serves every Google feature. The new
-  `angee.integrate_google` addon owns the `google` provider preset (endpoints,
-  OIDC metadata, claims, incremental authorization, the scope catalogue) and seeds
-  the deployment's blank `google` client and Google's public `gemini` client;
-  [Register the deployment's Google client](docs/howto/google-oauth-client.md)
-  covers the Cloud console side. `iam_integrate_oidc` depends on it and no longer
-  ships `GoogleType`, the demo `google` row or the Gemini endpoints; it sets login
-  policy on the `google` and `gemini` rows through its install seed. A
-  console-created Google client no longer defaults to sign-in; turn its login
-  switch on.
-- A consumer declares the scopes it needs beyond its client's defaults
-  (`IntegrationImpl.oauth_scopes`); connect requests
-  `OAuthClient.requested_scopes` and refuses a scope outside the client's
-  catalogue (`scope_not_in_catalogue`). Credentials are keyed by
-  (user, OAuth client, external account), so one user connects several accounts
-  through one client; connect sends `prompt=select_account` and the bound
-  account's `login_hint`, reuses only that account's live credential, and refuses
-  to re-point an integration at another account (`account_switch_refused` now
-  comes from `IntegrationManager.attach_completed_connect`). A re-consent without
-  a refresh token keeps the stored one.
-- `integrate.OAuthClient` owns `issuer` and `jwks_uri`, and
-  `OAuthClientProtocol.verify_id_token` (with `ANGEE_OIDC_JWKS_TTL` and the
-  `pyjwt` dependency) moved from the login addon; connect identifies an account
-  from the verified ID token when its grant cannot read userinfo. The fake OpenID
-  provider moved to `angee.integrate.testing.oidc`. Projects regenerate migrations
-  for the two credential constraints and the moved columns (same table, no data
-  change).
-- Data upgrade for `posts_integrate_youtube` (bridges): YouTube connects through
-  the `google` client and no longer ships `google_youtube`. Set
-  `provider_type = 'google'` on any `integrate_oauthclient` row still holding
-  `google_youtube` before upgrading, then reconnect its channels through the
-  `google` client.
+  `angee.integrate_google` addon owns the `google` provider preset and seeds the
+  deployment's blank `google` client and Google's public `gemini` client
+  ([Register the deployment's Google client](docs/howto/google-oauth-client.md)).
+  `iam_integrate_oidc` depends on it and no longer ships `GoogleType` or the demo
+  `google` row. Google sign-in is off until the operator turns on the `google`
+  client's login switch.
+- Consumers declare the scopes they need (`IntegrationImpl.oauth_scopes`).
+  Credentials are keyed by (user, OAuth client, external account), so one user
+  connects several accounts through one client, and an integration stays bound to
+  the account it was connected as (`account_switch_refused`). A connect whose
+  grant lacks the refresh token a refreshable client needs restarts asking for
+  consent (`consent_required`); one whose grant drops a scope an attached
+  integration uses is refused (`scope_not_granted`).
+- `integrate.OAuthClient` owns `issuer` and `jwks_uri`, and ID-token verification
+  (with `ANGEE_OIDC_JWKS_TTL` and `pyjwt`) moved into `integrate`; the fake
+  OpenID provider moved to `angee.integrate.testing.oidc`.
+- **Upgrade.** Projects author native migrations for:
+  - the schema: the two credential constraints replace
+    `uniq_integrate_credential_user_oauth_client`, and `issuer`/`jwks_uri` move to
+    the base model (new columns where the login addon was absent). The reverse
+    migration fails once any user holds two accounts at one client.
+  - `angee.integrate_google.compose_migrations.integrate.align_google_clients`:
+    fills the preset's endpoints, catalogue and `include_granted_scopes` on
+    existing `google`-type clients (the demo row included), never replacing client
+    ids, secrets or values an operator set.
+  - `angee.integrate_google.compose_migrations.resources.rehome_google_oauth_resources`:
+    the `oauth_gemini` seed moved from `integrate` to `integrate_google` with its
+    content unchanged; the step moves its ledger so the row is not re-applied.
+  - bridges `posts_integrate_youtube.compose_migrations.integrate.move_youtube_client_to_google`
+    (see its README).
+- **Re-applied seed rows.** On the first provision after upgrading, the
+  `oauth_google` seed adopts an existing `google`/`prod` client and sets its
+  provider type, display name and icon; without the ledger step, the `oauth_gemini`
+  row re-applies its released values. No other OAuth seed row changes.
 
 - `angee.scheduling` owns due rules: a `DueRule` (`angee.scheduling.due`) names due
   anchors the subject supplies later and labelled terms measured from them; the

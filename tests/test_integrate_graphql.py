@@ -1062,7 +1062,8 @@ def test_connect_integration_reuses_live_oauth_for_explicit_concrete_child(
 ) -> None:
     """OAuth ingress carries the authorized child resource and public id through attach.
 
-    The integration stays connected as its account, whose live credential is reused.
+    The integration stays connected as its account, whose live credential (the
+    fixture's account-less credential, adopted by that account) is reused.
     """
 
     bridge = make_integration(
@@ -1095,7 +1096,7 @@ def test_connect_integration_reuses_live_oauth_for_explicit_concrete_child(
         "integration": {
             "id": _public_id(bridge),
             "lifecycle": "CONNECTED",
-            "credential": {"display_name": "Oauth-Concrete-Target (concrete-account)"},
+            "credential": {"display_name": "Oauth-Concrete-Target"},
         },
         "error_code": None,
     }

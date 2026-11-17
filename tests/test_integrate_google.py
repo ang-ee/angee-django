@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
-from pathlib import Path
+from types import SimpleNamespace
 
 import httpx2
 import pytest
 from django.apps import apps
 from django.contrib.auth import get_user_model
+from django.db import connection, transaction
 from django.db.models.fields import NOT_PROVIDED
 from rebac import system_context
 
@@ -16,12 +17,15 @@ from angee.integrate.oauth import state
 from angee.integrate.oauth.client import OAuthClientProtocol
 from angee.integrate.testing.http import mock_transport
 from angee.integrate.testing.oidc import OidcProvider
+from angee.integrate_google.compose_migrations.integrate.align_google_clients import (
+    PRESET_ENDPOINT_FIELDS,
+    align_google_clients,
+)
+from angee.integrate_google.compose_migrations.resources.rehome_google_oauth_resources import rehome
 from angee.integrate_google.providers import GoogleType
 from angee.resources.entries import ResourceEntry, resource_manifest_for
+from angee.resources.testing.models import Resource
 from tests.conftest import OAuthClient
-
-ROOT = Path(__file__).resolve().parents[1]
-GOOGLE_ENDPOINT_HOSTS = ("accounts.google.com/o/oauth2", "oauth2.googleapis.com", "openidconnect.googleapis.com")
 
 
 def _seed_rows(app_label: str, path: str) -> dict[str, dict]:
@@ -67,47 +71,76 @@ def test_google_client_takes_the_preset_profile_endpoint_on_create() -> None:
     assert client.external_id_from_claims(claims) == "provider-subject"
 
 
-def test_google_seeds_name_the_preset_and_repeat_no_endpoint() -> None:
+def test_google_seeds_the_deployment_client_bare_and_keeps_the_released_gemini_row() -> None:
     rows = _seed_rows("integrate_google", "resources/install/010_integrate.oauthclient.yaml")
 
-    assert set(rows) == {"oauth_google", "oauth_gemini"}
-    google, gemini = rows["oauth_google"], rows["oauth_gemini"]
-    assert (google["slug"], google["environment"], google["provider_type"]) == ("google", "prod", "google")
-    assert "client_id" not in google and "client_secret" not in google
-    assert gemini["provider_type"] == "google"
+    assert rows["oauth_google"] == {
+        "_xref": "oauth_google", "slug": "google", "environment": "prod", "provider_type": "google",
+        "display_name": "Google", "icon": "google",
+    }
+    # Gemini keeps the content integrate released, so the rehomed ledger skips it.
+    gemini = rows["oauth_gemini"]
     assert gemini["client_id"] == "681255809395-oo8ft2oprdrnp9e3aqf6av3hmdib135j.apps.googleusercontent.com"
-    endpoint_fields = {
-        "discovery_url", "issuer", "jwks_uri", "authorize_endpoint", "token_endpoint", "userinfo_endpoint",
-        "revoke_endpoint", "authorize_params", "external_id_claim", "email_claim",
-    }
-    for row in (google, gemini):
-        assert not endpoint_fields & row.keys()
+    assert "provider_type" not in gemini and gemini["userinfo_endpoint"] == ""
 
 
-def test_login_addon_sets_policy_on_the_google_rows_it_composes() -> None:
-    rows = _seed_rows("iam_integrate_oidc", "resources/install/010_integrate.oauthclient.yaml")
+@pytest.mark.django_db
+def test_the_seeded_google_client_takes_its_endpoints_from_the_preset() -> None:
+    with system_context(reason="test Google seed"):
+        Resource.objects.load_addons((apps.get_app_config("integrate_google"),), tiers=[Resource.Tier.INSTALL])
+        google = OAuthClient.objects.get(slug="google", environment="prod")
 
-    assert rows["oauth_google_oidc"] == {
-        "_xref": "oauth_google_oidc",
-        "slug": "google",
-        "environment": "prod",
-        "login_enabled": True,
-        "link_on_email_match": True,
-    }
-    assert rows["oauth_gemini_oidc"] == {
-        "_xref": "oauth_gemini_oidc", "slug": "gemini", "environment": "prod", "login_enabled": True,
-    }
+    preset = GoogleType.effective_defaults()
+    for field in PRESET_ENDPOINT_FIELDS:
+        assert getattr(google, field) == preset[field]
+    assert google.scopes_catalogue == preset["scopes_catalogue"]
+    assert (google.client_id, google.configuration_state) == ("", "needs_client")
 
 
-def test_google_endpoints_live_only_in_the_preset() -> None:
-    sources = [path for pattern in ("*.py", "*.yaml") for path in (ROOT / "src" / "angee").rglob(pattern)]
-    copies = {
-        path.relative_to(ROOT).as_posix()
-        for path in sources
-        if any(host in path.read_text(encoding="utf-8") for host in GOOGLE_ENDPOINT_HOSTS)
-    }
+@pytest.mark.django_db
+def test_align_step_fills_the_preset_on_existing_google_clients_and_keeps_operator_values() -> None:
+    with system_context(reason="test Google client upgrade"):
+        demo = OAuthClient.objects.create(
+            slug="google", provider_type="google", display_name="Google (demo)", client_id="demo-oidc-client",
+        )
+        gemini = OAuthClient.objects.create(slug="gemini", provider_type="google", display_name="Gemini")
+        # Rows created before the preset carried these columns.
+        OAuthClient.objects.filter(pk=demo.pk).update(
+            revoke_endpoint="", issuer="", jwks_uri="", scopes_catalogue=["openid", "custom"],
+            authorize_params={"access_type": "online"},
+        )
+        OAuthClient.objects.filter(pk=gemini.pk).update(scopes_catalogue=["cloud-platform"])
 
-    assert copies == {"src/angee/integrate_google/providers.py"}
+        align_google_clients(apps, SimpleNamespace(connection=connection))
+
+        demo.refresh_from_db()
+        gemini.refresh_from_db()
+    preset = GoogleType.effective_defaults()
+    assert (demo.revoke_endpoint, demo.issuer, demo.jwks_uri) == (
+        preset["revoke_endpoint"], preset["issuer"], preset["jwks_uri"],
+    )
+    assert demo.scopes_catalogue[:2] == ["openid", "custom"]
+    assert set(preset["scopes_catalogue"]) <= set(demo.scopes_catalogue)
+    assert demo.authorize_params == {"access_type": "online", "include_granted_scopes": "true"}
+    assert demo.client_id == "demo-oidc-client"
+    assert gemini.scopes_catalogue == ["cloud-platform"]
+
+
+@pytest.mark.django_db
+def test_gemini_ledger_rehome_preserves_identity_and_refuses_a_competing_ledger() -> None:
+    values = dict(
+        source_path="resources/install/010_integrate.oauthclient.yaml", tier="install", xref="oauth_gemini",
+        content_hash="retained-hash", target_model="integrate.OAuthClient", target_id="clt_existing",
+    )
+    with system_context(reason="test Gemini ledger rehome"):
+        row = Resource.objects.create(source_addon="angee.integrate", **values)
+        rehome(apps, SimpleNamespace(connection=connection))
+        row.refresh_from_db()
+        assert (row.source_addon, row.content_hash) == ("angee.integrate_google", "retained-hash")
+
+        Resource.objects.create(source_addon="angee.integrate", **values)
+        with pytest.raises(RuntimeError, match="Both Integrate and integrate_google"), transaction.atomic():
+            rehome(apps, SimpleNamespace(connection=connection))
 
 
 @pytest.mark.django_db

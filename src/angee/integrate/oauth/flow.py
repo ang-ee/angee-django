@@ -56,6 +56,7 @@ def issue_flow(
     integration_id: str = "",
     scopes: Sequence[str] | None = None,
     login_hint: str = "",
+    consent: bool = False,
 ) -> tuple[str, state.StateRecord, str, str]:
     """Issue and session-bind state for one redirect flow.
 
@@ -77,6 +78,7 @@ def issue_flow(
         integration_id=integration_id,
         scopes=tuple(oauth_client.default_scope_values if scopes is None else scopes),
         login_hint=login_hint,
+        consent=consent,
     )
     session = cast(Any, request).session
     session[f"{_SESSION_OAUTH_CLIENT_PREFIX}{state_token}"] = str(oauth_client.sqid)
@@ -95,6 +97,7 @@ def start(
     integration_id: str = "",
     scopes: Sequence[str] | None = None,
     login_hint: str = "",
+    consent: bool = False,
     authorize_url_builder: Callable[[OAuthClient, str, state.StateRecord, str], str] | None = None,
 ) -> OAuthStart:
     """Issue state and return the browser redirect facts for one OAuth/OIDC flow.
@@ -113,6 +116,7 @@ def start(
         integration_id=integration_id,
         scopes=scopes,
         login_hint=login_hint,
+        consent=consent,
     )
     builder = authorize_url_builder or _connect_authorize_url
     return OAuthStart(
@@ -120,6 +124,28 @@ def start(
         state=state_token,
         mode=mode,
         redirect_uri=effective_redirect_uri,
+    )
+
+
+def restart_with_consent(request: HttpRequest, oauth_client: OAuthClient, record: state.StateRecord) -> OAuthStart:
+    """Start the consumed connect again, asking the provider for consent.
+
+    The completion refused a grant without the refresh token it needs
+    (``ConsentRequired``); the new flow keeps the user, scopes, hint, target and
+    redirect of the first.
+    """
+
+    return start(
+        request,
+        oauth_client,
+        record.redirect_uri,
+        user_id=record.user_id,
+        next_path=record.next_path or "/",
+        flow=record.flow,
+        integration_id=record.integration_id,
+        scopes=record.scopes,
+        login_hint=record.login_hint,
+        consent=True,
     )
 
 
@@ -193,22 +219,19 @@ def _connect_authorize_url(
     record: state.StateRecord,
     redirect_uri: str,
 ) -> str:
-    """Return the account-connect authorize URL, on which the user chooses the account.
+    """Return the account-connect authorize URL, hinting the account the consumer expects.
 
-    ``prompt=select_account`` (OIDC Core §3.1.2.1) joins any prompt the
-    registration configures, so one client can connect several accounts of one
-    user; ``login_hint`` preselects the account the consumer expects. Providers
-    ignore authorize parameters they do not know (RFC 6749 §3.1).
+    The provider preset owns the prompt (``OAuthProviderType.authorize_params``);
+    providers ignore authorize parameters they do not know (RFC 6749 §3.1).
     """
 
-    configured = oauth_client.authorize_param_values.get("prompt", "").split()
-    extras = {"prompt": " ".join(dict.fromkeys([*configured, "select_account"]))}
-    if record.login_hint:
-        extras["login_hint"] = record.login_hint
+    extras = {"login_hint": record.login_hint} if record.login_hint else {}
     return OAuthClientProtocol(oauth_client).authorize_url(
         state=state_token,
         redirect_uri=redirect_uri,
         scopes=record.scopes,
         code_challenge=pkce_challenge(record.code_verifier),
+        flow=record.flow,
+        consent=record.consent,
         **extras,
     )

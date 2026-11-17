@@ -53,10 +53,10 @@ set, and `ready` afterwards. A host that keeps secrets in its environment declar
 the client in `ANGEE_INTEGRATE_OAUTH_CLIENTS` instead and syncs it with
 `manage.py oauth_clients`.
 
-When the OIDC login addon is installed, the `google` client is also a sign-in
-provider: an existing user signs in with the Google account whose verified email
-matches theirs. Restrict sign-in to your domains with the client's allowed email
-domains, or turn it off with its login switch.
+To sign users in with Google (OIDC login addon installed), turn on the `google`
+client's login switch and, to let an existing user in by the verified email of
+their Google account, its email-match switch. Restrict sign-in to your domains
+with the client's allowed email domains.
 
 ## Keep the client alive
 

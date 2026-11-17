@@ -1,9 +1,11 @@
 # OAuth registration seeds (install tier). Model inferred from the
 # `integrate.oauthclient` filename; adopted by (slug, environment) so a pre-existing
 # row is linked, not duplicated. Public clients omit client secrets; confidential
-# registrations acquire app credentials from host settings. A vendor addon seeds
-# its own registrations (Google's live in integrate_google); the OIDC login policy
-# for login-capable providers is owned and seeded by the iam_integrate_oidc addon.
+# registrations acquire app credentials from host settings. Vendor addons seed
+# their own registrations (Google's live in integrate_google); the OIDC login
+# policy for login-capable providers is owned and seeded by the iam_integrate_oidc
+# addon. A row's content is its ledger hash: editing a row re-applies all of its
+# fields to existing installations.
 - xref: oauth_grok
   slug: grok
   environment: prod
@@ -12,8 +14,6 @@
   client_id: b1a00492-073a-47ea-816f-4c329264a828
   authorize_endpoint: https://auth.x.ai/oauth2/authorize
   token_endpoint: https://auth.x.ai/oauth2/token
-  discovery_url: https://auth.x.ai/.well-known/openid-configuration
-  issuer: https://auth.x.ai
   is_enabled: false
   supports_pkce: true
   supports_refresh: true

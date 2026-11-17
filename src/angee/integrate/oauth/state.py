@@ -45,7 +45,8 @@ class StateRecord:
     """Cached data needed to complete one OAuth/OIDC redirect.
 
     ``scopes`` are the scopes the authorization request asks for; ``login_hint``
-    names the account a connect expects, when its consumer knows it.
+    names the account a connect expects, when its consumer knows it; ``consent``
+    marks a connect restarted to ask the provider for consent again.
     """
 
     oauth_client_id: str
@@ -59,6 +60,7 @@ class StateRecord:
     integration_id: str = ""
     scopes: tuple[str, ...] = ()
     login_hint: str = ""
+    consent: bool = False
 
 
 def issue(
@@ -71,6 +73,7 @@ def issue(
     integration_id: str = "",
     scopes: tuple[str, ...] = (),
     login_hint: str = "",
+    consent: bool = False,
 ) -> tuple[str, StateRecord]:
     """Create and cache one single-use redirect state record."""
 
@@ -88,6 +91,7 @@ def issue(
         integration_id=integration_id,
         scopes=scopes,
         login_hint=login_hint,
+        consent=consent,
     )
     cache.set(_cache_key(state_token), record, timeout=_state_ttl_seconds())
     return state_token, record

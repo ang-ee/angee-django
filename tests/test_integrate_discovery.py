@@ -184,8 +184,8 @@ def test_oauth_completion_preserves_discovery_for_the_same_identity(bridge, sent
             "client_id", "client_secret", "token_endpoint", "authorize_endpoint", "userinfo_endpoint",
         ])
         completion = complete_external_account_link(
-            client, user=bridge.owner, external_id="connected-account", tokens={"access_token": "fake"},
-            claims={"sub": "connected-account"},
+            client, user=bridge.owner, external_id="connected-account",
+            tokens={"access_token": "fake", "refresh_token": "fake-refresh"}, claims={"sub": "connected-account"},
         )
         bridge.attach_credential(completion.credential)
         if derived:

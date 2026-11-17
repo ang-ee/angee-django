@@ -110,6 +110,8 @@ def _oidc_authorize_url(oauth_client: Any, state_token: str, record: oauth_state
         scopes=record.scopes,
         nonce=record.nonce,
         code_challenge=oauth_flow.pkce_challenge(record.code_verifier),
+        flow=record.flow,
+        consent=record.consent,
     )
 
 

@@ -15,6 +15,7 @@ from collections.abc import Iterable
 from typing import Any
 
 from angee.integrate.oauth.client import OAuthClientProtocol
+from angee.integrate.oauth.state import StateFlow
 
 
 class OAuthClientOidcProtocol(OAuthClientProtocol):
@@ -28,6 +29,8 @@ class OAuthClientOidcProtocol(OAuthClientProtocol):
         scopes: Iterable[str],
         nonce: str | None = None,
         code_challenge: str | None = None,
+        flow: StateFlow = StateFlow.LOGIN,
+        consent: bool = False,
         **extras: str,
     ) -> str:
         """Return the OIDC authorization URL — adds the ``openid`` scope and a ``nonce``.
@@ -48,6 +51,8 @@ class OAuthClientOidcProtocol(OAuthClientProtocol):
             redirect_uri=redirect_uri,
             scopes=effective_scopes,
             code_challenge=code_challenge,
+            flow=flow,
+            consent=consent,
             nonce=nonce,
             **extras,
         )

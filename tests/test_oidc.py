@@ -995,6 +995,7 @@ def test_complete_account_connect_falls_back_to_token_response_account(db: None)
     oauth_client = _oauth_client(
         slug="token-account",
         oidc=False,
+        supports_refresh=False,
         external_id_claim="account.uuid",
         email_claim="account.email_address",
         display_name_claim="account.display_name",
@@ -1672,6 +1673,27 @@ def test_oidc_link_refines_the_grant_before_userinfo_and_credential_persistence(
         assert result.account.external_id == "linked-subject"
         assert result.account.display_name == "Linked identity"
         assert Credential.objects.get(user=user, oauth_client=client).secret_value() == "refined"
+
+
+@pytest.mark.django_db
+def test_connect_completion_without_a_refresh_token_returns_the_consent_restart() -> None:
+    with system_context(reason="test consent restart payload"):
+        user = get_user_model().objects.create_user(username="consent-restart-payload")
+        client = _oauth_client("consent-restart-payload")
+    request = graphql_request(user, session=True)
+    token, _record, redirect = _bound_flow(request, client, oauth_state.StateFlow.CONNECT, user)
+
+    with mock_transport(OidcProvider(userinfo={"sub": "consent-subject"})):
+        result = _complete(
+            _console_schema(), request, "connect_account_complete", token, redirect,
+            "error_code account { id } restart { authorize_url mode state redirect_uri }",
+        )
+
+    assert result["error_code"] == "consent_required" and result["account"] is None
+    restart = result["restart"]
+    assert restart["authorize_url"].startswith("https://issuer.example/oauth/authorize?")
+    assert restart["state"] and restart["state"] != token
+    assert (restart["mode"], restart["redirect_uri"]) == ("auto", redirect)
 
 
 @pytest.mark.django_db

@@ -1,18 +1,21 @@
 # OIDC login policy for OAuth clients seeded by integrate and its vendor addons.
 # This file updates the existing rows by (slug, environment) only when the OIDC
 # addon is composed, because these fields are contributed by the addon extension.
-# Endpoints, issuer and JWKS belong to each row's own seed and provider preset.
-- xref: oauth_google_oidc
-  slug: google
-  environment: prod
-  login_enabled: true
-  link_on_email_match: true
+# The rows keep their released content so existing installations are not
+# re-applied. The deployment's `google` client gets no row here: seeding cannot
+# tell a new row from an adopted one, so its sign-in switch is the operator's.
 - xref: oauth_gemini_oidc
   slug: gemini
   environment: prod
+  provider_type: google
   login_enabled: true
+  issuer: https://accounts.google.com
+  jwks_uri: https://www.googleapis.com/oauth2/v3/certs
+  discovery_url: https://accounts.google.com/.well-known/openid-configuration
 - xref: oauth_grok_oidc
   slug: grok
   environment: prod
   provider_type: generic_oidc
   login_enabled: true
+  issuer: https://auth.x.ai
+  discovery_url: https://auth.x.ai/.well-known/openid-configuration

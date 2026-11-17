@@ -70,7 +70,7 @@ from angee.integrate.errors import IntegrationError
 from angee.integrate.mixins import SyncStateMixin
 from angee.integrate.models import Bridge, IntegrationCreateMode, IntegrationManager
 from angee.integrate.oauth import flow, state
-from angee.integrate.oauth.errors import PROVIDER_UNAVAILABLE, OAuthFlowError
+from angee.integrate.oauth.errors import PROVIDER_UNAVAILABLE, ConsentRequired, OAuthFlowError
 from angee.integrate.oauth.registrations import OAuthRegistrationExtension, operation_registration_slugs
 from angee.integrate.states import ConflictKeep, StreamState, SyncFailure, SyncFailureKind, SyncFailureStatus
 
@@ -469,6 +469,8 @@ class ConnectAccountResult:
     claims: JSON | None = None
     error: str | None = None
     error_code: str | None = None
+    restart: OAuthStartPayload | None = None
+    """With ``consent_required``: the same connect started again asking for consent; follow it."""
 
 
 @strawberry.type
@@ -849,6 +851,14 @@ class ConnectionMutation:
                 result.integration_id, result.user, result.credential,
                 exposed_model_labels=_exposed_model_labels(info),
             )
+        except ConsentRequired as refused:
+            try:
+                restart = flow.restart_with_consent(request, oauth_client, refused.record)
+            except OAuthFlowError as error:
+                return ConnectAccountResult(error=error.public_message, error_code=error.code)
+            return ConnectAccountResult(
+                error=refused.public_message, error_code=refused.code, restart=OAuthStartPayload.from_start(restart),
+            )
         except OAuthFlowError as error:
             if error.transient:
                 error = OAuthFlowError(PROVIDER_UNAVAILABLE, 503)
@@ -1118,7 +1128,7 @@ class IntegrationConnectionMixin:
         extensions=[PermissionsExtension(("write",))],
         annotate={
             f"_connection_{name}": partial(_credential_projection, name)
-            for name in ("status", "expires_at", "last_refresh_status")
+            for name in ("status", "expires_at", "last_refresh_status", "granted_scopes")
         },
     )
     def credential_status(self) -> str | None:

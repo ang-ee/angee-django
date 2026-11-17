@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
+
 from angee.integrate.oauth.providers import OAuthProviderType
+from angee.integrate.oauth.state import StateFlow
 
 
 class GoogleType(OAuthProviderType):
@@ -19,6 +22,25 @@ class GoogleType(OAuthProviderType):
     label = "Google"
     category = "oidc"
     icon = "google"
+
+    @classmethod
+    def authorize_params(cls, flow: StateFlow, configured: Mapping[str, str], *, consent: bool) -> dict[str, str]:
+        """Let a connect choose among the user's Google accounts, and ask for consent on request.
+
+        Google issues a refresh token on the consent screen only, so a connect
+        that received none restarts with ``prompt=consent``. Sign-in keeps
+        Google's own prompt.
+        """
+
+        params = super().authorize_params(flow, configured, consent=consent)
+        prompts = params.get("prompt", "").split()
+        if flow == StateFlow.CONNECT:
+            prompts.append("select_account")
+        if consent:
+            prompts.append("consent")
+        if prompts:
+            params["prompt"] = " ".join(dict.fromkeys(prompts))
+        return params
     defaults = {
         "discovery_url": "https://accounts.google.com/.well-known/openid-configuration",
         "issuer": "https://accounts.google.com",

@@ -10,6 +10,7 @@ Works for any ``OAuthClient`` (an OIDC login refinement is not required).
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, cast
 
@@ -19,12 +20,15 @@ from django.contrib.auth.base_user import AbstractBaseUser
 from django.core.exceptions import ValidationError
 from django.db import models
 from django.http import HttpRequest
+from rebac import system_context
 
 from angee.integrate.oauth import flow
 from angee.integrate.oauth.client import OAuthClientProtocol
 from angee.integrate.oauth.errors import (
+    CONSENT_REQUIRED,
     EXTERNAL_ACCOUNT_RESOLUTION_FAILED,
     INVALID_STATE,
+    ConsentRequired,
     OAuthFlowError,
 )
 from angee.integrate.oauth.state import StateFlow, StateRecord
@@ -46,19 +50,20 @@ def connect_integration_target(
     """Attach the bound account's live credential, or start the owner's OAuth flow.
 
     The flow requests the client's default scopes plus the capability's own
-    (``OAuthClient.requested_scopes``), and lets the user choose the account,
-    hinted with the account the integration is connected as. Only that account's
-    credential is reused, and only when it holds the capability's scopes; an
-    integration not yet connected as an account always starts the flow. None means
-    attachment completed. OAuthStart is the existing native browser flow contract;
+    (``OAuthClient.requested_scopes``) and those the bound account already
+    granted, so a new consumer never narrows the grant others use. The account
+    the integration is connected as hints the flow; only its credential is
+    reused, and only when it holds the capability's scopes. An integration not
+    yet connected as an account always starts the flow. None means attachment
+    completed. OAuthStart is the existing native browser flow contract;
     transports own authentication/exposure and result projection.
     """
 
     integration.require_connect(user)
     oauth_client.require_configured()
     consumer_scopes = integration.connection_oauth_scopes
-    scopes = oauth_client.requested_scopes(consumer_scopes)
     account = integration.bound_account(oauth_client)
+    granted: tuple[str, ...] = ()
     if account is not None:
         credential_model = cast("type[CredentialModel]", apps.get_model("integrate", "Credential"))
         credential = credential_model.objects.live_oauth_for_user(
@@ -67,6 +72,10 @@ def connect_integration_target(
         if credential is not None:
             integration.attach_credential(credential)
             return None
+        with system_context(reason="integrate.oauth.connect.granted_scopes"):
+            bound_credential = account.credential
+        granted = () if bound_credential is None else tuple(bound_credential.granted_scopes or ())
+    scopes = oauth_client.requested_scopes(consumer_scopes, granted=granted)
     if not redirect_uri:
         raise OAuthFlowError("redirect_uri_required", 400, "OAuth redirect URI is required.")
     return flow.start(
@@ -107,7 +116,11 @@ def complete_account_connect(
     account is labelled from the provider userinfo and its OAuth credential stored
     under ``(user, provider, account)``. A grant scoped to one resource may be
     unable to read userinfo; the account then comes from the ID token the code
-    exchange returned, verified against the client's issuer and JWKS.
+    exchange returned, verified against the client's issuer and JWKS. The grant
+    must cover the scopes the flow asked for beyond the client's defaults, and,
+    on a refreshable client, hold a refresh token: a first attempt without one
+    raises ``ConsentRequired`` so the flow restarts asking for consent; a
+    consent attempt stores what the provider gave.
     """
 
     record = flow.consume_validated_state(
@@ -141,16 +154,24 @@ def complete_account_connect(
             claims = {**token_claims, **claims}
     if not external_id:
         raise OAuthFlowError(EXTERNAL_ACCOUNT_RESOLUTION_FAILED, 400)
-    return complete_external_account_link(
-        oauth_client,
-        user=user,
-        external_id=external_id,
-        tokens=tokens,
-        claims=claims,
-        next_path=record.next_path or "/",
-        integration_id=record.integration_id,
-        reason="integrate.oauth.connect",
-    )
+    defaults = set(oauth_client.default_scope_values)
+    try:
+        return complete_external_account_link(
+            oauth_client,
+            user=user,
+            external_id=external_id,
+            tokens=tokens,
+            claims=claims,
+            next_path=record.next_path or "/",
+            integration_id=record.integration_id,
+            reason="integrate.oauth.connect",
+            require_refresh_token=not record.consent,
+            required_scopes=[scope for scope in record.scopes if scope not in defaults],
+        )
+    except OAuthFlowError as error:
+        if error.code == CONSENT_REQUIRED:
+            raise ConsentRequired(record) from error
+        raise
 
 
 def complete_external_account_link(
@@ -163,8 +184,10 @@ def complete_external_account_link(
     next_path: str = "/",
     integration_id: str = "",
     reason: str = "integrate.oauth.connect",
+    require_refresh_token: bool = False,
+    required_scopes: Iterable[str] = (),
 ) -> AccountConnectCompletion:
-    """Link an external account to ``user`` and store its OAuth credential."""
+    """Link an external account to ``user`` and store its OAuth credential (``connect_oauth``)."""
 
     Account = cast(Any, apps.get_model("integrate", "ExternalAccount"))
     try:
@@ -175,6 +198,8 @@ def complete_external_account_link(
             tokens=tokens,
             claims=claims,
             reason=reason,
+            require_refresh_token=require_refresh_token,
+            required_scopes=required_scopes,
         )
     except ValidationError as error:
         if error.code == "account_already_linked":

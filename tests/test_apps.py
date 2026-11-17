@@ -9,6 +9,7 @@ from types import ModuleType
 import pytest
 from django.apps import AppConfig, apps
 from django.core.exceptions import ImproperlyConfigured
+from django.db.models.fields import NOT_PROVIDED
 from django_compose.components import enabled_apps
 
 from angee.base.addons import addon_facts, is_angee_addon
@@ -183,9 +184,6 @@ def test_integrate_config_installs_public_oauth_provider_resources() -> None:
     assert grok["client_id"] == "b1a00492-073a-47ea-816f-4c329264a828"
     assert grok["authorize_endpoint"] == "https://auth.x.ai/oauth2/authorize"
     assert grok["token_endpoint"] == "https://auth.x.ai/oauth2/token"
-    # OIDC metadata is OAuth-generic: it rides on the row's own seed.
-    assert grok["issuer"] == "https://auth.x.ai"
-    assert grok["discovery_url"] == "https://auth.x.ai/.well-known/openid-configuration"
     assert grok["is_enabled"] is False
     assert "client_secret" not in grok
 
@@ -420,7 +418,7 @@ def test_knowledge_config_owns_handbook_demo_seed() -> None:
 
 
 def test_iam_integrate_oidc_config_installs_oauth_client_oidc_defaults() -> None:
-    """The OIDC login addon ships login policy, never endpoints, for OAuth client rows."""
+    """The OIDC login addon ships the login policy of the OAuth client rows it signs users in with."""
 
     config = apps.get_app_config("iam_integrate_oidc")
     manifest = resource_manifest_for(config)
@@ -435,18 +433,24 @@ def test_iam_integrate_oidc_config_installs_oauth_client_oidc_defaults() -> None
         ResourceEntry.from_declaration(config, "install", manifest["install"][0]).read_groups()[0].model_label
         == "integrate.oauthclient"
     )
-    oidc_by_xref = {row["_xref"]: row for row in oidc_rows}
-    assert set(oidc_by_xref) == {"oauth_google_oidc", "oauth_gemini_oidc", "oauth_grok_oidc"}
-    for row in oidc_rows:
-        assert row["environment"] == "prod"
-        assert row["login_enabled"] is True
-        assert not {"issuer", "jwks_uri", "discovery_url", "authorize_endpoint", "token_endpoint"} & row.keys()
-    assert oidc_by_xref["oauth_google_oidc"]["slug"] == "google"
-    assert oidc_by_xref["oauth_google_oidc"]["link_on_email_match"] is True
-    assert oidc_by_xref["oauth_gemini_oidc"]["slug"] == "gemini"
-    grok_oidc = oidc_by_xref["oauth_grok_oidc"]
-    assert grok_oidc["slug"] == "grok"
-    assert grok_oidc["provider_type"] == "generic_oidc"
+    oidc_by_xref = {
+        row["_xref"]: {key: value for key, value in row.items() if value is not NOT_PROVIDED} for row in oidc_rows
+    }
+    # Released rows, unchanged so existing installations are not re-applied; the
+    # deployment's `google` client gets no login row (seeding cannot tell new from adopted).
+    assert oidc_by_xref == {
+        "oauth_gemini_oidc": {
+            "_xref": "oauth_gemini_oidc", "slug": "gemini", "environment": "prod", "provider_type": "google",
+            "login_enabled": True, "issuer": "https://accounts.google.com",
+            "jwks_uri": "https://www.googleapis.com/oauth2/v3/certs",
+            "discovery_url": "https://accounts.google.com/.well-known/openid-configuration",
+        },
+        "oauth_grok_oidc": {
+            "_xref": "oauth_grok_oidc", "slug": "grok", "environment": "prod", "provider_type": "generic_oidc",
+            "login_enabled": True, "issuer": "https://auth.x.ai",
+            "discovery_url": "https://auth.x.ai/.well-known/openid-configuration",
+        },
+    }
 
 
 def test_integrate_config_installs_agentic_vendor_resources() -> None:
