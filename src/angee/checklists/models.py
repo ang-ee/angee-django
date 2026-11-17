@@ -32,13 +32,14 @@ from operator import attrgetter
 from typing import Any
 
 from django.apps import apps
-from django.contrib.contenttypes.fields import GenericForeignKey, GenericRelation
+from django.contrib.contenttypes.fields import GenericForeignKey
 from django.contrib.contenttypes.models import ContentType
 from django.core import checks
 from django.db import models
 from rebac.field_backing import canonical_model
 from rebac.resources import model_resource_type
 
+from angee.base.fields.relations import RetainedGenericRelation
 from angee.base.fields.state import StateField
 from angee.base.models.append_only import AppendOnlyModel
 from angee.base.models.audit import AuditMixin
@@ -68,11 +69,12 @@ class ChecklistMixin(models.Model):
     the queried model.
     """
 
-    checklist_results = GenericRelation(
+    checklist_results = RetainedGenericRelation(
         "checklists.ChecklistResult",
         content_type_field="content_type",
         object_id_field="object_id",
     )
+    """The row's results, for queries; deleting the row deletes them through their owner's teardown."""
     _checklist_latest = LatestResults()
     """Each listed row's latest readable result per item, for a page's projection."""
 
@@ -130,12 +132,13 @@ class ChecklistResult(AppendOnlyModel, AuditMixin, RecordRefMixin, AngeeDataMode
     (``permissions.zed``). ``revision`` is the record's content token when the
     result was recorded. Rows are append-only: the latest row per item is its
     result. Merging the record keeps the rows on the merged record; deleting the
-    record deletes them through its ``checklist_results`` relation.
+    record, or any record a result has as evidence, deletes the results through
+    :meth:`ChecklistResultManager.delete_for_record` and
+    :meth:`~ChecklistResultManager.delete_supported_by`.
     """
 
     sqid_prefix = "ckr_"
     merge_policy = MergePolicy.KEEP
-    on_target_delete = models.CASCADE
 
     content_type = models.ForeignKey(ContentType, on_delete=models.PROTECT, related_name="+")
     object_id = models.PositiveBigIntegerField()
@@ -167,14 +170,9 @@ class ChecklistResult(AppendOnlyModel, AuditMixin, RecordRefMixin, AngeeDataMode
 
     @classmethod
     def teardown_for_target(cls, target: models.Model) -> None:
-        """Leave a deleted record's results to its ``checklist_results`` cascade.
+        """Delete a deleted record's results and their evidence links, whoever deletes the record."""
 
-        The record's reverse relation collects its results, and their evidence
-        links follow through their foreign key; the append-only queryset never
-        deletes them in bulk.
-        """
-
-        del target
+        cls.objects.delete_for_record(target)
 
     @classmethod
     def check(cls, **kwargs: Any) -> list[checks.CheckMessage]:
@@ -265,6 +263,11 @@ class ChecklistEvidence(DerivedFrom, concrete=True):
     with a ``record``-backed relation unioned into ``record_read``. A link
     whose record the reader cannot read hides its result; a link of an
     undeclared type is refused when the result is recorded.
+
+    Deleting an evidence record deletes every result it supports, whatever its
+    other links: the result's read depended on all of them, so a result that
+    lost one must not become readable to more people. The item then reads as
+    it did before the result was recorded.
     """
 
     sqid_prefix = "cke_"
@@ -291,3 +294,9 @@ class ChecklistEvidence(DerivedFrom, concrete=True):
         """Return a readable label for Django displays."""
 
         return f"{self.result_id}<-{self.content_type_id}:{self.object_id}"
+
+    @classmethod
+    def teardown_for_target(cls, target: models.Model) -> None:
+        """Delete the results ``target`` is evidence of, with all their links, whoever deletes ``target``."""
+
+        _result_model().objects.delete_supported_by(target)

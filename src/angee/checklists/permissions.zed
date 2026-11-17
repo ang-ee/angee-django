@@ -1,7 +1,7 @@
 // Authorization schema for the checklists addon.
 // @rebac_package: checklists
 // @rebac_package_version: 0.1.0
-// @rebac_schema_revision: 1
+// @rebac_schema_revision: 2
 
 // A result is authorized by the record it checks. The app that owns a checklist
 // type (one composing `ChecklistMixin`) declares one relation for it in its
@@ -9,15 +9,17 @@
 // (`relation entry: ledger/entry // rebac:field=record`), and unions the type's
 // read and recording authority into `target_read` and `target_write`.
 // A result shows only when every evidence link is readable: one hidden link
-// hides it, never falling back to an older result.
+// hides it, never falling back to an older result. `evidence_hidden` is that
+// exclusion alone, for readers that already hold the record's `target_read`.
 definition checklists/result {
     relation evidence: checklists/evidence // rebac:field=evidence
 
     permission target_read  = nil
     permission target_write = nil
+    permission evidence_hidden = evidence->hidden
 
     permission create = target_write
-    permission read   = target_read - evidence->hidden
+    permission read   = target_read - evidence_hidden
     permission write  = nil
     permission delete = nil
 }
@@ -26,12 +28,12 @@ definition checklists/result {
 // results declares each evidence type it uses, backed by the link's generic
 // foreign key (`relation step: jobs/step // rebac:field=record`), and unions
 // that type's read into `record_read`. A link of a type no relation names is
-// hidden from everyone, so its result is too.
+// hidden from everyone, signed in or anonymous, so its result is too.
 definition checklists/evidence {
     relation result: checklists/result // rebac:field=result
 
     permission record_read = nil
-    permission hidden      = authenticated - record_read
+    permission hidden      = (authenticated + anonymous) - record_read
 
     permission create = result->target_write
     permission read   = result->target_read & record_read

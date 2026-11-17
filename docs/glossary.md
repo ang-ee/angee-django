@@ -431,7 +431,8 @@ checks only; readiness a model can compute stays a verb-eligibility condition.
 **Checklist result** — one append-only outcome of one item on one record, with
 its status, detail, the record's content token and its evidence links. The
 latest result per item wins. A result shows only when its record and every
-evidence link are readable.
+evidence link are readable to the reader, signed in or anonymous; deleting an
+evidence record deletes the results it supports.
 
 **Content token** — the opaque string a checklist type declares through
 `checklist_revision_expression()`. A passed result recorded against another

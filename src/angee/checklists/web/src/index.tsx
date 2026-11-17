@@ -6,9 +6,9 @@ import { checklistTones } from "./ChecklistViews";
 export {
   CHECKLIST_ASSESSMENTS, CHECKLIST_ATTENTION, CHECKLIST_FIELDS, CHECKLIST_STATUSES,
   ChecklistLegend, ChecklistSection, ChecklistStatusBadge,
-  checklistCategoryColumns, checklistFromRow, checklistItemsColumn, checklistStatusColumn, checklistToneKey,
+  checklistCategoriesColumn, checklistFromRow, checklistItemsColumn, checklistStatusColumn, checklistToneKey,
   checklistTones, useChecklistStatusLabel,
-  type ChecklistAssessment, type ChecklistCategoryColumn, type ChecklistColumnOptions, type ChecklistSectionProps,
+  type ChecklistAssessment, type ChecklistColumnOptions, type ChecklistSectionProps,
   type ChecklistStatus,
 } from "./ChecklistViews";
 export { ChecklistFragment, type ChecklistFields } from "./documents.console";

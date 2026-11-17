@@ -38,13 +38,26 @@ export const CHECKLIST_FIELDS: readonly string[] = [
     .map((field) => `checklist.items.${field}`),
 ];
 
+/** Each status's label key: the type requires one for every status, and each key is a literal. */
+const CHECKLIST_STATUS_LABELS = {
+  passed: "status.passed",
+  risk: "status.risk",
+  conflict: "status.conflict",
+  unresolved: "status.unresolved",
+  not_checked: "status.not_checked",
+  not_applicable: "status.not_applicable",
+} as const satisfies Record<ChecklistStatus, string>;
+
 function isKnownStatus(status: string): status is ChecklistStatus {
   return (CHECKLIST_STATUSES as readonly string[]).includes(status);
 }
 
 export function useChecklistStatusLabel(): (status: string) => string {
   const t = useChecklistsT();
-  return React.useCallback((status: string) => t(isKnownStatus(status) ? `status.${status}` : "status.unknown"), [t]);
+  return React.useCallback(
+    (status: string) => t(isKnownStatus(status) ? CHECKLIST_STATUS_LABELS[status] : "status.unknown"),
+    [t],
+  );
 }
 
 type ChecklistItem = ChecklistFields["items"][number];
@@ -151,16 +164,6 @@ export interface ChecklistColumnOptions {
   /** The record's model label and the tab its checklist section occupies, for a cell's link. */
   recordModel: string;
   tab?: string;
-  /**
-   * How a cell reads its row's checklist: the list row's own selection by default,
-   * or the owner's hook (a per-record read shared with its section). It is called
-   * once per render of every cell, so it may be a React hook.
-   */
-  useChecklist?: (row: Row) => ChecklistFields | null | undefined;
-}
-
-function useRowChecklist(row: Row): ChecklistFields | null {
-  return checklistFromRow(row);
 }
 
 function RecordLink({ row, options, label }: { row: Row; options: ChecklistColumnOptions; label: React.ReactNode }) {
@@ -183,7 +186,7 @@ function ChecklistItemsCell({ row, options }: { row: Row; options: ChecklistColu
   const t = useChecklistsT();
   const label = useChecklistStatusLabel();
   const statusTone = useStatusTone();
-  const checklist = (options.useChecklist ?? useRowChecklist)(row);
+  const checklist = checklistFromRow(row);
   const incomplete = Boolean(checklist && !checklist.complete && checklist.status !== "not_checked");
   const counts = new Map<string, number>();
   for (const item of checklist?.items ?? []) {
@@ -209,37 +212,31 @@ function ChecklistItemsCell({ row, options }: { row: Row; options: ChecklistColu
   return <RecordLink row={row} options={options} label={summary} />;
 }
 
-export interface ChecklistCategoryColumn {
-  key: string;
-  header: React.ReactNode;
+function CategoriesHeading(): React.ReactElement { return <>{useChecklistsT()("categories")}</>; }
+
+/** One cell showing each category's status as an icon, in the server's order and with its labels. */
+export function checklistCategoriesColumn(): ListColumn {
+  return {
+    id: "checklist-categories", field: "checklist.groups", header: <CategoriesHeading />,
+    sortable: false, minWidth: 128, selectionPaths: CHECKLIST_FIELDS,
+    render: (row) => <ChecklistCategoriesCell row={row} />,
+  };
 }
 
-/** One centred status icon per category, each a native table column of its own. */
-export function checklistCategoryColumns(
-  categories: readonly ChecklistCategoryColumn[], options: Pick<ChecklistColumnOptions, "useChecklist"> = {},
-): ListColumn[] {
-  return categories.map((category) => ({
-    id: `checklist-${category.key}`, field: "checklist.groups", header: category.header,
-    sortable: false, align: "center", minWidth: 64, selectionPaths: CHECKLIST_FIELDS,
-    render: (row) => <ChecklistCategoryCell row={row} category={category} useChecklist={options.useChecklist} />,
-  }));
-}
-
-function ChecklistCategoryCell({ row, category, useChecklist = useRowChecklist }: {
-  row: Row; category: ChecklistCategoryColumn; useChecklist?: ChecklistColumnOptions["useChecklist"];
-}): React.ReactElement {
+function ChecklistCategoriesCell({ row }: { row: Row }): React.ReactElement {
   const t = useChecklistsT();
   const label = useChecklistStatusLabel();
   const statusTone = useStatusTone();
-  const group = useChecklist(row)?.groups.find((item) => item.key === category.key);
-  const status = group?.status ?? "unresolved";
-  const tone = statusTone(checklistToneKey(status), undefined, { unknownTone: "muted" });
-  const name = group?.label ?? category.key;
-  return <StatusIconGroup label={name} items={[{
-    key: category.key, label: `${name}: ${label(status)}`, description: group?.detail ?? t("noResults"),
-    tone: tone === "success" || tone === "warning" || tone === "danger" ? tone : "muted",
-    icon: status === "not_applicable" || status === "not_checked" ? "minus" : undefined,
-  }]} />;
+  const groups = checklistFromRow(row)?.groups ?? [];
+  if (!groups.length) return <Chip>{t("noResultsShort")}</Chip>;
+  return <StatusIconGroup label={t("categories")} items={groups.map((group) => {
+    const tone = statusTone(checklistToneKey(group.status), undefined, { unknownTone: "muted" });
+    return {
+      key: group.key, label: `${group.label}: ${label(group.status)}`, description: group.detail,
+      tone: tone === "success" || tone === "warning" || tone === "danger" ? tone : "muted",
+      icon: group.status === "not_applicable" || group.status === "not_checked" ? "minus" : undefined,
+    };
+  })} />;
 }
 
 /** The record's summary status with its detail. */
@@ -253,7 +250,7 @@ export function checklistStatusColumn(options: ChecklistColumnOptions & { header
 
 function ChecklistStatusCell({ row, options }: { row: Row; options: ChecklistColumnOptions }): React.ReactElement {
   const t = useChecklistsT();
-  const checklist = (options.useChecklist ?? useRowChecklist)(row);
+  const checklist = checklistFromRow(row);
   const detail = checklist?.detail ?? t("noResults");
   return <DefinitionPair as="div" orientation="stacked" density="cell"
     value={<RecordLink row={row} options={options} label={<ChecklistStatusBadge status={checklist?.status ?? "unresolved"} />} />}

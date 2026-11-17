@@ -9,18 +9,29 @@ under the actor that holds the inspection's write and reads the report.
 from __future__ import annotations
 
 from typing import Any, cast
+from unittest.mock import patch
 
 import pytest
 import strawberry
 import strawberry_django
 from django.apps import apps
+from django.contrib.auth.models import AnonymousUser
 from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import PermissionDenied, ValidationError
 from django.db import connection, models
 from django.db.models import Value
 from django.db.models.lookups import Exact
 from django.test.utils import CaptureQueriesContext, isolate_apps
-from rebac import RelationshipTuple, actor_context, system_context, to_object_ref, to_subject_ref, write_relationships
+from rebac import (
+    MissingActorError,
+    RelationshipTuple,
+    actor_context,
+    system_context,
+    to_object_ref,
+    to_subject_ref,
+    write_relationships,
+)
+from rebac.models import SchemaOverride, SchemaPermission
 from strawberry import auto
 
 from angee.base.permissions import bind_rebac_schema
@@ -30,9 +41,10 @@ from angee.checklists.managers import (
     checklist_category_status,
     checklist_next_blocking,
     checklist_status,
+    read_decomposes,
 )
 from angee.checklists.models import ChecklistMixin
-from angee.checklists.schema import ChecklistNode, resource_filters
+from angee.checklists.schema import ChecklistNode, ChecklistResultChangeGate, resource_filters
 from angee.checklists.testing.models import ChecklistEvidence, ChecklistResult
 from angee.checklists.timeline import ChecklistResultKind
 from angee.decisions.contracts import DecisionProposal, DecisionRequest
@@ -40,11 +52,12 @@ from angee.decisions.testing.models import Decision
 from angee.graphql.node import AngeeNode
 from angee.graphql.testing.documents import execute_schema, measure_graphql_document, result_data
 from angee.graphql.testing.publishing import capture_broadcasts
-from tests.checklistdemo.models import CraneInspection, Inspection, Report
-from tests.conftest import addon_schema, create_user
+from tests.checklistdemo.models import CraneInspection, Inspection, Notice, Report
+from tests.conftest import addon_schema, create_platform_admin, create_user
 from tests.mtidemo.models import MtiParent
 
 CATEGORIES = ("identity", "content", "archive")
+LABELS = {"identity": "Identity", "content": "Content", "archive": "Archive"}
 
 
 def _grant(record: Any, relation: str, *users: Any) -> None:
@@ -112,7 +125,7 @@ def _assert_parity(world: Any, actor: Any) -> Any:
     summary, attention = ChecklistResult.objects.counts(rows)
     assert summary == [(assessed.status, 1)]
     assert attention == [
-        (key, status, int(filters[key] == status))
+        (key, LABELS[key], status, int(filters[key] == status))
         for key in CATEGORIES
         for status in ("conflict", "risk", "unresolved")
     ]
@@ -163,14 +176,17 @@ def _checklist_errors(errors: list[Any], *models_: Any) -> list[Any]:
 
 def test_the_check_accepts_the_declared_checklist_type(db: None) -> None:
     del db
-    assert set(ChecklistResult.declared_target_models().values()) == {Inspection}
+    assert set(ChecklistResult.declared_target_models().values()) == {Inspection, Notice}
     assert [error for error in ChecklistResult.check() if error.id.startswith("checklists.")] == []
 
 
 def test_the_check_reports_a_checklist_type_without_a_relation() -> None:
     bind_rebac_schema(apps.get_app_config("checklists"), None)
     errors = [error for error in ChecklistResult.check() if error.id.startswith("checklists.")]
-    assert [(error.id, error.obj) for error in errors] == [("checklists.E002", Inspection)]
+    assert sorted((error.id, error.obj.__name__) for error in errors) == [
+        ("checklists.E002", "Inspection"),
+        ("checklists.E002", "Notice"),
+    ]
 
 
 def test_the_check_reports_placement_bad_declarations_and_a_missing_token(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -230,6 +246,7 @@ def test_recording_stores_the_content_token_and_one_link_per_evidence_record(wor
     [
         pytest.param("retired", "passed", "key", id="undeclared-key"),
         pytest.param("owner", "maybe", "status", id="unknown-status"),
+        pytest.param("owner", "not_checked", "status", id="not-checked-is-no-outcome"),
     ],
 )
 def test_recording_refuses_an_undeclared_key_or_status(world: Any, key: str, status: str, field: str) -> None:
@@ -278,7 +295,7 @@ def test_a_result_shows_only_when_its_record_and_every_evidence_link_are_readabl
         },
     }
     owner = next(item for item in _assess(world, world.auditor).items if item.key == "owner")
-    assert [(ref.model, ref.id) for ref in owner.result.evidence_references] == [
+    assert [(ref.model, ref.id) for ref in owner.evidence] == [
         ("checklistdemo.Report", world.report.sqid),
     ]
 
@@ -410,14 +427,32 @@ def test_counts_group_every_record_in_one_actor_scoped_statement(world: Any) -> 
     with CaptureQueriesContext(connection) as captured:
         summary, attention = ChecklistResult.objects.counts(rows)
     assert summary == [("conflict", 1), ("not_checked", 1)]
-    assert ("identity", "conflict", 1) in attention and len(attention) == len(CATEGORIES) * 3
-    # REBAC 0.34: two schema-revision guards and the one aggregate statement.
-    assert len(captured) <= 3
+    assert ("identity", "Identity", "conflict", 1) in attention and len(attention) == len(CATEGORIES) * 3
+    # REBAC 0.34 pins one policy snapshot for the statement's fetch: its one revision guard
+    # serves the rows, the read proof and every scope the checklist expressions build as they
+    # compile. Then the one aggregate statement; further checklist expressions add nothing.
+    assert len(captured) <= 2
     assert len([query for query in captured if "COUNT(" in query["sql"].upper()]) == 1
     assert ChecklistResult.objects.counts(rows.none()) == (
         [],
-        [(key, status, 0) for key in CATEGORIES for status in ("conflict", "risk", "unresolved")],
+        [(key, LABELS[key], status, 0) for key in CATEGORIES for status in ("conflict", "risk", "unresolved")],
     )
+
+
+def test_counts_group_under_primary_key_functional_dependence(world: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    """PostgreSQL reduces GROUP BY to selected primary keys; the status expression survives that reduction.
+
+    Every backend compiles the reduction here, so it is not left to the PostgreSQL lane.
+    """
+
+    monkeypatch.setattr(connection.features, "allows_group_by_selected_pks", True)
+    _record(world, "owner", "conflict")
+    rows = Inspection.objects.with_actor(world.writer)
+    summary, attention = ChecklistResult.objects.counts(rows)
+    assert summary == [("conflict", 1)]
+    assert ("identity", "Identity", "conflict", 1) in attention
+    grouped = rows.values("name").annotate(status=checklist_status(rows), total=models.Count("pk"))
+    assert list(grouped.values_list("status", "total")) == [("conflict", 1)]
 
 
 # Consumers of the rule.
@@ -442,8 +477,8 @@ def test_records_still_blocked_are_one_actor_scoped_query(world: Any) -> None:
             .values_list("name", "next_blocking")
         )
     assert blocked == [("Harbour crane", "totals")]
-    # REBAC 0.34: two schema-revision guards and the one data statement.
-    assert len(captured) <= 3
+    # REBAC 0.34: the fetch's one revision guard (above) and the one data statement.
+    assert len(captured) <= 2
     assert len([query for query in captured if "test_checklistdemo_inspection" in query["sql"]]) == 1
     assert unseen.pk not in rows.values_list("pk", flat=True)
 
@@ -575,7 +610,10 @@ def test_the_node_projection_reads_a_page_in_a_flat_statement_budget(world: Any)
 
     _record(world, "owner", "passed")
     measure_graphql_document(_schema(), _DOCUMENT, {}, actor=world.writer)
-    assert page(1) == page(25)
+    bare = measure_graphql_document(_schema(), "query { inspections { name } }", {}, actor=world.writer)
+    # The status cells compile inside the page's own statement and policy pin; the latest
+    # results' prefetch is the one statement the checklist adds.
+    assert page(1) == page(25) == bare.statements + 1
 
 
 def test_the_timeline_lists_results_as_their_reader_reads_them(world: Any) -> None:
@@ -609,7 +647,7 @@ def test_a_child_declares_items_on_the_rows_its_canonical_parent_carries(world: 
             "_checklist_latest", queryset=ChecklistResult.objects.with_actor(world.writer), to_attr="latest"
         ),
     )
-    assert [(result.key, result.status) for result in row.latest] == [("load", "risk")]
+    assert [(entry.result.key, entry.result.status) for entry in row.latest] == [("load", "risk")]
     with pytest.raises(ValidationError):
         with actor_context(world.writer):
             world.inspection.checklist_record("load", "passed")
@@ -626,3 +664,269 @@ def test_recording_a_result_publishes_a_change_its_record_reads_observe(
     assert ("checklistdemo.Inspection", world.inspection.sqid) in {
         (ref["model"], ref["id"]) for ref in event["related_records"]
     }
+
+
+def test_deleting_an_evidence_record_deletes_every_result_it_supports(world: Any) -> None:
+    """A result that loses any evidence link goes: its read depended on all of them."""
+
+    supported = _record(world, "owner", "passed", evidence=(world.report,))
+    shared = _record(world, "signature", "risk", "Two sources.", evidence=(world.report, world.hidden))
+    kept = _record(world, "totals", "conflict", "Other source.", evidence=(world.hidden,))
+    with system_context(reason="tests.checklists.other"):
+        other = Inspection.objects.create(name="Gantry", notes="")
+    _grant(other, "writer", world.writer)
+    with actor_context(world.writer):
+        untouched = other.checklist_record("owner", "passed", evidence=(world.hidden,))
+    with system_context(reason="tests.checklists.delete_evidence"):
+        Report.objects.filter(pk=world.report.pk).delete()
+    remaining = set(ChecklistResult._base_manager.values_list("pk", flat=True))
+    assert remaining == {kept.pk, untouched.pk}
+    assert supported.pk not in remaining and shared.pk not in remaining
+    assert set(ChecklistEvidence._base_manager.values_list("result_id", flat=True)) == {kept.pk, untouched.pk}
+    assert _statuses(_assess(world, world.writer)) == {
+        "owner": "not_checked",
+        "signature": "not_checked",
+        "totals": "conflict",
+        "marker": "not_checked",
+    }
+
+
+def test_an_anonymous_reader_never_sees_a_result_its_evidence_hides(world: Any) -> None:
+    with system_context(reason="tests.checklists.notice"):
+        notice = Notice.objects.create(text="Opening hours")
+    _grant(notice, "writer", world.writer)
+    anonymous = AnonymousUser()
+    with actor_context(world.writer):
+        notice.checklist_record("wording", "passed", "Reviewed.", evidence=(world.report,))
+    with actor_context(anonymous):
+        assert [item.status for item in notice.checklist_assessment().items] == ["not_checked"]
+    with actor_context(world.writer):
+        notice.checklist_record("wording", "risk", "Recorded without evidence.")
+    with actor_context(anonymous):
+        assert [item.status for item in notice.checklist_assessment().items] == ["risk"]
+        rows = Notice.objects.with_actor(anonymous)
+        assert rows.annotate(status=checklist_status(rows)).values_list("status", flat=True).get() == "risk"
+
+
+def test_a_null_content_token_reads_every_pass_stale(world: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    _record(world, "owner", "passed")
+    _record(world, "totals", "risk")
+    monkeypatch.setattr(
+        Inspection,
+        "checklist_revision_expression",
+        classmethod(lambda cls: models.Value(None, output_field=models.CharField())),
+    )
+    statuses = _statuses(_assess(world, world.writer))
+    assert (statuses["owner"], statuses["totals"]) == ("unresolved", "risk")
+    assert _assess(world, world.writer).stale
+
+
+def test_a_result_change_reaches_its_records_readers_without_the_result(
+    world: Any,
+    django_capture_on_commit_callbacks: Any,
+) -> None:
+    with capture_broadcasts() as events, django_capture_on_commit_callbacks(execute=True):
+        _record(world, "owner", "conflict", "Private finding.", evidence=(world.hidden,))
+    [payload] = [event for event in events if event["model"] == "checklists.ChecklistResult"]
+    inspection = {"model": "checklistdemo.Inspection", "id": world.inspection.sqid}
+    for actor, delivered in ((world.auditor, True), (world.writer, True), (world.outsider, False)):
+        event = ChecklistResultChangeGate(ChecklistResult, to_subject_ref(actor)).filter(payload)
+        if not delivered:
+            assert event is None
+            continue
+        assert event is not None and event.id == "" and event.changed_values is None
+        assert [{"model": ref.model, "id": ref.id} for ref in event.related_records] == [inspection]
+
+
+def test_the_timeline_is_a_chronology_of_each_readable_result(world: Any) -> None:
+    """Unlike the status rule, the chronology keeps an older readable result when the latest is hidden."""
+
+    _record(world, "owner", "passed", "Older green.", evidence=(world.report,))
+    _record(world, "owner", "conflict", "Private conflict.", evidence=(world.hidden,))
+    assert _statuses(_assess(world, world.auditor))["owner"] == "not_checked"
+    rows = list(ChecklistResultKind().queryset(world.inspection, world.auditor))
+    assert [(row.key, row.status, row.detail) for row in rows] == [("owner", "passed", "Older green.")]
+
+
+@pytest.mark.parametrize("path", ["instance", "queryset"])
+def test_an_actor_deleting_evidence_deletes_the_results_it_supports(
+    world: Any, path: str, django_capture_on_commit_callbacks: Any
+) -> None:
+    """The owner deletes the results; the actor needs no authority on them, and the record's timeline refreshes."""
+
+    admin = create_platform_admin(f"evidence-admin-{path}")
+    supported = _record(world, "owner", "passed", evidence=(world.report,))
+    kept = _record(world, "totals", "conflict", "Other source.", evidence=(world.hidden,))
+    groups: list[str] = []
+    with (
+        patch("angee.timeline.events.broadcast_group", side_effect=lambda group, payload: groups.append(group)),
+        django_capture_on_commit_callbacks(execute=True),
+        actor_context(admin),
+    ):
+        if path == "instance":
+            Report.objects.get(pk=world.report.pk).delete()
+        else:
+            Report.objects.filter(pk=world.report.pk).delete()
+    assert set(ChecklistResult._base_manager.values_list("pk", flat=True)) == {kept.pk}
+    assert not ChecklistEvidence._base_manager.filter(result_id=supported.pk).exists()
+    assert f"angee.timeline.checklistdemo.inspection.{world.inspection.sqid}" in groups
+
+
+@pytest.mark.parametrize("path", ["instance", "queryset"])
+def test_an_actor_deleting_a_checked_record_deletes_its_results_and_no_others(world: Any, path: str) -> None:
+    admin = create_platform_admin(f"record-admin-{path}")
+    _record(world, "owner", "passed", evidence=(world.report,))
+    _record(world, "signature", "risk")
+    with system_context(reason="tests.checklists.unrelated"):
+        other = Inspection.objects.create(name="Gantry", notes="")
+    _grant(other, "writer", world.writer)
+    with actor_context(world.writer):
+        untouched = other.checklist_record("owner", "passed", evidence=(world.report,))
+    with actor_context(admin):
+        if path == "instance":
+            Inspection.objects.get(pk=world.inspection.pk).delete()
+        else:
+            Inspection.objects.filter(pk=world.inspection.pk).delete()
+    assert set(ChecklistResult._base_manager.values_list("pk", flat=True)) == {untouched.pk}
+    assert set(ChecklistEvidence._base_manager.values_list("result_id", flat=True)) == {untouched.pk}
+
+
+def test_the_owner_deletes_one_records_results_or_those_one_record_supports(world: Any) -> None:
+    """Each delete verb names its scope; neither takes an arbitrary selection, and neither needs an actor."""
+
+    with system_context(reason="tests.checklists.delete_verbs"):
+        other = Inspection.objects.create(name="Gantry", notes="")
+    _grant(other, "writer", world.writer)
+    _record(world, "owner", "passed", evidence=(world.report,))
+    _record(world, "signature", "risk")
+    with actor_context(world.writer):
+        supported = other.checklist_record("owner", "passed", evidence=(world.report,))
+        kept = other.checklist_record("totals", "conflict", evidence=(world.hidden,))
+    assert ChecklistResult.objects.delete_for_record(world.inspection) == 2
+    assert set(ChecklistResult._base_manager.values_list("pk", flat=True)) == {supported.pk, kept.pk}
+    assert ChecklistResult.objects.delete_supported_by(world.report) == 1
+    assert set(ChecklistResult._base_manager.values_list("pk", flat=True)) == {kept.pk}
+    assert set(ChecklistEvidence._base_manager.values_list("result_id", flat=True)) == {kept.pk}
+    with actor_context(world.outsider):
+        # The verbs read no ambient reader: an actor who cannot read the results still deletes them.
+        assert ChecklistResult.objects.delete_for_record(other) == 1
+    assert not ChecklistResult._base_manager.exists()
+
+
+def test_owner_delete_keeps_the_readers_scope_and_needs_an_actor(world: Any) -> None:
+    """The protected delete skips only the append-only guard: REBAC still scopes it and requires an actor."""
+
+    result = _record(world, "owner", "passed", evidence=(world.report,))
+    with actor_context(world.outsider):
+        assert ChecklistResult.objects.filter(pk=result.pk).owner_delete() == (0, {})
+    with pytest.raises(MissingActorError):
+        ChecklistResult.objects.filter(pk=result.pk).owner_delete()
+    assert ChecklistResult._base_manager.filter(pk=result.pk).exists()
+    assert ChecklistEvidence._base_manager.filter(result_id=result.pk).exists()
+
+
+def test_a_deleted_results_event_reaches_its_records_readers_without_the_result(
+    world: Any,
+    django_capture_on_commit_callbacks: Any,
+) -> None:
+    _record(world, "owner", "conflict", "Private finding.", evidence=(world.hidden,))
+    with capture_broadcasts() as events, django_capture_on_commit_callbacks(execute=True):
+        with system_context(reason="tests.checklists.delete_event"):
+            Report.objects.filter(pk=world.hidden.pk).delete()
+    [payload] = [event for event in events if event["model"] == "checklists.ChecklistResult"]
+    assert payload["action"] == "delete"
+    inspection = {"model": "checklistdemo.Inspection", "id": world.inspection.sqid}
+    for actor, delivered in ((world.auditor, True), (world.outsider, False)):
+        event = ChecklistResultChangeGate(ChecklistResult, to_subject_ref(actor)).filter(payload)
+        if not delivered:
+            assert event is None
+            continue
+        assert event is not None and event.id == "" and event.action == "delete"
+        assert [{"model": ref.model, "id": ref.id} for ref in event.related_records] == [inspection]
+
+
+def _override(permission: str, kind: str, expression: str) -> SchemaOverride:
+    target = SchemaPermission.objects.get(definition__resource_type="checklists/result", name=permission)
+    return SchemaOverride.objects.create(kind=kind, target=target, expression=expression, reason="tests.checklists")
+
+
+@pytest.mark.parametrize(
+    ("permission", "kind", "expression"),
+    [
+        pytest.param("read", SchemaOverride.KIND_TIGHTEN, "nil", id="tightened-read"),
+        pytest.param(
+            "target_read", SchemaOverride.KIND_EXTEND, "evidence->record_read", id="target-read-off-the-record"
+        ),
+        pytest.param("target_read", SchemaOverride.KIND_EXTEND, "evidence_hidden", id="target-read-named-per-result"),
+    ],
+)
+def test_statuses_fall_back_to_read_when_the_policy_no_longer_decomposes_it(
+    world: Any,
+    permission: str,
+    kind: str,
+    expression: str,
+) -> None:
+    _record(world, "owner", "passed", evidence=(world.report,))
+    _record(world, "signature", "risk", "Recorded without evidence.")
+    assert read_decomposes()
+    override = _override(permission, kind, expression)
+    try:
+        assert not read_decomposes()
+        for actor in (world.writer, world.reader):
+            readable = set(
+                ChecklistResult.objects.with_actor(actor).with_action("read").values_list("key", flat=True),
+            )
+            statuses = _statuses(_assess(world, actor))
+            assert {key for key, status in statuses.items() if status != "not_checked"} == readable, actor
+            _assert_parity(world, actor)
+    finally:
+        override.delete()
+    assert read_decomposes()
+
+
+def test_edges_with_a_teardown_never_block_their_targets_deletion(db: None) -> None:
+    del db
+    assert not ChecklistEvidence.blocks_target_delete(Report)
+    assert not ChecklistResult.blocks_target_delete(Inspection)
+
+
+def test_deleting_evidence_costs_a_constant_per_supported_result(world: Any) -> None:
+    """The edge index is read once per deletion, not once per edge of every collected result."""
+
+    def deleting(results: int) -> int:
+        with system_context(reason="tests.checklists.delete_cost"):
+            evidence = Report.objects.create(name=f"Survey {results}")
+        _grant(evidence, "reader", world.writer)
+        for key in ("owner", "signature", "totals")[:results]:
+            _record(world, key, "passed", evidence=(evidence,))
+        with system_context(reason="tests.checklists.delete_cost"), CaptureQueriesContext(connection) as captured:
+            Report.objects.filter(pk=evidence.pk).delete()
+        return len(captured)
+
+    with system_context(reason="tests.checklists.delete_cost"):
+        Report.objects.filter(pk=Report.objects.create(name="Warm").pk).delete()
+    none, one, three = deleting(0), deleting(1), deleting(3)
+    # Each collected result runs every delete receiver once: its REBAC cleanup and audit row,
+    # its record-edge policy (RecordLink), the workflows run stop, the change publication and the
+    # timeline refresh, 14 statements. The first result also reads the results and deletes the
+    # rows. Before the edge index was read once per revision, each result cost 56.
+    assert one - none <= 20
+    assert three - one <= 2 * 14
+
+
+@pytest.mark.parametrize("deleted", ["child", "parent"])
+def test_deleting_a_multi_table_child_deletes_its_results_once(world: Any, deleted: str) -> None:
+    """The child's deletion collects its canonical parent too; the teardown runs per instance and is idempotent."""
+
+    admin = create_platform_admin(f"crane-admin-{deleted}")
+    with system_context(reason="tests.checklists.child_delete"):
+        crane = CraneInspection.objects.create(name="Tower crane", notes="")
+    _grant(crane.inspection_ptr, "writer", world.writer)
+    with actor_context(world.writer):
+        crane.checklist_record("load", "risk", "Rated below the load.", evidence=(world.report,))
+        crane.checklist_record("owner", "passed")
+    kept = _record(world, "owner", "passed")
+    with actor_context(admin):
+        (CraneInspection if deleted == "child" else Inspection).objects.get(pk=crane.pk).delete()
+    assert set(ChecklistResult._base_manager.values_list("pk", flat=True)) == {kept.pk}
+    assert not ChecklistEvidence._base_manager.exists()

@@ -9,6 +9,7 @@ export const enChecklistsMessages: Record<string, string> = {
   "status.not_applicable": "Not applicable",
   "status.unknown": "Unknown",
   "checks": "Checks",
+  "categories": "Checks by category",
   "status": "Status",
   "result": "Result",
   "evidence": "Evidence",

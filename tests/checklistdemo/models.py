@@ -75,3 +75,23 @@ class CraneInspection(Inspection):
     @classmethod
     def checklist(cls) -> Checklist:
         return super().checklist().extend(items=(ChecklistItem("load", "Load rating", category="content"),))
+
+
+class Notice(ChecklistMixin, AngeeDataModel):
+    """A checklist type anyone may read, signed in or not; its writers record."""
+
+    sqid_prefix = "xnt_"
+    text = models.TextField(default="")
+
+    class Meta(AngeeDataModel.Meta):
+        abstract = False
+        db_table = "test_checklistdemo_notice"
+        rebac_resource_type = "checklistdemo/notice"
+
+    @classmethod
+    def checklist(cls) -> Checklist:
+        return super().checklist().extend(items=(ChecklistItem("wording", "Wording reviewed"),))
+
+    @classmethod
+    def checklist_revision_expression(cls) -> models.Expression:
+        return TextSHA256(models.F("text"))
