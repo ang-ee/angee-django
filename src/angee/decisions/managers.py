@@ -69,9 +69,6 @@ class DecisionQuerySet[T: Decision](AppendOnlyQuerySet[T], AngeeQuerySet[T]):
             held |= Q(Exists(rows.filter(_decision_id=OuterRef("pk")).order_by()))
         return held
 
-    def held_by_requesting_records(self) -> Any:
-        return self.filter(self.held_by_requesting_records_filter())
-
     def for_records(self, *records: Any) -> Any:
         """Select decisions retaining any of the supplied canonical records."""
 
@@ -214,7 +211,7 @@ class DecisionManager[T: Decision](_DecisionManagerBase[T]):
             row = rows.lock_if_supported().get()
             if not row.is_open:
                 raise ValidationError({"revision": "The decision has changed; reload it."})
-            if rows.held_by_requesting_records().exists():
+            if rows.filter(rows.held_by_requesting_records_filter()).exists():
                 raise ValidationError({"decision": "Its requesting owner retains this question; replace it there."})
             replacement = self.ask(request, actor=actor)
             _row, _withdrawing, closed = row._withdraw(actor=actor, reason=reason, superseded_by=replacement)
