@@ -1505,7 +1505,9 @@ class CalendarSource(Bridge, inherits="integrate.Integration"):
     An ``integrate.Integration`` child (its owner, credential and status come from
     the connection substrate) and a ``Bridge`` (the scheduler and the eager
     ``syncIntegration`` mutation drive it). ``backend_class`` selects the protocol
-    (``ics``, contributed by ``calendar_integrate_ics``). A secret address (a
+    (``ics`` from ``calendar_integrate_ics``, ``google`` from
+    ``calendar_integrate_google``), and the backend admits the credential it uses
+    (:meth:`admit_credential`). A secret address (a
     private feed URL) is its credential's material, never ``config``, which keeps
     only what may be shown. Its owner syncs and unsubscribes it
     (:meth:`sync_now`, :meth:`unsubscribe`); :meth:`admit_subscription` bounds how
@@ -1515,8 +1517,8 @@ class CalendarSource(Bridge, inherits="integrate.Integration"):
     stream (:meth:`calendars_stream`): one record per remote calendar, whose
     ``RecordLink`` names its :class:`Calendar` on the owner's person and whose
     source states that calendar's identity. Each remote calendar's events sync
-    through an ``events`` stream partitioned by its key (:meth:`events_stream`);
-    the calendar managers own every event write. Whether a calendar takes local
+    through the ``events`` stream its link holds as a container
+    (:meth:`events_stream`); the calendar managers own every event write. Whether a calendar takes local
     edits is its backend's ``writable`` declaration (:meth:`is_backend_writable`).
     """
 
@@ -1551,27 +1553,15 @@ class CalendarSource(Bridge, inherits="integrate.Integration"):
 
         return key is None or cls._meta.get_field("backend_class").resolve_class(key).writable
 
-    def calendar_for_partition(self, partition: str) -> Any | None:
-        """Return the calendar an ``events`` stream partition writes to, or ``None`` before it is mirrored.
+    def admit_credential(self, credential: Any) -> None:
+        """Admit only a credential this source's backend uses (``CalendarBackend.admit_credential``).
 
-        The one place that resolves a partition to its container: the
-        ``calendars``-stream ``RecordLink`` whose external key is the partition
-        names the calendar. Integrate has no partition-to-container seam yet; this
-        lookup is the interim one. It relies on the calendars stream draining before
-        the events streams (``CalendarBackend.sync_parallelism``), and both go when an
-        events stream names its calendar's link (``SyncStream.container``).
+        Integrate asks on every attachment, so neither a connect, the console's
+        credential patch nor a re-attachment points a source at a credential its
+        backend would send to another vendor.
         """
 
-        return (
-            apps.get_model("calendar", "Calendar")
-            .system_queryset()
-            .filter(
-                record_links__stream__integration_id=self.pk,
-                record_links__stream__key=CALENDARS_STREAM,
-                record_links__external_key=partition,
-            )
-            .first()
-        )
+        self.backend.admit_credential(credential)
 
     @classmethod
     def admit_subscription(cls, owner: Any) -> None:
@@ -1712,23 +1702,28 @@ class CalendarSource(Bridge, inherits="integrate.Integration"):
     def calendars_stream(self) -> StreamDefinition:
         """Declare the stream of the remote calendars this source serves: one record per calendar.
 
-        Like each events stream, it sweeps for absent records once per poll
-        interval (:meth:`_replica`).
+        Each record's link is a container: it holds that calendar's events stream
+        (:meth:`events_stream`). Like each events stream, it sweeps for absent
+        records once per poll interval (:meth:`_replica`); a calendar whose absence is
+        confirmed retires the events stream it holds.
         """
 
-        return self._replica(CALENDARS_STREAM)
+        return self._replica(CALENDARS_STREAM, holds_containers=True)
 
-    def events_stream(self, remote: ParsedCalendar) -> StreamDefinition:
-        """Declare the events stream of one remote calendar, partitioned by its key.
+    def events_stream(self, calendar_link: Any) -> StreamDefinition:
+        """Declare the events stream ``calendar_link`` (the calendar's ``calendars``-stream link) holds.
 
-        A pull-only record replica keyed by remote event identity. A backend that
-        takes writes makes its calendar writable; it does not change the stream.
+        A pull-only record replica keyed by remote event identity, partitioned by the
+        calendar's key and naming its link as its container, so integrate drains it
+        after the calendar is mirrored and pauses or retires it with that link. A
+        backend that takes writes makes its calendar writable; it does not change the
+        stream.
         """
 
-        return self._replica(EVENTS_STREAM, partition=remote.key)
+        return self._replica(EVENTS_STREAM, partition=calendar_link.external_key, container=calendar_link)
 
-    def _replica(self, key: str, *, partition: str = "") -> StreamDefinition:
-        """A pull-only record replica whose removals integrate's absence sweep finds.
+    def _replica(self, key: str, **declared: Any) -> StreamDefinition:
+        """A pull-only record replica whose removals integrate's absence sweep finds; ``declared`` adds its knobs.
 
         The sweep runs at most once per poll interval: a record the source stops
         serving is unavailable after one sweep and tombstoned after the stream's
@@ -1737,8 +1732,8 @@ class CalendarSource(Bridge, inherits="integrate.Integration"):
 
         return StreamDefinition(
             key,
-            partition=partition,
             kind=StreamKind.RECORD_REPLICA,
             direction=StreamDirection.PULL,
             reconcile_interval=timedelta(seconds=self.poll_interval),
+            **declared,
         )

@@ -28,7 +28,6 @@ from django.db.models import ProtectedError
 from rebac import actor_context, system_context
 
 from angee.calendar import models as calendar_models
-from angee.calendar.backends import ParsedCalendar
 from angee.calendar.models import (
     PURGE_SOURCE_TASK,
     READ_ONLY_CALENDAR,
@@ -425,7 +424,9 @@ def test_a_drain_in_flight_after_unsubscribing_ends_quietly_and_writes_nothing(s
     source = subscription.source
     subscription.feed.etags = False
     backend = IcsCalendarBackend(CalendarSource.objects.sudo(reason="tests.ics").get(pk=source.pk))
-    events = SyncStream.objects.current(backend.bridge, backend.bridge.events_stream(ParsedCalendar(FEED_KEY, "Team")))
+    links = RecordLink.objects.sudo(reason="tests.ics")
+    feed = links.get(stream=subscription.stream("calendars"), external_key=FEED_KEY)
+    events = SyncStream.objects.current(backend.bridge, backend.bridge.events_stream(feed))
     with system_context(reason="tests.ics"):
         # A drain already running holds the feed it fetched before the unsubscribe.
         backend.read_keys(events, ["launch@example.test"])
@@ -540,13 +541,16 @@ def test_the_absence_sweep_tombstones_a_dropped_uid_and_a_dropped_instance_resto
 
 def test_pages_carry_only_the_last_key_and_commit_the_validators_last(subscription: Subscription) -> None:
     backend = IcsCalendarBackend(CalendarSource.objects.sudo(reason="tests.ics").get(pk=subscription.source.pk))
-    calendars, events = list(backend.streams())
-    assert (calendars.key, calendars.partition, events.key, events.partition) == ("calendars", "", "events", FEED_KEY)
-    assert events.reconcile_interval == timedelta(hours=1)
     with system_context(reason="tests.ics"):
+        # Only the calendars stream until the feed's calendar is mirrored: its link holds the events stream.
+        [calendars] = backend.streams()
+        assert (calendars.key, calendars.partition, calendars.holds_containers) == ("calendars", "", True)
         mirrored = advance_stream(SyncStream.objects.current(backend.bridge, calendars), backend)
+        _calendars, events = backend.streams()
         stream = SyncStream.objects.current(backend.bridge, events)
     assert (mirrored.count, mirrored.stream.cursor) == (1, {"listed": True})
+    assert (events.key, events.partition, events.container.external_key) == ("events", FEED_KEY, FEED_KEY)
+    assert events.reconcile_interval == timedelta(hours=1)
 
     first = advance_stream(stream, backend, page_bound=4)
     assert not first.exhausted

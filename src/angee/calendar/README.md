@@ -118,21 +118,25 @@ streams:
   mirrored calendar (on the owner's person, `source` naming the source), and the
   source states that calendar's name, colour and zone. A person's own rename
   outranks the source's by statement precedence, so it survives a remote rename.
-- **`events`:** one stream per remote calendar, partitioned by its key. Remote
-  event ids live only in its `RecordLink` rows: a master's key is its UID, an
-  instance's its UID and `RECURRENCE-ID`. A removed master or single event is
-  cancelled; a removed instance is deleted, which restores the master's occurrence.
+- **`events`:** one stream per remote calendar, held by the calendar's
+  `calendars` link as its container (`SyncStream.container`) and partitioned by
+  its key. Remote event ids live only in its `RecordLink` rows: a master's key is
+  its UID, an instance's its UID and `RECURRENCE-ID`. A removed master or single
+  event is cancelled; a removed instance is deleted, which restores the master's
+  occurrence.
 
 Both streams use integrate's absence sweep, at most once per poll interval. A
 record the source stops serving is unavailable after one sweep and tombstoned
 after the stream's absence threshold (two sweeps); a tombstoned calendar
-withdraws the identity its source stated. A source's event takes the event
+withdraws the identity its source stated, and its events stream retires, which
+withdraws its events as removed ones. A source's event takes the event
 owner's stored form: an untitled event is "(No title)", and at most 500
 attendees are kept, the organizer first. An attendee lands on a handle by the
 address the source gave, and a source never renames a handle that already exists.
 
-A source's calendar is mirrored before its events land: a sync that finds it
-missing retries on the next cycle.
+A source's calendar is mirrored before its events land: integrate drains the
+`calendars` stream before the events streams its links hold, and declares a new
+calendar's events stream in the same sync.
 
 - **Replicas.** A backend declares whether it takes writes. A local calendar
   always takes edits; a source's calendar only when its backend writes. On a
@@ -158,6 +162,12 @@ missing retries on the next cycle.
   is the source's one remote calendar, polled hourly with a conditional GET; each
   event keeps its own `DTSTART` zone. Each fetched feed is a full snapshot; its
   module docstring lists the properties it maps.
+- **Google.** `calendar_integrate_google` syncs every calendar of one of the
+  user's connected Google accounts (the deployment's `google` OAuth client, with
+  `calendar.readonly` granted); each further account is a source of its own. Each
+  calendar's events sync with Google's sync tokens, and an expired token reads the
+  calendar again in full. The calendars are read-only. Its module docstring lists
+  the fields it maps.
 
 The sources page lists them with their sync status. Source addons add their
 subscribe or connect verb to its `calendar.sources#toolbar` container.

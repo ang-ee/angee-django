@@ -5,32 +5,36 @@ A source has two kinds of stream, both pull-only record replicas:
 - ``calendars``: one record per remote calendar the backend discovers
   (:class:`ParsedCalendar`), keyed by its remote key. Its ``RecordLink`` names
   the mirrored ``Calendar`` and the source states that calendar's identity
-  (``CalendarManager.mirror``), so a person's rename outranks a remote one.
-- ``events``, one per remote calendar, partitioned by that calendar's key: one
-  record per remote event (:class:`ParsedEvent`). A master's key is its UID and an
-  instance's the UID plus its ``RECURRENCE-ID`` instant (:func:`instance_key`).
-  Every write composes the calendar owners (``CalendarEventManager.ingest`` and
-  ``CalendarEvent.withdraw``).
+  (``CalendarManager.mirror``), so a person's rename outranks a remote one. The
+  stream holds containers: each calendar's link holds that calendar's events stream.
+- ``events``, one per remote calendar: its container is the calendar's link and its
+  partition that link's key. One record per remote event (:class:`ParsedEvent`). A
+  master's key is its UID and an instance's the UID plus its ``RECURRENCE-ID`` instant
+  (:func:`instance_key`). Every write composes the calendar owners
+  (``CalendarEventManager.ingest`` and ``CalendarEvent.withdraw``).
 
 Both sides of each three-way sync compare one deterministic projection: an event's
 (:func:`event_projection`), and for a calendar the identity this source stated, so
 a person's own edit is no local change of the source's. Remote identity lives only
 in the streams' ``RecordLink`` rows. Extraction pages what the source serves;
 integrate's absence sweep finds what it stopped serving (:meth:`CalendarBackend.enumerate_keys`,
-:meth:`CalendarBackend.on_absent`). The manual backend declares no streams.
+:meth:`CalendarBackend.on_absent`). A calendar the source stopped serving retires its
+events stream, whose events are then withdrawn as removed records. The manual backend
+declares no streams.
 """
 
 from __future__ import annotations
 
 import hashlib
 from collections.abc import Iterable, Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from typing import Any, ClassVar
 
 from django.apps import apps
 
 from angee.base.serialization import canonical_json_sha256
+from angee.calendar.choices import EventStatus
 from angee.integrate.errors import IntegrationError
 from angee.integrate.http import HttpClientMixin
 from angee.integrate.impl import BridgeImpl
@@ -252,6 +256,54 @@ def event_from_payload(payload: Mapping[str, Any]) -> ParsedEvent:
     )
 
 
+def series_instances(
+    event: ParsedEvent, uid: str, excluded: Iterable[datetime], *, calendar_zone: str
+) -> list[tuple[str, ParsedEvent]]:
+    """Validate a parsed master's rule, then return its cancelled instances at ``excluded`` (its ``EXDATE``s).
+
+    ``uid`` is the series' remote identity, keyed by :func:`series_key` and
+    :func:`instance_key`. The rule is validated by the event's own owner first
+    (``CalendarEvent.validate_rule``: its frequency floor, its ``COUNT`` bound, and
+    an occurrence within about 30 years of its start), so an invalid rule raises
+    ``ValidationError`` before anything expands it. The series then expands once, up
+    to its latest excluded moment, in the zone the stored series uses (the event's
+    own, else ``calendar_zone``) through ``CalendarEvent.instances``: an excluded
+    moment that is no instance is dropped, and a cancelled instance ends where the
+    event owner's arithmetic puts it (``CalendarEvent.occurrence_end``). Each keeps
+    the master's fields, without its rule and attendees. A blank rule returns none.
+    """
+
+    if not event.recurrence:
+        return []
+    zone = event.timezone or calendar_zone
+    # The unsaved row only lends its owner's rule checks and occurrence arithmetic; nothing writes it.
+    series: Any = apps.get_model("calendar", "CalendarEvent")(
+        start=event.start, end=event.end, all_day=event.all_day, recurrence=event.recurrence, timezone=event.timezone
+    )
+    series.validate_rule(zone=zone)
+    moments = sorted(set(excluded))
+    if not moments:
+        return []
+    instances = series.instances(event.start, moments[-1], zone=zone)
+    return [
+        (
+            instance_key(uid, moment),
+            replace(
+                event,
+                start=moment,
+                end=series.occurrence_end(moment, zone=zone),
+                recurrence="",
+                series=series_key(uid),
+                original_start=moment,
+                status=EventStatus.CANCELLED,
+                attendees=(),
+            ),
+        )
+        for moment in moments
+        if moment in instances
+    ]
+
+
 @dataclass
 class _EventsPage:
     """One events page's locked work: its calendar, the rows its links name, and its attendees' handles.
@@ -286,7 +338,8 @@ class CalendarBackend(BridgeImpl, HttpClientMixin):
     :meth:`observe` and :meth:`page`, and this base extracts the calendars stream,
     applies every record and applies integrate's absence sweep (:meth:`on_absent`).
     ``writable`` declares whether the source takes local edits: a read-only
-    backend's calendars refuse them (``Calendar.is_writable``).
+    backend's calendars refuse them (``Calendar.is_writable``). A backend that reads
+    with one kind of credential refuses any other (:meth:`admit_credential`).
     """
 
     registry_setting = "ANGEE_CALENDAR_SOURCE_BACKEND_CLASSES"
@@ -297,17 +350,6 @@ class CalendarBackend(BridgeImpl, HttpClientMixin):
 
     writable: ClassVar[bool] = False
     """Whether calendars of this backend take local edits; a read-only subscription does not."""
-
-    sync_parallelism: ClassVar[int | None] = 1
-    """Drain one partition at a time, in ``sync_bridge``'s (key, partition) order.
-
-    ``calendars`` sorts before ``events``, so a calendar is mirrored before its
-    events write to it. Integrate has no ordering between streams yet; this is the
-    explicit reliance, and with ``CalendarSource.calendar_for_partition`` it is
-    the interim one: both go when an events stream names its calendar's link
-    (``SyncStream.container``). A drain that meets an unmirrored calendar fails its
-    partition transiently (:meth:`get_calendar`) and retries on the next cycle.
-    """
 
     supports_identity_reads: ClassVar[bool] = True
     """Both stream kinds re-read identities (:meth:`read_keys`), so a retried or held record reads its source."""
@@ -353,12 +395,27 @@ class CalendarBackend(BridgeImpl, HttpClientMixin):
             keys = self.event_keys(stream)
         return sorted(key for key in set(keys) if after is None or key > after)
 
+    def admit_credential(self, credential: Any) -> None:
+        """Refuse a credential this backend cannot use, raising ``ValidationError`` on ``credential``.
+
+        ``CalendarSource.admit_credential`` asks on every attachment, so no path
+        points a source at a credential its backend would send elsewhere. The base
+        admits any credential.
+        """
+
+        del credential
+
     def streams(self, *, deadline: float | None = None) -> Iterable[StreamDefinition]:
-        """Declare the calendars stream, then each discovered calendar's events stream."""
+        """Declare the calendars stream, then the events stream each live calendar link holds.
+
+        Local state only: a calendar is known once the ``calendars`` stream applied
+        it, and integrate declares again after the wave in which its link appeared
+        (``RecordLinkQuerySet.containers_of``).
+        """
 
         yield self.bridge.calendars_stream()
-        for remote in sorted(self.discover(), key=lambda item: item.key):
-            yield self.bridge.events_stream(remote)
+        for link in apps.get_model("integrate", "RecordLink").objects.containers_of(self.bridge, CALENDARS_STREAM):
+            yield self.bridge.events_stream(link)
 
     def extract(self, stream: Any, page_bound: int, *, deadline: float | None = None) -> StreamPage:
         """Extract the calendars stream here; an events stream through the backend's :meth:`extract_events`.
@@ -377,12 +434,21 @@ class CalendarBackend(BridgeImpl, HttpClientMixin):
         return self.page(stream, payloads, page_bound, after=cursor.get("after"), cursor={"listed": True})
 
     def get_calendar(self, stream: Any) -> Any:
-        """Return the calendar the events ``stream`` writes to, found through its calendars-stream link."""
+        """Return the calendar the events ``stream`` writes to: the target of its container, the calendar's link."""
 
-        calendar = self.bridge.calendar_for_partition(stream.partition)
+        calendar = self._container_calendar(stream)
         if calendar is None:
             raise IntegrationError("The source's calendar is not mirrored yet.", transient=True)
         return calendar
+
+    def _container_calendar(self, stream: Any) -> Any | None:
+        """Return the calendar the events ``stream``'s container link targets, as system work, or ``None``."""
+
+        container = stream.container
+        if container is None or not container.target_object_id:
+            return None
+        rows = apps.get_model("calendar", "Calendar").system_queryset()
+        return rows.filter(pk=container.target_object_id).first()
 
     def page(
         self,
@@ -505,9 +571,9 @@ class CalendarBackend(BridgeImpl, HttpClientMixin):
     def _apply_calendar(self, stream: Any, record: RecordChange) -> ApplyResult:
         """Mirror one remote calendar through ``CalendarManager.mirror``; a removed one withdraws its identity.
 
-        A removed calendar keeps its row and events: the source only withdraws the
-        identity it stated (``RecordLink.withdraw_statements``), and declares no
-        events stream for it any more.
+        A removed calendar keeps its row: the source withdraws the identity it
+        stated (``RecordLink.withdraw_statements``), and integrate retires the events
+        stream its link holds, whose events :meth:`on_absent` then withdraws.
         """
 
         link = stream.links.get(external_key=record.external_key)
@@ -610,7 +676,8 @@ class CalendarBackend(BridgeImpl, HttpClientMixin):
         An unavailable record keeps its row until the stream's absence threshold
         tombstones it. A tombstoned calendar withdraws the identity its source stated;
         a tombstoned event is withdrawn as a removed record is (:meth:`apply_record`),
-        under the calendar's lock first.
+        under the calendar's lock first. The events of a retired stream (its calendar
+        stopped observing) arrive here too.
         """
 
         gone = [link for link in links if link.status == LinkStatus.TOMBSTONE]
@@ -618,7 +685,7 @@ class CalendarBackend(BridgeImpl, HttpClientMixin):
             for link in gone:
                 link.withdraw_statements()
             return
-        calendar = self.bridge.calendar_for_partition(stream.partition)
+        calendar = self._container_calendar(stream)
         if not gone or calendar is None:
             return
         calendar.lock_subject()
