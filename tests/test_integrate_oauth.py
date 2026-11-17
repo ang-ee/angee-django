@@ -20,6 +20,7 @@ from angee.base.fields.implementation import ImplClassField
 from angee.base.implementations import impl_choices
 from angee.base.testing.queries import statement_startswith
 from angee.integrate import connect
+from angee.integrate.credentials import CredentialKind
 from angee.integrate.errors import IntegrationError, RequestNotSentError
 from angee.integrate.oauth import state
 from angee.integrate.oauth.client import OAuthClientProtocol, with_query
@@ -376,6 +377,21 @@ def test_signing_secret_refuses_public_clients_without_reading_storage():
 def test_signing_secret_refuses_a_confidential_client_without_a_secret():
     with pytest.raises(IntegrationError, match="has no client secret"):
         OAuthClientProtocol(OAuthClient(manual_redirect_uri="", client_secret="")).confidential_client_secret()
+
+
+@pytest.mark.parametrize(("response_scope", "granted"), [(None, "openid email"), ("openid", "openid")])
+def test_a_code_exchange_that_omits_scope_granted_the_requested_scopes(response_scope, granted):
+    """RFC 6749 §5.1: a response names ``scope`` only when it differs from the request."""
+
+    client = OAuthClient(slug="scope-omitted", client_id="client", client_secret="secret",
+                         token_endpoint="https://provider.example/token")
+    body = {"access_token": "granted", **({"scope": response_scope} if response_scope else {})}
+    with mock_transport(lambda request: httpx2.Response(200, json=body)):
+        tokens = OAuthClientProtocol(client).exchange_code(
+            code="code", redirect_uri="https://app.example/callback", scopes=("openid", "email"),
+        )
+    assert tokens["scope"] == granted
+    assert CredentialKind.OAUTH.handler.upsert_fields(tokens)["granted_scopes"] == granted.split()
 
 
 @pytest.mark.parametrize("request_format", ["form", "json"])

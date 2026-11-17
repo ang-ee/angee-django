@@ -142,6 +142,7 @@ class OidcLoginCompletion:
             redirect_uri=redirect_uri,
             code_verifier=record.code_verifier,
             state=state_token,
+            scopes=record.scopes,
         )
         return tokens, self.protocol.verified_claims(id_token, userinfo, nonce=record.nonce)
 

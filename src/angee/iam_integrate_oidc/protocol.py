@@ -64,6 +64,7 @@ class OAuthClientOidcProtocol(OAuthClientProtocol):
         redirect_uri: str,
         code_verifier: str | None = None,
         state: str | None = None,
+        scopes: Iterable[str] = (),
     ) -> dict[str, Any]:
         """Exchange an authorization code for tokens, discovering endpoints first."""
 
@@ -73,4 +74,5 @@ class OAuthClientOidcProtocol(OAuthClientProtocol):
             redirect_uri=redirect_uri,
             code_verifier=code_verifier,
             state=state,
+            scopes=scopes,
         )

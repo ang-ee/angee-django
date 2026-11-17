@@ -150,6 +150,7 @@ class OAuthClientProtocol:
         redirect_uri: str,
         code_verifier: str | None = None,
         state: str | None = None,
+        scopes: Iterable[str] = (),
     ) -> dict[str, Any]:
         """Exchange an authorization code for token material.
 
@@ -157,6 +158,9 @@ class OAuthClientProtocol:
         it before exchange and leaves it out of the token request (RFC 6749
         §4.1.3); the JSON shim carries it because Anthropic's public-client token
         endpoint rejects that non-standard JSON request as malformed without it.
+        ``scopes`` are the scopes the authorization request asked for: a response
+        that omits ``scope`` granted exactly those (RFC 6749 §5.1), so the material
+        records them.
         """
 
         grant: dict[str, Any] = {"code": code, "redirect_uri": redirect_uri}
@@ -164,7 +168,10 @@ class OAuthClientProtocol:
             grant["code_verifier"] = code_verifier
         if self._uses_json_token_request() and state:
             grant["state"] = state
-        return self.exchange_grant("authorization_code", **grant)
+        tokens = self.exchange_grant("authorization_code", **grant)
+        if "scope" not in tokens and (requested := " ".join(scopes)):
+            tokens["scope"] = requested
+        return tokens
 
     def refresh_token(self, *, refresh_token: str) -> dict[str, Any]:
         """Exchange a stored refresh token for fresh token material (RFC 6749 §6).
@@ -176,16 +183,23 @@ class OAuthClientProtocol:
         return self.exchange_grant("refresh_token", refresh_token=refresh_token)
 
     def exchange_identity(
-        self, *, code: str, redirect_uri: str, code_verifier: str | None = None, state: str = "",
+        self,
+        *,
+        code: str,
+        redirect_uri: str,
+        code_verifier: str | None = None,
+        state: str = "",
+        scopes: Iterable[str] = (),
     ) -> tuple[dict[str, Any], dict[str, Any], str]:
         """Return refined material, userinfo and the code exchange's OIDC proof.
 
         Refinement may replace or omit an ID token; only the authorization-code
-        exchange's token proves the login against the flow's nonce.
+        exchange's token proves the login against the flow's nonce. ``scopes`` are
+        the flow's requested scopes (:meth:`exchange_code`).
         """
 
         tokens = self.exchange_code(
-            code=code, redirect_uri=redirect_uri, code_verifier=code_verifier, state=state,
+            code=code, redirect_uri=redirect_uri, code_verifier=code_verifier, state=state, scopes=scopes,
         )
         id_token = str(tokens.get("id_token", "") or "")
         tokens = self.oauth_client.refine_grant(self, tokens)

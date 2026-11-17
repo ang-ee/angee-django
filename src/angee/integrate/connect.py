@@ -132,6 +132,7 @@ def complete_account_connect(
         redirect_uri=redirect_uri,
         code_verifier=record.code_verifier,
         state=state_token,
+        scopes=record.scopes,
     )
     external_id = oauth_client.external_id_from_claims(claims)
     if not external_id:
