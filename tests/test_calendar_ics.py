@@ -1,14 +1,15 @@
 """ICS calendar subscriptions through the real subscribe verb, pinned client, stream driver and calendar managers.
 
 A scripted feed answers through integrate's ``mock_transport`` with ETag-conditional
-responses; only the private-address case dials the real pinned transport, which
-refuses before any connection. The writability guard is exercised on the ICS
-calendar the subscription mirrors, against a local calendar.
+responses; only the private-address cases dial the real pinned transport, which
+refuses before any connection. The replica rules (``Calendar.takes_write``) are
+exercised on the ICS calendar the subscription mirrors, against a local calendar.
 """
 
 from __future__ import annotations
 
 import hashlib
+import logging
 from collections.abc import Iterator
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta, tzinfo
@@ -17,6 +18,7 @@ from zoneinfo import ZoneInfo
 
 import httpx2
 import pytest
+from django.core.cache import caches
 from django.core.exceptions import ValidationError
 from django.db.models import ProtectedError
 from rebac import actor_context, system_context
@@ -26,7 +28,7 @@ from angee.calendar.testing.models import Calendar, CalendarEvent, CalendarSourc
 from angee.calendar_integrate_ics.backend import FEED_KEY, IcsCalendarBackend, IcsError
 from angee.calendar_integrate_ics.connect import subscribe_calendar
 from angee.integrate.states import LinkStatus
-from angee.integrate.streams import advance_stream, sync_bridge
+from angee.integrate.streams import BridgeSyncError, advance_stream, sync_bridge
 from angee.integrate.testing.http import mock_transport
 from angee.integrate.testing.models import RecordLink, SyncStream
 from angee.messaging.testing.models import Handle, Person
@@ -106,13 +108,42 @@ SUMMARY:Launch
 END:VEVENT"""
 
 
-def _feed(*events: str) -> str:
-    """Wrap VEVENTs in a New York feed calendar."""
 
-    body = "\n".join(
-        ["BEGIN:VCALENDAR", "VERSION:2.0", "PRODID:-//Example//Feed//EN", "X-WR-CALNAME:Team feed",
-         "X-WR-TIMEZONE:America/New_York", _VTIMEZONE, *events, "END:VCALENDAR"]
-    )
+def _feed(*events: str, zone: str = "America/New_York") -> str:
+    """Wrap VEVENTs in a feed calendar whose ``X-WR-TIMEZONE`` is ``zone`` (none when blank)."""
+
+    header = ["BEGIN:VCALENDAR", "VERSION:2.0", "PRODID:-//Example//Feed//EN", "X-WR-CALNAME:Team feed"]
+    if zone:
+        header.append(f"X-WR-TIMEZONE:{zone}")
+    body = "\n".join([*header, _VTIMEZONE, *events, "END:VCALENDAR"])
+    return body.replace("\n", "\r\n") + "\r\n"
+
+
+def _custom_zone_feed(standard: str, daylight: str) -> str:
+    """A feed defining its own ``Custom Zone`` (US transition dates) with the given offsets."""
+
+    zone = f"""BEGIN:VTIMEZONE
+TZID:Custom Zone
+BEGIN:DAYLIGHT
+TZOFFSETFROM:{standard}
+TZOFFSETTO:{daylight}
+DTSTART:19700308T020000
+RRULE:FREQ=YEARLY;BYMONTH=3;BYDAY=2SU
+END:DAYLIGHT
+BEGIN:STANDARD
+TZOFFSETFROM:{daylight}
+TZOFFSETTO:{standard}
+DTSTART:19701101T020000
+RRULE:FREQ=YEARLY;BYMONTH=11;BYDAY=1SU
+END:STANDARD
+END:VTIMEZONE"""
+    event = """BEGIN:VEVENT
+UID:custom@example.test
+DTSTART;TZID=Custom Zone:20260701T090000
+DTEND;TZID=Custom Zone:20260701T100000
+SUMMARY:Custom
+END:VEVENT"""
+    body = "\n".join(["BEGIN:VCALENDAR", "VERSION:2.0", "PRODID:x", zone, event, "END:VCALENDAR"])
     return body.replace("\n", "\r\n") + "\r\n"
 
 
@@ -128,6 +159,7 @@ class FakeFeed:
 
     body: str
     etags: bool = True
+    status: int = 200
     requests: list[httpx2.Request] = field(default_factory=list)
 
     @property
@@ -136,6 +168,8 @@ class FakeFeed:
 
     def __call__(self, request: httpx2.Request) -> httpx2.Response:
         self.requests.append(request)
+        if self.status != 200:
+            return httpx2.Response(self.status)
         if self.etag and request.headers.get("if-none-match") == self.etag:
             return httpx2.Response(304)
         headers = {"content-type": "text/calendar"} | ({"etag": self.etag} if self.etag else {})
@@ -150,14 +184,14 @@ class Subscription:
     def poll(self) -> int:
         """Run one bridge sync as system work, as the scheduled poll does."""
 
-        with system_context(reason="tests.ics.poll"):
-            return sync_bridge(CalendarSource.objects.get(pk=self.source.pk))
+        return _poll(self.source)
 
     @property
     def calendar(self) -> Any:
-        """Return the feed's calendar, found through the source's calendars-stream link."""
+        """Return the feed's calendar: the one calendar its source mirrors."""
 
-        return self.source.calendar_for_partition(FEED_KEY)
+        with system_context(reason="tests.ics"):
+            return CalendarSource.objects.get(pk=self.source.pk).calendars.get()
 
     def stream(self, key: str = "events") -> Any:
         rows = SyncStream.objects.sudo(reason="tests.ics").filter(integration_id=self.source.pk, key=key)
@@ -169,6 +203,26 @@ class Subscription:
         links = RecordLink.objects.sudo(reason="tests.ics").filter(stream=self.stream(), target_object_id__isnull=False)
         rows = {str(row.pk): row for row in CalendarEvent.system_queryset().filter(calendar=self.calendar)}
         return {link.external_key: rows[link.target_object_id] for link in links if link.target_object_id in rows}
+
+    def failures(self) -> dict[str, list[str]]:
+        """Return the open failure codes of the events stream's links, by external key."""
+
+        with system_context(reason="tests.ics"):
+            links = RecordLink.objects.filter(stream=self.stream())
+            return {link.external_key: [row.code for row in link.failures(open_only=True)] for link in links
+                    if link.failures(open_only=True)}
+
+
+def _poll(source: Any) -> int:
+    with system_context(reason="tests.ics.poll"):
+        return sync_bridge(CalendarSource.objects.get(pk=source.pk))
+
+
+@pytest.fixture(autouse=True)
+def _fresh_subscribe_rate() -> None:
+    """Each test starts with an unspent subscribe rate (the default cache holds it)."""
+
+    caches["default"].clear()
 
 
 @pytest.fixture
@@ -187,31 +241,43 @@ def _snapshot(subscription: Subscription) -> dict[str, tuple[Any, ...]]:
 # --- subscribe ---------------------------------------------------------------
 
 
-def test_subscribing_creates_a_source_whose_first_sync_mirrors_its_calendar(subscription: Subscription) -> None:
+def test_subscribing_fetches_nothing_and_the_first_sync_mirrors_the_calendar(subscription: Subscription) -> None:
     source, feed = subscription.source, subscription.feed
 
-    assert (source.backend_class, source.credential_id) == ("ics", None)
-    assert source.config == {"url": FEED_URL, "timezone": "America/New_York"}
+    assert feed.requests == []
+    assert (source.backend_class, source.config) == ("ics", {"feed": "feeds.example.test/…/team.ics"})
+    with system_context(reason="tests.ics"):
+        assert source.credential.secret_value() == FEED_URL
     assert (source.display_name, source.poll_interval, source.vendor.slug) == ("Team", 3600, "ics")
     assert source.sync_stage == source.SyncStage.QUEUED
-    [probe] = feed.requests
-    assert (str(probe.url), probe.method, probe.extensions["allow_private"]) == (FEED_URL, "GET", False)
-    assert "if-none-match" not in probe.headers
-    assert subscription.calendar is None
+    with system_context(reason="tests.ics"):
+        assert not CalendarSource.objects.get(pk=source.pk).calendars.exists()
 
     subscription.poll()
 
-    calendar: Any = source.calendar_for_partition(FEED_KEY)
-    assert calendar is not None
+    [probe, *_rest] = feed.requests
+    assert (str(probe.url), probe.method, probe.extensions["allow_private"]) == (FEED_URL, "GET", False)
+    calendar: Any = subscription.calendar
     with system_context(reason="tests.ics"):
         person = Person.objects.get(user=source.owner)
         [link] = RecordLink.objects.filter(stream=subscription.stream("calendars"))
         [statement] = calendar.statements.current().filter(aspect="identity")
-    assert (calendar.name, calendar.timezone, calendar.party_id, calendar.source_id) == (
-        "Team", "America/New_York", person.pk, source.pk)
+    assert (calendar.name, calendar.party_id, calendar.owner_id, calendar.source_id) == (
+        "Team", person.pk, source.owner_id, source.pk)
     assert calendar.is_writable is False
     assert (link.external_key, link.target_object_id) == (FEED_KEY, str(calendar.pk))
     assert (statement.source_kind, statement.link_id, statement.name) == ("directory", link.pk, "Team")
+
+
+def test_the_feed_address_never_reaches_the_request_log(
+    subscription: Subscription, caplog: pytest.LogCaptureFixture
+) -> None:
+    with caplog.at_level(logging.INFO, logger="httpx2"):
+        subscription.poll()
+
+    logged = [record.getMessage() for record in caplog.records if record.name == "httpx2"]
+    assert logged and all("team.ics" not in message for message in logged)
+    assert any("https://feeds.example.test/…" in message for message in logged)
 
 
 def test_a_remote_rename_applies_until_the_holder_renames_the_calendar(subscription: Subscription) -> None:
@@ -239,7 +305,7 @@ def test_a_remote_rename_applies_until_the_holder_renames_the_calendar(subscript
     assert stated == {"person": "My team", "directory": "Team feed v2"}
 
 
-def test_a_private_feed_address_is_refused_by_the_pinned_transport() -> None:
+def test_subscribe_refuses_a_private_address_literal_without_dialling() -> None:
     user = create_user("private-subscriber")
 
     with pytest.raises(IcsError, match="address is not allowed"):
@@ -248,17 +314,61 @@ def test_a_private_feed_address_is_refused_by_the_pinned_transport() -> None:
     assert not CalendarSource.objects.sudo(reason="tests.ics").exists()
 
 
-@pytest.mark.parametrize(
-    ("status", "body", "message"),
-    [(404, "", "returned HTTP 404"), (200, "not a calendar", "not valid iCalendar")],
-)
-def test_an_unreadable_feed_is_never_subscribed(status: int, body: str, message: str) -> None:
-    user = create_user("unreadable-subscriber")
-    with mock_transport(lambda request: httpx2.Response(status, content=body.encode())):
-        with pytest.raises(IcsError, match=message):
-            subscribe_calendar(user, name="Broken", url=FEED_URL)
+def test_the_pinned_transport_refuses_a_feed_host_that_resolves_privately() -> None:
+    source = subscribe_calendar(create_user("localhost-subscriber"), name="Local", url="http://localhost/calendar.ics")
 
-    assert not CalendarSource.objects.sudo(reason="tests.ics").exists()
+    with pytest.raises(BridgeSyncError) as refused:
+        _poll(source)
+
+    assert "address is not allowed" in str(refused.value)
+
+
+@pytest.mark.parametrize(("status", "body", "message"), [(404, "", "HTTP 404"), (200, "not a calendar", "iCalendar")])
+def test_the_first_sync_reports_an_unreadable_feed(status: int, body: str, message: str) -> None:
+    feed = FakeFeed(body, status=status, etags=False)
+    with mock_transport(feed):
+        source = subscribe_calendar(create_user("unreadable-subscriber"), name="Broken", url=FEED_URL)
+        with pytest.raises(BridgeSyncError) as refused:
+            _poll(source)
+
+    assert message in str(refused.value)
+
+
+def test_the_subscriber_quota_and_rate_bound_new_subscriptions(settings: Any) -> None:
+    user = create_user("busy-subscriber")
+    settings.ANGEE_CALENDAR_SOURCES_PER_OWNER = 1
+    subscribe_calendar(user, name="One", url=FEED_URL)
+    with pytest.raises(ValidationError, match="number of connected calendars"):
+        subscribe_calendar(user, name="Two", url="https://feeds.example.test/two.ics")
+
+    settings.ANGEE_CALENDAR_SOURCES_PER_OWNER = 25
+    settings.ANGEE_CALENDAR_SUBSCRIBE_RATE = (2, 3600)
+    subscribe_calendar(user, name="Two", url="https://feeds.example.test/two.ics")
+    with pytest.raises(ValidationError, match="Too many calendars"):
+        subscribe_calendar(user, name="Three", url="https://feeds.example.test/three.ics")
+
+
+def test_the_owner_syncs_and_unsubscribes_and_a_stranger_reaches_neither(subscription: Subscription) -> None:
+    subscription.poll()
+    source = subscription.source
+    stranger = create_user("stranger")
+    calendar = subscription.calendar
+
+    with system_context(reason="tests.ics"):
+        rows = CalendarSource.objects
+        assert rows.with_actor(source.owner).filter(pk=source.pk).exists()
+        assert not rows.with_actor(stranger).filter(pk=source.pk).exists()
+        CalendarSource.objects.get(pk=source.pk).unsubscribe()
+        source = CalendarSource.objects.get(pk=source.pk)
+        calendar.refresh_from_db()
+        links = RecordLink.objects.filter(stream=subscription.stream())
+
+        assert source.lifecycle == "disconnected"
+        assert calendar.is_archived is True
+        assert not CalendarEvent.objects.filter(calendar=calendar).exists()
+        assert not links.exclude(target_object_id=None).exists()
+        with pytest.raises(ValidationError, match="not connected"):
+            source.sync_now()
 
 
 # --- polling -----------------------------------------------------------------
@@ -360,6 +470,27 @@ def test_pages_hold_the_pending_events_and_commit_the_validators_last(subscripti
     assert len(subscription.events()) == 6
 
 
+def test_identity_reads_reread_the_feed_and_a_dropped_key_is_a_tombstone(subscription: Subscription) -> None:
+    subscription.poll()
+    backend = IcsCalendarBackend(CalendarSource.objects.sudo(reason="tests.ics").get(pk=subscription.source.pk))
+    subscription.feed.body = _feed(STANDUP, MOVED, HOLIDAY, LAUNCH)
+    subscription.feed.requests.clear()
+
+    with system_context(reason="tests.ics"):
+        changes = backend.read_keys(subscription.stream(), ["launch@example.test", "berlin@example.test"])
+        [calendar] = backend.read_keys(subscription.stream("calendars"), [FEED_KEY])
+
+    assert backend.supports_identity_reads is True
+    assert [(change.external_key, change.tombstone) for change in changes] == [
+        ("launch@example.test", False),
+        ("berlin@example.test", True),
+    ]
+    # One unconditional fetch serves every requested key.
+    [read] = subscription.feed.requests
+    assert "if-none-match" not in read.headers
+    assert (calendar.external_key, calendar.tombstone) == (FEED_KEY, False)
+
+
 # --- mapping -----------------------------------------------------------------
 
 
@@ -370,7 +501,7 @@ def test_recurrence_id_and_exdate_become_overrides_that_expand_across_dst(subscr
     moved = events["standup@example.test#20260309T130000Z"]
     excluded = events["standup@example.test#20260316T130000Z"]
 
-    assert (master.recurrence, master.series_id) == ("FREQ=WEEKLY;BYDAY=MO;COUNT=4", None)
+    assert (master.recurrence, master.series_id) == ("FREQ=WEEKLY;COUNT=4;BYDAY=MO", None)
     assert (moved.series_id, moved.original_start, moved.title) == (master.pk, _utc(2026, 3, 9, 9, zone=NEW_YORK),
                                                                    "Standup (moved)")
     assert (moved.start, moved.end) == (_utc(2026, 3, 9, 10, zone=NEW_YORK), _utc(2026, 3, 9, 10, 45, zone=NEW_YORK))
@@ -403,61 +534,47 @@ def test_tzid_all_day_and_utc_moments_land_on_their_instants(subscription: Subsc
     assert (launch.start, launch.end) == (_utc(2026, 4, 1, 12), _utc(2026, 4, 1, 13))
     master = events["standup@example.test"]
     assert (master.visibility, master.conference_url) == ("private", "https://meet.example.test/standup")
-    # Each event keeps its DTSTART zone; a date or floating time keeps its calendar's.
+    # Each event keeps its DTSTART zone; a date keeps the feed's X-WR-TIMEZONE.
     zones = {key: event.timezone for key, event in events.items()}
     assert zones == {
         "standup@example.test": "America/New_York",
         "standup@example.test#20260309T130000Z": "America/New_York",
         "standup@example.test#20260316T130000Z": "America/New_York",
-        "holiday@example.test": "",
+        "holiday@example.test": "America/New_York",
         "berlin@example.test": "Europe/Berlin",
         "launch@example.test": "UTC",
     }
-    # The moved instance stated no CLASS: it keeps its master's, as the override row does.
+    # The moved instance stated no CLASS: it keeps its master's.
     assert events["standup@example.test#20260309T130000Z"].visibility == "private"
 
 
-def test_a_moved_master_keeps_one_override_per_instance(subscription: Subscription) -> None:
-    subscription.poll()
-    before = subscription.events()
-    moved, excluded = before["standup@example.test#20260309T130000Z"], before["standup@example.test#20260316T130000Z"]
+def test_two_feeds_defining_one_tzid_differently_each_keep_their_own_zone() -> None:
+    first, second = FakeFeed(_custom_zone_feed("-0500", "-0400")), FakeFeed(_custom_zone_feed("+0100", "+0200"))
+    starts = []
+    for feed, name in ((first, "first"), (second, "second")):
+        with mock_transport(feed):
+            source = subscribe_calendar(create_user(f"{name}-zone"), name=name, url=f"https://{name}.example.test/a.ics")
+            _poll(source)
+        with system_context(reason="tests.ics"):
+            calendar = CalendarSource.objects.get(pk=source.pk).calendars.get()
+            starts.append(CalendarEvent.objects.get(calendar=calendar).start)
 
-    # The feed moves the series an hour later and restates its instances under new keys.
-    later = (
-        STANDUP.replace("20260302T090000", "20260302T100000")
-        .replace("20260302T093000", "20260302T103000")
-        .replace("EXDATE;TZID=America/New_York:20260316T090000", "EXDATE;TZID=America/New_York:20260316T100000")
-    )
-    instance = MOVED.replace(
-        "RECURRENCE-ID;TZID=America/New_York:20260309T090000", "RECURRENCE-ID;TZID=America/New_York:20260309T100000"
-    ).replace("DTSTART;TZID=America/New_York:20260309T100000", "DTSTART;TZID=America/New_York:20260309T110000")
-    subscription.feed.body = _feed(later, instance, HOLIDAY, BERLIN_EVENT, LAUNCH)
+    # 09:00 in July: daylight time in each feed's own definition of "Custom Zone".
+    assert starts == [_utc(2026, 7, 1, 13), _utc(2026, 7, 1, 7)]
+
+
+def test_a_windows_tzid_maps_to_its_iana_zone(subscription: Subscription) -> None:
+    windows = """BEGIN:VEVENT
+UID:windows@example.test
+DTSTART;TZID=Eastern Standard Time:20260701T090000
+DTEND;TZID=Eastern Standard Time:20260701T100000
+SUMMARY:Windows
+END:VEVENT"""
+    subscription.feed.body = _feed(windows)
     subscription.poll()
 
-    events = subscription.events()
-    master = events["standup@example.test"]
-    with system_context(reason="tests.ics"):
-        overrides = sorted(CalendarEvent.objects.filter(series=master).values_list("original_start", "status", "pk"))
-        stream = subscription.stream()
-        links = RecordLink.objects.filter(stream=stream)
-        failures = [link.external_key for link in links if link.failures(open_only=True)]
-        old = RecordLink.objects.get(stream=stream, external_key="standup@example.test#20260309T130000Z")
-        series = CalendarEvent.objects.filter(calendar=subscription.calendar, title__startswith="Standup")
-        starts = [o.start for o in series.occurrences(_utc(2026, 3, 1), _utc(2026, 4, 1))]
-    assert failures == []
-    assert old.status == LinkStatus.TOMBSTONE
-    # One override per instance: each new key adopted the row the series rebased.
-    assert overrides == [
-        (_utc(2026, 3, 9, 10, zone=NEW_YORK), "confirmed", moved.pk),
-        (_utc(2026, 3, 16, 10, zone=NEW_YORK), "cancelled", excluded.pk),
-    ]
-    assert events["standup@example.test#20260309T140000Z"].pk == moved.pk
-    assert events["standup@example.test#20260316T140000Z"].pk == excluded.pk
-    assert starts == [
-        _utc(2026, 3, 2, 10, zone=NEW_YORK),
-        _utc(2026, 3, 9, 11, zone=NEW_YORK),
-        _utc(2026, 3, 23, 10, zone=NEW_YORK),
-    ]
+    event = subscription.events()["windows@example.test"]
+    assert (event.timezone, event.start) == ("America/New_York", _utc(2026, 7, 1, 13))
 
 
 def test_an_overlap_on_a_refusing_calendar_is_a_record_failure_not_a_failed_page(subscription: Subscription) -> None:
@@ -494,10 +611,54 @@ def test_attendees_become_handles_with_one_organizer(subscription: Subscription)
     }
 
 
-# --- writability -------------------------------------------------------------
+# --- poison input --------------------------------------------------------------
 
 
-def test_edits_on_an_ics_calendar_are_refused_and_a_local_calendar_is_unaffected(
+def test_nul_characters_long_uids_and_unreadable_instances_never_fail_the_page(subscription: Subscription) -> None:
+    subscription.poll()
+    long_uid = "x" * 600 + "@example.test"
+    noisy = """BEGIN:VEVENT
+UID:{uid}
+DTSTART:20260402T{hour}0000Z
+DTEND:20260402T{hour}3000Z
+SUMMARY:Null\x00Title
+ORGANIZER;CN=Ali\x00ce:mailto:alice@example.test
+END:VEVENT"""
+    broken_instance = """BEGIN:VEVENT
+UID:standup@example.test
+RECURRENCE-ID;TZID=America/New_York:20260323T090000
+DTSTART;TZID=America/New_York:not-a-date
+SUMMARY:Broken
+END:VEVENT"""
+    far = """BEGIN:VEVENT
+UID:far@example.test
+DTSTART:99991231T220000Z
+DTEND:99991231T230000Z
+SUMMARY:Far
+END:VEVENT"""
+    with system_context(reason="tests.ics"):
+        Calendar.objects.filter(pk=subscription.calendar.pk).update(overlap_policy="refuse")
+    subscription.feed.body = _feed(
+        STANDUP, MOVED, HOLIDAY, BERLIN_EVENT, LAUNCH, noisy.format(uid="nul@example.test", hour=12),
+        noisy.format(uid=long_uid, hour=14), broken_instance, far,
+    )
+
+    subscription.poll()
+
+    events = subscription.events()
+    digest = "sha256:" + hashlib.sha256(long_uid.encode()).hexdigest()
+    assert events["nul@example.test"].title == "NullTitle"
+    assert events[digest].title == "NullTitle"
+    assert "far@example.test" in events
+    # The unreadable instance is quarantined under its own key; its master is untouched.
+    assert subscription.failures() == {"standup@example.test#20260323T130000Z": ["invalid_event"]}
+    assert "standup@example.test" in events
+
+
+# --- replicas ------------------------------------------------------------------
+
+
+def test_edits_on_an_ics_calendar_are_refused_by_the_model_and_a_local_calendar_is_unaffected(
     subscription: Subscription,
 ) -> None:
     subscription.poll()
@@ -507,21 +668,27 @@ def test_edits_on_an_ics_calendar_are_refused_and_a_local_calendar_is_unaffected
         launch.title = "Edited locally"
         with pytest.raises(ValidationError, match=READ_ONLY_CALENDAR):
             launch.full_clean()
+        # The save path refuses too, so no caller can skip the form's clean.
+        with pytest.raises(ValidationError, match=READ_ONLY_CALENDAR):
+            launch.save()
         launch.refresh_from_db()
         with pytest.raises(ValidationError, match=READ_ONLY_CALENDAR):
             launch.reschedule(_utc(2026, 4, 2, 12), _utc(2026, 4, 2, 13))
         with pytest.raises(ValidationError, match=READ_ONLY_CALENDAR):
-            CalendarEvent(calendar=subscription.calendar, title="New", start=launch.start, end=launch.end).full_clean()
+            CalendarEvent(calendar=subscription.calendar, title="New", start=launch.start, end=launch.end).save()
         # The model names the refusal a delete preview shows; the stream's link also retains the row.
         assert launch.delete_blocker() == READ_ONLY_CALENDAR
         with pytest.raises((ValidationError, ProtectedError)):
             launch.delete()
         handle = Handle.objects.upsert(platform="email", value="dave@example.test")
         with pytest.raises(ValidationError, match=READ_ONLY_CALENDAR):
-            EventAttendee(event=launch, handle=handle).full_clean()
+            EventAttendee(event=launch, handle=handle).save()
         organizer = EventAttendee.objects.get(event__title="Standup", role=AttendeeRole.ORGANIZER)
+        organizer.response = AttendeeResponse.DECLINED
         with pytest.raises(ValidationError, match=READ_ONLY_CALENDAR):
-            organizer.delete()
+            organizer.save()
+        with pytest.raises(ValidationError, match=READ_ONLY_CALENDAR):
+            EventAttendee.objects.get(pk=organizer.pk).delete()
         # The source's link and statements retain its calendar; the model names the refusal.
         assert subscription.calendar.delete_blocker() == SOURCE_CALENDAR_DELETE
         with pytest.raises((ValidationError, ProtectedError)):
@@ -542,6 +709,90 @@ def test_edits_on_an_ics_calendar_are_refused_and_a_local_calendar_is_unaffected
     launch.refresh_from_db()
     assert launch.title == "Launch"
     assert Calendar.system_queryset().filter(pk=subscription.calendar.pk).exists()
+
+
+def test_a_handle_merge_folds_two_attendees_of_one_replica(subscription: Subscription) -> None:
+    subscription.poll()
+    master = subscription.events()["standup@example.test"]
+
+    with system_context(reason="tests.ics"):
+        bob = Handle.objects.get(normalized_value="bob@example.test")
+        carol = Handle.objects.get(normalized_value="carol@example.test")
+        bob.fold([carol])
+        rows = list(EventAttendee.objects.filter(event=master, handle__in=[bob, carol]).values_list("handle", "role"))
+
+    assert rows == [(bob.pk, AttendeeRole.REQUIRED)]
+
+
+def test_a_source_moving_a_series_resends_its_instances_under_new_keys(subscription: Subscription) -> None:
+    subscription.poll()
+    before = subscription.events()
+    moved, excluded = before["standup@example.test#20260309T130000Z"], before["standup@example.test#20260316T130000Z"]
+
+    # The feed moves the series an hour later and restates its instances under new keys.
+    later = (
+        STANDUP.replace("20260302T090000", "20260302T100000")
+        .replace("20260302T093000", "20260302T103000")
+        .replace("EXDATE;TZID=America/New_York:20260316T090000", "EXDATE;TZID=America/New_York:20260316T100000")
+    )
+    instance = MOVED.replace(
+        "RECURRENCE-ID;TZID=America/New_York:20260309T090000", "RECURRENCE-ID;TZID=America/New_York:20260309T100000"
+    ).replace("DTSTART;TZID=America/New_York:20260309T100000", "DTSTART;TZID=America/New_York:20260309T110000")
+    subscription.feed.body = _feed(later, instance, HOLIDAY, BERLIN_EVENT, LAUNCH)
+    subscription.poll()
+
+    events = subscription.events()
+    master = events["standup@example.test"]
+    with system_context(reason="tests.ics"):
+        overrides = sorted(CalendarEvent.objects.filter(series=master).values_list("original_start", "status"))
+        old = RecordLink.objects.get(stream=subscription.stream(), external_key="standup@example.test#20260309T130000Z")
+        series = CalendarEvent.objects.filter(calendar=subscription.calendar, title__startswith="Standup")
+        starts = [o.start for o in series.occurrences(_utc(2026, 3, 1), _utc(2026, 4, 1))]
+    assert subscription.failures() == {}
+    assert old.status == LinkStatus.TOMBSTONE
+    # Each instance key owns its placement: the old rows went with their keys, new rows came with the new ones.
+    assert overrides == [
+        (_utc(2026, 3, 9, 10, zone=NEW_YORK), "confirmed"),
+        (_utc(2026, 3, 16, 10, zone=NEW_YORK), "cancelled"),
+    ]
+    assert not CalendarEvent.system_queryset().filter(pk__in=[moved.pk, excluded.pk]).exists()
+    assert starts == [
+        _utc(2026, 3, 2, 10, zone=NEW_YORK),
+        _utc(2026, 3, 9, 11, zone=NEW_YORK),
+        _utc(2026, 3, 23, 10, zone=NEW_YORK),
+    ]
+
+
+def test_a_source_shortening_a_series_with_an_exdate_keeps_the_page(subscription: Subscription) -> None:
+    subscription.poll()
+
+    subscription.feed.body = _feed(STANDUP.replace("COUNT=4", "COUNT=2"), MOVED, HOLIDAY, BERLIN_EVENT, LAUNCH)
+    subscription.poll()
+
+    with system_context(reason="tests.ics"):
+        series = CalendarEvent.objects.filter(calendar=subscription.calendar, title__startswith="Standup")
+        starts = [o.start for o in series.occurrences(_utc(2026, 3, 1), _utc(2026, 4, 1))]
+    assert subscription.failures() == {}
+    assert subscription.events()["standup@example.test"].recurrence == "FREQ=WEEKLY;COUNT=2;BYDAY=MO"
+    assert starts == [_utc(2026, 3, 2, 9, zone=NEW_YORK), _utc(2026, 3, 9, 10, zone=NEW_YORK)]
+
+
+def test_a_zone_change_on_a_subscribed_calendar_resyncs_instead_of_moving_replicas(subscription: Subscription) -> None:
+    subscription.poll()
+    before = _snapshot(subscription)
+    generation = subscription.stream().generation
+    owner = subscription.source.owner
+
+    with actor_context(owner):
+        mine = Calendar.objects.with_actor(owner).get(pk=subscription.calendar.pk)
+        mine.timezone = "Europe/Berlin"
+        mine.save()
+
+    assert subscription.stream().resync_required is True
+    assert _snapshot(subscription) == before
+    subscription.poll()
+    assert subscription.stream().generation == generation + 1
+    assert subscription.failures() == {}
 
 
 def test_a_local_calendar_edit_states_nothing_and_the_calendar_stays_deletable() -> None:

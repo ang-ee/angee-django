@@ -42,18 +42,23 @@ from __future__ import annotations
 
 from collections import defaultdict
 from collections.abc import Iterable, Mapping, Sequence
+from contextvars import ContextVar
 from dataclasses import dataclass
 from datetime import UTC, datetime, time, timedelta
+from types import NotImplementedType
 from typing import Any, ClassVar, Self, cast
 
 from django.apps import apps
+from django.conf import settings
+from django.core.cache import caches
 from django.core.exceptions import ValidationError
 from django.db import models, router, transaction
 from django.db.models import F, Q, Value, prefetch_related_objects
 from django.db.models.functions import Coalesce, NullIf
 from django.utils import timezone
-from rebac import permission_expression
+from rebac import PermissionDenied, check_new, permission_expression, system_context, to_subject_ref
 
+from angee.base.cache import increment_window
 from angee.base.fields.implementation import ImplClassField
 from angee.base.fields.relations import RetainedGenericRelation
 from angee.base.fields.state import StateField
@@ -64,6 +69,7 @@ from angee.base.models.locks import ImmutableFieldsMixin
 from angee.base.models.merge_references import EdgeReference, references
 from angee.base.models.ownership import OwnerMixin
 from angee.base.models.timestamps import update_fields_with_auto_now
+from angee.base.models.trash import ArchiveMixin, ArchiveQuerySet
 from angee.calendar.backends import (
     CALENDARS_STREAM,
     EVENTS_STREAM,
@@ -72,9 +78,10 @@ from angee.calendar.backends import (
     ParsedCalendar,
     ParsedEvent,
 )
-from angee.integrate.models import Bridge, IntegrationCreateMode
+from angee.integrate.models import Bridge, IntegrationCreateMode, IntegrationLifecycle
 from angee.integrate.states import StreamDefinition, StreamDirection, StreamKind
 from angee.messaging.models import ThreadedModelMixin
+from angee.provenance.context import changeset, changeset_model, current_changeset
 from angee.provenance.contrib.angee.history import HistoryMixin
 from angee.provenance.contrib.angee.managers import AngeeHistoryManager
 from angee.provenance.contrib.angee.querysets import AngeeHistoryQuerySet
@@ -141,8 +148,11 @@ class AttendeeResponse(models.TextChoices):
 READ_ONLY_CALENDAR = "This calendar is a read-only subscription."
 """The refusal of a local edit to an event of a calendar whose source takes no writes."""
 
-SOURCE_CALENDAR_DELETE = "This calendar mirrors a subscription; remove its source to remove it."
+SOURCE_CALENDAR_DELETE = "This calendar mirrors a subscription; unsubscribe to stop it, which archives the calendar."
 """The refusal of deleting a source's calendar on its own; its source's record link and statements retain it."""
+
+_LATEST = datetime.max.replace(tzinfo=UTC) - timedelta(days=2)
+"""The latest instant calendar arithmetic reaches; a day's margin keeps local conversions in range."""
 
 _SOURCE_FIELDS = (
     "title",
@@ -235,7 +245,14 @@ def _intervals_meet(left: Sequence[tuple[datetime, datetime]], right: Sequence[t
     return False
 
 
-class CalendarManager[CalendarT: Calendar](AngeeHistoryManager[CalendarT]):
+class CalendarQuerySet[CalendarT: Calendar](ArchiveQuerySet[CalendarT], AngeeHistoryQuerySet[CalendarT]):
+    """Calendar rows, with the archived scope an unsubscribed calendar enters."""
+
+
+_CalendarManagerBase = AngeeHistoryManager.from_queryset(CalendarQuerySet)
+
+
+class CalendarManager[CalendarT: Calendar](_CalendarManagerBase[CalendarT]):
     """Own calendar factories: the calendars a source mirrors through its record links."""
 
     def mirror(self, source: CalendarSource, remote: ParsedCalendar, *, link: Any) -> CalendarT:
@@ -273,7 +290,7 @@ class CalendarManager[CalendarT: Calendar](AngeeHistoryManager[CalendarT]):
         return calendar
 
 
-class Calendar(OwnerMixin, StatementsMixin, HistoryMixin, AngeeDataModel, concrete=True):
+class Calendar(OwnerMixin, ArchiveMixin, StatementsMixin, HistoryMixin, AngeeDataModel, concrete=True):
     """One party's calendar: the container its events belong to and take access from.
 
     ``party`` says whose calendar it is. Access is the calendar's own: its
@@ -294,7 +311,10 @@ class Calendar(OwnerMixin, StatementsMixin, HistoryMixin, AngeeDataModel, concre
     rename survives a remote one. A local calendar stays an ordinary record: a
     person's edit becomes a stance only once a source states it
     (``person_stances_once_stated``), and a source is admitted by
-    ``write_statements`` alone.
+    ``write_statements`` alone. The events of a calendar that is not writable are
+    its source's replicas: only its source's own work writes them
+    (:meth:`takes_write`), and a zone change re-reads them from the source instead
+    of moving them locally. Unsubscribing archives the calendar.
     """
 
     sqid_prefix = "cal_"
@@ -363,7 +383,11 @@ class Calendar(OwnerMixin, StatementsMixin, HistoryMixin, AngeeDataModel, concre
             previous_zone = None if self._state.adding or self.pk is None else self.lock_subject().timezone
             super().save(*args, **kwargs)
             if previous_zone is not None and previous_zone != self.timezone:
-                self._follow_zone(previous_zone)
+                if self.is_writable:
+                    self._follow_zone(previous_zone)
+                else:
+                    # Replicas are not moved locally: the source re-reads them in the new zone.
+                    transaction.on_commit(cast(CalendarSource, self.source).resync_events, using=using)
 
     def _follow_zone(self, previous_zone: str) -> None:
         """Carry the events that keep this calendar's zone from ``previous_zone`` onto the current one.
@@ -400,6 +424,25 @@ class Calendar(OwnerMixin, StatementsMixin, HistoryMixin, AngeeDataModel, concre
 
         source = self.source
         return source is None or CalendarSource.backend_writable(source.backend_class)
+
+    def takes_write(self) -> bool:
+        """Whether a write to this calendar's events and attendees is admitted now.
+
+        A writable calendar takes any write. A read-only subscription takes only its
+        source's own work, which the owning verb's changeset names as its origin (a
+        sync page: one of the source's streams; an unsubscribe: the source). A handle
+        merge folds a replica's attendees through :meth:`EventAttendee.merge_contract`.
+        """
+
+        if self.is_writable:
+            return True
+        current = current_changeset()
+        if not isinstance(current, changeset_model()):
+            return False
+        origin = cast(Any, current).origin
+        if isinstance(origin, apps.get_model("integrate", "SyncStream")):
+            return bool(origin.integration_id == self.source_id)
+        return isinstance(origin, apps.get_model("integrate", "Integration")) and origin.pk == self.source_id
 
     def delete_blocker(self) -> str | None:
         """Refuse deleting a source's calendar on its own: its source's link and statements retain it."""
@@ -562,8 +605,8 @@ class CalendarEventManager(_CalendarEventManagerBase):
     ) -> CalendarEvent:
         """Write one event its source observed, with its attendees; a source's sync is the only caller.
 
-        The row validates as every write does (:meth:`CalendarEvent.clean`), except
-        that a read-only calendar takes it: its source writes it. An event's place
+        The row validates and saves as every write does; a read-only calendar takes it
+        because the caller is its source's stream page (:meth:`Calendar.takes_write`). An event's place
         in a series (``series``, ``original_start``) is set when it is inserted; the
         caller passes no ``target`` whose place changed. Attendee addresses land on
         handles through ``HandleManager.upsert``; the organizer is the attendee whose
@@ -576,7 +619,6 @@ class CalendarEventManager(_CalendarEventManagerBase):
         if target is None:
             event.series = series
             event.original_start = parsed.original_start if series is not None else None
-        event._source_write = True
         event.full_clean()
         event.save()
         self._ingest_attendees(event, parsed.attendees, created_by_id=created_by_id)
@@ -591,7 +633,6 @@ class CalendarEventManager(_CalendarEventManagerBase):
         Returns the kept row, or ``None`` once it is deleted.
         """
 
-        event._source_write = True
         if remove:
             event.delete()
             return None
@@ -619,7 +660,6 @@ class CalendarEventManager(_CalendarEventManagerBase):
         rows = {row.handle_id: row for row in through.system_queryset().filter(event=event)}
         for handle_id, row in rows.items():
             if handle_id not in wanted:
-                row._source_write = True
                 row.delete()
         # One organizer per event: a former organizer's row changes role or goes first.
         for handle_id, (role, response) in sorted(
@@ -717,9 +757,6 @@ class CalendarEvent(
 
     objects = CalendarEventManager()
 
-    _source_write = False
-    """Set on a row by :class:`CalendarEventManager` alone: its source's sync writes or removes it."""
-
     class Meta:
         """Django model options for a calendar event."""
 
@@ -782,23 +819,23 @@ class CalendarEvent(
         self._refuse_read_only()
 
     def _refuse_read_only(self) -> None:
-        """Refuse a local write to an event of a read-only calendar; its source's sync writes it.
+        """Refuse a write the calendar does not take (:meth:`Calendar.takes_write`): a person's edit of a replica.
 
-        Create, update and :meth:`reschedule` all ``full_clean`` through here. The
-        calendar is read as system work: the rule holds whoever saves.
+        :meth:`clean` reports it to a form and :meth:`save` enforces it on every save
+        path. The calendar is read as system work: the rule holds whoever saves.
         """
 
-        if self._source_write or self.calendar_id is None:
+        if self.calendar_id is None:
             return
         calendars = type(self)._meta.get_field("calendar").related_model.system_queryset()
         calendar = calendars.select_related("source").filter(pk=self.calendar_id).first()
-        if calendar is not None and not calendar.is_writable:
+        if calendar is not None and not calendar.takes_write():
             raise ValidationError(READ_ONLY_CALENDAR)
 
     def delete_blocker(self) -> str | None:
-        """Refuse deleting an event of a read-only calendar; only its source's sync removes it."""
+        """Refuse deleting an event the calendar does not let this caller write (:meth:`Calendar.takes_write`)."""
 
-        if not self._source_write and not self.calendar.is_writable:
+        if not self.calendar.takes_write():
             return READ_ONLY_CALENDAR
         return cast(Any, super()).delete_blocker()
 
@@ -885,9 +922,14 @@ class CalendarEvent(
           result; a refusal rolls the whole save back.
 
         The rule frequency floor and ``series_end`` are enforced and derived here, so
-        every save path (a form, a drag, a sync) keeps them.
+        every save path (a form, a drag, a sync) keeps them. So is writability: a
+        replica of a read-only calendar is written only by its source's own work
+        (:meth:`_refuse_read_only`), and its series is the source's, so a moved
+        master never rebases its overrides there: the source re-sends each instance
+        under its own key.
         """
 
+        self._refuse_read_only()
         update_fields = kwargs.get("update_fields")
         schedule_changes = update_fields is None or bool(_SCHEDULE_FIELDS & set(update_fields))
         takes_time = update_fields is None or bool(_TIME_FIELDS & set(update_fields))
@@ -911,7 +953,11 @@ class CalendarEvent(
                 if schedule_changes:
                     previous = self._previous_schedule()
             super().save(*args, **kwargs)
-            if previous is not None and previous[:4] != (self.start, self.all_day, self.recurrence, self.timezone):
+            if (
+                previous is not None
+                and previous[:4] != (self.start, self.all_day, self.recurrence, self.timezone)
+                and self.calendar.is_writable
+            ):
                 self.rebase_overrides(previous_start=previous[0], previous_zone=previous[3] or previous[4])
             if takes_time and self.calendar_id is not None:
                 self._refuse_overlap()
@@ -1022,7 +1068,8 @@ class CalendarEvent(
         if not self.recurrence:
             return [(self.start, self.end)]
         zone = self.expansion_zone
-        stop = self.series_end or self.start + self.overlap_horizon
+        # The horizon stops short of the largest date, so a far-future start cannot overflow it.
+        stop = self.series_end or min(self.start, _LATEST - self.overlap_horizon) + self.overlap_horizon
         starts = Recurrence(self.recurrence).occurrences(self.start, self.start, stop, zone=zone)
         replaced: set[datetime] = set()
         if self.pk is not None:
@@ -1155,7 +1202,9 @@ class EventAttendee(ImmutableFieldsMixin, AuditMixin, HistoryMixin, AngeeDataMod
         An answer outranks none, and a definite answer a tentative one, with
         acceptance first: ``accepted`` > ``declined`` > ``tentative`` > ``needs_action``.
         The duplicate gives up the organizer role first, since one event has one
-        organizer and the duplicate goes only after this row is saved.
+        organizer and the duplicate goes only after this row is saved. A handle merge
+        reaches it through :meth:`merge_contract`, an event merge through the merge
+        owner's default move.
         """
 
         role = min((self.role, duplicate.role), key=_ROLE_RANK.index)
@@ -1169,22 +1218,68 @@ class EventAttendee(ImmutableFieldsMixin, AuditMixin, HistoryMixin, AngeeDataMod
             self.save(update_fields=update_fields_with_auto_now(self, dirty))
         return True
 
-    _source_write = False
-    """Set on a row by :class:`CalendarEventManager` alone: its source's sync removes it."""
+    @classmethod
+    def merge_contract(cls, reference: Any, rows: Any, *, survivor: Any) -> NotImplementedType | None:
+        """Fold a merged handle's invitations into the survivor's, a read-only calendar's included.
+
+        A merge is identity maintenance, not an edit, so a replica's attendees fold as
+        a local calendar's do: an invitation the survivor already holds on the same
+        event collapses into it (:meth:`merge_collapse`) and goes, and any other moves
+        to the survivor. Only this fold is admitted past the replica rule; any other
+        reference takes the merge owner's default move.
+        """
+
+        if reference.name != "handle":
+            return NotImplemented
+        token = _FOLDING_HANDLES.set(True)
+        try:
+            held = cls._base_manager.filter(handle=survivor, event_id__in=rows.values("event_id"))
+            kept_by_event = {row.event_id: row for row in held.order_by("pk")}
+            for duplicate in rows.order_by("pk"):
+                kept = kept_by_event.get(duplicate.event_id)
+                if kept is None:
+                    duplicate.handle = survivor
+                    duplicate.save(update_fields=update_fields_with_auto_now(duplicate, {"handle"}))
+                else:
+                    kept.merge_collapse(duplicate)
+                    duplicate.delete()
+        finally:
+            _FOLDING_HANDLES.reset(token)
+        return None
 
     def clean(self) -> None:
-        """Refuse a local attendee write on an event of a read-only calendar."""
+        """Report a write the event's calendar does not take to a form (:meth:`Calendar.takes_write`)."""
 
         super().clean()
-        if self.event_id is not None and not self.event.calendar.is_writable:
+        self._refuse_read_only()
+
+    def save(self, *args: Any, **kwargs: Any) -> None:
+        """Persist only a write the event's calendar takes, as an event's own save does."""
+
+        self._refuse_read_only()
+        super().save(*args, **kwargs)
+
+    def _takes_write(self) -> bool:
+        """Whether this attendee's write is admitted now: its calendar takes it, or a handle merge folds it."""
+
+        return _FOLDING_HANDLES.get() or self.event.calendar.takes_write()
+
+    def _refuse_read_only(self) -> None:
+        """Refuse an attendee write on a replica that is not its source's own work or a handle merge's."""
+
+        if self.event_id is not None and not self._takes_write():
             raise ValidationError(READ_ONLY_CALENDAR)
 
     def delete_blocker(self) -> str | None:
-        """Refuse deleting an attendee of an event on a read-only calendar; only its source's sync removes it."""
+        """Refuse deleting an attendee its event's calendar does not let this caller write."""
 
-        if not self._source_write and not self.event.calendar.is_writable:
+        if not self._takes_write():
             return READ_ONLY_CALENDAR
         return cast(Any, super()).delete_blocker()
+
+
+_FOLDING_HANDLES: ContextVar[bool] = ContextVar("angee_calendar_folding_handles", default=False)
+"""Set only while :meth:`EventAttendee.merge_contract` folds a merged handle's invitations."""
 
 
 _ROLE_RANK = (AttendeeRole.ORGANIZER, AttendeeRole.REQUIRED, AttendeeRole.OPTIONAL)
@@ -1205,8 +1300,11 @@ class CalendarSource(Bridge, inherits="integrate.Integration"):
     An ``integrate.Integration`` child (its owner, credential and status come from
     the connection substrate) and a ``Bridge`` (the scheduler and the eager
     ``syncIntegration`` mutation drive it). ``backend_class`` selects the protocol
-    (``ics``, contributed by ``calendar_integrate_ics``) and ``config`` carries what
-    it needs, such as the feed URL.
+    (``ics``, contributed by ``calendar_integrate_ics``). A secret address (a
+    private feed URL) is its credential's material, never ``config``, which keeps
+    only what may be shown. Its owner syncs and unsubscribes it
+    (:meth:`sync_now`, :meth:`unsubscribe`); :meth:`admit_subscription` bounds how
+    many a user keeps and how fast they add them.
 
     The source mirrors each remote calendar it serves through its ``calendars``
     stream (:meth:`calendars_stream`): one record per remote calendar, whose
@@ -1267,6 +1365,77 @@ class CalendarSource(Bridge, inherits="integrate.Integration"):
             )
             .first()
         )
+
+    @classmethod
+    def admit_subscription(cls, owner: Any) -> None:
+        """Admit one more source for ``owner``, or refuse: the REBAC create gate, their quota, then the rate.
+
+        ``ANGEE_CALENDAR_SOURCES_PER_OWNER`` bounds the connected sources one user
+        keeps; ``ANGEE_CALENDAR_SUBSCRIBE_RATE`` (``[burst, window_seconds]``) bounds
+        how often they add one, in a clock-aligned window of the default cache.
+        """
+
+        decision = check_new(subject=to_subject_ref(owner), action="create", resource_type="calendar/calendar_source")
+        if not decision.allowed:
+            raise PermissionDenied("Connecting a calendar requires a signed-in user.")
+        connected = cls.system_queryset().filter(owner=owner).exclude(lifecycle=IntegrationLifecycle.DISCONNECTED)
+        if connected.count() >= settings.ANGEE_CALENDAR_SOURCES_PER_OWNER:
+            raise ValidationError("You have reached the number of connected calendars you may keep.")
+        burst, window = settings.ANGEE_CALENDAR_SUBSCRIBE_RATE
+        if increment_window(caches["default"], f"angee:calendar-subscribe:{owner.pk}", timeout=window) > burst:
+            raise ValidationError("Too many calendars connected just now; try again in a while.")
+
+    def sync_now(self) -> bool:
+        """Queue this source's sync now, its owner's verb; ``False`` while one is already running."""
+
+        if self.lifecycle != IntegrationLifecycle.CONNECTED:
+            raise ValidationError("This calendar is not connected; subscribe again to sync it.")
+        return self.request_sync()
+
+    def resync_events(self) -> None:
+        """Re-read every events stream of this source in full, then queue its sync.
+
+        A replica's placement is its source's: when its calendar's zone changes, the
+        source re-reads the events in the new zone instead of moving them locally.
+        """
+
+        streams = apps.get_model("integrate", "SyncStream").objects
+        for stream in streams.current_for_bridge(self, EVENTS_STREAM):
+            streams.request_resync(stream)
+        if self.lifecycle == IntegrationLifecycle.CONNECTED:
+            self.request_sync()
+
+    def unsubscribe(self) -> None:
+        """End this subscription, its owner's verb: disconnect it, purge its events, archive its calendars.
+
+        Integrate's ``disconnect`` stops its polls (a disconnected bridge is never
+        due). Each event is released from its stream link
+        (``RecordLinkManager.release_target``) and deleted through the calendar
+        owner, under this source's own changeset (:meth:`Calendar.takes_write`).
+        The calendars stay, archived, with their history and statements. Deleting
+        the source row itself needs an integrate stream teardown, which does not
+        exist yet.
+        """
+
+        links = apps.get_model("integrate", "RecordLink").objects
+        calendars = apps.get_model("calendar", "Calendar")
+        events = apps.get_model("calendar", "CalendarEvent")
+        with (
+            changeset(fresh=True, activity="system", origin=self, change_reason="calendar.source.unsubscribe"),
+            system_context(reason="calendar.source.unsubscribe"),
+            transaction.atomic(),
+        ):
+            if self.lifecycle != IntegrationLifecycle.DISCONNECTED:
+                self.disconnect()
+            owned = calendars.system_queryset().filter(source_id=self.pk)
+            for link in links.filter(stream__integration_id=self.pk, stream__key=EVENTS_STREAM).exclude(
+                target_object_id=None
+            ):
+                links.release_target(link)
+            events.system_queryset().filter(calendar__in=owned).delete()
+            for calendar in owned.filter(is_archived=False):
+                calendar.is_archived = True
+                calendar.save(update_fields=["is_archived", "updated_at"])
 
     def calendars_stream(self) -> StreamDefinition:
         """Declare the stream of the remote calendars this source serves: one record per calendar."""

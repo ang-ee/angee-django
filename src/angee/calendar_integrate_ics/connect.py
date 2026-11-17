@@ -1,46 +1,55 @@
-"""Subscribe to one ICS feed through the calendar and integrate owners."""
+"""Subscribe a signed-in user to one ICS feed through the calendar and integrate owners."""
 
 from __future__ import annotations
 
+import hashlib
 from typing import Any
 
 from django.apps import apps
 from django.db import transaction
 from rebac import system_context
 
-from angee.calendar_integrate_ics.backend import feed_host, feed_url
+from angee.calendar_integrate_ics.backend import feed_label, feed_url
+from angee.integrate.models import IntegrationLifecycle
 
 
 def subscribe_calendar(user: Any, *, name: str, url: str) -> Any:
-    """Probe a feed before atomically retaining its source, owned by ``user``, then queue its first sync.
+    """Subscribe ``user`` to a feed: admit it, keep its address as a credential, and queue the first sync.
 
-    A subscription needs no credential. The probe runs on an unsaved source, so a
-    feed that cannot be read is never subscribed. The first sync mirrors the feed's
-    calendar on the subscriber's person through the source's ``calendars`` stream,
-    named ``name`` (else the feed's own name, else its host), then its events. The
-    feed's ``X-WR-TIMEZONE``, kept in the source's config, is the calendar's zone;
-    each event keeps its own ``DTSTART`` zone.
+    Nothing is fetched in the request. The address's shape is checked
+    (:func:`feed_url`), the calendar owner admits one more source for the user
+    (:meth:`CalendarSource.admit_subscription`: the create gate, a quota and a
+    rate), and the first sync reports a feed it cannot read. The address is a
+    secret, a private feed's token rides in it: it is a static-token credential's
+    material, and the source's ``config`` keeps only its label. The first sync
+    mirrors the feed's calendar on the user's person, then its events.
     """
 
     source_model = apps.get_model("calendar", "CalendarSource")
+    credential_model = apps.get_model("integrate", "Credential")
     vendor_model = apps.get_model("integrate", "Vendor")
     feed = feed_url(url)
-    values = {
-        "owner": user,
-        "backend_class": "ics",
-        "display_name": name.strip(),
-        "config": {"url": feed},
-        "lifecycle": "connected",
-        "created_by_id": user.pk,
-    }
-    # Network validation precedes the transaction; the probe row is never saved.
-    remote = source_model(**values).backend.probe()
-    values["display_name"] = values["display_name"] or remote.name or feed_host(feed)
-    values["config"] = {"url": feed, "timezone": remote.timezone}
-
+    label = feed_label(feed)
+    source_model.admit_subscription(user)
     with system_context(reason="calendar_integrate_ics.subscribe"), transaction.atomic():
         vendor, _created = vendor_model.objects.get_or_create(slug="ics", defaults={"display_name": "ICS feed"})
-        source = source_model.objects.create(vendor=vendor, **values)
+        credential = credential_model.objects.create_local_credential(
+            user,
+            kind="static_token",
+            # One credential per user and address; its name reveals nothing of the address.
+            name=f"Calendar feed {hashlib.sha256(feed.encode()).hexdigest()[:12]}",
+            material={"api_key": feed},
+        )
+        source = source_model.objects.create(
+            vendor=vendor,
+            credential=credential,
+            owner=user,
+            backend_class="ics",
+            display_name=name.strip() or label,
+            config={"feed": label},
+            lifecycle=IntegrationLifecycle.CONNECTED,
+            created_by_id=user.pk,
+        )
         # A bridge enters the poll loop once its first sync records a result.
         source.request_sync()
     return source

@@ -28,6 +28,7 @@ backend.
 
 from __future__ import annotations
 
+import logging
 import ssl
 import time
 from collections.abc import Callable, Iterable, Iterator
@@ -54,6 +55,25 @@ HTTP_TIMEOUT_SECONDS = 10
 
 _DOWNLOAD_CHUNK_BYTES = 64 * 1024
 """Maximum chunk read while enforcing a capped streamed download."""
+
+class _RequestOriginOnly(logging.Filter):
+    """Log only the origin of each request URL httpx2 reports.
+
+    httpx2 logs every request's full URL at INFO. A URL's path and query can be a
+    credential (a private calendar feed, a signed download), so the log keeps the
+    scheme, host and port, and drops the rest.
+    """
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        if isinstance(record.args, tuple):
+            record.args = tuple(
+                f"{arg.scheme}://{arg.netloc.decode('ascii', 'replace')}/…" if isinstance(arg, httpx2.URL) else arg
+                for arg in record.args
+            )
+        return True
+
+
+logging.getLogger("httpx2").addFilter(_RequestOriginOnly())
 
 _SSL_CONTEXT = ssl.create_default_context()
 """One shared system-trust-store TLS context reused by every pinned transport, so the

@@ -5,7 +5,7 @@ name = "angee-calendar-integrate-ics"
 version = "3.0.0"
 description = "Read-only ICS (iCalendar) feed subscriptions as calendars, polled with conditional GETs"
 keywords = ["calendar", "ics", "icalendar", "webcal", "subscription", "sync"]
-dependencies = ["angee-calendar>=3,<4", "angee-integrate>=3,<4", "angee-scheduling>=3,<4", "angee-graphql>=3,<4", "angee-iam>=3,<4", "angee-web>=3,<4", "vobject>=0.9.9", "angee-base>=3,<4"]
+dependencies = ["angee-calendar>=3,<4", "angee-integrate>=3,<4", "angee-scheduling>=3,<4", "angee-graphql>=3,<4", "angee-iam>=3,<4", "angee-web>=3,<4", "icalendar>=6.3,<8", "angee-base>=3,<4"]
 dynamic = ["entry-points"]
 
 [tool.angee]

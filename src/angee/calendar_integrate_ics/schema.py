@@ -15,10 +15,12 @@ class IcsCalendarMutation:
 
     @strawberry.mutation
     def subscribe_ics_calendar(self, info: strawberry.Info, name: str, url: str) -> CalendarSourceType:
-        """Probe an ICS feed and retain it as the signed-in user's read-only calendar subscription.
+        """Retain an ICS feed as the signed-in user's read-only calendar subscription and queue its first sync.
 
-        Any signed-in user subscribes (``session_user`` refuses anyone else); the
-        source and its calendar are theirs, and the feed must be a public address.
+        Any signed-in user subscribes (``session_user`` refuses anyone else), within
+        their source quota and subscribe rate; the source and its calendar are theirs.
+        Nothing is fetched here: the first sync reads the feed from a public address
+        and reports a feed it cannot read.
         """
 
         return cast(CalendarSourceType, subscribe_calendar(session_user(info), name=name, url=url))

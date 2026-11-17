@@ -118,20 +118,27 @@ streams:
 calendar through the calendars-stream link. Partitions drain in key order, so a
 calendar is mirrored before its events land.
 
-- **Writability.** A backend declares whether it takes writes. A local calendar
+- **Replicas.** A backend declares whether it takes writes. A local calendar
   always takes edits; a source's calendar only when its backend writes. On a
-  read-only subscription, creating, editing, rescheduling or deleting an event or an
-  attendee is refused ("This calendar is a read-only subscription"), and its
-  occurrences cannot be dragged. Only its source's sync writes its events.
-- **Removal.** A source's calendar goes with its source row, never on its own;
-  a source that has synced is disconnected through integrate's operator verbs.
+  read-only subscription the events and attendees are the source's replicas: a
+  person creating, editing, rescheduling or deleting one is refused ("This
+  calendar is a read-only subscription") on every save path, and its occurrences
+  cannot be dragged. Only the source's own work writes them, and a handle merge
+  still folds their attendees. The source owns its series: a moved series is never
+  rebased locally, the source re-sends each instance under its own key, and a
+  changed calendar zone re-reads the source's events instead of moving them.
+- **Lifecycle.** The source's owner syncs it now and unsubscribes it. Unsubscribing
+  disconnects the source, removes its events and archives its calendar; a source's
+  calendar is never deleted on its own. How many sources one user keeps, and how
+  fast they add them, are bounded (`ANGEE_CALENDAR_SOURCES_PER_OWNER`,
+  `ANGEE_CALENDAR_SUBSCRIBE_RATE`).
 - **ICS.** `calendar_integrate_ics` lets any signed-in user subscribe to a public
-  feed (`webcal://` reads as `https://`). The feed is the source's one remote
-  calendar, mirrored by the first sync, in the feed's `X-WR-TIMEZONE`; each event
-  keeps its own `DTSTART` zone. It is polled hourly with a conditional GET. Each
-  fetched feed is a full snapshot; its module docstring lists the properties it
-  maps. When the feed moves a series, each instance's new key adopts the override
-  the series rebased, so an instance keeps one override.
+  feed (`webcal://` reads as `https://`); nothing is fetched until the first
+  sync, which reports a feed it cannot read. The feed address is a secret, kept as
+  the source's credential; the source shows only its host and file name. The feed
+  is the source's one remote calendar, polled hourly with a conditional GET; each
+  event keeps its own `DTSTART` zone. Each fetched feed is a full snapshot; its
+  module docstring lists the properties it maps.
 
 The sources page lists them with their sync status. Source addons add their
 subscribe or connect verb to its `calendar.sources#toolbar` container.

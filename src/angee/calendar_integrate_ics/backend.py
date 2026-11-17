@@ -2,22 +2,35 @@
 
 The feed is the source's one remote calendar: the base backend's ``calendars``
 stream publishes one record for it, keyed ``feed``, and its events sync through
-the ``events`` stream partitioned by that key. Every poll fetches the feed through
-integrate's SSRF-pinned client, public
+the ``events`` stream partitioned by that key. The feed address is a secret (a
+private feed's token rides in it): it is the source credential's material, read
+only here, and the source's ``config`` keeps a redacted label (:func:`feed_label`).
+
+Every poll fetches the feed through integrate's SSRF-pinned client, public
 addresses only, with the stream cursor's ETag and Last-Modified as a conditional
-GET: a 304 means no work. ``webcal://`` is fetched as ``https://``. vobject parses
-the iCalendar; the calendar's base backend owns the event projection and every
-write. Each fetched feed is a full snapshot: events whose payload differs from
-their link's last observation are applied, and keys the feed no longer carries
-are tombstoned, so an unchanged feed applies nothing. The external key is the
-UID, plus the ``RECURRENCE-ID`` instant for an instance. Mapped properties:
+GET: a 304 means no work. ``webcal://`` is fetched as ``https://``.
+python-icalendar parses the iCalendar; the calendar's base backend owns the event
+projection and every write. Each fetched feed is a full snapshot: events whose
+payload differs from their link's last observation are applied, and keys the
+feed no longer carries are tombstoned, so an unchanged feed applies nothing. The
+external key is the UID (its digest when too long), plus the ``RECURRENCE-ID``
+instant for an instance.
+
+**Zones are resolved per parse.** icalendar's parser caches each feed-defined
+``VTIMEZONE`` in a process-wide registry, so a resolved value can carry another
+feed's definition of the same TZID. This module never reads one: it takes each
+moment's wall clock and ``TZID`` and resolves the TZID itself (:class:`_Zones`).
+An IANA name, a Windows name or a vendor-prefixed IANA name maps to the IANA zone
+(through icalendar's Windows table); any other TZID resolves from this feed's
+own ``VTIMEZONE``.
+
+Mapped properties:
 
 - ``UID``, ``RECURRENCE-ID``, ``SUMMARY``, ``DESCRIPTION``, ``LOCATION``;
-- ``DTSTART``, ``DTEND`` or ``DURATION`` (``VALUE=DATE`` is all-day); a ``TZID``
-  that names an IANA zone resolves through the scheduling zones owner and becomes
-  the event's own ``timezone`` (a UTC time keeps ``UTC``), another resolves through
-  the feed's ``VTIMEZONE``, and a floating time or a date is read in the calendar's
-  zone, which ``X-WR-TIMEZONE`` sets when the source subscribes;
+- ``DTSTART``, ``DTEND`` or ``DURATION`` (``VALUE=DATE`` is all-day); the event
+  keeps its ``DTSTART`` zone as its own ``timezone`` when that maps to an IANA name
+  (a UTC time keeps ``UTC``); a date or a floating time keeps the feed's
+  ``X-WR-TIMEZONE``, else its calendar's zone;
 - the first ``RRULE``; each ``EXDATE`` becomes a cancelled instance (``RDATE`` is
   not mapped);
 - ``STATUS``, ``TRANSP`` (``TRANSPARENT`` is free), ``CLASS`` (``PUBLIC`` is
@@ -28,20 +41,25 @@ UID, plus the ``RECURRENCE-ID`` instant for an instance. Mapped properties:
 - the conference URL: ``CONFERENCE`` (RFC 7986), ``X-GOOGLE-CONFERENCE``,
   ``X-MICROSOFT-ONLINEMEETINGEXTERNALLINK``, ``X-MICROSOFT-SKYPETEAMSMEETINGURL``,
   then ``URL``, the first web address.
+
+NUL characters are stripped from the whole body before parsing, so no text value
+or parameter carries one.
 """
 
 from __future__ import annotations
 
 import hashlib
-from collections.abc import Mapping
+import ipaddress
+from collections.abc import Mapping, Sequence
 from dataclasses import replace
-from datetime import UTC, date, datetime, time, timedelta
-from typing import Any, ClassVar
+from datetime import UTC, date, datetime, time, timedelta, tzinfo
+from typing import Any
 from urllib.parse import urlsplit
 
-import vobject
+import icalendar
 from django.core.exceptions import ValidationError
 from django.utils import timezone
+from icalendar.timezone.windows_to_olson import WINDOWS_TO_OLSON
 
 from angee.calendar.backends import (
     ORGANIZER,
@@ -50,11 +68,12 @@ from angee.calendar.backends import (
     ParsedCalendar,
     ParsedEvent,
     instance_key,
+    series_key,
 )
 from angee.calendar.models import AttendeeResponse, AttendeeRole, EventStatus, EventTransparency, EventVisibility
 from angee.integrate.errors import IntegrationError
 from angee.integrate.http import ResponseTooLargeError
-from angee.integrate.net import AddressNotAllowedError, AddressResolutionError, parse_http_url
+from angee.integrate.net import AddressNotAllowedError, AddressResolutionError, is_unsafe_address, parse_http_url
 from angee.integrate.streams import StreamPage
 from angee.scheduling.zones import get_zone_info, get_zone_names
 
@@ -65,11 +84,11 @@ _FEED_CAP = 16 * 1024 * 1024
 """The largest decoded feed body read; a larger feed fails its poll with an operator message."""
 
 _CONFERENCE_PROPERTIES = (
-    "conference",
-    "x-google-conference",
-    "x-microsoft-onlinemeetingexternallink",
-    "x-microsoft-skypeteamsmeetingurl",
-    "url",
+    "CONFERENCE",
+    "X-GOOGLE-CONFERENCE",
+    "X-MICROSOFT-ONLINEMEETINGEXTERNALLINK",
+    "X-MICROSOFT-SKYPETEAMSMEETINGURL",
+    "URL",
 )
 _STATUSES = {"CONFIRMED": EventStatus.CONFIRMED, "TENTATIVE": EventStatus.TENTATIVE, "CANCELLED": EventStatus.CANCELLED}
 _VISIBILITIES = {
@@ -91,45 +110,59 @@ class IcsError(IntegrationError):
 
 
 def feed_url(url: str) -> str:
-    """Return the HTTP(S) address of a feed, reading ``webcal://`` and ``webcals://`` as ``https://``."""
+    """Return the HTTP(S) address of a feed, reading ``webcal://`` and ``webcals://`` as ``https://``.
+
+    Only the address's shape is checked here, with no network: an http, https or
+    webcal URL whose host is not a private address literal. The pinned transport
+    judges a named host when the feed is fetched.
+    """
 
     text = (url or "").strip()
     scheme, _, rest = text.partition("://")
     if scheme.lower() in {"webcal", "webcals"}:
         text = f"https://{rest}"
     try:
-        parse_http_url(text)
+        host = parse_http_url(text).hostname or ""
     except ValidationError as error:
         raise IcsError("Enter an http, https or webcal calendar feed address.") from error
+    try:
+        literal = ipaddress.ip_address(host)
+    except ValueError:
+        return text
+    if is_unsafe_address(literal):
+        raise IcsError("The calendar feed address is not allowed.")
     return text
+
+
+def feed_label(url: str) -> str:
+    """Return what may be shown of a feed address: its host, and its file name when that names a calendar.
+
+    The path and query can carry the feed's secret, so nothing else is kept.
+    """
+
+    parts = urlsplit(url)
+    name = parts.path.rstrip("/").rsplit("/", 1)[-1]
+    shown = name.lower().endswith((".ics", ".ical", ".ifb")) and len(name) <= 40
+    return f"{parts.hostname}/…/{name}" if shown else f"{parts.hostname}/…"
 
 
 class IcsCalendarBackend(CalendarBackend):
     """Polls one public ICS feed into its source's read-only calendar.
 
-    ``config["url"]`` is the feed address and ``config["timezone"]`` the zone read
-    from the feed when the source subscribed. The feed is the source's one remote
-    calendar, keyed :data:`FEED_KEY`. The calendar takes no local edits: a feed never
-    takes a write (``writable`` stays false).
+    The feed is the source's one remote calendar, keyed :data:`FEED_KEY`; its address
+    is the source credential's secret. The calendar takes no local edits: a feed
+    never takes a write (``writable`` stays false).
     """
 
     key = "ics"
     label = "ICS feed"
     icon = "calendar"
     defaults = {"vendor": "ics", "poll_interval": 3600}
-    feed_cap: ClassVar[int] = _FEED_CAP
-
-    def probe(self) -> ParsedCalendar:
-        """Fetch and parse the feed once, returning its name and zone, so a dead feed is never subscribed."""
-
-        feed = _read(self._fetch({}).content)
-        return ParsedCalendar(key=FEED_KEY, name=_text(feed, "x-wr-calname"), timezone=_feed_zone(feed))
 
     def discover(self) -> list[ParsedCalendar]:
-        """Return the feed, the source's one remote calendar, named as subscribed and in the feed's zone."""
+        """Return the feed, the source's one remote calendar, named as subscribed."""
 
-        config = self.bridge.config or {}
-        return [ParsedCalendar(key=FEED_KEY, name=self.bridge.display_name, timezone=config.get("timezone", ""))]
+        return [ParsedCalendar(key=FEED_KEY, name=self.bridge.display_name)]
 
     def extract_events(self, stream: Any, page_bound: int, *, deadline: float | None = None) -> StreamPage:
         """Fetch a changed feed once and page its differences; the validators commit with the last page.
@@ -149,10 +182,25 @@ class IcsCalendarBackend(CalendarBackend):
             "last_modified": response.headers.get("last-modified", ""),
         }
         payloads = self._observe_feed(_read(response.content), zone=self.calendar(stream).timezone)
-        return self.page(stream, self.snapshot(stream, payloads, baseline="etag" not in cursor), page_bound,
-                         cursor=validators)
+        pending = self.snapshot(stream, payloads, baseline="etag" not in cursor)
+        return self.page(stream, pending, page_bound, cursor=validators)
+
+    def read_events(self, stream: Any, keys: Sequence[str]) -> dict[str, dict[str, Any] | None]:
+        """Read the requested keys from one fresh fetch of the feed; a key it no longer carries is ``None``."""
+
+        payloads = self._observe_feed(_read(self._fetch({}).content), zone=self.calendar(stream).timezone)
+        return {key: payloads.get(key) for key in keys}
 
     # --- transport ---
+
+    def _url(self) -> str:
+        """Return the feed address, the source credential's secret."""
+
+        credential = self.bridge.fresh_credential()
+        address = credential.secret_value() if credential is not None else ""
+        if not address:
+            raise IcsError("This subscription has no feed address.")
+        return feed_url(address)
 
     def _fetch(self, validators: Mapping[str, Any]) -> Any:
         """GET the feed from a public address, conditionally on ``validators``; a 304 returns as is."""
@@ -165,11 +213,11 @@ class IcsCalendarBackend(CalendarBackend):
         try:
             response = self.http.request(
                 "GET",
-                feed_url(str((self.bridge.config or {}).get("url", ""))),
+                self._url(),
                 headers=headers,
                 allow_private=False,
                 follow_redirects=True,
-                max_bytes=self.feed_cap,
+                max_bytes=_FEED_CAP,
             )
         except ResponseTooLargeError as error:
             raise IcsError("The calendar feed exceeds the size limit.") from error
@@ -192,31 +240,34 @@ class IcsCalendarBackend(CalendarBackend):
     # --- snapshot ---
 
     def _observe_feed(self, feed: Any, *, zone: str) -> dict[str, dict[str, Any]]:
-        """Return each event's retained payload by key; an unmappable event is a quarantine payload.
+        """Return each event's retained payload by key; an unmappable event is a quarantine payload under its own key.
 
         A ``RECURRENCE-ID`` instance overrides its series when the feed carries the
         series' master, and replaces a cancelled ``EXDATE`` instance at the same
         moment; an instance whose master the feed lacks is a single event. Of two
-        copies of one key, the higher ``SEQUENCE`` wins.
+        copies of one key, the higher ``SEQUENCE`` wins. ``zone`` is the calendar's.
         """
 
-        components = list(feed.contents.get("vevent", []))
-        masters = {
-            _text(component, "uid"): component for component in components if "recurrence-id" not in component.contents
-        }
+        zones = _Zones(feed)
+        feed_zone = zones.resolve(_text(feed, "X-WR-TIMEZONE"))[0] if _text(feed, "X-WR-TIMEZONE") else ""
+        local = feed_zone or zone
+        components = list(feed.walk("VEVENT"))
+        masters = {_text(component, "UID"): component for component in components if "RECURRENCE-ID" not in component}
         exceptions: dict[str, dict[str, Any]] = {}
         events: dict[str, tuple[int, dict[str, Any]]] = {}
         for component in components:
-            uid = _text(component, "uid")
+            uid = _text(component, "UID")
             if not uid:
-                digest = hashlib.sha256(component.serialize().encode()).hexdigest()
+                digest = hashlib.sha256(component.to_ical()).hexdigest()
                 events[f"missing-uid:{digest}"] = (0, {"error": "missing_uid"})
                 continue
             sequence = _sequence(component)
             try:
-                observed = _events(component, uid=uid, zone=zone, master=masters.get(uid))
+                observed = _events(
+                    component, uid=uid, zones=zones, zone=local, feed_zone=feed_zone, master=masters.get(uid)
+                )
             except Exception:  # noqa: BLE001 — the driver quarantines semantic input per record.
-                events.setdefault(uid, (sequence, {"error": "invalid_event"}))
+                events.setdefault(_own_key(component, uid, zones, local), (sequence, {"error": "invalid_event"}))
                 continue
             (key, event), *cancelled = observed
             if key not in events or events[key][0] <= sequence:
@@ -226,67 +277,112 @@ class IcsCalendarBackend(CalendarBackend):
         return {**exceptions, **{key: payload for key, (_sequence_, payload) in events.items()}}
 
 
-def _read(content: bytes) -> Any:
-    """Parse one iCalendar body, refusing anything that is not a ``VCALENDAR``."""
+class _Zones:
+    """One feed's TZIDs, resolved for this parse only and never through a process-wide registry.
 
+    An IANA name, a Windows name (icalendar's table) or an RFC 5545 vendor-prefixed
+    IANA name (``/vendor/Europe/Berlin``) resolves to its IANA zone. Any other TZID
+    resolves from this feed's own ``VTIMEZONE`` (``Timezone.to_tz`` without lookup),
+    and has no IANA name.
+    """
+
+    def __init__(self, feed: Any) -> None:
+        self._components = {
+            str(component.get("TZID", "")).strip("/"): component for component in feed.walk("VTIMEZONE")
+        }
+        self._resolved: dict[str, tuple[str, tzinfo | None]] = {}
+
+    def resolve(self, tzid: str) -> tuple[str, tzinfo | None]:
+        """Return a TZID's IANA name (blank for a feed-defined zone) and its zone (``None`` when unknown)."""
+
+        if tzid not in self._resolved:
+            name = _iana_name(tzid)
+            zone: tzinfo | None = get_zone_info(name) if name else None
+            component = self._components.get(tzid.strip().strip("/"))
+            if zone is None and component is not None:
+                try:
+                    zone = component.to_tz(lookup_tzid=False)
+                except Exception:  # noqa: BLE001 — an unusable definition leaves the zone unknown.
+                    zone = None
+            self._resolved[tzid] = (name, zone)
+        return self._resolved[tzid]
+
+
+def _iana_name(tzid: str) -> str:
+    """Return the IANA zone a TZID names, through icalendar's Windows table or a vendor prefix; else blank."""
+
+    cleaned = tzid.strip().strip("/")
+    names = get_zone_names()
+    parts = cleaned.split("/")
+    suffixes = ["/".join(parts[start:]) for start in range(1, len(parts))]
+    candidates = [cleaned, WINDOWS_TO_OLSON.get(cleaned, ""), *suffixes]
+    return next((candidate for candidate in candidates if candidate in names), "")
+
+
+def _read(content: bytes) -> Any:
+    """Parse one iCalendar body without NUL characters, refusing anything that is not a ``VCALENDAR``."""
+
+    text = content.decode("utf-8-sig", errors="replace").replace("\x00", "")
     try:
-        feed = vobject.readOne(content.decode("utf-8-sig", errors="replace"), ignoreUnreadable=True)
+        feed = icalendar.Calendar.from_ical(text)
     except Exception as error:  # noqa: BLE001 — any parser refusal is the same operator message.
         raise IcsError("The calendar feed is not valid iCalendar.") from error
-    if getattr(feed, "name", "") != "VCALENDAR":
+    if feed.name != "VCALENDAR":
         raise IcsError("The calendar feed is not valid iCalendar.")
     return feed
 
 
-def _events(component: Any, *, uid: str, zone: str, master: Any) -> list[tuple[str, ParsedEvent]]:
+def _events(
+    component: Any, *, uid: str, zones: _Zones, zone: str, feed_zone: str, master: Any
+) -> list[tuple[str, ParsedEvent]]:
     """Map one VEVENT to its keyed event, then a master's cancelled ``EXDATE`` instances.
 
     ``master`` is the series' master VEVENT when the feed carries it. An instance
-    that states no ``TRANSP`` or ``CLASS`` takes its master's, as a stored override
-    does (``CalendarEvent``'s series defaults).
+    that states no ``TRANSP`` or ``CLASS`` takes its master's.
     """
 
-    start_line = component.contents["dtstart"][0]
-    all_day = not isinstance(start_line.value, datetime)
-    start = _instant(start_line.value, _tzid(start_line), zone)
-    end = _end(component, start_line.value, start, all_day=all_day, zone=zone)
-    rid = component.contents.get("recurrence-id", [None])[0]
-    original_start = _instant(rid.value, _tzid(rid), zone) if rid is not None else None
-    override = original_start is not None and master is not None
+    start_prop = component["DTSTART"]
+    all_day = not isinstance(start_prop.dt, datetime)
+    start = _instant(start_prop.dt, _param(start_prop, "TZID"), zones, zone)
+    end = _end(component, start_prop.dt, start, all_day=all_day, zones=zones, zone=zone)
+    rid = component.get("RECURRENCE-ID")
+    original_start = _instant(rid.dt, _param(rid, "TZID"), zones, zone) if rid is not None else None
+    override = original_start is not None and master is not None and master is not component
     series_master = master if override else None
     event = ParsedEvent(
-        title=_text(component, "summary"),
-        description=_text(component, "description"),
-        location=_text(component, "location"),
+        title=_text(component, "SUMMARY"),
+        description=_text(component, "DESCRIPTION"),
+        location=_text(component, "LOCATION"),
         start=start,
         end=end,
         all_day=all_day,
-        recurrence="" if rid is not None else _text(component, "rrule").removeprefix("RRULE:"),
-        timezone=_event_zone(start_line),
-        series=uid if override else "",
+        recurrence="" if rid is not None else _rule(component),
+        timezone=_event_zone(start_prop, zones, feed_zone),
+        series=series_key(uid) if override else "",
         original_start=original_start if override else None,
-        status=_STATUSES.get(_text(component, "status").upper(), EventStatus.CONFIRMED),
+        status=_STATUSES.get(_text(component, "STATUS").upper(), EventStatus.CONFIRMED),
         transparency=(
             EventTransparency.FREE
-            if _stated(component, series_master, "transp").upper() == "TRANSPARENT"
+            if _stated(component, series_master, "TRANSP").upper() == "TRANSPARENT"
             else EventTransparency.BUSY
         ),
-        visibility=_VISIBILITIES.get(_stated(component, series_master, "class").upper(), EventVisibility.DEFAULT),
+        visibility=_VISIBILITIES.get(_stated(component, series_master, "CLASS").upper(), EventVisibility.DEFAULT),
         conference_url=next(
             (
-                value
+                url
                 for name in _CONFERENCE_PROPERTIES
-                if (value := _text(component, name)).lower().startswith(("https://", "http://"))
+                for url in _texts(component, name)
+                if url.lower().startswith(("https://", "http://"))
             ),
             "",
         ),
         attendees=_attendees(component),
     )
-    observed = [(instance_key(uid, original_start) if original_start is not None else uid, event)]
+    observed = [(instance_key(uid, original_start) if original_start is not None else series_key(uid), event)]
     if rid is None and event.recurrence:
-        for line in component.contents.get("exdate", []):
-            for value in line.value if isinstance(line.value, list) else [line.value]:
-                moment = _instant(value, _tzid(line), zone)
+        for exdate in _values(component, "EXDATE"):
+            for value in exdate.dts:
+                moment = _instant(value.dt, _param(exdate, "TZID"), zones, zone)
                 observed.append(
                     (
                         instance_key(uid, moment),
@@ -295,7 +391,7 @@ def _events(component: Any, *, uid: str, zone: str, master: Any) -> list[tuple[s
                             start=moment,
                             end=moment + (end - start),
                             recurrence="",
-                            series=uid,
+                            series=series_key(uid),
                             original_start=moment,
                             status=EventStatus.CANCELLED,
                             attendees=(),
@@ -305,36 +401,64 @@ def _events(component: Any, *, uid: str, zone: str, master: Any) -> list[tuple[s
     return observed
 
 
-def _instant(value: date | datetime, tzid: str, zone: str) -> datetime:
-    """Return one iCalendar moment as aware UTC.
+def _own_key(component: Any, uid: str, zones: _Zones, zone: str) -> str:
+    """Return the key an unmappable VEVENT is quarantined under: its own instance key, never its master's."""
 
-    A date is local midnight in ``zone``; an IANA ``TZID`` resolves through the
-    scheduling zones owner; another zone through the feed's ``VTIMEZONE`` (vobject
-    attached it); a floating time is read in ``zone``.
+    rid = component.get("RECURRENCE-ID")
+    if rid is None:
+        return series_key(uid)
+    try:
+        return instance_key(uid, _instant(rid.dt, _param(rid, "TZID"), zones, zone))
+    except Exception:  # noqa: BLE001 — an unreadable instance keeps a key of its own content.
+        return f"{series_key(uid)}#invalid:{hashlib.sha256(component.to_ical()).hexdigest()[:16]}"
+
+
+def _instant(value: date | datetime, tzid: str, zones: _Zones, zone: str) -> datetime:
+    """Return one iCalendar moment as aware UTC, from its wall clock and ``TZID``.
+
+    A date is local midnight in ``zone``; a ``TZID`` resolves through :class:`_Zones`
+    (an unknown one reads as ``zone``); a UTC time keeps its instant; a floating time
+    is read in ``zone``. A zone icalendar attached itself is never used.
     """
 
     if not isinstance(value, datetime):
         return timezone.make_aware(datetime.combine(value, time.min), get_zone_info(zone)).astimezone(UTC)
-    if tzid in get_zone_names():
-        return timezone.make_aware(value.replace(tzinfo=None), get_zone_info(tzid)).astimezone(UTC)
+    wall = value.replace(tzinfo=None)
+    if tzid:
+        resolved = zones.resolve(tzid)[1]
+        return timezone.make_aware(wall, resolved or get_zone_info(zone)).astimezone(UTC)
     if value.tzinfo is not None:
         return value.astimezone(UTC)
-    return timezone.make_aware(value, get_zone_info(zone)).astimezone(UTC)
+    return timezone.make_aware(wall, get_zone_info(zone)).astimezone(UTC)
 
 
-def _end(component: Any, start_value: date | datetime, start: datetime, *, all_day: bool, zone: str) -> datetime:
+def _event_zone(prop: Any, zones: _Zones, feed_zone: str) -> str:
+    """Return the zone an event keeps: its DTSTART's IANA zone, ``UTC`` for a UTC time, else the feed's (or blank)."""
+
+    tzid = _param(prop, "TZID")
+    if tzid:
+        return zones.resolve(tzid)[0]
+    value = prop.dt
+    if isinstance(value, datetime) and value.tzinfo is not None:
+        return "UTC"
+    return feed_zone
+
+
+def _end(
+    component: Any, start_value: date | datetime, start: datetime, *, all_day: bool, zones: _Zones, zone: str
+) -> datetime:
     """Return the event's end from ``DTEND``, else ``DURATION``, else one day (all-day) or its start."""
 
-    if "dtend" in component.contents:
-        line = component.contents["dtend"][0]
-        return _instant(line.value, _tzid(line), zone)
-    if "duration" in component.contents:
-        duration = component.contents["duration"][0].value
+    if "DTEND" in component:
+        prop = component["DTEND"]
+        return _instant(prop.dt, _param(prop, "TZID"), zones, zone)
+    if "DURATION" in component:
+        duration = component["DURATION"].dt
         if all_day:
-            return _instant(start_value + timedelta(days=duration.days), "", zone)
+            return _instant(start_value + timedelta(days=duration.days), "", zones, zone)
         return start + duration
     if all_day:
-        return _instant(start_value + timedelta(days=1), "", zone)
+        return _instant(start_value + timedelta(days=1), "", zones, zone)
     return start
 
 
@@ -342,20 +466,20 @@ def _attendees(component: Any) -> tuple[ParsedAttendee, ...]:
     """Return the ``mailto:`` attendees, the organizer first as the ``organizer`` attendee."""
 
     listed: dict[str, ParsedAttendee] = {}
-    for line in component.contents.get("attendee", []):
-        address = _mailto(line.value)
+    for prop in _values(component, "ATTENDEE"):
+        address = _mailto(prop)
         if address:
             listed.setdefault(
                 address.lower(),
                 ParsedAttendee(
                     address=address,
-                    role=_ROLES.get(_param(line, "ROLE").upper(), AttendeeRole.REQUIRED),
-                    response=_RESPONSES.get(_param(line, "PARTSTAT").upper(), AttendeeResponse.NEEDS_ACTION),
-                    display_name=_param(line, "CN"),
+                    role=_ROLES.get(_param(prop, "ROLE").upper(), AttendeeRole.REQUIRED),
+                    response=_RESPONSES.get(_param(prop, "PARTSTAT").upper(), AttendeeResponse.NEEDS_ACTION),
+                    display_name=_param(prop, "CN"),
                 ),
             )
-    organizer = component.contents.get("organizer", [None])[0]
-    address = _mailto(organizer.value) if organizer is not None else ""
+    organizer = component.get("ORGANIZER")
+    address = _mailto(organizer) if organizer is not None else ""
     if not address:
         return tuple(listed.values())
     listed_as = listed.pop(address.lower(), None)
@@ -370,35 +494,26 @@ def _attendees(component: Any) -> tuple[ParsedAttendee, ...]:
     )
 
 
-def _feed_zone(feed: Any) -> str:
-    """Return the feed's calendar zone, its ``X-WR-TIMEZONE`` when that names an IANA zone; each event keeps its own."""
+def _values(component: Any, name: str) -> list[Any]:
+    """Return every occurrence of a property, which icalendar gives as one value or a list."""
 
-    name = _text(feed, "x-wr-timezone")
-    return name if name in get_zone_names() else ""
-
-
-def _event_zone(line: Any) -> str:
-    """Return the zone an event keeps: its DTSTART's IANA ``TZID``, ``UTC`` for a UTC time, else its calendar's (blank).
-
-    A date or a floating time is read in the calendar's zone; a non-IANA ``TZID``
-    still lands on the right instant through the feed's ``VTIMEZONE`` but expands in
-    the calendar's zone.
-    """
-
-    tzid = _tzid(line)
-    if tzid in get_zone_names():
-        return tzid
-    value = line.value
-    if isinstance(value, datetime) and value.tzinfo is not None and not tzid and value.utcoffset() == timedelta(0):
-        return "UTC"
-    return ""
+    value = component.get(name)
+    if value is None:
+        return []
+    return list(value) if isinstance(value, list) else [value]
 
 
 def _text(component: Any, name: str) -> str:
     """Return a single-valued property's text, or ``""``."""
 
-    lines = component.contents.get(name)
-    return str(lines[0].value or "").strip() if lines else ""
+    values = _values(component, name)
+    return str(values[0]).strip() if values else ""
+
+
+def _texts(component: Any, name: str) -> list[str]:
+    """Return the text of every occurrence of a property."""
+
+    return [str(value).strip() for value in _values(component, name)]
 
 
 def _stated(component: Any, master: Any, name: str) -> str:
@@ -407,17 +522,18 @@ def _stated(component: Any, master: Any, name: str) -> str:
     return _text(component, name) or (_text(master, name) if master is not None else "")
 
 
-def _param(line: Any, name: str) -> str:
-    """Return a property parameter's first value, or ``""``."""
+def _rule(component: Any) -> str:
+    """Return the first ``RRULE`` as its RFC 5545 text, or ``""``."""
 
-    values = line.params.get(name) or [""]
-    return str(values[0]).strip()
+    rules = _values(component, "RRULE")
+    return rules[0].to_ical().decode().strip() if rules else ""
 
 
-def _tzid(line: Any) -> str:
-    """Return the ``TZID`` a moment was written in (vobject keeps it once it resolves the zone)."""
+def _param(prop: Any, name: str) -> str:
+    """Return a property parameter's text, or ``""``."""
 
-    return _param(line, "X-VOBJ-ORIGINAL-TZID") or _param(line, "TZID")
+    value = prop.params.get(name, "")
+    return str(value[0] if isinstance(value, list) and value else value).strip()
 
 
 def _mailto(value: Any) -> str:
@@ -432,7 +548,7 @@ def _mailto(value: Any) -> str:
 def _sequence(component: Any) -> int:
     """Return the event's ``SEQUENCE``, or 0."""
 
-    text = _text(component, "sequence")
+    text = _text(component, "SEQUENCE")
     return int(text) if text.isdecimal() else 0
 
 
@@ -441,9 +557,3 @@ def _retry_after(response: Any) -> timedelta | None:
 
     hint = response.headers.get("retry-after", "")
     return timedelta(seconds=int(hint)) if hint.isdecimal() and 0 < int(hint) <= 86400 else None
-
-
-def feed_host(url: str) -> str:
-    """Return the host a feed is served from, the fallback name of an unnamed subscription."""
-
-    return urlsplit(url).hostname or ""

@@ -1,13 +1,22 @@
 import * as React from "react";
-import { Field, Form, registerForm, type RegisteredFormProps } from "@angee/ui";
-import { IntegrationSyncFields, useIntegrationSyncAction } from "@angee/integrate";
+import type { ActionFieldName } from "@angee/gql/console/actions";
+import { Action, Field, Form, registerForm, useRecordActionMutation, type RegisteredFormProps } from "@angee/ui";
+import { IntegrationSyncFields } from "@angee/integrate";
 
 import { useCalendarT } from "../i18n";
-import { SOURCE_MODEL } from "../resources";
+import { CALENDAR_MODEL, SOURCE_MODEL } from "../resources";
 
+/**
+ * A connected calendar, read-only: created through its connect verb. Its owner's
+ * verbs (sync now, unsubscribe) show only to whoever the row's projected
+ * permissions allow: `write` syncs, `delete` unsubscribes.
+ */
 function CalendarSourceForm({ resource: _resource, ...props }: RegisteredFormProps): React.ReactElement {
   const t = useCalendarT();
-  const syncAction = useIntegrationSyncAction("sync_integration", t("source.action.sync"));
+  const [sync] = useRecordActionMutation<ActionFieldName>("sync_calendar_source");
+  const [unsubscribe] = useRecordActionMutation<ActionFieldName>("unsubscribe_calendar_source", {
+    invalidateModels: [SOURCE_MODEL, CALENDAR_MODEL],
+  });
   return (
     <Form {...props} resource={SOURCE_MODEL}>
       <Field name="display_name" title readOnly />
@@ -17,7 +26,15 @@ function CalendarSourceForm({ resource: _resource, ...props }: RegisteredFormPro
       <Field name="poll_interval" readOnly />
       <Field name="config" readOnly />
       {IntegrationSyncFields({ label: t("source.group.lastSync") })}
-      {syncAction}
+      <Action id="sync" label={t("source.action.sync")} icon="refresh" permission="write" run={sync} />
+      <Action
+        id="unsubscribe"
+        label={t("source.action.unsubscribe")}
+        icon="unlink"
+        permission="delete"
+        danger
+        run={unsubscribe}
+      />
     </Form>
   );
 }

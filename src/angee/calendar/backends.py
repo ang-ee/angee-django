@@ -20,7 +20,8 @@ in the streams' ``RecordLink`` rows. The manual backend declares no streams.
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping
+import hashlib
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from typing import Any, ClassVar
@@ -109,10 +110,27 @@ class ParsedEvent:
     attendees: tuple[ParsedAttendee, ...] = ()
 
 
-def instance_key(uid: str, original_start: datetime) -> str:
-    """Return the external key of one instance of the series ``uid``: the UID plus its UTC instant."""
+_INSTANT_SUFFIX = len("#YYYYMMDDTHHMMSSZ")
+"""The length an instance's ``RECURRENCE-ID`` instant adds to its series key."""
 
-    return f"{uid}#{original_start.astimezone(UTC).strftime('%Y%m%dT%H%M%SZ')}"
+
+def series_key(uid: str) -> str:
+    """Return the external key of the series or single event ``uid``: the UID, or its digest when too long.
+
+    A link's external key is bounded; a UID that leaves no room for an instance's
+    suffix is keyed by its SHA-256, so one oversized UID never fails its page.
+    """
+
+    limit = apps.get_model("integrate", "RecordLink")._meta.get_field("external_key").max_length or 0
+    if len(uid) + _INSTANT_SUFFIX <= limit:
+        return uid
+    return "sha256:" + hashlib.sha256(uid.encode()).hexdigest()
+
+
+def instance_key(uid: str, original_start: datetime) -> str:
+    """Return the external key of one instance of the series ``uid``: its series key plus its UTC instant."""
+
+    return f"{series_key(uid)}#{original_start.astimezone(UTC).strftime('%Y%m%dT%H%M%SZ')}"
 
 
 def event_projection(event: ParsedEvent) -> dict[str, Any]:
@@ -221,25 +239,33 @@ class CalendarBackend(BridgeImpl, HttpClientMixin):
         super().__init__(integration)
         self._released: list[Any] = []
 
-    def probe(self) -> ParsedCalendar:
-        """Validate the source before it persists and return the calendar it serves.
-
-        The subscribe or connect verb calls it on the unsaved source, so a source
-        that can never sync is never saved. It raises an operator-safe
-        ``IntegrationError`` on a bad source.
-        """
-
-        raise NotImplementedError("CalendarBackend subclasses must implement probe().")
-
     def discover(self) -> list[ParsedCalendar]:
         """Return the remote calendars this source serves, each with its stable key."""
 
         raise NotImplementedError("CalendarBackend subclasses must implement discover().")
 
+    supports_identity_reads: ClassVar[bool] = True
+    """Both stream kinds re-read identities (:meth:`read_keys`), so a retried or held record reads its source."""
+
     def extract_events(self, stream: Any, page_bound: int, *, deadline: float | None = None) -> StreamPage:
         """Extract one page of the events of the remote calendar ``stream.partition`` names."""
 
         raise NotImplementedError("CalendarBackend subclasses must implement extract_events().")
+
+    def read_events(self, stream: Any, keys: Sequence[str]) -> dict[str, dict[str, Any] | None]:
+        """Read the current payload of each requested event key of ``stream``, ``None`` for one the source lacks."""
+
+        raise NotImplementedError("CalendarBackend subclasses must implement read_events().")
+
+    def read_keys(self, stream: Any, keys: Sequence[str]) -> list[RecordChange]:
+        """Re-read the requested identities, each once, a missing one as a tombstone (integrate's identity reads)."""
+
+        if stream.key == CALENDARS_STREAM:
+            remotes = {remote.key: remote.payload() for remote in self.discover()}
+            payloads: Mapping[str, Any] = {key: remotes.get(key) for key in keys}
+        else:
+            payloads = self.read_events(stream, keys)
+        return self.record_changes(stream, {key: payloads.get(key) for key in keys})
 
     def streams(self, *, deadline: float | None = None) -> Iterable[StreamDefinition]:
         """Declare the calendars stream, then each discovered calendar's events stream."""
@@ -473,8 +499,9 @@ class CalendarBackend(BridgeImpl, HttpClientMixin):
         instance, or a row whose place in a series changed, is released: the
         result unbinds its link and :meth:`finish_page` deletes it, since a link
         retains its target. Deleting an instance restores the master's own
-        occurrence, which a cancelled override would drop. A new instance key adopts
-        the override its series already rebased onto that instance. The model's
+        occurrence, which a cancelled override would drop. Each instance key owns its
+        own placement: a source that moves a series re-sends its instances under new
+        keys and the old ones go through the stream. The model's
         refusals (an overlap on a ``refuse`` calendar, an invalid row) are
         ``ValidationError``s the driver quarantines per record. A calendars-stream
         record mirrors its calendar instead (:meth:`_apply_calendar`).
@@ -502,12 +529,6 @@ class CalendarBackend(BridgeImpl, HttpClientMixin):
             # An event's place in a series is set when it is inserted.
             self._released.append(target.pk)
             target = None
-        if target is None and series is not None:
-            # A moved master rebased its overrides (CalendarEvent.rebase_overrides): the
-            # instance's new key adopts the override already at its place, and the old
-            # key's removal then releases a row this link still binds, which stays.
-            rows = events.model.system_queryset(lock=("self",))
-            target = rows.filter(series=series, original_start=parsed.original_start).first()
         event = events.ingest(
             self.calendar(stream),
             parsed,
@@ -554,11 +575,6 @@ class ManualCalendarBackend(CalendarBackend):
 
     key = "manual"
     label = "Manual"
-
-    def probe(self) -> ParsedCalendar:
-        """Refuse: a manual source has nothing to subscribe to."""
-
-        raise ValidationError("A manual calendar source has nothing to subscribe to.")
 
     def discover(self) -> list[ParsedCalendar]:
         """Return no calendars."""

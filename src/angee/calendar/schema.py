@@ -16,10 +16,12 @@ the refusals (a recurring master, an inverted interval, an overlap); the shared
 ``action_guard`` projects them to an in-band ``ActionResult``.
 
 :class:`~angee.calendar.models.CalendarSource` is a read-only console resource
-(``calendar_sources``), like ``parties.directories``: a source addon's connect
-verb creates it, and integrate's operator verbs sync, pause and remove it. A
-calendar projects its ``source`` and ``is_writable``; a read-only subscription
-refuses event writes in the model.
+(``calendar_sources``): a source addon's connect verb creates it, and its owner's
+verbs ``sync_calendar_source`` (``write``) and ``unsubscribe_calendar_source``
+(``delete``) dispatch to :meth:`~angee.calendar.models.CalendarSource.sync_now` and
+:meth:`~angee.calendar.models.CalendarSource.unsubscribe`. A calendar projects its
+``source`` and ``is_writable``; a read-only subscription refuses event writes in
+the model.
 """
 
 from __future__ import annotations
@@ -70,9 +72,14 @@ Handle = apps.get_model("parties", "Handle")
 
 @strawberry_django.type(CalendarSource)
 class CalendarSourceType(BridgeTypeMixin, AngeeNode):
-    """Projection of a connected calendar source, such as a subscribed ICS feed."""
+    """Projection of a connected calendar source, such as a subscribed ICS feed.
+
+    ``config`` carries only what may be shown (an ICS feed's label); a secret address
+    is the source credential's. ``permissions`` gate its owner verbs.
+    """
 
     poll_interval: auto
+    permissions = permissions_field(("write", "delete"))
 
 
 @strawberry_django.type(Calendar)
@@ -335,6 +342,29 @@ class CalendarEventActionMutation:
         return ActionResult(ok=True, message="Event rescheduled.", id=event.sqid)
 
 
+@strawberry.type
+class CalendarSourceActionMutation:
+    """A connected calendar's owner verbs: sync it now, and unsubscribe."""
+
+    @strawberry.mutation
+    @action_guard("Sync failed.")
+    def sync_calendar_source(self, info: strawberry.Info, id: PublicID) -> ActionResult:
+        """Queue the source's sync after the ``write`` preflight (its owner, or a platform admin)."""
+
+        source = authorized_action_target(info, CalendarSource, id, "write")
+        queued = source.sync_now()
+        return ActionResult(ok=True, message="Sync queued." if queued else "A sync is already running.", id=source.sqid)
+
+    @strawberry.mutation
+    @action_guard("Unsubscribe failed.")
+    def unsubscribe_calendar_source(self, info: strawberry.Info, id: PublicID) -> ActionResult:
+        """End the subscription after the ``delete`` preflight: disconnect, purge its events, archive its calendar."""
+
+        source = authorized_action_target(info, CalendarSource, id, "delete")
+        source.unsubscribe()
+        return ActionResult(ok=True, message="Unsubscribed; the calendar is archived.", id=source.sqid)
+
+
 _SOURCE_RESOURCE = hasura_model_resource(
     CalendarSourceType,
     model=CalendarSource,
@@ -362,7 +392,11 @@ _RESOURCES = (_CALENDAR_RESOURCE, _EVENT_RESOURCE, _ATTENDEE_RESOURCE, _SOURCE_R
 schemas = {
     "console": {
         "query": [*[resource.query for resource in _RESOURCES], CalendarQuery],
-        "mutation": [*[resource.mutation for resource in _RESOURCES], CalendarEventActionMutation],
+        "mutation": [
+            *[resource.mutation for resource in _RESOURCES],
+            CalendarEventActionMutation,
+            CalendarSourceActionMutation,
+        ],
         "subscription": [
             changes(Calendar, field="calendarChanged"),
             changes(CalendarEvent, field="calendarEventChanged", read_gate=FreeBusyChangeReadGate),

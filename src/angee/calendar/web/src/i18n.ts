@@ -10,6 +10,7 @@ export const enCalendarMessages: Record<string, string> = {
   "source.name": "Name",
   "source.connect.menu": "Add a calendar",
   "source.action.sync": "Sync now",
+  "source.action.unsubscribe": "Unsubscribe",
   "source.group.lastSync": "Last sync",
 };
 
