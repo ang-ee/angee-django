@@ -107,7 +107,8 @@ class Decision(OptimisticLockMixin, AppendOnlyModel, AngeeDataModel, concrete=Tr
             name="decisions_verdict_consistent",
         )]
         indexes = [models.Index(
-            fields=("remind_after",), condition=models.Q(verdict__isnull=True, reminded_at__isnull=True),
+            fields=("remind_after",),
+            condition=models.Q(verdict__isnull=True, reminded_at__isnull=True, remind_after__isnull=False),
             name="decisions_reminder_due",
         )]
 
@@ -170,28 +171,31 @@ class Decision(OptimisticLockMixin, AppendOnlyModel, AngeeDataModel, concrete=Tr
                 decision_answered.send(sender=type(row), decision=row)
         return row, withdrawing, closed
 
-    def remind(self) -> Self:
-        """Stamp this open question's reminder and announce it once, in an asker's or the sweep's system context.
+    def remind(self) -> bool:
+        """Stamp this open question's one reminder and announce it; True when this call did both.
 
         ``reminded_at`` is written once, so a repeated or concurrent reminder, or one on
         a closed question, writes and sends nothing. The revision stays: a reminder
-        changes no answer. ``decision_reminder_due`` fires inside the transaction;
-        delivering the reminder belongs to its receivers, after commit.
+        changes no answer. The stamp is decisions' own named system work, so callers need
+        no elevation of their own. ``decision_reminder_due`` fires inside the
+        transaction but outside that system context: a receiver error rolls the stamp
+        back, and receivers carry no authority from decisions.
         """
-        if not is_sudo():
-            raise PermissionDenied("Reminding requires the asking owner's or the reminder sweep's system context.")
         rows = type(self).objects
-        with transaction.atomic(), system_context(reason="decisions.remind"):
-            row = rows.filter(pk=self.pk).lock_if_supported().get()
-            if row.is_open and row.reminded_at is None and (
-                rows.filter(pk=self.pk, reminded_at__isnull=True).open().owner_update(
-                    reminded_at=Now(), updated_at=Now(),
+        with transaction.atomic():
+            with system_context(reason="decisions.remind"):
+                row = rows.filter(pk=self.pk).lock_if_supported().get()
+                stamped = row.is_open and row.reminded_at is None and bool(
+                    rows.filter(pk=self.pk, reminded_at__isnull=True).open().owner_update(
+                        reminded_at=Now(), updated_at=Now(),
+                    )
                 )
-            ):
-                row.refresh_from_db()
-                publish_change(row, action="update", update_fields=None)
+                if stamped:
+                    row.refresh_from_db()
+                    publish_change(row, action="update", update_fields=None)
+            if stamped:
                 decision_reminder_due.send(sender=type(row), decision=row)
-        return row
+        return stamped
 
     def decide(
         self,

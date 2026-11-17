@@ -110,6 +110,13 @@ def test_a_refused_replacement_leaves_the_question_open(asked):
     assert question.is_open and question.superseded_by_id is None and question.revision == 1
 
 
+def test_a_question_is_replaced_when_no_asker_retains_questions(asked, monkeypatch):
+    requester, _reviewer, lead, subject, question = asked
+    monkeypatch.setattr(Decision, "requester_querysets", classmethod(lambda cls: ()))
+    replacement = supersede(question, request(subject, requester, lead), actor=requester)
+    assert Decision.system_queryset().get(pk=question.pk).superseded_by_id == replacement.pk
+
+
 def test_a_question_a_workflow_step_holds_is_replaced_only_by_that_step(execution, register_step):
     actor, _sent = execution
     subject = vault_for(actor, name="Workflow hold")

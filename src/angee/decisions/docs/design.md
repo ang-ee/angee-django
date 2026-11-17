@@ -112,8 +112,9 @@ How the ontology maps to this addon.
   The card's choice and accepted-answer lock belong to its observed revision. A new revision
   clears both; closing the card keeps focus on its outcome. Answers invalidate concerned records.
 - **Due and reminded:** the asker supplies `due_at` and `remind_after`; overdue is derived when read. A
-  reminder is stamped once by `remind()`, announced by `decision_reminder_due` and shown on the timeline;
-  delivering it belongs to an addon above. Questions a workflow step retains keep the step's own timing.
+  reminder is stamped once by `remind()`, announced by `decision_reminder_due` (whose receivers carry no
+  authority from decisions) and shown on the timeline; delivering it belongs to an addon above. The sweep is
+  bounded and skips rows another sweep holds, one savepoint per reminder. Questions a workflow step retains keep the step's own timing.
 - **No verdict decisions:** a decision is asked only when something needs judgement. The final action on a record
   (for example posting it) is the record's own action, not a decision.
 

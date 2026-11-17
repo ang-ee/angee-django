@@ -81,12 +81,16 @@ supersede naming the escalation's assignees; no question changes in place.
 A request may carry `due_at` and `remind_after`, aware instants the asker supplies;
 decisions does no date arithmetic on them and they stay fixed once asked. The
 resource's `is_overdue` filter selects open questions past `due_at`, derived when read.
-`decision.remind()` stamps `reminded_at` once and sends `decision_reminder_due` inside
-its transaction, in the asker's or the reminder sweep's system context; the revision
-does not move. The `decisions.remind_due` beat task reminds, every minute, each open
-question whose `remind_after` has passed. A question a requesting record retains keeps
-its asker's own timing and is skipped. Delivering a reminder belongs to the signal's
-receivers in an addon above decisions, after commit. The record timeline shows the
+`decision.remind()` stamps `reminded_at` once as decisions' own system work, then sends
+`decision_reminder_due` inside the transaction but outside that elevation, and returns
+whether it did; the revision does not move. Receivers hold no authority from decisions:
+one that delivers the reminder opens its own named system context for the reads it
+needs, and its error rolls back only that question's reminder. The `decisions.remind_due`
+beat task (every minute, expiring after one tick) calls `remind_due(now=, limit=200)`,
+which skips rows another sweep holds and reminds each due open question in its own
+savepoint, so a failing receiver never starves the rest. A question a requesting record
+retains keeps its asker's own timing and is skipped. Delivering a reminder belongs to an
+addon above decisions, after commit. The record timeline shows the
 reminder as a `decisions.reminder` line beside its question's line.
 
 Decisions execute no proposal actions. The asker consumes the answer through the
