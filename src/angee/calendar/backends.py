@@ -85,10 +85,11 @@ class ParsedEvent:
     """One event parsed from a source, neutral of the wire format.
 
     Moments are aware UTC; an all-day event starts at local midnight in its
-    calendar's zone. ``series`` is the external key of the recurring master an
-    instance overrides and ``original_start`` the instance it replaces; both are
-    blank on a master or a single event. Field values use the calendar's
-    vocabulary (``EventStatus``, ``EventTransparency``, ``EventVisibility``).
+    calendar's zone. ``timezone`` is the IANA zone the event keeps (its DTSTART
+    zone), or blank for its calendar's. ``series`` is the external key of the
+    recurring master an instance overrides and ``original_start`` the instance it
+    replaces; both are blank on a master or a single event. Field values use the
+    calendar's vocabulary (``EventStatus``, ``EventTransparency``, ``EventVisibility``).
     """
 
     title: str
@@ -101,6 +102,7 @@ class ParsedEvent:
     description: str = ""
     location: str = ""
     recurrence: str = ""
+    timezone: str = ""
     series: str = ""
     original_start: datetime | None = None
     conference_url: str = ""
@@ -132,6 +134,7 @@ def event_projection(event: ParsedEvent) -> dict[str, Any]:
         "end": moment(event.end),
         "all_day": event.all_day,
         "recurrence": event.recurrence,
+        "timezone": event.timezone,
         "original_start": moment(event.original_start),
         "status": event.status,
         "transparency": event.transparency,
@@ -170,6 +173,7 @@ def event_from_payload(payload: Mapping[str, Any]) -> ParsedEvent:
         end=end,
         all_day=event["all_day"],
         recurrence=event["recurrence"],
+        timezone=event["timezone"],
         series=payload["series"],
         original_start=moment(event["original_start"]),
         status=event["status"],
@@ -469,7 +473,10 @@ class CalendarBackend(BridgeImpl, HttpClientMixin):
         instance, or a row whose place in a series changed, is released: the
         result unbinds its link and :meth:`finish_page` deletes it, since a link
         retains its target. Deleting an instance restores the master's own
-        occurrence, which a cancelled override would drop. A calendars-stream
+        occurrence, which a cancelled override would drop. A new instance key adopts
+        the override its series already rebased onto that instance. The model's
+        refusals (an overlap on a ``refuse`` calendar, an invalid row) are
+        ``ValidationError``s the driver quarantines per record. A calendars-stream
         record mirrors its calendar instead (:meth:`_apply_calendar`).
         """
 
@@ -495,6 +502,12 @@ class CalendarBackend(BridgeImpl, HttpClientMixin):
             # An event's place in a series is set when it is inserted.
             self._released.append(target.pk)
             target = None
+        if target is None and series is not None:
+            # A moved master rebased its overrides (CalendarEvent.rebase_overrides): the
+            # instance's new key adopts the override already at its place, and the old
+            # key's removal then releases a row this link still binds, which stays.
+            rows = events.model.system_queryset(lock=("self",))
+            target = rows.filter(series=series, original_start=parsed.original_start).first()
         event = events.ingest(
             self.calendar(stream),
             parsed,

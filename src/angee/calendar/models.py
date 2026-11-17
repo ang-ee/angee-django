@@ -152,6 +152,7 @@ _SOURCE_FIELDS = (
     "end",
     "all_day",
     "recurrence",
+    "timezone",
     "status",
     "transparency",
     "visibility",
@@ -257,6 +258,7 @@ class CalendarManager[CalendarT: Calendar](AngeeHistoryManager[CalendarT]):
                 name=name,
                 timezone=remote.timezone,
                 color=remote.color,
+                owner=source.owner,
                 created_by_id=source.owner_id,
             )
             # The link names the row before its source is admitted to state it.

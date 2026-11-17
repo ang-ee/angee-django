@@ -403,6 +403,78 @@ def test_tzid_all_day_and_utc_moments_land_on_their_instants(subscription: Subsc
     assert (launch.start, launch.end) == (_utc(2026, 4, 1, 12), _utc(2026, 4, 1, 13))
     master = events["standup@example.test"]
     assert (master.visibility, master.conference_url) == ("private", "https://meet.example.test/standup")
+    # Each event keeps its DTSTART zone; a date or floating time keeps its calendar's.
+    zones = {key: event.timezone for key, event in events.items()}
+    assert zones == {
+        "standup@example.test": "America/New_York",
+        "standup@example.test#20260309T130000Z": "America/New_York",
+        "standup@example.test#20260316T130000Z": "America/New_York",
+        "holiday@example.test": "",
+        "berlin@example.test": "Europe/Berlin",
+        "launch@example.test": "UTC",
+    }
+    # The moved instance stated no CLASS: it keeps its master's, as the override row does.
+    assert events["standup@example.test#20260309T130000Z"].visibility == "private"
+
+
+def test_a_moved_master_keeps_one_override_per_instance(subscription: Subscription) -> None:
+    subscription.poll()
+    before = subscription.events()
+    moved, excluded = before["standup@example.test#20260309T130000Z"], before["standup@example.test#20260316T130000Z"]
+
+    # The feed moves the series an hour later and restates its instances under new keys.
+    later = (
+        STANDUP.replace("20260302T090000", "20260302T100000")
+        .replace("20260302T093000", "20260302T103000")
+        .replace("EXDATE;TZID=America/New_York:20260316T090000", "EXDATE;TZID=America/New_York:20260316T100000")
+    )
+    instance = MOVED.replace(
+        "RECURRENCE-ID;TZID=America/New_York:20260309T090000", "RECURRENCE-ID;TZID=America/New_York:20260309T100000"
+    ).replace("DTSTART;TZID=America/New_York:20260309T100000", "DTSTART;TZID=America/New_York:20260309T110000")
+    subscription.feed.body = _feed(later, instance, HOLIDAY, BERLIN_EVENT, LAUNCH)
+    subscription.poll()
+
+    events = subscription.events()
+    master = events["standup@example.test"]
+    with system_context(reason="tests.ics"):
+        overrides = sorted(CalendarEvent.objects.filter(series=master).values_list("original_start", "status", "pk"))
+        stream = subscription.stream()
+        links = RecordLink.objects.filter(stream=stream)
+        failures = [link.external_key for link in links if link.failures(open_only=True)]
+        old = RecordLink.objects.get(stream=stream, external_key="standup@example.test#20260309T130000Z")
+        series = CalendarEvent.objects.filter(calendar=subscription.calendar, title__startswith="Standup")
+        starts = [o.start for o in series.occurrences(_utc(2026, 3, 1), _utc(2026, 4, 1))]
+    assert failures == []
+    assert old.status == LinkStatus.TOMBSTONE
+    # One override per instance: each new key adopted the row the series rebased.
+    assert overrides == [
+        (_utc(2026, 3, 9, 10, zone=NEW_YORK), "confirmed", moved.pk),
+        (_utc(2026, 3, 16, 10, zone=NEW_YORK), "cancelled", excluded.pk),
+    ]
+    assert events["standup@example.test#20260309T140000Z"].pk == moved.pk
+    assert events["standup@example.test#20260316T140000Z"].pk == excluded.pk
+    assert starts == [
+        _utc(2026, 3, 2, 10, zone=NEW_YORK),
+        _utc(2026, 3, 9, 11, zone=NEW_YORK),
+        _utc(2026, 3, 23, 10, zone=NEW_YORK),
+    ]
+
+
+def test_an_overlap_on_a_refusing_calendar_is_a_record_failure_not_a_failed_page(subscription: Subscription) -> None:
+    subscription.poll()
+    with system_context(reason="tests.ics"):
+        Calendar.objects.filter(pk=subscription.calendar.pk).update(overlap_policy="refuse")
+    clash = LAUNCH.replace("launch@example.test", "clash@example.test").replace("SUMMARY:Launch", "SUMMARY:Clash")
+    subscription.feed.body = _feed(STANDUP, MOVED, HOLIDAY, BERLIN_EVENT, LAUNCH, clash)
+
+    subscription.poll()
+
+    with system_context(reason="tests.ics"):
+        link = RecordLink.objects.get(stream=subscription.stream(), external_key="clash@example.test")
+        [failure] = link.failures(open_only=True)
+    assert failure.code == "invalid_record" and failure.details["fields"] == ["start"]
+    assert "clash@example.test" not in subscription.events()
+    assert "launch@example.test" in subscription.events()
 
 
 def test_attendees_become_handles_with_one_organizer(subscription: Subscription) -> None:

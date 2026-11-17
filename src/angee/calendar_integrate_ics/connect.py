@@ -17,8 +17,9 @@ def subscribe_calendar(user: Any, *, name: str, url: str) -> Any:
     A subscription needs no credential. The probe runs on an unsaved source, so a
     feed that cannot be read is never subscribed. The first sync mirrors the feed's
     calendar on the subscriber's person through the source's ``calendars`` stream,
-    named ``name`` (else the feed's own name, else its host), then its events.
-    The feed's zone is kept in the source's config until events carry their own.
+    named ``name`` (else the feed's own name, else its host), then its events. The
+    feed's ``X-WR-TIMEZONE``, kept in the source's config, is the calendar's zone;
+    each event keeps its own ``DTSTART`` zone.
     """
 
     source_model = apps.get_model("calendar", "CalendarSource")

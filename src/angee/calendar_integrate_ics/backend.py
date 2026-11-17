@@ -14,13 +14,15 @@ UID, plus the ``RECURRENCE-ID`` instant for an instance. Mapped properties:
 
 - ``UID``, ``RECURRENCE-ID``, ``SUMMARY``, ``DESCRIPTION``, ``LOCATION``;
 - ``DTSTART``, ``DTEND`` or ``DURATION`` (``VALUE=DATE`` is all-day); a ``TZID``
-  that names an IANA zone resolves through the scheduling zones owner, another
-  through the feed's ``VTIMEZONE``, and a floating time or a date in the calendar's
-  zone;
+  that names an IANA zone resolves through the scheduling zones owner and becomes
+  the event's own ``timezone`` (a UTC time keeps ``UTC``), another resolves through
+  the feed's ``VTIMEZONE``, and a floating time or a date is read in the calendar's
+  zone, which ``X-WR-TIMEZONE`` sets when the source subscribes;
 - the first ``RRULE``; each ``EXDATE`` becomes a cancelled instance (``RDATE`` is
   not mapped);
 - ``STATUS``, ``TRANSP`` (``TRANSPARENT`` is free), ``CLASS`` (``PUBLIC`` is
   public, ``PRIVATE`` and ``CONFIDENTIAL`` private, none the calendar's default);
+  an instance that states no ``TRANSP`` or ``CLASS`` takes its master's;
 - ``ORGANIZER`` and ``ATTENDEE`` ``mailto:`` addresses with ``CN``, ``ROLE`` and
   ``PARTSTAT``;
 - the conference URL: ``CONFERENCE`` (RFC 7986), ``X-GOOGLE-CONFERENCE``,
@@ -199,7 +201,9 @@ class IcsCalendarBackend(CalendarBackend):
         """
 
         components = list(feed.contents.get("vevent", []))
-        masters = {_text(component, "uid") for component in components if "recurrence-id" not in component.contents}
+        masters = {
+            _text(component, "uid"): component for component in components if "recurrence-id" not in component.contents
+        }
         exceptions: dict[str, dict[str, Any]] = {}
         events: dict[str, tuple[int, dict[str, Any]]] = {}
         for component in components:
@@ -210,7 +214,7 @@ class IcsCalendarBackend(CalendarBackend):
                 continue
             sequence = _sequence(component)
             try:
-                observed = _events(component, uid=uid, zone=zone, has_master=uid in masters)
+                observed = _events(component, uid=uid, zone=zone, master=masters.get(uid))
             except Exception:  # noqa: BLE001 — the driver quarantines semantic input per record.
                 events.setdefault(uid, (sequence, {"error": "invalid_event"}))
                 continue
@@ -234,8 +238,13 @@ def _read(content: bytes) -> Any:
     return feed
 
 
-def _events(component: Any, *, uid: str, zone: str, has_master: bool) -> list[tuple[str, ParsedEvent]]:
-    """Map one VEVENT to its keyed event, then a master's cancelled ``EXDATE`` instances."""
+def _events(component: Any, *, uid: str, zone: str, master: Any) -> list[tuple[str, ParsedEvent]]:
+    """Map one VEVENT to its keyed event, then a master's cancelled ``EXDATE`` instances.
+
+    ``master`` is the series' master VEVENT when the feed carries it. An instance
+    that states no ``TRANSP`` or ``CLASS`` takes its master's, as a stored override
+    does (``CalendarEvent``'s series defaults).
+    """
 
     start_line = component.contents["dtstart"][0]
     all_day = not isinstance(start_line.value, datetime)
@@ -243,7 +252,8 @@ def _events(component: Any, *, uid: str, zone: str, has_master: bool) -> list[tu
     end = _end(component, start_line.value, start, all_day=all_day, zone=zone)
     rid = component.contents.get("recurrence-id", [None])[0]
     original_start = _instant(rid.value, _tzid(rid), zone) if rid is not None else None
-    override = original_start is not None and has_master
+    override = original_start is not None and master is not None
+    series_master = master if override else None
     event = ParsedEvent(
         title=_text(component, "summary"),
         description=_text(component, "description"),
@@ -252,13 +262,16 @@ def _events(component: Any, *, uid: str, zone: str, has_master: bool) -> list[tu
         end=end,
         all_day=all_day,
         recurrence="" if rid is not None else _text(component, "rrule").removeprefix("RRULE:"),
+        timezone=_event_zone(start_line),
         series=uid if override else "",
         original_start=original_start if override else None,
         status=_STATUSES.get(_text(component, "status").upper(), EventStatus.CONFIRMED),
         transparency=(
-            EventTransparency.FREE if _text(component, "transp").upper() == "TRANSPARENT" else EventTransparency.BUSY
+            EventTransparency.FREE
+            if _stated(component, series_master, "transp").upper() == "TRANSPARENT"
+            else EventTransparency.BUSY
         ),
-        visibility=_VISIBILITIES.get(_text(component, "class").upper(), EventVisibility.DEFAULT),
+        visibility=_VISIBILITIES.get(_stated(component, series_master, "class").upper(), EventVisibility.DEFAULT),
         conference_url=next(
             (
                 value
@@ -358,17 +371,27 @@ def _attendees(component: Any) -> tuple[ParsedAttendee, ...]:
 
 
 def _feed_zone(feed: Any) -> str:
-    """Return the feed's IANA zone: ``X-WR-TIMEZONE``, a recurring master's ``TZID``, or a ``VTIMEZONE``'s."""
+    """Return the feed's calendar zone, its ``X-WR-TIMEZONE`` when that names an IANA zone; each event keeps its own."""
 
-    candidates = [_text(feed, "x-wr-timezone")]
-    candidates += [
-        _tzid(component.contents["dtstart"][0])
-        for component in feed.contents.get("vevent", [])
-        if "rrule" in component.contents and "dtstart" in component.contents
-    ]
-    candidates += [_text(component, "tzid") for component in feed.contents.get("vtimezone", [])]
-    names = get_zone_names()
-    return next((name for name in candidates if name in names), "")
+    name = _text(feed, "x-wr-timezone")
+    return name if name in get_zone_names() else ""
+
+
+def _event_zone(line: Any) -> str:
+    """Return the zone an event keeps: its DTSTART's IANA ``TZID``, ``UTC`` for a UTC time, else its calendar's (blank).
+
+    A date or a floating time is read in the calendar's zone; a non-IANA ``TZID``
+    still lands on the right instant through the feed's ``VTIMEZONE`` but expands in
+    the calendar's zone.
+    """
+
+    tzid = _tzid(line)
+    if tzid in get_zone_names():
+        return tzid
+    value = line.value
+    if isinstance(value, datetime) and value.tzinfo is not None and not tzid and value.utcoffset() == timedelta(0):
+        return "UTC"
+    return ""
 
 
 def _text(component: Any, name: str) -> str:
@@ -376,6 +399,12 @@ def _text(component: Any, name: str) -> str:
 
     lines = component.contents.get(name)
     return str(lines[0].value or "").strip() if lines else ""
+
+
+def _stated(component: Any, master: Any, name: str) -> str:
+    """Return a property's text, else its series master's when ``master`` is given, else ``""``."""
+
+    return _text(component, name) or (_text(master, name) if master is not None else "")
 
 
 def _param(line: Any, name: str) -> str:

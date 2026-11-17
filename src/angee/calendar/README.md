@@ -127,9 +127,11 @@ calendar is mirrored before its events land.
   a source that has synced is disconnected through integrate's operator verbs.
 - **ICS.** `calendar_integrate_ics` lets any signed-in user subscribe to a public
   feed (`webcal://` reads as `https://`). The feed is the source's one remote
-  calendar, mirrored by the first sync; it is polled hourly with a conditional
-  GET. Each fetched feed is a full snapshot; its module docstring lists the
-  properties it maps.
+  calendar, mirrored by the first sync, in the feed's `X-WR-TIMEZONE`; each event
+  keeps its own `DTSTART` zone. It is polled hourly with a conditional GET. Each
+  fetched feed is a full snapshot; its module docstring lists the properties it
+  maps. When the feed moves a series, each instance's new key adopts the override
+  the series rebased, so an instance keeps one override.
 
 The sources page lists them with their sync status. Source addons add their
 subscribe or connect verb to its `calendar.sources#toolbar` container.
