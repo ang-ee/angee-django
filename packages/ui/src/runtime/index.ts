@@ -56,6 +56,7 @@ export {
   useLoginPath,
   useRuntimeAuth,
   useRuntimeBrand,
+  useDeclaredBrand,
   useRuntimeViewAs,
   useRuntimeLogoutAction,
   useRuntimeUserPreferences,

@@ -256,6 +256,7 @@ describe("createApp selection", () => {
       app: "focus",
       rail: ["requests", "requests.files"],
       brand: { name: "Requests", mark: "requests" },
+      brandFallback: true,
       home: "requests.all",
       sources: {
         app: "?app=focus",

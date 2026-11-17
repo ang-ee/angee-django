@@ -8,7 +8,7 @@ import { Link } from "@tanstack/react-router";
 
 import { useHrefLinkOptions } from "./href-link-options";
 import { useUiT } from "../i18n";
-import { useRuntimeBrand } from "../runtime";
+import { useDeclaredBrand } from "../runtime";
 import { cn } from "../lib/cn";
 import { toneClass as toneFillClass } from "../lib/tones";
 import { Button } from "../ui/button";
@@ -94,8 +94,8 @@ function AppChooserBody({
   triggerLabel,
 }: Omit<AppChooserProps, "menuItems">): ReactElement {
   const t = useUiT();
-  // The deployment's brand mark fronts the chooser; the framework's own glyph is the fallback.
-  const mark = useRuntimeBrand()?.mark ?? "angee";
+  // A declared brand's mark fronts the chooser; the framework's own glyph is the fallback.
+  const mark = useDeclaredBrand()?.mark ?? "angee";
   const resolvedSearchPlaceholder = searchPlaceholder ?? t("chrome.searchApps");
   const resolvedTitle = title ?? t("chrome.switchApp");
   const resolvedTriggerLabel = triggerLabel ?? t("chrome.switchApp");
@@ -132,7 +132,7 @@ function AppChooserBody({
             className,
           )}
         >
-          {trigger ?? <Glyph name={mark} size={20} />}
+          {trigger ?? <Glyph name={mark} fallbackName="angee" size={20} />}
         </PopoverTrigger>
       </Tooltip>
       <PopoverPortal>
@@ -145,7 +145,7 @@ function AppChooserBody({
           >
             <div className="mb-4 flex items-center gap-3">
               <span className={cn("grid size-7 shrink-0 place-content-center rounded-6", toneFillClass("brand", "soft"))}>
-                <Glyph name={mark} size={18} />
+                <Glyph name={mark} fallbackName="angee" size={18} />
               </span>
               <div className="min-w-0 flex-1">
                 <h2 className={cn(textRoleVariants({ role: "title", truncate: true }), "m-0")}>

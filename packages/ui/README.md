@@ -4,9 +4,12 @@
 
 Install: `pnpm add @angee/ui`
 
-`useRuntimeBrand` supplies the selected app's identity to chrome: the rail's app
-chooser draws the brand mark and the expanded rail's caption its name, with the
-framework glyph and "Apps" as the fallback when no brand is set. `DocumentTitle`
+`useRuntimeBrand` supplies the selected app's identity to chrome. Over several apps,
+the rail's app chooser draws the brand's mark and the expanded rail's caption its name
+only when a deployment, app or menu root declared it (`useDeclaredBrand`): a named
+app's first root standing in with its label and icon does not count. Without a
+declared brand they keep the framework glyph and "Apps", and an unregistered mark
+falls back to the framework glyph. `DocumentTitle`
 composes the active breadcrumb with that brand. `GanttView` is the presentational date
 axis; the `gantt` collection kind composes the list owner's filter, grouping and
 row paging alongside list, board and calendar views.
