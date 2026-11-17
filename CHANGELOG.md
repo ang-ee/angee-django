@@ -10,13 +10,150 @@ live in code docstrings.
 
 ## Unreleased — shared addon contracts, native embeddings and graph retrieval
 
+- `Message.objects.compose_reply` composes an email reply as a complete envelope:
+  addressed to the parent's `Reply-To` when it carries one, else its sender (RFC
+  5322 §3.6.2; `Message.reply_addresses(actor=)` is the one reader of `Reply-To`:
+  lower-cased addresses with their display names, in header order, read with the
+  caller's access, empty without the header), titled `Re: <thread title>` without stacking prefixes, and
+  identified by a Message-ID (`make_msgid(domain=DNS_NAME)`, as Django mints one) as
+  its external id. The email transport renders the parent's Message-ID as
+  `In-Reply-To` and `References`, so the answer threads onto the same conversation
+  instead of opening a new one. Replying to an email with neither a Reply-To nor a
+  sender is refused; replies of other kinds are unchanged. Header parts named
+  `message-id`, `in-reply-to` or `references` no longer render beside the
+  transport's own. Email replies composed earlier keep their old envelope, which had
+  no recipient and could not be delivered. The unread
+  `ChannelBackend.message_platform` attribute is removed.
+
+- A triage task's hold may carry a wake date, an awaited user, both or neither:
+  `TaskWork.snooze(until=None, *, awaiting=None, expected_revision=None)` takes the
+  write and revision check accept and decline take, reads the persisted stage
+  under the row lock and refuses a hold awaiting its own holder.
+  `TaskWork.wake(reason="manual", *, message=None, expected_revision=None)` ends a
+  hold and sends `angee.work.events.task_woken` (`task`, `reason` of `due`, `reply`
+  or `manual`, `message`); the task carries no instance sudo and keeps the waking
+  actor, and a consumer asks its review again there. New columns `snoozed_at` (set
+  exactly while held; the triage inbox filters by it) and `snoozed_awaiting` (the
+  awaited user); `snoozed_until` is no longer editable. One rule decides a reply,
+  `TaskWorkQuerySet.wake_replied(message, replier_id=)`: a hold wakes only on its
+  awaited user's message, so the reviewer's own comment and any message to a hold
+  awaiting nobody wake nothing; such a hold wakes only at its date or by hand.
+  `wake_from_chatter_thread` is replaced by `wake_on_chatter_reply`. The due job
+  and the reply paths wake row by row through `TaskWorkQuerySet.wake_each`, with
+  history and a revision bump, where they used bulk updates; a failing row is
+  logged and stays held for the next run without failing the others or the
+  message that woke it. `held()` leaves out trashed tasks. Leaving triage ends a
+  hold. GraphQL `snooze_task(task, until, expected_revision)` makes `until`
+  optional; `wake_task(task, expected_revision)` is new, with its MCP tool.
+  Upgrade: a host authors the schema migration for the two columns and the
+  `snoozed_until` option, then a data migration that marks existing holds and
+  clears holds left outside triage, through the historical model and the schema
+  editor's alias:
+
+  ```python
+  def mark_holds(apps, schema_editor):
+      tasks = apps.get_model("projects", "Task")._base_manager.using(schema_editor.connection.alias)
+      # Historical models keep Meta.ordering on ``sqid``, which migration state does not
+      # carry, so a joined update must clear the ordering.
+      held = tasks.filter(snoozed_until__isnull=False).order_by()
+      held.filter(stage__category="triage").update(snoozed_at=models.F("updated_at"))
+      held.exclude(stage__category="triage").update(snoozed_until=None, snoozed_by=None)
+  ```
+
+  `snoozed_at = updated_at` only approximates when each hold began. A migrated hold
+  whose wake date has already passed wakes on the due job's first run, and each
+  wake sends `task_woken`.
+- Intake asks a requester to clarify a request: `Task.clarify(question, *, to=None,
+  reply_by=None, expected_revision=None)` (GraphQL `clarify_task`) locks the task,
+  gives a requester without an account a passwordless one
+  (`Need.provide_requester_account`, the linking the `["*"]` policy uses: no
+  credential, admission or membership), holds the task awaiting that account,
+  posts the question as a task comment, and also emails it as a reply on the
+  request's source message when the requester has no admitted account and the
+  request came as an email with a sender on a channel with an outbound sender (the
+  reviewer needs the channel's `reply`); a requester reachable neither way is
+  refused. `to` names the request to ask about. An inbound email answering a
+  message on a request's conversation (its `In-Reply-To` resolved there), while
+  its task is in triage, from that request's sender or from an address its
+  `Reply-To` named (read through `Message.reply_addresses`), is the request's reply: it files
+  no new request and task, and wakes the hold when it awaits that requester's
+  account. A relayed request's requester is its `Reply-To` address, which their
+  account is created for. A fresh email that only reuses a subject, and any email
+  after accept or decline, is a new request. `intake_requester_domains = ["*"]`
+  gives every claimed webform address a passwordless, unadmitted account on
+  capture; the intake README states its trust model. The intake Task donor
+  `TaskIntakeFilters` is renamed `TaskIntake`.
+
+- Failed or retried tool calls are now recorded as failed. pydantic-ai reports
+  them as a `ToolReturnPart` whose `outcome` is not `success` (`retried` for a
+  tool raising `ModelRetry`, as built-in tools do on every error), which the
+  in-process runtime used to save as `completed`. The chat view shows them as
+  errors; turns saved before keep their `completed` status.
+- A `start_conversation` step may require grounding evidence:
+  `StartConversationConfig(grounding=GroundingPolicy(search=("web_search",), fetch=("fetch_url",)))`
+  names the tools that satisfy each requirement. One completed call to a named
+  tool meets a requirement, read from the completed turn's saved calls. A
+  non-empty answer that leaves one unmet fails the step with the unmet
+  requirements and every call the turn made; an empty answer still routes
+  `no_reply`. Operator Retry posts another turn whose prompt ends with the
+  reason. A completed call proves only that the named function tool returned
+  without raising during the turn, so a grounding tool raises on empty results
+  or HTTP errors; provider-native tools are not saved and cannot meet the
+  policy. `AgentTurn.tool_calls(*names)` folds a turn's saved ACP tool updates
+  into one `acp.schema.ToolCall` per `toolCallId`, ignoring null fields, selected
+  by tool name: a saved tool call's `title` is its tool key (the `SessionRunner`
+  contract). What agents store is unchanged, and a step without `grounding`
+  behaves as before.
+
 - `angee.scheduling` owns due rules: a `DueRule` (`angee.scheduling.due`) names due
   anchors the subject supplies later and labelled terms measured from them; the
   [scheduling README](src/angee/scheduling/README.md) lists what a rule expresses.
   A consumer stores it in a `DueRuleField` beside its own date or instant column;
   the pure `DueRule.resolve` returns a `Due` whose point and canonical JSON basis
   the consumer writes, and `Due.get_status` is computed on read and never stored.
-  No consumer composes it yet.
+  `projects` tasks and milestones compose it (below).
+- `projects` templates: a project with `is_template` is copied by
+  `Project.objects.create_from_template(template, idempotency_key=, values=, task=,
+  anchors=, role_mapping=)` (idempotent per actor and key; template read and project
+  create, and with `task=` write on the task, whose promoted project is built in one
+  insert under the task's lock). The copy carries its phases through
+  `Milestone.setup_template_values`, its open tasks and subtasks with their audience
+  and relations, the tags (through the new `TagAssignmentManager.copy`) and every due
+  rule; dates, statements, grants, participants, bindings, links and files stay
+  behind. `Task.assignee_role` names a consumer's role, which `role_mapping` maps to
+  a person. `Project.created_from_template` records the provenance. A project with
+  closed tasks or reached phases cannot become a template. Ordinary lists, boards
+  (projects' and work's), My Work, the project picker, attention and overdue phases
+  leave templates out; a Templates page lists them. GraphQL:
+  `create_project_from_template`, the project resource's `is_template` and the task
+  resource's `in_template` filter (a boolean, false for a task about no project).
+  Contributors extend `template_copy_values()` on Project, Milestone and Task and
+  `validate_template()` on Project.
+- `projects` due dates: `Task` and `Milestone` compose `RuleDatedMixin` (`due_rule`,
+  `due_basis`), resolved into `Task.due_date` and the new aware `Task.due_at`, and
+  into `Milestone.target_date`, against the project's due anchors (`created` and the
+  named `Project.due_anchors` that `set_due_anchor` records). A person's edit or a
+  source's stated `schedule` holds the date (`due_basis.held`), even at the rule's
+  value; `reset_due_to_rule` releases it. Closed tasks and reached milestones keep
+  their dates. Rules over counters are refused, and a rule that cannot resolve when
+  anchors move records why (`due_basis.unresolved`). When a save moves a task to
+  done by any path, a repeating rule creates its next task once
+  (`Task.repeated_from`, `Task.repetition_values()`), due from inputs stored on it;
+  a failed repetition is logged and the completion stands. GraphQL:
+  `set_project_due_anchor`, `reset_task_due_to_rule`, `reset_milestone_due_to_rule`,
+  and `due_rule`, `due_basis`, `due_status` on tasks and milestones.
+  `MilestoneTemplate` takes a `due_rule`. The task form edits `due_rule` as raw JSON
+  until scheduling ships a rule editor.
+- `projects.Task.recurrence` is removed: a task's repetition is its due rule's
+  `repeat`. Projects author
+  [`task_recurrence_due_rule`](src/angee/projects/compose_migrations/projects/task_recurrence_due_rule.py)
+  as their next `projects` migration. It adds `due_at`, `due_rule` and `due_basis`
+  to the task table and its history table, moves each recurrence into "the date set
+  by hand, repeating" (a `COUNT` becomes the `UNTIL` of its last point, the task's
+  date counting first), skips and counts blank or malformed rules, and removes the
+  column from both; it is irreversible. Then run `makemigrations` for the release's
+  other columns: `Project.is_template`, `created_from_template`, `due_anchors`;
+  `Milestone.due_rule`, `due_basis`; `Task.assignee_role`, `repeated_from`.
 - `angee.scheduling.fields.TimeZoneField` stores an IANA zone name and
   `angee.scheduling.zones.ZoneName` is the same rule for Pydantic inputs; a blank
   zone takes its context's zone and finally the project `TIME_ZONE`, which
@@ -25,6 +162,104 @@ live in code docstrings.
   next occurrence after a moment. `angee-scheduling` now declares `angee-base`,
   which it reached through `angee-graphql` before. Follow-up: the zone strings in
   `arp.hr`, `messaging` and `posts` compose the new owner.
+
+- IAM sends sign-in links: a person without a password signs in once through
+  an emailed link. `User.issue_sign_in_link()` is an account verb with its own
+  `auth/user#issue_sign_in_link` permission (admin by default), the usual
+  protected-account refusal, a valid-email check and a per-account cooldown
+  (`ANGEE_IAM_SIGN_IN_LINK_COOLDOWN`). The console mutation is
+  `issue_user_sign_in_link`. The new internal `iam.SignInLink` row keeps a
+  keyed token digest, a digest of the account facts it is bound to (email,
+  password, last sign-in), the issuer, `expires_at`, `sent_at` and `used_at`,
+  never the token. Only an account's newest sent link signs in, and
+  deactivation retires its links. The link goes to `User.email` through
+  Django's `MAILERS["default"]` once the row commits. Redemption is
+  `authenticate()` through `angee.iam.auth.SignInLinkBackend` with
+  `sign_in_credentials(token)`, behind the public `redeem_sign_in_link`
+  mutation and IAM's public `/sign-in-link` route. A request now makes one
+  sign-in attempt: `login` and `redeem_sign_in_link` share
+  `angee.iam.auth.authenticate_once`, and a second attempt in the same request
+  (aliased or batched fields) is refused. IAM now owns the django-axes policy
+  (axes 9 or later): `AXES_COOLOFF_TIME` (one hour; lockouts were permanent;
+  a successful sign-in clears no failures), and username and whitelist
+  callables, so link attempts are recorded under the account public id they
+  name and a genuine spent link is not a failure. `ANGEE_PUBLIC_ORIGIN` is now
+  a base setting, fed by the environment variable of that name or authored,
+  with one rule (`angee.base.origins.public_origin`): only a bare `https`
+  origin (`http` only under `DEBUG`) joins the CSRF trusted origins, so an
+  origin authored in `settings.yaml` is now trusted too, and `angee.E051`
+  reports an invalid one (an `http` origin without `DEBUG` now fails the
+  check). Browser error reports drop URL fragments, frame locations included.
+  `safeRedirectPath` resolves a `next` value as the browser does and accepts
+  only a same-origin result, closing `/%09/host`-style escapes.
+  `useSignInRedirect` (`@angee/app/auth`) is the post-sign-in navigation
+  `LoginPage` uses. Upgrade: compose and author the
+  `iam` migration for the new table, then re-sync the permission schema (iam
+  revision 25). Projects whose `AUTHENTICATION_BACKENDS` replace IAM's list add
+  `angee.iam.auth.SignInLinkBackend`; projects with their own
+  `AXES_WHITELIST_CALLABLE` or `AXES_USERNAME_CALLABLE` keep theirs and lose
+  the link exemptions.
+
+- Tags gain categories. `tags.TagCategory` (name, description, a fractional
+  `position`, an optional `max_per_record`) groups the vocabulary for every
+  taggable type, and `Tag.category` files a tag under at most one of them
+  (nullable; deleting a category un-files its tags). Tag administrators curate
+  categories as they curate tags (`tags/tag_category`; tags revision 8).
+  - **One check:** `TagAssignmentManager.require_category_maximum` refuses a
+    record over a category's maximum, counting archived and unreadable tags.
+  - **Edge inserts:** every insert is judged in `TagAssignment.save`, for its
+    record in its tag's category. That covers the `tag` verb, a record's `tags`
+    input, a changeset revert's restore, a resource load and `objects.create`,
+    under the record's and the tag's row locks.
+  - **Tag saves:** a tag save that changes its category judges the records holding
+    the tag.
+  - **Category saves:** a category save that lowers its maximum judges its records
+    ("records already hold more").
+  - **Merges:** a merge is judged after its moves, through `pre_merge`. Merging a
+    duplicate into a capped tag collapses it, and a merge that would leave a
+    record over a maximum rolls back.
+  - **Category-side locks:** a category-side write locks the category row and its
+    tags' rows, so it and concurrent edge writes judge each other's committed
+    state.
+  - **Bypasses:** edge `bulk_create`, and queryset `update`/`bulk_update` of
+    `category` or `max_per_record`, are not judged.
+  - **Console:** a categories page, and a `category` column, facet and form field
+    on tags. `angee.tags.recordTags` shows a labelled group with one picker per
+    category, each showing its maximum.
+  - **Upgrade:** hosts author a migration for `tags` (`TagCategory`,
+    `Tag.category`) and re-sync the permission schema.
+
+- Decisions answer for a represented record, replace questions atomically and
+  remind once. `Decision.decide(..., on_behalf_of=, evidence=, note=)` takes
+  `EvidenceReference`s (model, public id, pointer) and stores `answered_for`
+  and `answer_evidence` rebuilt from the resolved records, plus `answer_note`;
+  `answered_by` stays the actor, `act` is unchanged, every participant must
+  read each record, and GraphQL shows each reference only to its record's
+  readers. `Decision.objects.supersede(decision, request, *, actor, reason)`
+  asks the replacement and withdraws the old question with its
+  `withdrawal_reason` and a `superseded_by` link in one transaction, in the
+  asking owner's system context (any named system context), and refuses a
+  question a requesting record (a workflow step) retains. Escalation is a
+  supersede of `decision.replacement_request(due_at=, remind_after=,
+  assignees=)`, which derives the request from the stored question and never
+  copies its instants. `withdraw` takes an optional `reason`. Requests carry
+  the asker's `due_at` and `remind_after`; overdue (`Decision.objects.overdue()`,
+  `Decision.is_overdue`, the `is_overdue` field and filter) is false for an
+  undated question. `Decision.remind()` stamps `reminded_at` once, returns
+  whether it sent `decision_reminder_due`, and runs receivers without
+  decisions' elevation; the `decisions.remind_due` beat task runs a bounded,
+  skip-locked sweep with a savepoint per reminder and shows a
+  `decisions.reminder` timeline line. `decisions/decision` gains
+  `read_granted` (assignees, requester, admins) and `read` derives from it:
+  consumers union outside audiences into `read_granted`, and fragments that
+  still add `read` arms (workflows, `tests/extcontrib`, arp) move there next.
+  Upgrade: decisions depends on `angee-jobs`; hosts author the decisions
+  migration (`answered_for`, `answer_evidence`, `answer_note`,
+  `withdrawal_reason`, `superseded_by`, `due_at`, `remind_after`,
+  `reminded_at`, the widened `decisions_verdict_consistent` constraint and the
+  `decisions_reminder_due` index), re-sync the permission schema (decisions
+  revision 8) and restart the whole application.
+
 - A record-visibility file takes its access from its attached records, its
   direct viewers and admins. Its owner (the uploader, by default) holds it while
   the upload is a draft, which the record edge needs, and once it is published
@@ -47,7 +282,9 @@ live in code docstrings.
   reach them as owner. Upgrade: such a record owner contributes the arm, and a
   host releases the owners existing chatter threads carry with a data migration
   over its historical models, for example
-  `Thread.objects.filter(attachments__role="chatter").exclude(owner=None).update(owner=None)`.
+  `Thread.objects.filter(attachments__role="chatter").exclude(owner=None).order_by().update(owner=None)`
+  (historical models keep `Meta.ordering` on `sqid`, which migration state does
+  not carry, so a joined update clears the ordering).
 - `ThreadedModelMixin.thread_moderate_access` (default `write`) names the record
   permission chatter moderation requires: editing and deleting other people's
   comments, trashing and restoring comments, listing the removed ones and managing

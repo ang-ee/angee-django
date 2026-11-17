@@ -53,6 +53,8 @@ export interface ChromeMenuExtra {
   brand?: RuntimeBrand;
   /** The installed theme a person who chose none sees when the app is selected. Only on a root. */
   theme?: string;
+  /** The app's theme wins over the person's own theme choice while the app is selected; needs `theme` beside it. Only on a root. */
+  themeLocked?: boolean;
   /** Desktop rail expansion until the person chooses otherwise. Only on a selected root. */
   railExpanded?: boolean;
 }
@@ -170,6 +172,7 @@ export class ChromeMenuNode implements ChromeMenuItem {
   home?: string;
   brand?: RuntimeBrand;
   theme?: string;
+  themeLocked?: boolean;
   railExpanded?: boolean;
   requires?: string;
   /** An included app shown without an entry of its own (logical tree only); still an app for words and rules (G-8). */

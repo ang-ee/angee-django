@@ -113,6 +113,22 @@ class WorkCampaignTests(TransactionTestCase):
         self.assertTrue(accepted["result"][0]["ok"])
         self.assertEqual(accepted["result"][0]["sqid"], triage["sqid"])
 
+    def test_hold_tools_refuse_a_caller_without_task_write_and_keep_the_hold(self):
+        task = self.task(category="triage")
+        with actor_context(self.actor):
+            task.with_actor(self.actor).snooze()
+        task.refresh_from_db()
+        held = (task.snoozed_at, task.snoozed_by_id, task.revision)
+        tools = {tool.name: tool for tool in async_to_sync(mcp_server().list_tools)()}
+        for name in ("wake_task", "snooze_task"):
+            with self.subTest(tool=name), actor_context(self.outsider):
+                refused = async_to_sync(tools[name].run)(
+                    {"sqid": task.sqid, "expected_revision": task.revision},
+                ).structured_content
+                self.assertFalse(refused["ok"], refused)
+        task.refresh_from_db()
+        self.assertEqual((task.snoozed_at, task.snoozed_by_id, task.revision), held)
+
     def test_every_hand_verb_can_write_existing_zero_after_policy_tightens(self):
         verbs = ("start", "complete", "reopen", "accept", "decline", "drop", "drop_duplicate",
                  "return_to_triage", "mark_duplicate", "snooze")

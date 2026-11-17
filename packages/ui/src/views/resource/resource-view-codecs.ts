@@ -166,8 +166,10 @@ function rowGroupFromTableRow<TRow extends Row>(
   const label = groupedRowLabel(row, groupStack, t);
   const path = [...parentPath, label];
   const children = row.subRows.filter((child) => child.getIsGrouped());
+  const value = row.groupingColumnId ? row.getGroupingValue(row.groupingColumnId) : null;
   return {
     key: row.id,
+    identity: value === null || value === undefined || value === "" ? null : String(value),
     label,
     path,
     depth: row.depth,

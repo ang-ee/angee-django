@@ -28,6 +28,8 @@ const STEP_BY_MODE: Record<CalendarViewMode, (date: Date, amount: number) => Dat
   month: addMonths,
   week: addWeeks,
   day: addDays,
+  // The list lists one month, so it steps and titles like the month grid.
+  list: addMonths,
 };
 
 /** The anchor one period earlier (`-1`) or later (`+1`) for the active mode. */
@@ -46,7 +48,7 @@ export function calendarPeriodTitle(
   t: UiTranslate,
 ): string {
   const date = calendarAnchorToDate(anchor);
-  if (mode === "month") return formatMonth(date);
+  if (mode === "month" || mode === "list") return formatMonth(date);
   if (mode === "week") {
     return t("calendar.weekOf", { date: formatDate(startOfWeek(date), { density: "full" }) });
   }

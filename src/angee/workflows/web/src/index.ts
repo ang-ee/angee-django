@@ -31,10 +31,16 @@ export default defineBaseAddon({
     ...resourcePageRoutes("workflows.triggers", "/workflows/triggers", lazyRouteComponent(() => import("./TriggersPage"), "TriggersPage"), TRIGGER_MODEL),
     ...resourcePageRoutes("workflows.trigger-events", "/workflows/trigger-events", lazyRouteComponent(() => import("./TriggerEventsPage"), "TriggerEventsPage"), TRIGGER_EVENT_MODEL),
   ],
+  // Incidents: runs held on an operator's error or on another run, without a replacement
+  // (`WorkflowRun.incident_expression`).
+  resourceViews: [
+    { id: "workflows.incidents", label: "Incidents", resource: RUN_MODEL, filter: { is_incident: { exact: true } } },
+  ],
   menus: {
     // Decisions is workflows' human-review inbox; it lives under Workflows.
     workflows: { label: "Workflows", icon: "versions", include: [{ id: "decisions", flatten: true }] },
     "workflows.runs": { parent: "workflows", label: "Runs", icon: "activity", route: "workflows.runs", sequence: 10 },
+    "workflows.incidents": { parent: "workflows", label: "Incidents", icon: "activity", route: "workflows.runs", defaultResourceView: "workflows.incidents", sequence: 15 },
     "workflows.studio": { parent: "workflows", label: "Studio", icon: "versions", sequence: 30 },
     "workflows.catalogue": { parent: "workflows.studio", label: "Workflows", icon: "versions", route: "workflows.catalogue" },
     "workflows.triggers": { parent: "workflows.studio", label: "Triggers", icon: "activity", route: "workflows.triggers" },

@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from contextlib import contextmanager, nullcontext
 from datetime import datetime
 from enum import StrEnum
+from graphlib import TopologicalSorter
 from typing import Any, ClassVar, Self, cast
 
 from django.apps import apps
@@ -19,6 +21,7 @@ from django.utils import timezone
 from django_compose.models import Composable
 from rebac import (
     PermissionDenied,
+    actor_context,
     current_actor,
     generic_target,
     system_context,
@@ -61,7 +64,8 @@ from angee.provenance.contrib.angee.history import HistoryMixin
 from angee.provenance.contrib.angee.managers import AngeeHistoryManager, AngeeHistoryMergeableUnscopedManager
 from angee.provenance.contrib.angee.querysets import AngeeHistoryMergeableUnscopedQuerySet, AngeeHistoryQuerySet
 from angee.provenance.statements import Aspect, SourceKind, StatementRecords, StatementsMixin
-from angee.scheduling.fields import RecurrenceField
+from angee.scheduling.due import Anchor, Due, DueRule, DueStatus, Term
+from angee.scheduling.fields import DueRuleField
 from angee.tags.models import TaggedModel
 
 STATED_BY: tuple[SourceKind, ...] = (SourceKind.PERSON, SourceKind.SYSTEM_OF_RECORD)
@@ -98,6 +102,318 @@ class StatedRecordMixin(StatementsMixin):
         if self.carries_statements():
             return f"This {self._meta.verbose_name} carries source statements and is retained."
         return cast(Any, super()).delete_blocker()
+
+
+SET_ANCHOR = "set"
+"""The due anchor naming a row's own hand-set date (``DueRule(terms=[Term(anchor="set")])``)."""
+
+CREATED_ANCHOR = "created"
+"""The built-in due anchor naming the subject's creation instant."""
+
+HELD = "held"
+"""``due_basis`` key: a person's or a source's date holds the row against its rule."""
+
+REPEATS = "repeats"
+"""``due_basis`` key: a repetition's resolution inputs, stored when it is created."""
+
+UNRESOLVED = "unresolved"
+"""``due_basis`` key: why the rule could not resolve when its anchors last moved."""
+
+_ROW_BASIS_KEYS = (HELD, REPEATS, UNRESOLVED)
+
+logger = logging.getLogger(__name__)
+
+
+class RuleDatedMixin(models.Model):
+    """A projects row whose date may come from a due rule (``angee.scheduling.due``).
+
+    ``due_rule`` (``NULL``: the date is set by hand) resolves against the
+    subject's due anchors (:meth:`due_anchor_values`) into the row's own date
+    column (``due_date_field``, and ``due_instant_field`` when the row keeps an
+    instant). ``due_basis`` is the rule's resolution (``Due.as_json()``) plus the
+    row's own keys: ``held``, ``repeats`` (a repetition's inputs) and
+    ``unresolved`` (a resolution failure recorded when anchors moved).
+
+    Precedence: a person's or a source's write of the date **holds** the row,
+    whatever the value, and the basis keeps the rule's value; anchor moves and
+    rule edits then move only rows that are not held, and
+    :meth:`reset_due_to_rule` releases the hold. An insert without a date
+    follows its rule; one with a date is held. The instant is only ever the
+    rule's: a held row keeps a date and no instant. A row's date is history once
+    it is closed (:meth:`due_history_q`): anchor moves and resets leave it. Rules
+    over counters are refused, because projects supply no counter readings.
+    """
+
+    due_rule = DueRuleField()
+    due_basis = models.JSONField(default=dict, blank=True, editable=False)
+
+    due_date_field: ClassVar[str]
+    """The row's date column the rule resolves into."""
+    due_instant_field: ClassVar[str | None] = None
+    """The row's aware instant column, when the row keeps one."""
+    due_subject_fields: ClassVar[tuple[str, ...]] = ("project", "project_id")
+    """Columns whose change moves the row to other due anchors."""
+    _due_rule_write: bool = False
+    _due_subject_anchor_values: dict[str, Any] | None = None
+
+    class Meta:
+        abstract = True
+
+    @classmethod
+    def due_history_q(cls) -> models.Q:
+        """Rows whose date is history (a closed task, a reached milestone): rules no longer move it."""
+
+        raise NotImplementedError
+
+    def due_is_history(self) -> bool:
+        """Whether this stored row's date is history (:meth:`due_history_q`)."""
+
+        return self.pk is not None and type(self)._base_manager.filter(self.due_history_q(), pk=self.pk).exists()
+
+    def due_subject_anchors(self) -> dict[str, Any]:
+        """The due anchors of the row's subject: its project's, read fresh unless an owner operation handed them in.
+
+        :meth:`Project.resolve_due_rules` and the template copy compute the map
+        once and give it to every row they resolve (:meth:`use_subject_anchors`).
+        """
+
+        if self._due_subject_anchor_values is not None:
+            return self._due_subject_anchor_values
+        project_id = cast(Any, self).project_id
+        if project_id is None:
+            return {}
+        project_model = apps.get_model("projects", "Project")
+        project = project_model._base_manager.only("created_at", "is_template", "due_anchors").get(pk=project_id)
+        return project.due_anchor_values()
+
+    def use_subject_anchors(self, anchors: dict[str, Any]) -> Self:
+        """Resolve against ``anchors``, the subject's map an owner operation computed once for all its rows."""
+
+        self._due_subject_anchor_values = anchors
+        return self
+
+    def due_anchor_values(self) -> dict[str, Any]:
+        """The anchors this row's rule resolves against: its subject's, plus ``set``, its own date."""
+
+        return {**self.due_subject_anchors(), SET_ANCHOR: getattr(self, self.due_date_field)}
+
+    def resolve_due(self, rule: DueRule) -> Due:
+        """Resolve ``rule`` for this row: against its due anchors, by default."""
+
+        return rule.resolve(anchors=self.due_anchor_values())
+
+    def validate_due_rule(self) -> None:
+        """Refuse a rule projects cannot resolve: its subject supplies no counter readings."""
+
+        rule = DueRule.from_json(self.due_rule)
+        if rule is not None and any(term.counter for term in rule.terms):
+            raise ValidationError({"due_rule": "A project row's rule measures calendar time; it has no counters."})
+
+    def clean(self) -> None:
+        """Validate the rule the row can resolve, beside the model's own checks."""
+
+        super().clean()
+        self.validate_due_rule()
+
+    def _due_point_fields(self) -> tuple[str, ...]:
+        return (self.due_date_field, *((self.due_instant_field,) if self.due_instant_field else ()))
+
+    def _due_point(self) -> tuple[Any, ...]:
+        return tuple(getattr(self, name) for name in self._due_point_fields())
+
+    def _point_of(self, due: Due | None) -> tuple[Any, ...]:
+        local_date = due.local_date if due is not None else None
+        at = due.at if due is not None else None
+        return (local_date, *((at,) if self.due_instant_field else ()))
+
+    def rule_due(self) -> Due | None:
+        """The rule's resolution stored in ``due_basis`` (its row keys set aside), or ``None``."""
+
+        if not self.due_basis or UNRESOLVED in self.due_basis:
+            return None
+        return Due.from_json({key: value for key, value in self.due_basis.items() if key not in _ROW_BASIS_KEYS})
+
+    def due_held(self) -> bool:
+        """Whether a person's or a source's date holds the row against its rule."""
+
+        return bool(self.due_basis.get(HELD))
+
+    def follows_due_rule(self) -> bool:
+        """Whether the row's date is its rule's: it has a rule and no hand or stated date holds it."""
+
+        return self.due_rule is not None and not self.due_held()
+
+    def apply_due_rule(self, *, hold: bool | None = None, record_failure: bool = False) -> set[str]:
+        """Resolve the rule into ``due_basis`` and, unless the row is held, into its date.
+
+        ``hold`` sets (``True``) or releases (``False``) the hold; ``None`` keeps
+        it. With ``record_failure`` a resolution error is recorded in the basis
+        (``unresolved``) and the date stays; otherwise it raises. Writes nothing:
+        returns the changed field names for the caller's save. Without a rule the
+        basis and the instant clear and the date stays.
+        """
+
+        changed: set[str] = set()
+        instant = self.due_instant_field
+        if self.due_rule is None:
+            if self.due_basis:
+                self.due_basis = {}
+                changed.add("due_basis")
+            if instant and getattr(self, instant) is not None:
+                setattr(self, instant, None)
+                changed.add(instant)
+            return changed
+        held = self.due_held() if hold is None else hold
+        kept = {key: self.due_basis[key] for key in (REPEATS,) if key in self.due_basis}
+        rule = DueRule.from_json(self.due_rule)
+        assert rule is not None  # a blank rule returned above
+        due: Due | None
+        try:
+            due = self.resolve_due(rule)
+        except ValidationError as error:
+            if not record_failure:
+                raise
+            due = None
+            basis = {**kept, UNRESOLVED: "; ".join(error.messages), **({HELD: True} if held else {})}
+        else:
+            basis = {**due.as_json(), **kept, **({HELD: True} if held else {})}
+        if basis != self.due_basis:
+            self.due_basis = basis
+            changed.add("due_basis")
+        if due is not None and not held:
+            for name, value in zip(self._due_point_fields(), self._point_of(due), strict=True):
+                if getattr(self, name) != value:
+                    setattr(self, name, value)
+                    changed.add(name)
+        elif held and instant and getattr(self, instant) is not None:
+            setattr(self, instant, None)
+            changed.add(instant)
+        return changed
+
+    @contextmanager
+    def due_rule_write(self) -> Iterator[None]:
+        """Mark the saves inside as the rule's own: they move the date without holding it."""
+
+        self._due_rule_write = True
+        try:
+            yield
+        finally:
+            self._due_rule_write = False
+
+    def save_due_rule(self, *, hold: bool | None = None, reason: str) -> bool:
+        """Apply the rule and save the result as a system write; record a failure instead of raising.
+
+        The caller authorized the change. A system write records no person's
+        stance on a stated row. Returns whether anything changed.
+        """
+
+        changed = self.apply_due_rule(hold=hold, record_failure=True)
+        if not changed:
+            return False
+        with self.due_rule_write(), system_context(reason=reason):
+            cast(Any, self).save(update_fields=(*sorted(changed), "updated_at"))
+        return True
+
+    def hold_due(self, values: Mapping[str, Any]) -> None:
+        """Hold the row at a person's or a source's stated date values (the ``schedule`` aspect).
+
+        Writes the values even when they equal the rule's, so the hold is recorded.
+        """
+
+        changed = False
+        for name, value in values.items():
+            attname = cast(models.Field, self._meta.get_field(name)).attname
+            if getattr(self, attname) != value:
+                setattr(self, attname, value)
+                changed = True
+        if changed or (self.due_rule is not None and not self.due_held()):
+            cast(Any, self).save(update_fields=(*values, "updated_at"))
+
+    def apply_schedule(self, *, member: Mapping[str, Any], values: Mapping[str, Any], statement: Any | None) -> None:
+        """Apply a surviving ``schedule`` stance as a hold (:meth:`hold_due`), even at the rule's own value.
+
+        No surviving stance (a withdrawal) or an unknown value keeps the date.
+        """
+
+        del member
+        if statement is None or statement.snak == statement.StatementSnak.SOME_VALUE:
+            return
+        self.hold_due(values)
+
+    def due_status(self, *, now: datetime | None = None) -> DueStatus | None:
+        """Where ``now`` stands against the row's date, computed on read and never stored.
+
+        A row following its rule reads the rule's basis (its warn and grace
+        windows included); a hand-set or stated date resolves through
+        ``DueRule(terms=[Term(anchor="set")])``. ``None`` without a date.
+        """
+
+        moment = now or timezone.now()
+        if self.follows_due_rule():
+            due = self.rule_due()
+            return due.get_status(now=moment) if due is not None else None
+        day = getattr(self, self.due_date_field)
+        if day is None:
+            return None
+        return DueRule(terms=(Term(anchor=SET_ANCHOR),)).resolve(anchors={SET_ANCHOR: day}).get_status(now=moment)
+
+    def reset_due_to_rule(self, *, expected_revision: int | None = None) -> Self:
+        """Release a hand-set or stated date and hand the row's date back to its due rule.
+
+        A closed task's or a reached milestone's date is history and is refused.
+        The reset is the rule's write: it records no person's stance.
+        """
+
+        row = cast(Any, self)
+        actor, bypass = row.effective_actor(strict=True)
+        with transaction.atomic():
+            locked = type(row).system_queryset(lock=("self",)).get(pk=row.pk)
+            if not bypass and not locked.with_actor(actor).has_access("write"):
+                raise PermissionDenied(f"Write access to the {self._meta.verbose_name} is required to reset its date.")
+            if expected_revision is not None:
+                locked.require_revision(expected_revision)
+            if locked.due_rule is None:
+                raise ValidationError({"due_rule": f"This {self._meta.verbose_name} has no due rule."})
+            if locked.due_is_history():
+                raise ValidationError({"due_rule": f"This {self._meta.verbose_name} is closed; its date is history."})
+            changed = locked.apply_due_rule(hold=False)
+            if changed:
+                # The rule's write, not the person's: it records no stance a source's statement competes with.
+                with locked.due_rule_write(), system_context(reason="projects.reset_due_to_rule"):
+                    locked.save(update_fields=(*sorted(changed), "updated_at"))
+            row.refresh_from_db()
+        return self
+
+    def _written_by_hand(self, update_fields: Any) -> bool:
+        """Whether this save writes the row's date as a person's or a source's value.
+
+        The rule's own writes (:meth:`due_rule_write`) never hold. An insert with
+        a date and a save naming the date column hold it; a full save holds it
+        when the date differs from the stored one.
+        """
+
+        if self._due_rule_write or self.due_rule is None:
+            return False
+        fields = self._due_point_fields()
+        if self._state.adding:
+            return getattr(self, self.due_date_field) is not None
+        if update_fields is not None:
+            return bool(set(fields).intersection(update_fields))
+        stored = type(self)._base_manager.filter(pk=cast(Any, self).pk).values_list(*fields).first()
+        return stored is not None and tuple(stored)[0] != getattr(self, self.due_date_field)
+
+    def save(self, *args: Any, **kwargs: Any) -> None:
+        """Hold a hand or stated date, then re-resolve the rule when the rule, the date or the subject is written."""
+
+        update_fields = kwargs.get("update_fields")
+        watched = {"due_rule", *self._due_point_fields(), *self.due_subject_fields}
+        if self._state.adding or update_fields is None or watched.intersection(update_fields):
+            self.validate_due_rule()
+            hold = True if self._written_by_hand(update_fields) else None
+            changed = self.apply_due_rule(hold=hold, record_failure=self._due_rule_write)
+            if update_fields is not None and changed:
+                kwargs["update_fields"] = {*update_fields, *changed}
+        super().save(*args, **kwargs)
 
 
 class ProjectSetupState(StrEnum):
@@ -200,6 +516,24 @@ class ProjectManager[ProjectT: Project](_ProjectManagerBase[ProjectT]):
     def from_task(self, task: Task, *, expected_revision: int | None = None) -> ProjectT:
         """Return the one project promoted from ``task``, creating it if needed."""
 
+        project, _created = self._promote(task, expected_revision=expected_revision)
+        return project
+
+    def _promote(
+        self,
+        task: Task,
+        *,
+        expected_revision: int | None = None,
+        defaults: Mapping[str, Any] | None = None,
+        values: Mapping[str, Any] | None = None,
+    ) -> tuple[ProjectT, bool]:
+        """Return ``task``'s one promoted project and whether this call created it, under the task's lock.
+
+        A new project is titled, described and led from the task (a blank one
+        takes ``defaults``), takes ``defaults`` for every other value and
+        ``values`` over both, in one insert.
+        """
+
         if task.pk is None:
             raise ValidationError("A task must be saved before it can be promoted.")
         actor, bypass = task.effective_actor(strict=True)
@@ -212,14 +546,14 @@ class ProjectManager[ProjectT: Project](_ProjectManagerBase[ProjectT]):
             with system_context(reason="projects.project.promote_from_task.lookup"):
                 existing = self.filter(converted_from_id=task.pk).first()
             if existing is not None:
-                return existing.with_actor(actor) if actor is not None else existing
+                return (existing.with_actor(actor) if actor is not None else existing), False
 
-            project = self.model(
-                title=locked_task.title,
-                body=locked_task.note,
-                lead_id=locked_task.assignee_id,
-                converted_from_id=locked_task.pk,
-            )
+            promoted = {"title": locked_task.title, "body": locked_task.note, "lead_id": locked_task.assignee_id}
+            given = {name: value for name, value in promoted.items() if value}
+            fields = {**(defaults or {}), **given, **(values or {})}
+            if "lead" in fields:
+                fields.pop("lead_id", None)
+            project = self.model(**fields, converted_from_id=locked_task.pk)
             project.full_clean(validate_unique=False, validate_constraints=False)
             try:
                 with transaction.atomic():
@@ -230,6 +564,8 @@ class ProjectManager[ProjectT: Project](_ProjectManagerBase[ProjectT]):
             except IntegrityError:
                 with system_context(reason="projects.project.promote_from_task.concurrent_lookup"):
                     project = self.get(converted_from_id=task.pk)
+                task.refresh_from_db()
+                return (project.with_actor(actor) if actor is not None else project), False
             else:
                 project.unsudo()
                 locked_task.sudo(reason="projects.task.promoted").save_without_historical_record(
@@ -240,7 +576,81 @@ class ProjectManager[ProjectT: Project](_ProjectManagerBase[ProjectT]):
                     locked_task.with_actor(actor)
                 task_promoted.send(sender=type(locked_task), task=locked_task, project=project)
             task.refresh_from_db()
-            return project.with_actor(actor) if actor is not None else project
+            return (project.with_actor(actor) if actor is not None else project), True
+
+    def create_from_template(
+        self,
+        template: ProjectT,
+        *,
+        idempotency_key: str,
+        values: Mapping[str, Any] | None = None,
+        task: Task | None = None,
+        anchors: Mapping[str, Any] | None = None,
+        role_mapping: Mapping[str, Any] | None = None,
+    ) -> ProjectT:
+        """Create a project from a readable template with its items, atomically and idempotently.
+
+        Requires template read and project create. The new project takes the
+        template's title and what each owner's ``template_copy_values`` names;
+        ``values`` override them, in one insert. With ``task``, the project is
+        the task's promoted project, which also requires write on the task: it is
+        titled, described and led from the task (a blank value takes the
+        template's), under the task's lock, and a task that already has a project
+        is refused. ``anchors`` are the new project's named due anchors
+        (:meth:`Project.set_due_anchor`); ``role_mapping`` maps a template task's
+        ``assignee_role`` to the person who takes it. What the copy carries is
+        :meth:`Project._copy_template`'s. The key belongs to the creating actor:
+        replay returns the created project, and the same key with other content
+        conflicts. Template edits afterwards change only later copies.
+        """
+
+        actor, bypass = template.effective_actor(strict=True)
+        actor_id = actor_user_id(actor)
+        if actor_id is None and not bypass:
+            raise ValidationError({"idempotency_key": "Creating from a template requires a user actor."})
+        named = {
+            self.model.due_anchor_name(name): validate_value(Anchor, value, field=f"anchors.{name}").as_json()
+            for name, value in sorted((anchors or {}).items()) if value is not None
+        }
+        values = dict(values or {})
+        roles = {str(role): person for role, person in sorted((role_mapping or {}).items())}
+        with changeset(fresh=True), transaction.atomic():
+            # The claim's unique key serializes same-key creations; the template is only read.
+            source = type(template).system_queryset().get(pk=template.pk)
+            if not bypass and not source.with_actor(actor).has_access("read"):
+                raise PermissionDenied("Read access to the template is required.")
+            result = changeset_model().objects.claim_created(
+                f"projects.template:{actor_id}",
+                idempotency_key,
+                values={"template": source, "task": task, "values": values, "anchors": named, "roles": roles},
+                model=self.model,
+                unavailable=ValidationError({"idempotency_key": "The created project is unavailable."}),
+            )
+            if result is not None:
+                if not bypass and not result.with_actor(actor).has_access("read"):
+                    raise PermissionDenied("Read access to the created project is required for replay.")
+                return result
+            if not source.is_template:
+                raise ValidationError({"template": "Choose a template project."})
+            source.validate_template()
+            copied = source.template_copy_values()
+            if task is None:
+                project = self.model(**{"title": source.title, **copied, **values})
+                project.full_clean(validate_unique=False, validate_constraints=False)
+                if bypass:
+                    project.sudo(reason="projects.project.create_from_template").save()
+                    project.unsudo()
+                else:
+                    project = self.with_actor(actor).insert(project)
+            else:
+                project, created = self._promote(task, defaults=copied, values=values)
+                if not created:
+                    raise ValidationError({"task": "This task already has a project."})
+            project._copy_template(source, anchors=named, role_mapping=roles)
+            require_changeset().record_created(project)
+            if actor is not None:
+                project.with_actor(actor)
+            return project
 
 
 class TaskOrderingQuerySet[TaskT: Task](models.QuerySet[TaskT]):
@@ -424,7 +834,16 @@ class TaskQuerySet[TaskT: Task](
         identity = actor_user_id(to_subject_ref(actor)) if actor is not None else None
         return models.Q(pk__in=[]) if identity is None else self.untrashed_q() & models.Q(
             status=self.model.TaskStatus.OPEN, assignee_id=identity,
-        )
+        ) & ~models.Q(self.in_template_expression())
+
+    def in_template_expression(self) -> models.Exists:
+        """Whether a task belongs to a template project: always a boolean, false for a task about no project.
+
+        Template tasks are copied by ``create_from_template`` and are nobody's work.
+        """
+
+        projects = self.model._meta.get_field("project").related_model
+        return models.Exists(projects._base_manager.filter(pk=models.OuterRef("project_id"), is_template=True))
 
     def for_record_filter(self, record: Any, *, include_done: bool = True) -> models.Q:
         """Subject membership and optional open state, independent of task authorization."""
@@ -701,6 +1120,18 @@ class Project(
         on_delete=models.RESTRICT,
         related_name="current_for_projects",
     )
+    is_template = models.BooleanField(default=False, db_index=True)
+    """A template is copied by :meth:`ProjectManager.create_from_template` and kept out of ordinary lists."""
+    created_from_template = models.ForeignKey(
+        "projects.Project",
+        null=True,
+        blank=True,
+        editable=False,
+        on_delete=models.SET_NULL,
+        related_name="created_projects",
+    )
+    due_anchors = models.JSONField(default=dict, blank=True, editable=False)
+    """Named due anchors (name to ``angee.scheduling.due.Anchor`` JSON), written by :meth:`set_due_anchor`."""
     links = GenericRelation(
         "projects.Link",
         content_type_field="content_type",
@@ -767,6 +1198,196 @@ class Project(
         """Whether this lifecycle state keeps the milestone path active."""
 
         return self.status == self.ProjectStatus.OPEN
+
+    def validate_template(self) -> None:
+        """Refuse a template a source states; contributors refuse their own facts through ``super()``.
+
+        A template's copies carry no statements, so the template holds none.
+        """
+
+        if self.carries_statements():
+            raise ValidationError({"is_template": "A project a source states cannot be a template."})
+
+    def validate_becoming_template(self) -> None:
+        """Refuse to turn a project with work history (a closed task, a reached phase) into a template."""
+
+        self.validate_template()
+        if self.pk is None:
+            return
+        tasks = apps.get_model("projects", "Task")._base_manager.filter(project_id=self.pk)
+        milestones = apps.get_model("projects", "Milestone")._base_manager.filter(project_id=self.pk)
+        if tasks.exclude(status="open").exists() or milestones.filter(reached_at__isnull=False).exists():
+            raise ValidationError(
+                {"is_template": "A project with closed tasks or reached phases cannot be a template."},
+            )
+
+    def template_copy_values(self) -> dict[str, Any]:
+        """Project values a project created from this template carries; contributors extend through ``super()``.
+
+        Dates, lifecycle, lead, folder and grants are the new project's own.
+        """
+
+        return {
+            "body": self.body,
+            "owns_items": self.owns_items,
+            "start_date_resolution": self.start_date_resolution,
+            "target_date_resolution": self.target_date_resolution,
+        }
+
+    def _copy_template(
+        self, template: Project, *, anchors: Mapping[str, Any], role_mapping: Mapping[str, Any] | None = None,
+    ) -> None:
+        """Copy ``template``'s items into this new project; only :meth:`ProjectManager.create_from_template` calls it.
+
+        That caller checked template read and ``is_template``. Copies, through
+        each row's own insert under the creating actor (so every contributor's
+        insert lifecycle runs): its milestones, in order, through
+        :meth:`Milestone.setup_template_values` (the one milestone input); its
+        open tasks and subtasks the actor reads, with the relations between
+        copied tasks, through :meth:`Task.template_copy_values`; and the tags of
+        the project and of every copied task, through the tag owner. A task
+        holding an ``assignee_role`` takes the person ``role_mapping`` names for
+        it, else no assignee: the role stays until someone is assigned. Due rules
+        copy and resolve against ``anchors`` (a rule that cannot resolve records
+        why on its row); dates, statements, grants, participants, bindings,
+        links and files never copy. The template's current phase (else the
+        first) becomes the project's current phase.
+        """
+
+        actor, bypass = self.effective_actor(strict=True)
+
+        def insert(row: Any) -> Any:
+            if isinstance(row, RuleDatedMixin):
+                row.use_subject_anchors(resolved)
+            with row.due_rule_write() if isinstance(row, RuleDatedMixin) else nullcontext():
+                if not bypass:
+                    return type(row).objects.with_actor(actor).insert(row)
+                row.sudo(reason="projects.project.copy_template").save()
+            row.unsudo()
+            return row
+
+        self.created_from_template = template
+        self.due_anchors = dict(anchors)
+        self.save(update_fields=("created_from_template", "due_anchors", "updated_at"))
+        resolved = self.due_anchor_values()  # one anchor map for every copied row
+        milestone_model = apps.get_model("projects", "Milestone")
+        phases: dict[Any, Any] = {}
+        for phase in milestone_model.system_queryset().filter(project_id=template.pk).order_by("sort_order", "pk"):
+            values = milestone_model.setup_template_values(phase.template_copy_values())
+            phases[phase.pk] = insert(milestone_model(project=self, **values))
+        task_model = apps.get_model("projects", "Task")
+        readable = task_model.system_queryset() if bypass else task_model.objects.with_actor(actor)
+        sources = {
+            row.pk: row
+            for row in readable.filter(project_id=template.pk, status=task_model.TaskStatus.OPEN)
+            .untrashed()
+            .canonical()
+            .order_by("pk")
+        }
+        order = TopologicalSorter({
+            pk: (row.parent_id,) if row.parent_id in sources else () for pk, row in sources.items()
+        }).static_order()
+        copies: dict[Any, Any] = {}
+        for pk in order:
+            source = sources[pk]
+            if source.parent_id is not None and source.parent_id not in copies:
+                continue  # its parent is closed, removed or unreadable: the branch stays behind
+            values = source.template_copy_values()
+            if values.get("assignee_role"):
+                person = (role_mapping or {}).get(values["assignee_role"])
+                values["assignee_id"] = person.pk if isinstance(person, models.Model) else person
+            copies[pk] = insert(task_model(
+                project=self,
+                milestone=phases.get(source.milestone_id),
+                parent=copies.get(source.parent_id),
+                **values,
+            ))
+        relation_model = apps.get_model("projects", "TaskRelation")
+        for relation in relation_model._base_manager.filter(
+            task_id__in=copies, related_task_id__in=copies,
+        ).order_by("pk"):
+            insert(relation_model(
+                task=copies[relation.task_id], related_task=copies[relation.related_task_id], kind=relation.kind,
+            ))
+        assignments: Any = type(self)._meta.get_field("tag_assignments").related_model
+        with system_context(reason="projects.project.copy_template.tags") if bypass else actor_context(actor):
+            assignments.objects.copy([(template, self), *((sources[pk], copy) for pk, copy in copies.items())])
+        first = phases.get(template.current_milestone_id) or next(iter(phases.values()), None)
+        if first is not None:
+            self.set_current_milestone(first)
+
+    def due_anchor_values(self) -> dict[str, Any]:
+        """The due anchors this project's rules resolve against; a template has none, so its rules stay pending.
+
+        ``created`` is the project's creation instant; the named ``due_anchors``
+        follow it (:meth:`set_due_anchor`).
+        """
+
+        if self.is_template:
+            return {}
+        return {
+            CREATED_ANCHOR: self.created_at or timezone.now(),
+            **{name: Anchor.from_json(value) for name, value in sorted(self.due_anchors.items())},
+        }
+
+    @staticmethod
+    def due_anchor_name(name: str) -> str:
+        """Return a named due anchor's canonical name; ``created`` and ``set`` are built in."""
+
+        canonical = strip_null_bytes(str(name or "")).strip()
+        if not canonical or len(canonical) > 64 or canonical in {CREATED_ANCHOR, SET_ANCHOR}:
+            raise ValidationError({"name": "Name a due anchor other than created or set, in at most 64 characters."})
+        return canonical
+
+    def set_due_anchor(self, name: str, value: Any, *, expected_revision: int | None = None) -> Project:
+        """Record (``None`` clears) one named due anchor, then re-resolve the rows that follow rules.
+
+        ``value`` is an :class:`~angee.scheduling.due.Anchor`, its JSON, or a bare
+        aware instant or date. ``created`` and ``set`` are built in, and a
+        template holds rules, not anchors.
+        """
+
+        name = self.due_anchor_name(name)
+        anchor = validate_value(Anchor, value, field="value").as_json() if value is not None else None
+        actor, bypass = self.effective_actor(strict=True)
+        with transaction.atomic():
+            locked = type(self).system_queryset(lock=("self",)).get(pk=self.pk)
+            if not bypass and not locked.with_actor(actor).has_access("write"):
+                raise PermissionDenied("Write access to the project is required to set its due anchors.")
+            if expected_revision is not None:
+                locked.require_revision(expected_revision)
+            if locked.is_template:
+                raise ValidationError({"name": "A template holds due rules, not due anchors."})
+            anchors = dict(locked.due_anchors)
+            if anchor is None:
+                anchors.pop(name, None)
+            else:
+                anchors[name] = anchor
+            if anchors != locked.due_anchors:
+                locked.due_anchors = anchors
+                locked.sudo(reason="projects.project.set_due_anchor").save(update_fields=("due_anchors", "updated_at"))
+                locked.unsudo()
+                locked.resolve_due_rules()
+            self.refresh_from_db()
+        return self
+
+    def resolve_due_rules(self) -> None:
+        """Re-resolve this project's open rule-dated milestones and tasks against its due anchors.
+
+        A system write: a following row's date is the project's fact, whoever may
+        write the row; a held date stays and only its basis moves. A reached
+        milestone and a closed task keep theirs: their dates are history. A row
+        whose rule cannot resolve records why in its basis (``unresolved``) and
+        keeps its date, so one row never blocks the project's anchors.
+        """
+
+        anchors = self.due_anchor_values()
+        for model_name in ("Milestone", "Task"):
+            model = apps.get_model("projects", model_name)
+            rows = model.system_queryset(lock=("self",)).filter(project_id=self.pk, due_rule__isnull=False)
+            for row in rows.exclude(model.due_history_q()).order_by("pk"):
+                row.project = self  # the saves read the project they already hold
+                row.use_subject_anchors(anchors).save_due_rule(reason="projects.project.resolve_due_rules")
 
     def apply_setup(
         self,
@@ -866,9 +1487,22 @@ class Project(
         return milestones.readable_count_subquery(actor=actor)
 
     def save(self, *args: Any, **kwargs: Any) -> None:
-        """Require target authority before a folder edit can widen project access."""
+        """Require target authority before a folder edit can widen project access; guard the template flag.
+
+        A project becoming a template is validated (:meth:`validate_becoming_template`),
+        and its rule-dated rows re-resolve whenever the flag changes: a template
+        supplies no due anchors, so its rules wait.
+        """
 
         update_fields = kwargs.get("update_fields")
+        flag_changed = False
+        if update_fields is None or "is_template" in update_fields:
+            stored = None if self._state.adding else (
+                type(self)._base_manager.filter(pk=self.pk).values_list("is_template", flat=True).first()
+            )
+            flag_changed = stored is not None and stored != self.is_template
+            if self.is_template and (self._state.adding or flag_changed):
+                self.validate_becoming_template()
         folder_is_written = update_fields is None or bool({"folder", "folder_id"}.intersection(update_fields))
         previous: Any = None
         previous_folder_id = None
@@ -886,6 +1520,8 @@ class Project(
                 if self.folder_id is not None:
                     require_binding_access(project=self, target=self.folder)
         super().save(*args, **kwargs)
+        if flag_changed:
+            self.resolve_due_rules()
 
     def pause(self, *, expected_revision: int | None = None) -> Project:
         """Pause this project, idempotently."""
@@ -995,9 +1631,14 @@ class MilestoneQuerySet[MilestoneT: Milestone](AngeeHistoryQuerySet[MilestoneT])
     """Milestone rows with project scheduling helpers."""
 
     def overdue(self) -> Self:
-        """Unfinished milestones past their target on open projects."""
+        """Unfinished milestones past their target on open projects; a template's phases are never overdue."""
 
-        return self.filter(target_date__lt=timezone.localdate(), reached_at__isnull=True, project__status="open")
+        return self.filter(
+            target_date__lt=timezone.localdate(),
+            reached_at__isnull=True,
+            project__status="open",
+            project__is_template=False,
+        )
 
 
 _MilestoneManagerBase = AngeeHistoryManager.from_queryset(MilestoneQuerySet)
@@ -1008,6 +1649,7 @@ class _MilestoneManager[MilestoneT: Milestone](_MilestoneManagerBase[MilestoneT]
 
 
 class Milestone(
+    RuleDatedMixin,
     StatedRecordMixin,
     HistoryMixin,
     OptimisticLockMixin,
@@ -1016,10 +1658,11 @@ class Milestone(
     AngeeDataModel,
     concrete=True,
 ):
-    """A named marker reached within one project."""
+    """A named marker reached within one project; its target date may come from a due rule."""
 
     sqid_prefix = "mls_"
     immutable_fields = ("reached_at", "reached_by_id")
+    due_date_field = "target_date"
 
     objects = _MilestoneManager()
 
@@ -1048,7 +1691,9 @@ class Milestone(
                 candidates=lifecycle_candidates,
                 apply=apply_lifecycle,
             ),
-            "schedule": Aspect(fields=("start_date", "target_date"), precedence=STATED_BY),
+            "schedule": Aspect(
+                fields=("start_date", "target_date"), precedence=STATED_BY, apply=RuleDatedMixin.apply_schedule,
+            ),
         },
         sqid_prefix="mss_",
     )
@@ -1058,6 +1703,20 @@ class Milestone(
         """Validate the milestone-owned portion of a setup template."""
 
         return MilestoneTemplate.values(values)
+
+    @classmethod
+    def due_history_q(cls) -> models.Q:
+        """A reached milestone's target date is history."""
+
+        return models.Q(reached_at__isnull=False)
+
+    def template_copy_values(self) -> dict[str, Any]:
+        """This template phase as a setup template; contributors extend through ``super()``.
+
+        A copy carries the rule, never the dates: they resolve in the new project.
+        """
+
+        return {"name": self.name, "description": self.description, "due_rule": self.due_rule}
 
     def complete_setup_template(self, values: Mapping[str, Any]) -> None:
         """Fill missing nullable template values while preserving prior work."""
@@ -1197,16 +1856,23 @@ class Task(
     OwnerMixin,
     OptimisticLockMixin,
     ThreadedModelMixin,
+    RuleDatedMixin,
     StatedRecordMixin,
     HistoryMixin,
     AngeeDataModel,
     concrete=True,
 ):
-    """The platform's one table for a discrete human action."""
+    """The platform's one table for a discrete human action.
+
+    ``due_date`` is the local day lists, boards and timelines read; ``due_at`` is
+    the aware instant a due rule gives when time of day matters (``RuleDatedMixin``).
+    """
 
     _angee_base = TaskBaseManager()
 
     sqid_prefix = "tsk_"
+    due_date_field = "due_date"
+    due_instant_field = "due_at"
     MERGED_PERMISSION = "write"
     retains_merged = True
     merge_policy = MergePolicy.MOVE
@@ -1215,6 +1881,8 @@ class Task(
     owner_container = "project"
     immutable_fields: ClassVar[tuple[str, ...]] = ("visibility",)
     rebac_grantable = {"reader": "share", "editor": "share"}
+    # A repetition's lineage stays on the original retained identity.
+    merge_policies = {"repeated_from": MergePolicy.KEEP}
 
     ORDERING_RANK_FIELDS: ClassVar[tuple[str, ...]] = ("sort_order", "sub_sort_order")
     ORDERING_FIELDS: ClassVar[frozenset[str]] = frozenset({
@@ -1400,6 +2068,8 @@ class Task(
         on_delete=models.SET_NULL,
         related_name="assigned_project_tasks",
     )
+    assignee_role = models.CharField(max_length=64, blank=True, default="")
+    """A consumer-named role a template task is assigned by; ``create_from_template`` maps it to a person."""
     delegate = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         null=True,
@@ -1409,7 +2079,16 @@ class Task(
     )
     priority = StateField(choices_enum=TaskPriority, default=TaskPriority.NONE)
     due_date = models.DateField(null=True, blank=True, db_index=True)
-    recurrence = RecurrenceField()
+    due_at = models.DateTimeField(null=True, blank=True, editable=False, db_index=True)
+    repeated_from = models.OneToOneField(
+        "projects.Task",
+        null=True,
+        blank=True,
+        editable=False,
+        on_delete=models.SET_NULL,
+        related_name="repetition",
+    )
+    """The completed task whose repeating due rule created this one; each task repeats once."""
     sort_order = FractionalRankField()
     sub_sort_order = FractionalRankField()
     done_at = models.DateTimeField(null=True, blank=True, db_index=True)
@@ -1476,7 +2155,7 @@ class Task(
                 precedence=STATED_BY,
                 apply=apply_lifecycle,
             ),
-            "schedule": Aspect(fields=("due_date",), precedence=STATED_BY),
+            "schedule": Aspect(fields=("due_date",), precedence=STATED_BY, apply=RuleDatedMixin.apply_schedule),
             "priority": Aspect(fields=("priority",), precedence=STATED_BY),
             "assignment": Aspect(fields=("assignee",), precedence=STATED_BY),
             "structure": Aspect(fields=("project", "milestone", "parent"), precedence=STATED_BY),
@@ -1521,6 +2200,153 @@ class Task(
         """Return the task title."""
 
         return self.title
+
+    @classmethod
+    def due_history_q(cls) -> models.Q:
+        """A closed (done or dropped) task's date is history."""
+
+        return ~models.Q(status=cls.TaskStatus.OPEN)
+
+    def due_subject_anchors(self) -> dict[str, Any]:
+        """A task's due anchors are its project's; a task about no project has its own ``created``."""
+
+        if self.project_id is None:
+            return {CREATED_ANCHOR: self.created_at or timezone.now()}
+        return super().due_subject_anchors()
+
+    def resolve_due(self, rule: DueRule) -> Due:
+        """A repetition steps from the inputs stored on it when it was created; a first task resolves its anchors.
+
+        ``due_basis.repeats`` holds the previous due point and the completion
+        (``DueRule.resolve_next``), so reopening the completed task never moves
+        its repetition; a moved anchor still reaches a from-completion repeat.
+        """
+
+        inputs = self.due_basis.get(REPEATS) if self.due_basis else None
+        if inputs:
+            prior = Due.from_json(inputs["previous"])
+            if prior is not None:
+                following = rule.resolve_next(
+                    prior, done=datetime.fromisoformat(inputs["done"]), anchors=self.due_anchor_values(),
+                )
+                if following is not None:
+                    return following
+        return super().resolve_due(rule)
+
+    def repetition_values(self) -> dict[str, Any]:
+        """Values the next task of this task's repeating rule carries; contributors extend through ``super()``.
+
+        It keeps this task's place, subject, audience, owner, people and rule;
+        its ranks, lifecycle, date, subtasks and direct shares are its own.
+        """
+
+        return {
+            "project_id": self.project_id,
+            "milestone_id": self.milestone_id,
+            "parent_id": self.parent_id,
+            "subject_content_type_id": self.subject_content_type_id,
+            "subject_object_id": self.subject_object_id,
+            "visibility": self.visibility,
+            "owner_id": self.owner_id,
+            "title": self.title,
+            "note": self.note,
+            "priority": self.priority,
+            "assignee_id": self.assignee_id,
+            "assignee_role": self.assignee_role,
+            "delegate_id": self.delegate_id,
+            "activity_type_id": self.activity_type_id,
+            "due_rule": self.due_rule,
+        }
+
+    def create_repetition(self) -> Task | None:
+        """Create the next task this completed task's repeating rule asks for, once per task.
+
+        Runs when a save moves the stored status to done, whichever path completes
+        it (a verb, a stage, a source). A system write: the rule asks for the
+        work, whoever completed it. The repetition takes :meth:`repetition_values`
+        and this task's tags, and is due at ``rule.resolve_next`` from this task's
+        basis and completion, both stored on it (``due_basis.repeats``). Nothing
+        is created when the rule ends or does not repeat, when this task already
+        repeated (a reopened task completed again keeps its one repetition), when
+        its project is closed or its parent task is no longer open; a reached
+        milestone does not take the repetition.
+        """
+
+        rule = DueRule.from_json(self.due_rule)
+        prior = self.rule_due()
+        if rule is None or rule.repeat.kind == "once" or prior is None or self.done_at is None:
+            return None
+        if rule.repeat.kind == "calendar" and prior.local_date is None:
+            return None
+        if rule.resolve_next(prior, done=self.done_at, anchors=self.due_anchor_values()) is None:
+            return None
+        tasks = type(self)._base_manager
+        if tasks.filter(repeated_from_id=self.pk).exists():
+            return None
+        projects = type(self).project.field.related_model._base_manager
+        if self.project_id is not None and not projects.filter(
+            pk=self.project_id, status__in=("open", "paused"),
+        ).exists():
+            return None
+        if self.parent_id is not None and not tasks.filter(pk=self.parent_id, status=self.TaskStatus.OPEN).exists():
+            return None
+        values = self.repetition_values()
+        milestones = type(self).milestone.field.related_model._base_manager
+        if values.get("milestone_id") is not None and milestones.filter(
+            pk=values["milestone_id"], reached_at__isnull=False,
+        ).exists():
+            values["milestone_id"] = None
+        repetition = type(self)(
+            **values,
+            repeated_from=self,
+            due_basis={REPEATS: {"previous": prior.as_json(), "done": self.done_at.isoformat()}},
+        )
+        with repetition.due_rule_write(), system_context(reason="projects.task.create_repetition"):
+            repetition.save()
+        assignments: Any = type(self)._meta.get_field("tag_assignments").related_model
+        with system_context(reason="projects.task.create_repetition.tags"):
+            assignments.objects.copy([(self, repetition)])
+        return repetition
+
+    def _completes(self, update_fields: Any) -> bool:
+        """Whether this save moves a repeating task's stored status to done."""
+
+        if self._state.adding or self.status != self.TaskStatus.DONE or self.due_rule is None:
+            return False
+        if update_fields is not None and "status" not in update_fields:
+            return False
+        stored = type(self)._base_manager.filter(pk=self.pk).values_list("status", flat=True).first()
+        return stored is not None and stored != self.TaskStatus.DONE
+
+    def _repeat_after_completion(self) -> None:
+        """Create the repetition in its own savepoint: if it fails, the completion stands and the failure is logged."""
+
+        try:
+            with transaction.atomic():
+                self.create_repetition()
+        except Exception:  # noqa: BLE001 -- the person's completion outranks the rule's consequence
+            logger.exception("Task %s was completed, but its repetition could not be created.", self.pk)
+
+    def template_copy_values(self) -> dict[str, Any]:
+        """Task values a copy of this template task carries; contributors extend through ``super()``.
+
+        The rule and the audience copy and the date resolves in the new
+        project; lifecycle, the record subject and grants are the copy's own.
+        """
+
+        return {
+            "title": self.title,
+            "note": self.note,
+            "visibility": self.visibility,
+            "priority": self.priority,
+            "assignee_id": self.assignee_id,
+            "assignee_role": self.assignee_role,
+            "delegate_id": self.delegate_id,
+            "activity_type_id": self.activity_type_id,
+            "due_rule": self.due_rule,
+            "sort_order": self.sort_order,
+            "sub_sort_order": self.sub_sort_order,
+        }
 
     @classmethod
     def lock_merge_records(cls, records: Sequence[Self]) -> None:
@@ -1625,6 +2451,18 @@ class Task(
         self._validate_structure()
 
     def save(self, *args: Any, **kwargs: Any) -> None:
+        """Save the row, then create the repetition a repeating rule asks for when the save completes it.
+
+        If the repetition fails the completion stands and the failure is logged
+        (:meth:`_repeat_after_completion`).
+        """
+
+        completing = self._completes(kwargs.get("update_fields"))
+        self._save_row(*args, **kwargs)
+        if completing and self.status == self.TaskStatus.DONE:
+            self._repeat_after_completion()
+
+    def _save_row(self, *args: Any, **kwargs: Any) -> None:
         """Authorize project moves and assignment before revalidating task structure."""
 
         fields = kwargs.get("update_fields")

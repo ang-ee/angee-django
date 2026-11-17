@@ -19,6 +19,7 @@ import { ToolbarRoot } from "../ui/toolbar";
 import { textRoleVariants } from "../ui/text";
 import {
   SegmentedControl,
+  ToggleGroup,
   type SegmentedControlOption,
 } from "../ui/toggle-group";
 import type {
@@ -62,7 +63,6 @@ export interface ResourceToolbarProps {
   utilityActions?: ReactNode;
   viewControls?: ResourceToolbarViewControls;
   availableViews?: readonly ResourceViewKind[];
-  viewSwitcher?: ReactNode;
   onPageChange?: (page: number) => void;
   onPageSizeChange?: (pageSize: number) => void;
   pagerPageSizeOptions?: readonly number[];
@@ -98,6 +98,12 @@ export interface ResourceToolbarViewControls {
   onPrev: () => void;
   onToday: () => void;
   onNext: () => void;
+  /** One toggle per labelled occurrence source; a pressed source shows on the grid. */
+  sources?: {
+    options: readonly { value: string; label: ReactNode }[];
+    visible: readonly string[];
+    onVisibleChange: (visible: readonly string[]) => void;
+  };
 }
 
 export interface ResourceToolbarGroupOption {
@@ -114,11 +120,10 @@ export interface ResourceToolbarCustomFilterChip {
   label: ReactNode;
 }
 
-export interface ResourceViewSwitcherProps<TView extends string = ResourceViewKind> {
-  view: TView;
-  onViewChange?: (view: TView) => void;
-  mode?: "resource" | "layout";
-  /** The resource-mode kinds to offer; defaults to list + board. */
+export interface ResourceViewSwitcherProps {
+  view: ResourceViewKind;
+  onViewChange?: (view: ResourceViewKind) => void;
+  /** The kinds to offer, labelled by the collection's `#views`; defaults to list + board. */
   kinds?: readonly ResourceViewKind[];
   ariaLabel?: string;
   className?: string;
@@ -138,7 +143,7 @@ export function ResourceToolbar(props: ResourceToolbarProps): ReactElement {
 
 /** The pane presentation owns no query state; all commands belong to the resource. */
 function PaneResourceToolbar({ search, pane, searchDeclaration, modelMetadata, sortOptions = [], sorting,
-  onSortingChange, chrome, view, onViewChange, availableViews, viewSwitcher, actions, utilityActions,
+  onSortingChange, chrome, view, onViewChange, availableViews, actions, utilityActions,
   onCreate, createLabel, viewControls }: ResourceToolbarProps): ReactElement {
   const t = useUiT();
   const shortcuts = useSearchShortcuts(searchDeclaration, modelMetadata);
@@ -184,7 +189,7 @@ function PaneResourceToolbar({ search, pane, searchDeclaration, modelMetadata, s
       {actions}{viewControls ? <ResourceViewControls {...viewControls} /> : null}{utilityActions}
       {view && onViewChange && chrome?.viewSwitcher !== false ? <ResourceViewSwitcher view={view}
         kinds={availableViews} favorites={search.catalog.favorites} onFavoriteSelect={(favorite) => search.applyFavorite(favorite.id)}
-        onViewChange={onViewChange} /> : null}{chrome?.viewSwitcher !== false ? viewSwitcher : null}</>}
+        onViewChange={onViewChange} /> : null}</>}
     overflow={<PaneToolbarMenu groups={groups} items={pane?.overflowItems} />} />
     {expandedSearch ? <div className="border-b border-border-subtle px-2 py-2">
       <SearchControls search={search} shortcuts={shortcuts} box />
@@ -193,7 +198,7 @@ function PaneResourceToolbar({ search, pane, searchDeclaration, modelMetadata, s
 
 function FullResourceToolbar({
   search, pager, chrome, view, searchDeclaration, modelMetadata, createLabel, onCreate, actions,
-  utilityActions, viewControls, availableViews, viewSwitcher, onPageChange,
+  utilityActions, viewControls, availableViews, onPageChange,
   onPageSizeChange, pagerPageSizeOptions, pagerMaxPageSize, onViewChange,
   pagerSubject, pagerTotalUnit, className, wrap = false,
 }: ResourceToolbarProps): ReactElement {
@@ -252,7 +257,6 @@ function FullResourceToolbar({
             onViewChange={onViewChange}
           />
         ) : null}
-        {chrome?.viewSwitcher !== false ? viewSwitcher : null}
       </div>
     </ToolbarRoot>
   );
@@ -306,6 +310,7 @@ function ResourceViewControls({
   onPrev,
   onToday,
   onNext,
+  sources,
 }: ResourceToolbarViewControls): ReactElement {
   const t = useUiT();
   return (
@@ -343,6 +348,20 @@ function ResourceViewControls({
         onValueChange={onModeChange}
         aria-label={t("resourceToolbar.periodMode")}
       />
+      {sources ? (
+        <ToggleGroup
+          multiple
+          variant="pills"
+          size="sm"
+          value={[...sources.visible]}
+          onValueChange={(visible) => sources.onVisibleChange(visible)}
+          aria-label={t("resourceToolbar.calendarSources")}
+        >
+          {sources.options.map((option) => (
+            <ToggleGroup.Item key={option.value} value={option.value}>{option.label}</ToggleGroup.Item>
+          ))}
+        </ToggleGroup>
+      ) : null}
     </div>
   );
 }
@@ -350,41 +369,27 @@ function ResourceViewControls({
 /**
  * @owner ResourceToolbar
  */
-export function ResourceViewSwitcher<TView extends string = ResourceViewKind>({
+export function ResourceViewSwitcher({
   view,
   onViewChange,
-  mode = "resource",
   kinds,
   ariaLabel,
   className,
   favorites = [],
   onFavoriteSelect,
-}: ResourceViewSwitcherProps<TView>): ReactElement | null {
+}: ResourceViewSwitcherProps): ReactElement | null {
   const t = useUiT();
   const viewKinds = useResourceViewKinds();
-  const options = mode === "layout"
-    ? [
-        {
-          value: "list" as TView,
-          label: t("resourceToolbar.listView"),
-          icon: "list",
-        },
-        {
-          value: "grid" as TView,
-          label: t("resourceToolbar.gridView"),
-          icon: "layout-grid",
-        },
-      ]
-    : (kinds ?? DEFAULT_SWITCHER_KINDS).flatMap((kind) => {
-        // The collection's `#views` declare each kind's label and glyph.
-        const content = viewKinds.get(kind);
-        return content ? [{
-          value: kind as TView,
-          label: content.labelKey ? t(content.labelKey) : content.label ?? kind,
-          icon: content.icon,
-        }] : [];
-      });
-  if (mode === "resource" && options.length <= 1) return null;
+  const options = (kinds ?? DEFAULT_SWITCHER_KINDS).flatMap((kind) => {
+    // The collection's `#views` declare each kind's label and glyph.
+    const content = viewKinds.get(kind);
+    return content ? [{
+      value: kind,
+      label: content.labelKey ? t(content.labelKey) : content.label ?? kind,
+      icon: content.icon,
+    }] : [];
+  });
+  if (options.length <= 1) return null;
   return (
     <div
       className={cn("flex items-center gap-1", className)}

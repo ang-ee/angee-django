@@ -495,6 +495,23 @@ describe("compileContainers", () => {
     expect(contents({ except: ["integrate.resume"] })).toEqual([]);
   });
 
+  test("unique address keeps one child per rendered address, besides impl children and variants", () => {
+    const cards: CoreContainer = { address: "resource#card", models: true, unique: "address" };
+    const notes = layer("notes", { "notes.Note#card": { "notes.card": { content: 1 } } });
+    // Each model may hold its own card.
+    expect(() => compileContainers([notes, layer("tasks", { "tasks.Task#card": { "tasks.card": { content: 2 } } })], [cards])).not.toThrow();
+    expect(() => compileContainers([notes, layer("skin", { "notes.Note#card": { "skin.card": { content: 2 } } })], [cards]))
+      .toThrow(/Children "notes.card" and "skin.card" of "notes.Note#card" are both its one child/);
+    // A kind-level child renders with every model's, so it collides with any of them.
+    expect(() => compileContainers([notes, layer("skin", { "resource#card": { "skin.card": { content: 2 } } })], [cards]))
+      .toThrow(/are both its one child/);
+    const varied = compileContainers([notes, layer("skin", { "notes.Note#card": {
+      "skin.pinned": { content: 2, variant: { of: "notes.card", impl: "pinned" } },
+      "skin.archived": { content: 3, impl: "archived" },
+    } }, ["notes"])], [cards]);
+    expect(ids(varied.children["notes.Note#card"] ?? [])).toEqual(["notes.card", "skin.pinned", "skin.archived"]);
+  });
+
   test("a built-in view kind is hidden or moved by its bare id", () => {
     const views: CoreContainer = { address: "resource#views", models: true, children: {
       list: { content: "list", sequence: 10 }, board: { content: "board", sequence: 20 }, calendar: { content: "calendar", sequence: 30 },

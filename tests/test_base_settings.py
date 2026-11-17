@@ -62,7 +62,7 @@ assert namespace['COMPOSE_WATCH_PATHS']==(root/'authored-watch',)
 ''', tmp_path)
 
 
-def test_dotenv_urls_pool_cache_csrf_and_process_environment_precedence(tmp_path: Path) -> None:
+def test_dotenv_urls_pool_cache_origin_and_process_environment_precedence(tmp_path: Path) -> None:
     _probe(_SEAM + r'''
 (root / '.env').write_text('DATABASE_URL=postgres://user:pass@localhost:5432/example\nANGEE_DB_POOL=true\nANGEE_DB_POOL_MAX_SIZE=3\nCACHE_URL=locmemcache://policy\nCELERY_BROKER_URL=redis://localhost:6379/4\nANGEE_PUBLIC_ORIGIN=https://example.test\nPRESERVE=dotenv\n')
 os.environ['PRESERVE'] = 'process'
@@ -75,7 +75,10 @@ assert database['OPTIONS']['options'] == '-c jit=off'
 assert database['OPTIONS']['pool'] == {'min_size':0, 'max_size':3, 'timeout':5.0}
 assert namespace['CACHES']['default']['BACKEND'] == 'django.core.cache.backends.locmem.LocMemCache'
 assert namespace['CELERY_BROKER_URL'] == 'redis://localhost:6379/4'
-assert namespace['CSRF_TRUSTED_ORIGINS'] == ['https://example.test']
+# The dotenv origin reaches the compiler's ANGEE_ environment overlay, which
+# resolves base's ANGEE_PUBLIC_ORIGIN; base's autoconfig then trusts it for CSRF.
+assert os.environ['ANGEE_PUBLIC_ORIGIN'] == 'https://example.test'
+assert namespace['CSRF_TRUSTED_ORIGINS'] == []
 ''', tmp_path)
 
 

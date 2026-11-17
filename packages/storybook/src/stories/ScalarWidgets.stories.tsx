@@ -48,6 +48,15 @@ type OwnerCellStoryValue =
 
 type NumericWidgetValue = number | string | null;
 
+/** Invented labels filed under two ordered headings, plus one with none. */
+const groupedLabelOptions = [
+  { value: "label-partner", label: "Partner", group: "Relationship", groupOrder: 2 },
+  { value: "label-prospect", label: "Prospect", group: "Relationship", groupOrder: 2 },
+  { value: "label-enterprise", label: "Enterprise", group: "Segment", groupOrder: 1 },
+  { value: "label-small", label: "Small team", group: "Segment", groupOrder: 1 },
+  { value: "label-follow-up", label: "Follow up" },
+];
+
 const meta = {
   title: "Widgets/Scalar Fields",
   parameters: {
@@ -175,6 +184,12 @@ export const EditAndRead: Story = {
             widget={defaultWidgets.many2many}
             initialValue={["rec-1001", "rec-1003"]}
             field={{ label: "Linked records", options: recordOptions }}
+          />
+          <WidgetExample<readonly unknown[]>
+            kind="many2many (option groups)"
+            widget={defaultWidgets.many2many}
+            initialValue={["label-partner"]}
+            field={{ label: "Labels", options: groupedLabelOptions }}
           />
         </div>
       </div>

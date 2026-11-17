@@ -5,6 +5,8 @@ import { developmentMode } from "../lib/development-mode";
 import { orderById, positionSiblings } from "../lib/position";
 import type { BuiltInResourceViewKind } from "../views/resource/model/capabilities";
 import type { ResourceViewKindCapabilities } from "../views/resource/model/capabilities";
+import type { CardRenderer } from "../views/resource/resource-view-types";
+import type { CardFrame } from "../ui/card";
 import type { ChatterTabContent, DrawerContribution, DrawerEdge, TimelineKindContent, RelatedGroupContent } from "./contracts";
 import { isPresent, sessionPermitted, useAppRuntime } from "./runtime";
 
@@ -26,6 +28,8 @@ export interface ContainerKinds {
   chrome: ReactNode;
   /** The view kinds a resource collection's switcher offers. */
   views: ResourceViewKindContent;
+  /** A model's card on its board and gallery kinds (`<app.Model>#card`), one per model. */
+  card: ResourceCardContent;
   /** Collection utilities beside a resource view's toolbar. */
   utilities: ReactNode;
   /** Notices below the console navigation, above the page controls. */
@@ -84,6 +88,22 @@ export interface ResourceViewKindContent {
   render?: ComponentType<{ resource: string }>;
 }
 
+/**
+ * A model's card, registered once as the one child of `<app.Model>#card`: the
+ * board and gallery kinds of that model's lists draw it wherever the page
+ * declares no card of its own. The child's `requiredFields` name the fields the
+ * card reads, which the list selects. `render` receives any row of the model
+ * (`Row`), so narrow it to the model's row type where the fields it reads are
+ * declared, and narrow the context on `kind` before reading a board-only fact;
+ * like every card renderer it is called as a plain function, so it returns a
+ * component that holds any hooks.
+ */
+export interface ResourceCardContent {
+  render: CardRenderer;
+  /** How the card's content meets its frame; each surface's default when omitted. */
+  frame?: CardFrame;
+}
+
 /** When a render-time verb applies: an app or route on the active trail. */
 export interface ContainerCondition {
   app?: string | readonly string[];
@@ -138,8 +158,12 @@ export type ContainerEntry<TContent> = {
   force?: true;
   /** Where the entry's render verbs (`only`, `except`, `hide`) apply. */
   when?: ContainerCondition;
-  /** On an addon's own container: at most one child per `key`. */
-  unique?: "key";
+  /**
+   * On an addon's own container: `key`, at most one child per `key`; `address`,
+   * at most one child per address a page renders together, besides its `impl`
+   * children and variants.
+   */
+  unique?: "key" | "address";
   /** On an addon's own container: also addressed per model (`<model>#<name>`), inheriting along MTI parents. */
   models?: true;
 } & { readonly [child: `${string}.${string}`]: ContainerChild<TContent> | ContainerAlteration }
@@ -156,6 +180,8 @@ export type ContainersDeclaration = {
 export interface CoreContainer {
   address: `${string}#${string}`;
   models?: boolean;
+  /** `address`: one child per address a page renders together, besides `impl` children and variants. */
+  unique?: "key" | "address";
   /** Children the framework itself declares, under bare ids (`list`, `board`) its owner already persists. */
   children?: Readonly<Record<string, ContainerChild>>;
   /** The owner also adds children at render time (a page's chatter tabs), so `only` may name ids composition cannot know. */
@@ -193,7 +219,7 @@ export interface ContainerRule {
 /** The composed containers the runtime renders from. */
 export interface ComposedContainers {
   /** Every container: its owner (`framework` for core ones) and whether it takes model addresses. */
-  declared: Readonly<Record<string, { owner: string; models: boolean; unique?: "key"; extras?: true }>>;
+  declared: Readonly<Record<string, { owner: string; models: boolean; unique?: "key" | "address"; extras?: true }>>;
   children: Readonly<Record<string, readonly ComposedContainerChild[]>>;
   rules: Readonly<Record<string, readonly ContainerRule[]>>;
   /** Children a layer removed, and who removed them. */
@@ -244,7 +270,8 @@ export function containersFromChildren(
   return {
     ...EMPTY_CONTAINERS,
     declared: Object.fromEntries(core.map((container) => [container.address,
-      { owner: "framework", models: container.models === true, ...(container.extras ? { extras: true as const } : {}) }])),
+      { owner: "framework", models: container.models === true, ...(container.extras ? { extras: true as const } : {}),
+        ...(container.unique ? { unique: container.unique } : {}) }])),
     children: composed,
   };
 }

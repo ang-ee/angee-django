@@ -66,6 +66,78 @@ describe("branded single-root rail", () => {
 });
 
 
+describe("branded multi-root rail", () => {
+  test("the app chooser carries the brand mark and the caption the brand name", async () => {
+    const router = createRouter({
+      history: createMemoryHistory({ initialEntries: ["/"] }),
+      routeTree: createRootRoute({ component: () => <AppRuntimeProvider runtime={{
+        brand: { name: "Notebook", mark: "notebook-mark" },
+        icons: { "notebook-mark": () => <svg data-testid="brand-mark" /> },
+        userPreferences: { available: true, preferences: { [APP_RAIL_PREFERENCES_KEY]: { expanded: true } }, patchPreferences: vi.fn() },
+      }}><AppRail menuItems={[
+        { id: "notes", label: "Notes", to: "/notes", icon: "book" },
+        { id: "files", label: "Files", to: "/files", icon: "files" },
+      ]} /></AppRuntimeProvider> }),
+    });
+    render(<RouterProvider router={router} />);
+    const chooser = await screen.findByRole("button", { name: "Switch app" });
+    expect(within(chooser).getByTestId("brand-mark")).toBeTruthy();
+    expect(screen.getByText("Notebook")).toBeTruthy();
+    expect(screen.queryByText("Apps")).toBeNull();
+  });
+  test("without a brand the chooser keeps the framework glyph and the Apps caption", async () => {
+    const router = createRouter({
+      history: createMemoryHistory({ initialEntries: ["/"] }),
+      routeTree: createRootRoute({ component: () => <AppRuntimeProvider runtime={{
+        icons: { angee: () => <svg data-testid="angee-mark" /> },
+        userPreferences: { available: true, preferences: { [APP_RAIL_PREFERENCES_KEY]: { expanded: true } }, patchPreferences: vi.fn() },
+      }}><AppRail menuItems={[
+        { id: "notes", label: "Notes", to: "/notes", icon: "book" },
+        { id: "files", label: "Files", to: "/files", icon: "files" },
+      ]} /></AppRuntimeProvider> }),
+    });
+    render(<RouterProvider router={router} />);
+    const chooser = await screen.findByRole("button", { name: "Switch app" });
+    expect(within(chooser).getByTestId("angee-mark")).toBeTruthy();
+    expect(screen.getByText("Apps")).toBeTruthy();
+  });
+  test("a named multi-root app's stand-in brand (its first root's label and icon) is not shown as a brand", async () => {
+    const router = createRouter({
+      history: createMemoryHistory({ initialEntries: ["/"] }),
+      routeTree: createRootRoute({ component: () => <AppRuntimeProvider runtime={{
+        brand: { name: "Notes", mark: "book" }, brandFallback: true,
+        icons: { angee: () => <svg data-testid="angee-mark" />, book: () => <svg data-testid="book-mark" /> },
+        userPreferences: { available: true, preferences: { [APP_RAIL_PREFERENCES_KEY]: { expanded: true } }, patchPreferences: vi.fn() },
+      }}><AppRail menuItems={[
+        { id: "notes", label: "Notes", to: "/notes", icon: "book" },
+        { id: "files", label: "Files", to: "/files", icon: "files" },
+      ]} /></AppRuntimeProvider> }),
+    });
+    render(<RouterProvider router={router} />);
+    const chooser = await screen.findByRole("button", { name: "Switch app" });
+    expect(within(chooser).getByTestId("angee-mark")).toBeTruthy();
+    expect(within(chooser).queryByTestId("book-mark")).toBeNull();
+    expect(screen.getByText("Apps")).toBeTruthy();
+  });
+  test("a declared brand whose mark is not registered falls back to the framework glyph", async () => {
+    const router = createRouter({
+      history: createMemoryHistory({ initialEntries: ["/"] }),
+      routeTree: createRootRoute({ component: () => <AppRuntimeProvider runtime={{
+        brand: { name: "Notebook", mark: "unregistered-mark" },
+        icons: { angee: () => <svg data-testid="angee-mark" /> },
+        userPreferences: { available: true, preferences: { [APP_RAIL_PREFERENCES_KEY]: { expanded: true } }, patchPreferences: vi.fn() },
+      }}><AppRail menuItems={[
+        { id: "notes", label: "Notes", to: "/notes", icon: "book" },
+        { id: "files", label: "Files", to: "/files", icon: "files" },
+      ]} /></AppRuntimeProvider> }),
+    });
+    render(<RouterProvider router={router} />);
+    const chooser = await screen.findByRole("button", { name: "Switch app" });
+    expect(within(chooser).getByTestId("angee-mark")).toBeTruthy();
+    expect(screen.getByText("Notebook")).toBeTruthy();
+  });
+});
+
 test("the brand follows a query-bearing app target through the same chrome conversion", async () => {
   const root = createRootRoute({ component: () => <AppRuntimeProvider runtime={{ brand: { name: "Notebook", mark: "book" } }}>
     <AppRail menuItems={[{ id: "notes", label: "Notes", to: "/notes?preset=all" }]} />

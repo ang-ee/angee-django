@@ -67,6 +67,15 @@ independently. The stored document contains stable IDs and versioned inputs:
 }
 ```
 
+A selected app may lock its theme (`themeLocked: true` beside the app's or its
+root's `theme`; see [`selectApp`](../../packages/app/src/boot-app.tsx)). Only the app
+selection locks: the build defaults cannot. Within that app the locked theme and the
+host options replace the person's `themeId` and `options`, which stay saved and apply
+again in unlocked apps; their `colorScheme` still applies. A locked app does not
+write the device's boot cache, so the next first paint follows the person's own
+choice. The Appearance page shows why, disables the theme choices (describing them by
+that reason), and hides the customization and the theme tools there.
+
 An absent field follows the corresponding host default. Selecting a different
 theme replaces the old theme's options. Reset removes the complete appearance
 slice. If a saved theme is later uninstalled, the UI uses the host or intrinsic
@@ -237,7 +246,11 @@ export default defineBaseAddon({
 Theme IDs are globally unique stable preference keys. Labels may change.
 Definitions use only the published semantic token allowlist; values are bounded
 and cannot contain CSS rules, URLs or declarations.
-The allowlist includes typography weights (integer 100–900), selected font sizes
+The allowlist includes three font families: `--font-family-sans` for body text,
+`--font-family-mono` for code, and `--font-family-display` for the title-like text
+roles (`display`, `title`, `heading`) and date tiles. An unset display family follows
+the sans family, so a theme that names only a body face looks the same everywhere.
+It also includes typography weights (integer 100–900), selected font sizes
 (integer 10–40px) and line heights (integer 12–56px), chart series and surface
 colours, and motion durations (integer 0–1000ms). Easing is limited to the
 standard CSS keywords or `cubic-bezier(...)` with four finite numbers; chart

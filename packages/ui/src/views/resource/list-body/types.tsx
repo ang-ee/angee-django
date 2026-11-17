@@ -22,7 +22,14 @@ export interface GroupByDimension {
 }
 
 export type RowGroup<TRow extends Row> = {
+  /** The renderer's key (a TanStack group row id, or a declared lane's id for drag and drop). */
   key: string;
+  /**
+   * The lane's group value as a card reads it: the related record's id or the
+   * grouped value, `null` for the records with no value. Absent on the single lane
+   * of an ungrouped collection.
+   */
+  identity?: string | null;
   label: string | null;
   path: readonly string[];
   depth: number;

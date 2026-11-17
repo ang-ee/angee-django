@@ -12,4 +12,11 @@ describe("angee.tags addon manifest", () => {
     expect(tags.widgets?.["angee.tags.recordTags"]).toBeDefined();
     expect(tags.forms?.["tags.Tag"]).toBeDefined();
   });
+
+  test("routes the tag vocabulary and its categories under the Tags menu", () => {
+    expect(tags.routes?.map((route) => route.name)).toEqual(
+      expect.arrayContaining(["tags.tags", "tags.categories"]),
+    );
+    expect(tags.menus?.["tags.categories"]).toMatchObject({ route: "tags.categories", parent: "tags" });
+  });
 });

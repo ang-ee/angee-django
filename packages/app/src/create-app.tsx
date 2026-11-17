@@ -4,6 +4,7 @@ import {
   createAngeeAccessControlProvider,
   dataResourcesFromAngeeSchemaMetadata,
   defineAngeeSchemaMetadata,
+  modelFieldForPath,
   mergeModelLabelInventory,
   refineResourceIdentifier,
   schemaFieldMetadataFromAngeeSchemaMetadata,
@@ -80,7 +81,7 @@ import {
   type RuntimeVocabulary,
 } from "@angee/ui/runtime";
 import { isBuiltInResourceViewKind, validateResourceViewPreset } from "@angee/ui/views/resource-view-model";
-import { validateSearchShortcut } from "@angee/ui/views/resource-view-types";
+import { validateResourceCard, validateSearchShortcut } from "@angee/ui/views/resource-view-types";
 import { composeAddons, type ShellSettings } from "./define-addon";
 import {
   ModalsHost,
@@ -348,10 +349,11 @@ export function createApp(input: CreateAppInput): AngeeApp {
     })),
   });
   // The selected app's theme is the default until the person picks their own; the build's
-  // theme options belong to the build's theme.
+  // theme options belong to the build's theme. Only the selection can lock it.
   const appearance = selection.theme === undefined || selection.theme === input.appearance?.themeId
     ? input.appearance
     : { ...input.appearance, themeId: selection.theme, options: undefined };
+  const themeLocked = selection.themeLocked === true;
   // Optional links (`maybe`, record destinations) skip unavailable pages; authored links still build.
   const runtimeRouteHref = unavailable.size
     ? createRouteHref(routeDescriptors, { unavailable: new Set(unavailable.keys()) })
@@ -364,29 +366,47 @@ export function createApp(input: CreateAppInput): AngeeApp {
   });
   // Presence: what the menus and container children `requires`; the identity read asks which the session holds.
   const requirements = presenceRequirements(menuTree, composed.containers);
+  // A model label's metadata in every schema that projects it.
+  const modelsFor = (label: string) => Object.values(schemas).flatMap((schema) => {
+    const model = schema.fieldMetadata.labels[label];
+    return model ? [{ model, fieldMetadata: schema.fieldMetadata }] : [];
+  });
   for (const [address, children] of Object.entries(composed.containers.children)) {
     if (!address.endsWith("#search")) continue;
     const modelLabel = address.slice(0, -"#search".length);
     for (const child of children) {
       validateSearchShortcut(child.content, child.id);
       if (modelLabel === "resource") continue;
-      const models = Object.values(schemas).flatMap((schema) => {
-        const model = schema.fieldMetadata.labels[modelLabel];
-        return model ? [model] : [];
-      });
       let failure: unknown;
-      const valid = models.some((model) => {
+      const valid = modelsFor(modelLabel).some(({ model }) => {
         try { validateSearchShortcut(child.content, child.id, ResourceQuery.from(model)); return true; }
         catch (error) { failure = error; return false; }
       });
       if (!valid) throw failure ?? new Error(`Unknown resource "${modelLabel}" in search shortcut "${child.id}".`);
     }
   }
+  // A model's cards (`<app.Model>#card`; the composer allows one per model besides
+  // its impl children and variants): content the card owner accepts, and field
+  // paths the model's metadata resolves.
+  for (const [address, children] of Object.entries(composed.containers.children)) {
+    if (!address.endsWith("#card")) continue;
+    const modelLabel = address.slice(0, -"#card".length);
+    for (const card of children) {
+      if (modelLabel === "resource") {
+        throw new Error(`Card "${card.id}" is declared on "resource#card"; a card belongs to one model ("<app.Model>#card").`);
+      }
+      validateResourceCard(card.content, card.id);
+      const models = modelsFor(modelLabel);
+      if (models.length === 0) throw new Error(`Card "${card.id}" is declared for unknown model "${modelLabel}".`);
+      const unknown = (card.requiredFields ?? []).filter((path) => !models.some(({ model, fieldMetadata }) =>
+        modelFieldForPath(path, model, fieldMetadata) || model.resource.query.fields[path]));
+      if (unknown.length > 0) {
+        throw new Error(`Card "${card.id}" of "${modelLabel}" reads unknown fields ${unknown.map((field) => `"${field}"`).join(", ")}.`);
+      }
+    }
+  }
   for (const preset of Object.values(composed.resourceViews)) {
-    const models = Object.values(schemas).flatMap((schema) => {
-      const model = schema.fieldMetadata.labels[preset.resource];
-      return model ? [model] : [];
-    });
+    const models = modelsFor(preset.resource).map(({ model }) => model);
     let failure: unknown;
     const valid = models.some((model) => {
       try { validateResourceViewPreset(preset, model); return true; }
@@ -404,10 +424,7 @@ export function createApp(input: CreateAppInput): AngeeApp {
   for (const route of routes) {
     if (route.defaultFilter === undefined) continue;
     const resource = inheritedRouteFact(route, routesByName, (item) => item.recordModel ?? item.resource);
-    const models = resource ? Object.values(schemas).flatMap((schema) => {
-      const model = schema.fieldMetadata.labels[resource];
-      return model ? [model] : [];
-    }) : [];
+    const models = resource ? modelsFor(resource).map(({ model }) => model) : [];
     let failure: unknown;
     const valid = models.some((model) => {
       try { ResourceQuery.from(model).filterFrom(route.defaultFilter); return true; }
@@ -455,6 +472,7 @@ export function createApp(input: CreateAppInput): AngeeApp {
   const runtime: Omit<AppRuntime, "auth" | "logoutAction" | "userPreferences"> = {
     rail: selection.rail,
     brand: selection.brand,
+    ...(selection.brandFallback ? { brandFallback: true as const } : {}),
     ...(selection.railExpanded !== undefined ? { railExpanded: selection.railExpanded } : {}),
     widgets: { ...defaultWidgets, ...composed.widgets },
     statusTones: composed.statusTones,
@@ -635,6 +653,7 @@ export function createApp(input: CreateAppInput): AngeeApp {
           authSchema={authSchema}
           loginPath={loginPath}
           appearance={appearance}
+          themeLocked={themeLocked}
         >
           <Outlet />
         </AppFrame>
@@ -883,12 +902,14 @@ function AppFrame({
   authSchema,
   loginPath,
   appearance,
+  themeLocked,
   children,
 }: {
   viewAs: ViewAsProvider;
   authSchema: string;
   loginPath: string;
   appearance?: HostAppearanceDefaults;
+  themeLocked: boolean;
   children: ReactNode;
 }): ReactNode {
   const { auth: identityAuth, identity } = useRuntimeAuthState();
@@ -935,6 +956,7 @@ function AppFrame({
           logoutAction={logoutAction}
           loginPath={loginPath}
           appearance={appearance}
+          themeLocked={themeLocked}
         >
           {children}
         </RuntimeSessionProvider>
@@ -948,12 +970,14 @@ function RuntimeSessionProvider({
   logoutAction,
   loginPath,
   appearance,
+  themeLocked,
   children,
 }: {
   auth: AuthState;
   logoutAction: ReturnType<typeof useLogoutAction>;
   loginPath: string;
   appearance?: HostAppearanceDefaults;
+  themeLocked: boolean;
   children: ReactNode;
 }): ReactNode {
   const userPreferences = useUserPreferences();
@@ -963,7 +987,7 @@ function RuntimeSessionProvider({
   );
   return (
     <AppRuntimeProvider runtime={runtime}>
-      <AppearanceProvider host={appearance}>{children}</AppearanceProvider>
+      <AppearanceProvider host={appearance} themeLocked={themeLocked}>{children}</AppearanceProvider>
     </AppRuntimeProvider>
   );
 }
@@ -1016,8 +1040,9 @@ function validateContainerConditions(
 /**
  * Every app the deployment can select, selected or not: each menu root, each
  * `ANGEE_UI.shell.apps` entry and each `hosts` entry. Its rail lists top-level
- * roots, its home lies inside the rail, its brand mark is a registered glyph and
- * its theme is installed; a misconfigured app fails at boot, not on its host.
+ * roots, its home lies inside the rail, its brand mark is a registered glyph,
+ * its theme is installed and a theme lock has its theme beside it; a
+ * misconfigured app fails at boot, not on its host.
  */
 function validateSelections(
   shell: ShellSettings,
@@ -1030,12 +1055,15 @@ function validateSelections(
     themes: ReadonlySet<string>;
   },
 ): void {
-  const checkFacts = (where: string, declared: { brand?: RuntimeBrand; theme?: string }): void => {
+  const checkFacts = (where: string, declared: { brand?: RuntimeBrand; theme?: string; themeLocked?: boolean }): void => {
     if (declared.brand && !getIcon(known.icons, declared.brand.mark)) {
       throw new Error(`${where} brand mark "${declared.brand.mark}" is not a registered icon.`);
     }
     if (declared.theme !== undefined && !known.themes.has(declared.theme)) {
       throw new Error(`${where} theme "${declared.theme}" is not installed.`);
+    }
+    if (declared.themeLocked && declared.theme === undefined) {
+      throw new Error(`${where} sets themeLocked without a theme beside it.`);
     }
   };
   checkFacts("ANGEE_UI.shell", shell);

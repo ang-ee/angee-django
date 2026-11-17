@@ -60,7 +60,7 @@ def test_decisions_compose_independently_with_inbox_read_resources(tmp_path: Pat
     assert schema.mutation_type is not None
     mutations = schema.mutation_type.fields
     assert "decide" in mutations
-    assert set(mutations["decide"].args) == {"id", "revision", "chosen", "values"}
+    assert set(mutations["decide"].args) == {"id", "revision", "chosen", "values", "on_behalf_of", "evidence", "note"}
     assert "verdict_values" in get_named_type(schema.query_type.fields["decisions"].type).fields
     assert not any(name.startswith(("insert_decision", "update_decision", "delete_decision")) for name in mutations)
     filters = schema.query_type.fields["decisions"].args["where"].type

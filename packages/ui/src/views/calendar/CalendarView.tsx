@@ -86,7 +86,7 @@ export interface CalendarViewProps {
 const CalendarSurface = lazy(() => import("./calendar-surface"));
 
 /**
- * The month/week/day event calendar — a standalone `@angee/ui` primitive
+ * The month/week/day/list event calendar — a standalone `@angee/ui` primitive
  * (occurrences in, interaction callbacks out, the `GraphView`
  * shape) composed over FullCalendar. Recurrence is not its concern: it renders
  * server-expanded occurrences and wires drag/resize/select/click back to the

@@ -75,6 +75,31 @@ Admission inputs use the same relation with no step. `step.records` and
 readable ancestors. `ctx.note(message, tone="info")` adds a small recorded note.
 The three reader-facing `StepRun.hold` states are `decision`, `run` and `error`;
 timer, record-change and map scheduling remain internal wait mechanics.
+A run's `hold` is its most urgent step hold: `error`, then `run`, then `decision`.
+A run with a replacement holds nothing; the replacement carries the hold. The run
+console's **Incidents** view lists the runs held on `error` or `run`
+(`WorkflowRun.incident_expression`, filter `is_incident`).
+
+A [`Schedule`](triggers.py) trigger (`source: schedule`) names a recurrence instead of a
+model and condition: `recurrence` (an RRULE that `angee.scheduling` expands),
+`recurrence_start` (its DTSTART, which supplies the parts the rule omits, so write
+`BYMINUTE=0;BYSECOND=0` for a round hour) and `recurrence_zone`, the wall clock the
+rule unrolls in, blank for the project `TIME_ZONE`. Its workflow declares no subject
+model. Enabling refuses a schedule with no occurrence after now (a past one-off start,
+an ended or never-matching rule) and one whose workflow rejects the input it would
+start with. An enabled schedule keeps its next occurrence in `next_occurrence_at`;
+the workflow tick reads only schedules that cursor has reached, records at most
+1,000 occurrences per schedule per pass, moves the cursor in the same transaction,
+then drains. The latest due occurrence becomes a `TriggerEvent` keyed by
+`(trigger, occurs_at)` and starts one run with no subject and the request key
+`trigger:<trigger>:<occurrence>`; earlier ones, missed while workers were down, are
+recorded with `skipped_at` and never run. Disabling skips the schedule's pending
+occurrences and clears its cursor, and admission refuses an occurrence older than the
+current enablement. Trigger hooks of a schedule receive `record=None` and the keyword
+`occurrence`. A schedule contributes no source grant: its runs act as the workflow
+principal with the reach it already has. An hourly or finer rule follows the wall
+clock through a DST change: the missing hour in spring lands on the next instant,
+which runs once, and the repeated hour in autumn runs once.
 
 `TriggerSource.watch_only` declares an observation that wakes `StepWatch` rows
 without contributing trigger scope or permissions. Its `model_label` and
@@ -99,7 +124,7 @@ The [`permission schema`](permissions.zed) lets starters discover and read the
 workflows they may start, without editing them. Run readers see the pinned topology
 and actor-readable execution summaries without requiring workflow or version read access.
 Run actors can cancel and
-reprocess their own runs. Monitoring other runs and reading unpublished drafts
+reprocess their own runs, from the start or from a step. Monitoring other runs and reading unpublished drafts
 requires workflow monitoring access, including read-only Studio inspection. Draft edits and
 publication require workflow write access. Execution rows and record links are engine-owned;
 the console exposes execution reads, monitor-readable draft authoring metadata,
@@ -115,9 +140,9 @@ own discovery; run admission owns authorization, validation and replay.
 [`Runner`](runner.py) owns the tick, dispatch and failure classification. The run
 row owns its state: [`WorkflowRun`](models.py) settles, plans and writes its status
 in `advance`, and its verbs `admit_subject`, `reopen`, `interrupt` and
-`cancel_owned_work` admit, retry, settle after a restart and cancel a held run. The
+`cancel_owned_work` admit, retry, settle after a restart and cancel a locked run. The
 run and step managers and querysets in [`managers.py`](managers.py) own the run lock
-(`hold`), admission, row-set transitions and retention, and act on a held run only
+(`lock_run`, `lock_owned_runs`), admission, row-set transitions and retention, and act on a locked run only
 through those verbs. A database step holds its run lock for its
 whole transaction. The domain writes, fenced result and successor planning
 commit together. After commit, every ready row of an active run is sent to the job
@@ -163,7 +188,7 @@ appear. The console shows this disclosure before it confirms enablement.
 Grant listings identify each target by its model noun and disclose its record
 label only while the reader retains access to that target.
 Retention prunes a cited run only after its continuations and reprocesses are
-pruned. An admitted event survives pruning of its run, and retained events
+pruned. An admitted record event survives pruning of its run, and retained events
 protect their trigger; the purge preview blocks deleting that trigger.
 IO bodies run after their claim commits, without a transaction. Their result is
 fenced by the attempt counter and deadline. IO timeouts leave a settlement window
@@ -199,10 +224,33 @@ Cancel also cancels open rows of a terminal run while preserving that run's
 terminal status, outcome, output and error.
 Delivery is at least once; step implementations must tolerate repeated execution.
 
+`WorkflowRun.objects.reprocess(run, from_node=key)` starts the replacement at a node
+instead of the entry, on the retained run's version, as
+[`Definition.reprocess_plan`](definition.py) splits the retained rows. The node and
+every node it reaches run again. Outside that reach a row is reused when it settled
+with a routed result (succeeded, skipped, or failed through a declared error route),
+and a map item only with its reused map; every other row outside the reach (one that
+never settled, an unrouted failure, an item of a map planned afresh) runs again too.
+The node must be a declared step of the run that ran. Copies keep their status,
+outcome, input, output and notes, and carry no attempts, decision link, awaited run,
+checkpoint or evidence, so a reused decision step grants the new run's actor nothing;
+the replacement's `reprocess_of` names the retained run, which never changes. A run
+with an open replacement refuses another reprocess, whole or from a step, so a repeated
+request cannot start two. The step console's **Reprocess from this step**
+(`reprocess_workflow_run_from_step`) lists the steps that run again
+(`StepRun.reprocess_reruns`), under the same authority as reprocessing. When a step
+outside the node's reach runs again after its attempt may already have made an
+external effect, the operator must accept a possible duplicate
+(`reprocess_workflow_run_from_step_accepting_duplicate`).
+
 **Named gap: run budgets.** The rebuilt engine bounds individual attempts,
 dispatch recovery, but has no owner for an overall run budget
 or deadline. Workflows that need an aggregate time, page or resource budget still
 need that engine contract; step bounds do not establish a run-wide limit.
+
+Occurrence events past `ANGEE_WORKFLOW_RETENTION_DAYS` are pruned by the tick in
+bounded batches once they were skipped, or evaluated and their run is pruned. Record
+events stay, and a schedule's window lives on its cursor, so pruning never reopens it.
 
 Resource rows supply `key`, `name`, `subject_model`, `draft` and `publish`.
 `subject_model` accepts a Django model label and stores the model's canonical

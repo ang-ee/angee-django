@@ -26,6 +26,9 @@ import { SetTaskVisibilityDocument } from "./documents";
 import { useProjectsT } from "./i18n";
 import { PROJECT_MODEL, TASK_MODEL } from "./resources";
 
+/** The project picker offers projects, never templates: a template's tasks are added from its own tab. */
+const PROJECT_PICKER_FILTERS = [{ field: "is_template", operator: "eq", value: false }] as const;
+
 export interface TaskActionRow extends StringIdRow {
   status?: unknown;
 }
@@ -80,7 +83,7 @@ export function useTaskRowActions<
 
 export interface TaskFormSelection {
   groups?: readonly ("placement" | "assignment" | "details")[];
-  verbs?: readonly ("complete" | "drop" | "reopen" | "promote")[];
+  verbs?: readonly ("complete" | "drop" | "reopen" | "promote" | "resetDue")[];
   contextLine?: FormProps["contextLine"];
   /** Compact read-only extras the host adds to the record header (a card in `RecordHeader.extra`). */
   headerExtras?: FormProps["headerExtras"];
@@ -123,6 +126,10 @@ export function useTaskFormDeclaration(
   const promote = useRecordAction(async (id, context) => {
     await settlePromotion(() => promoteTask(id, { expected_revision: context.record?.revision }));
   });
+  const [resetDue] = useRecordActionMutation<ActionFieldName>("reset_task_due_to_rule", {
+    invalidateModels: [TASK_MODEL],
+    settle: true,
+  });
   const [dropTask] = useActionOutcomeMutation<ActionFieldName>("drop_task", {
     invalidateModels: [TASK_MODEL],
   });
@@ -156,6 +163,9 @@ export function useTaskFormDeclaration(
     {(selection.verbs ?? ["complete", "drop", "reopen", "promote"]).includes("promote") ? <Action
       id="promote" label={t("task.action.promote")} permission="write"
       icon="projects" run={promote} /> : null}
+    {(selection.verbs ?? ["complete", "drop", "reopen", "promote", "resetDue"]).includes("resetDue") ? <Action
+      id="reset-due" label={t("task.action.resetDue")} permission="write" icon="activity" run={resetDue}
+      visibleWhen={(record) => record.due_rule != null} /> : null}
   </>;
   return (
     <Form {...props} resource={TASK_MODEL} contextLine={selection.contextLine ?? props.contextLine} headerExtras={selection.headerExtras ?? props.headerExtras}
@@ -173,19 +183,21 @@ export function useTaskFormDeclaration(
         ? <Field name={selection.statusField.name} widget={selection.statusField.widget} status readOnly />
         : <Field name="status" widget="statusbar" status options={statusOptions} createOnly />}
       {(selection.groups ?? ["placement", "assignment", "details"]).includes("placement") ? <Group label={t("task.group.placement")} columns={2}>
-        <Field name="project" />
+        <Field name="project" filters={PROJECT_PICKER_FILTERS} />
         <Field name="milestone" />
         <Field name="parent" />
         <Field name="tags" />
       </Group> : null}
       {(selection.groups ?? ["placement", "assignment", "details"]).includes("assignment") ? <Group label={t("task.group.assignment")} columns={2}>
         <Field name="assignee" />
+        <Field name="assignee_role" label={t("task.assigneeRole")} />
         <Field name="priority" options={priorityOptions} />
         <Field name="due_date" />
+        <Field name="due_at" label={t("task.dueAt")} readOnly />
       </Group> : null}
       {(selection.groups ?? ["placement", "assignment", "details"]).includes("details") ? <Group label={t("task.group.details")} columns={2} pane="task-details">
         <Field name="delegate" />
-        <Field name="recurrence" />
+        <Field name="due_rule" label={t("task.dueRule")} />
         <Field name="dropped_reason" readOnly />
         <Field name="done_at" readOnly />
         <Field name="dropped_at" readOnly />

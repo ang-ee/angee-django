@@ -43,7 +43,7 @@ into the test database, and each test requesting `db` rolls back over it.
 - Owner column: compose `angee.base.models.ownership.OwnerMixin`, back `owner` with `rebac:field=owner`, declare `transfer` and `write__owner = transfer` (notes). `angee.E045` rejects any other `owner` relation; `angee.E022/E027` reject a missing gate.
 - Row-dependent sharing: `rebac:field={"path":…,"filters":{…}}` (notes extends `storage/file`), `rebac:const={"target_id":"shared","filters":{…}}` + `shared_reader = authenticated` (money/rate, dashboards).
 - Live user facts: `rebac:attribute={"field":…,"value":…}` on `iam/kind`; compose `iam/kind:person#active_member`, never a copy.
-- Edge seams other addons already own: `tags/tag_assignment`, `storage/file_attachment`, `knowledge/record_binding`, `messaging/thread_attachment`, `projects/task`, `decisions/decision` — each declares `target_*`/`subject_*` arms for you to union into (notes extends file).
+- Edge seams other addons already own: `tags/tag_assignment`, `storage/file_attachment`, `knowledge/record_binding`, `messaging/thread_attachment`, `projects/task` — each declares `target_*`/`subject_*` arms for you to union into (notes extends file); `decisions/decision` declares `owner_eligible`, `owner_managed` and `read_granted` (`src/angee/decisions/permissions.zed`).
 - Native API: `.with_actor(user)`, `.as_user(user)`, `.with_action(perm)`, `.for_write()`, `.readable(field)`, `.sudo(reason=…)`, `.system_context(reason=…)` (rebac `RebacQuerySet` in `managers.py`), `has_access` (rebac `mixins.py`), `check_new` (rebac `preflight.py`); Angee adds `AngeeModel.require_access` (`base.py`) and `rebac_grantable` + `angee.graphql.sharing` for shares.
 
 ## Steps

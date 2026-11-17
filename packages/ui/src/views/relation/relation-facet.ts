@@ -20,6 +20,8 @@ interface DeclaredRelationFacet {
   axis: GroupAxis;
   pageSize: number;
   group: SearchFacet["group"];
+  optionGroupField?: string;
+  optionGroupOrderField?: string;
 }
 
 /** Declared facet choices and bucket predicates share the resource query's axis.
@@ -45,6 +47,10 @@ export function useRelationFacets(
       const group = option.group === false ? null : query.group(option.group ?? { field }).spec;
       return [{ field, label, axis, pageSize: option.pageSize ?? RELATION_FACET_OPTION_LIMIT,
         group: group ?? false,
+        ...(option.optionGroupField ? {
+          optionGroupField: option.optionGroupField,
+          ...(option.optionGroupOrderField ? { optionGroupOrderField: option.optionGroupOrderField } : {}),
+        } : {}),
       }];
     });
   }, [options, query, metadata]);
@@ -61,6 +67,10 @@ export function useRelationFacets(
     // relation axis looks its options up remotely.
     source: facet.axis.declaration.kind === "relation" ? "relation" : "scalar",
     group: facet.group,
+    ...(facet.optionGroupField ? {
+      optionGroupField: facet.optionGroupField,
+      ...(facet.optionGroupOrderField ? { optionGroupOrderField: facet.optionGroupOrderField } : {}),
+    } : {}),
     options: (result.facets[facet.field]?.options ?? []).flatMap((option) => {
       const filter = facet.axis.drill({ key: option.key });
       if (!filter) return [];

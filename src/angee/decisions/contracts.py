@@ -9,6 +9,7 @@ from django.core.exceptions import FieldDoesNotExist, ImproperlyConfigured, Vali
 from django.db import models
 from pydantic import (
     MISSING,
+    AwareDatetime,
     BaseModel,
     ConfigDict,
     Field,
@@ -291,7 +292,11 @@ class DecisionProposal(BaseModel):
 
 
 class DecisionRequest(BaseModel):
-    """One immutable question with optional named assignees."""
+    """One immutable question with optional named assignees.
+
+    ``due_at`` and ``remind_after`` are instants the asker supplies; decisions does no
+    date arithmetic on them and they stay fixed once asked.
+    """
 
     model_config = ConfigDict(extra="forbid", frozen=True, arbitrary_types_allowed=True, revalidate_instances="always")
     kind: str = Field(min_length=1, pattern=r"\S")
@@ -300,6 +305,8 @@ class DecisionRequest(BaseModel):
     proposal: DecisionProposal
     requester: Any = None
     context: InstanceOf[DecisionContext] = Field(default_factory=DecisionContext)
+    due_at: AwareDatetime | None = None
+    remind_after: AwareDatetime | None = None
 
     @model_validator(mode="after")
     def validate_proposal(self) -> "DecisionRequest":

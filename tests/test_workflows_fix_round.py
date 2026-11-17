@@ -471,7 +471,7 @@ def test_cancel_authorizes_once_before_acquiring_the_run_lock(execution, monkeyp
     workflow = load_workflow(document("entry"), key="cancel_authorization_order", actor=actor)
     run = WorkflowRun.objects.start(workflow, actor=actor)
     observed = []
-    original_access, original_hold = WorkflowRun.require_access, WorkflowRunQuerySet.hold
+    original_access, original_hold = WorkflowRun.require_access, WorkflowRunQuerySet.lock_run
 
     def require_access(self, permission, actor=None):
         assert not connection.in_atomic_block
@@ -479,13 +479,13 @@ def test_cancel_authorizes_once_before_acquiring_the_run_lock(execution, monkeyp
         return original_access(self, permission, actor)
 
     @contextmanager
-    def hold(self, run_id, **kwargs):
+    def lock_run(self, run_id, **kwargs):
         observed.append(("lock", run_id))
         with original_hold(self, run_id, **kwargs) as locked:
             yield locked
 
     monkeypatch.setattr(WorkflowRun, "require_access", require_access)
-    monkeypatch.setattr(WorkflowRunQuerySet, "hold", hold)
+    monkeypatch.setattr(WorkflowRunQuerySet, "lock_run", lock_run)
     WorkflowRun.objects.cancel(run, actor=actor)
     assert observed == [("authorize", "write"), ("lock", run.pk)]
     assert terminal_fields(run)["status"] == RunStatus.CANCELED

@@ -22,13 +22,13 @@ describe("GalleryView", () => {
     const navigate = vi.fn();
     const onCardClick = vi.fn();
     const onToggleSelected = vi.fn();
-    render(<InAppLinkProvider navigate={navigate}><GalleryView rows={[ROWS[0]!]}
+    render(<InAppLinkProvider navigate={navigate}><GalleryView rows={[ROWS[0]!]} titleField="title"
       cardHref={() => "/records/a"} onCardClick={onCardClick} onToggleSelected={onToggleSelected}
     /></InAppLinkProvider>);
     const checkbox = screen.getByRole("checkbox", { name: "Select Onboarding map" });
     expect(checkbox.closest("a")).toBeNull();
     fireEvent.click(checkbox);
-    expect(onToggleSelected).toHaveBeenCalledExactlyOnceWith("a", true);
+    expect(onToggleSelected).toHaveBeenCalledExactlyOnceWith("a", true, ROWS[0]);
     expect(onCardClick).not.toHaveBeenCalled();
     expect(navigate).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole("link"));
@@ -40,6 +40,7 @@ describe("GalleryView", () => {
     render(
       <GalleryView<Cover>
         rows={ROWS}
+        titleField="title"
         subtitleField="subtitle"
         onCardClick={onCardClick}
       />,
@@ -53,10 +54,42 @@ describe("GalleryView", () => {
     );
   });
 
+  test("frames each card on the shared recipe: flush by default, inset on request", () => {
+    const view = render(<GalleryView<Cover> rows={[ROWS[0]!]} renderCard={(row) => <span>{row.title}</span>} />);
+    const card = view.container.querySelector("[data-slot='gallery-card']");
+    expect(card?.getAttribute("data-frame")).toBe("flush");
+    expect(card?.firstElementChild?.className).not.toContain("p-3");
+    view.rerender(<GalleryView<Cover> rows={[ROWS[0]!]} cardFrame="inset" renderCard={(row) => <span>{row.title}</span>} />);
+    expect(view.container.querySelector("[data-slot='gallery-card']")?.firstElementChild?.className).toContain("p-3");
+  });
+
+  test("a selected card wears the card recipe's selected state", () => {
+    const view = render(<GalleryView<Cover> rows={ROWS} titleField="title" selectedIds={new Set(["b"])} onToggleSelected={() => undefined} />);
+    const cards = view.container.querySelectorAll("[data-slot='gallery-card']");
+    expect(cards[0]?.className).not.toContain("border-brand");
+    expect(cards[1]?.className).toContain("border-brand");
+    expect(screen.getByRole("checkbox", { name: "Select Quarterly brief" })).toBeTruthy();
+  });
+
+  test("renderCard receives the gallery context with the card's selection", () => {
+    const renderCard = vi.fn((row: Cover) => <span>{row.title}</span>);
+    render(<GalleryView<Cover> rows={ROWS} renderCard={renderCard} selectedIds={new Set(["b"])} />);
+    expect(renderCard).toHaveBeenCalledWith(ROWS[0], { kind: "gallery", selected: false });
+    expect(renderCard).toHaveBeenCalledWith(ROWS[1], { kind: "gallery", selected: true });
+  });
+
   test("falls back to the title initial when no image field is given", () => {
-    render(<GalleryView<Cover> rows={ROWS} />);
+    render(<GalleryView<Cover> rows={ROWS} titleField="title" />);
     expect(screen.getByText("O")).toBeTruthy();
     expect(screen.getByText("Q")).toBeTruthy();
+  });
+
+  test("names a card by its title field or the collection's label, never by guessing a field", () => {
+    const view = render(<GalleryView<Cover> rows={[ROWS[0]!]} onToggleSelected={() => undefined} />);
+    expect(screen.getByRole("checkbox", { name: "Select card" })).toBeTruthy();
+    view.rerender(<GalleryView<Cover> rows={[ROWS[0]!]} onToggleSelected={() => undefined} cardLabel={(row) => `Cover ${row.id}`} />);
+    expect(screen.getByRole("checkbox", { name: "Select Cover a" })).toBeTruthy();
+    expect(screen.getByText("Cover a")).toBeTruthy();
   });
 
   test("uses the shared interactive frame with actions and omits empty footers", () => {
@@ -64,6 +97,7 @@ describe("GalleryView", () => {
     const view = render(
       <GalleryView<Cover>
         rows={[ROWS[0]!]}
+        titleField="title"
         onCardClick={onCardClick}
         cardActions={() => <button type="button">Archive</button>}
       />,
@@ -76,6 +110,7 @@ describe("GalleryView", () => {
     view.rerender(
       <GalleryView<Cover>
         rows={[ROWS[0]!]}
+        titleField="title"
         onCardClick={onCardClick}
         cardActions={() => null}
       />,

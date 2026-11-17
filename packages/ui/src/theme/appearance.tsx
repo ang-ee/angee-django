@@ -73,6 +73,8 @@ export interface AppearanceState {
   hostTheme: ThemeContribution | null;
   hostOptions?: ThemeOptionsEnvelope;
   effectiveOptions?: ThemeOptionsEnvelope;
+  /** The app's theme is locked here; the person's theme choice is kept but not applied. */
+  themeLocked: boolean;
   available: boolean;
   editable: boolean;
   resolvingIdentity: boolean;
@@ -107,7 +109,16 @@ export interface AppearancePreferenceRead {
  * @kind null
  * @reason Provider infrastructure: Appearance context.
  */
-export function AppearanceProvider({ children, host = DEFAULT_HOST }: { children: ReactNode; host?: HostAppearanceDefaults }): ReactNode {
+export function AppearanceProvider({ children, host = DEFAULT_HOST, themeLocked: lockRequested = false }: {
+  children: ReactNode;
+  host?: HostAppearanceDefaults;
+  /**
+   * The selected app locks the host theme: it and the host options win over the
+   * person's theme and options, which stay saved for other apps; their color scheme
+   * still applies. Only the app selection sets it, never the build defaults.
+   */
+  themeLocked?: boolean;
+}): ReactNode {
   const runtime = useAppRuntime();
   const auth = useRuntimeAuth();
   const userPreferences = useRuntimeUserPreferences();
@@ -134,9 +145,10 @@ export function AppearanceProvider({ children, host = DEFAULT_HOST }: { children
   const system = useSystemColorScheme();
   const hostThemeId = host.themeId ?? null;
   const hostTheme = hostThemeId ? catalogue.get(hostThemeId) ?? null : null;
-  const savedAppearance = resolveAppearance(preferences, saved.notice, catalogue, host, system);
+  const savedAppearance = resolveAppearance(preferences, saved.notice, catalogue, host, system, lockRequested);
+  const { themeLocked } = savedAppearance;
   const { effectiveThemeId, effectiveTheme, colorSchemePreference, colorScheme, effectiveTokens, effectiveOptions, notice } =
-    draft ? resolveAppearance(draft, null, catalogue, host, system) : savedAppearance;
+    draft ? resolveAppearance(draft, null, catalogue, host, system, lockRequested) : savedAppearance;
   let hostOptions: ThemeOptionsEnvelope | undefined;
   if (hostTheme?.definition.options) {
     try {
@@ -155,7 +167,8 @@ export function AppearanceProvider({ children, host = DEFAULT_HOST }: { children
   }, [colorScheme, effectiveThemeId, effectiveTokens, resolvingIdentity]);
 
   useEffect(() => {
-    if (resolvingIdentity) return;
+    // A locked app's theme is not the person's; the device's next first paint follows their own choice.
+    if (resolvingIdentity || themeLocked) return;
     writeAppearanceCache({
       schema: APPEARANCE_CACHE_SCHEMA,
       fingerprint: host.fingerprint ?? "",
@@ -164,7 +177,7 @@ export function AppearanceProvider({ children, host = DEFAULT_HOST }: { children
       colorSchemePreference: savedAppearance.colorSchemePreference,
       tokenLayers: savedAppearance.tokenLayers,
     });
-  }, [auth.user?.id, savedAppearance, host.fingerprint, resolvingIdentity]);
+  }, [auth.user?.id, savedAppearance, host.fingerprint, resolvingIdentity, themeLocked]);
 
   const update = useCallback(async (
     apply: (current: AppearancePreferences) => AppearancePreferences | undefined,
@@ -281,6 +294,7 @@ export function AppearanceProvider({ children, host = DEFAULT_HOST }: { children
     hostTheme,
     hostOptions,
     effectiveOptions,
+    themeLocked,
     available: userPreferences.available,
     editable: saved.writable,
     resolvingIdentity,
@@ -294,21 +308,25 @@ export function AppearanceProvider({ children, host = DEFAULT_HOST }: { children
     save,
     discard,
     reset,
-  }), [preferences, currentPreferences, dirty, effectiveThemeId, colorSchemePreference, colorScheme, effectiveTheme, hostTheme, hostOptions, effectiveOptions, userPreferences.available, saved.writable, resolvingIdentity, saving, error, notice, setTheme, setColorScheme, setOptions, openDraft, save, discard, reset]);
+  }), [preferences, currentPreferences, dirty, effectiveThemeId, colorSchemePreference, colorScheme, effectiveTheme, hostTheme, hostOptions, effectiveOptions, themeLocked, userPreferences.available, saved.writable, resolvingIdentity, saving, error, notice, setTheme, setColorScheme, setOptions, openDraft, save, discard, reset]);
   return <AppearanceContext.Provider value={value}>{children}</AppearanceContext.Provider>;
 }
 
 /** Resolve both live appearance and the saved-only boot cache through one path. */
-function resolveAppearance(preferences: AppearancePreferences, notice: AppearanceState["notice"], catalogue: ReadonlyMap<string, ThemeContribution>, host: HostAppearanceDefaults, system: ColorScheme) {
+function resolveAppearance(preferences: AppearancePreferences, notice: AppearanceState["notice"], catalogue: ReadonlyMap<string, ThemeContribution>, host: HostAppearanceDefaults, system: ColorScheme, lockRequested: boolean) {
   const hostTheme = host.themeId ? catalogue.get(host.themeId) : undefined;
-  const selectedThemeId = preferences.themeId ?? host.themeId;
+  // A locked app theme replaces the person's theme and its options, never their scheme;
+  // the person's options are not in play, so their invalidity is no notice here.
+  const themeLocked = lockRequested && Boolean(host.themeId);
+  if (themeLocked && notice === "options-invalid") notice = null;
+  const selectedThemeId = themeLocked ? host.themeId : preferences.themeId ?? host.themeId;
   const selectedTheme = selectedThemeId ? catalogue.get(selectedThemeId) : undefined;
   if (selectedThemeId && !selectedTheme) notice ??= "theme-unavailable";
   const effectiveTheme = selectedTheme ?? hostTheme ?? null;
   const effectiveThemeId = effectiveTheme?.definition.id ?? null;
   const colorSchemePreference = preferences.colorScheme ?? host.colorScheme ?? "system";
   const colorScheme = colorSchemePreference === "system" ? system : colorSchemePreference;
-  const requestedOptions = preferences.themeId === undefined ? host.options : preferences.options;
+  const requestedOptions = themeLocked || preferences.themeId === undefined ? host.options : preferences.options;
   let tokenLayers: ThemeTokenLayers = { shared: {}, light: {}, dark: {} };
   let effectiveOptions: ThemeOptionsEnvelope | undefined;
   if (effectiveTheme) {
@@ -323,7 +341,7 @@ function resolveAppearance(preferences: AppearancePreferences, notice: Appearanc
     if (effectiveTheme.definition.options) effectiveOptions = { version: resolved.version, value: resolved.value };
   }
   const effectiveTokens = { ...tokenLayers.shared, ...tokenLayers[colorScheme] };
-  return { effectiveThemeId, effectiveTheme, colorSchemePreference, colorScheme, tokenLayers, effectiveTokens, effectiveOptions, notice };
+  return { effectiveThemeId, effectiveTheme, colorSchemePreference, colorScheme, tokenLayers, effectiveTokens, effectiveOptions, notice, themeLocked };
 }
 
 /**

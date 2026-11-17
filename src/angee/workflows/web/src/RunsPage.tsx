@@ -50,6 +50,7 @@ export function RunsList({ baseFilter, embedded = false }: {
         header={t("run.workflow")}
         render={(row) => typeof row.display_name === "string" ? row.display_name : null} />
       <Column field="status" header={t("run.status")} widget="statusBadge" />
+      <Column field="hold" header={t("run.hold")} widget="statusBadge" />
       <Column field="subject_id" header={t("run.subject")} render={(row) => typeof row.subject_id === "string" && typeof row.subject_model === "string"
         ? <RecordReference model={row.subject_model} id={row.subject_id} /> : null} />
       <Column field="origin" header={t("run.origin")} widget="statusBadge" />

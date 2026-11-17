@@ -22,7 +22,7 @@ catalogue, the subject model and the seams; runtime and vendor addons own their 
 | File or module | Owns | Reference |
 |---|---|---|
 | `<addon>/resources/<tier>/NNN_agents.agent.yaml` + `pyproject.toml [tool.angee.resources]` | the agent row and its catalogue dependencies | `examples/src/example/notes/resources/demo/095_agents.agent.yaml`, `[[tool.angee.resources.demo]]` in `notes/pyproject.toml` |
-| `src/angee/agents/models.py` | `Agent` (`principal_subject`, `runtime_backend`, `provision_blocker`, `mcp_config`), `Skill`, `MCPServer`, `MCPTool`, `InferenceProvider`, `InferenceModel` (`usable`, `require_usable`, `infer`, `embed`, `record_usage`), `AgentSession`, `AgentTurn` | docstrings |
+| `src/angee/agents/models.py` | `Agent` (`principal_subject`, `runtime_backend`, `provision_blocker`, `mcp_config`), `Skill`, `MCPServer`, `MCPTool`, `InferenceProvider`, `InferenceModel` (`usable`, `require_usable`, `infer`, `embed`, `record_usage`), `AgentSession`, `AgentTurn` (`tool_calls`) | docstrings |
 | `src/angee/agents/runtimes.py`; `agents_runtime_pydantic/runtime.py` | `AgentRuntime`, `NoRuntime`, `OpenCodeRuntime`, `ClaudeCodeRuntime`, `operator_secret_ref`; `PydanticAIRuntime` | docstrings |
 | `src/angee/agents/backends.py`, `sdk_backends.py`; vendor `agents_integrate_*/backend.py` | `InferenceBackend` (`chat`, `embed`, `embedding_model`, `TransientInferenceError`), `ManualInferenceBackend`; `SDKInferenceBackend`; `AnthropicInferenceBackend` (`agents_integrate_anthropic/backend.py`) | module docstring |
 | `src/angee/agents/autoconfig.py`; runtime/vendor `autoconfig.py` | `ANGEE_INFERENCE_BACKEND_CLASSES`, `ANGEE_AGENT_RUNTIME_CLASSES`, `ANGEE_INFERENCE_APPROVED_DEPLOYMENTS`, `ANGEE_MCP_ACTOR_VERIFIER`, `ANGEE_AGENT_CHAT_TOKEN_TTL` (`SETTINGS`); contributed keys (`SETTINGS` in `agents_runtime_pydantic/autoconfig.py`, `agents_integrate_anthropic/autoconfig.py`) | comments |
@@ -30,7 +30,7 @@ catalogue, the subject model and the seams; runtime and vendor addons own their 
 | `src/angee/agents/models.py` | `Skill.parse_manifest`; `SkillManager.sync_from_source` | docstrings |
 | `src/angee/agents/runners.py`, `sessions.py`, `tasks.py`, `acp_server.py`, `protocol.py` | `SessionRunner`, `TurnOutcome`; `run_next_turn`; `run_session`; ACP mappings; `ACP_PATH` | docstrings |
 | `src/angee/agents/provisioning.py` | `provision_agent`, `adopt_agent`, `replace_agent`, `reprovision_agent`, `deprovision_agent`, `ProvisioningError` | module docstring |
-| `src/angee/agents/testing/` | concrete `Agent`, `InferenceProvider`, `InferenceModel`, `Skill`, … (`models.py`); `FakeRunner`, `runner` fixture (`drivers.py`) | the `tests/test_agents.py` module docstring |
+| `src/angee/agents/testing/` | concrete `Agent`, `InferenceProvider`, `InferenceModel`, `Skill`, … (`models.py`); `FakeRunner`, `runner` fixture, `update_chunk`, `tool_call_updates` (`drivers.py`) | the `tests/test_agents.py` module docstring |
 
 ## Reuse first
 
@@ -39,7 +39,9 @@ catalogue, the subject model and the seams; runtime and vendor addons own their 
 - `InferenceModel.infer` / `objects.usable(actor, role, uses=)` / `require_usable` for one-shot inference from domain code; never a vendor client.
 - `ServiceUserMixin` (`src/angee/iam/models.py`) — `Agent` composes it: `Agent.save` calls `sync_service_user()`; delete receivers call `deactivate_service_user()` (`deactivate_agent_service_user` in `signals.py`).
 - `integrate.Credential` and `integrate_vcs.Source`/`Template` for secrets, skill sources and workspace templates.
-- `workflows_agents` steps `start_conversation`/`close_conversation` (`src/angee/workflows_agents/steps.py`) when a workflow needs a turn.
+- `workflows_agents` steps `start_conversation`/`close_conversation` (`src/angee/workflows_agents/steps.py`) when a workflow needs a turn;
+  its `grounding` config (`GroundingPolicy`) when the answer must follow completed search or fetch calls.
+- `AgentTurn.tool_calls(*names)` to read a turn's saved tool calls as ACP `ToolCall`s by tool name, rather than re-folding `updates`.
 - Upstream: pydantic-ai (`Model`, toolsets, `UsageLimits`), `agent-client-protocol` SDK, FastMCP — [Stack](../../../../../docs/stack.md#backend): the pydantic-ai-slim, agent-client-protocol and FastMCP rows.
 
 ## Steps
@@ -117,6 +119,7 @@ catalogue, the subject model and the seams; runtime and vendor addons own their 
 8. **Converse over ACP.** `AgentSession`/`AgentTurn` persist the chat; `run_session` (`tasks.py`) calls `run_next_turn`, which
    claims one turn outside any transaction and runs it under `actor_context(principal)` through the runtime's
    `SessionRunner.run_turn`, streaming ACP `session/update` payloads; the WebSocket route is `ACP_PATH` (`acp_server.py`).
+   A `tool_call` update's `title` is the called tool's name, and `AgentTurn.tool_calls` folds the saved calls per `toolCallId`.
    **Owner rule:** agents owns the seam, runtime addons the loop (`runners.py` docstring); the SDK owns protocol and schemas
    ([Stack](../../../../../docs/stack.md#backend), agent-client-protocol row).
 

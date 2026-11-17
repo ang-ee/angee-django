@@ -13,6 +13,7 @@ import { cn } from "../../lib/cn";
 import { formatNumber } from "../../lib/format-number";
 import { formatSize, isImageMime, normaliseMime } from "../../preview/model";
 import { formatDayLabel, type DateFormatValue } from "../../widgets/date-format";
+import { Button } from "../../ui/button";
 import { Chip, type ChipTone } from "../../ui/chip";
 import { Kbd } from "../../ui/kbd";
 import { textRoleVariants } from "../../ui/text";
@@ -375,32 +376,116 @@ function renderMessagePartText(
   if (normaliseMime(mime) !== "text/html") {
     return <div className="whitespace-pre-wrap break-words">{text}</div>;
   }
+  // The first part naming a content id supplies it; the frame decides which URLs are safe.
+  const inlineUrls: Record<string, string> = {};
+  for (const part of parts) {
+    const cid = part.cid?.trim();
+    const url = part.file ? resolveFileUrl(part.file) : undefined;
+    if (cid && url && !Object.hasOwn(inlineUrls, cid)) inlineUrls[cid] = url;
+  }
+  return <MessageHtmlFrame html={text} title={t("message.parts.htmlBody")} inlineUrls={inlineUrls} />;
+}
+
+export interface MessageHtmlFrameProps {
+  /** The untrusted HTML body. */
+  html: string;
+  /** The frame's accessible name. */
+  title: string;
+  /** The body's language tag; set on the document root when it is a well-formed tag. */
+  lang?: string;
+  /**
+   * Content id → URL for `cid:` references. The frame keeps only same-origin paths,
+   * http(s) URLs, image data URLs and blob URLs, and admits images from their origins.
+   */
+  inlineUrls?: Readonly<Record<string, string>>;
+  /**
+   * Load the body's remote images from the start. By default they stay blocked, as a
+   * mail client blocks trackers, until the reader loads them with the frame's control.
+   */
+  remoteImages?: boolean;
+  className?: string;
+}
+
+/**
+ * Untrusted message HTML in a sandboxed document: no scripts and no same origin;
+ * links open in a new tab with no opener and no referrer; a content security policy
+ * admits only inline styles and images from data, blob and the inline URLs' origins.
+ * Remote images stay blocked behind the frame's "Load remote images" control. The one
+ * sandbox for message HTML, shared by message parts and email previews.
+ * @kind fragment
+ */
+export function MessageHtmlFrame({
+  html,
+  title,
+  lang,
+  inlineUrls,
+  remoteImages = false,
+  className,
+}: MessageHtmlFrameProps): ReactElement {
+  const t = useUiT();
+  const [loadRemote, setLoadRemote] = useState(remoteImages);
+  const blocked = !loadRemote && REMOTE_IMAGE.test(html);
   return (
-    <iframe
-      title={t("message.parts.htmlBody")}
-      sandbox=""
-      referrerPolicy="no-referrer"
-      srcDoc={sandboxedMessageHtml(text, parts, resolveFileUrl)}
-      className="block h-96 w-full max-w-full rounded-6 border border-current/20 bg-white"
-    />
+    <div className={cn("flex h-96 w-full max-w-full flex-col overflow-hidden rounded-6 border border-current/20", className)}>
+      {blocked ? (
+        <div className="flex flex-wrap items-center gap-2 border-b border-current/20 px-3 py-1.5 text-12">
+          <span className="min-w-0 flex-1">{t("message.html.remoteImagesBlocked")}</span>
+          <Button type="button" size="sm" variant="secondary" onClick={() => setLoadRemote(true)}>
+            {t("message.html.loadRemoteImages")}
+          </Button>
+        </div>
+      ) : null}
+      <iframe
+        title={title}
+        sandbox="allow-popups allow-popups-to-escape-sandbox"
+        referrerPolicy="no-referrer"
+        srcDoc={sandboxedMessageHtml(html, inlineUrls ?? {}, lang, loadRemote)}
+        className="block min-h-0 w-full flex-1 bg-white"
+      />
+    </div>
   );
+}
+
+const LANGUAGE_TAG = /^[A-Za-z]{1,8}(?:-[A-Za-z0-9]{1,8})*$/;
+const DATA_IMAGE_URL = /^data:image\/[a-z0-9.+-]+;base64,[a-z0-9+/=]*$/i;
+/** An image the body would fetch from another host: an image attribute or a CSS `url()` naming http(s) or `//`. */
+const REMOTE_IMAGE = /\b(?:src|srcset|background|poster)\s*=\s*["']?\s*(?:https?:)?\/\/|url\(\s*["']?\s*(?:https?:)?\/\//i;
+
+/** A same-origin path, an http(s) URL, an image data URL or a blob URL; anything else is dropped. */
+function safeInlineUrl(url: string): string | undefined {
+  const value = url.trim();
+  return safeMessagePartUrl(value) ?? (DATA_IMAGE_URL.test(value) || value.startsWith("blob:") ? value : undefined);
+}
+
+/** The origin a CSP must admit for an inline image URL; data and blob URLs are admitted by scheme. */
+function inlineImageOrigin(url: string): string | undefined {
+  if (url.startsWith("data:") || url.startsWith("blob:")) return undefined;
+  try {
+    const origin = new URL(url, globalThis.location?.href).origin;
+    return origin === "null" ? undefined : origin;
+  } catch {
+    return undefined;
+  }
 }
 
 function sandboxedMessageHtml(
   html: string,
-  parts: readonly MessagePart[],
-  resolveFileUrl: NonNullable<MessagePartsViewProps["resolveFileUrl"]>,
+  inlineUrls: Readonly<Record<string, string>>,
+  lang: string | undefined,
+  remoteImages: boolean,
 ): string {
   let body = html;
-  for (const part of parts) {
-    const cid = part.cid?.trim();
-    const file = part.file;
-    if (!cid || !file) continue;
-    const url = safeMessagePartUrl(resolveFileUrl(file));
+  const origins = new Set<string>();
+  for (const [cid, raw] of Object.entries(inlineUrls)) {
+    const url = safeInlineUrl(raw);
     if (!url) continue;
+    const origin = inlineImageOrigin(url);
+    if (origin) origins.add(origin);
     body = body.replaceAll(`cid:${cid}`, escapeHtmlAttribute(url));
   }
-  return `<!doctype html><html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data: blob: http: https:; style-src 'unsafe-inline'"><meta name="viewport" content="width=device-width, initial-scale=1"><style>html{color-scheme:light}body{box-sizing:border-box;margin:0;padding:12px;max-width:100%;overflow-wrap:anywhere;font:14px/1.5 system-ui,sans-serif;color:#172033;background:#fff}img,table,pre{max-width:100%}img{height:auto}pre{white-space:pre-wrap}a{color:#2457c5}</style></head><body>${body}</body></html>`;
+  const imageSources = ["data:", "blob:", ...(remoteImages ? ["http:", "https:"] : [...origins].sort())].join(" ");
+  const language = lang && LANGUAGE_TAG.test(lang) ? ` lang="${lang}"` : "";
+  return `<!doctype html><html${language}><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src ${imageSources}; style-src 'unsafe-inline'"><meta name="referrer" content="no-referrer"><base target="_blank"><meta name="viewport" content="width=device-width, initial-scale=1"><style>html{color-scheme:light}body{box-sizing:border-box;margin:0;padding:12px;max-width:100%;overflow-wrap:anywhere;font:14px/1.5 system-ui,sans-serif;color:#172033;background:#fff}img,table,pre{max-width:100%}img{height:auto}pre{white-space:pre-wrap}a{color:#2457c5}</style></head><body>${body}</body></html>`;
 }
 
 function escapeHtmlAttribute(value: string): string {

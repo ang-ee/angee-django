@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import json
+import re
 import sys
+from importlib import import_module
 from pathlib import Path
 from types import ModuleType
 from typing import Any, cast
@@ -17,12 +19,13 @@ from django_compose.declarations import model_declaration
 from django_compose.model_composition import ModelComposition
 from django_compose.models import Composable
 from django_compose.rendering import render_models
+from graphql import parse, validate
 
 from angee.base.build import PermissionIntegration, composed_grants
 from angee.base.models.base import AngeeModel
 from angee.base.models.roles import role_anchor
 from angee.web.build import WebRuntime
-from tests.conftest import make_addon
+from tests.conftest import addon_schema, make_addon
 
 
 class FirstRenderPlanMetaThing(AngeeModel, concrete=True):
@@ -212,8 +215,19 @@ def test_nexus_aggregation_dependencies_reach_web_runtime() -> None:
     assert {"angee.messaging", "angee.parties", "angee.spaces", "angee.posts"} <= set(nexus["dependsOn"])
 
 
+def _public_operations(addon_root: Path) -> list[str]:
+    """Return the operations an addon's ``documents.public.ts`` declares, as public codegen scans them."""
+
+    source = (addon_root / "web" / "src" / "documents.public.ts").read_text()
+    return re.findall(r"graphql\(`(.*?)`\)", source, flags=re.S)
+
+
 def test_oidc_web_documents_follow_the_enabled_backend_addon() -> None:
-    """An IAM-only host never scans operations belonging to the optional OIDC schema."""
+    """An IAM-only host never scans operations belonging to the optional OIDC schema.
+
+    IAM owns public operations of its own (sign-in link redemption): an
+    IAM-only host's public schema validates every one, and none of OIDC's.
+    """
 
     iam_configs = enabled_apps(("angee.iam",), group="angee.addons").app_configs
     oidc_configs = enabled_apps(("angee.iam_integrate_oidc",), group="angee.addons").app_configs
@@ -225,9 +239,13 @@ def test_oidc_web_documents_follow_the_enabled_backend_addon() -> None:
     assert oidc["package"] == "@angee/iam-integrate-oidc"
     assert {"angee.iam", "angee.integrate", "angee.parties"} <= set(oidc["dependsOn"])
     iam_config = next(config for config in iam_configs if config.name == "angee.iam")
-    assert not (Path(iam_config.path) / "web/src/documents.public.ts").exists()
     oidc_config = next(config for config in oidc_configs if config.name == "angee.iam_integrate_oidc")
-    assert (Path(oidc_config.path) / "web/src/documents.public.ts").is_file()
+    iam_public = addon_schema(import_module("angee.iam.schema").schemas, "public")._schema
+    iam_operations = _public_operations(Path(iam_config.path))
+    oidc_operations = _public_operations(Path(oidc_config.path))
+    assert iam_operations and oidc_operations
+    assert [validate(iam_public, parse(operation)) for operation in iam_operations] == [[]] * len(iam_operations)
+    assert all(validate(iam_public, parse(operation)) for operation in oidc_operations)
 
 
 def test_web_runtime_carries_the_deployment_ui_layer() -> None:

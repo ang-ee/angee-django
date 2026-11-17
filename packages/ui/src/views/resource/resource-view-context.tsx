@@ -14,7 +14,7 @@ import { functionalUpdate, type OnChangeFn, type PaginationState, type RowSelect
 import { stableSerialize } from "@angee/refine";
 import { Filter, ResourceQuery, useModelMetadata, type Row } from "@angee/metadata";
 import { validateResourceViewState } from "./model/state";
-import { normaliseGroupStack } from "./model/search";
+import { normaliseGroupStack, normaliseSourceKeys } from "./model/search";
 import { normalisePageSize } from "./page-size";
 import { idsFromRowSelectionState } from "./resource-view-codecs";
 import type { ResourceCollectionPresentation } from "./resource-view-types";
@@ -160,6 +160,8 @@ export interface ResourceViewContextValue {
   setView: (view: ResourceViewKind) => void;
   setMode: (mode: CalendarViewMode) => void;
   setAnchor: (anchor: string) => void;
+  /** Hide the calendar sources with these keys (the rest show). */
+  setHiddenSources: (keys: readonly string[]) => void;
   savedFavorites: readonly ResourceViewFavorite[];
   saveFavorite?: (label: string) => void;
   renameFavorite?: (id: string, label: string) => void;
@@ -756,6 +758,8 @@ function useResourceViewContextValue({
         updateState((current) => ({ ...current, mode })),
       setAnchor: (anchor: string) =>
         updateState((current) => ({ ...current, anchor })),
+      setHiddenSources: (keys: readonly string[]) =>
+        updateState((current) => ({ ...current, hiddenSources: normaliseSourceKeys(keys) })),
       applyFavorite: (favorite: ResourceViewFavorite) =>
         resetScope((current) => {
           try {
@@ -769,6 +773,8 @@ function useResourceViewContextValue({
               sort: favorite.sort ?? null,
               mode: current.mode,
               anchor: current.anchor,
+              // A view that names no hidden sources leaves the calendar's toggles as they are.
+              hiddenSources: favorite.hiddenSources ?? current.hiddenSources,
             });
             return {
               ...current,

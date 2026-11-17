@@ -1,7 +1,7 @@
 // Authorization schema for the tags addon.
 // @rebac_package: tags
 // @rebac_package_version: 0.1.0
-// @rebac_schema_revision: 7
+// @rebac_schema_revision: 8
 
 // Named roles grant membership directly; platform admins reach every role.
 definition tags/role {
@@ -17,6 +17,18 @@ definition tags/role {
 // writes the vocabulary, everyone else only reads. The candidate-aware pre-save
 // gate admits an admin/manager and denies everyone else on creation.
 definition tags/tag {
+    relation admin:    angee/role  // rebac:const=admin
+    relation manager:  tags/role   // rebac:const=tags_admin
+
+    permission create = admin->member + manager->effective_member
+    permission read   = authenticated + admin->member + manager->effective_member
+    permission write  = admin->member + manager->effective_member
+    permission delete = admin->member + manager->effective_member
+}
+
+// A tag category is vocabulary too: every non-anonymous actor reads it and only
+// tag administrators curate it, exactly as they curate tags.
+definition tags/tag_category {
     relation admin:    angee/role  // rebac:const=admin
     relation manager:  tags/role   // rebac:const=tags_admin
 

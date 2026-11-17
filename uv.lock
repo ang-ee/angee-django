@@ -19,6 +19,7 @@ members = [
     "angee-appearance",
     "angee-appearance-integrate",
     "angee-base",
+    "angee-checklists",
     "angee-dashboards",
     "angee-decisions",
     "angee-extraction",
@@ -136,6 +137,7 @@ dependencies = [
     { name = "angee-appearance" },
     { name = "angee-appearance-integrate" },
     { name = "angee-base" },
+    { name = "angee-checklists" },
     { name = "angee-dashboards" },
     { name = "angee-decisions" },
     { name = "angee-extraction" },
@@ -240,6 +242,7 @@ requires-dist = [
     { name = "angee-appearance", editable = "src/angee/appearance" },
     { name = "angee-appearance-integrate", editable = "src/angee/appearance_integrate" },
     { name = "angee-base", editable = "src/angee/base" },
+    { name = "angee-checklists", editable = "src/angee/checklists" },
     { name = "angee-dashboards", editable = "src/angee/dashboards" },
     { name = "angee-decisions", editable = "src/angee/decisions" },
     { name = "angee-extraction", editable = "src/angee/extraction" },
@@ -543,6 +546,29 @@ requires-dist = [
 provides-extras = ["testing"]
 
 [[package]]
+name = "angee-checklists"
+version = "3.0.0"
+source = { editable = "src/angee/checklists" }
+dependencies = [
+    { name = "angee-base" },
+    { name = "angee-graphql" },
+    { name = "angee-iam" },
+    { name = "angee-provenance" },
+    { name = "angee-timeline" },
+    { name = "angee-web" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "angee-base", editable = "src/angee/base" },
+    { name = "angee-graphql", editable = "src/angee/graphql" },
+    { name = "angee-iam", editable = "src/angee/iam" },
+    { name = "angee-provenance", editable = "src/angee/provenance" },
+    { name = "angee-timeline", editable = "src/angee/timeline" },
+    { name = "angee-web", editable = "src/angee/web" },
+]
+
+[[package]]
 name = "angee-dashboards"
 version = "3.0.0"
 source = { editable = "src/angee/dashboards" }
@@ -573,6 +599,7 @@ dependencies = [
     { name = "angee-base" },
     { name = "angee-graphql" },
     { name = "angee-iam" },
+    { name = "angee-jobs" },
     { name = "angee-provenance" },
     { name = "angee-timeline" },
     { name = "angee-web" },
@@ -583,6 +610,7 @@ requires-dist = [
     { name = "angee-base", editable = "src/angee/base" },
     { name = "angee-graphql", editable = "src/angee/graphql" },
     { name = "angee-iam", editable = "src/angee/iam" },
+    { name = "angee-jobs", editable = "src/angee/jobs" },
     { name = "angee-provenance", editable = "src/angee/provenance" },
     { name = "angee-timeline", editable = "src/angee/timeline" },
     { name = "angee-web", editable = "src/angee/web" },
@@ -707,7 +735,7 @@ requires-dist = [
     { name = "angee-graphql", editable = "src/angee/graphql" },
     { name = "angee-resources", editable = "src/angee/resources" },
     { name = "angee-web", editable = "src/angee/web" },
-    { name = "django-axes", specifier = ">=8.0" },
+    { name = "django-axes", specifier = ">=9.0" },
 ]
 
 [[package]]
@@ -1823,6 +1851,7 @@ dependencies = [
     { name = "angee-jobs" },
     { name = "angee-provenance" },
     { name = "angee-resources" },
+    { name = "angee-scheduling" },
     { name = "angee-timeline" },
     { name = "angee-web" },
     { name = "django-compose" },
@@ -1837,6 +1866,7 @@ requires-dist = [
     { name = "angee-jobs", editable = "src/angee/jobs" },
     { name = "angee-provenance", editable = "src/angee/provenance" },
     { name = "angee-resources", editable = "src/angee/resources" },
+    { name = "angee-scheduling", editable = "src/angee/scheduling" },
     { name = "angee-timeline", editable = "src/angee/timeline" },
     { name = "angee-web", editable = "src/angee/web" },
     { name = "django-compose", specifier = ">=0.1.0.dev10,<0.2" },

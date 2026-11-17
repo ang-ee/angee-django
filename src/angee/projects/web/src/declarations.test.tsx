@@ -9,7 +9,7 @@ import {
 } from "@angee/ui";
 
 import {
-  MILESTONE_MODEL, PROJECT_MODEL, TASK_MODEL, projectListDeclaration, projectRecordTabs,
+  MILESTONE_MODEL, PROJECT_MODEL, PROJECTS_OUTSIDE_TEMPLATES, TASK_MODEL, TASKS_OUTSIDE_TEMPLATES, projectListDeclaration, projectRecordTabs,
   projectGanttSpec, projectRecordTabsFor, projectTimelineSpec, projectTimelineTab, taskRecordTabs, taskRecordTabsFor, useProjectFormDeclaration, useProjectListDeclaration,
   useTaskFormDeclaration, useTaskListDeclaration,
 } from "./index";
@@ -55,11 +55,25 @@ describe("composable standard project and task declarations", () => {
     expect(props.defaultGroup).toEqual({ field: "status" });
     expect(props.defaultGroups?.gantt).toBeNull();
     expect(props.gantt).toBe(projectGanttSpec);
+    // Templates stay out of the list and its Gantt lanes; the templates page lists them.
+    expect(props.baseFilter).toEqual(PROJECTS_OUTSIDE_TEMPLATES);
     expect(projectGanttSpec.linked).toEqual({ resource: MILESTONE_MODEL, lane: "project" });
     const columns = parsePageColumns(props.children);
     expect(columns.map(({ field }) => field)).toEqual(["title", "current_milestone", "status", "lead", "target_date", "updated_at", "tags"]);
     expect(columns.find(({ field }) => field === "tags")?.hiddenByDefault).toBe(true);
     expect(parsePageFacets(props.children).map(({ field }) => field)).toEqual(["lead"]);
+  });
+
+  test("a caller's scope narrows the lists without bringing templates back", () => {
+    const projects = propsOf<ListProps>(useProjectListDeclaration({ baseFilter: { lead: { exact: "usr_1" } } }));
+    expect(projects.baseFilter).toEqual({ ...PROJECTS_OUTSIDE_TEMPLATES, lead: { exact: "usr_1" } });
+    const { result: scoped } = renderHook(() => useTaskListDeclaration({ baseFilter: { assignee: { exact: "usr_1" } } }));
+    expect(propsOf<ListProps>(scoped.current).baseFilter).toEqual({ ...TASKS_OUTSIDE_TEMPLATES, assignee: { exact: "usr_1" } });
+    // A list scoped to one template's own tasks opts in.
+    const { result: own } = renderHook(() => useTaskListDeclaration({
+      baseFilter: { project: { exact: "prj_template" } }, includeTemplates: true,
+    }));
+    expect(propsOf<ListProps>(own.current).baseFilter).toEqual({ project: { exact: "prj_template" } });
   });
 
   test("project list options choose views without seeding a Gantt group", () => {
@@ -81,12 +95,19 @@ describe("composable standard project and task declarations", () => {
     expect(fields.find(({ name }) => name === "current_milestone")).toMatchObject({ status: true, widget: "projects.phase" });
     expect(fields.some(({ name }) => ["sort_order", "health"].includes(name))).toBe(false);
     const details = parsePageGroups(props.children).find(({ pane }) => pane === "project-settings");
-    expect(details?.fields.map(({ name }) => name)).toEqual(["owner", "start_date_resolution", "target_date_resolution", "owns_items", "folder", "converted_from"]);
-    expect(parsePageActions(props.children).map(({ id }) => id)).toEqual(["pause", "resume", "complete", "drop"]);
+    expect(details?.fields.map(({ name }) => name)).toEqual([
+      "owner", "start_date_resolution", "target_date_resolution", "owns_items", "folder", "converted_from",
+      "is_template", "created_from_template",
+    ]);
+    expect(parsePageActions(props.children).map(({ id }) => id))
+      .toEqual(["pause", "resume", "complete", "drop", "create-from-template"]);
     expect(props.returning).toContain("permissions");
     const actions = parsePageActions(props.children);
     expect(actions.find(({ id }) => id === "pause")?.visibleWhen?.({ status: "OPEN" })).toBe(true);
     expect(actions.find(({ id }) => id === "resume")?.visibleWhen?.({ status: "DROPPED" })).toBe(true);
+    const fromTemplate = actions.find(({ id }) => id === "create-from-template");
+    expect(fromTemplate?.visibleWhen?.({ is_template: true })).toBe(true);
+    expect(fromTemplate?.visibleWhen?.({ is_template: false })).toBe(false);
   });
 
   test("exports task list intent and keeps operational ordering out of the default form", () => {
@@ -94,6 +115,7 @@ describe("composable standard project and task declarations", () => {
     const listProps = propsOf<ListProps>(list.current);
     expect(listProps.resource).toBe(TASK_MODEL);
     expect(listProps.defaultGroup).toEqual({ field: "project" });
+    expect(listProps.baseFilter).toEqual(TASKS_OUTSIDE_TEMPLATES);
     expect(parsePageFacets(listProps.children).map(({ field }) => field)).toEqual(["project", "visibility", "assignee"]);
     expect(listProps.rowActions).toHaveLength(2);
     const { result: form } = renderHook(useTaskFormDeclaration);
@@ -101,7 +123,7 @@ describe("composable standard project and task declarations", () => {
     expect(groups.filter(({ label }) => label !== "Details").flatMap(({ fields }) => fields)
       .some(({ name }) => ["sort_order", "sub_sort_order"].includes(name))).toBe(false);
     expect(groups.find(({ pane }) => pane === "task-details")?.fields.map(({ name }) => name))
-      .toEqual(["delegate", "recurrence", "dropped_reason", "done_at", "dropped_at"]);
+      .toEqual(["delegate", "due_rule", "dropped_reason", "done_at", "dropped_at"]);
   });
 
   test("consumer selections keep dependency fields and reuse native groups and verbs", () => {
@@ -199,7 +221,8 @@ describe("composable standard project and task declarations", () => {
     expect(mountedDeclaration<ListProps>(List)).toBe(projectListDeclaration.props);
     const props = result.current.props;
     expect(parsePageFields(props.children).find(({ name }) => name === "current_milestone")?.status).toBe(true);
-    expect(parsePageActions(props.children).map(({ id }) => id)).toEqual(["pause", "resume", "complete", "drop"]);
+    expect(parsePageActions(props.children).map(({ id }) => id))
+      .toEqual(["pause", "resume", "complete", "drop", "create-from-template"]);
   });
 
   test("TasksPage mounts the exported task declarations and its default filter", () => {

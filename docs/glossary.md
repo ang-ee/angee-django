@@ -363,6 +363,15 @@ protected link identifies its parent step, prior run, or trigger event when one
 caused it. A manual run has no cause. A cited cause stays retained until its
 dependent effects are pruned.
 
+**Schedule trigger** — a trigger whose source is `schedule`: the workflow tick
+records the occurrences its cursor (`next_occurrence_at`) has reached, one ledger row
+each, and starts one run with no subject for the latest due occurrence. Older missed
+occurrences are recorded as skipped. See [the workflows README](../src/angee/workflows/README.md).
+
+**Run hold** — a run's most urgent step hold (`error`, then `run`, then
+`decision`); a run with a replacement holds nothing. The run console's Incidents view
+lists runs held on `error` or `run`.
+
 **Node** — a keyed graph declaration naming a step, its bindings and outgoing
 edges in a `Definition` document.
 
@@ -412,6 +421,22 @@ answer. It is derived and pays no query cost when a list does not request it.
 
 **Inbox** — the person's readable decisions, filtered by assignment or requester
 to distinguish questions they can answer from questions they issued.
+
+## Checklists
+
+**Checklist** — the ordered categories and items a model declares through its
+`checklist()` classmethod, extended by composed donors. It holds recorded
+checks only; readiness a model can compute stays a verb-eligibility condition.
+
+**Checklist result** — one append-only outcome of one item on one record, with
+its status, detail, the record's content token and its evidence links. The
+latest result per item wins. A result shows only when its record and every
+evidence link are readable to the reader, signed in or anonymous; deleting an
+evidence record deletes the results it supports.
+
+**Content token** — the opaque string a checklist type declares through
+`checklist_revision_expression()`. A passed result recorded against another
+token reads unresolved.
 
 ## Extraction
 

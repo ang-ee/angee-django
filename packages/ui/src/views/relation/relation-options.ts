@@ -51,6 +51,10 @@ export interface RelationOptionsConfig {
   optionStatusField?: string;
   /** Context values required by the computed status field. */
   optionStatusArguments?: readonly ListQueryFieldArgument[];
+  /** Related-row field whose value heads the option's picker group (e.g. a category's name). */
+  optionGroupField?: string;
+  /** Related-row number ordering those groups (e.g. a category's position); ungrouped options trail. */
+  optionGroupOrderField?: string;
   /** One-based server page, shared by pickers and row catalogues. */
   page?: number;
   pageSize?: number;
@@ -232,6 +236,8 @@ export function useRelationOptions(
     optionDescriptionField,
     optionStatusField,
     optionStatusArguments,
+    optionGroupField,
+    optionGroupOrderField,
     page = 1,
     pageSize = RELATION_OPTION_LIMIT,
     sort = false,
@@ -286,6 +292,8 @@ export function useRelationOptions(
     ...(extraFields ?? []),
     ...(optionDescriptionField ? [optionDescriptionField] : []),
     ...(optionStatusField ? [optionStatusField] : []),
+    ...(optionGroupField ? [optionGroupField] : []),
+    ...(optionGroupField && optionGroupOrderField ? [optionGroupOrderField] : []),
   ])]);
   const stableWhere = useValueStable(where);
   const stableStatusArguments = useValueStable(optionStatusArguments);
@@ -344,6 +352,8 @@ export function useRelationOptions(
       colorField,
       descriptionField: optionDescriptionField,
       statusField: optionStatusField,
+      groupField: optionGroupField,
+      groupOrderField: optionGroupOrderField,
       statusLabel: (value) => {
         const option = statusMetadata?.values?.find((item) => item.value === value);
         return option ? enumValueLabel(option) : statusLabel(value);
@@ -354,7 +364,7 @@ export function useRelationOptions(
       ? options.filter((option) => `${option.label} ${option.description ?? ""} ${option.status?.label ?? ""}`
         .toLocaleLowerCase().includes(labelSearch))
       : options;
-  }, [colorField, labelField, labelSearch, optionDescriptionField, optionStatusField, resolveStatusTone, rows, sort, statusMetadata, statusTones]);
+  }, [colorField, labelField, labelSearch, optionDescriptionField, optionGroupField, optionGroupOrderField, optionStatusField, resolveStatusTone, rows, sort, statusMetadata, statusTones]);
   return React.useMemo(() => ({ list, options, rows }), [list, options, rows]);
 }
 
@@ -390,6 +400,8 @@ function relationOptionsFromRows(
     statusField?: string;
     statusLabel?: (value: string) => string;
     statusTone?: (value: string) => Tone;
+    groupField?: string;
+    groupOrderField?: string;
   } = {},
 ): readonly RelationOption[] {
   const options = rows.flatMap((row) => {
@@ -399,6 +411,9 @@ function relationOptionsFromRows(
     const description = descriptionValue == null ? "" : String(descriptionValue).trim();
     const statusValue = config.statusField ? rowValueAtPath(row, config.statusField) : undefined;
     const status = statusValue == null ? "" : String(statusValue).trim();
+    const groupValue = config.groupField ? rowValueAtPath(row, config.groupField) : undefined;
+    const groupLabel = groupValue == null ? "" : String(groupValue).trim();
+    const groupOrder = config.groupOrderField ? rowValueAtPath(row, config.groupOrderField) : undefined;
     return [{
       value,
       label: relationOptionLabel(row, labelField, value),
@@ -409,6 +424,10 @@ function relationOptionsFromRows(
         label: config.statusLabel?.(status) ?? statusLabel(status),
         tone: config.statusTone?.(status) ?? "brand",
       } } : {}),
+      ...(groupLabel ? {
+        group: groupLabel,
+        ...(typeof groupOrder === "number" && Number.isFinite(groupOrder) ? { groupOrder } : {}),
+      } : {}),
     }];
   });
   return config.sort

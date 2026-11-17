@@ -11,7 +11,7 @@ from angee.jobs.scheduler import periodic_now
 
 @shared_task(name="work.wake_due_snoozes")
 def wake_due_snoozes(timestamp: int | None = None) -> int:
-    """Clear every task snooze whose inclusive wake instant has arrived."""
+    """Wake every task hold whose inclusive wake instant has arrived, one row at a time."""
 
     task_model = apps.get_model("projects", "Task")
     with system_context(reason="work.tasks.wake_due_snoozes"):

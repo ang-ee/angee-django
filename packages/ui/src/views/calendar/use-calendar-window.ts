@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { useMemo, type ReactNode } from "react";
 import {
   useAuthoredQuery,
   type AuthoredDocument,
@@ -41,6 +41,14 @@ export function calendarWindowBounds(window: CalendarWindow): CalendarWindowBoun
  * marker navigation is source-declared rather than page-woven.
  */
 export interface CalendarWindowSource<TDocument extends AuthoredDocument> {
+  /**
+   * The source's id within its page (letters, digits, `_`, `-`, `.`), named by
+   * `?hiddenSources=` and shipped views. A source with a `key` and a `label`
+   * gets a toolbar toggle that hides or shows its occurrences.
+   */
+  key?: string;
+  /** The toolbar toggle's label; requires `key`. */
+  label?: ReactNode;
   /** The authored occurrence query returning the occurrence wire shape. */
   document: TDocument;
   /** Build the query variables for a window — the source owns its argument names (compose `calendarWindowBounds`). */

@@ -23,7 +23,12 @@ rows:
       assignee: iam.user_bob
       priority: medium
       due_date: 2026-09-04
-      recurrence: FREQ=WEEKLY;BYDAY=FR
+      due_rule:
+        terms:
+          - anchor: set
+        repeat:
+          kind: calendar
+          rule: FREQ=WEEKLY;BYDAY=FR
       sort_order: 2048.0
       sub_sort_order: 2048.0
       owner: iam.user_alice

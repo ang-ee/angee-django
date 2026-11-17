@@ -348,7 +348,11 @@ Use these owners instead of maintaining another contract in an addon:
   never a stage flag, and a stage reaches a lifecycle only through projection.
   Addons contribute vocabulary (categories, reservations, applicability) through
   the primitive's hooks; they never copy its scope, admission, projection or
-  provisioning ([Persistence primitives](#persistence-primitives)).
+  provisioning ([Persistence primitives](#persistence-primitives)). A record's
+  position is its stage: a consumer reads it there and never derives a parallel
+  status from the record's other facts. Waiting is not a stage either; a paused
+  review keeps its stage and carries a hold, as a triage task does through
+  [`TaskWork.snooze`](../../src/angee/work/models.py) and `wake`.
 - Runtime model modules, generated schemas and codegen stubs are output.
   Change their source declarations. Native Django migration history is reviewed,
   version-controlled project source; preserve it across runtime rebuilds.
@@ -630,8 +634,9 @@ data through REBAC, never a queryset bypass.
   implementation changes. A refused trigger disables with a reason; a refused
   child start fails its step. The enable preview shows prospective grants and
   workflow monitor readers through REBAC's native subject lookup.
-  A `TriggerSource` declares its grant targets; a model captured by
-  `record_changed` explicitly opts in and declares its own grant targets.
+  A record `TriggerSource` declares its grant targets; a model captured by
+  `record_changed` explicitly opts in and declares its own grant targets. A
+  schedule admits no record and grants nothing.
   Enablement writes listable, revocable tuples to the workflow principal, not
   an implicit permission on the enabling user. Workflow monitoring grants
   readers access to triggered runs; per-reader record references remain redacted
@@ -687,7 +692,21 @@ data through REBAC, never a queryset bypass.
   only the vocabulary. An edge is read by whoever reads both the tag and the
   record. `TagAssignment.check`
   fails startup when the taggable models and the declared relations differ. The
-  tags addon names no other addon's model.
+  tags addon names no other addon's model. A `TagCategory` groups the vocabulary
+  for every taggable type and may cap how many of its tags one record holds,
+  archived tags included.
+  [`TagAssignmentManager.require_category_maximum`](../../src/angee/tags/models.py)
+  is the one check. It runs inside the write, after it:
+  - on every edge insert, for that record in the tag's category, under the
+    record's and the tag's locks;
+  - on a tag save that changes its category against the stored row, for the
+    records holding the tag;
+  - on a category save that lowers its maximum;
+  - after a merge's moves, through `pre_merge`.
+
+  Edge `bulk_create`, and queryset `update` or `bulk_update` of a tag's category
+  or a category's maximum, bypass it
+  ([tags](../../src/angee/tags/README.md#the-maximum-per-record)).
 - **Raise through the model's access owner.** `require_access(permission, actor=None)`
   delegates to native REBAC checks. An explicit actor stays bound to the instance;
   omitting it preserves native instance and ambient scope precedence. Verbs resolve
@@ -739,6 +758,16 @@ data through REBAC, never a queryset bypass.
 - **Login throttling belongs at the IAM auth seam.** Do not add per-view or
   per-test throttles; IAM composes `django-axes` at the `authenticate(request=...)`
   backend/signal path, so the password GraphQL mutation stays a thin caller.
+  Every credential a person presents is an authentication backend: a sign-in
+  link redeems through [`SignInLinkBackend`](../../src/angee/iam/auth.py) under
+  the same throttle. Name a credential keyword so Django's cleanser masks it
+  (`token`, `key`, `secret`, `password`) before `user_login_failed` receivers
+  see it, and pass the account it names unmasked so axes records the attempt
+  under that account. Each request makes one attempt
+  ([`authenticate_once`](../../src/angee/iam/auth.py)). IAM's autoconfig owns
+  the axes policy (the cool-off, no reset on success, the username and
+  whitelist callables); a refusal of a genuine but spent credential is not a
+  guess.
 - **Person accounts have one factory.** Actor-requested accounts go through
   [`UserManager.create_person`](../../src/angee/iam/models.py), whose `create`
   permission owns admission; ingress without an actor uses
@@ -751,8 +780,8 @@ data through REBAC, never a queryset bypass.
   account is renamed.
   `create_user` stays the trusted bootstrap and OIDC path.
 - **Managed accounts change through IAM's account verbs.** `User.set_active`,
-  `rename`, `issue_password` and `reset_password` lock the row, check their own
-  Zed permission, the expected revision and the shared
+  `rename`, `issue_password`, `issue_sign_in_link` and `reset_password` lock
+  the row, check their own Zed permission, the expected revision and the shared
   `User.account_action_blockers`, then write elevated; the `account_actions`
   projection batches the same conditions. Every verb refuses a protected
   account: staff, superusers, the actor's own and effective members of
@@ -1132,6 +1161,20 @@ IAM stores the canonical person email:
 and every save that writes `email` applies it, so lookups and the person-email
 unique constraint compare the stored column without SQL transforms.
 
+[`ChecklistMixin`](../../src/angee/checklists/models.py) declares a model's checks:
+the `checklist()` classmethod lists ordered categories and items, which composed
+donors extend through `super()`. `checklist_revision_expression()` names the
+record's content token. Results are append-only rows recorded with their evidence
+through [`ChecklistResultManager.record`](../../src/angee/checklists/managers.py).
+A checked record never carries a second status field or a retained review snapshot.
+[`ChecklistStatuses`](../../src/angee/checklists/managers.py) is the one status rule.
+Cells, filters, counts and record projections read it, so a list cell, its filter
+and a dashboard count cannot disagree. A result shows only when its record and
+every evidence link are readable to the reader, signed in or anonymous; deleting
+an evidence record deletes the results it supports. The recording addon declares
+the evidence types it records, and the checklist type's addon declares the type's
+relation ([checklists README](../../src/angee/checklists/README.md)).
+
 [`MergeableMixin`](../../src/angee/base/models/merge.py) owns operational redirects, actor
 admission and the system fold. Models declare domain refusals and carry/retire
 hooks; pointing rows declare `MergePolicy` (an edge's `merge_policy`, a key's
@@ -1211,6 +1254,18 @@ exception closes the rows as failed. Tests inherit a boundary from the root
   client-key or fingerprint columns. A keyed operation opens a fresh changeset
   inside its transaction and claims before writing; nested keyed operations
   therefore receive distinct claim rows without leaving the enclosing boundary.
+- **A template is a flagged row plus a copy verb, never a parallel model.** The
+  row type carries `is_template` (as `projects.Project` and `agents.Agent` do),
+  ordinary lists filter it out, and an idempotent manager verb creates a copy
+  ([`ProjectManager.create_from_template`](../../src/angee/projects/models.py),
+  [`VaultManager.create_from`](../../src/angee/knowledge/models.py)). Each owner
+  names what its copy carries through a cooperative hook (`template_copy_values`)
+  and inserts through its own save, so contributors' insert lifecycles run;
+  grants, statements, bindings and absolute dates never copy, and tags copy
+  through their owner (`TagAssignmentManager.copy`). Ordinary lists compose the
+  template exclusion with their caller's scope rather than letting it be
+  replaced. The copied rows are the vocabulary the copy was born with: later
+  template edits change only later copies.
 - **Ownership:** `owner` has one spelling. A grant root composes `OwnerMixin`,
   so `owner` is transferable access in a column and `created_by` remains
   attribution. Its Zed backs `owner` with that column and declares its transfer
@@ -1366,8 +1421,14 @@ exception closes the rows as failed. Tests inherit a boundary from the root
   Its `validate_insert` seam narrows all generic insert entrypoints. Retention
   commands insert validated batches through `owner_bulk_create`; lease state
   machines expose exact conditional writes through domain queryset methods using
-  `owner_update`. These public, framework-protected APIs skip only the declaring
-  owner's guard and retain downstream authorization and queryset guards. Each
+  `owner_update`; an owner deletes rows it validated through `owner_delete`, the
+  native collector delete with its receivers and cascades. These public,
+  framework-protected APIs skip only the declaring owner's guard and retain
+  downstream authorization and queryset guards.
+  [`OwnerDeleteQuerySet`](../../src/angee/base/querysets.py) owns the one
+  exception: Django's raw delete path, taken when rows have no receivers or
+  dependents, is admitted for the owner's own model during its `owner_delete`
+  and refused otherwise. Each
   owner supplies its validated predicates and allowed fields. `HierarchyQuerySet`
   exposes the same `owner_update` contract for derived path maintenance. They do
   not reopen generic mutations or replace model/FK invariants. `AuditMixin` dispatches
@@ -1471,6 +1532,13 @@ retains its native routing contract.
 - **The subject owns its anchors.** The model that learns a date (a project's
   start, a completion, a reading) supplies it by name; scheduling owns no anchors,
   counters or rates.
+- **A person's or a source's date holds the row; the basis keeps the rule's value.**
+  Writing a rule-dated row's date (a person's edit, a source's stated `schedule`)
+  holds it at that value, even one equal to the rule's; anchor moves and rule edits
+  then move only rows that are not held, and a reset verb releases the hold as the
+  rule's own write, recording no person's stance
+  ([`RuleDatedMixin`](../../src/angee/projects/models.py)). The hold is a key in the
+  basis (`held`), not a column, because no read filters on it.
 - **Status is computed on read, never stored.** `Due.get_status(now=…, counters=…)`
   reads the stored basis; a stored status goes stale as time passes. A set-level
   read, such as an overdue list, may compare the stored date column in a queryset
@@ -1868,9 +1936,15 @@ importing the composed model toolkit.
 [`RetainedGenericRelation`](../../src/angee/base/fields/relations.py) owns the
 native reverse relation's exclusion from automatic collection.
 Each edge declares `on_target_delete` as `CASCADE`, `PROTECT`, or `SET_NULL`; a
-model needing row-aware cleanup implements `teardown_for_target(target)`. The
-foundation target-delete receiver invokes that one declaration for instance and
-queryset deletion paths.
+model needing row-aware cleanup implements `teardown_for_target(target)` instead,
+which never blocks the target's deletion. The foundation target-delete receiver
+invokes that one declaration for instance and queryset deletion paths, once per
+collected instance (an MTI child's deletion also collects its canonical parent, so
+a teardown is idempotent), whether the target names the edge through a reverse
+relation or the edge's schema declares the target's type. An append-only edge,
+whose collection refuses bulk deletes, cascades through its teardown and the
+owner's `owner_delete`, under a named system context when the deleter needs no
+authority on the edge rows.
 [`RecordReferenceNode`](../../src/angee/graphql/relations.py) and
 `with_record_reference_access` project it into GraphQL under the current
 reader's scope. A hidden target yields null identity fields; its model and ID
@@ -2021,6 +2095,11 @@ A round's lift reads `can_open`, which composes the same
 Decision admission, answers and withdrawal belong to the
 [decisions manager](../../src/angee/decisions/managers.py). Asking owners
 consume its verdict; controls consume the owning verb's eligibility.
+
+Readiness a record can compute from its own rows is a blocker of the verb it
+gates, never a checklist item. A [checklist](../../src/angee/checklists/README.md)
+holds recorded checks, and a gate that needs them reads
+`ChecklistAssessment.blocking_unmet`.
 
 ### Integration and worker contracts
 
@@ -2270,7 +2349,7 @@ bridge advisory lock as polling and delivery settlement.
   `Step.check` at the body boundary. Retryability, timeouts and stack traces
   belong to the runner's attempt record, not to consumer settlements.
   A failed IO attempt cannot roll back writes already committed by its body.
-- **`WorkflowRunQuerySet.hold` owns the run lock and transaction.** It registers
+- **`WorkflowRunQuerySet.lock_run` owns the run lock and transaction.** It registers
   ready-row dispatch on successful commit. The run row owns its state:
   [`WorkflowRun.advance`](../../src/angee/workflows/models.py) requires that lock,
   settles the attempt, composes `Definition` to plan the graph and writes the
@@ -2281,14 +2360,14 @@ bridge advisory lock as polling and delivery settlement.
   and hands any other failure to `WorkflowRun.fail_advance` to record. Each tick
   candidate's transition is a `StepRun` verb (`wake`, `redispatch`, `reap`) that
   reports whether its run must replan; managers and querysets own row-set verbs
-  and act on a held run only through its verbs (`admit_subject`, `reopen`,
+  and act on a locked run only through its verbs (`admit_subject`, `reopen`,
   `interrupt`, `cancel_owned_work`).
 - **Queryset verbs own transitions and companion fields.** `StepRunQuerySet`
   owns `claim`, `settle`, `to_succeeded`, `fail_attempt`, `to_waiting`,
   `to_ready`, `cancel_open`, `dispatch` and `count_redispatch`;
   `StepAttemptQuerySet.close` owns attempt closure.
   Conditional updates check the attempt fence. The runner's periodic tick
-  rechecks due waits, expired claims and stale deliveries under `hold`, then delegates to
+  rechecks due waits, expired claims and stale deliveries under `lock_run`, then delegates to
   those verbs. The effect marker and heartbeat check the same attempt fence
   under the step lock used by the reaper. Uncertain non-idempotent effects wait
   for explicit operator acknowledgement; dispatch exhaustion also waits for an
@@ -2299,7 +2378,10 @@ bridge advisory lock as polling and delivery settlement.
   tick recovery. An already-running IO sibling retains its result without
   planning, and retry replans from all retained rows.
   Reprocessing records its predecessor and uses the requesting actor on the
-  current publication. Artifacts reference actor-readable records without
+  current publication; reprocessing from a node keeps the predecessor's version,
+  reuses the steps outside the node's reach that settled with a routed result and
+  runs the rest again. A run with an open replacement refuses another.
+  Artifacts reference actor-readable records without
   granting access to them. Admission retains the subject and each declared
   record-reference input as shared `DerivedFrom` evidence, after checking the
   run actor's standing read access. Run readers see those references through the

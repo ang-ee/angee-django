@@ -79,13 +79,16 @@ covers workflow definition, publication, execution,
 [settlement recovery](../tests/test_workflows_fix_round.py), authorization, concurrency,
 test-harness and composed-consumer contracts, plus decision
 [lifecycle](../tests/test_decisions_lifecycle.py) and
-[concurrency](../tests/test_decisions_concurrency.py). This named file selection
+[concurrency](../tests/test_decisions_concurrency.py), and the
+[checklist status rule](../tests/test_checklists.py), whose derived input has a
+PostgreSQL branch. This named file selection
 also covers [review waiters](../tests/test_workflows_review.py), their
 [locking races](../tests/test_workflows_review_concurrency.py),
 [execution links](../tests/test_workflows_review_graphql.py), and
 [inbox predicates](../tests/test_decisions_inbox.py),
 [committed timeline waits and inherited timeline subscriptions](../tests/test_timeline_workflows.py),
-[timeline stream authorization](../tests/test_timeline_subscriptions.py), plus the
+[timeline stream authorization](../tests/test_timeline_subscriptions.py),
+[schedule trigger capture races](../tests/test_workflows_schedule_concurrency.py), plus the
 [agent session loop](../tests/test_agent_sessions.py) and its
 [locking races](../tests/test_agent_sessions_concurrency.py), plus
 [connection discovery races](../tests/test_integrate_discovery_concurrency.py),
@@ -100,7 +103,8 @@ messaging with its [channel owner](../tests/test_messaging_channel_concurrency.p
 [portfolio report](../tests/test_portfolio_concurrency.py) locks, proposals,
 sequences, spaces, storage with its
 [window-aligned download URLs and expiry](../tests/test_storage_access_campaign.py),
-the system queryset, work and [task ordering](../tests/test_composed_work.py) locks,
+the system queryset, the [tag category maximum's](../tests/test_tags_categories_concurrency.py)
+filing locks, work and [task ordering](../tests/test_composed_work.py) locks,
 integrate streams, [scheduler row locks](../tests/test_integrate_scheduler.py) and workflow
 integrate steps, the
 [grouped rows](../tests/test_group_rows.py) partitions, the

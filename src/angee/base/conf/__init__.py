@@ -67,11 +67,9 @@ def configure(namespace: MutableMapping[str, Any]) -> None:
         and info.get("source") == str(project / "settings.yaml")
     )
     _deployment_urls(namespace, env)
+    # Base's autoconfig joins the resolved ANGEE_PUBLIC_ORIGIN to this list.
     origins = namespace.get("CSRF_TRUSTED_ORIGINS", ())
     namespace["CSRF_TRUSTED_ORIGINS"] = [origins] if isinstance(origins, str) else list(origins)
-    if origin := env.str("ANGEE_PUBLIC_ORIGIN", default=""):
-        if origin not in namespace["CSRF_TRUSTED_ORIGINS"]:
-            namespace["CSRF_TRUSTED_ORIGINS"].append(origin)
     namespace["COMPOSE_COMPONENT_GROUP"] = "angee.addons"
     namespace["COMPOSE_ENV_PREFIXES"] = ("ANGEE_",)
     from django_compose.conf import configure as compose_configure

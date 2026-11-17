@@ -1,7 +1,7 @@
 /**
  * The one owner of human dates and times. The rule: every list, row, facts line
  * and day label is absolute (`formatDate`, `formatDateTime`, `formatTime`,
- * `formatDayLabel`, `formatMonth`); relative time (`formatRelativeTime`,
+ * `formatDayLabel`, `formatMonth`, `formatDateParts`); relative time (`formatRelativeTime`,
  * `RelativeTime`) belongs only to a live header — a chat, a running job — whose
  * value keeps moving while the page is open. Never `toLocale*`, never a date-fns
  * `format` with a literal pattern, never a raw ISO string as user text.
@@ -186,8 +186,36 @@ export function formatMonth(value: DateFormatValue, options: HumanDateOptions = 
   }).format(date);
 }
 
-/** The calendar day of an instant in a zone, as a sortable key ("2026-09-30"). */
-function calendarDay(date: Date, timeZone?: string): string {
+/** A date's month and day, each localized on its own. */
+export interface DateParts {
+  month: string;
+  day: string;
+}
+
+/**
+ * The short month and the day of the month, each from its own formatter ("Sep" and
+ * "28", "9月" and "28日", "syys" and "28"), for a layout that sets them apart, such as
+ * a date tile. A combined month-and-day pattern would pick the month's in-context
+ * form, which is numeric in Japanese, Chinese or Finnish.
+ * @kind null
+ * @reason Format utility: converts data to display or storage text.
+ */
+export function formatDateParts(value: DateFormatValue, options: HumanDateOptions = {}): DateParts | null {
+  const date = dateFromValue(value);
+  if (!date) return null;
+  const locale = localeCode(options.locale);
+  const zone = options.timeZone ? { timeZone: options.timeZone } : {};
+  return {
+    month: new Intl.DateTimeFormat(locale, { month: "short", ...zone }).format(date),
+    day: new Intl.DateTimeFormat(locale, { day: "numeric", ...zone }).format(date),
+  };
+}
+
+/** The calendar day of an instant in a zone, as a sortable key and a `<time datetime>` value ("2026-09-30").
+ * @kind null
+ * @reason Format utility: converts data to display or storage text.
+ */
+export function calendarDay(date: Date, timeZone?: string): string {
   return new Intl.DateTimeFormat("en-CA", {
     year: "numeric", month: "2-digit", day: "2-digit",
     ...(timeZone ? { timeZone } : {}),

@@ -9,6 +9,7 @@ itself.
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Iterable, Mapping, Sequence
 from datetime import date, datetime, timedelta
 from typing import TYPE_CHECKING, Any, ClassVar, Self, cast
@@ -44,11 +45,14 @@ from angee.projects.models import TaskQuerySet as ProjectTaskQuerySet
 from angee.resources.mixins import ResourceLoadMixin
 from angee.sequence.models import PeriodReset
 from angee.spaces.managers import GroupManager
+from angee.work.events import task_woken
 
 if TYPE_CHECKING:
     from angee.iam.models import User
     from angee.projects.models import Project
     from angee.spaces.models import Group, Membership
+
+logger = logging.getLogger(__name__)
 
 
 class QueueManager[QueueT: Queue](GroupManager[QueueT]):
@@ -965,7 +969,7 @@ class MilestoneWork(Composable, extends="projects.Milestone"):
 
 
 class TaskWorkQuerySet[TaskT: TaskWork](ProjectTaskQuerySet[TaskT]):
-    """Work selections and snooze writes within the caller's task population."""
+    """Work selections and hold wakes within the caller's task population."""
 
     def removed_for(self, actor: Any, *, queue: Any = None, parent: Any = None) -> Self:
         """Select shared trash the actor may restore, excluding merge redirects, latest removal first."""
@@ -977,30 +981,70 @@ class TaskWorkQuerySet[TaskT: TaskWork](ProjectTaskQuerySet[TaskT]):
             rows = rows.filter(parent=parent)
         return rows.order_by("-trashed_at", "-pk")
 
+    def held(self) -> Self:
+        """Select the held tasks outside the trash: a hold stamps ``snoozed_at``, dated or not.
+
+        A removed task keeps its hold, as it keeps its stage, and is held again once restored.
+        """
+
+        return self.filter(snoozed_at__isnull=False, is_trashed=False)
+
+    def wake_each(self, reason: str, *, message: Any = None) -> int:
+        """Wake each selected hold through :meth:`TaskWork.wake` and return how many woke.
+
+        Each row is selected again under its row lock with this queryset's filters,
+        so a hold re-armed or ended after the selection was read is left alone.
+        Every wake is its own savepoint and emits ``task_woken``. A row whose wake
+        fails, a receiver's refusal included, is logged and rolled back alone: it
+        stays held for the next wake, and neither the other rows nor the caller's
+        transaction (the ingest of the message that woke it) fail with it.
+        """
+
+        woken = 0
+        for pk in self.held().order_by("pk").values_list("pk", flat=True):
+            try:
+                with transaction.atomic():
+                    task = self.held().filter(pk=pk).lock_if_supported().first()
+                    if task is not None:
+                        task.wake(reason, message=message)
+                        woken += 1
+            except Exception:
+                logger.exception("Waking held task %s (%s) failed; it stays held.", pk, reason)
+        return woken
+
     def wake_due_snoozes(self, *, now: datetime | None = None) -> int:
-        """Clear the selected snoozes whose inclusive wake instant is at or before ``now``."""
+        """Wake the selected holds whose inclusive wake instant is at or before ``now``."""
 
-        now = now or timezone.now()
-        return self.filter(snoozed_until__isnull=False, snoozed_until__lte=now).update(
-            snoozed_until=None, snoozed_by=None, updated_at=now
-        )
+        return self.filter(snoozed_until__lte=now or timezone.now()).wake_each(self.model.WakeReason.DUE)
 
-    def wake_from_chatter_thread(self, thread_id: Any) -> int:
-        """Clear the snooze on the selected task whose chatter thread is ``thread_id``."""
+    def wake_replied(self, message: Any, *, replier_id: Any) -> int:
+        """Wake the selected holds that await ``replier_id``, the account whose reply ``message`` is.
 
-        if thread_id is None:
+        The one reply rule: a hold wakes only on its awaited user's message, on the
+        task's chatter or on a conversation the caller ties to that user; a message
+        from anyone else wakes nothing, and a hold awaiting nobody wakes only at its
+        date or by hand.
+        """
+
+        if replier_id is None:
+            return 0
+        return self.filter(snoozed_awaiting_id=replier_id).wake_each(self.model.WakeReason.REPLY, message=message)
+
+    def wake_on_chatter_reply(self, message: Any) -> int:
+        """Wake the selected holds whose chatter thread carries ``message`` and that await its author."""
+
+        if message.thread_id is None:
             return 0
         chatter = (
             apps.get_model("messaging", "ThreadAttachment")
             ._base_manager.filter(
-                content_type=ContentType.objects.get_for_model(self.model), thread_id=thread_id, role="chatter"
+                content_type=ContentType.objects.get_for_model(self.model),
+                thread_id=message.thread_id,
+                role="chatter",
             )
             .values("object_id")
         )
-        snoozed = self.filter(pk__in=models.Subquery(chatter), snoozed_until__isnull=False)
-        if not snoozed.exists():
-            return 0
-        return snoozed.update(snoozed_until=None, snoozed_by=None, updated_at=timezone.now())
+        return self.filter(pk__in=models.Subquery(chatter)).wake_replied(message, replier_id=message.created_by_id)
 
 
 _TaskWorkManagerBase = ProjectTaskManager.from_queryset(TaskWorkQuerySet)
@@ -1062,7 +1106,18 @@ class TaskWork(StagedModelMixin[Stage], StateTransitionsMixin, Composable, exten
         stage_id: Any | None
         cycle_id: Any | None
         snoozed_by_id: Any | None
+        snoozed_awaiting_id: Any | None
         dropped_at: datetime | None
+
+    class WakeReason(models.TextChoices):
+        """Why a hold ended, as ``task_woken`` reports it; never stored."""
+
+        DUE = "due", "Due"
+        REPLY = "reply", "Reply"
+        MANUAL = "manual", "Manual"
+
+    HOLD_FIELDS: ClassVar[tuple[str, ...]] = ("snoozed_until", "snoozed_by", "snoozed_at", "snoozed_awaiting")
+    """The columns one hold writes together; :meth:`wake` and leaving triage clear them."""
 
     work = TaskWorkManager()
 
@@ -1077,6 +1132,8 @@ class TaskWork(StagedModelMixin[Stage], StateTransitionsMixin, Composable, exten
         "estimate",
         "snoozed_until",
         "snoozed_by",
+        "snoozed_at",
+        "snoozed_awaiting",
         "started_triage_at",
         "triaged_at",
     )
@@ -1092,6 +1149,7 @@ class TaskWork(StagedModelMixin[Stage], StateTransitionsMixin, Composable, exten
         "number",
         "estimate",
         "snoozed_until",
+        "snoozed_at",
         "started_triage_at",
         "triaged_at",
     )
@@ -1130,7 +1188,7 @@ class TaskWork(StagedModelMixin[Stage], StateTransitionsMixin, Composable, exten
         blank=True,
         validators=(MinValueValidator(0.0),),
     )
-    snoozed_until = models.DateTimeField(null=True, blank=True, db_index=True)
+    snoozed_until = models.DateTimeField(null=True, blank=True, editable=False, db_index=True)
     snoozed_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         null=True,
@@ -1139,6 +1197,17 @@ class TaskWork(StagedModelMixin[Stage], StateTransitionsMixin, Composable, exten
         on_delete=models.SET_NULL,
         related_name="+",
     )
+    snoozed_at = models.DateTimeField(null=True, blank=True, editable=False, db_index=True)
+    """When the current hold began; set exactly while the task is held, dated or not."""
+    snoozed_awaiting = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        null=True,
+        blank=True,
+        editable=False,
+        on_delete=models.SET_NULL,
+        related_name="+",
+    )
+    """The user whose message on the task's chatter ends the hold, when it awaits one."""
     started_triage_at = models.DateTimeField(null=True, blank=True, db_index=True)
     triaged_at = models.DateTimeField(null=True, blank=True, db_index=True)
 
@@ -1517,24 +1586,79 @@ class TaskWork(StagedModelMixin[Stage], StateTransitionsMixin, Composable, exten
         self.save(update_fields=("stage", "dropped_reason", "updated_at"))
         return self
 
-    def snooze(self, until: datetime) -> Any:
-        """Snooze a triage task until an inclusive instant or new chatter activity."""
+    @transaction.atomic
+    def snooze(
+        self,
+        until: datetime | None = None,
+        *,
+        awaiting: User | None = None,
+        expected_revision: int | None = None,
+    ) -> Any:
+        """Hold a triage task until an inclusive instant, a chatter reply from ``awaiting``, or a wake.
 
-        if timezone.is_naive(until):
+        A hold may carry a wake date, an awaited user, both or neither; an undated
+        hold without an awaited user lasts until :meth:`wake` or until the task
+        leaves triage. The task keeps its triage stage. ``snoozed_at`` marks the
+        hold and keeps its first start when a held task is snoozed again with new
+        conditions; repeating the same conditions is a no-op. A hold never awaits
+        the user who holds it.
+        """
+
+        if until is not None and timezone.is_naive(until):
             raise ValidationError({"until": "Snooze time must include a timezone."})
-        if until <= timezone.now():
+        if until is not None and until <= timezone.now():
             raise ValidationError({"until": "Snooze time must be in the future."})
-        user_id = actor_user_id(current_actor())
+        if awaiting is not None and awaiting.pk is None:
+            raise ValidationError({"awaiting": "Choose a saved user to await."})
+        self._require_work_action(expected_revision)
+        user_id = actor_user_id(self.effective_actor(strict=True)[0])
         if user_id is None:
             raise ValidationError({"snoozed_by": "Snoozing requires a user-backed actor."})
-        category = self._stage_category(self.stage_id) if self.queue_id is not None else None
-        if category != self.stage_model().StageCategory.TRIAGE:
+        if awaiting is not None and str(awaiting.pk) == str(user_id):
+            raise ValidationError({"awaiting": "A hold cannot await the user who holds it."})
+        previous, _following = self.stage_transition(manual=True, lock=True)
+        if previous is None or previous.category != self.stage_model().StageCategory.TRIAGE:
             raise ValidationError({"stage": "Only a task in triage can be snoozed."})
-        if self.snoozed_until == until and str(self.snoozed_by_id) == str(user_id):
+        awaiting_id = awaiting.pk if awaiting is not None else None
+        held_as = (self.snoozed_until, self.snoozed_awaiting_id, str(self.snoozed_by_id))
+        if self.snoozed_at is not None and held_as == (until, awaiting_id, str(user_id)):
             return self
         self.snoozed_until = until
         self.snoozed_by_id = user_id
-        self.save(update_fields=("snoozed_until", "snoozed_by", "updated_at"))
+        self.snoozed_awaiting_id = awaiting_id
+        self.snoozed_at = self.snoozed_at or timezone.now()
+        self.save(update_fields=(*self.HOLD_FIELDS, "updated_at"))
+        return self
+
+    @transaction.atomic
+    def wake(self, reason: str = "manual", *, message: Any = None, expected_revision: int | None = None) -> Any:
+        """End this task's hold, keeping its triage stage, and send ``task_woken``.
+
+        ``reason`` is a :class:`WakeReason`, stated by the caller: the due and
+        reply selections of :class:`TaskWorkQuerySet` (``wake_due_snoozes``,
+        ``wake_replied``) or a person by hand. ``message`` carries the reply for
+        ``reply`` and only then. A task that is not held is a no-op and sends
+        nothing. The event's task carries no instance sudo and keeps the waking
+        actor when there is one.
+        """
+
+        try:
+            reason = self.WakeReason(reason)
+        except ValueError as error:
+            raise ValidationError({"reason": "Choose due, reply, or manual."}) from error
+        if (reason == self.WakeReason.REPLY) != (message is not None):
+            raise ValidationError({"message": "A reply wake carries its message; other wakes carry none."})
+        actor, _elevated = self.effective_actor(strict=True)
+        self._require_work_action(expected_revision)
+        if self.snoozed_at is None:
+            return self
+        for name in self.HOLD_FIELDS:
+            setattr(self, name, None)
+        self.save(update_fields=(*self.HOLD_FIELDS, "updated_at"))
+        self.unsudo()
+        if actor is not None:
+            self.with_actor(actor)
+        task_woken.send(sender=type(self), task=self, reason=str(reason), message=message)
         return self
 
     def mark_duplicate(self, canonical: models.Model) -> Any:
@@ -1710,18 +1834,11 @@ class TaskWork(StagedModelMixin[Stage], StateTransitionsMixin, Composable, exten
         elif category != "triage" and old_category == "triage":
             self.triaged_at = self.triaged_at or now
             fields.add("triaged_at")
+            # A hold pauses review in triage; the review's outcome ends it, with no wake.
+            for name in self.HOLD_FIELDS:
+                setattr(self, name, None)
+            fields.update(self.HOLD_FIELDS)
         return fields
-
-    def _stage_category(self, stage_id: Any | None) -> str | None:
-        """Read the persisted category, independent of cached or edited stage objects."""
-
-        if stage_id is None:
-            return None
-        stage_model = self.stage_model()
-        return cast(
-            str | None,
-            stage_model._base_manager.filter(pk=stage_id).values_list("category", flat=True).first(),
-        )
 
     def _stage_for_category(self, category: str) -> Stage:
         """Return the first ordered stage in this task's queue for ``category``."""

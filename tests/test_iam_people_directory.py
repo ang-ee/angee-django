@@ -302,7 +302,8 @@ def test_the_policy_decides_every_iam_permission(db: None) -> None:
             RelationshipTuple(to_object_ref(target), "directory_reader", to_subject_ref(seats["named-reader"])),
         ])
     account_verbs = (
-        "write", "delete", "issue_password", "reset_password", "set_active", "rename", "administer",
+        "write", "delete", "issue_password", "issue_sign_in_link", "reset_password", "set_active", "rename",
+        "administer",
         *(f"write__{field}" for field in (
             "username", "email", "password", "kind", "is_active", "is_staff", "is_superuser", "preferences",
             "date_joined", "last_login",
