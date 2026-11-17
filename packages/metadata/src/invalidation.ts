@@ -88,16 +88,30 @@ export function useCanonicalResourceModelLabels(
 ): readonly string[] {
   const metadata = useSchemaFieldMetadata();
   const key = JSON.stringify(modelLabels ?? []);
-  return useMemo(() => {
-    const canonical = (modelLabels ?? []).flatMap((spelling) => {
-      const label = canonicalModelLabelOrNull(
-        metadata.resources ?? [],
-        spelling,
-        "authored-operation model label",
-      );
-      return label ? [label] : [];
-    });
-    return [...new Set(canonical)];
+  return useMemo(
+    () => canonicalResourceModelLabels(metadata, modelLabels),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [key, metadata]);
+    [key, metadata],
+  );
+}
+
+/**
+ * The canonical labels of authored-operation model spellings, deduplicated, against
+ * `metadata`: the rule {@link useCanonicalResourceModelLabels} applies, for a caller
+ * that resolves several label sets in one render (one per source of a batch).
+ * Unknown spellings warn in development and are omitted.
+ */
+export function canonicalResourceModelLabels(
+  metadata: Pick<SchemaFieldMetadata, "resources">,
+  modelLabels: readonly string[] | undefined,
+): readonly string[] {
+  const canonical = (modelLabels ?? []).flatMap((spelling) => {
+    const label = canonicalModelLabelOrNull(
+      metadata.resources ?? [],
+      spelling,
+      "authored-operation model label",
+    );
+    return label ? [label] : [];
+  });
+  return [...new Set(canonical)];
 }

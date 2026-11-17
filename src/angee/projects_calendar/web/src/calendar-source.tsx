@@ -1,10 +1,9 @@
-import * as React from "react";
 import type { OccurrenceSourceContribution } from "@angee/calendar";
 import { TASK_MODEL } from "@angee/projects";
 import { calendarWindowSource, formatDateStorage, type Occurrence, type ResourceRecordHrefLookup } from "@angee/ui";
 
 import { CalendarDueTasksDocument, type CalendarDueTaskRow } from "./documents";
-import { useProjectsCalendarT } from "./i18n";
+import { enProjectsCalendarMessages } from "./i18n";
 
 /** A local `yyyy-MM-dd`: the `Date`-typed due bounds never cross the UTC boundary. */
 function localDay(date: Date): string {
@@ -34,15 +33,15 @@ export function dueTaskOccurrences(row: CalendarDueTaskRow, recordHref: Resource
   ];
 }
 
-function DueTasksLabel(): React.ReactElement {
-  const t = useProjectsCalendarT();
-  return <>{t("source.dueTasks")}</>;
-}
-
 /** The viewer's open tasks by due date, overlaid on the calendar page (`calendar.events#occurrence-sources`). */
 export const dueTasksCalendarSource: OccurrenceSourceContribution = ({ viewerId, recordHref }) =>
   calendarWindowSource({
-    label: <DueTasksLabel />,
+    // A message key: the calendar surface renders it through the runtime i18n.
+    label: {
+      namespace: "projects-calendar",
+      key: "source.dueTasks",
+      fallback: enProjectsCalendarMessages["source.dueTasks"],
+    },
     document: CalendarDueTasksDocument,
     variables: (window) => ({
       assignee: viewerId,
