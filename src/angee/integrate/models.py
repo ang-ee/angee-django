@@ -1105,23 +1105,26 @@ class CredentialManager[CredentialT: Credential](_CredentialManagerBase[Credenti
         second account never replaces the first. A row stored without an account
         (before credentials were per account) is adopted by the first account that
         connects, never orphaned beside a new one. The row is updated under its own
-        lock; an OAuth grant that carries no refresh token keeps the one that row
-        stores, since a provider may issue one on first consent only (RFC 6749
-        §5.1, §6). ``require_refresh_token`` refuses (``consent_required``) a grant
-        that would leave a refreshable client's credential without one. A grant that
-        reports its scopes must cover ``required_scopes`` and those of every
-        integration the credential serves (``scope_not_granted``). A refusal writes
-        nothing. A reconnect re-attaches the integrations whose discovered material
-        derives from the replaced grant.
+        lock with what the kind carries forward over its stored material
+        (:meth:`CredentialKindHandler.carry_forward`: an OAuth grant without a
+        refresh token keeps the stored one). ``require_refresh_token`` refuses
+        (``consent_required``) a grant that would leave a refreshable client's
+        credential without one. A grant that reports its scopes must cover
+        ``required_scopes`` and those of every integration the credential serves
+        (``scope_not_granted``). A refusal writes nothing. A reconnect re-attaches
+        the integrations whose discovered material derives from the replaced grant.
         """
 
         handler = CredentialKind(kind).handler
-        operation_values, update_values = self._assemble_values(handler, material, fields)
+        material, update_values = self._assemble_values(handler, material, fields)
         account_id = None if external_account is None else external_account.pk
         create_values = {
             "external_account_id": account_id,
             **self._blank_create_values(),
-            **operation_values,
+            "kind": handler.kind,
+            # A callable default is encoded only when the row is created; an existing
+            # row stores what the kind carries forward over its own material.
+            "material": lambda: self.model.encode_material(material),
             **update_values,
         }
         # Give the credential a human label on create (OAuth rows carry no name of their
@@ -1147,7 +1150,7 @@ class CredentialManager[CredentialT: Credential](_CredentialManagerBase[Credenti
                 # and may already hold the credential lock.
                 integrations = [integration.lock_capability() for integration in served(existing.pk)]
             instance, created = self.lock_if_supported().get_or_create(**identity, defaults=create_values)
-            stored_refresh = ""
+            stored = material
             if not created:
                 # An attachment cannot commit while the credential is locked (its
                 # foreign-key check needs the row), so this read is final. A late
@@ -1160,18 +1163,13 @@ class CredentialManager[CredentialT: Credential](_CredentialManagerBase[Credenti
                         for integration in served(instance.pk)
                         if integration.pk not in locked
                     ]
-                if handler.kind == CredentialKind.OAUTH and not material.get("refresh_token"):
-                    stored_refresh = str(instance.reveal().get("refresh_token") or "")
-                    if stored_refresh:
-                        operation_values["material"] = self.model.encode_material(
-                            {**material, "refresh_token": stored_refresh},
-                        )
-                values = {**operation_values, **update_values}
+                stored = handler.carry_forward(material, instance.reveal())
+                values = {"kind": handler.kind, "material": self.model.encode_material(stored), **update_values}
                 for name, value in values.items():
                     setattr(instance, name, value)
                 instance.save(update_fields=[*values, "updated_at"])
             refreshable_client = handler.kind == CredentialKind.OAUTH and oauth_client.supports_refresh
-            if require_refresh_token and refreshable_client and not (material.get("refresh_token") or stored_refresh):
+            if require_refresh_token and refreshable_client and not stored.get("refresh_token"):
                 raise OAuthFlowError(CONSENT_REQUIRED, 409)
             if "granted_scopes" in update_values:
                 needed = set(required_scopes).union(
@@ -1306,7 +1304,8 @@ class CredentialManager[CredentialT: Credential](_CredentialManagerBase[Credenti
             raise ValueError("OAuth credentials are minted by the connect/login flow, not create_local_credential().")
         if not name:
             raise ValidationError({"name": "This field is required."})
-        return self._assemble_values(handler, material, fields)
+        material, update_values = self._assemble_values(handler, material, fields)
+        return {"kind": handler.kind, "material": self.model.encode_material(material)}, update_values
 
     def _assemble_values(
         self,
@@ -1314,7 +1313,7 @@ class CredentialManager[CredentialT: Credential](_CredentialManagerBase[Credenti
         material: dict[str, Any],
         fields: dict[str, Any],
     ) -> tuple[dict[str, Any], dict[str, Any]]:
-        """Return ``(operation_values, update_values)`` for both create paths from the handler's cleaned material."""
+        """Return the handler's cleaned material and the update values both create paths store beside it."""
 
         material = handler.clean(material)
         if owned := self.operation_fields & fields.keys():
@@ -1323,9 +1322,7 @@ class CredentialManager[CredentialT: Credential](_CredentialManagerBase[Credenti
         update_values = handler.upsert_fields(material)
         update_values.update(_validated_manager_values(self.model, fields, allowed=self.caller_fields))
         update_values["status"] = CredentialStatus.ACTIVE
-        material_value = self.model.encode_material(material)
-        operation_values = {"kind": handler.kind, "material": material_value}
-        return operation_values, update_values
+        return material, update_values
 
     @staticmethod
     def _blank_create_values() -> dict[str, Any]:

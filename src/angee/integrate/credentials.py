@@ -93,6 +93,15 @@ class CredentialKindHandler:
 
         return {}
 
+    def carry_forward(self, material: Mapping[str, Any], stored: Mapping[str, Any]) -> dict[str, Any]:
+        """Return what a new grant's ``material`` stores over the ``stored`` material of the same credential.
+
+        By default the new material replaces the stored one whole.
+        """
+
+        del stored
+        return dict(material)
+
     def auth_headers(self, credential: Any, *, scopes: Collection[str] = ()) -> dict[str, str]:
         """Return HTTP auth headers for ``credential``.
 
@@ -169,6 +178,18 @@ class OAuthCredentialHandler(CredentialKindHandler):
         if isinstance(scope, str):
             fields["granted_scopes"] = scope.split()
         return fields
+
+    def carry_forward(self, material: Mapping[str, Any], stored: Mapping[str, Any]) -> dict[str, Any]:
+        """Keep the stored refresh token when the new grant carries none.
+
+        A provider may issue a refresh token on first consent only, and a refresh
+        response that does not rotate it omits it (RFC 6749 §5.1, §6).
+        """
+
+        carried = dict(material)
+        if not carried.get("refresh_token") and stored.get("refresh_token"):
+            carried["refresh_token"] = stored["refresh_token"]
+        return carried
 
     @staticmethod
     def _expires_at(material: dict[str, Any], now: datetime) -> datetime | None:

@@ -12,6 +12,7 @@ from django.utils import timezone
 from rebac import system_context
 
 from angee.base.locks import record_lock_key, task_lock
+from angee.integrate.credentials import CredentialKind
 from angee.integrate.errors import IntegrationError
 from angee.integrate.oauth.client import OAuthClientProtocol
 from tests.conftest import Credential, make_integration
@@ -142,6 +143,30 @@ def test_refresh_retains_a_rotated_token_when_only_the_label_changed(monkeypatch
         credential.refresh_now()
     assert credential.reveal() == {"access_token": "fresh", "refresh_token": "rotated"}
     assert credential.name == "Renamed during provider exchange"
+
+
+def test_a_refresh_that_does_not_rotate_keeps_the_stored_refresh_token(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The OAuth kind carries the stored refresh token forward over a response that omits it."""
+
+    credential = _expired_credential("refresh-kept", {"access_token": "old", "refresh_token": "long-lived"})
+    monkeypatch.setattr(
+        OAuthClientProtocol, "refresh_token", lambda protocol, *, refresh_token: {"access_token": "new"},
+    )
+    with system_context(reason="test refresh keeps the refresh token"):
+        credential.refresh_now()
+    assert credential.reveal() == {"access_token": "new", "refresh_token": "long-lived"}
+
+
+def test_only_the_oauth_kind_carries_stored_material_forward() -> None:
+    """A rotated refresh token wins; another kind's new material replaces the stored one whole."""
+
+    oauth = CredentialKind.OAUTH.handler
+    assert oauth.carry_forward({"access_token": "a", "refresh_token": "new"}, {"refresh_token": "old"}) == {
+        "access_token": "a", "refresh_token": "new",
+    }
+    assert CredentialKind.STATIC_TOKEN.handler.carry_forward({"api_key": "new"}, {"api_key": "old", "x": 1}) == {
+        "api_key": "new",
+    }
 
 
 def test_refresh_refuses_to_run_inside_a_transaction(monkeypatch: pytest.MonkeyPatch) -> None:
