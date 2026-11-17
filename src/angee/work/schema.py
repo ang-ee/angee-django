@@ -165,6 +165,7 @@ class TaskWorkExtension:
     number: auto
     estimate: auto
     snoozed_until: auto
+    snoozed_at: auto
     stage_entered_at: auto
     started_triage_at: auto
     triaged_at: auto
@@ -185,6 +186,12 @@ class TaskWorkExtension:
 
         return optional_public_id(user_public_id(cast(Any, self).snoozed_by_id))
 
+    @strawberry_django.field(only=["snoozed_awaiting_id"])
+    def snoozed_awaiting(self) -> strawberry.ID | None:
+        """Return the awaited user's public id without exposing auth/user."""
+
+        return optional_public_id(user_public_id(cast(Any, self).snoozed_awaiting_id))
+
     @strawberry.field
     def work_key(self) -> str | None:
         """Return the queue-keyed task number, such as ``ENG-42``."""
@@ -199,6 +206,7 @@ class ConsoleTaskWorkExtension:
     number: auto
     estimate: auto
     snoozed_until: auto
+    snoozed_at: auto
     stage_entered_at: auto
     started_triage_at: auto
     triaged_at: auto
@@ -208,6 +216,7 @@ class ConsoleTaskWorkExtension:
     cycle: WorkCycleType | None = actor_scoped_to_one("cycle")
 
     stage_name = TaskWorkExtension.__dict__["stage_name"]
+    snoozed_awaiting = TaskWorkExtension.__dict__["snoozed_awaiting"]
 
     @strawberry_django.field(only=["snoozed_by_id"])
     def snoozed_by(self) -> strawberry.ID | None:
@@ -486,13 +495,23 @@ class WorkActionMutation:
         self,
         info: strawberry.Info,
         task: PublicID,
-        until: datetime,
+        until: datetime | None = None,
+        expected_revision: int | None = None,
     ) -> ActionResult:
-        """Snooze one writable triage task until time or chatter wakes it."""
+        """Hold one writable triage task until a time, or undated until it is woken."""
 
         target = authorized_action_target(info, Task, task, "write")
-        target.snooze(until)
+        target.snooze(until, expected_revision=expected_revision)
         return ActionResult(ok=True, message="Task snoozed.", id=target.sqid)
+
+    @strawberry.mutation
+    @action_guard("Wake task failed.")
+    def wake_task(self, info: strawberry.Info, task: PublicID, expected_revision: int | None = None) -> ActionResult:
+        """End one writable task's hold by hand, resuming its review."""
+
+        target = authorized_action_target(info, Task, task, "write")
+        target.wake(expected_revision=expected_revision)
+        return ActionResult(ok=True, message="Task woken.", id=target.sqid)
 
     @strawberry.mutation
     @action_guard("Mark duplicate failed.")
