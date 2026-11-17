@@ -9,8 +9,6 @@ from collections.abc import Collection, Mapping
 from datetime import datetime, timedelta
 from typing import Any, ClassVar
 
-import httpx2
-from authlib.integrations.httpx_client import AssertionClient, OAuthError
 from authlib.oauth2.rfc7523 import JWTBearerGrant
 from django.core.exceptions import ValidationError
 from django.db import models
@@ -18,11 +16,10 @@ from django.utils import timezone
 from joserfc.errors import JoseError
 from joserfc.jwk import RSAKey
 
-from angee.integrate.errors import IntegrationError, RequestNotSentError, is_transient_failure
-from angee.integrate.http import HTTP_TIMEOUT_SECONDS, HttpClient
+from angee.integrate.errors import IntegrationError, is_transient_failure
 from angee.integrate.net import parse_http_url
-from angee.integrate.oauth.client import OUTBOUND_HEADERS
-from angee.integrate.oauth.errors import TOKEN_EXCHANGE_FAILED, OAuthFlowError
+from angee.integrate.oauth.client import jwt_bearer_grant
+from angee.integrate.oauth.errors import ENDPOINT_NOT_ALLOWED, TOKEN_EXCHANGE_FAILED, OAuthFlowError
 
 logger = logging.getLogger(__name__)
 
@@ -309,10 +306,11 @@ class JwtBearerCredentialHandler(CredentialKindHandler):
     signing_key_refusal: ClassVar[str] = "invalid_signing_key"
     """The error code a refusal carries when the stored key does not load or sign locally."""
     recorded_refusals: ClassVar[frozenset[str]] = frozenset(
-        {"invalid_grant", "invalid_client", "unauthorized_client", signing_key_refusal}
+        {"invalid_grant", "invalid_client", "unauthorized_client", signing_key_refusal, ENDPOINT_NOT_ALLOWED}
     )
     """The RFC 6749 §5.2 errors that refuse the key or identity rather than one request,
-    plus :attr:`signing_key_refusal`."""
+    plus :attr:`signing_key_refusal` and a key file whose token endpoint the address
+    policy refuses (``ENDPOINT_NOT_ALLOWED``)."""
     algorithm: ClassVar[str] = "RS256"
 
     def clean(self, material: Mapping[str, Any]) -> dict[str, Any]:
@@ -390,19 +388,17 @@ class JwtBearerCredentialHandler(CredentialKindHandler):
             raise IntegrationError("The signing key cannot sign an assertion.") from error
 
     def mint_access_token(self, credential: Any, scope: str) -> dict[str, Any]:
-        """Sign a fresh assertion for ``scope`` and exchange it at the token endpoint.
+        """Sign a fresh assertion for ``scope`` and exchange it through the JWT bearer grant.
 
-        Authlib signs ``iss``, ``aud``, ``iat``, ``exp`` (one hour) and ``jti``, plus
-        ``sub`` when stored, with ``kid`` in the header when the key file names one;
-        the scope rides the claim or the request parameter as ``scope_placement``
-        says. The grant is posted through ``HttpClient.transport_factory`` with
-        public addresses only. A refusal raises
-        ``OAuthFlowError(TOKEN_EXCHANGE_FAILED, status)`` with the response's real
-        HTTP status (400 when the response was not an error status), so a 429, a
-        server error, ``temporarily_unavailable`` or a request never sent is
-        transient; the refusal's error code rides ``body`` for :meth:`records_failure`.
-        A key that does not load or sign is the permanent
-        :attr:`signing_key_refusal`. Logs carry the credential id and status only.
+        The grant (:func:`~angee.integrate.oauth.client.jwt_bearer_grant`) signs
+        ``sub`` when stored and names the key in the header when the key file does,
+        places the scope as ``scope_placement`` says, posts to public addresses only,
+        and refuses with ``OAuthFlowError(TOKEN_EXCHANGE_FAILED, status)`` at the
+        response's real HTTP status, so a 429, a server error,
+        ``temporarily_unavailable`` or a request never sent is transient; the
+        refusal's error code rides ``body`` for :meth:`records_failure`. A key that
+        does not load or sign is the permanent :attr:`signing_key_refusal`. Logs carry
+        the credential id and status only.
         """
 
         material = credential.reveal()
@@ -410,69 +406,38 @@ class JwtBearerCredentialHandler(CredentialKindHandler):
             signing_key = RSAKey.import_key(material["private_key"])
         except (JoseError, TypeError, ValueError) as error:
             raise self._signing_key_refused(credential) from error
-        claim = material["scope_placement"] == "claim"
-        statuses: list[int] = []
-
-        def refusal_status() -> int:
-            """Return the response's error status, or 400 for a refusal that carried none."""
-
-            return statuses[-1] if statuses and statuses[-1] >= 400 else 400
-
-        client: AssertionClient | None = None
         try:
-            client = AssertionClient(
-                token_endpoint=material["token_endpoint"],
+            token = jwt_bearer_grant(
+                material["token_endpoint"],
                 issuer=material["issuer"],
-                subject=material["subject"] or None,
-                audience=material["audience"] or None,
-                scope=None if claim else scope,
-                claims={"scope": scope} if claim else None,
                 key=signing_key,
                 header=self._header(material),
-                headers=dict(OUTBOUND_HEADERS),
-                timeout=HTTP_TIMEOUT_SECONDS,
-                transport=HttpClient.transport_factory(allow_private=False),
-                event_hooks={"response": [lambda response: statuses.append(response.status_code)]},
+                scope=scope,
+                scope_in_claim=material["scope_placement"] == "claim",
+                subject=material["subject"],
+                audience=material["audience"],
+                log_subject=f"credential {credential.pk}",
             )
-            token = client.refresh_token()
         except JoseError as error:
             raise self._signing_key_refused(credential) from error
-        except OAuthError as error:
-            # Authlib raises OAuthError for any JSON error body; the hook kept its status.
-            status = 503 if error.error == "temporarily_unavailable" else refusal_status()
-            self._log_failure(credential, status)
-            raise OAuthFlowError(TOKEN_EXCHANGE_FAILED, status, body={"error": error.error}) from error
-        except httpx2.HTTPStatusError as error:
-            self._log_failure(credential, error.response.status_code)
-            raise OAuthFlowError(TOKEN_EXCHANGE_FAILED, error.response.status_code) from error
-        except RequestNotSentError as error:
-            raise OAuthFlowError(TOKEN_EXCHANGE_FAILED, 503) from error
-        except (httpx2.HTTPError, ValueError) as error:
-            self._log_failure(credential, f"transport_error:{type(error).__name__}")
-            status = 503 if isinstance(error, httpx2.TransportError) else 400
-            raise OAuthFlowError(TOKEN_EXCHANGE_FAILED, status) from error
-        finally:
-            if client is not None:
-                client.close()
-        access_token = str(token.get("access_token") or "")
-        if not access_token:
-            # A JSON body without ``error`` (a gateway's 429, say) still carries its status.
-            status = refusal_status()
-            self._log_failure(credential, status)
-            raise OAuthFlowError(TOKEN_EXCHANGE_FAILED, status)
         try:
             expires_in: int | None = int(token["expires_in"])
         except KeyError, TypeError, ValueError:
             expires_in = None
         # RFC 6749 §5.1: a response may omit ``scope`` when it grants what was asked.
-        return {"access_token": access_token, "expires_in": expires_in, "scope": str(token.get("scope") or scope)}
+        return {
+            "access_token": str(token["access_token"]),
+            "expires_in": expires_in,
+            "scope": str(token.get("scope") or scope),
+        }
 
     def records_failure(self, error: Exception) -> bool:
         """Return whether a mint refusal condemns the key or identity, so the key file must be re-entered.
 
         A refused grant, client or client authorization does, and so does a key that
-        does not load or sign (:attr:`recorded_refusals`). A refused scope, any other
-        request-specific refusal and every transient failure do not.
+        does not load or sign or a token endpoint the address policy refuses
+        (:attr:`recorded_refusals`). A refused scope, any other request-specific
+        refusal and every transient failure do not.
         """
 
         if not isinstance(error, OAuthFlowError) or error.transient:
@@ -483,19 +448,15 @@ class JwtBearerCredentialHandler(CredentialKindHandler):
     def _signing_key_refused(self, credential: Any) -> OAuthFlowError:
         """Return the permanent, recorded refusal for a stored key that does not load or sign."""
 
-        self._log_failure(credential, self.signing_key_refusal)
+        logger.warning(
+            "JWT bearer token request failed for credential %s: status=%s", credential.pk, self.signing_key_refusal,
+        )
         return OAuthFlowError(TOKEN_EXCHANGE_FAILED, 400, body={"error": self.signing_key_refusal})
 
     def _header(self, material: Mapping[str, Any]) -> dict[str, str]:
         """Return the assertion's JOSE header, naming the key when the key file does."""
 
         return {"alg": self.algorithm, **({"kid": material["key_id"]} if material["key_id"] else {})}
-
-    @staticmethod
-    def _log_failure(credential: Any, status: object) -> None:
-        """Log one refused grant by credential id and status, never with provider-controlled values."""
-
-        logger.warning("JWT bearer token request failed for credential %s: status=%s", credential.pk, status)
 
 
 _CREDENTIAL_HANDLERS = {

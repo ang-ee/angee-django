@@ -326,9 +326,12 @@ def test_channel_typed_feed_resolves_the_feed_admission_selector():
 
 
 @pytest.mark.django_db(transaction=True)
+@pytest.mark.parametrize("request_format", ["form", "json"])
 @pytest.mark.parametrize("status", [429, 503, None])
 @pytest.mark.parametrize("expired", [False, True])
-def test_preexpiry_refresh_failure_keeps_valid_access_token(status, expired):
+def test_preexpiry_refresh_failure_keeps_valid_access_token(request_format, status, expired):
+    """A rate limit, an outage or a request never sent stays transient on both token request formats."""
+
     with system_context(reason="test preexpiry refresh"):
         credential = make_integration(
             "preexpiry-refresh", kind="oauth", material={"access_token": "fake", "refresh_token": "fake-refresh"},
@@ -336,13 +339,13 @@ def test_preexpiry_refresh_failure_keeps_valid_access_token(status, expired):
         credential.expires_at = timezone.now() + timedelta(minutes=-1 if expired else 2)
         credential.save(update_fields=["expires_at"])
         credential.oauth_client.token_endpoint = "https://provider.example/token"
-        credential.oauth_client.token_request_format = "json"  # the JSON shim keeps the provider's status
+        credential.oauth_client.token_request_format = request_format
         credential.oauth_client.save(update_fields=["token_endpoint", "token_request_format"])
 
     def refuse(request):
         if status is None:
             raise RequestNotSentError()
-        return httpx2.Response(status, json={"error": "temporarily_unavailable"})
+        return httpx2.Response(status, json={"error": "rate_limited" if status == 429 else "server_error"})
 
     with mock_transport(refuse), system_context(reason="test use existing access token"):
         if expired:

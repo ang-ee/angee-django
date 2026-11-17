@@ -50,6 +50,7 @@ from angee.integrate.oauth import state as oauth_state
 from angee.integrate.oauth.client import OAuthClientProtocol
 from angee.integrate.oauth.errors import (
     DISCOVERY_FAILED,
+    ENDPOINT_NOT_ALLOWED,
     EXTERNAL_ACCOUNT_RESOLUTION_FAILED,
     INVALID_ID_TOKEN,
     INVALID_STATE,
@@ -515,8 +516,10 @@ def test_oauth_protocol_round_trips_over_the_real_pinned_transport(
     assert received[3]["fields"]["token"] == "renewed-access"
     assert {request["user_agent"] for request in received} == {oauth_protocol.USER_AGENT}
     metadata_endpoint = _stub_oauth_client(token_endpoint="http://169.254.169.254/oauth/token")
-    with pytest.raises(AddressNotAllowedError):
+    with pytest.raises(OAuthFlowError) as refused:
         OAuthClientProtocol(metadata_endpoint).exchange_code(code="code", redirect_uri="https://app.example/callback")
+    assert (refused.value.body, refused.value.transient) == ({"error": ENDPOINT_NOT_ALLOWED}, False)
+    assert isinstance(refused.value.__cause__, AddressNotAllowedError)
 
 
 @pytest.mark.parametrize("claim,value", [("iss", "https://wrong.example"), ("aud", "other-client"), ("nonce", "wrong")])

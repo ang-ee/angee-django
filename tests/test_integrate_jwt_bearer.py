@@ -27,7 +27,8 @@ from angee.graphql.testing.documents import execute_schema, result_data
 from angee.integrate.credentials import CredentialKind
 from angee.integrate.errors import IntegrationError
 from angee.integrate.models import CredentialStatus
-from angee.integrate.oauth.errors import OAuthFlowError
+from angee.integrate.net import AddressNotAllowedError
+from angee.integrate.oauth.errors import ENDPOINT_NOT_ALLOWED, OAuthFlowError
 from angee.integrate.testing.http import mock_transport, request_fields
 from tests.conftest import Credential, VcsBridge, Vendor, addon_schema, create_platform_admin, create_user
 
@@ -360,6 +361,23 @@ def test_only_key_or_identity_refusals_require_reconnect(
     assert raised.value.transient is transient
     assert credential.is_reconnect_required is recorded
     assert credential.last_refresh_status == ("failed" if recorded else "")
+
+
+@pytest.mark.django_db(transaction=True)
+def test_a_token_endpoint_the_address_policy_refuses_is_a_recorded_refusal() -> None:
+    """No retry reaches an endpoint the pinned transport refuses, so the key file must be re-entered."""
+
+    credential = create_jwt_bearer()
+
+    def refuse_address(request: httpx2.Request) -> httpx2.Response:
+        raise AddressNotAllowedError()
+
+    with mock_transport(refuse_address), pytest.raises(OAuthFlowError) as raised:
+        credential.scoped_access_token([WRITE])
+
+    assert (raised.value.http_status, raised.value.transient) == (400, False)
+    assert raised.value.body == {"error": ENDPOINT_NOT_ALLOWED}
+    assert credential.is_reconnect_required
 
 
 @pytest.mark.django_db(transaction=True)

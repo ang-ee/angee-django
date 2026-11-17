@@ -16,6 +16,10 @@ nonce), and the small
 token body Authlib does not emit, plus Anthropic's required ``state`` echo —
 keeps a documented shim. PyJWT owns ID-token signature and claim checks.
 
+The JWT bearer assertion grant (RFC 7523 §2.1, :func:`jwt_bearer_grant`), which
+the ``jwt_bearer`` credential kind mints its access tokens with, is a token request
+too: every token request maps its failures in one place (:class:`_TokenRequest`).
+
 Endpoints are taken from the row as configured; when a row has a discovery URL,
 the protocol asks the row to fill missing OAuth endpoints, issuer and JWKS URI
 before failing.
@@ -26,13 +30,14 @@ from __future__ import annotations
 import logging
 from collections.abc import Iterable, Mapping
 from functools import cache
+from types import TracebackType
 from typing import TYPE_CHECKING, Any, Literal
 from urllib import parse
 
 import httpx2
 import jwt
 from authlib.integrations.base_client.errors import OAuthError
-from authlib.integrations.httpx_client import OAuth2Client
+from authlib.integrations.httpx_client import AssertionClient, OAuth2Client
 from authlib.oauth2.rfc6749.parameters import prepare_grant_uri
 from django.conf import settings
 from jwt import PyJWKClient
@@ -40,8 +45,10 @@ from jwt.exceptions import PyJWKClientConnectionError, PyJWKClientError, PyJWTEr
 
 from angee.integrate.errors import IntegrationError, RequestNotSentError
 from angee.integrate.http import HTTP_TIMEOUT_SECONDS, HttpClient
+from angee.integrate.net import AddressNotAllowedError
 from angee.integrate.oauth.errors import (
     CLIENT_NOT_CONFIGURED,
+    ENDPOINT_NOT_ALLOWED,
     INVALID_ID_TOKEN,
     MISSING_ENDPOINT,
     PROVIDER_UNAVAILABLE,
@@ -51,6 +58,8 @@ from angee.integrate.oauth.errors import (
 from angee.integrate.oauth.state import StateFlow
 
 if TYPE_CHECKING:
+    from joserfc.jwk import RSAKey
+
     from angee.integrate.models import OAuthClient
 
 # An honest, non-browser User-Agent for all outbound connection requests. Must NOT
@@ -331,38 +340,19 @@ class OAuthClientProtocol:
     ) -> dict[str, Any]:
         """Run the standard (form-encoded) grant through Authlib's OAuth2 client."""
 
-        session = self._session()
-        try:
-            if grant_type == "refresh_token":
-                token = session.refresh_token(endpoint, **grant, **extra)
-            else:
-                token = session.fetch_token(endpoint, grant_type=grant_type, **grant, **extra)
-        except OAuthError as exc:
-            body = {"error": exc.error, "error_description": exc.description}
-            self._log_token_failure("oauth_refusal", None)
-            raise OAuthFlowError(TOKEN_EXCHANGE_FAILED, 400, body=body) from exc
-        except httpx2.HTTPStatusError as exc:
-            # Authlib raises this only for >=500 (it raise_for_status()es server errors).
-            self._log_token_failure(exc.response.status_code, _response_body(exc.response))
-            raise OAuthFlowError(
-                TOKEN_EXCHANGE_FAILED,
-                exc.response.status_code,
-                body=_response_body(exc.response),
-            ) from exc
-        except RequestNotSentError as exc:
-            raise OAuthFlowError(TOKEN_EXCHANGE_FAILED, 503) from exc
-        except (httpx2.HTTPError, ValueError) as exc:
-            # Authlib parses the token body as JSON before checking the status, so a
-            # non-JSON 4xx (the documented Anthropic/CDN 403/429 block page) surfaces as
-            # a ValueError, and a transport failure as httpx2.HTTPError — both map to the
-            # stable OAuthFlowError seam, like the JSON-shim and discovery paths.
-            self._log_token_failure(f"transport_error:{type(exc).__name__}", None)
-            raise OAuthFlowError(TOKEN_EXCHANGE_FAILED, 503 if isinstance(exc, httpx2.TransportError) else 400) from exc
-        finally:
-            session.close()
+        request = self._token_request()
+        with request:
+            session = self._session(request)
+            try:
+                if grant_type == "refresh_token":
+                    token = session.refresh_token(endpoint, **grant, **extra)
+                else:
+                    token = session.fetch_token(endpoint, grant_type=grant_type, **grant, **extra)
+            finally:
+                session.close()
         response = dict(token)
         self._token_response_claims = _token_response_identity_claims(response)
-        return _token_material(response)
+        return request.material(response)
 
     def _json_token_request(
         self,
@@ -382,31 +372,27 @@ class OAuthClientProtocol:
         client_secret = self._client_secret()
         if client_secret:
             body["client_secret"] = client_secret
-        client = self._http_client()
-        try:
-            response = client.post(endpoint, json=body)
-            response.raise_for_status()
-            data = response.json()
-        except httpx2.HTTPStatusError as exc:
-            self._log_token_failure(exc.response.status_code, _response_body(exc.response))
-            raise OAuthFlowError(
-                TOKEN_EXCHANGE_FAILED,
-                exc.response.status_code,
-                body=_response_body(exc.response),
-            ) from exc
-        except RequestNotSentError as exc:
-            raise OAuthFlowError(TOKEN_EXCHANGE_FAILED, 503) from exc
-        except (httpx2.HTTPError, ValueError) as exc:
-            raise OAuthFlowError(TOKEN_EXCHANGE_FAILED, 503 if isinstance(exc, httpx2.TransportError) else 400) from exc
-        finally:
-            client.close()
+        request = self._token_request()
+        with request:
+            client = httpx2.Client(**request.client_kwargs())
+            try:
+                response = client.post(endpoint, json=body)
+                response.raise_for_status()
+                data = response.json()
+            finally:
+                client.close()
         if not isinstance(data, dict):
-            raise OAuthFlowError(TOKEN_EXCHANGE_FAILED, 400)
+            data = {}
         self._token_response_claims = _token_response_identity_claims(data)
-        return _token_material(data)
+        return request.material(data)
 
-    def _session(self) -> OAuth2Client:
-        """Build the per-row Authlib OAuth2 client.
+    def _token_request(self) -> _TokenRequest:
+        """Return one token request against this row's endpoint, logged by the row's slug."""
+
+        return _TokenRequest("OAuth", self.oauth_client.slug or "unknown")
+
+    def _session(self, request: _TokenRequest | None = None) -> OAuth2Client:
+        """Build the per-row Authlib OAuth2 client, over ``request``'s client policy when given.
 
         Client authentication rides the body (``client_secret_post``) to match the
         row's stored secret; a public client (no secret) sends only ``client_id``.
@@ -420,8 +406,7 @@ class OAuthClientProtocol:
             client_id=self.oauth_client.client_id,
             client_secret=secret or None,
             token_endpoint_auth_method="client_secret_post" if secret else "none",
-            headers=dict(OUTBOUND_HEADERS),
-            **_outbound_kwargs(),
+            **(request or self._token_request()).client_kwargs(),
         )
 
     def _client_secret(self) -> str:
@@ -455,22 +440,6 @@ class OAuthClientProtocol:
         if not secret:
             raise IntegrationError("The confidential OAuth client has no client secret.")
         return secret
-
-    def _http_client(self) -> httpx2.Client:
-        """Return a plain httpx2 client carrying the outbound headers (JSON-shim transport)."""
-
-        return httpx2.Client(headers=dict(OUTBOUND_HEADERS), **_outbound_kwargs())
-
-    def _log_token_failure(self, status: object, body: Any) -> None:
-        """Log bounded token-request metadata without provider-controlled values."""
-
-        del body
-        client_label = self.oauth_client.slug or "unknown"
-        logger.warning(
-            "OAuth token request failed for %s: status=%s",
-            client_label,
-            status,
-        )
 
     def _grant_uri(
         self,
@@ -556,7 +525,7 @@ def _jwks_client(jwks_uri: str) -> _PinnedPyJWKClient:
     return _PinnedPyJWKClient(jwks_uri)
 
 
-def _outbound_kwargs() -> dict[str, Any]:
+def _outbound_kwargs(*, allow_private: bool = True) -> dict[str, Any]:
     """Shared outbound httpx2 client policy: a request timeout and the transport.
 
     The transport is ``HttpClient.transport_factory``'s, the SSRF-pinned
@@ -565,13 +534,159 @@ def _outbound_kwargs() -> dict[str, Any]:
     every other outbound call. Authlib's ``OAuth2Client`` is an ``httpx2.Client``,
     so the transport must be an httpx2 transport too.
     ``allow_private=True`` permits operator-configured self-hosted IDPs on private
-    networks while still rejecting cloud metadata and the other SSRF escapes.
+    networks while still rejecting cloud metadata and the other SSRF escapes; an
+    endpoint read from user-supplied material passes ``False``, public addresses only.
     """
 
     return {
         "timeout": HTTP_TIMEOUT_SECONDS,
-        "transport": HttpClient.transport_factory(allow_private=True),
+        "transport": HttpClient.transport_factory(allow_private=allow_private),
     }
+
+
+class _TokenRequest:
+    """One token-endpoint request through an httpx2 client, and the one mapping of its failures.
+
+    :meth:`client_kwargs` configures the client: the outbound headers and policy
+    (:func:`_outbound_kwargs`), plus a response hook that keeps each HTTP status,
+    because Authlib raises ``OAuthError`` for any JSON body naming an ``error`` and
+    returns one naming none, whatever the status. Inside ``with request:`` every
+    failure becomes ``OAuthFlowError(TOKEN_EXCHANGE_FAILED, status)``, so a 429 or a
+    5xx stays transient (``OAuthFlowError.transient``) on every path:
+
+    - a refusal (``OAuthError``) takes the response's real status, and
+      ``temporarily_unavailable`` (RFC 6749 §5.2) is a 503; its ``error`` rides ``body``;
+    - an error status Authlib raised for, or the JSON shim's, takes that status;
+    - a request never sent, or any other transport failure, is a 503, and an
+      unreadable body a 400;
+    - an endpoint the address policy refuses is the permanent
+      :data:`~angee.integrate.oauth.errors.ENDPOINT_NOT_ALLOWED` refusal.
+
+    Any other exception propagates unchanged. :meth:`material` refuses a response
+    without an access token at its real status. Each refusal is logged by ``grant``,
+    ``subject`` and status only, never with provider-controlled values.
+    """
+
+    def __init__(self, grant: str, subject: object, *, allow_private: bool = True) -> None:
+        """Name the request for its log line and choose its address policy."""
+
+        self.grant = grant
+        self.subject = subject
+        self.allow_private = allow_private
+        self.statuses: list[int] = []
+
+    def client_kwargs(self) -> dict[str, Any]:
+        """Return the httpx2 client keywords: outbound headers and policy, plus the status hook."""
+
+        return {
+            "headers": dict(OUTBOUND_HEADERS),
+            **_outbound_kwargs(allow_private=self.allow_private),
+            "event_hooks": {"response": [self._record_status]},
+        }
+
+    @property
+    def refusal_status(self) -> int:
+        """Return the last response's error status, or 400 for a refusal that carried none."""
+
+        return self.statuses[-1] if self.statuses and self.statuses[-1] >= 400 else 400
+
+    def material(self, response: Mapping[str, Any]) -> dict[str, Any]:
+        """Return the carried token keys from ``response``, refusing one without an access token."""
+
+        tokens = {key: response[key] for key in _TOKEN_MATERIAL_KEYS if key in response}
+        if not tokens.get("access_token"):
+            raise self._refused(self.refusal_status)
+        return tokens
+
+    def __enter__(self) -> _TokenRequest:
+        """Map the failures of the request the block sends."""
+
+        return self
+
+    def __exit__(
+        self, exc_type: type[BaseException] | None, exc: BaseException | None, traceback: TracebackType | None,
+    ) -> None:
+        """Raise the mapped ``OAuthFlowError`` for a token-request failure; let anything else propagate."""
+
+        del exc_type, traceback
+        if exc is not None and (refusal := self._refusal(exc)) is not None:
+            raise refusal from exc
+
+    def _record_status(self, response: httpx2.Response) -> None:
+        """Keep one response's status for :attr:`refusal_status`."""
+
+        self.statuses.append(response.status_code)
+
+    def _refusal(self, exc: BaseException) -> OAuthFlowError | None:
+        """Return the ``OAuthFlowError`` one token-request failure maps to, or ``None`` when it is not one."""
+
+        if isinstance(exc, OAuthError):
+            status = 503 if exc.error == "temporarily_unavailable" else self.refusal_status
+            return self._refused(status, body={"error": exc.error, "error_description": exc.description})
+        if isinstance(exc, httpx2.HTTPStatusError):
+            return self._refused(exc.response.status_code, body=_response_body(exc.response))
+        if isinstance(exc, RequestNotSentError):
+            return OAuthFlowError(TOKEN_EXCHANGE_FAILED, 503)
+        if isinstance(exc, AddressNotAllowedError):
+            return self._refused(400, body={"error": ENDPOINT_NOT_ALLOWED})
+        if isinstance(exc, httpx2.HTTPError | ValueError):
+            # Authlib parses the token body as JSON before checking the status, so a
+            # non-JSON 4xx (a CDN's 403/429 block page) surfaces as a ValueError.
+            status = 503 if isinstance(exc, httpx2.TransportError) else 400
+            return self._refused(status, logged=f"transport_error:{type(exc).__name__}")
+        return None
+
+    def _refused(self, status: int, *, body: Any = None, logged: object = None) -> OAuthFlowError:
+        """Log one refusal by grant, subject and status, and return its ``OAuthFlowError``."""
+
+        logger.warning(
+            "%s token request failed for %s: status=%s", self.grant, self.subject, status if logged is None else logged,
+        )
+        return OAuthFlowError(TOKEN_EXCHANGE_FAILED, status, body=body)
+
+
+def jwt_bearer_grant(
+    token_endpoint: str,
+    *,
+    issuer: str,
+    key: RSAKey,
+    header: Mapping[str, str],
+    scope: str,
+    scope_in_claim: bool,
+    subject: str = "",
+    audience: str = "",
+    log_subject: object = "",
+) -> dict[str, Any]:
+    """Exchange a signed assertion for an access token on ``scope`` (RFC 7523 §2.1).
+
+    Authlib's ``AssertionClient`` signs ``iss``, ``aud`` (``audience``, else the token
+    endpoint), ``iat``, ``exp`` (one hour) and ``jti``, plus ``sub`` when given, with
+    ``header``. ``scope`` rides the assertion's ``scope`` claim when
+    ``scope_in_claim`` (Google's placement), else the request's ``scope`` parameter
+    (RFC 7521 §4.1). The endpoint comes from pasted key material, so the grant is
+    posted with public addresses only. Failures map as every token request's
+    (:class:`_TokenRequest`), logged as ``log_subject``; a ``JoseError`` from signing
+    propagates for the caller to classify. Returns the carried token keys.
+    """
+
+    request = _TokenRequest("JWT bearer", log_subject, allow_private=False)
+    with request:
+        client = AssertionClient(
+            token_endpoint=token_endpoint,
+            issuer=issuer,
+            subject=subject or None,
+            audience=audience or None,
+            scope=None if scope_in_claim else scope,
+            claims={"scope": scope} if scope_in_claim else None,
+            key=key,
+            header=dict(header),
+            **request.client_kwargs(),
+        )
+        try:
+            token = client.refresh_token()
+        finally:
+            client.close()
+    return request.material(dict(token))
 
 
 def with_query(url: str, query: Mapping[str, str]) -> str:
@@ -581,15 +696,6 @@ def with_query(url: str, query: Mapping[str, str]) -> str:
     existing = parse.parse_qsl(parts.query, keep_blank_values=True)
     encoded = parse.urlencode([*(pair for pair in existing if pair[0] not in query), *query.items()])
     return parse.urlunsplit((parts.scheme, parts.netloc, parts.path, encoded, parts.fragment))
-
-
-def _token_material(response: Mapping[str, Any]) -> dict[str, Any]:
-    """Return the carried token keys from a token response, requiring an access token."""
-
-    tokens = {key: response[key] for key in _TOKEN_MATERIAL_KEYS if key in response}
-    if not tokens.get("access_token"):
-        raise OAuthFlowError(TOKEN_EXCHANGE_FAILED, 400)
-    return tokens
 
 
 def _token_response_identity_claims(response: Mapping[str, Any]) -> dict[str, Any]:

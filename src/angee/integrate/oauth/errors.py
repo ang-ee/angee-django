@@ -31,6 +31,10 @@ REDIRECT_URI_REQUIRED = "redirect_uri_required"
 OAUTH_CLIENT_NOT_CONNECTABLE = "oauth_client_not_connectable"
 ACCOUNT_ALREADY_LINKED = "account_already_linked"
 
+ENDPOINT_NOT_ALLOWED = "endpoint_not_allowed"
+"""A token refusal's local ``body["error"]`` code, beside the RFC 6749 §5.2 codes: the
+token endpoint resolves to an address the SSRF policy refuses, so no retry can succeed."""
+
 _PUBLIC_MESSAGES = {
     INVALID_STATE: "The authorization request is invalid or has expired.",
     CLIENT_NOT_CONFIGURED: "This connection is not configured.",
