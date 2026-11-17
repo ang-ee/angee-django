@@ -13,6 +13,11 @@ export {
   type DetailSurfaceProps,
 } from "./DetailSurface";
 export {
+  DateTile,
+  dateTileVariants,
+  type DateTileProps,
+} from "./DateTile";
+export {
   DefinitionPair,
   definitionFromTuple,
   definitionPairVariants,
