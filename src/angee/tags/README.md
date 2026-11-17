@@ -34,31 +34,56 @@ an edge is read by whoever reads both the tag and the record.
 ## The maximum per record
 
 `TagAssignmentManager.require_category_maximum` is the one check. It counts each
-record's edges in a category with a maximum, as named system work, so tags the
-actor cannot read count too, and refuses the first record over its category's
-maximum with a `ValidationError`. Every write that can raise a record's count
-runs it in the write's transaction, so a refusal rolls the write back:
+record's edges in a category with a maximum, as named system work, and refuses the
+first record over its category's maximum with a `ValidationError`. Archived tags,
+tags in an archived category, and tags the actor cannot read all count. Each write
+below runs it inside its own transaction, after the write, so a refusal rolls the
+write back.
 
-- `attach` (the `tag` mutation) and `set_for` (a record save carrying `tags`)
-  lock the target row first, so concurrent tag writes on one record serialize,
-  then write and judge the result. The error is keyed `tags`.
-- A tag save that writes `category` judges that category's records (`category`).
-- A category save that writes `max_per_record` judges its records
-  (`max_per_record`). A lowered maximum a record already exceeds is refused.
-- A merge into a tag whose category has a maximum refuses merged tags filed under
-  another category: file them into the category first, which the tag save judges,
-  then merge. A merge within one category only collapses tags.
+| write | when it is judged | what is judged | error key |
+|---|---|---|---|
+| a new edge (`TagAssignment.save` on insert): the `tag` verb, a record's `tags` input, a changeset revert's restore, a resource load, `objects.create` | always | that record, in the new tag's category | `tags` |
+| a tag save (`Tag.save`) | it writes a `category` that differs from the stored row's | the records holding the tag, in its new category | `category` |
+| a category save (`TagCategory.save`) | it lowers `max_per_record` below the stored value | every record holding the category's tags | `max_per_record` ("records already hold more") |
+| a merge (`pre_merge`, `TagAssignmentManager.judging_fold`) | after the fold's moves, inside the merge | a tag survivor: the records holding it, in its category; a taggable survivor: its record, in the categories of the tags it gained | none |
 
-Queryset and bulk updates, and raw edge creates, bypass these verbs and saves and
-are not judged.
+Nothing else is judged: a rename, a description, a raised or removed maximum,
+unfiling a tag, or a merge into an uncategorised tag. A record already over a
+maximum keeps every other edit. `set_for` removes before it adds, so a swap within
+a maximum succeeds.
+
+Not judged: `bulk_create` of edges, and queryset `update` or `bulk_update` of
+`Tag.category` or `TagCategory.max_per_record`. They bypass the saves above.
+
+Locks keep concurrent writes from judging each other's uncommitted state:
+
+- **Edge writes:** an edge write locks its record's row, then its tags' rows
+  (`no_key`, in key order), and reads each tag's category under those locks.
+- **Category-side writes:** a refiling or a lowered maximum locks the category row
+  (a full row lock, which filing a new tag under it waits on), then the category's
+  tags (`no_key`, in key order), before it reads the stored value
+  (`TagCategory.lock_filing`).
+- **Merges:** a merge holds its records' locks (a tag merge, the survivor tag's)
+  and locks the tags a taggable survivor gained before it judges.
+- **Result:** whichever write runs second waits for the first and judges its
+  committed state. The cost is that every tagging of one tag serializes on that
+  tag's row, and every tagging of one record on that record's row.
 
 ## Console
 
 The Tags menu holds the tag vocabulary (filterable by category) and the tag
 categories page. The registered tag form edits a tag's category. The
 `angee.tags.recordTags` widget, for records whose scalar fields are read-only,
-shows one picker per category in category order, then the uncategorised tags; a
-tag created from a category's picker is filed under it.
+shows a labelled group of pickers:
+
+- one per category, in category order, with its maximum when it has one, then the
+  uncategorised tags;
+- each held tag's category is read once and kept, so pickers never regroup on a
+  refetch;
+- a category past the category list's first page still gets a picker when the
+  record holds one of its tags;
+- at a maximum of one, a new pick replaces the held tag, untagging first;
+- a tag created from a category's picker is filed under it.
 
 ## Seeds
 

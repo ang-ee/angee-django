@@ -14,15 +14,30 @@ live in code docstrings.
   `position`, an optional `max_per_record`) groups the vocabulary for every
   taggable type, and `Tag.category` files a tag under at most one of them
   (nullable; deleting a category un-files its tags). Tag administrators curate
-  categories as they curate tags (`tags/tag_category`; tags revision 8). One
-  check, `TagAssignmentManager.require_category_maximum`, refuses a record over a
-  category's maximum: `attach` and `set_for` run it under the record's row lock,
-  a tag save that writes `category` and a category save that writes
-  `max_per_record` run it over the category's records, and a merge into a capped
-  category refuses tags filed elsewhere. The console gains a categories page, a
-  `category` column, facet and form field on tags, and `angee.tags.recordTags`
-  shows one picker per category. Hosts author a migration for `tags`
-  (`TagCategory`, `Tag.category`) and re-sync the permission schema.
+  categories as they curate tags (`tags/tag_category`; tags revision 8).
+  - **One check:** `TagAssignmentManager.require_category_maximum` refuses a
+    record over a category's maximum, counting archived and unreadable tags.
+  - **Edge inserts:** every insert is judged in `TagAssignment.save`, for its
+    record in its tag's category. That covers the `tag` verb, a record's `tags`
+    input, a changeset revert's restore, a resource load and `objects.create`,
+    under the record's and the tag's row locks.
+  - **Tag saves:** a tag save that changes its category judges the records holding
+    the tag.
+  - **Category saves:** a category save that lowers its maximum judges its records
+    ("records already hold more").
+  - **Merges:** a merge is judged after its moves, through `pre_merge`. Merging a
+    duplicate into a capped tag collapses it, and a merge that would leave a
+    record over a maximum rolls back.
+  - **Category-side locks:** a category-side write locks the category row and its
+    tags' rows, so it and concurrent edge writes judge each other's committed
+    state.
+  - **Bypasses:** edge `bulk_create`, and queryset `update`/`bulk_update` of
+    `category` or `max_per_record`, are not judged.
+  - **Console:** a categories page, and a `category` column, facet and form field
+    on tags. `angee.tags.recordTags` shows a labelled group with one picker per
+    category, each showing its maximum.
+  - **Upgrade:** hosts author a migration for `tags` (`TagCategory`,
+    `Tag.category`) and re-sync the permission schema.
 - A record-visibility file takes its access from its attached records, its
   direct viewers and admins. Its owner (the uploader, by default) holds it while
   the upload is a draft, which the record edge needs, and once it is published

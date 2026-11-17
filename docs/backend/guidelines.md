@@ -688,10 +688,19 @@ data through REBAC, never a queryset bypass.
   record. `TagAssignment.check`
   fails startup when the taggable models and the declared relations differ. The
   tags addon names no other addon's model. A `TagCategory` groups the vocabulary
-  for every taggable type and may cap how many of its tags one record holds;
+  for every taggable type and may cap how many of its tags one record holds,
+  archived tags included.
   [`TagAssignmentManager.require_category_maximum`](../../src/angee/tags/models.py)
-  is the one check, run by the edge verbs under the record's row lock and by the
-  saves that file a tag or lower a maximum
+  is the one check. It runs inside the write, after it:
+  - on every edge insert, for that record in the tag's category, under the
+    record's and the tag's locks;
+  - on a tag save that changes its category against the stored row, for the
+    records holding the tag;
+  - on a category save that lowers its maximum;
+  - after a merge's moves, through `pre_merge`.
+
+  Edge `bulk_create`, and queryset `update` or `bulk_update` of a tag's category
+  or a category's maximum, bypass it
   ([tags](../../src/angee/tags/README.md#the-maximum-per-record)).
 - **Raise through the model's access owner.** `require_access(permission, actor=None)`
   delegates to native REBAC checks. An explicit actor stays bound to the instance;
