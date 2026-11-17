@@ -4758,6 +4758,21 @@ class RecordLinkManager[RecordLinkT: RecordLink](_RecordLinkManagerBase[RecordLi
             link.target_content_type_id = link.target_object_id = None
             return locked
 
+    def release_targets(self, links: models.QuerySet[Any]) -> int:
+        """Let every row ``links`` binds go at once, as :meth:`release_target` lets one go; return how many.
+
+        For a domain owner that purges a whole replica (an unsubscribed source's
+        records): one tracked update, the rows locked in primary-key order first.
+        Status, evidence and history stay.
+        """
+
+        with system_context(reason="integrate.record.release_targets"), transaction.atomic():
+            bound = self.filter(pk__in=links.values("pk")).exclude(target_object_id=None).order_by("pk")
+            ids = list(bound.lock_if_supported().values_list("pk", flat=True))
+            return self.filter(pk__in=ids).update(
+                target_content_type=None, target_object_id=None, updated_at=timezone.now()
+            )
+
     def promote(
         self,
         link: Any,

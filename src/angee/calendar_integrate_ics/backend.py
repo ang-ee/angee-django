@@ -4,7 +4,7 @@ The feed is the source's one remote calendar: the base backend's ``calendars``
 stream publishes one record for it, keyed ``feed``, and its events sync through
 the ``events`` stream partitioned by that key. The feed address is a secret (a
 private feed's token rides in it): it is the source credential's material, read
-only here, and the source's ``config`` keeps a redacted label (:func:`feed_label`).
+only here, and the source's ``config`` keeps only its host (:func:`feed_label`).
 
 Every poll fetches the feed through integrate's SSRF-pinned bounded download
 (public addresses only; 16 MiB, five redirects and a minute in total), with the
@@ -14,25 +14,31 @@ iCalendar; the calendar's base backend owns the event projection and every
 write. A changed feed is paged in key order, and the driver applies only the
 events whose projection changed. A key the feed stopped serving is found by
 integrate's absence sweep, once per poll interval: unavailable first, then
-tombstoned. One sync reads the feed once for its pages, identity reads and
-sweep. The external key is the UID (its digest when too long), plus the
-``RECURRENCE-ID`` instant for an instance; a feed carries at most 10,000 events.
+tombstoned. An adapter keeps the snapshot it fetched, with its validators, for
+its pages, identity reads and sweep (:meth:`IcsCalendarBackend._events_now`).
+The external key is the UID (its digest when too long), plus the
+``RECURRENCE-ID`` instant for an instance. A feed produces at most 10,000
+events, cancelled instances included, and defines at most 100 time zones; both
+are counted before it is parsed. A rule is validated by the event's own field
+before any ``EXDATE`` expands it.
 
 **Zones are resolved per parse.** icalendar's parser caches each feed-defined
 ``VTIMEZONE`` in a process-wide registry, so a resolved value can carry another
 feed's definition of the same TZID. This module never reads one: it takes each
 moment's wall clock and ``TZID`` and resolves the TZID itself (:class:`_Zones`).
-An IANA name, a Windows name or a vendor-prefixed IANA name maps to the IANA zone
-(through icalendar's Windows table); any other TZID resolves from this feed's
-own ``VTIMEZONE``.
+An IANA name, a Windows name or a ``/``-prefixed vendor IANA name maps to the
+IANA zone (through icalendar's Windows table); any other TZID falls back to the
+feed's ``X-WR-TIMEZONE``, then to this feed's own ``VTIMEZONE``. Parsing still
+fills icalendar's process-wide cache, which only grows: a sync worker recycled
+after a number of tasks (Celery's ``worker_max_tasks_per_child``) bounds it.
 
 Mapped properties:
 
 - ``UID``, ``RECURRENCE-ID``, ``SUMMARY``, ``DESCRIPTION``, ``LOCATION``;
 - ``DTSTART``, ``DTEND`` or ``DURATION`` (``VALUE=DATE`` is all-day); the event
   keeps its ``DTSTART`` zone as its own ``timezone`` when that maps to an IANA name
-  (a UTC time keeps ``UTC``); a date or a floating time keeps the feed's
-  ``X-WR-TIMEZONE``, else its calendar's zone;
+  (a UTC time keeps ``UTC``); a custom zone, a date or a floating time keeps the
+  feed's ``X-WR-TIMEZONE``, else its calendar's zone;
 - the first ``RRULE``; each ``EXDATE`` becomes a cancelled instance (``RDATE`` is
   not mapped);
 - ``STATUS``, ``TRANSP`` (``TRANSPARENT`` is free), ``CLASS`` (``PUBLIC`` is
@@ -52,8 +58,10 @@ from __future__ import annotations
 
 import hashlib
 import ipaddress
+import re
+from collections import Counter
 from collections.abc import Mapping, Sequence
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from datetime import UTC, date, datetime, time, timedelta, tzinfo
 from typing import Any
 from urllib.parse import urlsplit
@@ -78,6 +86,7 @@ from angee.integrate.http import DownloadResult, OutboundBudget
 from angee.integrate.net import AddressNotAllowedError, AddressResolutionError, is_unsafe_address, parse_http_url
 from angee.integrate.states import StreamPhase
 from angee.integrate.streams import StreamPage
+from angee.scheduling.recurrence import Recurrence
 from angee.scheduling.zones import get_zone_info, get_zone_names
 
 FEED_KEY = "feed"
@@ -90,7 +99,13 @@ _REPORTED_STATUSES = frozenset({304, *range(400, 600)})
 """The statuses a fetch reports itself: a conditional GET's 304, and a refusal named to the operator."""
 
 _EVENTS_PER_FEED = 10_000
-"""The most VEVENTs a feed may carry; a larger feed fails its poll with an operator message."""
+"""The most events a feed may produce, cancelled instances included; a larger feed fails its poll."""
+
+_TIMEZONES_PER_FEED = 100
+"""The most VTIMEZONEs a feed may define; a larger feed fails its poll before it is parsed."""
+
+_BEGIN = re.compile(r"^BEGIN:(VEVENT|VTIMEZONE)[ \t]*\r?$", re.IGNORECASE | re.MULTILINE)
+"""A component's opening line, counted before the feed is parsed."""
 
 _CONFERENCE_PROPERTIES = (
     "CONFERENCE",
@@ -144,15 +159,12 @@ def feed_url(url: str) -> str:
 
 
 def feed_label(url: str) -> str:
-    """Return what may be shown of a feed address: its host, and its file name when that names a calendar.
+    """Return what may be shown of a feed address: its host alone.
 
-    The path and query can carry the feed's secret, so nothing else is kept.
+    Any path segment, file name or query can carry the feed's secret.
     """
 
-    parts = urlsplit(url)
-    name = parts.path.rstrip("/").rsplit("/", 1)[-1]
-    shown = name.lower().endswith((".ics", ".ical", ".ifb")) and len(name) <= 40
-    return f"{parts.hostname}/…/{name}" if shown else f"{parts.hostname}/…"
+    return urlsplit(url).hostname or ""
 
 
 class IcsCalendarBackend(CalendarBackend):
@@ -168,7 +180,7 @@ class IcsCalendarBackend(CalendarBackend):
     icon = "calendar"
     defaults = {"vendor": "ics", "poll_interval": 3600}
 
-    _snapshot: dict[str, dict[str, Any]] | None = None
+    _snapshot: _Snapshot | None = None
 
     def discover(self) -> list[ParsedCalendar]:
         """Return the feed, the source's one remote calendar, named as subscribed."""
@@ -178,46 +190,61 @@ class IcsCalendarBackend(CalendarBackend):
     def extract_events(self, stream: Any, page_bound: int, *, deadline: float | None = None) -> StreamPage:
         """Page the feed's events in key order; the feed's validators commit with the last page.
 
-        A delta poll asks conditionally on the committed validators, and a 304 is no
-        work; a baseline (a new or resynced stream) fetches unconditionally. While
-        pages remain the cursor carries only the last key, and a later page reads the
-        same snapshot (:meth:`_events_now`). A key the feed stopped serving is
-        integrate's absence sweep's to find (:meth:`event_keys`).
+        Without a snapshot in hand, a delta poll asks conditionally on the committed
+        validators and a 304 is no work; a baseline (a new or resynced stream)
+        fetches unconditionally. A snapshot this adapter already holds (an identity
+        read fetched it) pages without another fetch, and is no work when its
+        validators are the ones the cursor committed. While pages remain the cursor
+        carries only the last key. A key the feed stopped serving is integrate's
+        absence sweep's to find (:meth:`event_keys`).
         """
 
         cursor = dict(stream.cursor or {})
         if "after" in cursor:
-            payloads = self._events_now(stream)
-            return self.page(stream, payloads, page_bound, after=cursor["after"], cursor=cursor["next"])
-        result = self._fetch(cursor if stream.phase != StreamPhase.BASELINE else {})
-        if result.status_code == 304:
+            snapshot = self._events_now(stream)
+            return self.page(stream, snapshot.payloads, page_bound, after=cursor["after"], cursor=cursor["next"])
+        baseline = stream.phase == StreamPhase.BASELINE
+        held = self._snapshot
+        if held is None:
+            result = self._fetch({} if baseline else cursor)
+            if result.status_code == 304:
+                return StreamPage((), cursor)
+            held = self._snapshot = self._read_snapshot(stream, result)
+        elif not baseline and any(held.validators.values()) and held.validators == _validators(cursor):
             return StreamPage((), cursor)
-        validators = {"etag": result.headers.get("etag", ""), "last_modified": result.headers.get("last-modified", "")}
-        self._snapshot = self._observe_feed(_read(result.content), zone=self.get_calendar(stream).timezone)
-        return self.page(stream, self._snapshot, page_bound, after=None, cursor=validators)
+        return self.page(stream, held.payloads, page_bound, after=None, cursor=held.validators)
 
     def read_events(self, stream: Any, keys: Sequence[str]) -> dict[str, dict[str, Any] | None]:
         """Read the requested keys from the feed's snapshot; a key it no longer carries is ``None``."""
 
-        payloads = self._events_now(stream)
+        payloads = self._events_now(stream).payloads
         return {key: payloads.get(key) for key in keys}
 
     def event_keys(self, stream: Any) -> list[str]:
         """Return every key the feed's snapshot carries."""
 
-        return list(self._events_now(stream))
+        return list(self._events_now(stream).payloads)
 
-    def _events_now(self, stream: Any) -> dict[str, dict[str, Any]]:
-        """Return the feed's events as this adapter last read them, fetching the feed once when it has not.
+    def _events_now(self, stream: Any) -> _Snapshot:
+        """Return the snapshot this adapter holds, fetching the feed unconditionally when it holds none.
 
-        One adapter serves one sync of the feed's partition, so its pages, identity
-        reads and absence sweep share one snapshot. A later sync's adapter reads the
-        feed afresh.
+        One adapter serves one sync of the feed's partition. While it holds a
+        snapshot, its identity reads, later pages and absence sweep read that one; a
+        sync whose extraction got a 304 fetches the feed once more only when its
+        sweep or an identity read is due. A later sync's adapter starts without one.
         """
 
         if self._snapshot is None:
-            self._snapshot = self._observe_feed(_read(self._fetch({}).content), zone=self.get_calendar(stream).timezone)
+            self._snapshot = self._read_snapshot(stream, self._fetch({}))
         return self._snapshot
+
+    def _read_snapshot(self, stream: Any, result: DownloadResult) -> _Snapshot:
+        """Parse a fetched feed into its snapshot, kept with the validators it was served with."""
+
+        return _Snapshot(
+            {"etag": result.headers.get("etag", ""), "last_modified": result.headers.get("last-modified", "")},
+            self._observe_feed(_read(result.content), zone=self.get_calendar(stream).timezone),
+        )
 
     # --- transport ---
 
@@ -271,14 +298,14 @@ class IcsCalendarBackend(CalendarBackend):
         A ``RECURRENCE-ID`` instance overrides its series when the feed carries the
         series' master, and replaces a cancelled ``EXDATE`` instance at the same
         moment; an instance whose master the feed lacks is a single event. Of two
-        copies of one key, the higher ``SEQUENCE`` wins. ``zone`` is the calendar's.
+        copies of one key, the higher ``SEQUENCE`` wins. Every produced record,
+        cancelled instances included, counts against :data:`_EVENTS_PER_FEED`.
+        ``zone`` is the calendar's.
         """
 
         components = list(feed.walk("VEVENT"))
-        if len(components) > _EVENTS_PER_FEED:
-            raise IcsError(f"The calendar feed has more than {_EVENTS_PER_FEED} events.")
         zones = _Zones(feed)
-        feed_zone = zones.resolve(_text(feed, "X-WR-TIMEZONE"))[0] if _text(feed, "X-WR-TIMEZONE") else ""
+        feed_zone = zones.feed_zone
         local = feed_zone or zone
         masters = {_text(component, "UID"): component for component in components if "RECURRENCE-ID" not in component}
         exceptions: dict[str, dict[str, Any]] = {}
@@ -308,31 +335,48 @@ class IcsCalendarBackend(CalendarBackend):
                 events[key] = (sequence, self.observe(event))
             for instance, exception in cancelled:
                 exceptions[instance] = self.observe(exception)
+            if len(events) + len(exceptions) > _EVENTS_PER_FEED:
+                raise IcsError(f"The calendar feed has more than {_EVENTS_PER_FEED} events.")
         return {**exceptions, **{key: payload for key, (_sequence_, payload) in events.items()}}
+
+
+@dataclass(frozen=True)
+class _Snapshot:
+    """One fetched feed: the validators it was served with, and each event's retained payload by key."""
+
+    validators: dict[str, str]
+    payloads: dict[str, dict[str, Any]]
+
+
+def _validators(cursor: Mapping[str, Any]) -> dict[str, str]:
+    """Return the feed validators a stream cursor committed."""
+
+    return {"etag": str(cursor.get("etag", "")), "last_modified": str(cursor.get("last_modified", ""))}
 
 
 class _Zones:
     """One feed's TZIDs, resolved for this parse only and never through a process-wide registry.
 
     An IANA name, a Windows name (icalendar's table) or an RFC 5545 vendor-prefixed
-    IANA name (``/vendor/Europe/Berlin``) resolves to its IANA zone. Any other TZID
-    resolves from this feed's own ``VTIMEZONE`` (``Timezone.to_tz`` without lookup),
-    and has no IANA name.
+    IANA name (``/vendor/Europe/Berlin``) resolves to its IANA zone. Any other
+    TZID falls back to the feed's ``X-WR-TIMEZONE`` (``feed_zone``), and without
+    one to this feed's own ``VTIMEZONE`` (``Timezone.to_tz`` without lookup), which
+    has no IANA name.
     """
 
     def __init__(self, feed: Any) -> None:
-        self._components = {
-            str(component.get("TZID", "")).strip("/"): component for component in feed.walk("VTIMEZONE")
-        }
+        self._components = {str(component.get("TZID", "")).strip(): component for component in feed.walk("VTIMEZONE")}
+        self.feed_zone = _iana_name(_text(feed, "X-WR-TIMEZONE"))
+        """The feed's ``X-WR-TIMEZONE`` as an IANA name, or blank."""
         self._resolved: dict[str, tuple[str, tzinfo | None]] = {}
 
     def resolve(self, tzid: str) -> tuple[str, tzinfo | None]:
         """Return a TZID's IANA name (blank for a feed-defined zone) and its zone (``None`` when unknown)."""
 
         if tzid not in self._resolved:
-            name = _iana_name(tzid)
+            name = _iana_name(tzid) or self.feed_zone
             zone: tzinfo | None = get_zone_info(name) if name else None
-            component = self._components.get(tzid.strip().strip("/"))
+            component = self._components.get(tzid.strip())
             if zone is None and component is not None:
                 try:
                     zone = component.to_tz(lookup_tzid=False)
@@ -343,20 +387,39 @@ class _Zones:
 
 
 def _iana_name(tzid: str) -> str:
-    """Return the IANA zone a TZID names, through icalendar's Windows table or a vendor prefix; else blank."""
+    """Return the IANA zone a TZID names, directly, through icalendar's Windows table, or behind a vendor prefix.
 
-    cleaned = tzid.strip().strip("/")
+    Only a TZID that starts with ``/`` (RFC 5545's globally unique form) is read
+    for a vendor prefix; any other unknown TZID names no IANA zone.
+    """
+
+    text = tzid.strip()
     names = get_zone_names()
-    parts = cleaned.split("/")
-    suffixes = ["/".join(parts[start:]) for start in range(1, len(parts))]
-    candidates = [cleaned, WINDOWS_TO_OLSON.get(cleaned, ""), *suffixes]
-    return next((candidate for candidate in candidates if candidate in names), "")
+    if text in names:
+        return text
+    if (windows := WINDOWS_TO_OLSON.get(text, "")) in names:
+        return windows
+    if text.startswith("/"):
+        parts = text.strip("/").split("/")
+        return next((name for start in range(len(parts)) if (name := "/".join(parts[start:])) in names), "")
+    return ""
 
 
 def _read(content: bytes) -> Any:
-    """Parse one iCalendar body without NUL characters, refusing anything that is not a ``VCALENDAR``."""
+    """Parse one iCalendar body without NUL characters, refusing anything that is not a ``VCALENDAR``.
+
+    Its components are counted before it is parsed: a feed past
+    :data:`_EVENTS_PER_FEED` events or :data:`_TIMEZONES_PER_FEED` time zones fails
+    its poll unparsed.
+    """
 
     text = content.decode("utf-8-sig", errors="replace").replace("\x00", "")
+    # Unfold continuation lines (RFC 5545 3.1), so a folded opening line still counts.
+    counts = Counter(name.upper() for name in _BEGIN.findall(re.sub(r"\r?\n[ \t]", "", text)))
+    if counts["VEVENT"] > _EVENTS_PER_FEED:
+        raise IcsError(f"The calendar feed has more than {_EVENTS_PER_FEED} events.")
+    if counts["VTIMEZONE"] > _TIMEZONES_PER_FEED:
+        raise IcsError(f"The calendar feed defines more than {_TIMEZONES_PER_FEED} time zones.")
     try:
         feed = icalendar.Calendar.from_ical(text)
     except Exception as error:  # noqa: BLE001 — any parser refusal is the same operator message.
@@ -372,11 +435,14 @@ def _events(
     """Map one VEVENT to its keyed event, then a master's cancelled ``EXDATE`` instances.
 
     ``master`` is the series' master VEVENT when the feed carries it. An instance
-    that states no ``TRANSP`` or ``CLASS`` takes its master's. An ``EXDATE`` that
-    is no instance of the rule is dropped, and a cancelled instance ends where the
-    event owner's arithmetic puts it (``CalendarEvent.occurrence_end``: an all-day
-    instance spans local days), both expanded in the zone the stored series uses.
-    ``calendar_zone`` is the calendar's.
+    that states no ``TRANSP`` or ``CLASS`` takes its master's. A rule is validated
+    by the event's own field first (its frequency floor and ``COUNT`` bound), so an
+    invalid rule makes the master an invalid event before anything expands it.
+    The series then expands once, through the bounded recurrence owner, up to its
+    latest ``EXDATE``, in the zone the stored series uses: an ``EXDATE`` that is
+    no instance is dropped, and a cancelled instance ends where the event owner's
+    arithmetic puts it (``CalendarEvent.occurrence_end``: an all-day instance spans
+    local days). ``calendar_zone`` is the calendar's.
     """
 
     start_prop = component["DTSTART"]
@@ -384,6 +450,10 @@ def _events(
     start = _instant(start_prop.dt, _param(start_prop, "TZID"), zones, zone)
     end = _end(component, start_prop.dt, start, all_day=all_day, zones=zones, zone=zone)
     rid = component.get("RECURRENCE-ID")
+    recurrence = "" if rid is not None else _rule(component)
+    model: Any = apps.get_model("calendar", "CalendarEvent")
+    if recurrence:
+        model._meta.get_field("recurrence").clean(recurrence, None)
     original_start = _instant(rid.dt, _param(rid, "TZID"), zones, zone) if rid is not None else None
     override = original_start is not None and master is not None and master is not component
     series_master = master if override else None
@@ -394,7 +464,7 @@ def _events(
         start=start,
         end=end,
         all_day=all_day,
-        recurrence="" if rid is not None else _rule(component),
+        recurrence=recurrence,
         timezone=_event_zone(start_prop, zones, feed_zone),
         series=series_key(uid) if override else "",
         original_start=original_start if override else None,
@@ -417,32 +487,36 @@ def _events(
         attendees=_attendees(component),
     )
     observed = [(instance_key(uid, original_start) if original_start is not None else series_key(uid), event)]
-    if rid is None and event.recurrence:
-        # The unsaved row only lends its owner's rule arithmetic; nothing writes it.
-        series: Any = apps.get_model("calendar", "CalendarEvent")(
-            start=start, end=end, all_day=all_day, recurrence=event.recurrence
-        )
+    excluded = sorted(
+        {
+            _instant(value.dt, _param(exdate, "TZID"), zones, zone)
+            for exdate in (_values(component, "EXDATE") if recurrence else ())
+            for value in exdate.dts
+        }
+    )
+    if excluded:
         expansion = event.timezone or calendar_zone
-        for exdate in _values(component, "EXDATE"):
-            for value in exdate.dts:
-                moment = _instant(value.dt, _param(exdate, "TZID"), zones, zone)
-                if not series.is_instance(moment, zone=expansion):
-                    continue
-                observed.append(
-                    (
-                        instance_key(uid, moment),
-                        replace(
-                            event,
-                            start=moment,
-                            end=series.occurrence_end(moment, zone=expansion),
-                            recurrence="",
-                            series=series_key(uid),
-                            original_start=moment,
-                            status=EventStatus.CANCELLED,
-                            attendees=(),
-                        ),
-                    )
-                )
+        until = excluded[-1] + timedelta(microseconds=1)
+        instances = set(Recurrence(recurrence).occurrences(start, start, until, zone=expansion))
+        # The unsaved row only lends its owner's occurrence arithmetic; nothing writes it.
+        series = model(start=start, end=end, all_day=all_day, recurrence=recurrence)
+        observed.extend(
+            (
+                instance_key(uid, moment),
+                replace(
+                    event,
+                    start=moment,
+                    end=series.occurrence_end(moment, zone=expansion),
+                    recurrence="",
+                    series=series_key(uid),
+                    original_start=moment,
+                    status=EventStatus.CANCELLED,
+                    attendees=(),
+                ),
+            )
+            for moment in excluded
+            if moment in instances
+        )
     return observed
 
 
@@ -454,8 +528,8 @@ def _own_key(component: Any, uid: str, zones: _Zones, zone: str) -> str:
         return series_key(uid)
     try:
         return instance_key(uid, _instant(rid.dt, _param(rid, "TZID"), zones, zone))
-    except Exception:  # noqa: BLE001 — an unreadable instance keeps a key of its own content.
-        return f"{series_key(uid)}#invalid:{hashlib.sha256(component.to_ical()).hexdigest()[:16]}"
+    except Exception:  # noqa: BLE001 — an unreadable instance keeps a bounded key of its own content.
+        return "sha256:" + hashlib.sha256(uid.encode() + b"#invalid\n" + component.to_ical()).hexdigest()
 
 
 def _instant(value: date | datetime, tzid: str, zones: _Zones, zone: str) -> datetime:
@@ -478,7 +552,10 @@ def _instant(value: date | datetime, tzid: str, zones: _Zones, zone: str) -> dat
 
 
 def _event_zone(prop: Any, zones: _Zones, feed_zone: str) -> str:
-    """Return the zone an event keeps: its DTSTART's IANA zone, ``UTC`` for a UTC time, else the feed's (or blank)."""
+    """Return the zone an event keeps: its DTSTART's IANA zone, ``UTC`` for a UTC time, else the feed's (or blank).
+
+    A custom ``TZID`` keeps the feed's ``X-WR-TIMEZONE`` (:class:`_Zones`), else none.
+    """
 
     tzid = _param(prop, "TZID")
     if tzid:

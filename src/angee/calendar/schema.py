@@ -344,11 +344,11 @@ class CalendarSourceActionMutation:
     @strawberry.mutation
     @action_guard("Unsubscribe failed.")
     def unsubscribe_calendar_source(self, info: strawberry.Info, id: PublicID) -> ActionResult:
-        """End the subscription after the ``delete`` preflight: disconnect, purge its events, archive its calendar."""
+        """End the subscription after the ``delete`` preflight: disconnect it now and queue its purge."""
 
         source = authorized_action_target(info, CalendarSource, id, "delete")
         source.unsubscribe()
-        return ActionResult(ok=True, message="Unsubscribed; the calendar is archived.", id=source.sqid)
+        return ActionResult(ok=True, message="Unsubscribed; its events are being removed.", id=source.sqid)
 
 
 _SOURCE_RESOURCE = hasura_model_resource(

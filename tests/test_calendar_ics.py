@@ -24,17 +24,27 @@ from django.db.models import ProtectedError
 from rebac import actor_context, system_context
 
 from angee.calendar import models as calendar_models
-from angee.calendar.models import READ_ONLY_CALENDAR, SOURCE_CALENDAR_DELETE, AttendeeResponse, AttendeeRole
+from angee.calendar.backends import ParsedCalendar
+from angee.calendar.models import (
+    PURGE_SOURCE_TASK,
+    READ_ONLY_CALENDAR,
+    SOURCE_CALENDAR_DELETE,
+    AttendeeResponse,
+    AttendeeRole,
+)
+from angee.calendar.tasks import purge_source
 from angee.calendar.testing.models import Calendar, CalendarEvent, CalendarSource, EventAttendee
 from angee.calendar_integrate_ics import backend as ics_backend
 from angee.calendar_integrate_ics.backend import FEED_KEY, IcsCalendarBackend, IcsError
 from angee.calendar_integrate_ics.connect import subscribe_calendar
+from angee.integrate.errors import IntegrationError
 from angee.integrate.states import LinkStatus
 from angee.integrate.streams import BridgeSyncError, advance_stream, sync_bridge
 from angee.integrate.testing.http import mock_transport
 from angee.integrate.testing.models import RecordLink, SyncStream
+from angee.jobs.celery import app as celery_app
 from angee.messaging.testing.models import Handle, Person
-from tests.conftest import create_user
+from tests.conftest import Credential, create_user
 
 pytestmark = pytest.mark.django_db(transaction=True)
 
@@ -261,7 +271,8 @@ def test_subscribing_fetches_nothing_and_the_first_sync_mirrors_the_calendar(sub
     source, feed = subscription.source, subscription.feed
 
     assert feed.requests == []
-    assert (source.backend_class, source.config) == ("ics", {"feed": "feeds.example.test/…/team.ics"})
+    # The label is the host alone: a path or file name can carry the feed's secret.
+    assert (source.backend_class, source.config) == ("ics", {"feed": "feeds.example.test"})
     with system_context(reason="tests.ics"):
         assert source.credential.secret_value() == FEED_URL
     assert (source.display_name, source.poll_interval, source.vendor.slug) == ("Team", 3600, "ics")
@@ -367,13 +378,16 @@ def test_the_subscriber_quota_and_rate_bound_new_subscriptions(settings: Any) ->
         subscribe_calendar(user, name="Three", url="https://feeds.example.test/three.ics")
 
 
-def test_unsubscribing_disconnects_purges_and_archives_and_a_stranger_cannot_read_the_source(
-    subscription: Subscription,
+def test_unsubscribing_disconnects_now_and_the_purge_job_removes_the_replica(
+    subscription: Subscription, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     subscription.poll()
     source = subscription.source
     stranger = create_user("stranger")
     calendar = subscription.calendar
+    credential_id = source.credential_id
+    sent: list[tuple[str, dict[str, Any]]] = []
+    monkeypatch.setattr(celery_app, "send_task", lambda name, **options: sent.append((name, options["kwargs"])))
 
     with system_context(reason="tests.ics"):
         rows = CalendarSource.objects
@@ -381,15 +395,44 @@ def test_unsubscribing_disconnects_purges_and_archives_and_a_stranger_cannot_rea
         assert not rows.with_actor(stranger).filter(pk=source.pk).exists()
         CalendarSource.objects.get(pk=source.pk).unsubscribe()
         source = CalendarSource.objects.get(pk=source.pk)
-        calendar.refresh_from_db()
-        links = RecordLink.objects.filter(stream=subscription.stream())
-
+        # The request only disconnects; the replica is the job's.
         assert source.lifecycle == "disconnected"
+        assert CalendarEvent.objects.filter(calendar=calendar).count() == 6
+        with pytest.raises(ValidationError, match="not connected"):
+            source.sync_now()
+    assert sent == [(PURGE_SOURCE_TASK, {"pk": source.pk})]
+
+    assert purge_source(source.pk) == 6
+
+    with system_context(reason="tests.ics"):
+        calendar.refresh_from_db()
+        source.refresh_from_db()
+        links = RecordLink.objects.filter(stream=subscription.stream())
         assert calendar.is_archived is True
         assert not CalendarEvent.objects.filter(calendar=calendar).exists()
         assert not links.exclude(target_object_id=None).exists()
-        with pytest.raises(ValidationError, match="not connected"):
-            source.sync_now()
+        assert source.credential_id is None
+        assert not Credential.objects.filter(pk=credential_id).exists()
+
+
+def test_a_sync_in_flight_after_unsubscribing_refuses_to_bring_events_back(subscription: Subscription) -> None:
+    subscription.poll()
+    source = subscription.source
+    subscription.feed.etags = False
+    backend = IcsCalendarBackend(CalendarSource.objects.sudo(reason="tests.ics").get(pk=source.pk))
+    events = SyncStream.objects.current(backend.bridge, backend.bridge.events_stream(ParsedCalendar(FEED_KEY, "Team")))
+    with system_context(reason="tests.ics"):
+        # A drain already running holds the feed it fetched before the unsubscribe.
+        backend.read_keys(events, ["launch@example.test"])
+        CalendarSource.objects.filter(pk=source.pk).update(lifecycle="disconnected")
+        source.refresh_from_db()
+        assert source.purge() == 6
+
+        # Its next page waits on the calendar lock the purge took, then writes nothing.
+        with pytest.raises(IntegrationError, match="unsubscribed"):
+            advance_stream(subscription.stream(), backend)
+
+    assert not CalendarEvent.system_queryset().filter(calendar=subscription.calendar).exists()
 
 
 # --- polling -----------------------------------------------------------------
@@ -700,7 +743,7 @@ def test_a_feed_over_the_event_cap_fails_its_poll(subscription: Subscription, mo
     assert "more than 2 events" in str(refused.value)
 
 
-def test_a_feed_rule_beyond_the_owners_bounds_is_a_record_failure(subscription: Subscription) -> None:
+def test_a_feed_rule_beyond_the_fields_bounds_is_an_invalid_event(subscription: Subscription) -> None:
     minutely = LAUNCH.replace("launch@example.test", "minutely@example.test") + "\n"
     minutely = minutely.replace("SUMMARY:Launch", "SUMMARY:Minutely\nRRULE:FREQ=MINUTELY;COUNT=5")
     endless = LAUNCH.replace("launch@example.test", "endless@example.test").replace(
@@ -716,9 +759,10 @@ def test_a_feed_rule_beyond_the_owners_bounds_is_a_record_failure(subscription: 
                 stream=subscription.stream(), external_key=key).failures(open_only=True)]
             for key in ("minutely@example.test", "endless@example.test")
         }
+    # The event's own field refuses each rule at parse, before anything expands it.
     assert refused == {
-        "minutely@example.test": [("invalid_record", ["recurrence"])],
-        "endless@example.test": [("invalid_record", ["recurrence"])],
+        "minutely@example.test": [("invalid_event", None)],
+        "endless@example.test": [("invalid_event", None)],
     }
     assert "launch@example.test" in subscription.events()
 
@@ -740,6 +784,174 @@ def test_a_status_only_change_derives_no_series_end(
 
     master = subscription.events()["standup@example.test"]
     assert (master.status, master.series_end) == ("tentative", series_end)
+
+
+def test_an_exdate_never_expands_a_rule_past_the_owners_bound(subscription: Subscription) -> None:
+    hourly = """BEGIN:VEVENT
+UID:hourly@example.test
+DTSTART:20260401T000000Z
+DTEND:20260401T003000Z
+RRULE:FREQ=HOURLY
+EXDATE:21000101T000000Z
+SUMMARY:Hourly
+END:VEVENT"""
+    minutely = """BEGIN:VEVENT
+UID:minutely@example.test
+DTSTART:20260401T000000Z
+DTEND:20260401T000100Z
+RRULE:FREQ=MINUTELY
+EXDATE:99991231T000000Z
+SUMMARY:Minutely
+END:VEVENT"""
+    subscription.feed.body = _feed(STANDUP, MOVED, HOLIDAY, BERLIN_EVENT, LAUNCH, hourly, minutely)
+
+    subscription.poll()
+
+    # The field refuses the minutely rule before anything expands it; the hourly rule
+    # reaches the recurrence owner's occurrence bound before its far EXDATE.
+    assert subscription.failures() == {
+        "hourly@example.test": ["invalid_event"],
+        "minutely@example.test": ["invalid_event"],
+    }
+    assert "launch@example.test" in subscription.events()
+
+
+def test_cancelled_instances_count_against_the_feed_cap(
+    subscription: Subscription, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Five VEVENTs pass the count before parsing; with its cancelled 16 March instance the feed produces six.
+    monkeypatch.setattr(ics_backend, "_EVENTS_PER_FEED", 5)
+
+    with pytest.raises(BridgeSyncError) as refused:
+        subscription.poll()
+
+    assert "more than 5 events" in str(refused.value)
+
+
+def test_a_feed_over_the_time_zone_cap_fails_before_it_is_parsed(
+    subscription: Subscription, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(ics_backend, "_TIMEZONES_PER_FEED", 0)
+
+    with pytest.raises(BridgeSyncError) as refused:
+        subscription.poll()
+
+    assert "more than 0 time zones" in str(refused.value)
+
+
+def test_a_floating_until_at_the_end_of_time_on_a_zone_behind_utc_lands(subscription: Subscription) -> None:
+    forever = """BEGIN:VEVENT
+UID:forever@example.test
+DTSTART;TZID=America/New_York:20260105T090000
+DTEND;TZID=America/New_York:20260105T100000
+RRULE:FREQ=YEARLY;UNTIL=99991231T235959
+SUMMARY:Forever
+END:VEVENT"""
+    subscription.feed.body = _feed(STANDUP, MOVED, HOLIDAY, BERLIN_EVENT, LAUNCH, forever)
+
+    subscription.poll()
+
+    assert subscription.failures() == {}
+    # 9999-12-31 23:59:59 in New York is past the last UTC instant: the series ends with the representable range.
+    assert subscription.events()["forever@example.test"].series_end == _utc(9999, 1, 5, 10, zone=NEW_YORK)
+
+
+def test_a_far_future_event_lands_on_a_refusing_calendar_beside_an_open_series_ahead_of_utc(
+    subscription: Subscription,
+) -> None:
+    subscription.poll()
+    with system_context(reason="tests.ics"):
+        Calendar.objects.filter(pk=subscription.calendar.pk).update(overlap_policy="refuse")
+    early = """BEGIN:VEVENT
+UID:early@example.test
+DTSTART;TZID=Europe/Berlin:20260401T070000
+DTEND;TZID=Europe/Berlin:20260401T073000
+RRULE:FREQ=DAILY
+SUMMARY:Early
+END:VEVENT"""
+    far = """BEGIN:VEVENT
+UID:far@example.test
+DTSTART:99991231T220000Z
+DTEND:99991231T230000Z
+SUMMARY:Far
+END:VEVENT"""
+    subscription.feed.body = _feed(STANDUP, MOVED, HOLIDAY, BERLIN_EVENT, LAUNCH, early, far)
+
+    subscription.poll()
+
+    assert subscription.failures() == {}
+    assert {"early@example.test", "far@example.test"} <= set(subscription.events())
+
+
+def test_a_custom_tzid_falls_back_to_the_feeds_zone_and_only_a_slash_tzid_reads_a_vendor_prefix(
+    subscription: Subscription,
+) -> None:
+    def event(uid: str, tzid: str) -> str:
+        return (
+            f"BEGIN:VEVENT\nUID:{uid}\nDTSTART;TZID={tzid}:20260701T090000\n"
+            f"DTEND;TZID={tzid}:20260701T100000\nSUMMARY:{uid}\nEND:VEVENT"
+        )
+
+    subscription.feed.body = _feed(
+        event("custom@example.test", "Customized Time Zone"),
+        event("vendor@example.test", "/example.com/Europe/Berlin"),
+        event("unprefixed@example.test", "Mars/Europe/Berlin"),
+    )
+    subscription.poll()
+
+    events = subscription.events()
+    zones = {key: (events[key].timezone, events[key].start) for key in events}
+    # Unmappable TZIDs read the feed's X-WR-TIMEZONE (New York); a /-prefixed one names its IANA zone.
+    assert zones == {
+        "custom@example.test": ("America/New_York", _utc(2026, 7, 1, 13)),
+        "vendor@example.test": ("Europe/Berlin", _utc(2026, 7, 1, 7)),
+        "unprefixed@example.test": ("America/New_York", _utc(2026, 7, 1, 13)),
+    }
+
+
+def test_an_adapter_holding_a_snapshot_pages_from_it_without_fetching_again(subscription: Subscription) -> None:
+    subscription.poll()
+    backend = IcsCalendarBackend(CalendarSource.objects.sudo(reason="tests.ics").get(pk=subscription.source.pk))
+    subscription.feed.requests.clear()
+
+    with system_context(reason="tests.ics"):
+        backend.read_keys(subscription.stream(), ["launch@example.test"])
+        settled = advance_stream(subscription.stream(), backend)
+
+    # One fetch serves the identity read; the extraction finds the cursor already holds its validators.
+    assert len(subscription.feed.requests) == 1
+    assert (settled.count, settled.stream.cursor) == (0, {"etag": subscription.feed.etag, "last_modified": ""})
+
+
+def test_an_unreadable_instance_quarantines_under_a_key_that_fits_its_link(subscription: Subscription) -> None:
+    subscription.poll()
+    uid = "y" * 490 + "@example.test"
+    broken = f"BEGIN:VEVENT\nUID:{uid}\nRECURRENCE-ID:garbage\nDTSTART:20260401T120000Z\nSUMMARY:Broken\nEND:VEVENT"
+    subscription.feed.body = _feed(STANDUP, MOVED, HOLIDAY, BERLIN_EVENT, LAUNCH, broken)
+
+    subscription.poll()
+
+    failures = subscription.failures()
+    [key] = failures
+    assert failures[key] == ["invalid_event"] and key.startswith("sha256:") and len(key) <= 512
+
+
+def test_a_handle_merge_leaves_the_replica_converged_with_its_feed(subscription: Subscription) -> None:
+    subscription.poll()
+    with system_context(reason="tests.ics"):
+        bob = Handle.objects.get(normalized_value="bob@example.test")
+        bob.fold([Handle.objects.get(normalized_value="carol@example.test")])
+
+    # The feed still names Carol: on both sides she is Bob now, so the series settles once with no conflict.
+    subscription.feed.body = _feed(
+        STANDUP, MOVED, HOLIDAY, BERLIN_EVENT, LAUNCH.replace("SUMMARY:Launch", "SUMMARY:Launch review")
+    )
+    assert subscription.poll() == 2
+    subscription.feed.etags = False
+    assert subscription.poll() == 0
+    subscription.sweep()
+    assert subscription.poll() == 0
+    assert subscription.failures() == {}
 
 
 # --- poison input --------------------------------------------------------------

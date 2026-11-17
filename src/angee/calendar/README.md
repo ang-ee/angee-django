@@ -135,14 +135,16 @@ missing retries on the next cycle.
   rebased locally, the source re-sends each instance under its own key, and a
   changed calendar zone re-reads the source's events instead of moving them.
 - **Lifecycle.** The source's owner syncs it now and unsubscribes it. Unsubscribing
-  disconnects the source, removes its events and archives its calendar; a source's
-  calendar is never deleted on its own. How many sources one user keeps, and how
+  disconnects the source at once; a job then removes its events, archives its
+  calendar and deletes its credential. A sync already running stops at its next
+  page instead of bringing events back. A source's calendar is never deleted on
+  its own. How many sources one user keeps, and how
   fast they add them, are bounded (`ANGEE_CALENDAR_SOURCES_PER_OWNER`,
   `ANGEE_CALENDAR_SUBSCRIBE_RATE`).
 - **ICS.** `calendar_integrate_ics` lets any signed-in user subscribe to a public
   feed (`webcal://` reads as `https://`); nothing is fetched until the first
   sync, which reports a feed it cannot read. The feed address is a secret, kept as
-  the source's credential; the source shows only its host and file name. The feed
+  the source's credential; the source shows only its host. The feed
   is the source's one remote calendar, polled hourly with a conditional GET; each
   event keeps its own `DTSTART` zone. Each fetched feed is a full snapshot; its
   module docstring lists the properties it maps.

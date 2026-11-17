@@ -5,7 +5,7 @@ name = "angee-calendar"
 version = "3.0.0"
 description = "Calendars owned by parties: events with recurrence and overrides, attendees, sharing and free/busy."
 keywords = ["calendar", "events", "attendees", "recurrence", "free/busy", "scheduling"]
-dependencies = ["angee-base>=3,<4", "angee-graphql>=3,<4", "angee-iam>=3,<4", "angee-integrate>=3,<4", "angee-messaging>=3,<4", "angee-parties>=3,<4", "angee-provenance>=3,<4", "angee-resources>=3,<4", "angee-scheduling>=3,<4", "angee-tags>=3,<4", "angee-web>=3,<4"]
+dependencies = ["angee-base>=3,<4", "angee-graphql>=3,<4", "angee-iam>=3,<4", "angee-integrate>=3,<4", "angee-jobs>=3,<4", "angee-messaging>=3,<4", "angee-parties>=3,<4", "angee-provenance>=3,<4", "angee-resources>=3,<4", "angee-scheduling>=3,<4", "angee-tags>=3,<4", "angee-web>=3,<4"]
 dynamic = ["entry-points"]
 
 [tool.angee]

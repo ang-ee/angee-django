@@ -34,6 +34,7 @@ from angee.base.serialization import canonical_json_sha256
 from angee.integrate.errors import IntegrationError
 from angee.integrate.http import HttpClientMixin
 from angee.integrate.impl import BridgeImpl
+from angee.integrate.models import IntegrationLifecycle
 from angee.integrate.states import LinkStatus, StreamDefinition, SyncFailureKind
 from angee.integrate.streams import ApplyResult, RecordChange, SemanticError, StreamPage
 
@@ -169,35 +170,56 @@ def normalized_address(address: str) -> str:
     return str(handles.normalize_value(handles.Platform.for_value(address), address) or "")
 
 
-def event_projection(event: ParsedEvent) -> dict[str, Any]:
-    """Return the JSON comparison shape a remote event and a stored row share.
+def attendee_identity(handle: Any | None, address: str) -> str:
+    """Return what an attendee compares on: the handle it lands on, or its address before that handle exists.
 
-    Attendees compare as a set of ``(address, role, response)`` on the normalized
-    address; their display names belong to the handle. The series key stays out of
-    it: an instance's own key already names its series.
+    ``handle`` is the canonical handle ``HandleManager.find_identity`` finds for the
+    address (``CalendarEventManager.attendee_handles``). A stored attendee row
+    compares on its handle the same way, so a merged pair of handles is one
+    attendee on both sides.
     """
+
+    return str(handle.pk) if handle is not None else f"new:{normalized_address(address)}"
+
+
+def _columns(event: ParsedEvent) -> dict[str, Any]:
+    """Return the event's projected columns as JSON: moments as UTC ISO-8601 text."""
 
     def value(name: str) -> Any:
         found = getattr(event, name)
         return found.astimezone(UTC).isoformat() if name in _MOMENTS and found is not None else found
 
-    return {
-        **{name: value(name) for name in _PROJECTED},
-        "attendees": sorted(
-            [normalized_address(attendee.address), attendee.role, attendee.response] for attendee in event.attendees
-        ),
-    }
+    return {name: value(name) for name in _PROJECTED}
+
+
+def event_projection(event: ParsedEvent, identities: Mapping[str, str] | None = None) -> dict[str, Any]:
+    """Return the JSON comparison shape a remote event and a stored row share.
+
+    Attendees compare as a set of ``(identity, role, response)``
+    (:func:`attendee_identity`): ``identities`` maps each remote address to its
+    identity, and a stored attendee's address already is one. Of two addresses on
+    one handle the first is kept, as ingest keeps it. Display names belong to the
+    handle. The series key stays out of it: an instance's own key already names
+    its series.
+    """
+
+    attendees: dict[str, list[str]] = {}
+    for attendee in event.attendees:
+        identity = identities[attendee.address] if identities is not None else attendee.address
+        attendees.setdefault(identity, [identity, attendee.role, attendee.response])
+    return {**_columns(event), "attendees": sorted(attendees.values())}
 
 
 def event_payload(event: ParsedEvent) -> dict[str, Any]:
     """Return the JSON source payload a stream retains for one remote event.
 
-    Its projection, its series key, and its attendees as the source gave them, the
-    addresses ingest lands on handles.
+    Its projected columns, its series key, and its attendees as the source gave
+    them: the addresses ingest lands on handles. It names no handle, so its hash
+    holds while handles merge.
     """
 
     return {
-        "event": event_projection(event),
+        "event": _columns(event),
         "series": event.series,
         "attendees": [
             [attendee.address, attendee.role, attendee.response, attendee.display_name] for attendee in event.attendees
@@ -226,11 +248,26 @@ def event_from_payload(payload: Mapping[str, Any]) -> ParsedEvent:
 
 @dataclass
 class _EventsPage:
-    """One events page's locked work: its calendar, then the rows its links name, by external key."""
+    """One events page's locked work: its calendar, the rows its links name, and its attendees' handles.
+
+    Rows and links are by external key; handles by the address the source gave.
+    """
 
     calendar: Any
     rows: dict[str, Any] = field(default_factory=dict)
     links: dict[str, Any] = field(default_factory=dict)
+    handles: dict[str, Any] = field(default_factory=dict)
+
+
+def _attendee_addresses(payloads: Iterable[Mapping[str, Any] | None]) -> set[str]:
+    """Return the attendee addresses the mappable event payloads name."""
+
+    return {
+        attendee[0]
+        for payload in payloads
+        if payload is not None and "error" not in payload
+        for attendee in payload.get("attendees", ())
+    }
 
 
 class CalendarBackend(BridgeImpl, HttpClientMixin):
@@ -373,12 +410,18 @@ class CalendarBackend(BridgeImpl, HttpClientMixin):
         """Bind observed payloads (``None`` for a removed key) to their linked rows and projections.
 
         A payload carrying ``error`` is a remote record the backend could not map;
-        the driver quarantines it under its key.
+        the driver quarantines it under its key. An event's remote projection
+        compares its attendees on the handles they land on, resolved once for the
+        whole batch.
         """
 
         calendars = stream.key == CALENDARS_STREAM
         states = self._calendar_states(stream, payloads) if calendars else self._local_states(stream, payloads)
-        mapped = "calendar" if calendars else "event"
+        identities: dict[str, str] = {}
+        if not calendars:
+            addresses = _attendee_addresses(payloads.values())
+            handles = apps.get_model("calendar", "CalendarEvent").objects.attendee_handles(addresses)
+            identities = {address: attendee_identity(handles.get(address), address) for address in addresses}
         records = []
         for key, payload in payloads.items():
             target, projection = states[key]
@@ -396,7 +439,11 @@ class CalendarBackend(BridgeImpl, HttpClientMixin):
                         key,
                         dict(payload),
                         canonical_json_sha256(payload),
-                        mapped_payload=payload[mapped],
+                        mapped_payload=(
+                            payload["calendar"]
+                            if calendars
+                            else event_projection(event_from_payload(payload), identities)
+                        ),
                         target=target,
                         projection=projection,
                     )
@@ -471,12 +518,16 @@ class CalendarBackend(BridgeImpl, HttpClientMixin):
     def prepare_page(self, stream: Any, page: Any) -> None:
         """Lock an events page's work once, in the one lock order: its calendar, then the rows its links name.
 
-        The rows include the series masters the page's instances name, so the page
-        resolves its calendar and every target once and projects from the rows in hand.
+        The rows include the series masters the page's instances name, and the
+        page's attendee handles resolve once, so the page resolves its calendar,
+        every target and every handle once and projects from the rows in hand. A
+        source unsubscribed meanwhile refuses the page under that lock
+        (:meth:`_require_subscribed`).
         """
 
         self._page = None
         if stream.key == CALENDARS_STREAM:
+            self._require_subscribed()
             return
         keys = {record.external_key for record in page.records}
         keys.update(
@@ -485,11 +536,13 @@ class CalendarBackend(BridgeImpl, HttpClientMixin):
             if not record.tombstone and record.failure is None and record.source_payload.get("series")
         )
         calendar = self.get_calendar(stream).lock_subject()
+        self._require_subscribed()
         events = apps.get_model("calendar", "CalendarEvent").objects
         self._page = _EventsPage(
             calendar,
             events.linked(stream, keys, lock=True),
             {link.external_key: link for link in stream.links.filter(external_key__in=keys)},
+            events.attendee_handles(_attendee_addresses(record.source_payload for record in page.records)),
         )
 
     def apply_record(self, stream: Any, record: RecordChange) -> ApplyResult:
@@ -528,6 +581,7 @@ class CalendarBackend(BridgeImpl, HttpClientMixin):
             link=link,
             target=target,
             series=series,
+            handles=page.handles,
             created_by_id=self.bridge.owner_id,
         )
         page.rows[key] = event
@@ -551,12 +605,24 @@ class CalendarBackend(BridgeImpl, HttpClientMixin):
         if not gone or calendar is None:
             return
         calendar.lock_subject()
+        self._require_subscribed()
         rows = apps.get_model("calendar", "CalendarEvent").objects.linked(
             stream, [link.external_key for link in gone], lock=True
         )
         for link in gone:
             if (event := rows.get(link.external_key)) is not None:
                 event.withdraw(link)
+
+    def _require_subscribed(self) -> None:
+        """Refuse writing for a source unsubscribed since its sync started.
+
+        Read under the calendar's lock, which the purge takes first, so a page
+        already in flight never re-creates what the purge removed.
+        """
+
+        rows = type(self.bridge)._base_manager.filter(pk=self.bridge.pk)
+        if rows.values_list("lifecycle", flat=True).first() in (None, IntegrationLifecycle.DISCONNECTED):
+            raise IntegrationError("This calendar source is unsubscribed.")
 
     def _projection(self, event: Any | None) -> dict[str, Any] | None:
         """Return the stored projection of the event in hand, or ``None`` once it is gone."""

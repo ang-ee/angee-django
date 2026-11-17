@@ -320,6 +320,24 @@ def test_recurrence_refuses_more_occurrences_than_its_limit_and_never_truncates(
         Recurrence("FREQ=HOURLY").occurrences(_utc(2026, 1, 1), _utc(2026, 1, 1), _utc(2032, 1, 1))
 
 
+def test_a_floating_until_past_the_last_utc_instant_ends_with_the_representable_range() -> None:
+    forever = Recurrence("FREQ=YEARLY;UNTIL=99991231T235959")
+
+    forever.validate()
+    last = forever.get_last_occurrence(_utc(2026, 1, 5, 14), zone="America/New_York")
+
+    assert last == datetime(9999, 1, 5, 14, tzinfo=UTC)
+
+
+def test_an_expansion_past_the_representable_dates_is_refused_never_overflowed() -> None:
+    end_of_time = datetime.max.replace(tzinfo=UTC)
+
+    with pytest.raises(ValidationError) as refused:
+        Recurrence("FREQ=DAILY").occurrences(_utc(2026, 1, 1), end_of_time, end_of_time, zone="Pacific/Kiritimati")
+
+    assert refused.value.code == "out_of_range"
+
+
 @pytest.mark.parametrize(
     ("rule", "refused"),
     [

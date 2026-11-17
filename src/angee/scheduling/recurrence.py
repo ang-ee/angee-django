@@ -16,8 +16,9 @@ stack's owner of RFC-5545. The timezone/window contract is documented on
 from __future__ import annotations
 
 import re
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from datetime import UTC, datetime
+from functools import wraps
 from itertools import islice, takewhile
 
 from dateutil.parser import parse
@@ -34,6 +35,26 @@ def _rules(compiled: rrule | rruleset) -> list[rrule]:
     """The rules a parsed recurrence holds: itself, or every rule of a set (dateutil keeps them in ``_rrule``)."""
 
     return list(compiled._rrule) if isinstance(compiled, rruleset) else [compiled]
+
+
+def _in_range[**P, R](method: Callable[P, R]) -> Callable[P, R]:
+    """Refuse an expansion that reaches past the representable dates as a ``ValidationError``, never an overflow.
+
+    A moment near year 1 or 9999 can leave Python's range once moved into a zone;
+    the caller (a form, a sync's record) then refuses that one rule instead of
+    failing whatever it was part of.
+    """
+
+    @wraps(method)
+    def bounded(*args: P.args, **kwargs: P.kwargs) -> R:
+        try:
+            return method(*args, **kwargs)
+        except OverflowError as exc:
+            raise ValidationError(
+                "This recurrence reaches past the last representable date.", code="out_of_range"
+            ) from exc
+
+    return bounded
 
 
 def _capped(moments: Iterable[datetime]) -> list[datetime]:
@@ -93,7 +114,7 @@ class Recurrence:
             return
         try:
             rules = _rules(self._compile(_VALIDATION_ANCHOR))
-        except (ValueError, TypeError) as exc:
+        except (ValueError, TypeError, OverflowError) as exc:
             raise ValidationError(
                 "Enter a valid RFC-5545 recurrence rule (RRULE).",
                 code="invalid",
@@ -107,6 +128,7 @@ class Recurrence:
                 f"A rule repeats at most {self.OCCURRENCE_LIMIT} times.", code="too_many_occurrences"
             )
 
+    @_in_range
     def occurrences(
         self,
         dtstart: datetime,
@@ -130,7 +152,8 @@ class Recurrence:
         **half-open** — ``window_start`` is included, ``window_end`` excluded. An
         empty rule yields the single ``dtstart`` when it falls in the window. A
         window holding more than :attr:`OCCURRENCE_LIMIT` occurrences is refused
-        with a ``ValidationError``, never truncated.
+        with a ``ValidationError``, never truncated, as is one that reaches past the
+        representable dates.
         """
 
         require_aware(dtstart=dtstart, window_start=window_start, window_end=window_end)
@@ -149,6 +172,7 @@ class Recurrence:
             if after <= moment < before
         ]
 
+    @_in_range
     def get_occurrence_after(self, dtstart: datetime, moment: datetime, *, zone: str = "") -> datetime | None:
         """Return the first occurrence strictly after ``moment`` as aware UTC, or ``None`` once the rule ends.
 
@@ -168,6 +192,7 @@ class Recurrence:
             following = self._compile(anchor).after(moment.astimezone(tz), inc=False)
         return following.astimezone(UTC) if following is not None else None
 
+    @_in_range
     def get_last_occurrence(self, dtstart: datetime, *, zone: str = "") -> datetime | None:
         """Return the series' last occurrence as aware UTC, or ``None`` when the rule never ends.
 
@@ -190,15 +215,22 @@ class Recurrence:
         return series[-1].astimezone(UTC) if series else None
 
     def _compile(self, anchor: datetime) -> rrule | rruleset:
-        """Parse the rule anchored at an aware local ``anchor`` (a dateutil rrule/rruleset)."""
+        """Parse the rule anchored at an aware local ``anchor`` (a dateutil rrule/rruleset).
+
+        A floating ``UNTIL`` past the last representable UTC instant (9999-12-31 in
+        a zone behind UTC) ends with the representable range.
+        """
 
         def local_until(match: re.Match[str]) -> str:
             # Dateutil remains the date grammar owner; adapt only the legacy
             # floating cutoff to the aware DTSTART contract it requires.
             until = parse(match[1], default=anchor.replace(tzinfo=None, hour=0, minute=0, second=0))
             if until.tzinfo is None:
-                until = until.replace(tzinfo=anchor.tzinfo)
-                return "UNTIL=" + until.astimezone(UTC).strftime("%Y%m%dT%H%M%SZ")
+                try:
+                    bound = until.replace(tzinfo=anchor.tzinfo).astimezone(UTC)
+                except OverflowError:
+                    bound = datetime.max.replace(tzinfo=UTC)
+                return "UNTIL=" + bound.strftime("%Y%m%dT%H%M%SZ")
             return match[0]
 
         rule = re.sub(r"(?im)(?<![A-Z])UNTIL=([^;\s]+)", local_until, self.rule)
