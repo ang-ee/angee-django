@@ -21,6 +21,9 @@ import {
   type TaskActionRow,
 } from "./task-actions";
 
+/** Ordinary task collections leave a template project's tasks out; a template's own tabs scope by project. */
+export const TASKS_OUTSIDE_TEMPLATES = { in_template: { exact: false } } as const;
+
 /** Task collection columns, facets, grouping and lifecycle row actions. */
 export function useTaskListDeclaration(options: Partial<Omit<ListProps<TaskActionRow>, "resource">> = {}): React.ReactElement {
   const t = useProjectsT();
@@ -33,6 +36,7 @@ export function useTaskListDeclaration(options: Partial<Omit<ListProps<TaskActio
       order={{ sort_order: "ASC" }}
       rowActions={rowActions}
       fields={["status", ...TASK_ACTION_FIELDS, ...(fields ?? [])]}
+      baseFilter={TASKS_OUTSIDE_TEMPLATES}
       {...listOptions}
     >
       {children ?? <><Facet field="project" label={t("common.project")} />
