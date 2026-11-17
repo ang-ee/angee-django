@@ -79,8 +79,10 @@ workflow step's) belongs to that asker, so supersede refuses it. Escalation is a
 supersede naming the escalation's assignees; no question changes in place.
 
 A request may carry `due_at` and `remind_after`, aware instants the asker supplies;
-decisions does no date arithmetic on them and they stay fixed once asked. The
-resource's `is_overdue` filter selects open questions past `due_at`, derived when read.
+decisions does no date arithmetic on them and they stay fixed once asked. Overdue (open,
+with a `due_at` that has passed; an undated question never is) has one owner, derived
+when read: `Decision.objects.overdue()`, the `is_overdue` property, and the resource's
+`is_overdue` output field and filter. Consumers read it rather than compare `due_at`.
 `decision.remind()` stamps `reminded_at` once as decisions' own system work, then sends
 `decision_reminder_due` inside the transaction but outside that elevation, and returns
 whether it did; the revision does not move. Receivers hold no authority from decisions:

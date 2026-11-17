@@ -94,6 +94,7 @@ class DecisionType(AngeeNode):
     updated_at: auto
     display_name: str = strawberry_django.field(resolver=AngeeNode.display_name, only=["kind"])
     is_open: bool = strawberry_django.field(only=["verdict"])
+    is_overdue: bool = strawberry_django.field(only=["verdict", "due_at"])
     permissions = permissions_field(("act",))
 
     @strawberry_django.field(only=["answered_for"])

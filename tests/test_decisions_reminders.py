@@ -193,18 +193,40 @@ def test_the_sweep_leaves_a_workflow_held_question_to_its_step(execution, regist
     assert sweep(timezone.now()) == 0 and reminders == []
 
 
-def test_overdue_is_derived_when_read(people):
+@pytest.fixture
+def dated(people):
     requester, reviewer, subject = people
     now = timezone.now()
-    overdue = Decision.objects.ask(request(subject, reviewer, due_at=now - timedelta(minutes=1)), actor=requester)
-    Decision.objects.ask(request(subject, reviewer, due_at=now + timedelta(days=1)), actor=requester)
-    Decision.objects.ask(request(subject, reviewer), actor=requester)
-    answered = Decision.objects.ask(request(subject, reviewer, due_at=now - timedelta(days=1)), actor=requester)
-    answered.decide(actor=reviewer, chosen=["confirm"])
-    schema = addon_schema(decision_schema.schemas, "console")
-    rows = result_data(
-        execute_schema(
-            schema, "{ decisions(where: {is_overdue: {_eq: true}}) { id due_at reminded_at } }", user=reviewer
+    questions = {
+        name: Decision.objects.ask(request(subject, reviewer, **instants), actor=requester)
+        for name, instants in (
+            ("overdue", {"due_at": now - timedelta(minutes=1)}),
+            ("upcoming", {"due_at": now + timedelta(days=1)}),
+            ("undated", {}),
+            ("answered", {"due_at": now - timedelta(days=1)}),
         )
-    )["decisions"]
-    assert [row["id"] for row in rows] == [overdue.sqid] and rows[0]["due_at"]
+    }
+    questions["answered"].decide(actor=reviewer, chosen=["confirm"])
+    return reviewer, {name: Decision.system_queryset().get(pk=question.pk) for name, question in questions.items()}
+
+
+def test_overdue_has_one_rule_for_rows_instances_and_readers(dated):
+    reviewer, questions = dated
+    overdue = {name for name, question in questions.items() if question.is_overdue}
+    assert overdue == {"overdue"}
+    assert set(Decision.system_queryset().overdue().values_list("pk", flat=True)) == {questions["overdue"].pk}
+    schema = addon_schema(decision_schema.schemas, "console")
+    rows = result_data(execute_schema(schema, "{ decisions { id is_overdue } }", user=reviewer))["decisions"]
+    assert {row["id"]: row["is_overdue"] for row in rows} == {
+        question.sqid: name in overdue for name, question in questions.items()
+    }
+
+
+@pytest.mark.parametrize("flag", [True, False])
+def test_the_overdue_filter_partitions_every_question(dated, flag):
+    reviewer, questions = dated
+    schema = addon_schema(decision_schema.schemas, "console")
+    document = "query($flag: Boolean!) { decisions(where: {is_overdue: {_eq: $flag}}) { id } }"
+    rows = result_data(execute_schema(schema, document, {"flag": flag}, user=reviewer))["decisions"]
+    expected = {"overdue"} if flag else {"upcoming", "undated", "answered"}
+    assert {row["id"] for row in rows} == {questions[name].sqid for name in expected}

@@ -37,8 +37,13 @@ class DecisionQuerySet[T: Decision](AppendOnlyQuerySet[T], AngeeQuerySet[T]):
         return self.filter(verdict__isnull=True)
 
     def overdue_expression(self) -> ExpressionWrapper:
-        """Open past its due instant; derived when read, never stored."""
-        return ExpressionWrapper(Q(verdict__isnull=True, due_at__lt=Now()), output_field=BooleanField())
+        """Open with a due instant that has passed; derived when read, never stored. False when undated."""
+        return ExpressionWrapper(
+            Q(verdict__isnull=True, due_at__isnull=False, due_at__lt=Now()), output_field=BooleanField(),
+        )
+
+    def overdue(self) -> Any:
+        return self.filter(self.overdue_expression())
 
     def waiting_on(self, actor: Any) -> Any:
         """Open questions this actor may act on, assigned to them or unassigned."""

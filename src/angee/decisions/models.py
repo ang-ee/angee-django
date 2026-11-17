@@ -9,6 +9,7 @@ from django.core.exceptions import ObjectDoesNotExist, PermissionDenied, Validat
 from django.db import models, transaction
 from django.db.models import F
 from django.db.models.functions import Now
+from django.utils import timezone
 from django.utils.text import capfirst
 from pydantic import JsonValue, TypeAdapter
 from rebac import actor_context, current_actor, system_context, to_subject_ref
@@ -116,6 +117,11 @@ class Decision(OptimisticLockMixin, AppendOnlyModel, AngeeDataModel, concrete=Tr
     def is_open(self) -> bool:
         """No verdict means the question is still open."""
         return self.verdict is None
+
+    @property
+    def is_overdue(self) -> bool:
+        """Open with a due instant that has passed, as ``DecisionQuerySet.overdue`` selects."""
+        return self.is_open and self.due_at is not None and self.due_at < timezone.now()
 
     @property
     def kind_label(self) -> str:
