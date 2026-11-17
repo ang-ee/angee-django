@@ -56,6 +56,7 @@ const config = {
       alias: {
         ...(vite.resolve?.alias ?? {}),
         "@angee/gql": join(STACK_ROOT, "runtime/gql"),
+        "virtual:angee-storybook-host": join(STACK_ROOT, "runtime/web/app.ts"),
         react: join(ROOT, "node_modules/react"),
         "react-dom": join(ROOT, "node_modules/react-dom"),
         "react-dom/client": join(ROOT, "node_modules/react-dom/client"),

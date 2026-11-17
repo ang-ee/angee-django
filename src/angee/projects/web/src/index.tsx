@@ -3,6 +3,7 @@ import { defineBaseAddon, resourcePageRoutes, type MenuDeclarations } from "@ang
 import { lazyRouteComponent } from "@tanstack/react-router";
 import { Briefcase, ClipboardCheck, Kanban, ListChecks } from "lucide-react";
 
+import { projectForm, taskForm } from "./record-forms";
 import { enProjectsMessages } from "./i18n";
 import { PROJECT_MODEL, TASK_MODEL } from "./resources";
 import { ProjectPhaseControl } from "./project-phase";
@@ -64,6 +65,7 @@ const projects = defineBaseAddon({
   id: "projects",
   routes: projectsRoutes,
   menus: projectsMenu,
+  forms: { [PROJECT_MODEL]: projectForm, [TASK_MODEL]: taskForm },
   i18n: { projects: enProjectsMessages },
   widgets: { "projects.phase": { read: ProjectPhaseControl, edit: ProjectPhaseControl } },
   containers: {

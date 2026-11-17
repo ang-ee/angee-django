@@ -21,7 +21,7 @@ function WorkSectionLabel(): React.ReactElement {
 
 /** Work-owned donor fields contributed into the projects-owned task FormView. */
 export const taskWorkFormSection = (
-  <Group label={<WorkSectionLabel />} columns={2}>
+  <Group label={<WorkSectionLabel />} columns={2} pane="work">
     <Field name="queue" readOnly />
     <Field name="stage" readOnly />
     <Field name="cycle" readOnly />

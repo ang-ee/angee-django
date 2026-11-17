@@ -118,11 +118,15 @@ A base workflow may expose named insertion points in its definition, for example
 `points: {after_review: {after: review}}`. A consumer addon contributes a graph
 fragment from an install resource declared with kind
 `workflows.workflowextension`; each row names `extends`, `at`, `nodes`, optional
-`edges` or `bindings`, and an optional integer `sequence`. Provisioning orders
+`edges` or `bindings`, and an optional integer `sequence`. A fragment may declare
+`points` over its own nodes; a fragment composed after it splices there with `at`,
+so a dependent addon's phase runs inside another addon's graph rather than only
+at the base's boundaries. Provisioning orders
 fragments by composed addon order and then `sequence`, publishes the composed
 version, and leaves the base draft unchanged. The base resource fingerprint
-includes the contributions, so changing either side republishes. Unknown points
-and duplicate node keys stop the load. [`Definition`](../src/angee/workflows/definition.py) owns
+includes the contributions, so changing either side republishes. Unknown points,
+a point used before its declaring fragment, duplicate points and duplicate node
+keys stop the load. [`Definition`](../src/angee/workflows/definition.py) owns
 the graph splice and [`WorkflowExtensionResourceKind`](../src/angee/workflows/resources.py)
 owns the composer-time declaration seam; serving code has no extension registry.
 

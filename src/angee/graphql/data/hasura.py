@@ -9,6 +9,7 @@ import operator
 import types as _types
 from collections.abc import Awaitable, Callable, Hashable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
+from datetime import datetime
 from functools import cache, partial, reduce
 from typing import TYPE_CHECKING, Any, cast
 
@@ -1431,7 +1432,8 @@ def _drill_partition(
             span = getattr(key, cast(str, drill.range_key))
             start, end = span.from_, span.to
             if isinstance(field, models.DateField) and not isinstance(field, models.DateTimeField):
-                start, end = start.date(), end.date()
+                # A date-only column compares dates; a span may already carry them.
+                start, end = (value.date() if isinstance(value, datetime) else value for value in (start, end))
             if (start, end) not in spans:
                 spans.append((start, end))
             values.append(spans.index((start, end)))

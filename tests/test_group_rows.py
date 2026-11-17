@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from typing import Any
 
 import pytest
@@ -37,6 +37,20 @@ class DatedGroupThing(AngeeDataModel):
         """Django model options for the test model."""
 
         app_label = "tests"
+
+class DayGroupThing(AngeeDataModel):
+    """A row grouped by a date-only column, whose week groups carry rows by their range drill."""
+
+    sqid_prefix = "dyg_"
+
+    name = models.CharField(max_length=32)
+    happened_on = models.DateField()
+
+    class Meta:
+        """Django model options for the test model."""
+
+        app_label = "tests"
+
 
 class StatusGroupThing(AngeeDataModel):
     """A row with an enum column beside plain and relation axes, whose groups carry rows."""
@@ -315,6 +329,47 @@ def test_date_extraction_groups_carry_rows_by_their_range_drill() -> None:
                 }
             """))
     assert sorted([row["name"] for row in group["rows"]] for group in data["dated_group_things_groups"]) == [
+        ["a", "b"], ["c"],
+    ]
+
+
+@pytest.mark.django_db(transaction=True)
+def test_date_only_week_groups_carry_rows_by_their_range_drill() -> None:
+    """A DateField's week span arrives as dates; the drill compares it without converting."""
+
+    @strawberry_django.type(DayGroupThing)
+    class DayGroupThingType(AngeeNode):
+        name: auto
+
+    resource = hasura_model_resource(
+        DayGroupThingType,
+        model=DayGroupThing,
+        name="day_group_things",
+        filterable=["id", "name", "happened_on"],
+        sortable=["name"],
+        aggregatable=["id"],
+        groupable=["happened_on"],
+        get_queryset=lambda info: DayGroupThing.objects.all(),
+        insert=False,
+        update=False,
+        delete=False,
+    )
+    schema = _schema(resource, DayGroupThingType)
+    with model_tables((DayGroupThing,)):
+        with system_context(reason="test.group_rows.date_week.seed"):
+            for name, day in (("b", 2), ("a", 3), ("c", 10)):
+                DayGroupThing.objects.create(name=name, happened_on=date(2026, 3, day))
+
+        with system_context(reason="test.group_rows.date_week.read"):
+            data = result_data(execute_schema(schema, """
+                query {
+                  day_group_things_groups(group_by: [{field: HAPPENED_ON, granularity: WEEK}]) {
+                    key { happened_on_week_range { from to } }
+                    rows(limit: 5, order_by: [{name: asc}]) { name }
+                  }
+                }
+            """))
+    assert sorted([row["name"] for row in group["rows"]] for group in data["day_group_things_groups"]) == [
         ["a", "b"], ["c"],
     ]
 

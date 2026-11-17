@@ -130,11 +130,11 @@ def test_inverse_history_scope_covers_mti_pairs_and_generated_statements() -> No
         person.save(update_fields=["first_met_note"])
     with actor_context(owner), open_changeset(fresh=True, change_reason="Pair statement"):
         pair = person.same_as.for_pair(person, other).with_actor(owner)
-        pair.confirm(aspect="same_as", values={})
+        pair.confirm_statement(aspect="same_as", values={})
     with actor_context(owner), open_changeset(fresh=True, change_reason="Pair statement only"):
-        pair.confirm(aspect="same_as", values={}, confidence=0.75)
+        pair.confirm_statement(aspect="same_as", values={}, confidence=0.75)
     with actor_context(owner), open_changeset(fresh=True, change_reason="Statement only"):
-        person.with_actor(owner).confirm(aspect="identity", values={"display_name": "Ada"})
+        person.with_actor(owner).confirm_statement(aspect="identity", values={"display_name": "Ada"})
     changesets = apps.get_model("provenance", "Changeset").objects
     with system_context(reason="test.timeline.inverse_relations"):
         for detail, records in (

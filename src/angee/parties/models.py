@@ -320,7 +320,7 @@ class Party(
                 if declaration.members or not declaration.admits_person or decided.isdisjoint(declaration.fields):
                     continue
                 values = {name: kept[name] if name in kept else getattr(survivor, name) for name in declaration.fields}
-                survivor.confirm(aspect=aspect, values=values)
+                survivor.confirm_statement(aspect=aspect, values=values)
                 decided.difference_update(declaration.fields)
         edits = [name for name in sorted(decided.intersection(overrides)) if getattr(survivor, name) != kept[name]]
         for name in edits:
@@ -510,7 +510,8 @@ class Party(
         super().merge_fields(merged, **options)
         for row in merged:
             self.keep_merge_fields(row, field_overrides)
-            self.same_as.for_pair(self, row).with_actor(instance_actor(self)).confirm(aspect="same_as", values={})
+            pair = self.same_as.for_pair(self, row).with_actor(instance_actor(self))
+            pair.confirm_statement(aspect="same_as", values={})
 
 
 class Person(Composable, metaclass=RebacModelBase, inherits="parties.Party"):

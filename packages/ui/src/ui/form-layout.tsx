@@ -120,7 +120,11 @@ export const FormGrid = React.forwardRef<HTMLDivElement, FormGridProps>(
         className={styles.grid({ className })}
         style={{
           ...gridAreaStyle(areas),
-          ...(columns === "adaptiveTwo" ? { gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 22rem), 1fr))" } : undefined),
+          // Follow the space available in sheets and drawers, not the viewport.
+          // Keep fields readable while limiting the layout to two columns.
+          ...(columns === "adaptiveTwo" ? {
+            gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, max(14rem, calc(50% - 1rem))), 1fr))",
+          } : undefined),
           ...style,
         }}
         {...props}

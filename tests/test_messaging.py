@@ -1806,7 +1806,7 @@ def test_claimed_sender_proposal_accumulates_evidence_without_demoting_confirmat
             )
             for index in range(1, 22)
         ]
-        confirmed = party.with_actor(owner).confirm(aspect="handle", handle=handle, values={})
+        confirmed = party.with_actor(owner).confirm_statement(aspect="handle", handle=handle, values={})
 
     for message in messages:
         Party.objects.propose_claimed_handle_as_system(

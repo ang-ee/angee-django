@@ -10,7 +10,8 @@
   "private": true,
   "type": "module",
   "exports": {
-    "./testing": "./src/stories/runtime-fixtures.tsx"
+    "./testing": "./src/stories/runtime-fixtures.tsx",
+    "./host": "./src/host.ts"
   },
   "scripts": {
     "dev": "NODE_OPTIONS=\"${NODE_OPTIONS:+$NODE_OPTIONS }--disable-warning=DEP0205\" storybook dev -p \"${STORYBOOK_PORT:-6006}\"",
@@ -21,6 +22,7 @@
     "catalog:check": "node --test scripts/catalog.test.mjs"
   },
   "dependencies": {
+    "@date-fns/tz": "^1.5.0",
     "@angee/app": "workspace:*",
     "@angee/metadata": "workspace:*",
     "@angee/refine": "workspace:*",
@@ -37,7 +39,8 @@
     "nuqs": "^2.10.1",
     "react": "^19.2.7",
     "react-dom": "^19.2.7",
-    "react-hook-form": "^7.81.0"
+    "react-hook-form": "^7.81.0",
+    "date-fns": "^4.1.0"
   },
   "devDependencies": {
     "@storybook/react-vite": "^10.4.6",

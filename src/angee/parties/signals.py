@@ -22,12 +22,12 @@ def connect() -> None:
     post_save.connect(_follow_user_name, sender=get_user_model(), dispatch_uid="parties.user_name")
 
 
-def _link_person(sender: Any, instance: Any, **kwargs: Any) -> None:
-    """Create the account's person in IAM's transaction, including on replay."""
+def _link_person(sender: Any, instance: Any, identity: Any = None, **kwargs: Any) -> None:
+    """Link the account's person in IAM's transaction, including on replay: the ingress's ``identity`` or a new one."""
 
     del sender, kwargs
     with system_context(reason="parties.person_created"):
-        apps.get_model("parties", "Party").objects.for_user(instance)
+        apps.get_model("parties", "Party").objects.for_user(instance, adopt=identity)
 
 
 def _follow_user_name(
