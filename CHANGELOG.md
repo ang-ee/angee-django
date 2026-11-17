@@ -45,7 +45,38 @@ live in code docstrings.
   A consumer stores it in a `DueRuleField` beside its own date or instant column;
   the pure `DueRule.resolve` returns a `Due` whose point and canonical JSON basis
   the consumer writes, and `Due.get_status` is computed on read and never stored.
-  No consumer composes it yet.
+  `projects` tasks and milestones compose it (below).
+- `projects` templates: a project with `is_template` is copied by
+  `Project.objects.create_from_template(template, idempotency_key=, values=, task=,
+  anchors=, role_mapping=)` (idempotent per actor and key; template read and project
+  create). The copy carries the project's tags, its phases through
+  `Milestone.setup_template_values`, its open tasks and subtasks with their tags and
+  relations, and every due rule; dates, statements, grants, participants, bindings,
+  links and files stay behind. `Task.assignee_role` names a consumer's role, which
+  `role_mapping` maps to a person. `Project.created_from_template` records the
+  provenance. Ordinary lists, boards, attention and overdue phases leave templates
+  out; a Templates page lists them. GraphQL: `create_project_from_template`, the
+  project resource's `is_template` and the task resource's `in_template` filter.
+  Contributors extend `template_copy_values()` on Project, Milestone and Task and
+  `validate_template()` on Project.
+- `projects` due dates: `Task` and `Milestone` compose `RuleDatedMixin` (`due_rule`,
+  `due_basis`), resolved into `Task.due_date` and the new aware `Task.due_at`, and
+  into `Milestone.target_date`, against the project's due anchors (`created` and the
+  named `Project.due_anchors` that `set_due_anchor` records). A hand or stated date
+  wins over the rule; `reset_due_to_rule` hands it back. Completing a task whose rule
+  repeats creates its next task once (`Task.repeated_from`). GraphQL:
+  `set_project_due_anchor`, `reset_task_due_to_rule`, `reset_milestone_due_to_rule`,
+  and `due_rule`, `due_basis`, `due_status` on tasks and milestones.
+  `MilestoneTemplate` takes a `due_rule`.
+- `projects.Task.recurrence` is removed: a task's repetition is its due rule's
+  `repeat`. Projects author
+  [`task_recurrence_due_rule`](src/angee/projects/compose_migrations/projects/task_recurrence_due_rule.py)
+  as their next `projects` migration (it adds the task's `due_at`, `due_rule` and
+  `due_basis`, moves each recurrence into "the date set by hand, repeating", with a
+  `COUNT` becoming `UNTIL`, and removes the column), then run `makemigrations` for
+  the release's other columns: `Project.is_template`, `created_from_template`,
+  `due_anchors`; `Milestone.due_rule`, `due_basis`; `Task.assignee_role`,
+  `repeated_from`.
 - `angee.scheduling.fields.TimeZoneField` stores an IANA zone name and
   `angee.scheduling.zones.ZoneName` is the same rule for Pydantic inputs; a blank
   zone takes its context's zone and finally the project `TIME_ZONE`, which

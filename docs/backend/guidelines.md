@@ -1239,6 +1239,16 @@ exception closes the rows as failed. Tests inherit a boundary from the root
   client-key or fingerprint columns. A keyed operation opens a fresh changeset
   inside its transaction and claims before writing; nested keyed operations
   therefore receive distinct claim rows without leaving the enclosing boundary.
+- **A template is a flagged row plus a copy verb, never a parallel model.** The
+  row type carries `is_template` (as `projects.Project` and `agents.Agent` do),
+  ordinary lists filter it out, and an idempotent manager verb creates a copy
+  ([`ProjectManager.create_from_template`](../../src/angee/projects/models.py),
+  [`VaultManager.create_from`](../../src/angee/knowledge/models.py)). Each owner
+  names what its copy carries through a cooperative hook (`template_copy_values`)
+  and inserts through its own save, so contributors' insert lifecycles run;
+  grants, statements, bindings and absolute dates never copy. The copied rows
+  are the vocabulary the copy was born with: later template edits change only
+  later copies.
 - **Ownership:** `owner` has one spelling. A grant root composes `OwnerMixin`,
   so `owner` is transferable access in a column and `created_by` remains
   attribution. Its Zed backs `owner` with that column and declares its transfer
@@ -1499,6 +1509,12 @@ retains its native routing contract.
 - **The subject owns its anchors.** The model that learns a date (a project's
   start, a completion, a reading) supplies it by name; scheduling owns no anchors,
   counters or rates.
+- **A hand or stated date wins over the rule; the basis keeps the rule's value.**
+  A row follows its rule while its date equals the basis point, so anchor moves
+  and rule edits move it; a person's edit or a source's stated date that differs
+  stays until a reset verb hands the date back
+  ([`RuleDatedMixin`](../../src/angee/projects/models.py)). No flag records the
+  source: the row's own columns answer it.
 - **Status is computed on read, never stored.** `Due.get_status(now=…, counters=…)`
   reads the stored basis; a stored status goes stale as time passes. A set-level
   read, such as an overdue list, may compare the stored date column in a queryset

@@ -9,7 +9,9 @@ import {
   ListView,
   type GanttViewSpec,
   useEnumOptions,
+  useActionOutcomeMutation,
   useActionResultMutation,
+  useActionResultRun,
   useRecordAction,
   defineRowAction,
   type StringIdRow,
@@ -32,7 +34,7 @@ import { TaskManagementTab } from "./task-declarations";
 
 export interface ProjectFormSelection {
   groups?: readonly ("planning" | "details")[];
-  verbs?: readonly ("pause" | "resume" | "complete" | "drop")[];
+  verbs?: readonly ("pause" | "resume" | "complete" | "drop" | "createFromTemplate")[];
   contextLine?: FormProps["contextLine"];
   /** Compact read-only extras the host adds to the record header (a card in `RecordHeader.extra`). */
   headerExtras?: FormProps["headerExtras"];
@@ -66,26 +68,37 @@ export function useProjectFormDeclaration(
   const resumeProject = useRecordAction((id, context) => resume(id, { expected_revision: context.record?.revision }));
   const completeProject = useRecordAction((id, context) => complete(id, { expected_revision: context.record?.revision }));
   const dropProject = useRecordAction((id, context) => drop(id, { expected_revision: context.record?.revision }));
+  const [createFromTemplate] = useActionOutcomeMutation("create_project_from_template", {
+    invalidateModels: [PROJECT_MODEL],
+  });
+  const settleCreation = useActionResultRun({ linkTo: PROJECT_MODEL });
+  const createProject = useRecordAction(async (id) => {
+    await settleCreation(() => createFromTemplate(id, { idempotency_key: crypto.randomUUID() }));
+  });
+  const verbs = selection.verbs ?? ["pause", "resume", "complete", "drop", "createFromTemplate"];
   const standardActions = <>
-    {(selection.verbs ?? ["pause", "resume", "complete", "drop"]).includes("pause") ? <Action
+    {verbs.includes("pause") ? <Action
       id="pause" label={t("project.action.pause")} permission="write"
       icon="archive" run={pauseProject} visibleWhen={(record) => recordStatus(record) === "open"} /> : null}
-    {(selection.verbs ?? ["pause", "resume", "complete", "drop"]).includes("resume") ? <Action
+    {verbs.includes("resume") ? <Action
       id="resume" label={t("project.action.resume")} permission="write"
       icon="activity" run={resumeProject}
       visibleWhen={(record) => ["paused", "dropped"].includes(recordStatus(record))} /> : null}
-    {(selection.verbs ?? ["pause", "resume", "complete", "drop"]).includes("complete") ? <Action
+    {verbs.includes("complete") ? <Action
       id="complete" placement="toolbar" label={t("project.action.complete")} permission="write"
       icon="check" run={completeProject} visibleWhen={isActiveProject} /> : null}
-    {(selection.verbs ?? ["pause", "resume", "complete", "drop"]).includes("drop") ? <Action
+    {verbs.includes("drop") ? <Action
       id="drop" label={t("project.action.drop")} permission="write"
       icon="circle-x" danger run={dropProject} visibleWhen={isActiveProject} /> : null}
+    {verbs.includes("createFromTemplate") ? <Action
+      id="create-from-template" placement="toolbar" label={t("project.action.createFromTemplate")}
+      icon="projects" run={createProject} visibleWhen={(record) => record.is_template === true} /> : null}
   </>;
   return (
     <Form
       {...props}
       resource={PROJECT_MODEL}
-      returning={["permissions", "on_path", "status_changed_at", "selectable_milestones.id", "current_milestone.id", "current_milestone.name", ...(props.returning ?? []), ...(selection.returning ?? [])]}
+      returning={["permissions", "on_path", "status_changed_at", "is_template", "selectable_milestones.id", "current_milestone.id", "current_milestone.name", ...(props.returning ?? []), ...(selection.returning ?? [])]}
       contextLine={selection.contextLine ?? props.contextLine}
       headerExtras={selection.headerExtras ?? props.headerExtras}
       eyebrow={selection.eyebrow ?? props.eyebrow ?? t("project.eyebrow")}
@@ -110,6 +123,8 @@ export function useProjectFormDeclaration(
         <Field name="owns_items" />
         <Field name="folder" />
         <Field name="converted_from" readOnly />
+        <Field name="is_template" label={t("project.isTemplate")} />
+        <Field name="created_from_template" readOnly />
       </Group> : null}
       {standardActions}
       {selection.extraActions}
@@ -189,12 +204,16 @@ export const projectGanttSpec: GanttViewSpec = {
   start: "start_date", end: "target_date", label: "name", current: "current_milestone",
 };
 
+/** Ordinary project collections leave templates out; the templates page lists only them. */
+export const PROJECTS_OUTSIDE_TEMPLATES = { is_template: { exact: false } } as const;
+export const PROJECT_TEMPLATES = { is_template: { exact: true } } as const;
+
 /** The project collection's columns, facets and view-specific initial group. */
 export function useProjectListDeclaration(options: Partial<Omit<ListProps, "resource">> = {}): React.ReactElement {
   const { children, defaultGroups, ...listOptions } = options;
   return <List resource={PROJECT_MODEL} defaultGroup={{ field: "status" }}
     defaultGroups={{ gantt: null, ...defaultGroups }} order={{ updated_at: "DESC" }}
-    gantt={projectGanttSpec} {...listOptions}>
+    gantt={projectGanttSpec} baseFilter={PROJECTS_OUTSIDE_TEMPLATES} {...listOptions}>
     {children ?? <>
     <Facet field="lead" />
     <Column field="title" />

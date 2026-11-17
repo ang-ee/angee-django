@@ -6,6 +6,7 @@ import * as React from "react";
 
 import { useProjectsT } from "../i18n";
 import { TaskBoardSurface } from "../task-board-surface";
+import { TASKS_OUTSIDE_TEMPLATES } from "../task-declarations";
 import { TASK_MODEL } from "../resources";
 import {
   TASK_ACTION_FIELDS,
@@ -23,7 +24,7 @@ export function TaskBoardPage(): React.ReactElement {
       <List<TaskActionRow>
         resource={TASK_MODEL}
         defaultView="board"
-        baseFilter={{ status: { exact: "OPEN" } }}
+        baseFilter={{ status: { exact: "OPEN" }, ...TASKS_OUTSIDE_TEMPLATES }}
         order={{ sort_order: "ASC" }}
         laneSource={{ field: "assignee", rankField: "sort_order", rankInputField: "task_order" }}
         rowActions={rowActions}
