@@ -237,6 +237,7 @@ def test_recording_stores_the_content_token_and_one_link_per_evidence_record(wor
     [
         pytest.param("retired", "passed", "key", id="undeclared-key"),
         pytest.param("owner", "maybe", "status", id="unknown-status"),
+        pytest.param("owner", "not_checked", "status", id="not-checked-is-no-outcome"),
     ],
 )
 def test_recording_refuses_an_undeclared_key_or_status(world: Any, key: str, status: str, field: str) -> None:
