@@ -2296,6 +2296,7 @@ class ShelfAdapter(BridgeImpl):
     channel: Any = None
     shelves: dict[str, list[str]] = field(default_factory=dict)
     listing: bool = False
+    sync_parallelism: int | None = 1  # The order assertions need sequential waves on PostgreSQL too.
     extracted: list[tuple[str, str]] = field(default_factory=list)
     absent: list[tuple[str, tuple[str, ...]]] = field(default_factory=list)
 

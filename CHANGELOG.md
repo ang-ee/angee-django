@@ -34,7 +34,9 @@ live in code docstrings.
   A page of a superseded generation is refused as a "superseded stream generation".
 - `angee.parties` address books are records of the directory's `addressbooks`
   stream: each book's link targets its `Folder` (`FolderManager.ingest_addressbook`,
-  which truncates an over-long name) and holds its contacts stream. The folder's
+  which truncates an over-long name) and holds its contacts stream; both
+  declarations live on `DirectoryBackend` (`addressbooks_stream`,
+  `contacts_stream`). The folder's
   name is an `identity` statement, so a person's rename outranks a remote one;
   `Folder` composes statements and history, and `parties/folder#write_statements`
   admits the directory (parties revision 20). A book missing from the listing
@@ -44,8 +46,11 @@ live in code docstrings.
   Removed: `Folder.source_href` and `uq_folder_directory_source`,
   `FolderManager.sync_addressbook`, `Directory.addressbook_stream`, GraphQL
   `ContactFolderType.source_href`, and the `folder` argument of
-  `PartyManager.ingest_contact`, which finds its folder through its stream's
-  container. A source backend implements `discover`, `extract_contacts` and
+  `PartyManager.ingest_contact`, which now takes the page's `stream` and finds
+  its folder through that stream's container. `StatedRecordMixin` moves from
+  `angee.projects.models` (which still imports it) to `angee.integrate.mixins`,
+  beside `LinkedRecordMixin`, the `record_links` relation `Party` composes;
+  `Folder` composes `StatedRecordMixin`. A source backend implements `discover`, `extract_contacts` and
   `read_contacts`. Upgrade: a host runs `makemigrations integrate` for the
   container column, copies the migration template
   `src/angee/parties/compose_migrations/parties/addressbook_links.py` into

@@ -1333,7 +1333,7 @@ def test_ingest_contact_upserts_carddav_employment_in_place(db: None) -> None:
             role="Programmer",
         )
 
-        person = Party.objects.ingest_contact(parsed, created_by_id=owner.pk, link=link)
+        person = Party.objects.ingest_contact(parsed, stream=stream, created_by_id=owner.pk, link=link)
         synced = Relationship._base_manager.get(
             party=person,
             kind=employee,
@@ -1350,7 +1350,7 @@ def test_ingest_contact_upserts_carddav_employment_in_place(db: None) -> None:
             created_by=owner,
         )
 
-        again = Party.objects.ingest_contact(parsed, created_by_id=owner.pk, link=link)
+        again = Party.objects.ingest_contact(parsed, stream=stream, created_by_id=owner.pk, link=link)
         unchanged = Relationship._base_manager.get(
             party=again,
             kind=employee,
@@ -1365,7 +1365,7 @@ def test_ingest_contact_upserts_carddav_employment_in_place(db: None) -> None:
             title="Principal Mathematician",
             role="Research lead",
         )
-        Party.objects.ingest_contact(changed, created_by_id=owner.pk, link=link, target=person)
+        Party.objects.ingest_contact(changed, stream=stream, created_by_id=owner.pk, link=link, target=person)
         refreshed = Relationship._base_manager.get(pk=first_pk)
         backend = ManualDirectoryBackend(directory)
         local = backend._local_states(stream, ("contact-1",), links=(RecordLink.objects.get(pk=link.pk),))
@@ -1382,7 +1382,7 @@ def test_ingest_contact_upserts_carddav_employment_in_place(db: None) -> None:
         with pytest.raises(ValidationError, match="Party"):
             Party.objects.ingest_contact(
                 replace(parsed, uid="foreign-contact", display_name="Wrong identity"),
-                created_by_id=owner.pk, link=foreign_link,
+                stream=stream, created_by_id=owner.pk, link=foreign_link,
             )
         with pytest.raises(ValidationError, match="Party"):
             backend._local_states(stream, ("foreign-contact",), links=(foreign_link,))
@@ -1423,7 +1423,7 @@ def test_a_card_pass_keeps_its_addresses_local_facts(db: None) -> None:
         link = RecordLink.objects.observe(stream, "contact-4")
         RelationshipKind._base_manager.create(slug="employee", name="Employee", other_party_kind="organization")
         card = ParsedContact(uid="contact-4", display_name="Ada Lovelace", addresses=(home, work, work))
-        person = Party.objects.ingest_contact(card, created_by_id=owner.pk, link=link)
+        person = Party.objects.ingest_contact(card, stream=stream, created_by_id=owner.pk, link=link)
         assert Address._base_manager.filter(party=person, label="work").count() == 2
         located = Address._base_manager.get(party=person, label="home")
         located.latitude, located.longitude, located.is_primary = 39.8, -89.6, True
@@ -1433,6 +1433,7 @@ def test_a_card_pass_keeps_its_addresses_local_facts(db: None) -> None:
         office = ParsedAddress(label="office", street="3 Far Rd", city="Ogdenville", country="US")
         Party.objects.ingest_contact(
             replace(card, addresses=(moved, work, office)),
+            stream=stream,
             created_by_id=owner.pk,
             link=link,
             target=person,
@@ -1463,7 +1464,7 @@ def test_ingest_contact_requires_employee_relationship_kind(db: None) -> None:
         parsed = ParsedContact(uid="contact-2", display_name="Grace", organization="Navy")
 
         with pytest.raises(ValidationError, match="employee.*RelationshipKind"):
-            Party.objects.ingest_contact(parsed, created_by_id=owner.pk, link=link)
+            Party.objects.ingest_contact(parsed, stream=stream, created_by_id=owner.pk, link=link)
 
     assert not Person._base_manager.filter(display_name="Grace").exists()
 

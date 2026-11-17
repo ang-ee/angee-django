@@ -31,7 +31,6 @@ from rebac.field_backing import canonical_model
 
 from angee.base.exceptions import RecordAccessSubjectRefused
 from angee.base.fields.ordering import FractionalRankExhausted, FractionalRankField
-from angee.base.fields.relations import RetainedGenericRelation
 from angee.base.fields.state import StateField
 from angee.base.models.audit import AuditMixin
 from angee.base.models.base import AngeeDataModel
@@ -47,6 +46,7 @@ from angee.base.permissions import actor_user_id, candidate_relationships
 from angee.base.querysets import MergeableQuerySet
 from angee.base.serialization import strip_null_bytes
 from angee.base.validators import validate_value
+from angee.integrate.mixins import StatedRecordMixin
 from angee.messaging.models import AudienceMember, ThreadedModelMixin
 from angee.projects.access import require_binding_access, require_target_binding_access
 from angee.projects.events import (
@@ -60,7 +60,7 @@ from angee.provenance.context import changeset, changeset_model, require_changes
 from angee.provenance.contrib.angee.history import HistoryMixin
 from angee.provenance.contrib.angee.managers import AngeeHistoryManager, AngeeHistoryMergeableUnscopedManager
 from angee.provenance.contrib.angee.querysets import AngeeHistoryMergeableUnscopedQuerySet, AngeeHistoryQuerySet
-from angee.provenance.statements import Aspect, SourceKind, StatementRecords, StatementsMixin
+from angee.provenance.statements import Aspect, SourceKind, StatementRecords
 from angee.scheduling.fields import RecurrenceField
 from angee.tags.models import TaggedModel
 
@@ -71,33 +71,6 @@ A person's normal stance outranks a plain stream, a system of reference; an
 authoritative stream (``SyncStream.authoritative``) outranks it as the system of
 record (``Aspect.priority``). A person's confirm or dismiss stays on top.
 """
-
-
-class StatedRecordMixin(StatementsMixin):
-    """A projects row a system of record states through the ``integrate.RecordLink`` naming it.
-
-    A local row stays an ordinary record: a person's edit becomes a stance only
-    once a source states it (``person_stances_once_stated``). A source is admitted
-    by ``write_statements`` alone, kept out of ``read`` and ``write`` so no row
-    inheriting them reaches a source. Statements protect a stated row and every
-    row they name, so deleting them is refused.
-    """
-
-    person_stances_once_stated = True
-    statement_write_permission = "write_statements"
-    record_links = RetainedGenericRelation(
-        "integrate.RecordLink", content_type_field="target_content_type", object_id_field="target_object_id"
-    )
-
-    class Meta:
-        abstract = True
-
-    def delete_blocker(self) -> str | None:
-        """Name the refusal the statement tables' protected key enforces on every delete path."""
-
-        if self.carries_statements():
-            return f"This {self._meta.verbose_name} carries source statements and is retained."
-        return cast(Any, super()).delete_blocker()
 
 
 class ProjectSetupState(StrEnum):

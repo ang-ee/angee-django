@@ -70,9 +70,8 @@ def _todays_rows() -> dict[str, Any]:
     # The synced book's contacts reach a delta cursor through a scaffold container, then lose it.
     scaffold = current_stream(one, "addressbooks", kind=StreamKind.RECORD_REPLICA)
     holder = RecordLink.objects.observe(scaffold, _BOOK, target=folders["contacts"])
-    contacts = advance_stream(
-        SyncStream.objects.current(one, one.contacts_stream(holder)), CardDavDirectoryBackend(one)
-    ).stream
+    backend = CardDavDirectoryBackend(one)
+    contacts = advance_stream(SyncStream.objects.current(one, backend.contacts_stream(holder)), backend).stream
     SyncStream._base_manager.filter(pk=contacts.pk).update(container=None, last_reconciled_at=timezone.now())
     RecordLink._base_manager.filter(pk=holder.pk).delete()
     SyncStream._base_manager.filter(pk=scaffold.pk).delete()

@@ -24,7 +24,6 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from dataclasses import replace
-from datetime import timedelta
 from typing import Any, ClassVar, cast
 
 from django.apps import apps
@@ -44,7 +43,6 @@ from rebac import PermissionDenied, actor_context, system_context
 from rebac.mixins import RebacModelBase
 
 from angee.base.fields.implementation import ImplClassField
-from angee.base.fields.relations import RetainedGenericRelation
 from angee.base.fields.state import StateField
 from angee.base.fields.text import ColorField
 from angee.base.lineage import concrete_child, concrete_child_models, most_derived_concrete
@@ -57,8 +55,8 @@ from angee.base.models.ownership import OwnerMixin
 from angee.base.models.trash import TrashMixin
 from angee.base.permissions import actor_user_id, instance_actor, reader_queryset
 from angee.base.prefetch import prefetched
+from angee.integrate.mixins import LinkedRecordMixin, StatedRecordMixin
 from angee.integrate.models import Bridge, IntegrationCreateMode
-from angee.integrate.states import StreamDefinition, StreamDirection, StreamKind
 from angee.parties.backends import DirectoryBackend
 from angee.parties.connections import ConnectionHandle
 from angee.parties.fields import CountryCodeField
@@ -87,7 +85,15 @@ from angee.tags.models import TaggedModel
 
 
 class Party(
-    MergeableMixin, TrashMixin, StatementsMixin, HistoryMixin, TaggedModel, OwnerMixin, AngeeDataModel, concrete=True
+    MergeableMixin,
+    TrashMixin,
+    LinkedRecordMixin,
+    StatementsMixin,
+    HistoryMixin,
+    TaggedModel,
+    OwnerMixin,
+    AngeeDataModel,
+    concrete=True,
 ):
     """A person or organisation the project tracks.
 
@@ -117,9 +123,6 @@ class Party(
         # The member carries the handle's key; resolution locks and reloads that row itself.
         apps.get_model("parties", "Handle")(pk=member["handle"]).resolve()
 
-    record_links = RetainedGenericRelation(
-        "integrate.RecordLink", content_type_field="target_content_type", object_id_field="target_object_id"
-    )
     statements = StatementRecords(
         link="integrate.RecordLink",
         aspects={
@@ -1139,7 +1142,7 @@ class Address(TrashMixin, PartyAspectMixin, HistoryMixin, AuditMixin, AngeeDataM
         return ", ".join(part for part in (self.street, self.city, self.country) if part)
 
 
-class Folder(StatementsMixin, HistoryMixin, OwnerMixin, AngeeDataModel, concrete=True):
+class Folder(StatedRecordMixin, HistoryMixin, OwnerMixin, AngeeDataModel, concrete=True):
     """A group of parties — the local mirror of a synced address book.
 
     The contacts counterpart of storage's ``Drive``/``Folder`` and knowledge's
@@ -1156,11 +1159,6 @@ class Folder(StatementsMixin, HistoryMixin, OwnerMixin, AngeeDataModel, concrete
     """
 
     sqid_prefix = "fol_"
-    person_stances_once_stated = True
-    statement_write_permission = "write_statements"
-    record_links = RetainedGenericRelation(
-        "integrate.RecordLink", content_type_field="target_content_type", object_id_field="target_object_id"
-    )
     statements = StatementRecords(
         link="integrate.RecordLink",
         aspects={
@@ -1605,33 +1603,6 @@ class Directory(Bridge, inherits="integrate.Integration"):
         ordering = ("-updated_at",)
         verbose_name_plural = "directories"
         rebac_resource_type = "parties/directory"
-
-    def contacts_stream(self, addressbook: Any) -> StreamDefinition:
-        """Declare the contacts stream an address-book link holds, writing nothing.
-
-        The partition is the address book's href, the link's external key. The
-        stream's deletion policy seeds from this directory's per-collection config.
-        """
-
-        policy = {
-            "local_delete": "conflict",
-            "remote_delete": "retain",
-            **self.config.get("streams", {}).get("contacts", {}).get(addressbook.external_key, {}),
-        }
-        if policy["local_delete"] not in {"conflict", "propagate"} or policy["remote_delete"] not in {
-            "retain",
-            "propagate",
-        }:
-            raise ValueError("Unknown Directory deletion policy.")
-        return StreamDefinition(
-            "contacts",
-            partition=addressbook.external_key,
-            kind=StreamKind.RECORD_REPLICA,
-            direction=StreamDirection.BIDIRECTIONAL,
-            reconcile_interval=timedelta(days=1),
-            config=policy,
-            container=addressbook,
-        )
 
     @property
     def backend(self) -> DirectoryBackend:

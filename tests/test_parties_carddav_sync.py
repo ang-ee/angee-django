@@ -2623,6 +2623,9 @@ def test_a_removed_address_book_pauses_its_contacts_then_retires_them_once_its_a
     book = RecordLink.objects.get(stream=replica.addressbooks, external_key=_BOOK)
     work = f"{_BASE}books/work/"
     replica.server.books[work] = "Work"  # The listing stays non-empty, so the missing book is evidence.
+    # Sequential waves apply the book's absence before its contacts would open; parallel
+    # PostgreSQL waves may still drain them in the cycle of the first miss.
+    replica.directory.config = {**replica.directory.config, "sync_parallelism": 1}
     sync_bridge(replica.directory)
     del replica.server.books[_BOOK]
 

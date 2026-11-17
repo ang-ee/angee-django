@@ -1984,26 +1984,32 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
         self,
         parsed: ParsedContact,
         *,
+        stream: Any,
         created_by_id: Any,
         link: Any,
         target: Person | None = None,
     ) -> Any:
         """Assert one link's contact facts; preserve other sources and person preferences.
 
-        The link owns stable source identity, transport version and lossless bytes;
-        its stream's container is the address book, whose folder belongs to the
-        same directory. Addresses are matched by their normalized identity
-        (``AddressManager.identity_key``), repeated equal addresses included, so a
-        respelled card address updates its row and keeps what the card does not
-        carry; removed members withdraw only this source's statements instead of
-        deleting rows.
+        The link owns stable source identity, transport version and lossless bytes.
+        ``stream`` is the link's contacts stream as the page holds it, so its
+        container (the address book, whose folder belongs to the same directory)
+        and integration resolve once per page. Addresses are matched by their
+        normalized identity (``AddressManager.identity_key``), repeated equal
+        addresses included, so a respelled card address updates its row and keeps
+        what the card does not carry; removed members withdraw only this source's
+        statements instead of deleting rows.
         """
         if not parsed.uid:
             return None
-        container = link.stream.container
+        container = stream.container if stream.container_id is not None else None
         folder = container.target if container is not None else None
         folders = apps.get_model("parties", "Folder")
-        if not isinstance(folder, folders) or folder.directory_id != link.stream.integration_id:
+        if (
+            link.stream_id != stream.pk
+            or not isinstance(folder, folders)
+            or folder.directory_id != stream.integration_id
+        ):
             raise ValidationError("Contact ingestion requires a link of its directory's address-book stream.")
         if link.external_key != parsed.uid:
             raise ValidationError("The contact does not match the observed link identity.")
@@ -2012,7 +2018,7 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
         handles = apps.get_model("parties", "Handle").objects
         addresses = apps.get_model("parties", "Address")
         relationships = apps.get_model("parties", "Relationship")
-        source = link.stream.integration
+        source = stream.integration
         with transaction.atomic():
             linked_person = self.contact_person(link)
             target = target or linked_person
@@ -2242,19 +2248,3 @@ class FolderManager[FolderT: Folder](AngeeHistoryManager[FolderT]):
                 apps.get_model("integrate", "RecordLink").objects.bind_target(link, folder)
             folder.statements.set(aspect="identity", values={"name": name}, asserted_by=integration, link=link)
             return folder
-
-    def stated_addressbook(self, link: Any) -> dict[str, Any] | None:
-        """The address book's name as ``link`` currently states it, or ``None`` when it states nothing.
-
-        This is the local side the pull-only ``addressbooks`` stream compares: a
-        person's rename is a stance of its own and never reads as a local change.
-        """
-
-        statements: Any = self.model.statements  # Generated per concrete model, ``link`` included.
-        statement = (
-            statements.filter(link=link, aspect="identity")
-            .current()
-            .filter(status=statements.model.StatementStatus.ASSERTED, snak=statements.model.StatementSnak.VALUE)
-            .first()
-        )
-        return None if statement is None else {"name": statement.stated_value("name")}

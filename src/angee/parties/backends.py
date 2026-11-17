@@ -12,7 +12,7 @@ from __future__ import annotations
 import hashlib
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import asdict, dataclass, replace
-from datetime import date
+from datetime import date, timedelta
 from typing import Any
 
 from django.apps import apps
@@ -25,11 +25,13 @@ from angee.base.serialization import canonical_json_sha256
 from angee.integrate.errors import IntegrationError
 from angee.integrate.http import HttpClientMixin
 from angee.integrate.impl import AdapterContractError, BridgeImpl
-from angee.integrate.states import LinkStatus, StreamDefinition, StreamKind, StreamPhase
+from angee.integrate.states import LinkStatus, StreamDefinition, StreamDirection, StreamKind, StreamPhase
 from angee.integrate.streams import ApplyResult, LocalChange, RecordChange, SemanticError, StreamPage
 
 ADDRESSBOOKS = "addressbooks"
 """The stream whose records are a directory's address books; each targets its folder."""
+CONTACTS = "contacts"
+"""One address book's contacts; its stream's container is the book's link."""
 
 
 @dataclass(frozen=True)
@@ -224,9 +226,41 @@ class DirectoryBackend(BridgeImpl, HttpClientMixin):
         applied it, and its folder is created on that stream's apply path.
         """
 
-        yield StreamDefinition(ADDRESSBOOKS, kind=StreamKind.RECORD_REPLICA)
+        yield self.addressbooks_stream()
         for addressbook in apps.get_model("integrate", "RecordLink").objects.containers_of(self.bridge, ADDRESSBOOKS):
-            yield self.bridge.contacts_stream(addressbook)
+            yield self.contacts_stream(addressbook)
+
+    def addressbooks_stream(self) -> StreamDefinition:
+        """Declare the pull-only listing whose records are the directory's address books."""
+
+        return StreamDefinition(ADDRESSBOOKS, kind=StreamKind.RECORD_REPLICA)
+
+    def contacts_stream(self, addressbook: Any) -> StreamDefinition:
+        """Declare the contacts stream an address-book link holds, writing nothing.
+
+        The partition is the address book's href, the link's external key. The
+        stream's deletion policy seeds from the directory's per-collection config.
+        """
+
+        policy = {
+            "local_delete": "conflict",
+            "remote_delete": "retain",
+            **self.bridge.config.get("streams", {}).get(CONTACTS, {}).get(addressbook.external_key, {}),
+        }
+        if policy["local_delete"] not in {"conflict", "propagate"} or policy["remote_delete"] not in {
+            "retain",
+            "propagate",
+        }:
+            raise ValueError("Unknown Directory deletion policy.")
+        return StreamDefinition(
+            CONTACTS,
+            partition=addressbook.external_key,
+            kind=StreamKind.RECORD_REPLICA,
+            direction=StreamDirection.BIDIRECTIONAL,
+            reconcile_interval=timedelta(days=1),
+            config=policy,
+            container=addressbook,
+        )
 
     def extract(self, stream: Any, page_bound: int, *, deadline: float | None = None) -> StreamPage:
         """Compare the complete address-book listing with its links; contacts page through the source.
@@ -278,13 +312,13 @@ class DirectoryBackend(BridgeImpl, HttpClientMixin):
 
         A baseline reads each listed book once per generation; later, only a
         new, renamed or reappearing book is a record. A requested identity the
-        listing omits is a tombstone. The local side is the name the link
-        states, so a person's rename is not a local change of this pull-only stream.
+        listing omits is a tombstone. The local side is what this source last
+        applied: on a pull-only stream a person's rename is a stance of its own
+        (a statement), never a local change.
         """
 
-        links = {link.external_key: link for link in stream.links.order_by("pk")}
+        links = {link.external_key: link for link in stream.links.with_sync_evidence().order_by("pk")}
         listed = {book.href: book for book in books}
-        folders = apps.get_model("parties", "Folder").objects
         baseline = stream.phase == StreamPhase.BASELINE
         changes = []
         for href in sorted(listed) if keys is None else keys:
@@ -300,7 +334,7 @@ class DirectoryBackend(BridgeImpl, HttpClientMixin):
             ):
                 continue
             target = link.target if link is not None else None
-            projection = folders.stated_addressbook(link) if link is not None else None
+            projection = link.applied_base.mapped_payload if link is not None and link.applied_base else None
             changes.append(
                 RecordChange(href, payload, "", tombstone=True, target=target, projection=projection)
                 if book is None
@@ -524,6 +558,7 @@ class DirectoryBackend(BridgeImpl, HttpClientMixin):
             assert parsed is not None  # Only tombstones omit the parsed contact.
             target = parties.ingest_contact(
                 parsed,
+                stream=stream,
                 target=target,
                 created_by_id=self.bridge.owner_id,
                 link=apps.get_model("integrate", "RecordLink").objects.get(
@@ -561,11 +596,6 @@ class ManualDirectoryBackend(DirectoryBackend):
 
     key = "manual"
     label = "Manual"
-
-    def discover(self) -> list[ParsedAddressbook]:
-        """Return no address books — a manual directory is populated by hand."""
-
-        return []
 
     def streams(self, *, deadline: float | None = None) -> Iterable[StreamDefinition]:
         """Declare nothing: a manual directory has no source to sync."""
