@@ -66,16 +66,17 @@ EXPECTED_VERBS = {
     "workflows.WorkflowRun.queryset": (
         "about about_filter blocking for_subject hold hold_owned retention_candidates working_on"
     ),
-    "decisions.Decision.manager": "ask",
+    "decisions.Decision.manager": "ask remind_due supersede",
     "decisions.Decision.queryset": (
-        "attention_expression for_records for_records_filter open open_expression open_for waiting_on"
+        "attention_expression for_records for_records_filter held_by_requesting_records_filter open "
+        "open_expression open_for overdue overdue_expression waiting_on"
     ),
 }
 
 EXPECTED_ROW_VERBS = {
     "workflows.WorkflowRun": "advance cancel_on_commit fail_advance reopen",
     "workflows.StepRun": "reap redispatch wake",
-    "decisions.Decision": "decide withdraw",
+    "decisions.Decision": "decide remind replacement_request withdraw",
 }
 """Transitions each row owns, rather than its manager."""
 

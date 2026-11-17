@@ -3,10 +3,12 @@
 from datetime import UTC, datetime, timedelta
 
 import pytest
-from django.core.exceptions import PermissionDenied
+from django.db import connection
+from django.test.utils import CaptureQueriesContext
 from django.utils import timezone
 from pydantic import ValidationError as ContractError
-from rebac import RelationshipTuple, system_context, to_object_ref, to_subject_ref, write_relationships
+from rebac import RelationshipTuple, current_actor, to_object_ref, to_subject_ref, write_relationships
+from rebac.actors import is_sudo
 
 from angee.decisions import schema as decision_schema
 from angee.decisions.autoconfig import SETTINGS
@@ -45,6 +47,7 @@ def reminders():
 
     def collect(sender, decision, **kwargs):
         received.append(decision.pk)
+        assert not is_sudo() and current_actor() is None, "receivers carry no authority from decisions"
 
     decision_reminder_due.connect(collect, weak=False)
     try:
@@ -53,9 +56,19 @@ def reminders():
         decision_reminder_due.disconnect(collect)
 
 
-def sweep(now):
-    with system_context(reason="tests.decisions.remind_due"):
-        return Decision.objects.remind_due(now=now)
+def sweep(now, **options):
+    return Decision.objects.remind_due(now=now, **options)
+
+
+def due_questions(people, count):
+    requester, reviewer, subject = people
+    now = timezone.now()
+    return now, [
+        Decision.objects.ask(
+            request(subject, reviewer, remind_after=now - timedelta(minutes=count - index)), actor=requester
+        )
+        for index in range(count)
+    ]
 
 
 def test_the_asker_supplies_aware_due_and_reminder_instants(people):
@@ -88,12 +101,58 @@ def test_the_sweep_reminds_each_due_open_question_once(people, reminders):
 def test_a_repeated_reminder_writes_and_sends_nothing(people, reminders):
     requester, reviewer, subject = people
     question = Decision.objects.ask(request(subject, reviewer), actor=requester)
-    with system_context(reason="tests.decisions.remind"):
-        first = question.remind().reminded_at
-        assert question.remind().reminded_at == first
+    assert question.remind() is True
+    first = Decision.system_queryset().get(pk=question.pk).reminded_at
+    assert question.remind() is False
+    assert Decision.system_queryset().get(pk=question.pk).reminded_at == first
     assert reminders == [question.pk]
-    with pytest.raises(PermissionDenied, match="system context"):
-        question.remind()
+
+
+def test_one_failing_receiver_neither_starves_nor_rolls_back_the_others(people, reminders):
+    now, (first, second) = due_questions(people, 2)
+    failing = {first.pk}
+
+    def explode(sender, decision, **kwargs):
+        if decision.pk in failing:
+            raise RuntimeError("delivery receiver bug")
+
+    decision_reminder_due.connect(explode, weak=False)
+    try:
+        assert sweep(now) == 1
+        assert sweep(now) == 0
+        assert Decision.system_queryset().get(pk=first.pk).reminded_at is None
+        assert Decision.system_queryset().get(pk=second.pk).reminded_at is not None
+        failing.clear()
+        assert sweep(now) == 1
+    finally:
+        decision_reminder_due.disconnect(explode)
+    # The collector also saw the rolled-back attempts on the first question.
+    assert reminders.count(second.pk) == 1
+    assert not Decision.system_queryset().filter(pk__in=(first.pk, second.pk), reminded_at__isnull=True).exists()
+
+
+def test_the_sweep_is_bounded(people, reminders):
+    now, questions = due_questions(people, 3)
+    assert sweep(now, limit=2) == 2 and reminders == [question.pk for question in questions[:2]]
+    assert sweep(now, limit=2) == 1
+    with pytest.raises(ValueError, match="between 1 and 1000"):
+        sweep(now, limit=0)
+
+
+def test_the_sweep_reminds_when_no_asker_retains_questions(people, reminders, monkeypatch):
+    now, (question,) = due_questions(people, 1)
+    monkeypatch.setattr(Decision, "requester_querysets", classmethod(lambda cls: ()))
+    assert sweep(now) == 1 and reminders == [question.pk]
+
+
+def test_the_sweep_selects_only_keys_and_correlates_the_retained_exclusion(people):
+    now, _questions = due_questions(people, 1)
+    with CaptureQueriesContext(connection) as captured:
+        sweep(now)
+    table = Decision._meta.db_table
+    selection = next(query["sql"] for query in captured if query["sql"].startswith("SELECT") and table in query["sql"])
+    assert '"proposal"' not in selection and '"context"' not in selection
+    assert "EXISTS(" in selection and " IN (SELECT" not in selection
 
 
 def test_the_periodic_task_runs_the_sweep_at_its_instant(people, reminders):
@@ -134,18 +193,40 @@ def test_the_sweep_leaves_a_workflow_held_question_to_its_step(execution, regist
     assert sweep(timezone.now()) == 0 and reminders == []
 
 
-def test_overdue_is_derived_when_read(people):
+@pytest.fixture
+def dated(people):
     requester, reviewer, subject = people
     now = timezone.now()
-    overdue = Decision.objects.ask(request(subject, reviewer, due_at=now - timedelta(minutes=1)), actor=requester)
-    Decision.objects.ask(request(subject, reviewer, due_at=now + timedelta(days=1)), actor=requester)
-    Decision.objects.ask(request(subject, reviewer), actor=requester)
-    answered = Decision.objects.ask(request(subject, reviewer, due_at=now - timedelta(days=1)), actor=requester)
-    answered.decide(actor=reviewer, chosen=["confirm"])
-    schema = addon_schema(decision_schema.schemas, "console")
-    rows = result_data(
-        execute_schema(
-            schema, "{ decisions(where: {is_overdue: {_eq: true}}) { id due_at reminded_at } }", user=reviewer
+    questions = {
+        name: Decision.objects.ask(request(subject, reviewer, **instants), actor=requester)
+        for name, instants in (
+            ("overdue", {"due_at": now - timedelta(minutes=1)}),
+            ("upcoming", {"due_at": now + timedelta(days=1)}),
+            ("undated", {}),
+            ("answered", {"due_at": now - timedelta(days=1)}),
         )
-    )["decisions"]
-    assert [row["id"] for row in rows] == [overdue.sqid] and rows[0]["due_at"]
+    }
+    questions["answered"].decide(actor=reviewer, chosen=["confirm"])
+    return reviewer, {name: Decision.system_queryset().get(pk=question.pk) for name, question in questions.items()}
+
+
+def test_overdue_has_one_rule_for_rows_instances_and_readers(dated):
+    reviewer, questions = dated
+    overdue = {name for name, question in questions.items() if question.is_overdue}
+    assert overdue == {"overdue"}
+    assert set(Decision.system_queryset().overdue().values_list("pk", flat=True)) == {questions["overdue"].pk}
+    schema = addon_schema(decision_schema.schemas, "console")
+    rows = result_data(execute_schema(schema, "{ decisions { id is_overdue } }", user=reviewer))["decisions"]
+    assert {row["id"]: row["is_overdue"] for row in rows} == {
+        question.sqid: name in overdue for name, question in questions.items()
+    }
+
+
+@pytest.mark.parametrize("flag", [True, False])
+def test_the_overdue_filter_partitions_every_question(dated, flag):
+    reviewer, questions = dated
+    schema = addon_schema(decision_schema.schemas, "console")
+    document = "query($flag: Boolean!) { decisions(where: {is_overdue: {_eq: $flag}}) { id } }"
+    rows = result_data(execute_schema(schema, document, {"flag": flag}, user=reviewer))["decisions"]
+    expected = {"overdue"} if flag else {"upcoming", "undated", "answered"}
+    assert {row["id"] for row in rows} == {questions[name].sqid for name in expected}

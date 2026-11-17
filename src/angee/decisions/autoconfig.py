@@ -5,6 +5,6 @@ SETTINGS = {
     "ANGEE_GRAPHQL_RELATED_COUNTS:append": ["angee.decisions.schema.related_counts"],
     "ANGEE_TIMELINE_KINDS:append": ["angee.decisions.timeline.timeline_kinds"],
     "CELERY_BEAT_SCHEDULE:append": {
-        "decisions.remind_due": {"task": "decisions.remind_due", "schedule": 60.0},
+        "decisions.remind_due": {"task": "decisions.remind_due", "schedule": 60.0, "options": {"expires": 60}},
     },
 }

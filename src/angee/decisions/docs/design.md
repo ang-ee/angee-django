@@ -42,9 +42,9 @@ How the ontology maps to this addon.
 - **One model, `Decision`:** `kind`, `requester`, `assignees` (users or agents who may answer), `records`,
   `proposal`, `context` (evidence shown on the card), the asker's `due_at` and `remind_after`, and the verdict:
   `verdict` (the chosen alternative keys), `verdict_values` (supplied values by record public id and field),
-  `answered_by`, `answered_at`, `answered_for` (the record an answer was given for), `verdict_context` (the
-  answer's note and evidence, or a withdrawal's reason) and `superseded_by` (a withdrawn question's
-  replacement). `reminded_at` records the one reminder.
+  `answered_by`, `answered_at`, `answered_for` (the record an answer was given for), `answer_evidence` and
+  `answer_note` (how the answer was obtained), `withdrawal_reason` and `superseded_by` (a withdrawn question's
+  reason and replacement). `reminded_at` records the one reminder.
   A decision is open while it has no verdict. There is no group, no policy, no
   round, no separate list of answer options and no answer form: a value the answerer supplies is a `choose`
   action on a field, rendered by that field's own widget.
@@ -98,21 +98,24 @@ How the ontology maps to this addon.
   workflow steps apply on resume and expose failure as an error hold.
   Someone may answer for a represented record (a party who answered elsewhere) with
   `on_behalf_of`, `evidence` and a `note`; the answerer still needs `act`, and every participant must read
-  each reference.
+  each record. Stored references are rebuilt from the records, never taken from the caller, and each reader
+  sees only the referenced records it may read.
 - **Gate:** `Decision.objects.open_for(record)` is the one call other owners use.
 - **Withdrawing:** the asker closes its own open decision with an empty verdict, recorded with who stopped it.
   `verdict_values` is null while open and when withdrawn, enforced by the verdict consistency constraint.
   A named system owner may withdraw without a user; it still records `answered_at`.
   A withdrawal may keep a reason. Superseding asks the replacement and withdraws the old question with
   its reason and a `superseded_by` link in one transaction, by the asker only; a question a workflow step
-  retains is replaced by that step. Escalation is a supersede with the escalation's assignees.
+  retains is replaced by that step. Escalation is a supersede with the escalation's assignees, asking the
+  `replacement_request` the stored question derives with fresh instants.
   Every substantive answer requires `answered_by`.
   "Open" stays one rule: no verdict yet.
   The card's choice and accepted-answer lock belong to its observed revision. A new revision
   clears both; closing the card keeps focus on its outcome. Answers invalidate concerned records.
 - **Due and reminded:** the asker supplies `due_at` and `remind_after`; overdue is derived when read. A
-  reminder is stamped once by `remind()`, announced by `decision_reminder_due` and shown on the timeline;
-  delivering it belongs to an addon above. Questions a workflow step retains keep the step's own timing.
+  reminder is stamped once by `remind()`, announced by `decision_reminder_due` (whose receivers carry no
+  authority from decisions) and shown on the timeline; delivering it belongs to an addon above. The sweep is
+  bounded and skips rows another sweep holds, one savepoint per reminder. Questions a workflow step retains keep the step's own timing.
 - **No verdict decisions:** a decision is asked only when something needs judgement. The final action on a record
   (for example posting it) is the record's own action, not a decision.
 

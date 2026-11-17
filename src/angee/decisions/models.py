@@ -1,6 +1,7 @@
 """One question, its immutable proposal, and its final verdict."""
 
 from collections.abc import Iterable, Sequence
+from datetime import datetime
 from typing import Any, Self
 
 from django.conf import settings
@@ -9,6 +10,7 @@ from django.core.exceptions import ObjectDoesNotExist, PermissionDenied, Validat
 from django.db import models, transaction
 from django.db.models import F
 from django.db.models.functions import Now
+from django.utils import timezone
 from django.utils.text import capfirst
 from pydantic import JsonValue, TypeAdapter
 from rebac import actor_context, current_actor, system_context, to_subject_ref
@@ -21,10 +23,15 @@ from angee.base.models.locks import OptimisticLockMixin
 from angee.base.permissions import actor_user_id, require_rebac_queryset
 from angee.base.refs import RecordRef, record_view_refs
 from angee.base.signals import publish_change
-from angee.decisions.contracts import DecisionContext, DecisionProposal, DecisionRecordReference
+from angee.decisions.contracts import DecisionContext, DecisionProposal, DecisionRecordReference, DecisionRequest
 from angee.decisions.managers import DecisionManager, DecisionRecordManager
 from angee.decisions.signals import decision_answered, decision_reminder_due
-from angee.provenance.evidence import readable_records
+from angee.provenance.evidence import (
+    EvidenceReference,
+    readable_evidence,
+    readable_evidence_records,
+    readable_records,
+)
 
 
 def _user(actor: Any, *, active: bool = True) -> Any:
@@ -56,7 +63,9 @@ class Decision(OptimisticLockMixin, AppendOnlyModel, AngeeDataModel, concrete=Tr
     )
     answered_at = models.DateTimeField(null=True, blank=True)
     answered_for = models.JSONField(null=True, blank=True)
-    verdict_context = models.JSONField(null=True, blank=True)
+    answer_evidence = models.JSONField(null=True, blank=True)
+    answer_note = models.TextField(blank=True, default="")
+    withdrawal_reason = models.TextField(blank=True, default="")
     superseded_by = models.OneToOneField(
         "decisions.Decision", on_delete=models.PROTECT, null=True, blank=True, related_name="+",
     )
@@ -89,15 +98,19 @@ class Decision(OptimisticLockMixin, AppendOnlyModel, AngeeDataModel, concrete=Tr
         rebac_resource_type = "decisions/decision"
         constraints = [models.CheckConstraint(
             condition=models.Q(verdict__isnull=True, verdict_values__isnull=True, answered_by__isnull=True,
-                               answered_at__isnull=True, answered_for__isnull=True, verdict_context__isnull=True,
-                               superseded_by__isnull=True)
+                               answered_at__isnull=True, answered_for__isnull=True, answer_evidence__isnull=True,
+                               answer_note="", withdrawal_reason="", superseded_by__isnull=True)
             | (models.Q(verdict__isnull=False, answered_at__isnull=False)
-               & (models.Q(verdict=[]) | models.Q(answered_by__isnull=False, superseded_by__isnull=True))
-               & (~models.Q(verdict=[]) | models.Q(verdict_values__isnull=True, answered_for__isnull=True))),
+               & (models.Q(verdict=[])
+                  | models.Q(answered_by__isnull=False, superseded_by__isnull=True, withdrawal_reason=""))
+               & (~models.Q(verdict=[])
+                  | models.Q(verdict_values__isnull=True, answered_for__isnull=True, answer_evidence__isnull=True,
+                             answer_note=""))),
             name="decisions_verdict_consistent",
         )]
         indexes = [models.Index(
-            fields=("remind_after",), condition=models.Q(verdict__isnull=True, reminded_at__isnull=True),
+            fields=("remind_after",),
+            condition=models.Q(verdict__isnull=True, reminded_at__isnull=True, remind_after__isnull=False),
             name="decisions_reminder_due",
         )]
 
@@ -105,6 +118,11 @@ class Decision(OptimisticLockMixin, AppendOnlyModel, AngeeDataModel, concrete=Tr
     def is_open(self) -> bool:
         """No verdict means the question is still open."""
         return self.verdict is None
+
+    @property
+    def is_overdue(self) -> bool:
+        """Open with a due instant that has passed, as ``DecisionQuerySet.overdue`` selects."""
+        return self.is_open and self.due_at is not None and self.due_at < timezone.now()
 
     @property
     def kind_label(self) -> str:
@@ -126,20 +144,52 @@ class Decision(OptimisticLockMixin, AppendOnlyModel, AngeeDataModel, concrete=Tr
     def withdraw(self, *, actor: Any, reason: str = "") -> Self:
         """An authorized asking owner withdraws this question in a named system context.
 
-        ``reason`` is kept as the closing ``verdict_context`` reason. Withdrawing a
-        closed question changes nothing.
+        ``reason`` is kept as ``withdrawal_reason``. Withdrawing a closed question
+        changes nothing. Decisions cannot tell askers apart: any named system context
+        is taken as the asking owner's.
         """
         if not is_sudo():
             raise PermissionDenied("Withdrawal requires the authorized asking owner's system context.")
         row, withdrawing, _closed = self._withdraw(actor=actor, reason=reason)
         return row.with_actor(withdrawing) if withdrawing is not None else row
 
+    def replacement_request(
+        self,
+        *,
+        due_at: datetime | None,
+        remind_after: datetime | None,
+        assignees: Sequence[Any] | None = None,
+    ) -> DecisionRequest:
+        """Ask this question again, for ``Decision.objects.supersede``; the asking owner's system context.
+
+        Kind, concerned records, proposal, context and requester come from this question.
+        ``due_at`` and ``remind_after`` are required and never copied, so a past reminder
+        is not replayed. ``assignees`` defaults to this question's; an escalation names
+        its own, typically from a ``decision_reminder_due`` receiver.
+        """
+        if not is_sudo():
+            raise PermissionDenied("A replacement request requires the authorized asking owner's system context.")
+        with system_context(reason="decisions.replacement_request"):
+            links = self.records.model.system_queryset().filter(decision_id=self.pk).select_related("content_type")
+            records = tuple(link.record for link in links.order_by("pk"))
+            if any(record is None for record in records):
+                raise ValidationError({"records": "A record this question concerns no longer exists."})
+            return DecisionRequest(
+                kind=self.kind,
+                records=records,
+                assignees=tuple(self.assignees.order_by("pk")) if assignees is None else tuple(assignees),
+                requester=self.requester,
+                proposal=DecisionProposal.model_validate(self.proposal),
+                context=DecisionContext.model_validate(self.context),
+                due_at=due_at,
+                remind_after=remind_after,
+            )
+
     def _withdraw(self, *, actor: Any, reason: str, superseded_by: Any = None) -> tuple[Self, Any, bool]:
         """Close this question with an empty verdict if it is still open; callers hold the asker's system context."""
         # Cleanup must still close a retired principal's retained questions.
         actor = actor if actor is not None else current_actor()
         withdrawing = _user(actor, active=False) if actor is not None else None
-        context = DecisionContext(reason=reason.strip()).model_dump(mode="json") if reason.strip() else None
         rows = type(self).objects
         with transaction.atomic(), system_context(reason="decisions.withdraw"):
             row = rows.filter(pk=self.pk).lock_if_supported().get()
@@ -148,7 +198,7 @@ class Decision(OptimisticLockMixin, AppendOnlyModel, AngeeDataModel, concrete=Tr
                     verdict=[],
                     answered_by=withdrawing,
                     answered_at=Now(),
-                    verdict_context=context,
+                    withdrawal_reason=reason.strip(),
                     superseded_by=superseded_by,
                     revision=F("revision") + 1,
                     updated_at=Now(),
@@ -160,28 +210,31 @@ class Decision(OptimisticLockMixin, AppendOnlyModel, AngeeDataModel, concrete=Tr
                 decision_answered.send(sender=type(row), decision=row)
         return row, withdrawing, closed
 
-    def remind(self) -> Self:
-        """Stamp this open question's reminder and announce it once, in an asker's or the sweep's system context.
+    def remind(self) -> bool:
+        """Stamp this open question's one reminder and announce it; True when this call did both.
 
         ``reminded_at`` is written once, so a repeated or concurrent reminder, or one on
         a closed question, writes and sends nothing. The revision stays: a reminder
-        changes no answer. ``decision_reminder_due`` fires inside the transaction;
-        delivering the reminder belongs to its receivers, after commit.
+        changes no answer. The stamp is decisions' own named system work, so callers need
+        no elevation of their own. ``decision_reminder_due`` fires inside the
+        transaction but outside that system context: a receiver error rolls the stamp
+        back, and receivers carry no authority from decisions.
         """
-        if not is_sudo():
-            raise PermissionDenied("Reminding requires the asking owner's or the reminder sweep's system context.")
         rows = type(self).objects
-        with transaction.atomic(), system_context(reason="decisions.remind"):
-            row = rows.filter(pk=self.pk).lock_if_supported().get()
-            if row.is_open and row.reminded_at is None and (
-                rows.filter(pk=self.pk, reminded_at__isnull=True).open().owner_update(
-                    reminded_at=Now(), updated_at=Now(),
+        with transaction.atomic():
+            with system_context(reason="decisions.remind"):
+                row = rows.filter(pk=self.pk).lock_if_supported().get()
+                stamped = row.is_open and row.reminded_at is None and bool(
+                    rows.filter(pk=self.pk, reminded_at__isnull=True).open().owner_update(
+                        reminded_at=Now(), updated_at=Now(),
+                    )
                 )
-            ):
-                row.refresh_from_db()
-                publish_change(row, action="update", update_fields=None)
+                if stamped:
+                    row.refresh_from_db()
+                    publish_change(row, action="update", update_fields=None)
+            if stamped:
                 decision_reminder_due.send(sender=type(row), decision=row)
-        return row
+        return stamped
 
     def decide(
         self,
@@ -197,22 +250,32 @@ class Decision(OptimisticLockMixin, AppendOnlyModel, AngeeDataModel, concrete=Tr
         """Record one final verdict on this question. Proposal actions belong to the asker.
 
         ``values`` maps a concern's public id to its field values; it is validated here.
-        ``on_behalf_of`` is a ``DecisionRecordReference`` to the record the answer is
-        given for, any model, stored as ``answered_for``; ``answered_by`` stays the
-        actor, whose ``act`` permission still decides. ``evidence`` references and
-        ``note`` record how the answer was obtained, as ``verdict_context``. Every
-        participant (the answerer, requester and active assignees) must read each
-        reference, as asking requires of the question's context.
+        ``on_behalf_of`` names the record the answer is given for, any model, and
+        ``evidence`` the records that show how it was obtained; each is an
+        ``EvidenceReference`` (model, public id, optional pointer) and nothing more.
+        Every participant (the answerer, requester and active assignees) must read each
+        record, as asking requires of the question's context, and the stored
+        ``answered_for`` and ``answer_evidence`` are rebuilt from the resolved records,
+        so no caller-written label is kept. ``note`` is the answerer's own account,
+        stored as ``answer_note``. ``answered_by`` stays the actor, whose ``act``
+        permission still decides.
         """
         answering = _user(actor)
+        errors: dict[str, str] = {}
+        represented: EvidenceReference | None = None
+        cited: tuple[EvidenceReference, ...] = ()
         try:
-            answered_for = TypeAdapter(DecisionRecordReference | None).validate_python(on_behalf_of)
-            answer_context = DecisionContext(
-                reason=note.strip(),
-                references=TypeAdapter(tuple[DecisionRecordReference, ...]).validate_python(evidence),
-            )
+            represented = TypeAdapter(EvidenceReference | None).validate_python(on_behalf_of)
         except ValueError as error:
-            raise ValidationError({"evidence": str(error)}) from error
+            errors["on_behalf_of"] = str(error)
+        try:
+            cited = TypeAdapter(tuple[EvidenceReference, ...]).validate_python(evidence)
+        except ValueError as error:
+            errors["evidence"] = str(error)
+        if not isinstance(note, str):
+            errors["note"] = "Write the note as text."
+        if errors:
+            raise ValidationError(errors)
         rows = type(self).objects
         with transaction.atomic():
             with system_context(reason="decisions.decide"):
@@ -222,9 +285,7 @@ class Decision(OptimisticLockMixin, AppendOnlyModel, AngeeDataModel, concrete=Tr
                     row.require_revision(revision)
                 if not row.is_open:
                     raise ValidationError({"revision": "The decision has changed; reload it."})
-                references = (*answer_context.records(), *((answered_for,) if answered_for is not None else ()))
-                if references:
-                    readable_records(references, row._participants(answering))
+                answered_for, answer_evidence = row._resolved_answer_references(represented, cited, answering)
                 try:
                     validated = TypeAdapter(dict[str, dict[str, JsonValue]]).validate_python(
                         {} if values is None else values
@@ -270,11 +331,9 @@ class Decision(OptimisticLockMixin, AppendOnlyModel, AngeeDataModel, concrete=Tr
                         answered_by=answering,
                         answered_at=Now(),
                         verdict_values=validated or None,
-                        answered_for=answered_for.model_dump(mode="json") if answered_for is not None else None,
-                        verdict_context=(
-                            answer_context.model_dump(mode="json")
-                            if answer_context.reason or answer_context.references else None
-                        ),
+                        answered_for=answered_for,
+                        answer_evidence=answer_evidence,
+                        answer_note=note.strip(),
                         revision=F("revision") + 1,
                         updated_at=Now(),
                     )
@@ -286,6 +345,36 @@ class Decision(OptimisticLockMixin, AppendOnlyModel, AngeeDataModel, concrete=Tr
             with actor_context(answering):
                 decision_answered.send(sender=type(row), decision=answered)
         return answered
+
+    def _resolved_answer_references(
+        self, represented: EvidenceReference | None, cited: tuple[EvidenceReference, ...], answering: Any,
+    ) -> tuple[dict[str, Any] | None, list[dict[str, Any]] | None]:
+        """Admit the answer's records for every participant and rebuild their references from those records."""
+        references = (*((represented,) if represented is not None else ()), *cited)
+        if not references:
+            return None, None
+        readable_records(references, self._participants(answering))
+        rebuilt = [
+            DecisionRecordReference.of(record, pointer=reference.pointer).model_dump(mode="json")
+            for reference, record in readable_evidence_records(references, answering)
+        ]
+        if len(rebuilt) != len(references):
+            raise PermissionDenied("The answerer must read every referenced record.")
+        if represented is None:
+            return None, rebuilt
+        return rebuilt[0], rebuilt[1:] or None
+
+    def readable_answered_for(self, reader: Any) -> dict[str, Any] | None:
+        """The represented record's reference when ``reader`` may read that record, else None."""
+        if self.answered_for is None:
+            return None
+        reference = DecisionRecordReference.model_validate(self.answered_for)
+        return self.answered_for if readable_evidence([reference], reader) else None
+
+    def readable_answer_evidence(self, reader: Any) -> list[dict[str, Any]]:
+        """The answer's evidence references whose records ``reader`` may read, in stored order."""
+        references = [DecisionRecordReference.model_validate(item) for item in self.answer_evidence or ()]
+        return [reference.model_dump(mode="json") for reference in readable_evidence(references, reader)]
 
     def _participants(self, answering: Any) -> tuple[Any, ...]:
         """The answerer, then this question's active requester and assignees; read in the verb's system context."""

@@ -23,7 +23,8 @@ through that query path. Deleting the source preserves these retained links.
 and `read` derives from it. A consumer whose outside audience reads the question asked
 of them, such as a represented party's admitted user, unions that arm into
 `read_granted` from its own `permissions.extends.zed`; it reaches the question and its
-concern links and nothing else.
+concern links and nothing else; the answer's referenced records still show only to
+their own readers.
 
 `DecisionProposal` is the Pydantic contract for the stored JSON:
 
@@ -54,15 +55,21 @@ Non-workflow askers apply there, so refusal rolls the verdict back. Workflow
 subscribers schedule their wake after commit and apply when the step resumes. The Python revision is optional; the card's
 GraphQL mutation requires its observed revision. Invalid choices write nothing.
 An answer may be given for a represented record of any model, such as a party who
-answered by phone: `decide(..., on_behalf_of=DecisionRecordReference.of(record),
-evidence=(DecisionRecordReference.of(file),), note="...")` stores `answered_for` and
-`verdict_context` (a `DecisionContext` whose `reason` is the note and whose
-`references` are the evidence). `answered_by` stays the actor and `act` still decides;
-the represented record grants nothing. Every participant (the answerer, requester and
-active assignees) must read each reference, as asking requires of the question's
-context, or the answer is refused.
+answered by phone: `decide(..., on_behalf_of=EvidenceReference.of(record),
+evidence=(EvidenceReference.of(file),), note="...")`. The references name a model, a
+public id and an optional pointer, nothing more. Every participant (the answerer,
+requester and active assignees) must read each record, as asking requires of the
+question's context, or the answer is refused; `answered_for` and `answer_evidence` are
+then rebuilt from the resolved records, so no caller-written label is stored.
+`answer_note` keeps the note. `answered_by` stays the actor and `act` still decides; the
+represented record grants nothing. Each malformed argument is refused under its own key.
+GraphQL shows `answered_for` and each `answer_evidence` reference only to a reader who
+may read that record (`provenance.evidence.readable_evidence`), so a later reader of the
+question learns nothing about records it cannot read.
 `decision.withdraw(actor=actor, reason="...")` closes a question with an empty verdict
-in the asking owner's system context and keeps the reason as `verdict_context.reason`.
+in the asking owner's system context and keeps the reason as `withdrawal_reason`.
+Decisions cannot tell askers apart: any named system context counts as the asking
+owner's, for `withdraw` and `supersede` alike.
 `Decision.objects.supersede(decision, request, actor=actor, reason="...")` replaces an
 open question in one transaction, again only in the asking owner's system context: it
 asks `request`, withdraws the old question with the reason and links the replacement as
@@ -70,16 +77,28 @@ asks `request`, withdraws the old question with the reason and links the replace
 revision refusal. A question a requesting record retains (`requester_querysets`, a
 workflow step's) belongs to that asker, so supersede refuses it. Escalation is a
 supersede naming the escalation's assignees; no question changes in place.
+`decision.replacement_request(due_at=, remind_after=, assignees=None)` derives that
+request from the stored question (kind, concerned records, proposal, context,
+requester) in the asking owner's system context. The instants are required and never
+copied, so a past reminder is not replayed; escalators never rebuild a request from the
+stored JSON. Decisions runs no due-time sweep: an escalating addon receives
+`decision_reminder_due` and supersedes there.
 
 A request may carry `due_at` and `remind_after`, aware instants the asker supplies;
-decisions does no date arithmetic on them and they stay fixed once asked. The
-resource's `is_overdue` filter selects open questions past `due_at`, derived when read.
-`decision.remind()` stamps `reminded_at` once and sends `decision_reminder_due` inside
-its transaction, in the asker's or the reminder sweep's system context; the revision
-does not move. The `decisions.remind_due` beat task reminds, every minute, each open
-question whose `remind_after` has passed. A question a requesting record retains keeps
-its asker's own timing and is skipped. Delivering a reminder belongs to the signal's
-receivers in an addon above decisions, after commit. The record timeline shows the
+decisions does no date arithmetic on them and they stay fixed once asked. Overdue (open,
+with a `due_at` that has passed; an undated question never is) has one owner, derived
+when read: `Decision.objects.overdue()`, the `is_overdue` property, and the resource's
+`is_overdue` output field and filter. Consumers read it rather than compare `due_at`.
+`decision.remind()` stamps `reminded_at` once as decisions' own system work, then sends
+`decision_reminder_due` inside the transaction but outside that elevation, and returns
+whether it did; the revision does not move. Receivers hold no authority from decisions:
+one that delivers the reminder opens its own named system context for the reads it
+needs, and its error rolls back only that question's reminder. The `decisions.remind_due`
+beat task (every minute, expiring after one tick) calls `remind_due(now=, limit=200)`,
+which skips rows another sweep holds and reminds each due open question in its own
+savepoint, so a failing receiver never starves the rest. A question a requesting record
+retains keeps its asker's own timing and is skipped. Delivering a reminder belongs to an
+addon above decisions, after commit. The record timeline shows the
 reminder as a `decisions.reminder` line beside its question's line.
 
 Decisions execute no proposal actions. The asker consumes the answer through the

@@ -1,5 +1,6 @@
 """Question admission and the decision selections."""
 
+import logging
 from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
@@ -25,6 +26,8 @@ from angee.provenance.evidence import readable_records
 if TYPE_CHECKING:
     from angee.decisions.models import Decision
 
+logger = logging.getLogger(__name__)
+
 
 class DecisionQuerySet[T: Decision](AppendOnlyQuerySet[T], AngeeQuerySet[T]):
     def open_expression(self) -> ExpressionWrapper:
@@ -34,8 +37,13 @@ class DecisionQuerySet[T: Decision](AppendOnlyQuerySet[T], AngeeQuerySet[T]):
         return self.filter(verdict__isnull=True)
 
     def overdue_expression(self) -> ExpressionWrapper:
-        """Open past its due instant; derived when read, never stored."""
-        return ExpressionWrapper(Q(verdict__isnull=True, due_at__lt=Now()), output_field=BooleanField())
+        """Open with a due instant that has passed; derived when read, never stored. False when undated."""
+        return ExpressionWrapper(
+            Q(verdict__isnull=True, due_at__isnull=False, due_at__lt=Now()), output_field=BooleanField(),
+        )
+
+    def overdue(self) -> Any:
+        return self.filter(self.overdue_expression())
 
     def waiting_on(self, actor: Any) -> Any:
         """Open questions this actor may act on, assigned to them or unassigned."""
@@ -50,13 +58,16 @@ class DecisionQuerySet[T: Decision](AppendOnlyQuerySet[T], AngeeQuerySet[T]):
     def open_for(self, *records: Any) -> Any:
         return self.open().for_records(*records)
 
-    def held_by_requesting_records(self) -> Any:
-        """Questions a requesting record retains, such as a workflow step's; that asker owns their lifecycle."""
+    def held_by_requesting_records_filter(self) -> Q:
+        """A requesting record retains the question, such as a workflow step's: one correlated EXISTS per contributor.
+
+        That asker owns the lifecycle of the questions it retains.
+        """
 
         held = Q(pk__in=[])
         for rows in self.model.requester_querysets():
-            held |= Q(pk__in=rows.filter(_decision_id__isnull=False).order_by().values("_decision_id"))
-        return self.filter(held)
+            held |= Q(Exists(rows.filter(_decision_id=OuterRef("pk")).order_by()))
+        return held
 
     def for_records(self, *records: Any) -> Any:
         """Select decisions retaining any of the supplied canonical records."""
@@ -92,20 +103,33 @@ _DecisionManagerBase = AngeeManager.from_queryset(DecisionQuerySet)
 
 
 class DecisionManager[T: Decision](_DecisionManagerBase[T]):
-    def remind_due(self, *, now: datetime) -> int:
-        """Remind each open question whose ``remind_after`` has passed, once; the reminder sweep's system work.
+    def remind_due(self, *, now: datetime, limit: int = 200) -> int:
+        """Remind up to ``limit`` open questions whose ``remind_after`` has passed; return how many were sent.
 
-        A question a requesting record retains keeps its asker's own timing (a workflow
-        step wakes by its deadline), so the sweep leaves it alone.
+        Rows another sweep holds are skipped, and each reminder runs in its own
+        savepoint, so one failing receiver neither starves nor rolls back the others;
+        its question stays unreminded for the next sweep. A question a requesting record
+        retains keeps its asker's own timing (a workflow step wakes by its deadline).
         """
+        if not 1 <= limit <= 1000:
+            raise ValueError("Reminder limit must be between 1 and 1000.")
         rows = self.model.system_queryset()
-        due = rows.open().filter(remind_after__lte=now, reminded_at__isnull=True).exclude(
-            pk__in=rows.held_by_requesting_records().values("pk"),
+        due = (
+            rows.open()
+            .filter(remind_after__lte=now, reminded_at__isnull=True)
+            .exclude(rows.held_by_requesting_records_filter())
+            .lock_if_supported(skip_locked=True)
+            .only("pk")
+            .order_by("pk")
         )
         reminded = 0
-        for decision in due.order_by("pk"):
-            decision.remind()
-            reminded += 1
+        with transaction.atomic():
+            for decision in due[:limit]:
+                try:
+                    with transaction.atomic():
+                        reminded += decision.remind()
+                except Exception as error:
+                    logger.warning("Reminder for decision %s failed (%s).", decision.pk, type(error).__name__)
         return reminded
 
     def ask(self, request: DecisionRequest, *, actor: Any) -> Any:
@@ -187,7 +211,7 @@ class DecisionManager[T: Decision](_DecisionManagerBase[T]):
             row = rows.lock_if_supported().get()
             if not row.is_open:
                 raise ValidationError({"revision": "The decision has changed; reload it."})
-            if rows.held_by_requesting_records().exists():
+            if rows.filter(rows.held_by_requesting_records_filter()).exists():
                 raise ValidationError({"decision": "Its requesting owner retains this question; replace it there."})
             replacement = self.ask(request, actor=actor)
             _row, _withdrawing, closed = row._withdraw(actor=actor, reason=reason, superseded_by=replacement)

@@ -77,8 +77,7 @@ def test_ask_then_decide_updates_the_line_and_live_attention(people) -> None:
 def test_ask_reminder_supersede_and_answer_each_read_on_the_record(people) -> None:
     requester, reviewer, bystander, subject = people
     question = ask(people)
-    with system_context(reason="test.timeline.remind"):
-        question.remind()
+    assert question.remind()
     (reminder,) = timeline_entries(subject, reviewer, kind="decisions.reminder")
     assert (reminder.target_id, reminder.title, reminder.detail) == (public_id_of(question), "Note review", "Reminder")
     assert not reminder.needs_me

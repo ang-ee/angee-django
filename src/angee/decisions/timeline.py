@@ -96,7 +96,9 @@ class DecisionReminderKind(DecisionKind):
         return decision._base_manager.filter(self._record_filter(record), reminded_at__isnull=False).exists()
 
     def queryset(self, record: Any, actor: Any) -> models.QuerySet:
-        return super().queryset(record, actor).filter(reminded_at__isnull=False)
+        """Reminded questions only; the line names its kind, so it loads no answerer or assignees."""
+        rows = apps.get_model("decisions", "Decision").objects.with_actor(actor)
+        return rows.filter(self._record_filter(record), reminded_at__isnull=False).scoped()
 
     def waiting_on(self, record: Any, actor: Any) -> models.QuerySet | None:
         """Attention stays on the question's own line."""
