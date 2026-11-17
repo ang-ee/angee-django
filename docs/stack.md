@@ -263,6 +263,7 @@ settings or through the `ANGEE_WEB_STATEMENT_TIMEOUT` environment variable.
 | react-pdf (+ pdfjs-dist) | Inline PDF rendering (pdf.js) | storage file previewer |
 | @vidstack/react | Inline video/audio player | storage file previewer |
 | heic-to | Client-side HEIC/HEIF decode to a displayable image (current libheif-wasm) | storage HEIC previewer |
+| postal-mime | Browser-side RFC 822 / MIME parsing: multipart bodies, transfer encodings, charsets, encoded headers and inline parts | messaging's email previewer (`message/rfc822`, lazy-loaded); the HTML alternative renders in `@angee/ui`'s `MessageHtmlFrame` sandbox |
 | pnpm | JavaScript dependency resolution and workspaces | Workspace layout |
 | Node >= 22.13 | JavaScript build runtime | Project runtime |
 

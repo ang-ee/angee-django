@@ -1,0 +1,47 @@
+// Invented RFC 822 messages for the email previewer's test and story.
+
+/** HTML and plain-text alternatives, a declared language, an inline image and a script that must stay inert. */
+export const SAMPLE_EMAIL = [
+  "From: Ada Example <ada@example.test>",
+  "To: Grace Example <grace@example.test>, Lin Example <lin@example.test>",
+  "Subject: =?UTF-8?Q?Las_puertas_abren_a_las_ocho?=",
+  "Date: Tue, 17 Nov 2026 09:00:00 +0000",
+  "Content-Language: es",
+  "MIME-Version: 1.0",
+  'Content-Type: multipart/related; boundary="related"',
+  "",
+  "--related",
+  'Content-Type: multipart/alternative; boundary="alternative"',
+  "",
+  "--alternative",
+  "Content-Type: text/plain; charset=utf-8",
+  "",
+  "Las puertas abren a las ocho. La lectura empieza a las ocho y media.",
+  "--alternative",
+  "Content-Type: text/html; charset=utf-8",
+  "",
+  '<p>Las puertas abren a las <b>ocho</b>.</p><p>La lectura empieza a las ocho y media.</p><img alt="" src="cid:mark@example.test"><script>document.body.textContent = "scripted"</script>',
+  "--alternative--",
+  "--related",
+  "Content-Type: image/png",
+  "Content-ID: <mark@example.test>",
+  "Content-Disposition: inline",
+  "Content-Transfer-Encoding: base64",
+  "",
+  "iVBORw0KGgo=",
+  "--related--",
+  "",
+].join("\r\n");
+
+/** A plain-text message with no HTML alternative. */
+export const SAMPLE_TEXT_EMAIL = [
+  "From: Lin Example <lin@example.test>",
+  "To: Ada Example <ada@example.test>",
+  "Subject: Seating plan",
+  "Date: Tue, 17 Nov 2026 10:30:00 +0000",
+  "MIME-Version: 1.0",
+  "Content-Type: text/plain; charset=utf-8",
+  "",
+  "Rows A to C are held for the readers.",
+  "",
+].join("\r\n");
