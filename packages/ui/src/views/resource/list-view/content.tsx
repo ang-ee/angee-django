@@ -22,6 +22,7 @@ import type { ColumnDescriptor } from "../../page";
 import { useRelationFacets } from "../../relation/relation-facet";
 import { useScalarFacets } from "../../relation/scalar-facet";
 import { useBulkDelete } from "../useBulkDelete";
+import { recordRepresentationValue, titleText } from "../../form/form-view-model";
 import { requireDataResource, useAggregateOperation } from "../resource-operations";
 import { useResourceSearch } from "../search/use-resource-search";
 import { useSearchCatalog } from "../search/catalog";
@@ -202,6 +203,9 @@ export function ListViewContent<TRow extends Row = Row>({
   const galleryRenderCard = renderCard ?? (gallery ? undefined : boardCard ? boardCardBody : columnCardBody);
   const galleryFrame = cardFrame ?? (renderCard || gallery ? "flush" : "inset");
   const galleryRows = useGalleryRows(surface.rowModels);
+  // A card is named by its record representation, as the form header and the board are.
+  const representationLabel = React.useCallback(
+    (row: TRow) => titleText(recordRepresentationValue(row, modelMetadata), ""), [modelMetadata]);
   const search = useResourceSearch({ resourceView, catalog, groupStack: effectiveGroupStack,
     groupingEnabled: !boardGroupingPinned, maxGroupDepth });
   const heading = chrome?.heading ?? (resolvedChrome.compact
@@ -300,6 +304,7 @@ export function ListViewContent<TRow extends Row = Row>({
           getRowId={galleryRows.getRowId}
           imageField={gallery?.image}
           titleField={gallery?.title}
+          cardLabel={representationLabel}
           subtitleField={gallery?.subtitle}
           renderCard={galleryRenderCard}
           cardFrame={galleryFrame}

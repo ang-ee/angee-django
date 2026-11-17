@@ -22,7 +22,7 @@ describe("GalleryView", () => {
     const navigate = vi.fn();
     const onCardClick = vi.fn();
     const onToggleSelected = vi.fn();
-    render(<InAppLinkProvider navigate={navigate}><GalleryView rows={[ROWS[0]!]}
+    render(<InAppLinkProvider navigate={navigate}><GalleryView rows={[ROWS[0]!]} titleField="title"
       cardHref={() => "/records/a"} onCardClick={onCardClick} onToggleSelected={onToggleSelected}
     /></InAppLinkProvider>);
     const checkbox = screen.getByRole("checkbox", { name: "Select Onboarding map" });
@@ -40,6 +40,7 @@ describe("GalleryView", () => {
     render(
       <GalleryView<Cover>
         rows={ROWS}
+        titleField="title"
         subtitleField="subtitle"
         onCardClick={onCardClick}
       />,
@@ -63,7 +64,7 @@ describe("GalleryView", () => {
   });
 
   test("a selected card wears the card recipe's selected state", () => {
-    const view = render(<GalleryView<Cover> rows={ROWS} selectedIds={new Set(["b"])} onToggleSelected={() => undefined} />);
+    const view = render(<GalleryView<Cover> rows={ROWS} titleField="title" selectedIds={new Set(["b"])} onToggleSelected={() => undefined} />);
     const cards = view.container.querySelectorAll("[data-slot='gallery-card']");
     expect(cards[0]?.className).not.toContain("border-brand");
     expect(cards[1]?.className).toContain("border-brand");
@@ -78,9 +79,17 @@ describe("GalleryView", () => {
   });
 
   test("falls back to the title initial when no image field is given", () => {
-    render(<GalleryView<Cover> rows={ROWS} />);
+    render(<GalleryView<Cover> rows={ROWS} titleField="title" />);
     expect(screen.getByText("O")).toBeTruthy();
     expect(screen.getByText("Q")).toBeTruthy();
+  });
+
+  test("names a card by its title field or the collection's label, never by guessing a field", () => {
+    const view = render(<GalleryView<Cover> rows={[ROWS[0]!]} onToggleSelected={() => undefined} />);
+    expect(screen.getByRole("checkbox", { name: "Select card" })).toBeTruthy();
+    view.rerender(<GalleryView<Cover> rows={[ROWS[0]!]} onToggleSelected={() => undefined} cardLabel={(row) => `Cover ${row.id}`} />);
+    expect(screen.getByRole("checkbox", { name: "Select Cover a" })).toBeTruthy();
+    expect(screen.getByText("Cover a")).toBeTruthy();
   });
 
   test("uses the shared interactive frame with actions and omits empty footers", () => {
@@ -88,6 +97,7 @@ describe("GalleryView", () => {
     const view = render(
       <GalleryView<Cover>
         rows={[ROWS[0]!]}
+        titleField="title"
         onCardClick={onCardClick}
         cardActions={() => <button type="button">Archive</button>}
       />,
@@ -100,6 +110,7 @@ describe("GalleryView", () => {
     view.rerender(
       <GalleryView<Cover>
         rows={[ROWS[0]!]}
+        titleField="title"
         onCardClick={onCardClick}
         cardActions={() => null}
       />,

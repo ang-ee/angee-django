@@ -15,6 +15,7 @@ import { useResourceView } from "./resource-view-context";
 import { RESOURCE_CONTAINERS } from "./resource-view-kinds";
 
 const resource = testDataResource("notes.Note", {
+  recordRepresentation: "title",
   roots: { list: "notes", detail: "notes_by_pk", aggregate: "notes_aggregate" },
   typeNames: { filter: "NoteBoolExp", order: "NoteOrderBy" },
   fields: [{ name: "title", kind: "scalar", scalar: "String", readable: true,

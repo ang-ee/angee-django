@@ -14,6 +14,7 @@ import { ListCellContent, readPath, type RowGroup } from "../resource-view-list-
 import { columnTone } from "../../page";
 import type { ColumnDescriptor } from "../../page";
 import type { CardActionContext, CardRenderer } from "../resource-view-types";
+import { recordRepresentationValue, titleText } from "../../form/form-view-model";
 import { BOARD_CARD_SHELL_CLASS } from "./view";
 interface BoardRowCardProps<TRow extends Row> {
   columns: readonly ColumnDescriptor<TRow>[];
@@ -138,12 +139,11 @@ function BoardRowCardContent<TRow extends Row>({
   const styles = cardFrameVariants({
     frame, handle: dragEnabled, interactive: Boolean(href || onRowClick), selected, dragging: isDragging,
   });
-  const representation = modelMetadata?.resource.recordRepresentation;
-  const title = representation ? readPath(row.original, representation) : undefined;
+  // A card is named by its record representation, as the form header and the gallery are.
+  const title = titleText(recordRepresentationValue(row.original, modelMetadata ?? null), "");
   const selection = onToggleSelected ? (
     <CardSelection selected={selected} onSelectedChange={onToggleSelected} className={styles.selection()}
-      label={typeof title === "string" || typeof title === "number"
-        ? t("card.select", { title: String(title) }) : t("card.selectUntitled")} />
+      label={title ? t("card.select", { title }) : t("card.selectUntitled")} />
   ) : null;
   const handle = dragEnabled ? (
     <button

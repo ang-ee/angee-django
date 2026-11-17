@@ -10,6 +10,7 @@ import { Card, CardSelection, cardFrameVariants, type CardFrame } from "../ui/ca
 import { Skeleton, SkeletonStatus } from "../ui/skeleton";
 import { textRoleVariants } from "../ui/text";
 import { ListEmpty } from "./resource/resource-view-list-body";
+import { textValue } from "./form/field-values";
 import type { CardRenderer, ListEmptyContent } from "./resource/resource-view-types";
 
 /**
@@ -23,8 +24,11 @@ export interface GalleryViewProps<TRow extends Row = Row> {
   rows?: readonly TRow[];
   /** Field holding the thumbnail image URL. */
   imageField?: keyof TRow & string;
-  /** Field holding the card title (defaults to `title`/`name`). */
+  /** Field holding the card title. */
   titleField?: keyof TRow & string;
+  /** The card's name without a title field: the default body's heading and its
+   * checkbox label. A collection passes its record representation. */
+  cardLabel?: (row: TRow) => string;
   /** Field holding the secondary label. */
   subtitleField?: keyof TRow & string;
   /** A row's selection id; a collection passes its surface's row ids (`useGalleryRows`). Defaults to `row.id`. */
@@ -57,6 +61,7 @@ export function GalleryView<TRow extends Row = Row>({
   rows = [],
   imageField,
   titleField,
+  cardLabel,
   subtitleField,
   getRowId = defaultGalleryRowId,
   renderCard,
@@ -91,7 +96,7 @@ export function GalleryView<TRow extends Row = Row>({
               key={id}
               row={row}
               imageField={imageField}
-              titleField={titleField}
+              title={titleField ? textValue(row[titleField]) : cardLabel?.(row) ?? ""}
               subtitleField={subtitleField}
               renderCard={renderCard}
               actions={cardActions?.(row)}
@@ -172,7 +177,7 @@ function GallerySkeleton({
 function GalleryCard<TRow extends Row>({
   row,
   imageField,
-  titleField,
+  title,
   subtitleField,
   renderCard,
   actions,
@@ -185,7 +190,7 @@ function GalleryCard<TRow extends Row>({
 }: {
   row: TRow;
   imageField?: keyof TRow & string;
-  titleField?: keyof TRow & string;
+  title: string;
   subtitleField?: keyof TRow & string;
   renderCard?: CardRenderer<TRow>;
   actions?: ReactNode;
@@ -199,7 +204,6 @@ function GalleryCard<TRow extends Row>({
   const t = useUiT();
   const clickable = Boolean(href || onClick);
   const dragProps = dragSourceProps(dragPayload ?? null);
-  const title = cardTitle(row, titleField);
   // Selection is a sibling of the interactive body, including with custom cards.
   return (
     <GalleryCardFrame
@@ -303,18 +307,6 @@ function interactiveCardBodyProps<TRow extends Row>(
       onClick(row);
     },
   };
-}
-
-function cardTitle<TRow extends Row>(
-  row: TRow,
-  titleField?: keyof TRow & string,
-): string {
-  const key =
-    titleField ??
-    (("title" in row ? "title" : "name" in row ? "name" : undefined) as
-      | (keyof TRow & string)
-      | undefined);
-  return key ? String(row[key] ?? "") : "";
 }
 
 function DefaultCardBody<TRow extends Row>({
