@@ -373,7 +373,9 @@ describe("resource-view model", () => {
   test("a saved calendar view keeps its hidden sources; a shipped view may name them", () => {
     const state = createResourceViewState({ view: "calendar", hiddenSources: ["agenda"] });
     expect(favoriteFromResourceView(state, "Events only")).toMatchObject({ view: "calendar", hiddenSources: ["agenda"] });
-    expect(favoriteFromResourceView(createResourceViewState({ view: "calendar" }), "All")).not.toHaveProperty("hiddenSources");
+    // An empty list is saved too, so applying the view shows every source.
+    expect(favoriteFromResourceView(createResourceViewState({ view: "calendar" }), "All")).toMatchObject({ hiddenSources: [] });
+    expect(favoriteFromResourceView(createResourceViewState({ view: "list" }), "List")).not.toHaveProperty("hiddenSources");
     // Stored and shipped views parse through one schema: a key a URL cannot carry is refused.
     expect(resourceViewFavoritesFromJson(JSON.stringify([
       { id: "favorite:bad", label: "Bad", view: "calendar", hiddenSources: ["bad key"] },

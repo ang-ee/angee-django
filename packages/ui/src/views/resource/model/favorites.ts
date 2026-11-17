@@ -204,6 +204,7 @@ export function favoriteFromResourceView(
     ...(Filter.from(state.filter).hasEntries() ? { filter: state.filter } : {}),
     ...(state.groupStack.length > 0 ? { groupStack: state.groupStack } : {}),
     ...(state.view !== "list" ? { view: state.view } : {}),
-    ...(state.view === "calendar" && state.hiddenSources.length > 0 ? { hiddenSources: state.hiddenSources } : {}),
+    // A calendar view saves its hidden sources even when none are hidden, so applying it shows them all.
+    ...(state.view === "calendar" ? { hiddenSources: state.hiddenSources } : {}),
   };
 }
