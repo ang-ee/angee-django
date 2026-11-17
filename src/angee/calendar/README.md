@@ -122,9 +122,8 @@ owner's stored form: an untitled event is "(No title)", and at most 500
 attendees are kept, the organizer first. An attendee lands on a handle by the
 address the source gave, and a source never renames a handle that already exists.
 
-`CalendarSource.calendar_for_partition` resolves an events partition to its
-calendar through the calendars-stream link. Partitions drain in key order, so a
-calendar is mirrored before its events land.
+A source's calendar is mirrored before its events land: a sync that finds it
+missing retries on the next cycle.
 
 - **Replicas.** A backend declares whether it takes writes. A local calendar
   always takes edits; a source's calendar only when its backend writes. On a

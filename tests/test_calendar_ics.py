@@ -367,7 +367,9 @@ def test_the_subscriber_quota_and_rate_bound_new_subscriptions(settings: Any) ->
         subscribe_calendar(user, name="Three", url="https://feeds.example.test/three.ics")
 
 
-def test_the_owner_syncs_and_unsubscribes_and_a_stranger_reaches_neither(subscription: Subscription) -> None:
+def test_unsubscribing_disconnects_purges_and_archives_and_a_stranger_cannot_read_the_source(
+    subscription: Subscription,
+) -> None:
     subscription.poll()
     source = subscription.source
     stranger = create_user("stranger")
@@ -787,7 +789,7 @@ END:VEVENT"""
 # --- replicas ------------------------------------------------------------------
 
 
-def test_edits_on_an_ics_calendar_are_refused_by_the_model_and_a_local_calendar_is_unaffected(
+def test_a_replica_refuses_every_local_write_and_a_local_calendar_takes_them(
     subscription: Subscription,
 ) -> None:
     subscription.poll()
@@ -805,9 +807,10 @@ def test_edits_on_an_ics_calendar_are_refused_by_the_model_and_a_local_calendar_
             launch.reschedule(_utc(2026, 4, 2, 12), _utc(2026, 4, 2, 13))
         with pytest.raises(ValidationError, match=READ_ONLY_CALENDAR):
             CalendarEvent(calendar=subscription.calendar, title="New", start=launch.start, end=launch.end).save()
-        # The model names the refusal a delete preview shows; the stream's link also retains the row.
+        # A linked replica's delete is refused first by integrate's link retention; the
+        # calendar names its own refusal in the delete preview.
         assert launch.delete_blocker() == READ_ONLY_CALENDAR
-        with pytest.raises((ValidationError, ProtectedError)):
+        with pytest.raises(ProtectedError, match="RecordLink rows still refer"):
             launch.delete()
         handle = Handle.objects.upsert(platform="email", value="dave@example.test")
         with pytest.raises(ValidationError, match=READ_ONLY_CALENDAR):
@@ -816,11 +819,12 @@ def test_edits_on_an_ics_calendar_are_refused_by_the_model_and_a_local_calendar_
         organizer.response = AttendeeResponse.DECLINED
         with pytest.raises(ValidationError, match=READ_ONLY_CALENDAR):
             organizer.save()
+        # No link retains an attendee: the calendar's own delete receiver refuses it.
         with pytest.raises(ValidationError, match=READ_ONLY_CALENDAR):
             EventAttendee.objects.get(pk=organizer.pk).delete()
-        # The source's link and statements retain its calendar; the model names the refusal.
+        # The source's calendars-stream link retains its calendar; the calendar names the refusal in the preview.
         assert subscription.calendar.delete_blocker() == SOURCE_CALENDAR_DELETE
-        with pytest.raises((ValidationError, ProtectedError)):
+        with pytest.raises(ProtectedError):
             subscription.calendar.delete()
         occurrences = CalendarEvent.objects.filter(pk=launch.pk).occurrences(_utc(2026, 4, 1), _utc(2026, 4, 2))
 

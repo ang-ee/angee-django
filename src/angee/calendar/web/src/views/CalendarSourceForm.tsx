@@ -25,11 +25,11 @@ function CalendarSourceForm({ resource: _resource, ...props }: RegisteredFormPro
       <Field name="backend_class" readOnly />
       <Field name="poll_interval" readOnly />
       <Field name="config" readOnly />
-      {IntegrationSyncFields({ label: t("source.group.lastSync") })}
-      <Action id="sync" label={t("source.action.sync")} icon="refresh" permission="write" run={sync} />
+      {IntegrationSyncFields({ label: t("connection.group.lastSync") })}
+      <Action id="sync" label={t("connection.action.sync")} icon="refresh" permission="write" run={sync} />
       <Action
         id="unsubscribe"
-        label={t("source.action.unsubscribe")}
+        label={t("connection.action.unsubscribe")}
         icon="unlink"
         permission="delete"
         danger

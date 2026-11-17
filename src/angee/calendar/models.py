@@ -25,17 +25,19 @@ form, and :meth:`CalendarEvent.save` checks it again under the calendar's row
 lock on every save path.
 
 **A series owns its overrides.** When a master's schedule or the zone it follows
-changes, :meth:`CalendarEvent.rebase_overrides` carries each override along.
+changes, :meth:`CalendarEvent.rebase_overrides` carries each override along. A
+source's series is its source's: the source re-sends each instance instead.
 
 **Sources.** A :class:`CalendarSource` is a connected calendar account or feed,
 an ``integrate.Integration`` child. Its ``calendars`` stream mirrors each remote
 calendar it serves as a ``Calendar`` whose ``source`` names it and whose identity
 the source states; each calendar's ``events`` stream syncs its events. Remote ids,
-of calendars and of events, live only in the streams' ``RecordLink`` rows, and
-:class:`CalendarEventManager` is the one event write path. A calendar takes local edits
-when it has no source or when its source's backend writes
-(:attr:`Calendar.is_writable`); a read-only subscription refuses them, and only its
-source's sync writes, cancels or removes its events.
+of calendars and of events, live only in the streams' ``RecordLink`` rows.
+:meth:`CalendarEventManager.ingest` and :meth:`CalendarEvent.withdraw` are the
+source's event write path. A calendar takes local edits when it has no source or
+when its source's backend writes (:attr:`Calendar.is_writable`); a read-only
+subscription refuses them on every save path, and only its source's own work
+writes, cancels or removes its events (:meth:`Calendar.takes_write`).
 """
 
 from __future__ import annotations
@@ -73,12 +75,22 @@ from angee.base.models.timestamps import update_fields_with_auto_now
 from angee.base.models.trash import ArchiveMixin, ArchiveQuerySet
 from angee.calendar.backends import (
     CALENDARS_STREAM,
+    EVENT_FIELDS,
     EVENTS_STREAM,
     CalendarBackend,
     ParsedAttendee,
     ParsedCalendar,
     ParsedEvent,
+    basic_instant,
     normalized_address,
+)
+from angee.calendar.choices import (
+    AttendeeResponse,
+    AttendeeRole,
+    EventStatus,
+    EventTransparency,
+    EventVisibility,
+    OverlapPolicy,
 )
 from angee.integrate.models import Bridge, IntegrationCreateMode, IntegrationLifecycle
 from angee.integrate.states import StreamDefinition, StreamDirection, StreamKind
@@ -92,60 +104,6 @@ from angee.scheduling.fields import RecurrenceField, TimeZoneField
 from angee.scheduling.recurrence import Recurrence
 from angee.scheduling.zones import get_zone_info
 from angee.tags.models import TaggedModel
-
-
-class OverlapPolicy(models.TextChoices):
-    """Whether a calendar takes events whose busy time meets another's."""
-
-    ACCEPT = "accept", "Accept overlaps"
-    REFUSE = "refuse", "Refuse overlaps"
-
-
-class EventStatus(models.TextChoices):
-    """An event's state (RFC 5545 ``STATUS``); a cancelled event shows no occurrence."""
-
-    CONFIRMED = "confirmed", "Confirmed"
-    TENTATIVE = "tentative", "Tentative"
-    CANCELLED = "cancelled", "Cancelled"
-
-
-class EventTransparency(models.TextChoices):
-    """Whether an event takes its time (RFC 5545 ``TRANSP``); a free event never conflicts."""
-
-    BUSY = "busy", "Busy"
-    FREE = "free", "Free"
-
-
-class EventVisibility(models.TextChoices):
-    """Who reads an event's details, as Google Calendar's event ``visibility`` means it.
-
-    ``default`` follows the calendar's readers, ``public`` also shows the details
-    to free/busy viewers, and ``private`` shows them only to the calendar's
-    writers; everyone else who sees the calendar's busy times sees the event as
-    busy time only. An override created at ``default`` takes its master's.
-    """
-
-    DEFAULT = "default", "Default"
-    PUBLIC = "public", "Public"
-    PRIVATE = "private", "Private"
-
-
-class AttendeeRole(models.TextChoices):
-    """An attendee's part in an event (RFC 5545 ``ROLE``, with the organizer as a role)."""
-
-    ORGANIZER = "organizer", "Organizer"
-    REQUIRED = "required", "Required"
-    OPTIONAL = "optional", "Optional"
-
-
-class AttendeeResponse(models.TextChoices):
-    """An attendee's RSVP to an event invitation (RFC 5545 ``PARTSTAT`` vocabulary)."""
-
-    NEEDS_ACTION = "needs_action", "Needs Action"
-    ACCEPTED = "accepted", "Accepted"
-    DECLINED = "declined", "Declined"
-    TENTATIVE = "tentative", "Tentative"
-
 
 READ_ONLY_CALENDAR = "This calendar is a read-only subscription."
 """The refusal of a local edit to an event of a calendar whose source takes no writes."""
@@ -161,22 +119,6 @@ UNTITLED_EVENT = "(No title)"
 
 ATTENDEES_PER_EVENT = 500
 """The most attendees a source's event keeps, the organizer first; a source stating more is cut there."""
-
-_SOURCE_FIELDS = (
-    "title",
-    "description",
-    "location",
-    "start",
-    "end",
-    "all_day",
-    "recurrence",
-    "timezone",
-    "status",
-    "transparency",
-    "visibility",
-    "conference_url",
-)
-"""The event columns a source writes; ``series`` and ``original_start`` follow the override shape."""
 
 
 @dataclass(frozen=True)
@@ -216,12 +158,6 @@ class EventMoment:
     series: str
     start: datetime
     end: datetime
-
-
-def _basic(moment: datetime) -> str:
-    """A moment as UTC ISO-8601 basic, the occurrence-id suffix."""
-
-    return moment.astimezone(UTC).strftime("%Y%m%dT%H%M%SZ")
 
 
 def _nearest_midnight(moment: datetime, tz: Any) -> datetime:
@@ -431,7 +367,7 @@ class Calendar(OwnerMixin, ArchiveMixin, StatementsMixin, HistoryMixin, AngeeDat
         """Whether this calendar takes local edits: a local calendar always, a source's when its backend writes."""
 
         source = self.source
-        return source is None or CalendarSource.backend_writable(source.backend_class)
+        return source is None or CalendarSource.is_backend_writable(source.backend_class)
 
     def takes_write(self) -> bool:
         """Whether a write to this calendar's events and attendees is admitted now.
@@ -568,7 +504,7 @@ class CalendarEventQuerySet(AngeeHistoryQuerySet[Any]):
                     editable=bool(event.occurrence_write)
                     and not event.recurrence
                     and not redacted
-                    and CalendarSource.backend_writable(cast(Any, event).occurrence_backend),
+                    and CalendarSource.is_backend_writable(cast(Any, event).occurrence_backend),
                     redacted=redacted,
                 )
             )
@@ -582,7 +518,7 @@ _CalendarEventManagerBase = AngeeHistoryManager.from_queryset(CalendarEventQuery
 class CalendarEventManager(_CalendarEventManagerBase):
     """Own the source write path of events: the stored form, ingest, and the stored projection a source compares."""
 
-    def parsed(self, events: Iterable[CalendarEvent]) -> dict[Any, ParsedEvent]:
+    def project_events(self, events: Iterable[CalendarEvent]) -> dict[Any, ParsedEvent]:
         """Project stored events, with their attendees, into the neutral shape a source compares.
 
         The series key stays blank: a source names an instance's series by its own key.
@@ -593,7 +529,7 @@ class CalendarEventManager(_CalendarEventManagerBase):
         prefetch_related_objects(rows, "event_attendees__handle")
         return {
             event.pk: ParsedEvent(
-                **{name: getattr(event, name) for name in _SOURCE_FIELDS},
+                **{name: getattr(event, name) for name in EVENT_FIELDS},
                 original_start=event.original_start,
                 attendees=tuple(
                     ParsedAttendee(address=row.handle.normalized_value, role=row.role, response=row.response)
@@ -688,7 +624,7 @@ class CalendarEventManager(_CalendarEventManagerBase):
             target.withdraw(link, remove=True)
             target = None
         event: Any = target if target is not None else self.model(calendar=calendar, created_by_id=created_by_id)
-        changed = [name for name in _SOURCE_FIELDS if getattr(event, name) != getattr(parsed, name)]
+        changed = [name for name in EVENT_FIELDS if getattr(event, name) != getattr(parsed, name)]
         for name in changed:
             setattr(event, name, getattr(parsed, name))
         if target is None:
@@ -1181,10 +1117,10 @@ class CalendarEvent(
         if self.series_id is not None and self.original_start is not None:
             if not series:
                 raise ValueError("An override's occurrence id needs its master's public id.")
-            return f"{series}:{_basic(self.original_start)}"
+            return f"{series}:{basic_instant(self.original_start)}"
         if not self.recurrence:
             return self.sqid
-        return f"{self.sqid}:{_basic(start)}"
+        return f"{self.sqid}:{basic_instant(start)}"
 
     def reschedule(self, start: datetime, end: datetime) -> Self:
         """Move this single row to new ``start``/``end``, validate, and persist with history.
@@ -1396,9 +1332,9 @@ class CalendarSource(Bridge, inherits="integrate.Integration"):
     stream (:meth:`calendars_stream`): one record per remote calendar, whose
     ``RecordLink`` names its :class:`Calendar` on the owner's person and whose
     source states that calendar's identity. Each remote calendar's events sync
-    through an ``events`` stream partitioned by its key (:meth:`calendar_stream`);
+    through an ``events`` stream partitioned by its key (:meth:`events_stream`);
     the calendar managers own every event write. Whether a calendar takes local
-    edits is its backend's ``writable`` declaration (:meth:`backend_writable`).
+    edits is its backend's ``writable`` declaration (:meth:`is_backend_writable`).
     """
 
     integration_create_mode: ClassVar[IntegrationCreateMode | None] = IntegrationCreateMode.CONNECT
@@ -1427,7 +1363,7 @@ class CalendarSource(Bridge, inherits="integrate.Integration"):
         return backend_class(self)
 
     @classmethod
-    def backend_writable(cls, key: str | None) -> bool:
+    def is_backend_writable(cls, key: str | None) -> bool:
         """Whether a calendar whose source has backend ``key`` takes local edits; no source (``None``) does."""
 
         return key is None or cls._meta.get_field("backend_class").resolve_class(key).writable
@@ -1438,7 +1374,9 @@ class CalendarSource(Bridge, inherits="integrate.Integration"):
         The one place that resolves a partition to its container: the
         ``calendars``-stream ``RecordLink`` whose external key is the partition
         names the calendar. Integrate has no partition-to-container seam yet; this
-        lookup is the interim one, to be replaced by it.
+        lookup is the interim one. It relies on the calendars stream draining before
+        the events streams (``CalendarBackend.sync_parallelism``), and both go when an
+        events stream names its calendar's link (``SyncStream.container``).
         """
 
         return (
@@ -1532,7 +1470,7 @@ class CalendarSource(Bridge, inherits="integrate.Integration"):
 
         return self._replica(CALENDARS_STREAM)
 
-    def calendar_stream(self, remote: ParsedCalendar) -> StreamDefinition:
+    def events_stream(self, remote: ParsedCalendar) -> StreamDefinition:
         """Declare the events stream of one remote calendar, partitioned by its key.
 
         A pull-only record replica keyed by remote event identity. A backend that

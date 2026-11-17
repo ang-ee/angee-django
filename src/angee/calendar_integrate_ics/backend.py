@@ -65,7 +65,6 @@ from django.utils import timezone
 from icalendar.timezone.windows_to_olson import WINDOWS_TO_OLSON
 
 from angee.calendar.backends import (
-    ORGANIZER,
     CalendarBackend,
     ParsedAttendee,
     ParsedCalendar,
@@ -73,7 +72,7 @@ from angee.calendar.backends import (
     instance_key,
     series_key,
 )
-from angee.calendar.models import AttendeeResponse, AttendeeRole, EventStatus, EventTransparency, EventVisibility
+from angee.calendar.choices import AttendeeResponse, AttendeeRole, EventStatus, EventTransparency, EventVisibility
 from angee.integrate.errors import IntegrationError
 from angee.integrate.http import DownloadResult, OutboundBudget
 from angee.integrate.net import AddressNotAllowedError, AddressResolutionError, is_unsafe_address, parse_http_url
@@ -194,7 +193,7 @@ class IcsCalendarBackend(CalendarBackend):
         if result.status_code == 304:
             return StreamPage((), cursor)
         validators = {"etag": result.headers.get("etag", ""), "last_modified": result.headers.get("last-modified", "")}
-        self._snapshot = self._observe_feed(_read(result.content), zone=self.calendar(stream).timezone)
+        self._snapshot = self._observe_feed(_read(result.content), zone=self.get_calendar(stream).timezone)
         return self.page(stream, self._snapshot, page_bound, after=None, cursor=validators)
 
     def read_events(self, stream: Any, keys: Sequence[str]) -> dict[str, dict[str, Any] | None]:
@@ -217,7 +216,7 @@ class IcsCalendarBackend(CalendarBackend):
         """
 
         if self._snapshot is None:
-            self._snapshot = self._observe_feed(_read(self._fetch({}).content), zone=self.calendar(stream).timezone)
+            self._snapshot = self._observe_feed(_read(self._fetch({}).content), zone=self.get_calendar(stream).timezone)
         return self._snapshot
 
     # --- transport ---
@@ -532,7 +531,7 @@ def _attendees(component: Any) -> tuple[ParsedAttendee, ...]:
     return (
         ParsedAttendee(
             address=address,
-            role=ORGANIZER,
+            role=AttendeeRole.ORGANIZER,
             response=listed_as.response if listed_as is not None else AttendeeResponse.ACCEPTED,
             display_name=_param(organizer, "CN") or (listed_as.display_name if listed_as is not None else ""),
         ),

@@ -37,17 +37,37 @@ from angee.integrate.impl import BridgeImpl
 from angee.integrate.states import LinkStatus, StreamDefinition, SyncFailureKind
 from angee.integrate.streams import ApplyResult, RecordChange, SemanticError, StreamPage
 
-ORGANIZER = "organizer"
-"""The attendee role naming an event's organizer (``AttendeeRole.ORGANIZER``)."""
-
 CALENDARS_STREAM = "calendars"
 """The stream of a source's remote calendars: one record per calendar, linked to its ``Calendar``."""
 
 EVENTS_STREAM = "events"
 """The stream of one remote calendar's events, partitioned by the calendar's key."""
 
-_IDENTITY = ("name", "color", "timezone")
-"""The calendar fields a source states (the ``identity`` aspect of ``Calendar.statements``)."""
+EVENT_FIELDS = (
+    "title",
+    "description",
+    "location",
+    "start",
+    "end",
+    "all_day",
+    "recurrence",
+    "timezone",
+    "status",
+    "transparency",
+    "visibility",
+    "conference_url",
+)
+"""An event's own columns: what a person edits and a source writes, carried by :class:`ParsedEvent`.
+
+An event's place in a series (``series``, ``original_start``) is set when it is
+inserted, and its attendees are rows of their own.
+"""
+
+_PROJECTED = (*EVENT_FIELDS, "original_start")
+"""The columns an event's comparison projection carries, with its attendees."""
+
+_MOMENTS = frozenset({"start", "end", "original_start"})
+"""The projected columns that are moments, carried as UTC ISO-8601 text."""
 
 
 @dataclass(frozen=True)
@@ -130,10 +150,16 @@ def series_key(uid: str) -> str:
     return "sha256:" + hashlib.sha256(uid.encode()).hexdigest()
 
 
+def basic_instant(moment: datetime) -> str:
+    """Return a moment as UTC ISO-8601 basic: an occurrence id's and an instance key's suffix."""
+
+    return moment.astimezone(UTC).strftime("%Y%m%dT%H%M%SZ")
+
+
 def instance_key(uid: str, original_start: datetime) -> str:
     """Return the external key of one instance of the series ``uid``: its series key plus its UTC instant."""
 
-    return f"{series_key(uid)}#{original_start.astimezone(UTC).strftime('%Y%m%dT%H%M%SZ')}"
+    return f"{series_key(uid)}#{basic_instant(original_start)}"
 
 
 def normalized_address(address: str) -> str:
@@ -151,23 +177,12 @@ def event_projection(event: ParsedEvent) -> dict[str, Any]:
     it: an instance's own key already names its series.
     """
 
-    def moment(value: datetime | None) -> str | None:
-        return value.astimezone(UTC).isoformat() if value is not None else None
+    def value(name: str) -> Any:
+        found = getattr(event, name)
+        return found.astimezone(UTC).isoformat() if name in _MOMENTS and found is not None else found
 
     return {
-        "title": event.title,
-        "description": event.description,
-        "location": event.location,
-        "start": moment(event.start),
-        "end": moment(event.end),
-        "all_day": event.all_day,
-        "recurrence": event.recurrence,
-        "timezone": event.timezone,
-        "original_start": moment(event.original_start),
-        "status": event.status,
-        "transparency": event.transparency,
-        "visibility": event.visibility,
-        "conference_url": event.conference_url,
+        **{name: value(name) for name in _PROJECTED},
         "attendees": sorted(
             [normalized_address(attendee.address), attendee.role, attendee.response] for attendee in event.attendees
         ),
@@ -195,26 +210,13 @@ def event_from_payload(payload: Mapping[str, Any]) -> ParsedEvent:
 
     event = payload["event"]
 
-    def moment(value: str | None) -> datetime | None:
-        return datetime.fromisoformat(value) if value else None
+    def value(name: str) -> Any:
+        found = event[name]
+        return datetime.fromisoformat(found) if name in _MOMENTS and found else found
 
-    start, end = moment(event["start"]), moment(event["end"])
-    assert start is not None and end is not None  # Every projected event has both.
     return ParsedEvent(
-        title=event["title"],
-        description=event["description"],
-        location=event["location"],
-        start=start,
-        end=end,
-        all_day=event["all_day"],
-        recurrence=event["recurrence"],
-        timezone=event["timezone"],
+        **{name: value(name) for name in _PROJECTED},
         series=payload["series"],
-        original_start=moment(event["original_start"]),
-        status=event["status"],
-        transparency=event["transparency"],
-        visibility=event["visibility"],
-        conference_url=event["conference_url"],
         attendees=tuple(
             ParsedAttendee(address=address, role=role, response=response, display_name=name)
             for address, role, response, name in payload["attendees"]
@@ -256,8 +258,10 @@ class CalendarBackend(BridgeImpl, HttpClientMixin):
 
     ``calendars`` sorts before ``events``, so a calendar is mirrored before its
     events write to it. Integrate has no ordering between streams yet; this is the
-    explicit reliance. A drain that meets an unmirrored calendar fails its
-    partition transiently (:meth:`calendar`) and retries on the next cycle.
+    explicit reliance, and with ``CalendarSource.calendar_for_partition`` it is
+    the interim one: both go when an events stream names its calendar's link
+    (``SyncStream.container``). A drain that meets an unmirrored calendar fails its
+    partition transiently (:meth:`get_calendar`) and retries on the next cycle.
     """
 
     supports_identity_reads: ClassVar[bool] = True
@@ -309,7 +313,7 @@ class CalendarBackend(BridgeImpl, HttpClientMixin):
 
         yield self.bridge.calendars_stream()
         for remote in sorted(self.discover(), key=lambda item: item.key):
-            yield self.bridge.calendar_stream(remote)
+            yield self.bridge.events_stream(remote)
 
     def extract(self, stream: Any, page_bound: int, *, deadline: float | None = None) -> StreamPage:
         """Extract the calendars stream here; an events stream through the backend's :meth:`extract_events`."""
@@ -320,7 +324,7 @@ class CalendarBackend(BridgeImpl, HttpClientMixin):
         payloads = {remote.key: remote.payload() for remote in self.discover()}
         return self.page(stream, payloads, page_bound, after=cursor.get("after"), cursor={"listed": True})
 
-    def calendar(self, stream: Any) -> Any:
+    def get_calendar(self, stream: Any) -> Any:
         """Return the calendar the events ``stream`` writes to, found through its calendars-stream link."""
 
         calendar = self.bridge.calendar_for_partition(stream.partition)
@@ -421,7 +425,10 @@ class CalendarBackend(BridgeImpl, HttpClientMixin):
         return states
 
     def _stated(self, calendar: Any, link: Any) -> dict[str, Any] | None:
-        """Return the identity this source currently asserts on ``calendar`` through ``link``, or ``None``."""
+        """Return the identity this source currently asserts on ``calendar`` through ``link``, or ``None``.
+
+        The identity is the fields of ``Calendar.statements``' ``identity`` aspect.
+        """
 
         statements = calendar.statements
         row = (
@@ -429,7 +436,9 @@ class CalendarBackend(BridgeImpl, HttpClientMixin):
             .filter(aspect="identity", link=link, status=statements.model.StatementStatus.ASSERTED)
             .first()
         )
-        return {name: row.stated_value(name) or "" for name in _IDENTITY} if row is not None else None
+        if row is None:
+            return None
+        return {name: row.stated_value(name) or "" for name in statements.model.statement_aspects["identity"].fields}
 
     def _apply_calendar(self, stream: Any, record: RecordChange) -> ApplyResult:
         """Mirror one remote calendar through ``CalendarManager.mirror``; a removed one withdraws its identity.
@@ -454,7 +463,7 @@ class CalendarBackend(BridgeImpl, HttpClientMixin):
         events = apps.get_model("calendar", "CalendarEvent").objects
         keys = set(keys)
         rows = events.linked(stream, keys)
-        parsed = events.parsed(rows.values())
+        parsed = events.project_events(rows.values())
         return {
             key: (rows[key], event_projection(parsed[rows[key].pk])) if key in rows else (None, None) for key in keys
         }
@@ -475,7 +484,7 @@ class CalendarBackend(BridgeImpl, HttpClientMixin):
             for record in page.records
             if not record.tombstone and record.failure is None and record.source_payload.get("series")
         )
-        calendar = self.calendar(stream).lock_subject()
+        calendar = self.get_calendar(stream).lock_subject()
         events = apps.get_model("calendar", "CalendarEvent").objects
         self._page = _EventsPage(
             calendar,
@@ -555,7 +564,7 @@ class CalendarBackend(BridgeImpl, HttpClientMixin):
         if event is None:
             return None
         events = apps.get_model("calendar", "CalendarEvent").objects
-        return event_projection(events.parsed((event,))[event.pk])
+        return event_projection(events.project_events((event,))[event.pk])
 
 
 class ManualCalendarBackend(CalendarBackend):

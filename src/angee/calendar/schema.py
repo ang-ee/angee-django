@@ -40,6 +40,7 @@ from rebac.field_visibility import check_field_access
 from rebac.resources import resource_id_attr
 from strawberry import auto
 
+from angee.calendar.backends import EVENT_FIELDS
 from angee.calendar.models import CalendarEvent as CalendarEventSource
 from angee.calendar.models import EventOccurrence, EventTransparency
 from angee.graphql.access import ChangeReadGate
@@ -241,21 +242,6 @@ _CALENDAR_RESOURCE = hasura_model_resource(
     id_column="sqid",
 )
 
-_EVENT_SCHEDULE_FIELDS = (
-    "title",
-    "description",
-    "location",
-    "start",
-    "end",
-    "all_day",
-    "recurrence",
-    "timezone",
-    "status",
-    "transparency",
-    "visibility",
-    "conference_url",
-)
-
 _EVENT_RESOURCE = hasura_model_resource(
     CalendarEventType,
     model=CalendarEvent,
@@ -266,8 +252,8 @@ _EVENT_RESOURCE = hasura_model_resource(
     groupable=["calendar", "status", "all_day"],
     # Containment is set once (`CalendarEvent.immutable_fields`): an event never
     # moves to another calendar, series or instance after insert.
-    insertable=["calendar", "series", "original_start", *_EVENT_SCHEDULE_FIELDS],
-    updatable=list(_EVENT_SCHEDULE_FIELDS),
+    insertable=["calendar", "series", "original_start", *EVENT_FIELDS],
+    updatable=list(EVENT_FIELDS),
     field_id_decode={
         "calendar": public_pk_decoder(Calendar),
         "series": public_pk_decoder(CalendarEvent),

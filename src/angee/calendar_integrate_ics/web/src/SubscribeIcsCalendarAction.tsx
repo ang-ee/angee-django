@@ -1,12 +1,10 @@
+import { CALENDAR_MODEL, SOURCE_MODEL } from "@angee/calendar";
 import { useAuthoredMutation } from "@angee/refine";
 import * as React from "react";
 import { ActionTrigger, MutationDialog, mutationDialogValueCodecs, type DescriptorField, type MutationDialogValues } from "@angee/ui";
 
 import { SubscribeIcsCalendar } from "./documents";
 import { useIcsT } from "./i18n";
-
-const SOURCE_MODEL = "calendar.CalendarSource";
-const CALENDAR_MODEL = "calendar.Calendar";
 
 /** The ICS subscribe verb: one dialog creates the source and its read-only calendar. */
 export function SubscribeIcsCalendarAction(): React.ReactElement {

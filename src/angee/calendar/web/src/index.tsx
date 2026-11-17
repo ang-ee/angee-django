@@ -48,7 +48,7 @@ const calendarMenu: MenuDeclarations = {
   [CALENDAR_ID]: { label: "Calendar", icon: "calendar-app" },
   "calendar.events": { parent: CALENDAR_ID, label: "Calendar", icon: "calendar-events", route: "calendar.events" },
   "calendar.calendars": { parent: CALENDAR_ID, label: "Calendars", icon: "calendar-calendars", route: "calendar.calendars" },
-  "calendar.sources": { parent: CALENDAR_ID, label: "Subscriptions", icon: "calendar-sources", route: "calendar.sources" },
+  "calendar.sources": { parent: CALENDAR_ID, label: "Connected calendars", icon: "calendar-sources", route: "calendar.sources" },
 };
 
 const calendar = defineBaseAddon({
