@@ -79,6 +79,7 @@ export const enProjectsMessages: Record<string, string> = {
   "recordTasks.dropped": "Canceled",
   "recordTasks.errorSchedule": "Could not schedule the task.",
   "recordTasks.errorLog": "Could not log the exchange.",
+  "calendar.dueTasks": "My due tasks",
 };
 
 export const useProjectsT = createNamespaceT("projects", enProjectsMessages);

@@ -1,0 +1,25 @@
+# Demo overrides of the weekly standup (demo tier): the RFC 5545 RECURRENCE-ID
+# shape. Each names its master (`series`) and the instance it replaces
+# (`original_start`). The 13 July standup moves to the Tuesday; the 20 July one
+# is cancelled, so the calendar drops it.
+_meta:
+  model: calendar.CalendarEvent
+rows:
+  - xref: standup_moved
+    fields:
+      calendar: calendar.alice_calendar
+      series: calendar.standup
+      original_start: 2026-07-13T09:00:00Z
+      title: Team Standup (moved)
+      location: Main Office
+      start: 2026-07-14T09:00:00Z
+      end: 2026-07-14T09:30:00Z
+  - xref: standup_cancelled
+    fields:
+      calendar: calendar.alice_calendar
+      series: calendar.standup
+      original_start: 2026-07-20T09:00:00Z
+      title: Team Standup
+      status: cancelled
+      start: 2026-07-20T09:00:00Z
+      end: 2026-07-20T09:30:00Z

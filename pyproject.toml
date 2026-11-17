@@ -18,6 +18,7 @@ dependencies = [
     "angee-appearance==3.0.0",
     "angee-appearance-integrate==3.0.0",
     "angee-base==3.0.0",
+    "angee-calendar==3.0.0",
     "angee-dashboards==3.0.0",
     "angee-decisions==3.0.0",
     "angee-extraction==3.0.0",
@@ -131,6 +132,7 @@ angee-agents-runtime-pydantic = {workspace = true}
 angee-appearance = {workspace = true}
 angee-appearance-integrate = {workspace = true}
 angee-base = {workspace = true}
+angee-calendar = {workspace = true}
 angee-dashboards = {workspace = true}
 angee-decisions = {workspace = true}
 angee-extraction = {workspace = true}

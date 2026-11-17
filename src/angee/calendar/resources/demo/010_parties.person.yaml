@@ -1,0 +1,21 @@
+# The demo users' own people (demo tier), whose calendars 030 seeds. Adopted on
+# the one-person-per-user key, so a host whose other addons seed the same people
+# keeps one row each; each person is owned by its user, as `PersonManager.for_user`
+# makes a signed-up user's own person, so the user may give it more calendars.
+_meta:
+  model: parties.Person
+rows:
+  - xref: alice_person
+    fields:
+      display_name: Alice Morgan
+      given_name: Alice
+      family_name: Morgan
+      user: iam.user_alice
+      owner: iam.user_alice
+  - xref: bob_person
+    fields:
+      display_name: Bob Chen
+      given_name: Bob
+      family_name: Chen
+      user: iam.user_bob
+      owner: iam.user_bob

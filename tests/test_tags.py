@@ -37,6 +37,7 @@ from rebac.roles import grant as grant_role
 
 from angee.base.models.identity import public_id_for
 from angee.base.permissions import bind_rebac_schema
+from angee.calendar.testing.models import CalendarEvent
 from angee.graphql.testing.documents import execute_schema, result_data
 from angee.messaging.testing.models import Handle, Message, Party, Person, Thread
 from angee.projects.testing.models import Project, Task
@@ -572,7 +573,7 @@ def test_attaching_across_mti_levels_shares_one_edge(party_edge: SimpleNamespace
 
 
 def _taggable_test_models() -> set[type[Any]]:
-    return {File, Handle, Message, Page, Party, Project, Task, Thread}
+    return {CalendarEvent, File, Handle, Message, Page, Party, Project, Task, Thread}
 
 
 def _tag_errors(errors: list[Any]) -> list[Any]:

@@ -1,4 +1,5 @@
 import { expectValidBaseAddon } from "@angee/app/testing";
+import type { CalendarSourceContribution } from "@angee/calendar";
 import type { ChatterTabContent, ChatterViewContext, ContainerChild } from "@angee/ui/runtime";
 import { describe, expect, test } from "vitest";
 
@@ -23,5 +24,15 @@ describe("projects addon manifest", () => {
     expect(offered([TASK_MODEL])).toBe(true);
     expect(offered(["messaging.ThreadAttachment", "storage.FileAttachment"])).toBe(false);
     expect(offered()).toBe(false);
+  });
+
+  test("overlays the viewer's due tasks on the calendar page as a toggleable source", () => {
+    const entry = projects.containers?.["calendar.events#occurrence-sources"] as
+      Record<string, ContainerChild<CalendarSourceContribution>>;
+    const child = entry["projects.due-tasks"]!;
+    const source = child.content({ viewerId: "usr_viewer", recordHref: () => undefined });
+    expect(source.key).toBe("projects.tasks");
+    expect(source.enabled).toBe(true);
+    expect(child.content({ viewerId: "", recordHref: () => undefined }).enabled).toBe(false);
   });
 });
