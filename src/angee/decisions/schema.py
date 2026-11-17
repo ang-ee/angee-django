@@ -80,9 +80,15 @@ class DecisionType(AngeeNode):
     records: list[DecisionRecordType] = actor_scoped_to_many("records")
     verdict: JSON | None
     verdict_values: JSON | None
-    verdict_label: str = strawberry_django.field(only=["verdict", "proposal"])
+    verdict_label: str = strawberry_django.field(only=["verdict", "proposal", "superseded_by"])
     answered_by: UserType | None = actor_scoped_to_one("answered_by")
     answered_at: auto
+    answered_for: JSON | None
+    verdict_context: JSON | None
+    superseded_by: DecisionType | None = actor_scoped_to_one("superseded_by")
+    due_at: auto
+    remind_after: auto
+    reminded_at: auto
     revision: auto
     created_at: auto
     updated_at: auto
@@ -103,13 +109,14 @@ class DecisionType(AngeeNode):
 
 _DECISIONS = hasura_model_resource(
     DecisionType, model=Decision, name="decisions",
-    filterable=["id", "kind", "assignees", "requester", "is_open", "can_act",
+    filterable=["id", "kind", "assignees", "requester", "is_open", "is_overdue", "can_act", "due_at",
                 *declared_hasura_resource_fields(Decision, "hasura_filterable_fields")],
-    sortable=["id", "created_at"], aggregatable=["id"], groupable=["kind"],
+    sortable=["id", "created_at", "due_at"], aggregatable=["id"], groupable=["kind"],
     insert=False, update=False, delete=False,
     field_id_decode={"assignees": public_pk_decoder(Decision._meta.get_field("assignees").related_model)},
     filter_expressions={
         "is_open": Decision.objects.open_expression(),
+        "is_overdue": Decision.objects.overdue_expression(),
         "can_act": partial(permission_expression, name="act"),
     },
 )
@@ -142,10 +149,14 @@ class DecisionMutation:
     @action_guard("Could not decide.", camel_case_keys=False, result_type=DecideResult)
     def decide(
         self, info: strawberry.Info, id: PublicID, chosen: list[str], revision: int, values: JSON | None = None,
+        on_behalf_of: JSON | None = None, evidence: JSON | None = None, note: str = "",
     ) -> DecideResult:
         decision = authorized_permission_target(info, Decision, id, "act")
         actor = get_current_user(info)
-        answered = decision.decide(actor=actor, revision=revision, chosen=chosen, values=values)
+        answered = decision.decide(
+            actor=actor, revision=revision, chosen=chosen, values=values,
+            on_behalf_of=on_behalf_of, evidence=evidence or (), note=note,
+        )
         return DecideResult(ok=True, message="Decision recorded.", id=answered.sqid, decision_row=answered)
 
 

@@ -8,7 +8,7 @@ verdict with who stopped it; no verdict is the sole open-state rule.
 
 `Decision.objects.ask(DecisionRequest(...), actor=actor)` admits one question.
 Requests declare `kind`, saved `records`, `proposal`, and optional `assignees`,
-`requester` and `context`. Assignees default to `()` and requester to `None`.
+`requester`, `context`, `due_at` and `remind_after`. Assignees default to `()` and requester to `None`.
 When supplied, assignees must be active and at least one must be permitted to
 answer. The composed `act` permission governs answers, including an owning
 addon's `owner_eligible` contribution. Without such a contribution or named
@@ -17,8 +17,13 @@ one participant and standing read access to concerns and context references for
 the asking actor, requester and assignees. It creates no grants. Concern links
 use canonical model identities. An owning addon may declare
 `RetainedGenericRelation("decisions.DecisionRecord", related_query_name=...)` on the
-canonical concerned model and contribute typed `owner_eligible` and `read` arms
+canonical concerned model and contribute typed `owner_eligible` and `read_granted` arms
 through that query path. Deleting the source preserves these retained links.
+`decisions/decision#read_granted` is the assignees, the requester and administrators,
+and `read` derives from it. A consumer whose outside audience reads the question asked
+of them, such as a represented party's admitted user, unions that arm into
+`read_granted` from its own `permissions.extends.zed`; it reaches the question and its
+concern links and nothing else.
 
 `DecisionProposal` is the Pydantic contract for the stored JSON:
 
@@ -48,6 +53,35 @@ verdict in authored order, increments the optimistic revision and emits
 Non-workflow askers apply there, so refusal rolls the verdict back. Workflow
 subscribers schedule their wake after commit and apply when the step resumes. The Python revision is optional; the card's
 GraphQL mutation requires its observed revision. Invalid choices write nothing.
+An answer may be given for a represented record of any model, such as a party who
+answered by phone: `decide(..., on_behalf_of=DecisionRecordReference.of(record),
+evidence=(DecisionRecordReference.of(file),), note="...")` stores `answered_for` and
+`verdict_context` (a `DecisionContext` whose `reason` is the note and whose
+`references` are the evidence). `answered_by` stays the actor and `act` still decides;
+the represented record grants nothing. Every participant (the answerer, requester and
+active assignees) must read each reference, as asking requires of the question's
+context, or the answer is refused.
+`decision.withdraw(actor=actor, reason="...")` closes a question with an empty verdict
+in the asking owner's system context and keeps the reason as `verdict_context.reason`.
+`Decision.objects.supersede(decision, request, actor=actor, reason="...")` replaces an
+open question in one transaction, again only in the asking owner's system context: it
+asks `request`, withdraws the old question with the reason and links the replacement as
+`superseded_by`, so one question stays open and a stale answer to the old one meets the
+revision refusal. A question a requesting record retains (`requester_querysets`, a
+workflow step's) belongs to that asker, so supersede refuses it. Escalation is a
+supersede naming the escalation's assignees; no question changes in place.
+
+A request may carry `due_at` and `remind_after`, aware instants the asker supplies;
+decisions does no date arithmetic on them and they stay fixed once asked. The
+resource's `is_overdue` filter selects open questions past `due_at`, derived when read.
+`decision.remind()` stamps `reminded_at` once and sends `decision_reminder_due` inside
+its transaction, in the asker's or the reminder sweep's system context; the revision
+does not move. The `decisions.remind_due` beat task reminds, every minute, each open
+question whose `remind_after` has passed. A question a requesting record retains keeps
+its asker's own timing and is skipped. Delivering a reminder belongs to the signal's
+receivers in an addon above decisions, after commit. The record timeline shows the
+reminder as a `decisions.reminder` line beside its question's line.
+
 Decisions execute no proposal actions. The asker consumes the answer through the
 records' owners. Free correction means editing the record and then choosing the
 alternative that keeps its current values.

@@ -10,6 +10,29 @@ live in code docstrings.
 
 ## Unreleased — shared addon contracts, native embeddings and graph retrieval
 
+- Decisions answer for a represented record, replace questions atomically and
+  remind once. `Decision.decide(..., on_behalf_of=, evidence=, note=)` stores
+  `answered_for` (a `DecisionRecordReference` to any record) and
+  `verdict_context` (a `DecisionContext`); `answered_by` stays the actor and
+  `act` is unchanged, and every participant must read each reference.
+  `Decision.objects.supersede(decision, request, *, actor, reason)` asks the
+  replacement and withdraws the old question with its reason and a
+  `superseded_by` link in one transaction, in the asking owner's system
+  context, and refuses a question a requesting record (a workflow step)
+  retains; escalation is a supersede with the escalation's assignees.
+  `withdraw` takes an optional `reason`. Requests carry the asker's `due_at`
+  and `remind_after`; `is_overdue` filters the resource; `Decision.remind()`
+  stamps `reminded_at` once and sends `decision_reminder_due`, which an addon
+  above delivers; the `decisions.remind_due` beat task runs it every minute
+  and shows a `decisions.reminder` timeline line. `decisions/decision` gains
+  `read_granted` (assignees, requester, admins) and `read` derives from it:
+  consumers union outside audiences into `read_granted`, and fragments that
+  still add `read` arms (workflows, `tests/extcontrib`, arp) move there next.
+  Upgrade: decisions depends on `angee-jobs`; hosts author the decisions
+  migration (six columns, the widened `decisions_verdict_consistent`
+  constraint and the `decisions_reminder_due` index), re-sync the permission
+  schema (decisions revision 8) and restart the whole application.
+
 - `angee.scheduling` owns due rules. A `DueRule` (`angee.scheduling.due`) names
   due anchors the subject supplies later and labelled terms measured from them:
   calendar offsets (elapsed minutes and hours; wall-calendar days to years in the
