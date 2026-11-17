@@ -1,12 +1,13 @@
 // The checklist type's results and the evidence it records, as a consumer declares them.
 // @rebac_package: checklistdemo
-// @rebac_schema_revision: 1
+// @rebac_schema_revision: 2
 
 definition checklists/result {
     relation inspection: checklistdemo/inspection // rebac:field=record
+    relation notice: checklistdemo/notice // rebac:field=record
 
-    permission target_read  = inspection->read
-    permission target_write = inspection->write
+    permission target_read  = inspection->read + notice->read
+    permission target_write = inspection->write + notice->write
 }
 
 definition checklists/evidence {

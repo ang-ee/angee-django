@@ -1141,9 +1141,10 @@ A checked record never carries a second status field or a retained review snapsh
 [`ChecklistStatuses`](../../src/angee/checklists/managers.py) is the one status rule.
 Cells, filters, counts and record projections read it, so a list cell, its filter
 and a dashboard count cannot disagree. A result shows only when its record and
-every evidence link are readable. The recording addon declares the evidence types
-it records, and the checklist type's addon declares the type's relation
-([checklists README](../../src/angee/checklists/README.md)).
+every evidence link are readable to the reader, signed in or anonymous; deleting
+an evidence record deletes the results it supports. The recording addon declares
+the evidence types it records, and the checklist type's addon declares the type's
+relation ([checklists README](../../src/angee/checklists/README.md)).
 
 [`MergeableMixin`](../../src/angee/base/models/merge.py) owns operational redirects, actor
 admission and the system fold. Models declare domain refusals and carry/retire

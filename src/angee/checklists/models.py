@@ -265,9 +265,15 @@ class ChecklistEvidence(DerivedFrom, concrete=True):
     with a ``record``-backed relation unioned into ``record_read``. A link
     whose record the reader cannot read hides its result; a link of an
     undeclared type is refused when the result is recorded.
+
+    Deleting an evidence record deletes every result it supports, whatever its
+    other links: the result's read depended on all of them, so a result that
+    lost one must not become readable to more people. The item then reads as
+    it did before the result was recorded.
     """
 
     sqid_prefix = "cke_"
+    on_target_delete = models.CASCADE
 
     result = models.ForeignKey("checklists.ChecklistResult", on_delete=models.CASCADE, related_name="evidence")
 
@@ -291,3 +297,14 @@ class ChecklistEvidence(DerivedFrom, concrete=True):
         """Return a readable label for Django displays."""
 
         return f"{self.result_id}<-{self.content_type_id}:{self.object_id}"
+
+    @classmethod
+    def teardown_for_target(cls, target: models.Model) -> None:
+        """Delete the results ``target`` is evidence of; their links follow through the foreign key.
+
+        Append-only rows leave through their owner's delete, never the collection's.
+        """
+
+        supported = cls._base_manager.filter(cls.record_filter(target)).values("result_id")
+        for result in _result_model()._base_manager.filter(pk__in=supported).order_by("pk"):
+            result._owner_delete()

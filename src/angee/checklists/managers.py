@@ -1,13 +1,16 @@
 """Recording checklist results and the one SQL rule that assesses them.
 
-:class:`ChecklistStatuses` is the status rule. For each declared item it reads
-the latest structural result row; the row counts only when the reader may read
-it, so an unreadable latest result reads ``not_checked`` and never falls back to
-an older one. A passed or not-applicable result recorded against another content
-token reads ``unresolved``. Categories and the record combine their items, and a
-result whose key left the checklist still counts while it needs attention. The
-record's token is computed once per row in a derived input, which PostgreSQL
-keeps unflattened (``OFFSET 0``) so each item is assessed once.
+:class:`ChecklistStatuses` is the status rule. A derived input computes, once
+per record row, the record's content token and whether the reader holds the
+record's ``target_read``. For each declared item it then reads the latest
+structural result row; the row counts only when the reader may read the record
+and no evidence link hides the row (``checklists/result#evidence_hidden``), so an
+unreadable latest result reads ``not_checked`` and never falls back to an older
+one. A passed or not-applicable result recorded against another content token,
+or against a record whose token is NULL, reads ``unresolved``. Categories and the
+record combine their items, and a result whose key left the checklist still
+counts while it needs attention. PostgreSQL keeps each derived input unflattened
+(``OFFSET 0``), so the token, the record's read and each item are evaluated once.
 
 Cells, filters, counts and :meth:`ChecklistResultManager.assess` all read that
 expression; the Python projection only adds each item's recorded detail,
@@ -25,8 +28,9 @@ from django.apps import apps
 from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import PermissionDenied, ValidationError
 from django.db import models, transaction
+from django.db.models.fields.json import KeyTextTransform, KeyTransform
 from django.db.models.functions import Coalesce, JSONObject
-from django.db.models.lookups import Exact, In
+from django.db.models.lookups import Exact, In, IsNull
 from rebac import current_actor, generic_target, system_context
 from rebac.actors import is_sudo
 from rebac.field_backing import canonical_model
@@ -36,7 +40,7 @@ from angee.base.expressions import JSONArraySubquery
 from angee.base.managers import AngeeManager
 from angee.base.models.append_only import AppendOnlyQuerySet
 from angee.base.models.identity import public_id_for
-from angee.base.permissions import reader_queryset
+from angee.base.permissions import reader_queryset, require_rebac_queryset
 from angee.base.prefetch import InstancePrefetch
 from angee.base.querysets import AngeeQuerySet
 from angee.checklists.contracts import ATTENTION_STATUSES, PASSING_STATUSES, Checklist, ChecklistStatus
@@ -74,10 +78,24 @@ def _target_content_type(model: type[models.Model]) -> ContentType:
     return ContentType.objects.get_for_model(canonical_model(model) or model)
 
 
-def _readable_results(actor: Any) -> models.QuerySet[Any]:
-    """The results ``actor`` may read, as a subquery-ready aggregate scope; ambient without an actor."""
+def _holding(actor: Any, permission: str) -> models.QuerySet[Any] | None:
+    """The results on which ``actor`` holds ``permission``, as a subquery-ready aggregate scope.
 
-    return cast(Any, reader_queryset(_result_model(), actor)).scoped_for_aggregate()
+    ``None`` under a named system context, which reads every result. Without an
+    actor or system context the scope fails closed, as REBAC's ambient read does.
+    """
+
+    if actor is None and is_sudo():
+        return None
+    rows = (
+        require_rebac_queryset(_result_model())
+        if actor is None
+        else require_rebac_queryset(
+            _result_model(),
+            actor=actor,
+        )
+    )
+    return cast(Any, rows.with_action(permission)).scoped_for_aggregate()
 
 
 class _InputColumn(models.Expression):
@@ -99,6 +117,7 @@ class _InputColumn(models.Expression):
 _INPUT = "checklist_input"
 _ITEMS = "checklist_items"
 _REVISION = "_checklist_revision"
+_READABLE = "_checklist_readable"
 
 type Selection = Literal["status", "vector", "projection", "next_blocking"] | tuple[Literal["category"], str]
 
@@ -121,23 +140,19 @@ class ChecklistStatuses(models.Func):
             raise TypeError(f"{model._meta.label} does not compose ChecklistMixin.")
         self.checklist: Checklist = model.checklist()
         self.select = select
-        self.readable = _readable_results(actor)
         target = canonical_model(model) or model
         self.target = (target._meta.app_label, target._meta.model_name)
-        if isinstance(select, tuple):
-            self.items = self.checklist.category_items(select[1])
-        else:
-            self.items = self.checklist.items
+        self.target_read = _holding(actor, "target_read")
+        self.evidence_hidden = _holding(actor, "evidence_hidden")
+        self.items = self.checklist.category_items(select[1]) if isinstance(select, tuple) else self.checklist.items
         self.retired = select in ("status", "vector", "projection")
-        self.stale = select == "projection"
+        self.projection = select == "projection"
         revision = model.checklist_revision_expression()
         if revision is None:
             revision = models.Value("", output_field=models.CharField())
-        sources: list[Any] = [revision, *(self._item_status(item.key) for item in self.items)]
+        sources: list[Any] = [revision, self._record_readable(), *(self._item(item.key) for item in self.items)]
         if self.retired:
             sources.append(self._retired_status())
-        if self.stale:
-            sources.extend(self._item_stale(item.key) for item in self.items)
         output: models.Field = (
             models.JSONField()
             if select in ("vector", "projection")
@@ -161,41 +176,56 @@ class ChecklistStatuses(models.Func):
             object_id=models.OuterRef(record),
         )
 
-    def _shown(self) -> models.Exists:
-        return models.Exists(self.readable.filter(pk=models.OuterRef("pk")))
+    def _record_readable(self) -> models.Exists | models.Value:
+        """Whether the reader holds the record's ``target_read``: every result of a record shares it."""
+
+        if self.target_read is None:
+            return models.Value(True, output_field=models.BooleanField())
+        app_label, model_name = self.target
+        return models.Exists(
+            self.target_read.filter(
+                content_type__app_label=app_label,
+                content_type__model=model_name,
+                object_id=models.OuterRef("pk"),
+            )
+        )
+
+    def _shown(self) -> models.Q:
+        """A result row the reader may read: the record is readable and no evidence link hides the row."""
+
+        shown = models.Q(_InputColumn(_INPUT, _READABLE, models.BooleanField()))
+        if self.evidence_hidden is not None:
+            shown &= ~models.Q(models.Exists(self.evidence_hidden.filter(pk=models.OuterRef("pk"))))
+        return shown
 
     def _fresh(self) -> models.Q:
-        return models.Q(revision=_InputColumn(_INPUT, _REVISION, models.CharField()))
+        """Recorded against the record's current token; a NULL token is never current."""
 
-    def _item_status(self, key: str) -> models.Expression:
-        status = models.Case(
-            models.When(~models.Q(self._shown()), then=models.Value(ChecklistStatus.NOT_CHECKED)),
+        token = _InputColumn(_INPUT, _REVISION, models.CharField())
+        return models.Q(Exact(models.F("revision"), token)) & models.Q(IsNull(token, False))
+
+    def _value(self, status: models.Expression | models.F, stale: bool) -> models.Expression | models.F:
+        if not self.projection:
+            return status
+        return JSONObject(status=status, stale=models.Value(stale, output_field=models.BooleanField()))
+
+    def _item(self, key: str) -> models.Expression:
+        """One item's status (and, for the projection, its staleness) from its latest row, in one subquery."""
+
+        not_checked = self._value(models.Value(ChecklistStatus.NOT_CHECKED), False)
+        output: models.Field = models.JSONField() if self.projection else models.CharField()
+        item = models.Case(
+            models.When(~self._shown(), then=not_checked),
             models.When(
                 models.Q(status__in=PASSING_STATUSES) & ~self._fresh(),
-                then=models.Value(ChecklistStatus.UNRESOLVED),
+                then=self._value(models.Value(ChecklistStatus.UNRESOLVED), True),
             ),
-            default=models.F("status"),
-            output_field=models.CharField(),
+            models.When(~self._fresh(), then=self._value(models.F("status"), True)),
+            default=self._value(models.F("status"), False),
+            output_field=output,
         )
-        latest = self._results().filter(key=key).annotate(_status=status).order_by(*LATEST_ORDER)
-        return Coalesce(
-            models.Subquery(latest.values("_status")[:1]),
-            models.Value(ChecklistStatus.NOT_CHECKED),
-            output_field=models.CharField(),
-        )
-
-    def _item_stale(self, key: str) -> models.Expression:
-        stale = models.Case(
-            models.When(models.Q(self._shown()) & ~self._fresh(), then=models.Value(True)),
-            default=models.Value(False),
-            output_field=models.BooleanField(),
-        )
-        latest = self._results().filter(key=key).annotate(_stale=stale).order_by(*LATEST_ORDER)
-        return Coalesce(
-            models.Subquery(latest.values("_stale")[:1]),
-            models.Value(False),
-            output_field=models.BooleanField(),
-        )
+        latest = self._results().filter(key=key).annotate(_item=item).order_by(*LATEST_ORDER)
+        return Coalesce(models.Subquery(latest.values("_item")[:1]), not_checked, output_field=output)
 
     def _retired_status(self) -> models.Subquery:
         """The strongest attention status among the readable latest results of retired keys."""
@@ -203,11 +233,7 @@ class ChecklistStatuses(models.Func):
         latest = (
             self._results("object_id")
             .exclude(key__in=self.checklist.keys)
-            .first_per_group(
-                "key",
-                order_by=LATEST_ORDER,
-                limit=1,
-            )
+            .first_per_group("key", order_by=LATEST_ORDER, limit=1)
         )
         strength = models.Case(
             *(models.When(status=status, then=models.Value(rank)) for rank, status in enumerate(ATTENTION_STATUSES)),
@@ -222,17 +248,22 @@ class ChecklistStatuses(models.Func):
         )
         return models.Subquery(alerting.values("status")[:1], output_field=models.CharField(null=True))
 
-    def _columns(self) -> tuple[list[_InputColumn], _InputColumn | None, list[_InputColumn]]:
-        items = [_InputColumn(_ITEMS, f"i{index}", models.CharField()) for index in range(len(self.items))]
-        retired = _InputColumn(_ITEMS, "r", models.CharField(null=True)) if self.retired else None
-        stale = (
-            [_InputColumn(_ITEMS, f"s{index}", models.BooleanField()) for index in range(len(self.items))]
-            if self.stale
-            else []
-        )
-        return items, retired, stale
+    def _columns(self) -> tuple[list[models.Expression], _InputColumn | None, list[models.Expression]]:
+        """Each item's status and staleness as the combining expressions read them, and the retired status."""
 
-    def _summary(self, items: Sequence[_InputColumn], retired: _InputColumn | None) -> models.Expression:
+        statuses: list[models.Expression] = []
+        stale: list[models.Expression] = []
+        for index in range(len(self.items)):
+            if self.projection:
+                column = _InputColumn(_ITEMS, f"i{index}", models.JSONField())
+                statuses.append(KeyTextTransform("status", column))
+                stale.append(KeyTransform("stale", column))
+            else:
+                statuses.append(_InputColumn(_ITEMS, f"i{index}", models.CharField()))
+        retired = _InputColumn(_ITEMS, "r", models.CharField(null=True)) if self.retired else None
+        return statuses, retired, stale
+
+    def _summary(self, items: Sequence[models.Expression], retired: _InputColumn | None) -> models.Expression:
         conditions = []
         for attention in ATTENTION_STATUSES:
             condition = models.Q(Exact(retired, models.Value(attention))) if retired is not None else models.Q()
@@ -261,7 +292,7 @@ class ChecklistStatuses(models.Func):
         )
 
     @staticmethod
-    def _category(items: Sequence[_InputColumn]) -> models.Expression:
+    def _category(items: Sequence[models.Expression]) -> models.Expression:
         if not items:
             return models.Value(ChecklistStatus.NOT_APPLICABLE, output_field=models.CharField())
         conditions = []
@@ -280,7 +311,7 @@ class ChecklistStatuses(models.Func):
             output_field=models.CharField(),
         )
 
-    def _categories(self, items: Sequence[_InputColumn]) -> dict[str, models.Expression]:
+    def _categories(self, items: Sequence[models.Expression]) -> dict[str, models.Expression]:
         by_key = dict(zip((item.key for item in self.items), items, strict=True))
         return {
             category.key: self._category([by_key[item.key] for item in self.checklist.category_items(category.key)])
@@ -322,30 +353,47 @@ class ChecklistStatuses(models.Func):
         **extra_context: Any,
     ) -> _AsSqlType:
         quote = connection.ops.quote_name
-        revision, *sources = self.get_source_expressions()
+        revision, readable, *sources = self.get_source_expressions()
         revision_sql, revision_params = compiler.compile(revision)
+        readable_sql, readable_params = compiler.compile(readable)
         names = [f"i{index}" for index in range(len(self.items))]
         if self.retired:
             names.append("r")
-        if self.stale:
-            names.extend(f"s{index}" for index in range(len(self.items)))
         compiled = [compiler.compile(source) for source in sources]
         output_sql, output_params = compiler.compile(self._output().resolve_expression(compiler.query))
         # PostgreSQL otherwise flattens each derived input into its readers and
-        # repeats the record's token and every item read per reference.
+        # repeats the record's token, its read and every item read per reference.
         keep = " OFFSET 0" if connection.vendor == "postgresql" else ""
         columns = ", ".join(f"{sql} AS {quote(name)}" for (sql, _params), name in zip(compiled, names, strict=True))
         sql = (
             f"(SELECT {output_sql} FROM (SELECT {columns or 'NULL AS ' + quote('_')} FROM "
-            f"(SELECT {revision_sql} AS {quote(_REVISION)}{keep}) AS {quote(_INPUT)}{keep}) AS {quote(_ITEMS)})"
+            f"(SELECT {revision_sql} AS {quote(_REVISION)}, {readable_sql} AS {quote(_READABLE)}{keep}) "
+            f"AS {quote(_INPUT)}{keep}) AS {quote(_ITEMS)})"
         )
-        params = (*output_params, *(param for _sql, params in compiled for param in params), *revision_params)
+        params = (
+            *output_params,
+            *(param for _sql, params in compiled for param in params),
+            *revision_params,
+            *readable_params,
+        )
         return sql, params
 
 
 @dataclass(frozen=True)
+class LatestResult:
+    """A record's latest readable result for one item, with the records that produced it.
+
+    Every evidence reference is readable by the reader the result was read for:
+    one hidden link would have hidden the result (``checklists/result#read``).
+    """
+
+    result: ChecklistResult
+    evidence: tuple[EvidenceReference, ...]
+
+
+@dataclass(frozen=True)
 class ChecklistItemAssessment:
-    """One item's assessed status with its latest readable result, if any."""
+    """One item's assessed status with its latest readable result and that result's evidence."""
 
     key: str
     label: str
@@ -354,7 +402,8 @@ class ChecklistItemAssessment:
     status: str
     detail: str
     stale: bool
-    result: Any = None
+    result: ChecklistResult | None = None
+    evidence: tuple[EvidenceReference, ...] = ()
 
     @property
     def recorded_at(self) -> datetime | None:
@@ -416,7 +465,7 @@ def _detail(items: Sequence[ChecklistItemAssessment], status: str) -> str:
     return f"{applicable} applicable check{'s' if applicable != 1 else ''} passed."
 
 
-def _item_detail(status: str, result: Any) -> str:
+def _item_detail(status: str, result: ChecklistResult | None) -> str:
     if result is None:
         return NO_RESULT_DETAIL
     if status != result.status and result.status in PASSING_STATUSES:
@@ -424,45 +473,52 @@ def _item_detail(status: str, result: Any) -> str:
     return str(result.detail)
 
 
-def assessment(checklist: Checklist, statuses: Mapping[str, Any], results: Iterable[Any]) -> ChecklistAssessment:
+def assessment(
+    checklist: Checklist, statuses: Mapping[str, Any], latest: Iterable[LatestResult]
+) -> ChecklistAssessment:
     """Build a record's assessment from its SQL statuses and its latest readable results."""
 
-    by_key = {result.key: result for result in results}
+    by_key = {entry.result.key: entry for entry in latest}
     item_statuses = statuses.get("items") or {}
     stale = statuses.get("stale") or {}
-    items = [
-        ChecklistItemAssessment(
-            key=item.key,
-            label=item.label,
-            category=item.category,
-            blocking=item.blocking,
-            status=(status := item_statuses.get(item.key, ChecklistStatus.NOT_CHECKED)),
-            detail=_item_detail(status, by_key.get(item.key) if status != ChecklistStatus.NOT_CHECKED else None),
-            stale=bool(stale.get(item.key)),
-            result=by_key.get(item.key) if status != ChecklistStatus.NOT_CHECKED else None,
+    items: list[ChecklistItemAssessment] = []
+    for item in checklist.items:
+        status = str(item_statuses.get(item.key, ChecklistStatus.NOT_CHECKED))
+        shown = by_key.get(item.key) if status != ChecklistStatus.NOT_CHECKED else None
+        items.append(
+            ChecklistItemAssessment(
+                key=item.key,
+                label=item.label,
+                category=item.category,
+                blocking=item.blocking,
+                status=status,
+                detail=_item_detail(status, shown.result if shown else None),
+                stale=bool(stale.get(item.key)),
+                result=shown.result if shown else None,
+                evidence=shown.evidence if shown else (),
+            )
         )
-        for item in checklist.items
-    ]
     items.extend(
         ChecklistItemAssessment(
-            key=result.key,
-            label=result.key,
+            key=key,
+            label=key,
             category=None,
             blocking=False,
-            status=str(result.status),
-            detail=str(result.detail),
+            status=str(entry.result.status),
+            detail=str(entry.result.detail),
             stale=False,
-            result=result,
+            result=entry.result,
+            evidence=entry.evidence,
         )
-        for key, result in sorted(by_key.items())
-        if checklist.item(key) is None and result.status in ATTENTION_STATUSES
+        for key, entry in sorted(by_key.items())
+        if checklist.item(key) is None and entry.result.status in ATTENTION_STATUSES
     )
     categories = statuses.get("categories") or {}
     groups = tuple(
         ChecklistGroupAssessment(
             key=category.key,
             label=category.label,
-            status=(group := categories.get(category.key, ChecklistStatus.NOT_APPLICABLE)),
+            status=(group := str(categories.get(category.key, ChecklistStatus.NOT_APPLICABLE))),
             detail=_detail(members := [item for item in items if item.category == category.key], group),
             item_keys=tuple(item.key for item in members),
         )
@@ -485,8 +541,7 @@ class LatestResults(InstancePrefetch):
 
     The latest row per item is chosen structurally (``first_per_group`` over the
     page's rows) before the reader's scope applies, so an unreadable latest
-    result leaves its item without one. Each result carries its readable
-    evidence references.
+    result leaves its item without one. Each row is a :class:`LatestResult`.
     """
 
     single = False
@@ -497,11 +552,11 @@ class LatestResults(InstancePrefetch):
         queryset: models.QuerySet[Any],
     ) -> tuple[Iterable[Any], Callable[[Any], object], Callable[[Any], object]]:
         if not instances:
-            return [], lambda row: row.object_id, lambda instance: instance.pk
+            return [], lambda entry: entry.result.object_id, lambda instance: instance.pk
         model = type(instances[0])
         actor = self.reader(queryset)
         rows = _result_model().objects.latest_readable(model, [instance.pk for instance in instances], actor)
-        return rows, lambda row: row.object_id, lambda instance: instance.pk
+        return rows, lambda entry: entry.result.object_id, lambda instance: instance.pk
 
 
 class ChecklistResultQuerySet[ResultT: ChecklistResult](AppendOnlyQuerySet[ResultT], AngeeQuerySet[ResultT]):
@@ -530,10 +585,13 @@ class ChecklistResultManager[ResultT: ChecklistResult](_ChecklistResultManagerBa
     ) -> ResultT:
         """Record one result for item ``key`` on ``record`` under the ambient actor.
 
-        The key must be declared by the record's checklist and ``status`` belong to
-        :class:`~angee.checklists.models.ChecklistStatus`. The record's current content
-        token is stored with it. Each evidence record must be of a type the
-        recording addon declares on ``checklists/evidence``, and readable by the
+        The key must be declared by the record's checklist, and ``status`` must be
+        an outcome of :class:`~angee.checklists.contracts.ChecklistStatus`: ``not_checked``
+        is the absence of a result, never one. The record's content token is read
+        here and stored with the result, so the caller holds the record's row lock
+        from the reads its check made until this call; otherwise a concurrent edit
+        could be stamped as checked content. Each evidence record must be of a type
+        the recording addon declares on ``checklists/evidence``, and readable by the
         recording actor; actorless recording requires a named system context. The
         result's own ``create`` gate requires the record type's declared write.
         """
@@ -545,6 +603,8 @@ class ChecklistResultManager[ResultT: ChecklistResult](_ChecklistResultManagerBa
             raise ValidationError({"key": f"{model._meta.label} declares no checklist item {key!r}."})
         if status not in ChecklistStatus.values:
             raise ValidationError({"status": f"{status!r} is not a checklist status."})
+        if status == ChecklistStatus.NOT_CHECKED:
+            raise ValidationError({"status": "A result records an outcome; not checked is the absence of one."})
         links = list(dict.fromkeys(evidence))
         evidence_model = _evidence_model()
         for link in links:
@@ -584,13 +644,11 @@ class ChecklistResultManager[ResultT: ChecklistResult](_ChecklistResultManagerBa
                     )
         return result
 
-    def latest_readable(self, model: type[models.Model], record_ids: Sequence[Any], actor: Any) -> list[ResultT]:
+    def latest_readable(self, model: type[models.Model], record_ids: Sequence[Any], actor: Any) -> list[LatestResult]:
         """The latest readable result per item of each listed record, with its evidence, in one read.
 
         The latest row is selected structurally, then the reader's scope applies,
-        so an item whose latest result the reader cannot read has none. A shown
-        result's evidence is readable by construction (``checklists/result#read``),
-        so each row carries its evidence references as ``evidence_references``.
+        so an item whose latest result the reader cannot read has none.
         """
 
         content_type = _target_content_type(model)
@@ -606,22 +664,13 @@ class ChecklistResultManager[ResultT: ChecklistResult](_ChecklistResultManagerBa
             .order_by("pk")
             .values(_item=JSONObject(content_type=models.F("content_type_id"), object_id=models.F("object_id")))
         )
-        rows = list(
+        rows = (
             reader_queryset(self.model, actor)
             .filter(pk__in=latest.values("pk"))
             .annotate(_evidence=JSONArraySubquery(links))
             .order_by("pk")
         )
-        for row in rows:
-            references = []
-            for link in cast(Any, row)._evidence:
-                target = ContentType.objects.get_for_id(link["content_type"]).model_class()
-                if target is not None:
-                    references.append(
-                        EvidenceReference(model=target._meta.label, id=public_id_for(target, link["object_id"])),
-                    )
-            cast(Any, row).evidence_references = tuple(references)
-        return cast(list[ResultT], rows)
+        return [LatestResult(result=row, evidence=_references(cast(Any, row)._evidence)) for row in rows]
 
     def assess(self, record: ChecklistMixin) -> ChecklistAssessment:
         """Assess one record for the ambient actor through the same rule its list reads."""
@@ -636,14 +685,17 @@ class ChecklistResultManager[ResultT: ChecklistResult](_ChecklistResultManagerBa
             )
             .first()
         )
-        results = self.latest_readable(model, [record.pk], current_actor())
-        return assessment(model.checklist(), statuses or {}, results)
+        return assessment(model.checklist(), statuses or {}, self.latest_readable(model, [record.pk], current_actor()))
 
-    def counts(self, rows: models.QuerySet[Any]) -> tuple[list[tuple[str, int]], list[tuple[str, str, int]]]:
+    def counts(
+        self,
+        rows: models.QuerySet[Any],
+    ) -> tuple[list[tuple[str, int]], list[tuple[str, str, str, int]]]:
         """Count records by summary status, and by category and attention status, in one statement.
 
-        Summary buckets are the nonempty statuses, summing to the rows counted;
-        attention lists every category and attention status, zero included.
+        Summary buckets are the nonempty statuses, summing to the rows counted.
+        Attention lists every declared category, in order with its label, and each
+        attention status, zero included: ``(category, label, status, count)``.
         """
 
         checklist: Checklist = rows.model.checklist()
@@ -667,10 +719,21 @@ class ChecklistResultManager[ResultT: ChecklistResult](_ChecklistResultManagerBa
                 if status in ATTENTION_STATUSES:
                     attention[category, status] = attention.get((category, status), 0) + row["count"]
         return sorted(summary.items()), [
-            (category.key, status, attention.get((category.key, status), 0))
+            (category.key, category.label, status, attention.get((category.key, status), 0))
             for category in checklist.categories
             for status in ATTENTION_STATUSES
         ]
+
+
+def _references(links: Iterable[Mapping[str, Any]]) -> tuple[EvidenceReference, ...]:
+    """Name each evidence link's record publicly, in link order."""
+
+    references = []
+    for link in links:
+        target = ContentType.objects.get_for_id(link["content_type"]).model_class()
+        if target is not None:
+            references.append(EvidenceReference(model=target._meta.label, id=public_id_for(target, link["object_id"])))
+    return tuple(references)
 
 
 def checklist_status(rows: models.QuerySet[Any]) -> models.Expression:

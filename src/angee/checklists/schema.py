@@ -10,6 +10,8 @@ stored lowercase values on every surface, filters included.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
+from dataclasses import replace
 from datetime import datetime
 from functools import partial
 from typing import Any, cast
@@ -18,7 +20,8 @@ import strawberry
 import strawberry_django
 from django.apps import apps
 from django.db import models
-from rebac import current_actor
+from rebac import ObjectRef, current_actor
+from rebac.field_visibility import check_field_access
 from strawberry_django.fields.field import StrawberryDjangoField
 
 from angee.base.permissions import require_rebac_queryset
@@ -31,6 +34,8 @@ from angee.checklists.managers import (
     checklist_status,
 )
 from angee.checklists.models import ChecklistMixin
+from angee.graphql.access import ChangeReadGate
+from angee.graphql.events import ChangeEvent, ChangePayload
 from angee.graphql.subscriptions import changes
 
 ChecklistResult = apps.get_model("checklists", "ChecklistResult")
@@ -113,10 +118,7 @@ def _project(assessed: ChecklistAssessment) -> ChecklistType:
                 detail=item.detail,
                 stale=item.stale,
                 recorded_at=item.recorded_at,
-                evidence=[
-                    ChecklistEvidenceType(model=ref.model, id=ref.id)
-                    for ref in (getattr(item.result, "evidence_references", ()) if item.result is not None else ())
-                ],
+                evidence=[ChecklistEvidenceType(model=ref.model, id=ref.id) for ref in item.evidence],
             )
             for item in assessed.items
         ],
@@ -143,6 +145,32 @@ def _latest_prefetch(info: strawberry.Info) -> models.Prefetch:
     del info
     rows = require_rebac_queryset(ChecklistResult, actor=current_actor())
     return models.Prefetch("_checklist_latest", queryset=rows, to_attr=_LATEST_ATTR)
+
+
+class ChecklistResultChangeGate(ChangeReadGate):
+    """Admit a result's change to its record's readers, naming only the record.
+
+    A reader holding the record's ``target_read`` learns that its checklist
+    changed even when the result's evidence hides the result itself: the event
+    carries no result identity or values, only the record references the reader
+    may read. A deleted result has no row left to check; its record references
+    decide.
+    """
+
+    def filter(self, payload: Mapping[str, Any] | ChangePayload) -> ChangeEvent | None:
+        change = self._change(payload)
+        if change.action != "delete":
+            assert self.resource_type is not None
+            resource = ObjectRef(self.resource_type, change.resource_identifier)
+            held = check_field_access(self.active_backend, subject=self.actor, action="target_read", resource=resource)
+            if not held.allowed:
+                return None
+        change = self._filter_related_records(change)
+        if not change.related_records:
+            return None
+        return ChangeEvent.from_payload(
+            replace(change, id="", resource_id=None, changed_fields=None, changed_values=None),
+        )
 
 
 @strawberry.type
@@ -191,7 +219,9 @@ def resource_filters(model: type[models.Model]) -> dict[str, Any]:
 schemas: dict[str, Any] = {
     "console": {
         "types": [ChecklistType],
-        "subscription": [changes(ChecklistResult, field="checklistResultChanged")],
+        "subscription": [
+            changes(ChecklistResult, field="checklistResultChanged", read_gate=ChecklistResultChangeGate),
+        ],
     },
 }
 """The projection types, present wherever checklists is installed so web documents can name them, and the

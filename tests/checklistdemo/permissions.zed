@@ -1,6 +1,6 @@
 // Checklist probes: a checked record and an evidence record with their own readers.
 // @rebac_package: checklistdemo
-// @rebac_schema_revision: 2
+// @rebac_schema_revision: 3
 
 definition checklistdemo/inspection {
     relation reader: auth/user
@@ -30,4 +30,14 @@ definition checklistdemo/crane_inspection {
     permission read = inspection->read
     permission write = inspection->write
     permission delete = inspection->delete
+}
+
+definition checklistdemo/notice {
+    relation writer: auth/user
+    relation admin: angee/role // rebac:const=admin
+
+    permission create = admin->member
+    permission read = anonymous + authenticated + admin->member
+    permission write = writer + admin->member
+    permission delete = admin->member
 }
