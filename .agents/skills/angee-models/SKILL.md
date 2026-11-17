@@ -217,6 +217,7 @@ A jj workspace lane has no host, database or JS install: run the focused pytest 
 - A save with `F()` expressions refreshes the instance from `RETURNING`; do not restore a locally recomputed value afterwards (same section).
 - Renaming a model, app or field changes every `EncryptedField` key; plan `ANGEE_FERNET_KEYS` rotation first (same section).
 - `ImplClassField` builds its enum at import: every settings module installing the addon must carry a non-empty registry (same section); a `HierarchyMixin` consumer that omits `hierarchy_scope_fields` silently accepts a parent outside its scope (same section).
+- A staged record whose stage model overrides `Stage.for_record` lists every record field the override reads in `stage_scope_fields`; an omitted field lets a change of it leave the record in a stage that does not apply (`docs/backend/guidelines.md#persistence-primitives`, "Stages are data-owned").
 
 ## Read next
 

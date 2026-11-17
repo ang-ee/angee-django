@@ -59,6 +59,7 @@ export function CycleBoardPage(): React.ReactElement {
             field: "stage",
             rankField: "sort_order",
             rankInputField: "task_order",
+            foldField: "fold",
             filters: queueStageFilters(queueId),
             sorters: [{ field: "position", order: "asc" }],
           }}

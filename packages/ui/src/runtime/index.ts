@@ -82,6 +82,7 @@ export {
   type RuntimeRouteShortcut,
 } from "./runtime";
 export {
+  REFINE_CREATE_ID,
   RECORD_NAVIGATION_SEARCH_KEY,
   RECORD_TAB_SEARCH_KEY,
   CHATTER_TAB_SEARCH_KEY,

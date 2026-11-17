@@ -13,11 +13,10 @@ import {
   XCircle,
 } from "lucide-react";
 import { PROJECT_MODEL, TASK_ACTION_FIELDS, TASK_MODEL } from "@angee/projects";
-import { ShareAccessRailGroup } from "@angee/iam";
 
 import { ProjectManagerAccessRole } from "./access-role";
 import { enWorkMessages } from "./i18n";
-import { QUEUE_FORM_SECTIONS } from "./queue-form";
+import { QUEUE_FORM_SECTIONS, queueForm } from "./queue-form";
 import { QUEUE_MODEL } from "./resources";
 import { StageStatusbar } from "./stage-statusbar";
 import { taskWorkFormSection } from "./task-work";
@@ -95,17 +94,15 @@ const work = defineBaseAddon({
   id: "work",
   routes: workRoutes,
   menus: workMenu,
+  forms: { [QUEUE_MODEL]: queueForm },
   i18n: { work: enWorkMessages },
   widgets: { "work.stage": { read: StageStatusbar, edit: StageStatusbar } },
   containers: {
     [`${PROJECT_MODEL}#access-roles`]: {
       "work.manager": { content: ProjectManagerAccessRole },
     },
-    [`${PROJECT_MODEL}#rail`]: {
-      "work.people-rail": { sequence: 40, content: ShareAccessRailGroup },
-    },
     [`${PROJECT_MODEL}#sections`]: {
-      "work.project-team": { sequence: 40, content: <Group><Field name="team" /></Group> },
+      "work.project-team": { sequence: 40, content: <Group label={{ namespace: "work", key: "project.team" }} pane="team"><Field name="team" /></Group> },
     },
     [`${TASK_MODEL}#sections`]: {
       "work.task-fields": { sequence: 40, content: taskWorkFormSection },

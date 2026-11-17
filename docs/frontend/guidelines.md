@@ -853,14 +853,24 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
   select that swaps the body — and a hidden field is never submitted. Reach for a
   custom form component only when the declarative DSL genuinely cannot express it.
 - **A record's own fields are its sheet; tabs live only beneath it.** `FormView`
-  renders the header, body field and every group as the sheet; labelled groups are
-  titled sections, so group fields for reading order. A group of secondary facts the
+  renders the header, lead body and primary groups as the sheet. Keep that sheet
+  short: identity, ownership, status and the few facts needed for the next decision.
+  Labelled groups are titled sections; use `groupLayout="paired"` for two unnamed
+  summary groups that read side by side when space permits. Shared `FormGrid`
+  sizing follows the available sheet or drawer width; addons declare groups and
+  fields instead of adding viewport breakpoints or private grids. A group of secondary facts the
   reader opens on demand (a message's envelope) may instead be a pane:
   `<Group label=… pane="id">` renders its fields beneath the sheet as that pane,
-  bound to the record's form. Panes come in strip order: the editable lines when no
+  bound to the record's form. Explicit pane placement wins over inferred title,
+  status and long-text hero placement; a pane's description must not jump above
+  the sheet. Addon contributions place occasional settings in panes instead of
+  extending the primary sheet indefinitely. Panes come in strip order: the editable lines when no
   `<Group lines>` places them in the sheet, then the saved-record tabs left after
   `visibleWhen`, permissions and the record's implementation, then pane groups; all
-  share one id namespace. Two or more panes get a strip; one renders without one,
+  share one id namespace. Two or more panes get one measured strip: excess panes
+  move into More, and the selected pane stays visible when it fits. Reuse
+  `useOverflowCount` and native Tabs/DropdownMenu behavior, never a local clipping
+  or overflow algorithm. One pane renders without a strip,
   beneath the sheet under a `SectionHeading` with its label. A full-bleed pane
   fills the height beneath the sheet, which then scrolls in its own region. `defaultRecordTab` (or its rule), a controlled
   `recordTab` and `?recordTab=` choose among the panes; an id that names no visible
@@ -868,7 +878,9 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
   a sheet field in place and selects the pane holding a pane-group or line field.
 - **Never nest tabs.** A pane is the last level of tabs: its content carries no
   strip of its own and no second heading row repeating what the pane names. An
-  embedded list that fills a pane sets `chrome: { heading: false }`; content that
+  embedded list that fills a pane sets `chrome: { heading: false }` and opens its
+  record in a drawer or the canonical route, so the child's tabs cannot appear
+  inside the parent's tab. Content that
   needs its own sections is a sheet group or another pane, not tabs inside a tab.
 - **The form hero precedes secondary facts.** `FormView` places its status control
   above the title, except statusbar fields: these occupy the title row's right, wrap below on narrow widths, omit their label and body copy, and remain header badges in compact forms. Its lead body precedes the sheet's groups. A domain-owned
@@ -1011,7 +1023,10 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
   Its component composes `Form`, `Field` and `Group` and receives
   `RegisteredFormProps`; it owns any create/edit distinction through the record
   `id`. Collection routes and relation-picker create/edit dialogs use that same
-  form, so a caller declares the resource instead of repeating its fields.
+  form, so a caller declares the resource instead of repeating its fields. Keep
+  the registration in a form module, independent of the lazy collection page.
+  Secondary panes and lifecycle actions travel with that form. A migration removes
+  the page-private form and updates its existing behavior tests at the new owner.
   Inline `fields` remain for a caller-specific form; they are not a second
   per-model registration. Relation pickers also follow the selected record's
   registered route, so creation, editing and navigation compose the same owners.
@@ -1916,6 +1931,15 @@ reused by tests sets `angeeOwnRuntime: true` and passes
 `appearance={storyAppearance(context.globals)}` into the same owner. Each story
 has one provider stack — appearance, data, toasts and modals.
 
+Full-product workshops use `ComposedRuntimeFixture` from `@angee/storybook/testing`.
+It mounts the real `createApp` composition with native memory history and requires
+fixture transports with live queries disabled. The `@angee/storybook/host` entry
+exposes the stack's emitted addons and schema loader; it adds no product registry.
+`resourceSnapshotOperations` supplies small read-only sample collections through
+metadata-owned filters, relations and grouping. Product packages own their sample
+records, authored report handlers and named CSF stories. Their page maps should
+derive from those stories and check coverage against the addon declarations.
+
 ### Developer mode
 
 Developer mode's composition dialog lists container narrowing (each layer's
@@ -1963,7 +1987,8 @@ queue's stages or a document's lines. Declare them with `lines=HasuraLines(...)`
 the form renders them as one ordered section, saved by its one Save, with row
 order as the position. `linePrimaryFields` chooses the columns shown first (the
 rest wait in the data view's visible-fields menu) and `lineFields` their headers,
-choices and help. `<Group label lines />` places the lines as a section; carried
+choices and help, and `readOnlyWhen` locks a cell on the rows the domain says
+carry no such fact (a section row has no price). `<Group label lines />` places the lines as a section; carried
 by a `<model>#sections` child it narrows like any section, so a product keeps only
 the lines on its route with `only` under `when`, and narrowed away they are gone.
 Undeclared, the lines trail the form. A record with a life of its own (its own verbs, revision,

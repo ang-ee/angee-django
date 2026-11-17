@@ -12,7 +12,7 @@ def test_stage_contract_retains_the_consumers_stage_type(tmp_path: Path) -> None
     root = Path(__file__).resolve().parents[1]
     source = tmp_path / "stage_types.py"
     declarations = """\
-from typing import assert_type
+from typing import Any, assert_type
 from django.db.models import Model, QuerySet
 from angee.base.models.stages import Stage, StagedModelMixin
 
@@ -26,10 +26,15 @@ class DeliveryRecord(StagedModelMixin[DeliveryStage]):
 
 def inspect(container: Model, record: DeliveryRecord, stages: QuerySet[DeliveryStage]) -> None:
     assert_type(DeliveryStage.for_container(container), QuerySet[DeliveryStage, DeliveryStage])
+    assert_type(DeliveryStage.for_record(record), QuerySet[DeliveryStage, DeliveryStage])
     assert_type(DeliveryStage.resolve_default(container), DeliveryStage | None)
+    assert_type(DeliveryStage.resolve_default(container, stages=stages), DeliveryStage | None)
     assert_type(DeliveryStage.resolve_default_fallback(stages), DeliveryStage | None)
+    assert_type(DeliveryStage.provision(container, [{"name": "New"}]), dict[Any, DeliveryStage])
     assert_type(DeliveryRecord.stage_model(), type[DeliveryStage])
     assert_type(record.resolve_default_stage(), DeliveryStage | None)
+    assert_type(record.stage_transition(), tuple[DeliveryStage | None, DeliveryStage | None])
+    assert_type(record.project_stage(None, None), set[str])
 """
     source.write_text(declarations)
     command = [
