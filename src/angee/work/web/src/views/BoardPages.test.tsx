@@ -13,6 +13,7 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("@angee/projects", () => ({
   TASK_MODEL: "projects.Task",
+  TASKS_OUTSIDE_TEMPLATES: { in_template: { exact: false } },
   TaskBoardSurface: ({ children }: { children?: React.ReactNode }) => (
     <>{children}</>
   ),
@@ -97,13 +98,14 @@ describe("work board stage lanes", () => {
     expect(mocks.leafLabel).toBe("Engineering");
   });
 
-  test("keeps triage and duplicate stages out of both planning boards", () => {
+  test("keeps triage and duplicate stages, and template tasks, out of both planning boards", () => {
     // System stages are excluded by the LANE filters only: `stage` is an ID
     // comparison on the wire, so a nested stage.category baseFilter is not
     // expressible — rows in system stages simply have no lane to render in.
     const queue = render(<QueueBoardPage />);
     expectBoardStageScope(mocks.listProps, {
       queue: { exact: "que_eng" },
+      in_template: { exact: false },
     });
     queue.unmount();
 
@@ -111,6 +113,7 @@ describe("work board stage lanes", () => {
     expectBoardStageScope(mocks.listProps, {
       queue: { exact: "que_eng" },
       cycle: { exact: "cyc_7" },
+      in_template: { exact: false },
     });
   });
 });

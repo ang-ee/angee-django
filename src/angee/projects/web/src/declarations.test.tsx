@@ -64,6 +64,18 @@ describe("composable standard project and task declarations", () => {
     expect(parsePageFacets(props.children).map(({ field }) => field)).toEqual(["lead"]);
   });
 
+  test("a caller's scope narrows the lists without bringing templates back", () => {
+    const projects = propsOf<ListProps>(useProjectListDeclaration({ baseFilter: { lead: { exact: "usr_1" } } }));
+    expect(projects.baseFilter).toEqual({ ...PROJECTS_OUTSIDE_TEMPLATES, lead: { exact: "usr_1" } });
+    const { result: scoped } = renderHook(() => useTaskListDeclaration({ baseFilter: { assignee: { exact: "usr_1" } } }));
+    expect(propsOf<ListProps>(scoped.current).baseFilter).toEqual({ ...TASKS_OUTSIDE_TEMPLATES, assignee: { exact: "usr_1" } });
+    // A list scoped to one template's own tasks opts in.
+    const { result: own } = renderHook(() => useTaskListDeclaration({
+      baseFilter: { project: { exact: "prj_template" } }, includeTemplates: true,
+    }));
+    expect(propsOf<ListProps>(own.current).baseFilter).toEqual({ project: { exact: "prj_template" } });
+  });
+
   test("project list options choose views without seeding a Gantt group", () => {
     const declaration = useProjectListDeclaration({ availableViews: ["list", "gantt"], defaultView: "gantt" });
     const props = propsOf<ListProps>(declaration);

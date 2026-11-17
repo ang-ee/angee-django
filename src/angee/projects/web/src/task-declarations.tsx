@@ -24,11 +24,16 @@ import {
 /** Ordinary task collections leave a template project's tasks out; a template's own tabs scope by project. */
 export const TASKS_OUTSIDE_TEMPLATES = { in_template: { exact: false } } as const;
 
+export interface TaskListOptions extends Partial<Omit<ListProps<TaskActionRow>, "resource">> {
+  /** A list scoped to one project or parent shows its tasks even in a template. */
+  includeTemplates?: boolean;
+}
+
 /** Task collection columns, facets, grouping and lifecycle row actions. */
-export function useTaskListDeclaration(options: Partial<Omit<ListProps<TaskActionRow>, "resource">> = {}): React.ReactElement {
+export function useTaskListDeclaration(options: TaskListOptions = {}): React.ReactElement {
   const t = useProjectsT();
   const rowActions = useTaskRowActions<TaskActionRow>();
-  const { children, fields, ...listOptions } = options;
+  const { children, fields, baseFilter, includeTemplates = false, ...listOptions } = options;
   return (
     <List<TaskActionRow>
       resource={TASK_MODEL}
@@ -36,7 +41,8 @@ export function useTaskListDeclaration(options: Partial<Omit<ListProps<TaskActio
       order={{ sort_order: "ASC" }}
       rowActions={rowActions}
       fields={["status", ...TASK_ACTION_FIELDS, ...(fields ?? [])]}
-      baseFilter={TASKS_OUTSIDE_TEMPLATES}
+      // A caller's scope narrows the list; it does not bring templates back.
+      baseFilter={includeTemplates ? baseFilter : { ...TASKS_OUTSIDE_TEMPLATES, ...baseFilter }}
       {...listOptions}
     >
       {children ?? <><Facet field="project" label={t("common.project")} />
@@ -74,6 +80,7 @@ export function TaskManagementTab({ recordId, relation, projectIds }: TaskManage
     : { parent: { exact: recordId } };
   const list = useTaskListDeclaration({
     scope: "local",
+    includeTemplates: true,
     baseFilter,
     order: { [relation === "project" ? "sort_order" : "sub_sort_order"]: "ASC" },
     rowHref,

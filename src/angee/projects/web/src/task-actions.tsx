@@ -26,6 +26,9 @@ import { SetTaskVisibilityDocument } from "./documents";
 import { useProjectsT } from "./i18n";
 import { PROJECT_MODEL, TASK_MODEL } from "./resources";
 
+/** The project picker offers projects, never templates: a template's tasks are added from its own tab. */
+const PROJECT_PICKER_FILTERS = [{ field: "is_template", operator: "eq", value: false }] as const;
+
 export interface TaskActionRow extends StringIdRow {
   status?: unknown;
 }
@@ -180,7 +183,7 @@ export function useTaskFormDeclaration(
         ? <Field name={selection.statusField.name} widget={selection.statusField.widget} status readOnly />
         : <Field name="status" widget="statusbar" status options={statusOptions} createOnly />}
       {(selection.groups ?? ["placement", "assignment", "details"]).includes("placement") ? <Group label={t("task.group.placement")} columns={2}>
-        <Field name="project" />
+        <Field name="project" filters={PROJECT_PICKER_FILTERS} />
         <Field name="milestone" />
         <Field name="parent" />
         <Field name="tags" />
