@@ -17,7 +17,7 @@ from anthropic import AsyncAnthropic
 from asgiref.sync import async_to_sync, sync_to_async
 from django.contrib.auth import get_user_model
 from openai import AsyncOpenAI, DefaultAsyncHttpxClient
-from pydantic_ai import DeferredToolRequests
+from pydantic_ai import DeferredToolRequests, ModelRetry
 from pydantic_ai.messages import (
     FunctionToolCallEvent,
     FunctionToolResultEvent,
@@ -50,7 +50,7 @@ from angee.agents.context import render_view_context
 from angee.agents.models import AgentLifecycle, RuntimeStatus, SessionStatus, TurnStatus
 from angee.agents.runtimes import ANTHROPIC_OAUTH_CLIENT_HEADERS, ANTHROPIC_OAUTH_SYSTEM_PREAMBLE
 from angee.agents.tasks import run_session
-from angee.agents.testing.models import Agent, AgentSession
+from angee.agents.testing.models import Agent, AgentSession, AgentTurn
 from angee.agents_integrate_anthropic.backend import AnthropicInferenceBackend
 from angee.agents_integrate_ollama.backend import OllamaInferenceBackend
 from angee.agents_integrate_openai.backend import OpenAIInferenceBackend
@@ -239,6 +239,58 @@ def test_acp_events_emit_reducer_shapes_and_one_tool_call() -> None:
         },
     ]
     assert sum(update["sessionUpdate"] == "tool_call" for update in updates) == 1
+
+
+@pytest.mark.parametrize("outcome", ["retried", "failed", "denied", "interrupted"])
+def test_acp_unsuccessful_tool_results_are_saved_failed(outcome: Any) -> None:
+    """Every tool return outcome but success settles the saved call as failed."""
+
+    result = ToolReturnPart(tool_name="read_note", content="Note missing.", tool_call_id="call-1", outcome=outcome)
+
+    assert list(updates_for_event(FunctionToolResultEvent(result))) == [
+        {
+            "sessionUpdate": "tool_call_update",
+            "toolCallId": "call-1",
+            "status": "failed",
+            "rawOutput": "Note missing.",
+        }
+    ]
+
+
+def test_retried_tool_call_of_a_real_turn_is_saved_failed(db: Any) -> None:
+    """A tool raising ``ModelRetry`` is saved failed and its successful retry completed."""
+
+    del db
+    searches: list[str] = []
+
+    async def web_search(query: str = "a") -> str:
+        searches.append(query)
+        if len(searches) == 1:
+            raise ModelRetry("Search backend offline.")
+        return "Two results."
+
+    async def fetch_url(url: str = "a") -> str:
+        return "Page text."
+
+    saved: list[dict[str, Any]] = []
+    outcome = async_to_sync(PydanticAISessionRunner()._run_async)(
+        prompt="Search, then fetch.",
+        history=[],
+        deferred=None,
+        instructions="",
+        inference_model=TestModel(call_tools=["web_search", "fetch_url"], custom_output_text="done"),
+        toolsets=[FunctionToolset([web_search, fetch_url])],
+        limits=_usage_limits(),
+        emit=saved.append,
+        deadline=monotonic() + 30,
+    )
+
+    assert (outcome.kind, len(searches)) == ("completed", 2)
+    assert [(call.title, call.status) for call in AgentTurn(updates=saved).tool_calls()] == [
+        ("web_search", "failed"),
+        ("fetch_url", "completed"),
+        ("web_search", "completed"),
+    ]
 
 
 def test_external_mcp_transport_carries_its_agent_bearer() -> None:

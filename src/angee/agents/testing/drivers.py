@@ -21,6 +21,21 @@ def update_chunk(text: str, *, thought: bool = False) -> dict[str, Any]:
     }
 
 
+def tool_call_updates(name: str, call_id: str, *, output: Any = "", failed: bool = False) -> list[dict[str, Any]]:
+    """Return the updates a runner emits for one finished call: opened, running, then settled."""
+    opened = {"toolCallId": call_id, "title": name, "rawInput": {"query": call_id}}
+    return [
+        {"sessionUpdate": "tool_call", **opened, "status": "pending"},
+        {"sessionUpdate": "tool_call_update", **opened, "status": "in_progress"},
+        {
+            "sessionUpdate": "tool_call_update",
+            "toolCallId": call_id,
+            "status": "failed" if failed else "completed",
+            "rawOutput": output,
+        },
+    ]
+
+
 class FakeRunner(SessionRunner):
     """Replace only the provider boundary while retaining persistence and dispatch."""
 

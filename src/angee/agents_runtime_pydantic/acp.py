@@ -7,7 +7,7 @@ The persisted vocabulary is deliberately the exact subset reduced by
 * tool calls: ``{sessionUpdate: "tool_call", toolCallId, title, status,
   rawInput}``;
 * tool results: ``{sessionUpdate: "tool_call_update", toolCallId, status,
-  rawOutput}``.
+  rawOutput}``, ``failed`` for every ``ToolReturnPart.outcome`` but success.
 
 Keeping the mapping in this runtime addon lets a future container recorder emit
 the same runtime-neutral transcript without teaching the agents models about
@@ -26,7 +26,6 @@ from pydantic_ai.messages import (
     FunctionToolResultEvent,
     PartDeltaEvent,
     PartStartEvent,
-    RetryPromptPart,
     TextPart,
     TextPartDelta,
     ThinkingPart,
@@ -59,11 +58,10 @@ def updates_for_event(event: Any) -> Iterable[dict[str, Any]]:
             "rawInput": _tool_args(event.part),
         }
     elif isinstance(event, FunctionToolResultEvent):
-        failed = isinstance(event.part, RetryPromptPart)
         yield {
             "sessionUpdate": "tool_call_update",
             "toolCallId": event.tool_call_id,
-            "status": "failed" if failed else "completed",
+            "status": "completed" if event.part.outcome == "success" else "failed",
             "rawOutput": _json_value(event.part.content),
         }
 

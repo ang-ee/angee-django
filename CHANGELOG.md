@@ -10,6 +10,22 @@ live in code docstrings.
 
 ## Unreleased — shared addon contracts, native embeddings and graph retrieval
 
+- Failed or retried tool calls are now recorded as failed. pydantic-ai reports
+  them as a `ToolReturnPart` whose `outcome` is not `success` (`retried` for a
+  tool raising `ModelRetry`, as built-in tools do on every error), which the
+  in-process runtime used to save as `completed`. The chat view shows them as
+  errors; turns saved before keep their `completed` status.
+- A `start_conversation` step may require grounding evidence:
+  `StartConversationConfig(grounding=GroundingPolicy(search=("web_search",), fetch=("fetch_url",)))`
+  names the tools that satisfy each requirement. One completed call to a named
+  tool meets a requirement, read from the completed turn's saved calls; an answer
+  that leaves one unmet fails the step with the unmet requirements and the calls
+  the turn made, and operator Retry posts another turn. `AgentTurn.tool_calls(*names)`
+  folds a turn's saved ACP tool updates into one `acp.schema.ToolCall` per
+  `toolCallId`, selected by tool name: a saved tool call's `title` is its tool's
+  name (the `SessionRunner` contract). What agents store is unchanged, and a
+  step without `grounding` behaves as before.
+
 - `angee.scheduling` owns due rules: a `DueRule` (`angee.scheduling.due`) names due
   anchors the subject supplies later and labelled terms measured from them; the
   [scheduling README](src/angee/scheduling/README.md) lists what a rule expresses.

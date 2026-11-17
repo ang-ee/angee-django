@@ -24,6 +24,7 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, ClassVar, Self, TypedDict, cast
 
 import yaml
+from acp.schema import ToolCall
 from asgiref.sync import async_to_sync
 from django.apps import apps
 from django.conf import settings
@@ -2550,6 +2551,23 @@ class AgentTurn(AuditMixin, AngeeDataModel, concrete=True):
                 locked.save(update_fields=["updates", "updated_at"])
                 self.updates = locked.updates
             return locked.status == TurnStatus.RUNNING
+
+    def tool_calls(self, *names: str) -> tuple[ToolCall, ...]:
+        """Fold the saved tool updates into one ACP call per ``toolCallId``, in call order.
+
+        ``tool_call`` opens a call and ``tool_call_update`` amends an opened one,
+        each provided field replacing the earlier value, as ACP clients reduce
+        them. A call's ``title`` is its tool's name (``SessionRunner``); ``names``
+        keeps only the calls to those tools.
+        """
+
+        calls: dict[str, dict[str, Any]] = {}
+        for update in self.updates:
+            kind = update["sessionUpdate"]
+            if kind == "tool_call" or (kind == "tool_call_update" and update["toolCallId"] in calls):
+                calls.setdefault(update["toolCallId"], {}).update(update)
+        folded = (ToolCall.model_validate(call) for call in calls.values())
+        return tuple(call for call in folded if not names or call.title in names)
 
     def change_related_records(self) -> tuple[RecordRef, ...]:
         """Name the session without loading its guarded relation, including on delete."""
