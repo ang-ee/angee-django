@@ -158,8 +158,12 @@ export type ContainerEntry<TContent> = {
   force?: true;
   /** Where the entry's render verbs (`only`, `except`, `hide`) apply. */
   when?: ContainerCondition;
-  /** On an addon's own container: at most one child per `key`. */
-  unique?: "key";
+  /**
+   * On an addon's own container: `key`, at most one child per `key`; `address`,
+   * at most one child per address a page renders together, besides its `impl`
+   * children and variants.
+   */
+  unique?: "key" | "address";
   /** On an addon's own container: also addressed per model (`<model>#<name>`), inheriting along MTI parents. */
   models?: true;
 } & { readonly [child: `${string}.${string}`]: ContainerChild<TContent> | ContainerAlteration }
@@ -176,6 +180,8 @@ export type ContainersDeclaration = {
 export interface CoreContainer {
   address: `${string}#${string}`;
   models?: boolean;
+  /** `address`: one child per address a page renders together, besides `impl` children and variants. */
+  unique?: "key" | "address";
   /** Children the framework itself declares, under bare ids (`list`, `board`) its owner already persists. */
   children?: Readonly<Record<string, ContainerChild>>;
   /** The owner also adds children at render time (a page's chatter tabs), so `only` may name ids composition cannot know. */
@@ -213,7 +219,7 @@ export interface ContainerRule {
 /** The composed containers the runtime renders from. */
 export interface ComposedContainers {
   /** Every container: its owner (`framework` for core ones) and whether it takes model addresses. */
-  declared: Readonly<Record<string, { owner: string; models: boolean; unique?: "key"; extras?: true }>>;
+  declared: Readonly<Record<string, { owner: string; models: boolean; unique?: "key" | "address"; extras?: true }>>;
   children: Readonly<Record<string, readonly ComposedContainerChild[]>>;
   rules: Readonly<Record<string, readonly ContainerRule[]>>;
   /** Children a layer removed, and who removed them. */
@@ -264,7 +270,8 @@ export function containersFromChildren(
   return {
     ...EMPTY_CONTAINERS,
     declared: Object.fromEntries(core.map((container) => [container.address,
-      { owner: "framework", models: container.models === true, ...(container.extras ? { extras: true as const } : {}) }])),
+      { owner: "framework", models: container.models === true, ...(container.extras ? { extras: true as const } : {}),
+        ...(container.unique ? { unique: container.unique } : {}) }])),
     children: composed,
   };
 }

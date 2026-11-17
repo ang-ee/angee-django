@@ -6,10 +6,12 @@ import {
   useModelMetadata,
   useSchemaFieldMetadata,
 } from "@angee/metadata";
-import type { Row } from "@angee/metadata";
+import type { ModelMetadata, Row } from "@angee/metadata";
 import { useUiT } from "../../../i18n";
 import { useValueStable } from "../../../lib/use-value-stable";
-import { modelChain, useAppRuntime, useContainer, useResourceRecordMatchFields, type ComposedContainerChild, type ResourceCardContent, type ResourceViewKindContent } from "../../../runtime";
+import { modelChain, useAppRuntime, useContainer, useResourceRecordMatchFields, type ResourceCardContent, type ResourceViewKindContent } from "../../../runtime";
+import { useContainerAdmission } from "../../form/container-admission";
+import type { CardFrame } from "../../../ui/card";
 import { withResourceViewScope, useResourceViewMaybe, type ResourceViewContextValue } from "../resource-view-context";
 import { DEFAULT_TEXT_FILTER_FIELD, Filter, isBuiltInResourceViewKind } from "../resource-view-model";
 import { ResourceViewKindsProvider, useOfferedResourceViewKinds, useResourceViewKindContent } from "../resource-view-kinds";
@@ -19,7 +21,7 @@ import { LinkedGanttCollectionSurface } from "../../gantt/linked-gantt-collectio
 import { CalendarCollectionSurface } from "../../calendar/calendar-collection-surface";
 import { type GroupedResourceViewSurface, type ResourceViewSurface, type UseResourceViewSurfaceProps } from "../resource-view-surface";
 import type { ResolvedBoardLaneSource } from "../resource-view-board-lanes";
-import type { ListViewProps } from "../resource-view-types";
+import type { CardRenderer, ListViewProps } from "../resource-view-types";
 import { resolveResourceViewGroup } from "../resource-view-utils";
 import { columnsWithMetadataDefaults, relationFieldInfo } from "../model-metadata-defaults";
 import { useRelationFacets } from "../../relation/relation-facet";
@@ -176,25 +178,41 @@ function useResourceModels(resource: string, canonical: string | null | undefine
 }
 
 /**
- * The model's registered card (`<app.Model>#card`): the most specific model's
- * child wins over its MTI parent's. A page that declares a card of its own
- * (`renderCard`, `boardCard` or `gallery`) keeps it.
+ * The model's registered card (`<app.Model>#card`) as one renderer: per row, the
+ * most specific model's card the row admits (its `impl` child or variant for the
+ * row's implementation, else the original), the MTI parent's when the model has
+ * none. Its frame is the model's original card's; the list selects every
+ * candidate's `requiredFields` and the implementation fields. A page that declares
+ * a card of its own (`renderCard`, `boardCard` or `gallery`) keeps it.
  */
 function useModelCard(
   resource: string,
-  canonical: string | null | undefined,
+  modelMetadata: ModelMetadata | null,
   pageDeclaresCard: boolean,
-): ComposedContainerChild<ResourceCardContent> | undefined {
-  const models = useResourceModels(resource, canonical);
-  const cards = useContainer<ResourceCardContent>("resource#card", { models });
+): { render: CardRenderer; frame?: CardFrame; fields: readonly string[] } | undefined {
+  const models = useResourceModels(resource, modelMetadata?.resource?.canonicalLabel);
+  const implFields = modelMetadata?.resource?.implFields;
+  const candidates = useContainer<ResourceCardContent>("resource#card", { models, projection: true });
+  const admits = useContainerAdmission("resource#card", models, implFields);
   return React.useMemo(() => {
-    if (pageDeclaresCard) return undefined;
-    for (const model of [...models].reverse()) {
-      const card = cards.find((child) => child.address === `${model}#card`);
-      if (card) return card;
-    }
-    return undefined;
-  }, [cards, models, pageDeclaresCard]);
+    if (pageDeclaresCard || candidates.length === 0) return undefined;
+    const specific = [...models].reverse();
+    const original = specific.map((model) => candidates.find((child) =>
+      child.address === `${model}#card` && child.impl === undefined && !child.variant)).find(Boolean);
+    const cardFor = (row: Row): ResourceCardContent | undefined => {
+      for (const model of specific) {
+        const admitted = candidates.filter((child) => child.address === `${model}#card` && admits(child.id, row));
+        const card = admitted.find((child) => child.impl !== undefined || child.variant) ?? admitted[0];
+        if (card) return card.content;
+      }
+      return undefined;
+    };
+    return {
+      render: (row, context) => cardFor(row)?.render(row, context) ?? null,
+      ...(original?.content.frame ? { frame: original.content.frame } : {}),
+      fields: [...new Set([...candidates.flatMap((child) => child.requiredFields ?? []), ...(implFields ?? [])])],
+    };
+  }, [admits, candidates, implFields, models, pageDeclaresCard]);
 }
 
 const NO_GROUPS: readonly never[] = [];
@@ -269,10 +287,9 @@ function ListViewBody<TRow extends Row = Row>({
   const modelMetadata = source ? null : discoveredMetadata;
   const textFilterField = declaredTextField === undefined && !modelMetadata ? DEFAULT_TEXT_FILTER_FIELD : declaredTextField;
   const recordMatchFields = useResourceRecordMatchFields(source ? "" : resource);
-  const modelCard = useModelCard(source ? "" : resource, modelMetadata?.resource?.canonicalLabel,
-    Boolean(pageRenderCard || boardCard || gallery));
-  const renderCard = pageRenderCard ?? modelCard?.content.render;
-  const cardFrame = pageCardFrame ?? modelCard?.content.frame;
+  const modelCard = useModelCard(source ? "" : resource, modelMetadata, Boolean(pageRenderCard || boardCard || gallery));
+  const renderCard = pageRenderCard ?? modelCard?.render;
+  const cardFrame = pageCardFrame ?? modelCard?.frame;
   // A declared filter option names the fields its rows need while its filter is active.
   const activeFilter = Filter.from(Filter.combineOptional(resourceView.baseFilter, resourceView.state.filter));
   const filterOptionFields = (explicitFilterOptions ?? []).flatMap(
@@ -282,7 +299,7 @@ function ListViewBody<TRow extends Row = Row>({
     ...(fields ?? []), ...filterOptionFields, ...recordMatchFields,
     ...(boardCard ? [boardCard.title, ...(boardCard.fields ?? [])] : []),
     ...[gallery?.image, gallery?.title, gallery?.subtitle].filter((field): field is string => Boolean(field)),
-    ...(modelCard?.requiredFields ?? []),
+    ...(modelCard?.fields ?? []),
   ]);
   // The Calendar kind is offered only where the page declares occurrence sources and
   // the gallery where there is a card to draw (or a page or view opens on it); the

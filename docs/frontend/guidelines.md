@@ -1587,7 +1587,9 @@ presentation of the timeline kinds its Python source implements:
 An addon declares a container of its own by naming an address on its own node,
 with no children or with its own: `"messaging.channels#toolbar": {}`. Two
 entry keys apply only there. `unique: "key"` makes every child carry a `key`
-and fails two children with one key. `models: true`
+and fails two children with one key; `unique: "address"` fails two children at
+an address a page renders together, besides their `impl` children and variants
+(the framework's `resource#card` is one). `models: true`
 makes the container model-scoped: IAM declares `iam#access-roles`, and
 [proposals](../../src/angee/proposals/web/src/record-rounds.tsx) adds
 children at `proposals.Round#access-roles`; the owner passes the record's
@@ -1903,9 +1905,12 @@ card is registered once as the one child of `<app.Model>#card` (content
 list of that model whose page declares no card draws it, so a shipped view
 naming `view: "gallery"` or `"board"` needs no page code. An addon may register
 the card of a model it does not own; replacing another addon's card removes it
-first (`remove: true`), since app creation refuses two cards for one model, a
-card on `resource#card`, and fields the model lacks. The most specific model's
-card wins over its MTI parent's. An addon
+first (`remove: true`), since the composer allows one card per model
+(`unique: "address"`). `impl` children and variants vary the card per row: the
+list draws, for each row, the card its implementation admits. App creation
+checks each card's content (`validateResourceCard`) and resolves its
+`requiredFields` paths through the model's metadata, and refuses a card on
+`resource#card`. The most specific model's card wins over its MTI parent's. An addon
 contributes a kind as a `<model>#views` child with a namespaced id. Its
 `ResourceViewKindContent` carries `label` (or a ui `labelKey`), `icon`,
 `capabilities` (which collection controls apply while it is active) and

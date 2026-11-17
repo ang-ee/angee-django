@@ -18,9 +18,10 @@ const resource = testDataResource("notes.Note", {
   recordRepresentation: "title",
   roots: { list: "notes", detail: "notes_by_pk", aggregate: "notes_aggregate" },
   typeNames: { filter: "NoteBoolExp", order: "NoteOrderBy" },
-  fields: [{ name: "title", kind: "scalar", scalar: "String", readable: true,
-    aggregatable: false, creatable: false, updatable: false, requiredOnCreate: false }],
-  query: testResourceQuery({ fields: { id: testQueryField("id"), title: testQueryField("title") } }),
+  implFields: ["kind"],
+  fields: ["title", "kind"].map((name) => ({ name, kind: "scalar" as const, scalar: "String", readable: true,
+    aggregatable: false, creatable: false, updatable: false, requiredOnCreate: false })),
+  query: testResourceQuery({ fields: { id: testQueryField("id"), title: testQueryField("title"), kind: testQueryField("kind") } }),
 });
 const { Provider, clearClients } = createUiTestProviders({
   resources: [resource], apiUrl: "test://resource-view-kinds",
@@ -51,9 +52,13 @@ function composed(
   return { ...containers, rules: rules.length ? { "resource#views": rules.map((rule, index) => ({ rank: index, ...rule, exempt: [] })) } : {} };
 }
 
-function renderCollection(containers: ComposedContainers, props: Partial<ComponentProps<typeof ResourceList>> = {}) {
-  const getList = vi.fn(async () => ({ data: [{ id: "note-1", title: "First note" }, ...(props.defaultView === "gallery"
-    ? [{ id: "note-2", title: "Second note" }] : [])], total: props.defaultView === "gallery" ? 2 : 1 }));
+function renderCollection(
+  containers: ComposedContainers,
+  props: Partial<ComponentProps<typeof ResourceList>> = {},
+  data: readonly Record<string, unknown>[] = [{ id: "note-1", title: "First note" },
+    ...(props.defaultView === "gallery" ? [{ id: "note-2", title: "Second note" }] : [])],
+) {
+  const getList = vi.fn(async () => ({ data: [...data], total: data.length }));
   const router = createRouter({ routeTree: createRootRoute(), history: createMemoryHistory({ initialEntries: ["/"] }) });
   render(<Provider dataProvider={{ getList }}>
     <RouterContextProvider router={router}><ModalsHost><ToastProvider>
@@ -150,4 +155,18 @@ test("a model's registered card draws its gallery and board with no page code; t
   renderCollection(cards, { defaultView: "gallery", renderCard: (row) => <span>Page card of {String(row.title)}</span> });
   expect(await screen.findByText("Page card of First note")).toBeTruthy();
   expect(screen.queryByText(/^Card of/)).toBeNull();
+});
+
+test("a model card's variant draws the rows of its implementation; the original draws the rest", async () => {
+  const pinned: ResourceCardContent = { render: (row) => <span>Pinned card of {String(row.title)}</span> };
+  const cards = composed([], { "notes.Note#card": {
+    "skin.note": { content: noteCard },
+    "skin.note-pinned": { content: pinned, variant: { of: "skin.note", impl: "pinned" } },
+  } });
+  renderCollection(cards, { defaultView: "gallery" }, [
+    { id: "note-1", title: "First note", kind: "pinned" },
+    { id: "note-2", title: "Second note", kind: "plain" },
+  ]);
+  expect(await screen.findByText("Pinned card of First note")).toBeTruthy();
+  expect(screen.getByText("Card of Second note on the gallery")).toBeTruthy();
 });

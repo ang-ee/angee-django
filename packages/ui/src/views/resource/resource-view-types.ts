@@ -11,7 +11,9 @@ import type {
   ResourceViewKind,
 } from "./resource-view-model";
 import type { ButtonVariant } from "../../ui/button";
-import type { CardFrame } from "../../ui/card";
+import { cardFrameVariants, type CardFrame } from "../../ui/card";
+import { recipeAxes } from "../../lib/variants";
+import type { ResourceCardContent } from "../../runtime/containers";
 
 import type {
   FilterClauseField,
@@ -175,6 +177,21 @@ export type CardRenderContext =
  * inside the card's link or button, so it holds no interactive element.
  */
 export type CardRenderer<TRow extends Row = Row> = (row: TRow, context: CardRenderContext) => ReactNode;
+
+/**
+ * Check a registered card's content (`<app.Model>#card`) as app creation does:
+ * `render` is a function and `frame`, when set, a card frame.
+ * @kind null
+ * @reason Schema infrastructure: validates serialized runtime contracts.
+ */
+export function validateResourceCard(content: unknown, id: string): asserts content is ResourceCardContent {
+  const card = typeof content === "object" && content !== null ? content as Record<string, unknown> : null;
+  if (!card || typeof card.render !== "function") throw new Error(`Card "${id}" needs a render function.`);
+  const frames: readonly string[] = recipeAxes(cardFrameVariants).frame;
+  if (card.frame !== undefined && !frames.includes(String(card.frame))) {
+    throw new Error(`Card "${id}" names frame "${String(card.frame)}"; a card frame is ${frames.map((frame) => `"${frame}"`).join(" or ")}.`);
+  }
+}
 
 export interface ListEmptyAction {
   label: ReactNode;

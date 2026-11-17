@@ -4,6 +4,7 @@ import {
   createAngeeAccessControlProvider,
   dataResourcesFromAngeeSchemaMetadata,
   defineAngeeSchemaMetadata,
+  modelFieldForPath,
   mergeModelLabelInventory,
   refineResourceIdentifier,
   schemaFieldMetadataFromAngeeSchemaMetadata,
@@ -80,7 +81,7 @@ import {
   type RuntimeVocabulary,
 } from "@angee/ui/runtime";
 import { isBuiltInResourceViewKind, validateResourceViewPreset } from "@angee/ui/views/resource-view-model";
-import { validateSearchShortcut } from "@angee/ui/views/resource-view-types";
+import { validateResourceCard, validateSearchShortcut } from "@angee/ui/views/resource-view-types";
 import { composeAddons, type ShellSettings } from "./define-addon";
 import {
   ModalsHost,
@@ -365,51 +366,47 @@ export function createApp(input: CreateAppInput): AngeeApp {
   });
   // Presence: what the menus and container children `requires`; the identity read asks which the session holds.
   const requirements = presenceRequirements(menuTree, composed.containers);
+  // A model label's metadata in every schema that projects it.
+  const modelsFor = (label: string) => Object.values(schemas).flatMap((schema) => {
+    const model = schema.fieldMetadata.labels[label];
+    return model ? [{ model, fieldMetadata: schema.fieldMetadata }] : [];
+  });
   for (const [address, children] of Object.entries(composed.containers.children)) {
     if (!address.endsWith("#search")) continue;
     const modelLabel = address.slice(0, -"#search".length);
     for (const child of children) {
       validateSearchShortcut(child.content, child.id);
       if (modelLabel === "resource") continue;
-      const models = Object.values(schemas).flatMap((schema) => {
-        const model = schema.fieldMetadata.labels[modelLabel];
-        return model ? [model] : [];
-      });
       let failure: unknown;
-      const valid = models.some((model) => {
+      const valid = modelsFor(modelLabel).some(({ model }) => {
         try { validateSearchShortcut(child.content, child.id, ResourceQuery.from(model)); return true; }
         catch (error) { failure = error; return false; }
       });
       if (!valid) throw failure ?? new Error(`Unknown resource "${modelLabel}" in search shortcut "${child.id}".`);
     }
   }
-  // A model's card (`<app.Model>#card`) is its one child there, reading fields the model has.
+  // A model's cards (`<app.Model>#card`; the composer allows one per model besides
+  // its impl children and variants): content the card owner accepts, and field
+  // paths the model's metadata resolves.
   for (const [address, children] of Object.entries(composed.containers.children)) {
-    if (!address.endsWith("#card") || children.length === 0) continue;
+    if (!address.endsWith("#card")) continue;
     const modelLabel = address.slice(0, -"#card".length);
-    if (modelLabel === "resource") {
-      throw new Error(`Card "${children[0]!.id}" is declared on "resource#card"; a card belongs to one model ("<app.Model>#card").`);
-    }
-    if (children.length > 1) {
-      throw new Error(`Cards ${children.map((child) => `"${child.id}"`).join(" and ")} are both declared for "${modelLabel}"; a model has one card, so remove one.`);
-    }
-    const card = children[0]!;
-    const models = Object.values(schemas).flatMap((schema) => {
-      const model = schema.fieldMetadata.labels[modelLabel];
-      return model ? [model] : [];
-    });
-    if (models.length === 0) throw new Error(`Card "${card.id}" is declared for unknown model "${modelLabel}".`);
-    const unknown = (card.requiredFields ?? []).filter((field) => !models.some((model) =>
-      model.fields[field.split(".")[0]!] || model.resource.query.fields[field]));
-    if (unknown.length > 0) {
-      throw new Error(`Card "${card.id}" of "${modelLabel}" reads unknown fields ${unknown.map((field) => `"${field}"`).join(", ")}.`);
+    for (const card of children) {
+      if (modelLabel === "resource") {
+        throw new Error(`Card "${card.id}" is declared on "resource#card"; a card belongs to one model ("<app.Model>#card").`);
+      }
+      validateResourceCard(card.content, card.id);
+      const models = modelsFor(modelLabel);
+      if (models.length === 0) throw new Error(`Card "${card.id}" is declared for unknown model "${modelLabel}".`);
+      const unknown = (card.requiredFields ?? []).filter((path) => !models.some(({ model, fieldMetadata }) =>
+        modelFieldForPath(path, model, fieldMetadata) || model.resource.query.fields[path]));
+      if (unknown.length > 0) {
+        throw new Error(`Card "${card.id}" of "${modelLabel}" reads unknown fields ${unknown.map((field) => `"${field}"`).join(", ")}.`);
+      }
     }
   }
   for (const preset of Object.values(composed.resourceViews)) {
-    const models = Object.values(schemas).flatMap((schema) => {
-      const model = schema.fieldMetadata.labels[preset.resource];
-      return model ? [model] : [];
-    });
+    const models = modelsFor(preset.resource).map(({ model }) => model);
     let failure: unknown;
     const valid = models.some((model) => {
       try { validateResourceViewPreset(preset, model); return true; }
@@ -427,10 +424,7 @@ export function createApp(input: CreateAppInput): AngeeApp {
   for (const route of routes) {
     if (route.defaultFilter === undefined) continue;
     const resource = inheritedRouteFact(route, routesByName, (item) => item.recordModel ?? item.resource);
-    const models = resource ? Object.values(schemas).flatMap((schema) => {
-      const model = schema.fieldMetadata.labels[resource];
-      return model ? [model] : [];
-    }) : [];
+    const models = resource ? modelsFor(resource).map(({ model }) => model) : [];
     let failure: unknown;
     const valid = models.some((model) => {
       try { ResourceQuery.from(model).filterFrom(route.defaultFilter); return true; }

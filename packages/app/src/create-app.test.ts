@@ -2581,8 +2581,22 @@ test("a model's card is its one child at <app.Model>#card, reading fields the mo
   });
   const cards: BaseAddon = { id: "cards", containers: { "notes.Note#card": { "cards.note": { content: card, requiredFields: ["title"] } } } };
   expect(() => createApp(input(cards))).not.toThrow();
+  // The composer allows one card per model (unique: "address").
   expect(() => createApp(input(cards, { id: "skin", containers: { "notes.Note#card": { "skin.note": { content: card } } } })))
-    .toThrow(/Cards "cards.note" and "skin.note" are both declared for "notes.Note"; a model has one card/);
+    .toThrow(/Children "cards.note" and "skin.note" of "notes.Note#card" are both its one child/);
+  // Impl children and variants vary the one card per row.
+  expect(() => createApp(input(cards, { id: "skin", dependsOn: ["cards"], containers: { "notes.Note#card": {
+    "skin.note-pinned": { content: card, variant: { of: "cards.note", impl: "pinned" } },
+    "skin.note-archived": { content: card, impl: "archived" },
+  } } }))).not.toThrow();
+  // The card owner checks the content as the search owner checks shortcuts.
+  // Untyped manifests (JavaScript, JSON-built) reach the content check too.
+  const untyped = (content: unknown) => ({ id: "cards", containers: { "notes.Note#card": { "cards.note": { content } } } }) as BaseAddon;
+  expect(() => createApp(input(untyped({ render: "card" })))).toThrow(/Card "cards.note" needs a render function/);
+  expect(() => createApp(input(untyped({ ...card, frame: "bleed" })))).toThrow(/Card "cards.note" names frame "bleed"/);
+  // A field path resolves through the metadata path owner: a scalar has no sub-field.
+  expect(() => createApp(input({ id: "cards", containers: { "notes.Note#card": { "cards.note": { content: card, requiredFields: ["title.length"] } } } })))
+    .toThrow(/reads unknown fields "title.length"/);
   // A layer replaces a model's card by removing the one its dependency declared.
   expect(() => createApp(input(cards, { id: "skin", dependsOn: ["cards"], containers: { "notes.Note#card": {
     "cards.note": { remove: true }, "skin.note": { content: card },
