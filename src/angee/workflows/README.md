@@ -112,7 +112,7 @@ The [`permission schema`](permissions.zed) lets starters discover and read the
 workflows they may start, without editing them. Run readers see the pinned topology
 and actor-readable execution summaries without requiring workflow or version read access.
 Run actors can cancel and
-reprocess their own runs. Monitoring other runs and reading unpublished drafts
+reprocess their own runs, from the start or from a step. Monitoring other runs and reading unpublished drafts
 requires workflow monitoring access, including read-only Studio inspection. Draft edits and
 publication require workflow write access. Execution rows and record links are engine-owned;
 the console exposes execution reads, monitor-readable draft authoring metadata,
@@ -211,6 +211,16 @@ Retry refuses while other unrouted failures remain and names those nodes.
 Cancel also cancels open rows of a terminal run while preserving that run's
 terminal status, outcome, output and error.
 Delivery is at least once; step implementations must tolerate repeated execution.
+
+`WorkflowRun.objects.reprocess(run, from_node=key)` starts the replacement at a node
+instead of the entry. It runs on the retained run's version and begins with copies
+of every settled step the node cannot reach ([`Definition.reusable_rows`](definition.py)),
+each noting its reuse; the node and every node it reaches run again. The node must be
+a declared step of the run that ran. The retained run never changes and the
+replacement's `reprocess_of` names it. Copies carry no attempts, decision link, awaited
+run, checkpoint or evidence, so a reused decision step grants the new run's actor
+nothing. The step console offers this as **Reprocess from this step**
+(`reprocess_workflow_run_from_step`) under the same authority as reprocessing.
 
 **Named gap: run budgets.** The rebuilt engine bounds individual attempts,
 dispatch recovery, but has no owner for an overall run budget

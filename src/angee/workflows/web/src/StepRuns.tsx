@@ -1,11 +1,12 @@
+import type { ActionFieldName } from "@angee/gql/console/actions";
 import { DecisionCard } from "@angee/decisions";
 import { useAuthoredQuery } from "@angee/refine";
 import {
   Action, Column, DrawerResourceList, Facet, Field, Form, Group, List, RecordReference,
-  optionToken,
+  optionToken, useRecordActionMutation,
 } from "@angee/ui";
 
-import { STEP_RUN_MODEL, StepDecisionDocument } from "./documents.console";
+import { RUN_MODEL, RUN_MODELS, STEP_RUN_MODEL, StepDecisionDocument } from "./documents.console";
 import { useWorkflowsT } from "./i18n";
 import { formatStepPage, stepPageCodec } from "./step-page";
 import { useStepRetryActions } from "./step-retry";
@@ -16,6 +17,9 @@ export function StepRuns({ runId, nodeKeys }: {
 }) {
   const t = useWorkflowsT();
   const retryActions = useStepRetryActions();
+  const [reprocessFrom] = useRecordActionMutation<ActionFieldName>("reprocess_workflow_run_from_step", {
+    dataProviderName: "console", invalidateModels: RUN_MODELS, linkTo: RUN_MODEL,
+  });
   return <DrawerResourceList resource={STEP_RUN_MODEL} hideCreate presentation="embedded"
     baseFilter={{ run: { exact: runId }, ...(nodeKeys ? { node_key: { inList: nodeKeys } } : {}) }} recordTabs={[
       { id: "attempts", label: t("step.attempts"), render: ({ recordId }) => <StepAttempts stepId={recordId} /> },
@@ -46,7 +50,7 @@ export function StepRuns({ runId, nodeKeys }: {
       <Column field="outcome_label" header={t("run.outcome")} />
       <Column field="attempt" header={t("step.attempts")} />
     </List>
-    <Form readOnly returning={["can_retry", "requires_duplicate_acknowledgement"]}>
+    <Form readOnly returning={["can_retry", "requires_duplicate_acknowledgement", "can_reprocess_from"]}>
       <Field name="is_mapped" hidden />
       <Field name="is_map" hidden />
       <Field name="node_label" title />
@@ -73,6 +77,9 @@ export function StepRuns({ runId, nodeKeys }: {
       <Field name="output" label={t("run.output")} widget="json" />
       <Field name="state" label={t("step.checkpoint")} widget="json" />
       {retryActions.map((action) => <Action key={action.id} {...action} />)}
+      <Action id="reprocess-from" label={t("action.reprocess_workflow_run_from_step")}
+        visibleWhen={(record) => record.can_reprocess_from === true} run={reprocessFrom}
+        confirm={{ title: t("action.reprocess_workflow_run_from_step"), body: t("action.reprocessFromStepDescription") }} />
     </Form>
   </DrawerResourceList>;
 }

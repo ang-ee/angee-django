@@ -1179,6 +1179,15 @@ class StepRun(AngeeDataModel, concrete=True):
             return False
         return self.retry_blocker is None
 
+    @property
+    def starts_reprocess(self) -> bool:
+        """Whether a reprocess can start at this row's node: a declared node that ran."""
+        return not self.is_mapped and self.status != StepRunStatus.SKIPPED
+
+    def can_reprocess_from(self, actor: Any) -> bool:
+        """Whether ``actor`` may reprocess this row's run from its node."""
+        return self.starts_reprocess and self.run.can_reprocess(actor)
+
     class Meta:
         """Django options for node identity, fences and tick predicates."""
 

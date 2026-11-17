@@ -96,7 +96,7 @@ export const stepRunResourceFixture = testDataResource("workflows.StepRun", {
     ...["run", "awaited_run"].map((name) => ({ ...retainedField(name), kind: "relation" as const,
       relationObject: true, relationModelLabel: "workflows.WorkflowRun" })),
     ...["rank", "map_index", "map_settled", "map_total", "attempt", "page_index", "retries"].map((name) => retainedField(name, "Int")),
-    ...["can_retry", "requires_duplicate_acknowledgement", "is_mapped", "is_map"].map((name) => retainedField(name, "Boolean")),
+    ...["can_retry", "requires_duplicate_acknowledgement", "can_reprocess_from", "is_mapped", "is_map"].map((name) => retainedField(name, "Boolean")),
     ...["input", "output", "state"].map((name) => retainedField(name, "JSON")),
     { ...retainedField("status"), kind: "enum", values: stepStates },
     { ...retainedField("waiting_kind"), kind: "enum", values: waitKinds },
@@ -104,7 +104,7 @@ export const stepRunResourceFixture = testDataResource("workflows.StepRun", {
   roots: { list: "steprun", detail: "steprun_by_pk", aggregate: "steprun_aggregate" },
   typeNames: { filter: "steprun_bool_exp", order: "steprun_order_by" },
   query: testResourceQuery({ fields: {
-    ...Object.fromEntries(["id", "node_key", "node_label", "outcome", "outcome_label", "attempt", "wait_reason", "input", "output", "can_retry", "requires_duplicate_acknowledgement"].map((name) => [name, testQueryField(name)])),
+    ...Object.fromEntries(["id", "node_key", "node_label", "outcome", "outcome_label", "attempt", "wait_reason", "input", "output", "can_retry", "requires_duplicate_acknowledgement", "can_reprocess_from"].map((name) => [name, testQueryField(name)])),
     ...Object.fromEntries(["run", "awaited_run"].map((name) => [name, testQueryField(name, {
       kind: "relation", scalar: "ID",
       relation: { model: "workflows.WorkflowRun", identityPath: `${name}.id`, labelPath: `${name}.id` },

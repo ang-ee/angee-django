@@ -2273,7 +2273,9 @@ bridge advisory lock as polling and delivery settlement.
   tick recovery. An already-running IO sibling retains its result without
   planning, and retry replans from all retained rows.
   Reprocessing records its predecessor and uses the requesting actor on the
-  current publication. Artifacts reference actor-readable records without
+  current publication; reprocessing from a node keeps the predecessor's version,
+  reuses the settled steps the node cannot reach and runs the rest again.
+  Artifacts reference actor-readable records without
   granting access to them. Admission retains the subject and each declared
   record-reference input as shared `DerivedFrom` evidence, after checking the
   run actor's standing read access. Run readers see those references through the
