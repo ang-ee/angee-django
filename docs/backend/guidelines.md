@@ -1241,7 +1241,9 @@ exception closes the rows as failed. Tests inherit a boundary from the root
   [knowledge pages](../../src/angee/knowledge/permissions.zed)). The shared
   [`trash_record` / `restore_record`](../../src/angee/graphql/trash.py) verbs
   check the row's `delete`; metadata marks the flag `trashable` for shared views.
-  A domain authority that is not `delete` (record-chatter moderation) keeps its own
+  A domain authority that is not `delete` (record-chatter moderation, the host's
+  declared `ThreadedModelMixin.thread_moderate_access`, default `write`, beside
+  `thread_read_access` and `thread_post_access`) keeps its own
   verbs and narrows the shared ones through `TrashQuerySet.trash_targets()`; a
   sudo read path it owns, such as the chatter transcript, must exclude trashed rows
   itself. Managers

@@ -2164,8 +2164,8 @@ def _record_message_access(record: ThreadedModelMixin, user: Any) -> tuple[bool,
         return False, False
     if not model_resource_type(record):
         return record.can_post(user), record.can_moderate(user)
-    permissions = held_permissions(record, (record.thread_post_access, "write"))
-    return record.thread_post_access in permissions, "write" in permissions
+    permissions = held_permissions(record, (record.thread_post_access, record.thread_moderate_access))
+    return record.thread_post_access in permissions, record.thread_moderate_access in permissions
 
 
 def _message_access(message: Any, info: strawberry.Info | None) -> dict[str, Any]:

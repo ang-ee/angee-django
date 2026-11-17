@@ -10,6 +10,13 @@ live in code docstrings.
 
 ## Unreleased — shared addon contracts, native embeddings and graph retrieval
 
+- `ThreadedModelMixin.thread_moderate_access` (default `write`) names the record
+  permission chatter moderation requires: editing and deleting other people's
+  comments, trashing and restoring comments, listing the removed ones and managing
+  another party's follow. `can_moderate` and the record thread's moderation facts
+  (`can_trash`, `can_edit`, `can_delete`, `removed_message_count`) read it, so a
+  record whose `write` reaches people who may move it but not edit it declares a
+  narrower permission. Hosts that declare nothing keep moderation on `write`.
 - `StatementsMixin`'s subject verbs are `confirm_statement(*, aspect, values, **members)`
   and `dismiss_statement(*, aspect, **members)` (were `confirm` / `dismiss`), so a
   subject model's own `confirm` verb, such as a lifecycle transition, no longer
