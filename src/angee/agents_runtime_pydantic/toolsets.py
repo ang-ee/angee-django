@@ -333,11 +333,13 @@ def _transport_for(server: Any) -> Any:
         raise ValueError(f"MCP server {server.name!r} has no addressable URL.")
     headers: dict[str, str] = {}
     if server.credential_id:
-        server.credential.ensure_fresh()
-        bearer = str(server.credential.secret_value() or "")
-        if not bearer:
+        credential = server.credential
+        credential.ensure_fresh()
+        if not credential.secret_value():
             raise ValueError(f"MCP server {server.name!r} has an empty credential.")
-        headers["Authorization"] = f"Bearer {bearer}"
+        # The kind owns its authorization header: a bearer token sends Bearer, a
+        # password sends Basic, and key material never rides a bearer header.
+        headers = credential.auth_headers()
     return StreamableHttpTransport(url, headers=headers or None)
 
 

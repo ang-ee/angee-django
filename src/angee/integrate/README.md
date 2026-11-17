@@ -150,7 +150,12 @@ configuration fields, never client secrets. OIDC
 metadata discovery resolves OAuth endpoints independently of connection
 discovery. Host
 settings are applied through `oauth_clients` after resources load.
-`Credential.is_reconnect_required` uses status, failed refresh and expiry.
+`Credential.is_reconnect_required` uses status, failed refresh or mint, and expiry.
+A `jwt_bearer` credential holds a provider signing key (a pasted key file, such as a
+Google service-account key) and mints one access token per scope set through the
+JWT bearer grant (RFC 7523); consumers call `Credential.auth_headers(scopes=...)`.
+Only a refusal of the key or identity marks it failed, re-entering the key file
+clears that, and the signing key is never its generic secret.
 `Credential.refreshable` derives refreshability from the current client and grant
 material; it is never stored as a copy of client policy. Ordinary access-token
 expiry with a refresh grant does not ask for new consent.

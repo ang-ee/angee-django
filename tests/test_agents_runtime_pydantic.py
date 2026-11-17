@@ -65,7 +65,7 @@ pytestmark = pytest.mark.django_db(transaction=True)
 
 
 class _Credential:
-    """Minimal credential double exercising the public SDK backend seam."""
+    """Minimal credential double exercising the public SDK backend seam through its kind handler."""
 
     def __init__(self, value: str, *, kind: Any = CredentialKind.STATIC_TOKEN) -> None:
         self.value = value
@@ -75,8 +75,14 @@ class _Credential:
     def ensure_fresh(self) -> None:
         self.freshened += 1
 
+    def reveal(self) -> dict[str, str]:
+        return {CredentialKind(self.kind).handler.material_field: self.value}
+
     def secret_value(self) -> str:
-        return self.value
+        return CredentialKind(self.kind).handler.secret_value(self)
+
+    def auth_headers(self) -> dict[str, str]:
+        return CredentialKind(self.kind).handler.auth_headers(self)
 
 
 def test_anthropic_model_keeps_override_and_oauth_beta_header(monkeypatch: Any) -> None:
@@ -258,6 +264,21 @@ def test_external_mcp_transport_carries_its_agent_bearer() -> None:
     assert transport.url == "http://angee.test/mcp"
     assert transport.headers == {"Authorization": "Bearer agent-bearer"}
     assert credential.freshened == 1
+
+
+def test_external_mcp_transport_never_sends_a_signing_key() -> None:
+    """A JWT bearer credential has no generic secret, so the MCP transport refuses it."""
+
+    server = SimpleNamespace(
+        name="Angee",
+        resolved_url="http://angee.test/mcp",
+        builtin="",
+        credential_id=1,
+        credential=_Credential("{\"private_key\": \"pem\"}", kind=CredentialKind.JWT_BEARER),
+    )
+
+    with pytest.raises(ValueError, match="empty credential"):
+        _transport_for(server)
 
 
 def test_usage_limits_allow_a_multi_request_tool_turn(db: Any) -> None:
