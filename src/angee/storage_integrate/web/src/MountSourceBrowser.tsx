@@ -34,16 +34,16 @@ type MountLocation = BrowseResult["entries"][number];
 
 export interface MountSourceBrowserProps extends DescriptorFieldControlProps {
   backendClass: string;
-  /** The account a credential backend browses with; browsing waits for one when `requiresAccount`. */
+  /** The account a credential backend browses with; browsing waits for one when `requiresCredential`. */
   credentialId?: string;
-  requiresAccount?: boolean;
+  requiresCredential?: boolean;
 }
 
 /** Bare MutationDialog control for an opaque source-root token. */
 export function MountSourceBrowser({
   backendClass,
   credentialId,
-  requiresAccount = false,
+  requiresCredential = false,
   id,
   readOnly,
   invalid,
@@ -69,7 +69,7 @@ export function MountSourceBrowser({
     }),
     [backendClass, credentialId, token],
   );
-  const waitingForAccount = requiresAccount && !credentialId;
+  const waitingForAccount = requiresCredential && !credentialId;
   const query = useAuthoredQuery(BrowseMountSource, variables, { enabled: !waitingForAccount });
   const result = query.data?.browse_mount_source;
 

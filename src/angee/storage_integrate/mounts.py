@@ -78,8 +78,8 @@ class MountBackend(BridgeImpl):
     label = "Mount"
     requires_credential: ClassVar[bool] = False
     """Whether the source is read with the connecting user's credential, which provisioning attaches."""
-    vendor_slug: ClassVar[str] = "local"
-    """The integrate catalogue vendor a Mount of this backend points at; ``oauth_client`` expands from it."""
+    vendor_slug: ClassVar[str]
+    """The integrate catalogue vendor a Mount of this backend points at; each backend names its own."""
     oauth_scopes: ClassVar[tuple[str, ...]] = ()
     """OAuth scopes a credential backend reads with; only accounts that granted all of them are offered."""
 
@@ -99,14 +99,16 @@ class MountBackend(BridgeImpl):
         raise NotImplementedError
 
     @classmethod
-    def oauth_slug(cls) -> str:
-        """Return the OAuth registration slug a credential backend's accounts connect through.
+    def already_mounted_message(cls) -> str:
+        """Return the refusal for a root some Mount already uses, named by this backend's label."""
 
-        The ``oauth_client`` hint expanded with :attr:`vendor_slug`, the expansion
-        ``Integration.connection_oauth_slug`` applies to a saved row's vendor.
-        """
+        return f"This {cls.label} source is already mounted."
 
-        return cls.oauth_client.format(vendor=cls.vendor_slug)
+    @classmethod
+    def slug_default(cls) -> str:
+        """Return the drive slug base for a Mount whose name slugifies to nothing: this backend's key."""
+
+        return cls.key.replace("_", "-")
 
     def source_root(self) -> str:
         """Validate the configured source and return the canonical root a Mount persists for it.
@@ -125,9 +127,9 @@ class MountBackend(BridgeImpl):
 
         super().__init__(integration)
         self._entry_mime_types: dict[str, str] = {}
-        # Paths of files the walk saw but could not yield (a stat race), so sync
-        # never trashes them as missing; only path-keyed sources report them.
-        self.observed_paths: set[str] = set()
+        # Storage keys of files the walk saw but could not yield (a stat race),
+        # so sync never trashes them as missing.
+        self.observed_keys: set[str] = set()
         self.scan_errors = 0
         # Source files the backend deliberately does not mirror (a type it cannot
         # store as bytes), reported as the sync's ``skipped`` count.
@@ -193,6 +195,7 @@ class LocalFolderMountBackend(MountBackend):
 
     key = "local_folder"
     label = "Local folder"
+    vendor_slug = "local"
     requires_credential = False
 
     @classmethod
@@ -296,7 +299,7 @@ class LocalFolderMountBackend(MountBackend):
                 if path.is_symlink():
                     continue
                 relative_path = path.relative_to(root).as_posix()
-                self.observed_paths.add(relative_path)
+                self.observed_keys.add(relative_path)
                 try:
                     stat = path.stat()
                 except OSError as error:
@@ -304,7 +307,7 @@ class LocalFolderMountBackend(MountBackend):
                     logger.warning("storage.mount.stat: skipped %s: %s", path, error)
                     continue
                 if not stat_module.S_ISREG(stat.st_mode):
-                    self.observed_paths.discard(relative_path)
+                    self.observed_keys.discard(relative_path)
                     continue
                 yield MountEntry(
                     path=relative_path,

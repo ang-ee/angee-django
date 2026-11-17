@@ -6,7 +6,7 @@ import contextlib
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, replace
 from pathlib import PurePosixPath
-from typing import Any, ClassVar, Self, cast
+from typing import TYPE_CHECKING, Any, ClassVar, Self, cast
 
 from django.apps import apps
 from django.core.exceptions import ImproperlyConfigured, ValidationError
@@ -26,9 +26,16 @@ from angee.integrate.models import (
     IntegrationManager,
     IntegrationQuerySet,
 )
+from angee.integrate.oauth.errors import OAuthFlowError
 from angee.integrate.sync import current_progress_bridge
 from angee.storage import exceptions
 from angee.storage_integrate.mounts import MountBackend, MountBrowseResult, MountEntry, MountLocation
+
+if TYPE_CHECKING:
+    from django.contrib.auth.base_user import AbstractBaseUser
+
+    from angee.integrate.models import Credential, OAuthClient
+    from angee.storage.models import Backend
 
 _PROGRESS_BATCH_SIZE = 200
 
@@ -66,7 +73,7 @@ _MountManagerBase = IntegrationManager.from_queryset(MountQuerySet)
 
 
 class MountManager[MountT: Mount](_MountManagerBase[MountT]):
-    """Provision mounts together with the drive their source synchronizes into."""
+    """Provision mounts together with the drive their source synchronizes into, admitting their inputs once."""
 
     @staticmethod
     def backend_impl(backend_class: str) -> type[MountBackend]:
@@ -77,45 +84,73 @@ class MountManager[MountT: Mount](_MountManagerBase[MountT]):
         except ImproperlyConfigured as error:
             raise ValidationError({"backend_class": str(error)}) from error
 
-    def oauth_registration(self, backend_class: str) -> Any | None:
-        """Return the enabled OAuth client a credential backend's accounts connect through, if any."""
+    def build(self, backend_class: str, **fields: Any) -> MountT:
+        """Return an unsaved Mount of ``backend_class`` pointing at its backend's vendor.
+
+        It answers what a saved row would before anything is created: its
+        backend, its OAuth registration (``connection_oauth_slug``,
+        ``connect_oauth_client``) and its source's canonical root.
+        """
+
+        impl = self.backend_impl(backend_class)
+        with system_context(reason="storage_integrate.mount.vendor"):
+            vendor = apps.get_model("integrate", "Vendor").objects.seeded(impl.vendor_slug)
+        return self.model(backend_class=backend_class, vendor_id=vendor.pk, **fields)
+
+    def connect_oauth_client(self, backend_class: str) -> OAuthClient | None:
+        """Return the enabled OAuth client a credential backend's accounts connect through, if one is ready."""
 
         impl = self.backend_impl(backend_class)
         if not impl.requires_credential:
             return None
-        oauth_client_model = apps.get_model("integrate", "OAuthClient")
-        with system_context(reason="storage_integrate.mount.oauth_registration"):
-            return oauth_client_model.objects.enabled_for_slug(impl.oauth_slug())
+        try:
+            with system_context(reason="storage_integrate.mount.oauth_client"):
+                return cast("OAuthClient", self.build(backend_class).connect_oauth_client(impl.label))
+        except OAuthFlowError:
+            return None
 
-    def connectable_credentials(self, user: Any, backend_class: str) -> Any:
+    def connectable_credentials(self, user: AbstractBaseUser, backend_class: str) -> models.QuerySet[Credential]:
         """Return ``user``'s connected OAuth credentials a backend may read its source with.
 
-        Only a backend that requires a credential has any: only of its own OAuth
-        registration, so one vendor's token is never sent to another's API, and
-        only those whose grant covers the backend's ``oauth_scopes``.
+        Only a backend that requires a credential has any: only of the OAuth
+        registration its Mount connects through, so one vendor's token is never
+        sent to another's API, and only those whose grant covers the backend's
+        ``oauth_scopes``.
         """
 
         impl = self.backend_impl(backend_class)
         credential_model = apps.get_model("integrate", "Credential")
         if not impl.requires_credential:
-            return credential_model.objects.none()
+            return cast("models.QuerySet[Credential]", credential_model.objects.none())
+        with system_context(reason="storage_integrate.mount.oauth_slug"):
+            oauth_slug = self.build(backend_class).connection_oauth_slug(impl.label)
         accounts = credential_model.objects.connected_for(user).filter(
             kind=CredentialKind.OAUTH,
-            oauth_client__slug=impl.oauth_slug(),
+            oauth_client__slug=oauth_slug,
         )
         required = set(impl.oauth_scopes)
         # JSON containment is not portable to SQLite; a user's accounts are few.
         granted = [pk for pk, scopes in accounts.values_list("pk", "granted_scopes") if required <= set(scopes or ())]
-        return accounts.filter(pk__in=granted)
+        return cast("models.QuerySet[Credential]", accounts.filter(pk__in=granted))
 
-    def browse_source(self, backend_class: str, *, credential: Any | None = None, token: str = "") -> MountBrowseResult:
+    def browse_source(
+        self,
+        user: AbstractBaseUser,
+        backend_class: str,
+        *,
+        credential: Credential | None = None,
+        token: str = "",
+    ) -> MountBrowseResult:
         """List one bounded level of a configured mount backend's source tree, before a Mount exists.
 
-        A location some mount already roots at is offered blocked as already
-        mounted, unless the backend already blocked it for its own reason.
+        The account is admitted as :meth:`provision` admits it. A location some
+        mount already roots at is offered blocked as already mounted, unless the
+        backend already blocked it for its own reason.
         """
 
-        listing = self.backend_impl(backend_class).browse(credential=credential, token=token)
+        impl = self.backend_impl(backend_class)
+        self._check_connection(user, backend_class, impl=impl, credential=credential)
+        listing = impl.browse(credential=credential, token=token)
         tokens = (location.token for location in (listing.location, *listing.entries))
         with system_context(reason="storage_integrate.browse_mount_source"):
             mounted = set(self.for_roots(tokens).values_list("config__root", flat=True))
@@ -129,31 +164,28 @@ class MountManager[MountT: Mount](_MountManagerBase[MountT]):
 
     def provision(
         self,
-        user: Any,
+        user: AbstractBaseUser,
         *,
+        backend_class: str,
         name: str,
         root: str,
         mode: MountMode,
-        backend_class: str,
-        already_mounted_message: str,
-        slug_default: str,
-        reason: str,
-        credential: Any | None = None,
-        copy_backend: Any | None = None,
+        credential: Credential | None = None,
+        copy_backend: Backend | None = None,
     ) -> MountT:
         """Provision one external-source Mount and its drive, then queue its first sync.
 
-        ``root`` is the backend's source token (what ``browse`` offers); the
-        backend's ``source_root`` validates it on the unsaved row and returns its
-        canonical root, which the already-mounted check and the Mount use, so a
-        refusal is keyed to ``path`` before anything is created. A backend that requires a credential reads with
-        ``credential``, one of ``user``'s :meth:`connectable_credentials`,
-        attached through the integration's own attach verb; the Mount points at
-        the backend's vendor. A reference mount gets its own storage backend
-        serving the source in place; a copy mount stores under a key prefix of
-        ``copy_backend``, a writable backend ``user`` may read, or else of the
-        configured default drive's backend. ``reason`` names the caller's system
-        scope.
+        Every input is admitted here, once. ``root`` is the backend's source
+        token (what ``browse`` offers); the backend's ``source_root`` validates it
+        on the unsaved row and returns its canonical root, which the
+        already-mounted check and the Mount use, so a refusal is keyed to
+        ``root`` before anything is created. A backend that requires a
+        credential reads with ``credential``, one of ``user``'s
+        :meth:`connectable_credentials`, attached through the integration's own
+        attach verb; the Mount points at the backend's vendor. A reference mount
+        gets its own storage backend serving the source in place; a copy mount
+        stores under a key prefix of ``copy_backend``, a writable backend
+        ``user`` may read, or else of the configured default drive's backend.
         """
 
         display_name = str(name).strip()
@@ -164,52 +196,52 @@ class MountManager[MountT: Mount](_MountManagerBase[MountT]):
         drive_model = apps.get_model("storage", "Drive")
         self._check_connection(user, backend_class, impl=impl, credential=credential)
         self._check_copy_backend(user, mode=mode, copy_backend=copy_backend, backend_model=backend_model)
+        source = self.build(backend_class, config={"root": str(root)}, credential=credential, mode=mode)
         storage_backend_spec: tuple[str, dict[str, Any]] | None = None
         try:
-            source = self.model(backend_class=backend_class, config={"root": str(root)}, credential=credential)
             with contextlib.closing(source.backend) as backend:
                 mount_config = {"root": backend.source_root()}
                 if mode == MountMode.REFERENCE:
                     storage_backend_spec = backend.storage_backend_spec()
         except IntegrationError as error:
-            raise ValidationError({"path": error.public_message}) from error
+            raise ValidationError({"root": error.public_message}) from error
         except ValidationError as error:
             # Django ValidationError has error_dict only for field-keyed errors.
             if hasattr(error, "error_dict"):
                 raise
-            raise ValidationError({"path": error.messages}) from error
+            raise ValidationError({"root": error.messages}) from error
 
-        with system_context(reason=reason), transaction.atomic():
+        with system_context(reason="storage_integrate.mount.provision"), transaction.atomic():
             if self.for_roots((mount_config["root"],)).exists():
-                raise ValidationError({"path": already_mounted_message})
+                raise ValidationError({"root": impl.already_mounted_message()})
             slug = self._available_slug(
                 display_name,
-                slug_default=slug_default,
+                slug_default=impl.slug_default(),
                 backend_model=backend_model,
                 drive_model=drive_model,
             )
             drive_slug = f"mount-{slug}"
             if storage_backend_spec is not None:
                 storage_backend_key, storage_backend_config = storage_backend_spec
-                storage_backend = backend_model.objects.create(
+                storage_backend_id = backend_model.objects.create(
                     slug=drive_slug,
                     label=f"{display_name} (external)",
                     backend_class=storage_backend_key,
                     backend_config=storage_backend_config,
                     created_by_id=user.pk,
-                )
+                ).pk
                 prefix = ""
             else:
                 if copy_backend is not None:
-                    storage_backend = copy_backend
+                    storage_backend_id = copy_backend.pk
                 else:
                     default = drive_model.objects.configured_default()
                     if default is None:
                         raise ImproperlyConfigured("The configured default storage drive is missing.")
-                    storage_backend = default.backend
+                    storage_backend_id = default.backend_id
                 prefix = f"mounts/{slug}"
             drive = drive_model.objects.create(
-                backend_id=storage_backend.pk,
+                backend_id=storage_backend_id,
                 slug=drive_slug,
                 name=display_name,
                 prefix=prefix,
@@ -217,7 +249,7 @@ class MountManager[MountT: Mount](_MountManagerBase[MountT]):
                 created_by_id=user.pk,
             )
             mount = self.create(
-                vendor_id=apps.get_model("integrate", "Vendor").objects.seeded(impl.vendor_slug).pk,
+                vendor_id=source.vendor_id,
                 owner_id=user.pk,
                 display_name=display_name,
                 backend_class=backend_class,
@@ -235,7 +267,12 @@ class MountManager[MountT: Mount](_MountManagerBase[MountT]):
         return mount
 
     def _check_connection(
-        self, user: Any, backend_class: str, *, impl: type[MountBackend], credential: Any | None
+        self,
+        user: AbstractBaseUser,
+        backend_class: str,
+        *,
+        impl: type[MountBackend],
+        credential: Credential | None,
     ) -> None:
         """Require a credential exactly when the backend reads with one, and only one of ``user``'s it may use."""
 
@@ -251,7 +288,9 @@ class MountManager[MountT: Mount](_MountManagerBase[MountT]):
             raise ValidationError({"credential": f"This account cannot read a {impl.label} for you."})
 
     @staticmethod
-    def _check_copy_backend(user: Any, *, mode: MountMode, copy_backend: Any | None, backend_model: Any) -> None:
+    def _check_copy_backend(
+        user: AbstractBaseUser, *, mode: MountMode, copy_backend: Backend | None, backend_model: Any
+    ) -> None:
         """Admit a chosen copy target only for a copy mount, writable and readable by ``user``."""
 
         if copy_backend is None:
@@ -422,7 +461,7 @@ class Mount(Bridge, inherits="integrate.Integration"):
 
             self._report_batch(counts)
 
-        seen_keys.update(backend.observed_paths)
+        seen_keys.update(backend.observed_keys)
         counts["scanned"] += backend.scan_errors
         counts["errors"] += backend.scan_errors
         counts["skipped"] = backend.skipped_entries

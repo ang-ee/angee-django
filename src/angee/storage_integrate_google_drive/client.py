@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import contextlib
 import io
+import json
 from collections.abc import Iterator, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -27,10 +28,8 @@ from typing import Any, BinaryIO
 from urllib.parse import quote, urlencode
 
 import httpx2
-from django.core.exceptions import ValidationError
 from django.utils import timezone
 
-from angee.integrate.credentials import CredentialKind
 from angee.integrate.errors import IntegrationError
 from angee.integrate.http import HttpClient
 
@@ -48,6 +47,7 @@ _LIST_FIELDS = f"nextPageToken,files({_FILE_FIELDS})"
 _PAGE_SIZE = 1000
 _JSON_MAX_BYTES = 8 * 1024 * 1024
 _MEDIA_CHUNK_BYTES = 256 * 1024
+_ERROR_BODY_MAX_BYTES = 16 * 1024
 _RATE_LIMIT_REASONS = frozenset({"rateLimitExceeded", "userRateLimitExceeded"})
 _SCOPE_REFUSALS = frozenset({"insufficientPermissions", "ACCESS_TOKEN_SCOPE_INSUFFICIENT"})
 _FILE_REFUSALS = frozenset(
@@ -115,21 +115,13 @@ class DriveItem:
 class GoogleDriveClient:
     """One Google account's Drive, read with its OAuth credential.
 
-    ``oauth_slug`` names the OAuth registration the credential must belong to,
-    so a token of another vendor is never sent to Google.
+    Which credential may read whose source is the Mount owner's admission
+    (``MountManager.connectable_credentials``); the client only reads with it.
     """
 
-    def __init__(self, credential: Any, *, oauth_slug: str) -> None:
-        """Bind a Google OAuth credential; refuse any other."""
+    def __init__(self, credential: Any) -> None:
+        """Bind the credential every request authenticates with."""
 
-        oauth_client = getattr(credential, "oauth_client", None) if credential is not None else None
-        if (
-            credential is None
-            or credential.kind != CredentialKind.OAUTH
-            or oauth_client is None
-            or oauth_client.slug != oauth_slug
-        ):
-            raise ValidationError({"credential": "Connect a Google account to read Google Drive."})
         self.credential = credential
         self.http = HttpClient()
         self._refreshed = False
@@ -156,6 +148,20 @@ class GoogleDriveClient:
             "supportsAllDrives": "true",
             "includeItemsFromAllDrives": "true",
             **corpus,
+        }
+        yield from (DriveItem.from_api(item) for item in self._pages("files", params, "files"))
+
+    def drive_items(self, drive_id: str) -> Iterator[DriveItem]:
+        """Yield every untrashed item of one shared drive in one paged listing of its corpus."""
+
+        params = {
+            "q": "trashed = false",
+            "fields": _LIST_FIELDS,
+            "pageSize": str(_PAGE_SIZE),
+            "corpora": "drive",
+            "driveId": drive_id,
+            "supportsAllDrives": "true",
+            "includeItemsFromAllDrives": "true",
         }
         yield from (DriveItem.from_api(item) for item in self._pages("files", params, "files"))
 
@@ -189,8 +195,7 @@ class GoogleDriveClient:
             stack.close()
             response = stack.enter_context(self.http.stream("GET", url, headers=self._headers()))
         if not response.is_success:
-            response.read()
-            self._raise_for_status(response, per_file=True)
+            self._raise_for_status(response, _bounded_body(response), per_file=True)
         return response.iter_bytes(chunk_size=_MEDIA_CHUNK_BYTES)
 
     def _pages(self, path: str, params: Mapping[str, str], items_key: str) -> Iterator[Mapping[str, Any]]:
@@ -211,7 +216,7 @@ class GoogleDriveClient:
         response = self.http.request("GET", url, headers=self._headers(), max_bytes=_JSON_MAX_BYTES)
         if response.status_code == 401 and self._renew():
             response = self.http.request("GET", url, headers=self._headers(), max_bytes=_JSON_MAX_BYTES)
-        self._raise_for_status(response, per_file=path.startswith("files/"))
+        self._raise_for_status(response, response.content, per_file=path.startswith("files/"))
         try:
             data = response.json()
         except ValueError as error:
@@ -243,7 +248,7 @@ class GoogleDriveClient:
         return True
 
     @staticmethod
-    def _raise_for_status(response: httpx2.Response, *, per_file: bool) -> None:
+    def _raise_for_status(response: httpx2.Response, body: bytes, *, per_file: bool) -> None:
         """Map a Drive refusal onto the error of its reach.
 
         ``per_file`` marks a request about one file, whose refusals other than
@@ -255,7 +260,7 @@ class GoogleDriveClient:
             return
         if status == 404:
             raise FileNotFoundError("Google Drive item not found.")
-        reason = _error_reason(response)
+        reason = _error_reason(body)
         if status == 429 or (status == 403 and reason in _RATE_LIMIT_REASONS):
             raise GoogleDriveError(
                 "Google Drive is rate limiting this account; try the sync again later.",
@@ -348,15 +353,26 @@ def _query_literal(value: str) -> str:
     return value.replace("\\", "\\\\").replace("'", "\\'")
 
 
-def _error_reason(response: httpx2.Response) -> str:
+def _error_reason(body: bytes) -> str:
     """Return Drive's error reason (``rateLimitExceeded``, ...) from a refusal body, or ``""``."""
 
     try:
-        error = response.json().get("error") or {}
+        error = json.loads(body).get("error") or {}
         errors = error.get("errors") or ()
         return str(errors[0].get("reason") or "") if errors else str(error.get("status") or "")
     except (ValueError, AttributeError, IndexError, TypeError):
         return ""
+
+
+def _bounded_body(response: httpx2.Response) -> bytes:
+    """Read at most :data:`_ERROR_BODY_MAX_BYTES` of a streamed refusal, enough for its reason."""
+
+    body = b""
+    for chunk in response.iter_bytes(chunk_size=_ERROR_BODY_MAX_BYTES):
+        body += chunk
+        if len(body) >= _ERROR_BODY_MAX_BYTES:
+            break
+    return body[:_ERROR_BODY_MAX_BYTES]
 
 
 def _retry_after(response: httpx2.Response) -> timedelta | None:

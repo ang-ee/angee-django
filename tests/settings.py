@@ -54,7 +54,7 @@ INSTALLED_APPS = [
     "angee.mcp",
     "angee.storage",
     "angee.storage_integrate",
-    "angee.storage_integrate_gdrive",
+    "angee.storage_integrate_google_drive",
     "angee.storage_integrate_iphone",
     "angee.parties",
     "angee.money",

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import posixpath
-from collections.abc import Iterable, Iterator
+from collections.abc import Callable, Iterable, Iterator
 from dataclasses import dataclass, field
 from pathlib import PurePosixPath
 from typing import Any, BinaryIO, ClassVar
@@ -12,7 +12,7 @@ from django.core.exceptions import ValidationError
 
 from angee.storage_integrate.models import MountMode
 from angee.storage_integrate.mounts import MountBackend, MountBrowseResult, MountEntry, MountLocation
-from angee.storage_integrate_gdrive.client import MY_DRIVE, DriveItem, GoogleDriveClient, GoogleDriveError
+from angee.storage_integrate_google_drive.client import MY_DRIVE, DriveItem, GoogleDriveClient, GoogleDriveError
 
 _TAG_LENGTH = 8
 """Characters of a file id that tag a duplicate sibling name."""
@@ -48,21 +48,18 @@ class GoogleDriveMountBackend(MountBackend):
     """The Google OAuth scopes this backend reads with; the connected account must grant them."""
 
     @classmethod
-    def client_for(cls, credential: Any) -> GoogleDriveClient:
-        """Return a Drive client for one of this backend's Google credentials."""
-
-        return GoogleDriveClient(credential, oauth_slug=cls.oauth_slug())
-
-    @classmethod
     def browse(
         cls,
         *,
         credential: Any | None = None,
         token: str = "",
     ) -> MountBrowseResult:
-        """List My Drive and the shared drives at the top, then a folder's child folders."""
+        """List My Drive and the shared drives at the top, then a folder's child folders.
 
-        client = cls.client_for(credential)
+        ``credential`` is one the Mount manager admitted for the browsing user.
+        """
+
+        client = GoogleDriveClient(credential)
         raw_token = str(token or "").strip()
         if not raw_token:
             my_drive = client.get(MY_DRIVE)
@@ -110,7 +107,10 @@ class GoogleDriveMountBackend(MountBackend):
         """Return the Drive client reading with this Mount's attached credential."""
 
         if self._client is None:
-            self._client = self.client_for(self.bridge.load_connection_credential())
+            credential = self.bridge.load_connection_credential()
+            if credential is None:
+                raise GoogleDriveError("This Google Drive mount has no account attached; reconnect it.")
+            self._client = GoogleDriveClient(credential)
         return self._client
 
     def check_source(self) -> None:
@@ -174,18 +174,24 @@ class GoogleDriveMountBackend(MountBackend):
         return "google_drive", {"root": self._checked_root().id}
 
     def _walked(self) -> _DriveWalk:
-        """Walk the mounted folder once per sync, depth first with siblings in name order."""
+        """Walk the mounted folder once per sync, depth first with siblings in name order.
+
+        A shared drive is listed whole in one paged pass and its tree built from
+        each item's parents; My Drive is listed folder by folder, since its
+        corpus is every file the account can see.
+        """
 
         if self._walk is not None:
             return self._walk
         root = self._checked_root()
+        children_of = self._listed_children(root)
         copying = self.bridge.mode == MountMode.COPY
         walk = _DriveWalk()
         seen = {root.id}
         pending: list[tuple[str, DriveItem]] = [("", root)]
         while pending:
             prefix, folder = pending.pop()
-            children = list(self.client.children(folder))
+            children = children_of(folder)
             unmirrored = {
                 child.id
                 for child in children
@@ -217,6 +223,17 @@ class GoogleDriveMountBackend(MountBackend):
             pending.extend(reversed(subfolders))
         self._walk = walk
         return walk
+
+    def _listed_children(self, root: DriveItem) -> Callable[[DriveItem], list[DriveItem]]:
+        """Return how to list a folder's children: from one listing of a shared drive, else per folder."""
+
+        if not root.drive_id:
+            return lambda folder: list(self.client.children(folder))
+        by_parent: dict[str, list[DriveItem]] = {}
+        for item in self.client.drive_items(root.drive_id):
+            for parent in item.parents:
+                by_parent.setdefault(parent, []).append(item)
+        return lambda folder: by_parent.get(folder.id, [])
 
 
 def _sibling_names(items: Iterable[DriveItem], *, keep_suffix: bool) -> list[tuple[DriveItem, str]]:

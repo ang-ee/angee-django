@@ -25,10 +25,8 @@ from angee.graphql.testing.documents import execute_schema, result_data
 from angee.integrate.models import IntegrationLifecycle
 from angee.integrate.testing.http import mock_transport
 from angee.storage import exceptions as storage_exceptions
-from angee.storage_integrate.connect import create_local_folder_mount
 from angee.storage_integrate.models import MountMode
-from angee.storage_integrate_gdrive.client import FOLDER_MIME, GoogleDriveError
-from angee.storage_integrate_gdrive.connect import create_google_drive_mount
+from angee.storage_integrate_google_drive.client import FOLDER_MIME, GoogleDriveError
 from tests.conftest import (
     Backend,
     Drive,
@@ -44,7 +42,6 @@ from tests.conftest import (
 )
 
 storage_integrate_schema = importlib.import_module("angee.storage_integrate.schema")
-gdrive_schema = importlib.import_module("angee.storage_integrate_gdrive.schema")
 
 TOKEN = "drive-token"
 MY_DRIVE_ID = "0AMyDriveRoot"
@@ -149,19 +146,18 @@ class FakeDrive:
             return self._page(drives, params, "drives")
         if path == "/drive/v3/files":
             self.listings.append(params)
-            match = re.match(r"'([^']+)' in parents and trashed = false", params["q"])
-            assert match is not None
-            folders_only = "mimeType = " in params["q"]
-            children = sorted(
-                (
-                    item
-                    for item in self.items.values()
-                    if item.parent == match.group(1)
-                    and not item.trashed
-                    and (item.mime == FOLDER_MIME or not folders_only)
-                ),
-                key=lambda item: (item.name, item.id),
-            )
+            if params["q"] == "trashed = false":
+                drive_id = params["driveId"]
+                listed = [item for item in self.items.values() if item.drive_id == drive_id and item.id != drive_id]
+            else:
+                match = re.match(r"'([^']+)' in parents and trashed = false", params["q"])
+                assert match is not None
+                folders_only = "mimeType = " in params["q"]
+                listed = [
+                    item for item in self.items.values()
+                    if item.parent == match.group(1) and (item.mime == FOLDER_MIME or not folders_only)
+                ]
+            children = sorted((item for item in listed if not item.trashed), key=lambda item: (item.name, item.id))
             return self._page([child.resource() for child in children], params, "files")
         file_id = unquote(path.removeprefix("/drive/v3/files/"))
         item = self.items.get(MY_DRIVE_ID if file_id == "root" else file_id)
@@ -267,10 +263,12 @@ def queued_mounts(monkeypatch: pytest.MonkeyPatch) -> list[Any]:
 def _connect(
     env: SimpleNamespace, root: str, *, mode: MountMode = MountMode.REFERENCE, name: str = "Drive", **values: Any
 ) -> Any:
-    """Provision one Google Drive Mount through the public connect verb."""
+    """Provision one Google Drive Mount as ``connect_mount`` does."""
 
     values.setdefault("credential", env.credential)
-    return create_google_drive_mount(env.owner, name=name, path=root, mode=mode, **values)
+    return Mount.objects.provision(
+        env.owner, backend_class="google_drive", name=name, root=root, mode=mode, **values
+    )
 
 
 def _run_sync(mount: Any) -> int:
@@ -306,12 +304,9 @@ def _details(mount: Any) -> dict[str, Any]:
 
 
 def _console_schema() -> Any:
-    """Compose the Google Drive mutation onto its storage_integrate dependency."""
+    """Return the console schema carrying the generic ``connect_mount``."""
 
-    parts = {key: list(values) for key, values in storage_integrate_schema.schemas["console"].items()}
-    for key, values in gdrive_schema.schemas["console"].items():
-        parts.setdefault(key, []).extend(values)
-    return addon_schema({"console": parts}, "console")
+    return addon_schema(storage_integrate_schema.schemas, "console")
 
 
 def test_browse_lists_my_drive_and_shared_drives_then_child_folders(
@@ -327,7 +322,7 @@ def test_browse_lists_my_drive_and_shared_drives_then_child_folders(
     fake.shared_drive("0ATeam", "Team")
     fake.shared_drive("0AArt", "Art")
 
-    top = Mount.objects.browse_source("google_drive", credential=drive_env.credential)
+    top = Mount.objects.browse_source(drive_env.owner, "google_drive", credential=drive_env.credential)
     assert top.location.token == ""
     assert not top.location.is_mountable
     assert [(entry.token, entry.label) for entry in top.entries] == [
@@ -337,22 +332,24 @@ def test_browse_lists_my_drive_and_shared_drives_then_child_folders(
     ]
     assert not top.supports_manual_token
 
-    my_drive = Mount.objects.browse_source("google_drive", credential=drive_env.credential, token=MY_DRIVE_ID)
+    my_drive = Mount.objects.browse_source(
+        drive_env.owner, "google_drive", credential=drive_env.credential, token=MY_DRIVE_ID
+    )
     assert my_drive.location.is_mountable
     assert my_drive.parent_token == ""
     assert [entry.label for entry in my_drive.entries] == ["archive", "Work"]
 
     _connect(drive_env, "f-work", name="Work")
-    work = Mount.objects.browse_source("google_drive", credential=drive_env.credential, token="f-work")
+    work = Mount.objects.browse_source(drive_env.owner, "google_drive", credential=drive_env.credential, token="f-work")
     assert work.parent_token == MY_DRIVE_ID
     assert work.location.blocked_reason == "Already mounted"
     assert [entry.token for entry in work.entries] == ["f-plans"]
 
     with pytest.raises(ValidationError) as missing:
-        Mount.objects.browse_source("google_drive", credential=drive_env.credential, token="gone")
+        Mount.objects.browse_source(drive_env.owner, "google_drive", credential=drive_env.credential, token="gone")
     assert set(missing.value.message_dict) == {"token"}
     with pytest.raises(ValidationError) as anonymous:
-        Mount.objects.browse_source("google_drive")
+        Mount.objects.browse_source(drive_env.owner, "google_drive")
     assert set(anonymous.value.message_dict) == {"credential"}
 
 
@@ -492,12 +489,12 @@ def test_shared_drive_mount_reads_its_own_corpus(drive_env: SimpleNamespace, que
     mount = _connect(drive_env, "0ATeam", name="Team")
     assert _run_sync(mount) == 1
     assert _rows(mount.drive)["x-team"].folder.name == "Docs"
-    assert fake.listings
-    for listing in fake.listings:
-        assert listing["corpora"] == "drive"
-        assert listing["driveId"] == "0ATeam"
-        assert listing["supportsAllDrives"] == "true"
-        assert listing["includeItemsFromAllDrives"] == "true"
+    [listing] = fake.listings
+    assert listing["q"] == "trashed = false"
+    assert listing["corpora"] == "drive"
+    assert listing["driveId"] == "0ATeam"
+    assert listing["supportsAllDrives"] == "true"
+    assert listing["includeItemsFromAllDrives"] == "true"
 
 
 def test_a_file_without_a_drive_checksum_is_hashed_from_one_download(
@@ -589,23 +586,24 @@ def test_connect_requires_one_of_the_users_google_accounts_and_a_mountable_folde
     for root in ("x-file", "gone"):
         with pytest.raises(ValidationError) as unusable:
             _connect(drive_env, root)
-        assert set(unusable.value.message_dict) == {"path"}
+        assert set(unusable.value.message_dict) == {"root"}
     _connect(drive_env, "f-once", name="Once")
     with pytest.raises(ValidationError) as again:
         _connect(drive_env, "f-once", name="Again", mode=MountMode.COPY)
-    assert again.value.message_dict == {"path": ["This Google Drive folder is already mounted."]}
+    assert again.value.message_dict == {"root": ["This Google Drive source is already mounted."]}
 
     local_root = drive_env.tmp_path / "local"
     local_root.mkdir()
     with pytest.raises(ValidationError) as local:
         Mount.objects.provision(
-            drive_env.owner, name="Local", root=str(local_root), mode=MountMode.REFERENCE,
-            backend_class="local_folder", already_mounted_message="mounted", slug_default="folder",
-            reason="test", credential=drive_env.credential,
+            drive_env.owner, backend_class="local_folder", name="Local", root=str(local_root),
+            mode=MountMode.REFERENCE, credential=drive_env.credential,
         )
     assert set(local.value.message_dict) == {"credential"}
     assert len(queued_mounts) == 1
-    assert create_local_folder_mount(drive_env.owner, name="Local", path=str(local_root), mode=MountMode.REFERENCE)
+    assert Mount.objects.provision(
+        drive_env.owner, backend_class="local_folder", name="Local", root=str(local_root), mode=MountMode.REFERENCE
+    )
 
 
 def test_graphql_lists_accounts_browses_and_connects_with_the_session_users_account(
@@ -622,19 +620,21 @@ def test_graphql_lists_accounts_browses_and_connects_with_the_session_users_acco
     accounts = result_data(
         execute_schema(
             schema,
-            'query { mount_accounts(backend_class: "google_drive") { oauth_client accounts { id display_name } } }',
+            'query { mount_backend(backend_class: "google_drive") '
+            "{ requires_credential oauth_client accounts { id display_name } } }",
             user=admin,
         )
-    )["mount_accounts"]
+    )["mount_backend"]
+    assert accounts["requires_credential"] is True
     assert accounts["oauth_client"] == str(drive_env.google.public_id)
     assert [account["id"] for account in accounts["accounts"]] == [str(drive_env.credential.public_id)]
     others = result_data(
         execute_schema(
             schema,
-            'query { mount_accounts(backend_class: "google_drive") { accounts { id } } }',
+            'query { mount_backend(backend_class: "google_drive") { accounts { id } } }',
             user=other_admin,
         )
-    )["mount_accounts"]
+    )["mount_backend"]
     assert others["accounts"] == []
 
     browse = """
@@ -652,15 +652,18 @@ def test_graphql_lists_accounts_browses_and_connects_with_the_session_users_acco
     assert execute_schema(schema, browse, own_account, user=other_admin).errors is not None
 
     connect = """
-        mutation($credential: ID!, $path: String!) {
-          connect_google_drive(name: "Console drive", credential_id: $credential, path: $path, mode: REFERENCE) {
+        mutation($credential: ID!, $root: String!) {
+          connect_mount(
+            backend_class: "google_drive", name: "Console drive", credential_id: $credential, source_root: $root,
+            mode: REFERENCE
+          ) {
             id mode lifecycle
           }
         }
     """
-    variables = {"credential": str(drive_env.credential.public_id), "path": "f-gql"}
+    variables = {"credential": str(drive_env.credential.public_id), "root": "f-gql"}
     assert execute_schema(schema, connect, variables, user=other_admin).errors is not None
-    connected = result_data(execute_schema(schema, connect, variables, user=admin))["connect_google_drive"]
+    connected = result_data(execute_schema(schema, connect, variables, user=admin))["connect_mount"]
     assert connected["mode"] == "REFERENCE"
     assert connected["lifecycle"] == "CONNECTED"
     assert connected["id"] == str(queued_mounts[0].sqid)
@@ -874,4 +877,4 @@ def test_an_alias_root_is_normalized_before_the_mounted_check(
     assert mount.config["root"] == MY_DRIVE_ID
     with pytest.raises(ValidationError) as again:
         _connect(drive_env, MY_DRIVE_ID, name="Again")
-    assert set(again.value.message_dict) == {"path"}
+    assert set(again.value.message_dict) == {"root"}

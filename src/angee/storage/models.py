@@ -704,7 +704,7 @@ class FileQuerySet[FileT: File](TrashQuerySet[FileT], OwnerQuerySet[FileT], Ange
     """REBAC-scoped reads for file rows; ``trashed()`` backs the Trash smart folder."""
 
     def trash_missing_external(self, drive: Any, present_paths: Collection[str]) -> int:
-        """Soft-trash this selection's live rows in ``drive`` whose external path vanished."""
+        """Soft-trash this selection's live rows in ``drive`` whose backend key the external source no longer lists."""
 
         present = {str(path) for path in present_paths}
         with system_context(reason="storage.file.trash_missing_external"):
@@ -1047,12 +1047,14 @@ class FileManager[FileT: File](_FileManagerBase[FileT]):
         existing_pk: Any = None,
         owner_id: Any = None,
     ) -> FileT:
-        """Upsert one externally-owned object by its drive-relative path.
+        """Upsert one externally-owned object by its backend key (``storage_path``).
 
         External bytes are already present, so this path creates READY rows
-        directly. Path is the identity; the drive's content-hash uniqueness
-        remains authoritative and reports a second path with identical bytes
-        as :class:`~angee.storage.exceptions.ExternalDuplicate`.
+        directly. The backend key is the identity: a drive-relative path for a
+        folder, or a stable source id; the row's folder and filename place it.
+        The drive's content-hash uniqueness remains authoritative and reports a
+        second key with identical bytes as
+        :class:`~angee.storage.exceptions.ExternalDuplicate`.
         """
 
         path = str(storage_path).strip()
@@ -1509,10 +1511,11 @@ class File(TaggedModel, TrashMixin, OwnerMixin, HistoryMixin, AngeeDataModel, co
     def local_path(self) -> Path | None:
         """Return this file's real on-disk path when its backend exposes one.
 
-        Reference-mode mounts store rows at real filesystem paths (a
-        ``FileSystemStorage`` rooted at the mount folder), which lets a mount
-        extractor open the bytes in place; object-store backends have no local
-        path and return ``None``. This owns the backend probe so no caller
+        A reference mount of a local folder stores rows at backend keys that
+        are real filesystem paths (a ``FileSystemStorage`` rooted at the mount
+        folder), which lets a mount extractor open the bytes in place; backends
+        whose keys name no local file (object stores, remote sources) return
+        ``None``. This owns the backend probe so no caller
         reaches into the storage shape from outside.
         """
 

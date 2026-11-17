@@ -1,6 +1,6 @@
 # Google Drive mounts
 
-Install `angee.storage_integrate_gdrive` in the project's `INSTALLED_APPS`. It
+Install `angee.storage_integrate_google_drive` in the project's `INSTALLED_APPS`. It
 adds a Google Drive backend to the storage Mounts that `angee.storage_integrate`
 owns: open **Storage → Mounts** and choose **Connect Google Drive**.
 

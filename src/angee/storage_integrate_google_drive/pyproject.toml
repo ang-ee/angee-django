@@ -1,7 +1,7 @@
 build-system = { requires = ["hatch-angee>=1.1,<2"], build-backend = "hatch_angee" }
 
 [project]
-name = "angee-storage-integrate-gdrive"
+name = "angee-storage-integrate-google-drive"
 version = "3.0.0"
 description = "Google Drive folders, My Drive and shared drives as external storage Mounts"
 keywords = ["google", "drive", "storage", "mounts"]

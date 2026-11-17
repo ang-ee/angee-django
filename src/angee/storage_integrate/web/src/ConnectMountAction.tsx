@@ -1,7 +1,4 @@
-import {
-  useAuthoredMutation,
-  type TypedDocumentNode,
-} from "@angee/refine";
+import { useAuthoredMutation, useAuthoredQuery } from "@angee/refine";
 import {
   ActionTrigger,
   MutationDialog,
@@ -13,6 +10,7 @@ import {
 } from "@angee/ui";
 import * as React from "react";
 
+import { ConnectMount, MOUNT_MODEL, MountBackendFacts, MountCopyTargets } from "./documents";
 import { useStorageIntegrateT } from "./i18n";
 import { MountAccountPicker } from "./MountAccountPicker";
 import { MountSourceBrowser } from "./MountSourceBrowser";
@@ -20,53 +18,46 @@ import { MountSourceBrowser } from "./MountSourceBrowser";
 export type MountConnectMode = "COPY" | "REFERENCE";
 
 export type MountConnectVariables = {
+  backendClass: string;
   name: string;
-  path: string;
+  root: string;
   mode: MountConnectMode;
   credentialId?: string;
   copyBackendId?: string;
 };
 
-const BACKEND_MODEL = "storage.Backend";
-
 export interface ConnectMountActionProps {
-  mutationDocument: TypedDocumentNode<unknown, MountConnectVariables>;
   backendClass: string;
   i18nPrefix: string;
-  invalidateModel: string;
-  /** The backend reads its source with one of the user's accounts (`MountBackend.requires_credential`). */
-  requiresAccount?: boolean;
-  /** The mutation takes `copyBackendId`, so a copy mount may store in a chosen writable backend. */
-  choosesCopyBackend?: boolean;
 }
 
 /**
  * Canonical economy for browsable Mount connection: this factory owns the
  * button, typed dialog, account and browser fields, copy target, generic labels,
- * busy copy, mutation, and invalidation. Backends supply only their
- * operation/class, whether they read with an account, and genuinely varying
+ * busy copy, the one `connect_mount` mutation, and invalidation. What a backend
+ * asks for (an account, which accounts) comes from the server's `mount_backend`;
+ * backends supply only their class and genuinely varying
  * button/title/description/placeholder/error range.
  *
  * Backend message ranges arrive through addon composition. Providerless raw-key
  * renders are intentional; copying backend strings into this owner is not.
  */
 export function ConnectMountAction({
-  mutationDocument,
   backendClass,
   i18nPrefix,
-  invalidateModel,
-  requiresAccount = false,
-  choosesCopyBackend = false,
 }: ConnectMountActionProps): React.ReactElement {
   const t = useStorageIntegrateT();
-  const [connect] = useAuthoredMutation(mutationDocument, {
-    invalidateModels: [invalidateModel],
+  const [connect] = useAuthoredMutation(ConnectMount, {
+    invalidateModels: [MOUNT_MODEL],
   });
+  const facts = useAuthoredQuery(MountBackendFacts, { backendClass }).data?.mount_backend;
+  const targets = useAuthoredQuery(MountCopyTargets).data?.backends;
+  const requiresCredential = facts?.requires_credential === true;
   const accountControl = React.useCallback(
     (props: DescriptorFieldControlProps) => (
-      <MountAccountPicker {...props} backendClass={backendClass} />
+      <MountAccountPicker {...props} accounts={facts?.accounts ?? []} oauthClientId={facts?.oauth_client ?? null} />
     ),
-    [backendClass],
+    [facts],
   );
   const sourceControl = React.useCallback(
     (props: DescriptorFieldControlProps) => {
@@ -74,10 +65,16 @@ export function ConnectMountAction({
       // A new account browses afresh: its folders are another account's.
       return (
         <MountSourceBrowser {...props} key={credentialId ?? ""} backendClass={backendClass}
-          credentialId={credentialId} requiresAccount={requiresAccount} />
+          credentialId={credentialId} requiresCredential={requiresCredential} />
       );
     },
-    [backendClass, requiresAccount],
+    [backendClass, requiresCredential],
+  );
+  const copyTargetOptions = React.useMemo(
+    () => (targets ?? [])
+      .filter((target) => target.writable && !target.is_archived)
+      .map((target) => ({ value: target.id, label: target.label })),
+    [targets],
   );
   const fields = React.useMemo<readonly DescriptorField[]>(
     () => [
@@ -87,7 +84,7 @@ export function ConnectMountAction({
         placeholder: t(`${i18nPrefix}.namePlaceholder`),
         required: true,
       },
-      ...(requiresAccount
+      ...(requiresCredential
         ? [{
           name: "credentialId",
           label: t("mount.connect.account"),
@@ -95,11 +92,11 @@ export function ConnectMountAction({
           controlLabelMode: "group" as const,
           control: accountControl,
           // The chosen folder belongs to the account it was browsed with.
-          branchReset: () => ({ fields: ["path"], values: {} }),
+          branchReset: () => ({ fields: ["root"], values: {} }),
         }]
         : []),
       {
-        name: "path",
+        name: "root",
         label: t("mount.connect.sourceFolder"),
         required: true,
         controlLabelMode: "group",
@@ -115,23 +112,22 @@ export function ConnectMountAction({
         ],
         required: true,
       },
-      ...(choosesCopyBackend
-        ? [{
-          name: "copyBackendId",
-          label: t("mount.connect.copyBackend"),
-          placeholder: t("mount.connect.copyBackendDefault"),
-          relation: {
-            resource: BACKEND_MODEL,
-            labelField: "label",
-            filters: [{ field: "is_archived", operator: "eq" as const, value: false }],
-          },
-          showWhen: (values: Record<string, unknown>) => values.mode === "COPY",
-        }]
-        : []),
+      {
+        name: "copyBackendId",
+        label: t("mount.connect.copyBackend"),
+        placeholder: t("mount.connect.copyBackendDefault"),
+        widget: "select",
+        options: copyTargetOptions,
+        showWhen: (values: Record<string, unknown>) => values.mode === "COPY",
+      },
     ],
-    [accountControl, choosesCopyBackend, i18nPrefix, requiresAccount, sourceControl, t],
+    [accountControl, copyTargetOptions, i18nPrefix, requiresCredential, sourceControl, t],
   );
   const errorFallback = optionalTranslation(t, `${i18nPrefix}.error`);
+  const parseValues = React.useCallback(
+    (values: MutationDialogValues) => parseMountConnectValues(backendClass, values),
+    [backendClass],
+  );
 
   return (
     <MutationDialog
@@ -143,7 +139,7 @@ export function ConnectMountAction({
         submitLabel={t("mount.connect.submit")}
         submittingLabel={t("mount.connect.submitting")}
         errorFallback={errorFallback}
-        parseValues={parseMountConnectValues}
+        parseValues={parseValues}
         onSubmit={async (values) => ({ status: "ok", data: await connect(values) })}
         size="lg"
     />
@@ -151,11 +147,13 @@ export function ConnectMountAction({
 }
 
 function parseMountConnectValues(
+  backendClass: string,
   values: MutationDialogValues,
 ): MountConnectVariables {
   const variables: MountConnectVariables = {
+    backendClass,
     name: mutationDialogValueCodecs.requiredString(values.name, "name"),
-    path: mutationDialogValueCodecs.requiredString(values.path, "path"),
+    root: mutationDialogValueCodecs.requiredString(values.root, "root"),
     mode: mountModeValue(values.mode),
   };
   const credentialId = mutationDialogValueCodecs.string(values.credentialId);

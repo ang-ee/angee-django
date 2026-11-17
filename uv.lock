@@ -60,7 +60,7 @@ members = [
     "angee-spaces",
     "angee-storage",
     "angee-storage-integrate",
-    "angee-storage-integrate-gdrive",
+    "angee-storage-integrate-google-drive",
     "angee-storage-integrate-iphone",
     "angee-tags",
     "angee-theme-angee",
@@ -178,7 +178,7 @@ dependencies = [
     { name = "angee-spaces" },
     { name = "angee-storage" },
     { name = "angee-storage-integrate" },
-    { name = "angee-storage-integrate-gdrive" },
+    { name = "angee-storage-integrate-google-drive" },
     { name = "angee-storage-integrate-iphone" },
     { name = "angee-tags" },
     { name = "angee-theme-angee" },
@@ -283,7 +283,7 @@ requires-dist = [
     { name = "angee-spaces", editable = "src/angee/spaces" },
     { name = "angee-storage", editable = "src/angee/storage" },
     { name = "angee-storage-integrate", editable = "src/angee/storage_integrate" },
-    { name = "angee-storage-integrate-gdrive", editable = "src/angee/storage_integrate_gdrive" },
+    { name = "angee-storage-integrate-google-drive", editable = "src/angee/storage_integrate_google_drive" },
     { name = "angee-storage-integrate-iphone", editable = "src/angee/storage_integrate_iphone" },
     { name = "angee-tags", editable = "src/angee/tags" },
     { name = "angee-theme-angee", editable = "src/angee/theme_angee" },
@@ -1599,9 +1599,9 @@ requires-dist = [
 ]
 
 [[package]]
-name = "angee-storage-integrate-gdrive"
+name = "angee-storage-integrate-google-drive"
 version = "3.0.0"
-source = { editable = "src/angee/storage_integrate_gdrive" }
+source = { editable = "src/angee/storage_integrate_google_drive" }
 dependencies = [
     { name = "angee-integrate" },
     { name = "angee-storage" },

@@ -7,47 +7,29 @@ from typing import Any, cast
 import strawberry
 import strawberry_django
 from django.apps import apps
-from django.core.exceptions import ValidationError
 from django.utils import timezone
 from strawberry import auto
 
-from angee.graphql.actions import ActionResult, action_target, session_user
+from angee.graphql.actions import ActionResult, action_target, resolve_action_target, session_user
 from angee.graphql.data.hasura import hasura_model_resource
 from angee.graphql.ids import PublicID, public_id_field
 from angee.graphql.node import AngeeNode
 from angee.graphql.subscriptions import changes
 from angee.iam.permissions import ADMIN_PERMISSION_CLASSES
-from angee.integrate.schema import BridgeTypeMixin, CredentialType
-from angee.storage_integrate.connect import create_local_folder_mount
+from angee.integrate.schema import BridgeTypeMixin, ConnectedCredentialType
 from angee.storage_integrate.models import MountMode
 from angee.storage_integrate.mounts import MountBrowseResult
 
 Mount = apps.get_model("storage_integrate", "Mount")
+Credential = apps.get_model("integrate", "Credential")
 Backend = apps.get_model("storage", "Backend")
 strawberry.enum(cast(Any, MountMode))
 
 
-def mount_credential(info: strawberry.Info, backend_class: str, credential_id: PublicID | None) -> Any | None:
-    """Resolve one of the session user's accounts a mount backend may read with (``connectable_credentials``)."""
+def _by_public_id(model: Any, id: PublicID | None, *, reason: str) -> Any | None:
+    """Resolve an optional input row by public id; the Mount manager admits it."""
 
-    if credential_id is None:
-        return None
-    accounts = Mount.objects.connectable_credentials(session_user(info), backend_class)
-    credential = accounts.from_public_id(str(credential_id))
-    if credential is None:
-        raise ValidationError({"credential": "Choose one of your connected accounts for this source."})
-    return credential
-
-
-def copy_target_backend(copy_backend_id: PublicID | None) -> Any | None:
-    """Resolve the storage backend a copy mount stores into, as the session actor reads it."""
-
-    if copy_backend_id is None:
-        return None
-    backend = Backend.objects.all().from_public_id(str(copy_backend_id))
-    if backend is None:
-        raise ValidationError({"copy_backend": "The storage backend was not found."})
-    return backend
+    return resolve_action_target(model, id, reason=reason) if id is not None else None
 
 
 @strawberry.type
@@ -73,11 +55,14 @@ class MountBrowseResultType:
 
 
 @strawberry.type
-class MountAccountsType:
-    """The session user's accounts a credential mount backend reads with, and where to connect another."""
+class MountBackendType:
+    """What connecting a mount of one backend asks for: its account, if any, and the session user's choices."""
 
+    key: str
+    label: str
+    requires_credential: bool
     oauth_client: strawberry.ID | None
-    accounts: list[CredentialType]
+    accounts: list[ConnectedCredentialType]
 
 
 @strawberry_django.type(Mount)
@@ -139,21 +124,26 @@ class StorageIntegrateQuery:
         """List one bounded level from a configured mount backend, read with one of the user's accounts."""
 
         result: MountBrowseResult = Mount.objects.browse_source(
+            session_user(info),
             backend_class,
-            credential=mount_credential(info, backend_class, credential_id),
+            credential=_by_public_id(Credential, credential_id, reason="storage_integrate.graphql.browse.credential"),
             token=token,
         )
         return cast(MountBrowseResultType, result)
 
     @strawberry.field(permission_classes=ADMIN_PERMISSION_CLASSES)
-    def mount_accounts(self, info: strawberry.Info, backend_class: str) -> MountAccountsType:
-        """List the session user's accounts a mount backend reads with, and the registration to connect another."""
+    def mount_backend(self, info: strawberry.Info, backend_class: str) -> MountBackendType:
+        """Describe connecting a mount of one backend for the session user."""
 
-        registration = Mount.objects.oauth_registration(backend_class)
+        impl = Mount.objects.backend_impl(backend_class)
+        registration = Mount.objects.connect_oauth_client(backend_class)
         accounts = Mount.objects.connectable_credentials(session_user(info), backend_class).order_by("pk")
-        return MountAccountsType(
+        return MountBackendType(
+            key=impl.key,
+            label=str(impl.label),
+            requires_credential=impl.requires_credential,
             oauth_client=strawberry.ID(registration.public_id) if registration is not None else None,
-            accounts=cast(list[CredentialType], list(accounts)),
+            accounts=cast(list[ConnectedCredentialType], list(accounts)),
         )
 
 
@@ -162,22 +152,27 @@ class StorageIntegrateMutation:
     """Admin connection and sync actions for storage mounts."""
 
     @strawberry.mutation(permission_classes=ADMIN_PERMISSION_CLASSES)
-    def connect_local_folder(
+    def connect_mount(
         self,
         info: strawberry.Info,
+        backend_class: str,
         name: str,
-        path: str,
+        # A GraphQL argument named ``root`` collides with Strawberry's extension middleware.
+        source_root: str,
         mode: MountMode,
+        credential_id: PublicID | None = None,
         copy_backend_id: PublicID | None = None,
     ) -> MountType:
-        """Connect a Django-host folder and queue its first sync."""
+        """Connect a mount of any configured backend and queue its first sync; the Mount manager admits every input."""
 
-        mount = create_local_folder_mount(
+        mount = Mount.objects.provision(
             session_user(info),
+            backend_class=backend_class,
             name=name,
-            path=path,
+            root=source_root,
             mode=mode,
-            copy_backend=copy_target_backend(copy_backend_id),
+            credential=_by_public_id(Credential, credential_id, reason="storage_integrate.graphql.connect.credential"),
+            copy_backend=_by_public_id(Backend, copy_backend_id, reason="storage_integrate.graphql.connect.backend"),
         )
         return cast(MountType, mount)
 
@@ -198,7 +193,7 @@ schemas = {
         "types": [
             MountLocationType,
             MountBrowseResultType,
-            MountAccountsType,
+            MountBackendType,
             MountType,
             *_MOUNT_RESOURCE.types,
         ],

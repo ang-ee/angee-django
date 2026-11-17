@@ -8,7 +8,7 @@ from urllib.parse import urlencode
 import strawberry
 import strawberry_django
 from django.apps import apps
-from django.core.exceptions import ObjectDoesNotExist, ValidationError
+from django.core.exceptions import ImproperlyConfigured, ObjectDoesNotExist, ValidationError
 from django.db.models import Prefetch
 from django.urls import reverse
 from graphql import GraphQLError
@@ -83,6 +83,15 @@ class BackendType(AngeeNode):
     is_archived: auto
     created_at: auto
     updated_at: auto
+
+    @strawberry_django.field(only=["backend_class"])
+    def writable(self) -> bool:
+        """Whether new objects may be stored here: the selected ``StorageBackend``'s ``writable``."""
+
+        try:
+            return bool(cast(Any, self).get_backend_class_impl().writable)
+        except ImproperlyConfigured:
+            return False
 
 
 @strawberry_django.type(Drive)
