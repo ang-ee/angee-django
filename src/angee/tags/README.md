@@ -87,5 +87,7 @@ shows a labelled group of pickers:
 
 ## Seeds
 
-The demo tier seeds neutral categories and files the demo tags under them;
-the resource ledger's `(source_addon, xref)` identity makes reloads idempotent.
+The demo tier seeds neutral categories and files the demo tags under them. The
+categories set no maximum, so demo data loads on every host, including one whose
+own rules require a capped category to have an owner. The resource ledger's
+`(source_addon, xref)` identity makes reloads idempotent.

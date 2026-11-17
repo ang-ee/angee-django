@@ -391,6 +391,7 @@ def test_demo_resources_load_categories_and_file_tags_idempotently(db: None) -> 
             "Wholesale": "Segment",
             "Partner": "Relationship",
         }
-        assert TagCategory.objects.get(name="Relationship").max_per_record == 1
+        # Demo data loads on every host, so no demo category sets a maximum.
+        assert set(TagCategory.objects.values_list("max_per_record", flat=True)) == {None}
     replay = Resource.objects.load_addons((addon,), tiers=[Resource.Tier.DEMO], allow_non_dev=True)
     assert (replay.created, replay.updated) == (0, 0)
