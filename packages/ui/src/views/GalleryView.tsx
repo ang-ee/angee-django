@@ -5,8 +5,7 @@ import { useUiT } from "../i18n";
 import { useInAppLink } from "../lib/in-app-link";
 import { cn } from "../lib/cn";
 import { dragSourceProps, type DndPayload } from "../lib/dnd";
-import { Card } from "../ui/card";
-import { Checkbox } from "../ui/checkbox";
+import { Card, CardSelection, cardFrameVariants, type CardFrame } from "../ui/card";
 import { Skeleton, SkeletonStatus } from "../ui/skeleton";
 import { textRoleVariants } from "../ui/text";
 import { ListEmpty } from "./resource/resource-view-list-body";
@@ -39,7 +38,10 @@ export interface GalleryViewProps<TRow extends Row = Row> {
   /** Make a card draggable by returning its dnd payload, or `null`. */
   draggableRow?: (row: TRow) => DndPayload | null;
   selectedIds?: ReadonlySet<string>;
-  onToggleSelected?: (id: string, selected: boolean) => void;
+  /** Toggle one card's selection; the row is the snapshot a selection owner keeps. */
+  onToggleSelected?: (id: string, selected: boolean, row: TRow) => void;
+  /** How a card's content meets its frame; `flush` (edge to edge) by default. */
+  cardFrame?: CardFrame;
   /** Draw card-shaped placeholders while the first page is loading. */
   fetching?: boolean;
   /** Empty-state content shown when `rows` is empty. */
@@ -63,6 +65,7 @@ export function GalleryView<TRow extends Row = Row>({
   draggableRow,
   selectedIds,
   onToggleSelected,
+  cardFrame = "flush",
   fetching = false,
   emptyContent,
   className,
@@ -94,10 +97,11 @@ export function GalleryView<TRow extends Row = Row>({
               href={cardHref?.(row)}
               dragPayload={draggableRow?.(row) ?? null}
               onClick={onCardClick}
+              frame={cardFrame}
               selected={selectedIds?.has(id) ?? false}
               onToggle={
                 onToggleSelected
-                  ? (next) => onToggleSelected(id, next)
+                  ? (next) => onToggleSelected(id, next, row)
                   : undefined
               }
             />
@@ -125,7 +129,7 @@ function GallerySkeleton({
         <Card
           key={index}
           aria-hidden="true"
-          className="overflow-hidden p-0 shadow-none"
+          className={cn(cardFrameVariants({ frame: "flush" }).root(), "shadow-none")}
         >
           {showImage ? <Skeleton className="aspect-[4/3] rounded-none" /> : null}
           <div className="grid gap-2 p-3">
@@ -156,6 +160,7 @@ function GalleryCard<TRow extends Row>({
   href,
   dragPayload,
   onClick,
+  frame,
   selected,
   onToggle,
 }: {
@@ -168,41 +173,27 @@ function GalleryCard<TRow extends Row>({
   href?: string;
   dragPayload?: DndPayload | null;
   onClick?: (row: TRow) => void;
+  frame: CardFrame;
   selected: boolean;
   onToggle?: (next: boolean) => void;
 }): ReactElement {
+  const t = useUiT();
   const clickable = Boolean(href || onClick);
-  const cardClass = cn(
-    "group relative overflow-hidden p-0 outline-none",
-    clickable &&
-      "cursor-pointer hover:border-border-strong focus-visible:focus-ring",
-    selected && "border-brand",
-  );
   const dragProps = dragSourceProps(dragPayload ?? null);
   const title = cardTitle(row, titleField);
   // Selection is a sibling of the interactive body, including with custom cards.
-  const selection = onToggle ? (
-    <div
-      className="absolute left-2 top-2 z-10 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100 data-[selected=true]:opacity-100"
-      data-selected={selected || undefined}
-    >
-      <Checkbox
-        checked={selected}
-        onCheckedChange={(next) => onToggle(next)}
-        aria-label={`Select ${title || "item"}`}
-      />
-    </div>
-  ) : null;
-
   return (
     <GalleryCardFrame
       row={row}
       href={href}
       onClick={onClick}
       actions={actions}
-      selection={selection}
+      frame={frame}
+      clickable={clickable}
+      selected={selected}
+      onToggle={onToggle}
+      selectionLabel={title ? t("card.select", { title }) : t("card.selectUntitled")}
       dragProps={dragProps}
-      cardClass={cardClass}
     >
       {renderCard ? renderCard(row, { kind: "gallery", selected }) : <DefaultCardBody
         row={row} imageField={imageField} title={title} subtitleField={subtitleField}
@@ -216,9 +207,12 @@ interface GalleryCardFrameProps<TRow extends Row> {
   href?: string;
   onClick?: (row: TRow) => void;
   actions?: ReactNode;
-  selection?: ReactNode;
+  frame: CardFrame;
+  clickable: boolean;
+  selected: boolean;
+  onToggle?: (next: boolean) => void;
+  selectionLabel: string;
   dragProps: ReturnType<typeof dragSourceProps>;
-  cardClass: string;
   children: ReactNode;
 }
 
@@ -228,36 +222,62 @@ function GalleryCardFrame<TRow extends Row>({
   href,
   onClick,
   actions,
-  selection,
+  frame,
+  clickable,
+  selected,
+  onToggle,
+  selectionLabel,
   dragProps,
-  cardClass,
   children,
 }: GalleryCardFrameProps<TRow>): ReactElement {
   const link = useInAppLink(href, undefined, { onFollow: () => onClick?.(row) });
+  const styles = cardFrameVariants({ frame });
   const bodyClass = cn(
+    styles.body(),
     "block outline-none focus-visible:focus-ring",
-    actions ? "rounded-t-8" : "rounded-inherit",
+    frame === "inset" ? "rounded-6" : actions ? "rounded-t-8" : "rounded-inherit",
   );
+  const body = href ? (
+    <a href={href} className={bodyClass} {...link}>
+      {children}
+    </a>
+  ) : (
+    <div
+      {...interactiveCardBodyProps(row, onClick)}
+      className={bodyClass}
+    >
+      {children}
+    </div>
+  );
+  const selection = onToggle ? (
+    <CardSelection selected={selected} onSelectedChange={onToggle} label={selectionLabel}
+      className={styles.selection()} />
+  ) : null;
   return (
-    <Card {...dragProps} density="sm" className={cardClass}>
-      {href ? (
-        <a href={href} className={bodyClass} {...link}>
-          {children}
-        </a>
-      ) : (
-        <div
-          {...interactiveCardBodyProps(row, onClick)}
-          className={bodyClass}
-        >
-          {children}
-        </div>
+    <Card
+      {...dragProps}
+      density="sm"
+      selected={selected}
+      data-slot="gallery-card"
+      data-frame={frame}
+      className={cn(
+        styles.root(),
+        "outline-none",
+        clickable && "cursor-pointer hover:border-border-strong focus-visible:focus-ring",
       )}
-      {selection}
-      {actions ? (
-        <footer className="flex items-center justify-end gap-1 border-t border-border-subtle p-2">
-          {actions}
-        </footer>
-      ) : null}
+    >
+      {frame === "inset" ? (
+        <div className={styles.row()}>
+          {body}
+          {selection ? <div className={styles.controls()}>{selection}</div> : null}
+        </div>
+      ) : (
+        <>
+          {body}
+          {selection}
+        </>
+      )}
+      {actions ? <footer className={styles.footer()}>{actions}</footer> : null}
     </Card>
   );
 }

@@ -28,7 +28,7 @@ describe("GalleryView", () => {
     const checkbox = screen.getByRole("checkbox", { name: "Select Onboarding map" });
     expect(checkbox.closest("a")).toBeNull();
     fireEvent.click(checkbox);
-    expect(onToggleSelected).toHaveBeenCalledExactlyOnceWith("a", true);
+    expect(onToggleSelected).toHaveBeenCalledExactlyOnceWith("a", true, ROWS[0]);
     expect(onCardClick).not.toHaveBeenCalled();
     expect(navigate).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole("link"));
@@ -51,6 +51,23 @@ describe("GalleryView", () => {
     expect(onCardClick).toHaveBeenCalledWith(
       expect.objectContaining({ id: "a" }),
     );
+  });
+
+  test("frames each card on the shared recipe: flush by default, inset on request", () => {
+    const view = render(<GalleryView<Cover> rows={[ROWS[0]!]} renderCard={(row) => <span>{row.title}</span>} />);
+    const card = view.container.querySelector("[data-slot='gallery-card']");
+    expect(card?.getAttribute("data-frame")).toBe("flush");
+    expect(card?.className).toContain("p-0");
+    view.rerender(<GalleryView<Cover> rows={[ROWS[0]!]} cardFrame="inset" renderCard={(row) => <span>{row.title}</span>} />);
+    expect(view.container.querySelector("[data-slot='gallery-card']")?.className).toContain("p-3");
+  });
+
+  test("a selected card wears the card recipe's selected state", () => {
+    const view = render(<GalleryView<Cover> rows={ROWS} selectedIds={new Set(["b"])} onToggleSelected={() => undefined} />);
+    const cards = view.container.querySelectorAll("[data-slot='gallery-card']");
+    expect(cards[0]?.className).not.toContain("border-brand");
+    expect(cards[1]?.className).toContain("border-brand");
+    expect(screen.getByRole("checkbox", { name: "Select Quarterly brief" })).toBeTruthy();
   });
 
   test("renderCard receives the gallery context with the card's selection", () => {

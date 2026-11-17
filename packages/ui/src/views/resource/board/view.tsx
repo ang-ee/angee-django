@@ -4,6 +4,7 @@ import type { Row as TableRowModel } from "@tanstack/react-table";
 import { rowPublicId, type ModelMetadata, type Row } from "@angee/metadata";
 import { useUiT } from "../../../i18n";
 import { useDndKitSensors } from "../../../lib/dnd";
+import type { CardFrame } from "../../../ui/card";
 import type { ResourceViewContextValue } from "../resource-view-context";
 import type { ResourceViewGroup } from "../resource-view-model";
 import { ListEmpty, readPath, type RowGroup } from "../resource-view-list-body";
@@ -24,6 +25,8 @@ export interface BoardViewProps<TRow extends Row = Row> {
   resourceView: ResourceViewContextValue;
   modelMetadata?: ModelMetadata | null;
   selectedIds: ReadonlySet<string>;
+  /** Present when the collection is selectable: a card's checkbox toggles its row. */
+  onToggleSelected?: (id: string, selected: boolean, row: TRow) => void;
   interactive: boolean;
   fetching?: boolean;
   emptyContent: ListEmptyContent;
@@ -46,6 +49,8 @@ export interface BoardViewProps<TRow extends Row = Row> {
    * rich card (description, chips, badges) instead of the default title + key/value rows.
    * The lane grouping, frame link/click, selection, and the `cardActions` footer stay. */
   renderCard?: CardRenderer<TRow>;
+  /** How a card's content meets its frame; `inset` (padded) by default. */
+  cardFrame?: CardFrame;
 }
 
 export function BoardView<TRow extends Row = Row>(
@@ -56,6 +61,8 @@ export function BoardView<TRow extends Row = Row>(
     groups,
     resourceView,
     modelMetadata,
+    selectedIds,
+    onToggleSelected,
     fetching = false,
     emptyContent,
     rowHref,
@@ -69,6 +76,7 @@ export function BoardView<TRow extends Row = Row>(
     onCardMove,
     onCreateInLane,
     renderCard,
+    cardFrame = "inset",
   } = props;
   return (
     <BoardRows
@@ -77,6 +85,8 @@ export function BoardView<TRow extends Row = Row>(
       groups={groups}
       groupStack={resourceView.state.groupStack}
       modelMetadata={modelMetadata}
+      selectedIds={selectedIds}
+      onToggleSelected={onToggleSelected}
       emptyContent={emptyContent}
       rowHref={rowHref}
       onRowClick={onRowClick}
@@ -89,6 +99,7 @@ export function BoardView<TRow extends Row = Row>(
       onCardMove={onCardMove}
       onCreateInLane={onCreateInLane}
       renderCard={renderCard}
+      cardFrame={cardFrame}
     />
   );
 }
@@ -105,6 +116,8 @@ function BoardRows<TRow extends Row>({
   groups,
   groupStack,
   modelMetadata,
+  selectedIds,
+  onToggleSelected,
   emptyContent,
   rowHref,
   onRowClick,
@@ -117,12 +130,15 @@ function BoardRows<TRow extends Row>({
   onCardMove,
   onCreateInLane,
   renderCard,
+  cardFrame,
 }: {
   columns: readonly ColumnDescriptor<TRow>[];
   fetching: boolean;
   groups: readonly RowGroup<TRow>[];
   groupStack: readonly ResourceViewGroup[];
   modelMetadata?: ModelMetadata | null;
+  selectedIds: ReadonlySet<string>;
+  onToggleSelected?: (id: string, selected: boolean, row: TRow) => void;
   emptyContent: ListEmptyContent;
   rowHref?: (row: TRow) => string;
   onRowClick?: (row: TRow) => void;
@@ -139,6 +155,7 @@ function BoardRows<TRow extends Row>({
   ) => void | Promise<void>;
   onCreateInLane?: (laneId: string | null, rank?: number) => void;
   renderCard?: CardRenderer<TRow>;
+  cardFrame: CardFrame;
 }): React.ReactElement {
   const t = useUiT();
   const leaves = groups.flatMap(flattenLeaves);
@@ -229,6 +246,9 @@ function BoardRows<TRow extends Row>({
           }}
           onCreateInLane={onCreateInLane}
           renderCard={renderCard}
+          cardFrame={cardFrame}
+          selectedIds={selectedIds}
+          onToggleSelected={onToggleSelected}
         />
       ))}
     </div>

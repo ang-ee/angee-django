@@ -8,6 +8,7 @@ import { useUiT } from "../../../i18n";
 import { Glyph } from "../../../chrome/Glyph";
 import { cn } from "../../../lib/cn";
 import type { Tone } from "../../../lib/tones";
+import { Card, CardSelection, cardFrameVariants, type CardFrame } from "../../../ui/card";
 import type { ResourceViewGroup } from "../resource-view-model";
 import { ListCellContent, readPath, type RowGroup } from "../resource-view-list-body";
 import { columnTone } from "../../page";
@@ -28,6 +29,11 @@ interface BoardRowCardProps<TRow extends Row> {
   sortable: boolean;
   laneId: string;
   renderCard?: CardRenderer<TRow>;
+  /** Defaults to the board's `inset` frame. */
+  frame?: CardFrame;
+  selected?: boolean;
+  /** Present when the collection is selectable: toggle this card's selection. */
+  onToggleSelected?: (selected: boolean) => void;
 }
 
 export function BoardRowCard<TRow extends Row>(
@@ -103,9 +109,13 @@ function BoardRowCardContent<TRow extends Row>({
   dragEnabled,
   laneId,
   renderCard,
+  frame = "inset",
+  selected = false,
+  onToggleSelected,
   drag,
 }: BoardRowCardProps<TRow> & { drag: BoardCardDrag }): React.ReactElement {
   const t = useUiT();
+  const styles = cardFrameVariants({ frame });
   const href = rowHref?.(row.original);
   const actions = cardActions?.(row.original, cardActionContext);
   const {
@@ -123,12 +133,60 @@ function BoardRowCardContent<TRow extends Row>({
         transition,
       }
     : undefined;
+  const representation = modelMetadata?.resource.recordRepresentation;
+  const title = representation ? readPath(row.original, representation) : undefined;
+  const selection = onToggleSelected ? (
+    <CardSelection selected={selected} onSelectedChange={onToggleSelected} className={styles.selection()}
+      label={typeof title === "string" || typeof title === "number"
+        ? t("card.select", { title: String(title) }) : t("card.selectUntitled")} />
+  ) : null;
+  const handle = dragEnabled ? (
+    <button
+      ref={setActivatorNodeRef}
+      type="button"
+      aria-label={t("board.dragCard")}
+      className={cn(
+        "grid size-7 shrink-0 touch-none cursor-grab place-content-center rounded-6 text-fg-subtle outline-none transition-colors hover:bg-inset hover:text-fg focus-visible:focus-ring focus-visible:opacity-100 active:cursor-grabbing",
+        styles.handle(),
+      )}
+      {...attributes}
+      {...listeners}
+    >
+      <Glyph name="grip-vertical" />
+    </button>
+  ) : null;
+  const body = (
+    <div className={styles.body()}>
+      <BoardCardFrame
+        href={href}
+        onClick={onRowClick ? () => onRowClick(row.original) : undefined}
+        onRecordOpen={onRecordOpen ? () => onRecordOpen(row.original) : undefined}
+      >
+        {renderCard ? (
+          renderCard(row.original, { kind: "board", laneId: laneId === "" ? null : laneId, dragging: isDragging, selected })
+        ) : (
+          <DefaultBoardCardBody
+            columns={columns}
+            groupFields={groupFields}
+            modelMetadata={modelMetadata}
+            row={row.original}
+          />
+        )}
+      </BoardCardFrame>
+    </div>
+  );
+  // The surface is the shared card recipe; the frame places the body and its controls.
   return (
-    <article
+    <Card
       ref={dragEnabled ? setNodeRef : undefined}
       style={style}
+      selected={selected}
+      data-slot="board-card"
+      data-frame={frame}
+      data-dragging={isDragging || undefined}
       className={cn(
-        "board-card-grid group/record grid min-w-0 gap-2 rounded-8 border border-border-subtle bg-sheet p-3 shadow-xs",
+        "board-card-grid group/record grid",
+        styles.root(),
         isDragging
           ? "transition-none"
           : "transition hover:-translate-y-0.5 hover:border-border hover:shadow-md",
@@ -136,48 +194,17 @@ function BoardRowCardContent<TRow extends Row>({
         isDragging && "z-10 border-border-focus shadow-lg",
       )}
     >
-      <div className="flex min-w-0 max-w-full items-start gap-2">
-        <div className="min-w-0 flex-1">
-          <BoardCardFrame
-            href={href}
-            onClick={onRowClick ? () => onRowClick(row.original) : undefined}
-            onRecordOpen={onRecordOpen ? () => onRecordOpen(row.original) : undefined}
-          >
-            {renderCard ? (
-              renderCard(row.original, { kind: "board", laneId: laneId === "" ? null : laneId, dragging: isDragging })
-            ) : (
-              <DefaultBoardCardBody
-                columns={columns}
-                groupFields={groupFields}
-                modelMetadata={modelMetadata}
-                row={row.original}
-              />
-            )}
-          </BoardCardFrame>
-        </div>
-        {dragEnabled ? (
-          <button
-            ref={setActivatorNodeRef}
-            type="button"
-            aria-label={t("board.dragCard")}
-            className="grid size-7 shrink-0 touch-none cursor-grab place-content-center rounded-6 text-fg-subtle outline-none transition-colors hover:bg-inset hover:text-fg focus-visible:focus-ring active:cursor-grabbing"
-            {...attributes}
-            {...listeners}
-          >
-            <Glyph name="grip-vertical" />
-          </button>
-        ) : null}
+      <div className={styles.row()}>
+        {body}
+        {selection || handle ? <div className={styles.controls()}>{selection}{handle}</div> : null}
       </div>
-      {actions ? (
-        <footer className="flex items-center justify-end gap-2 border-t border-border-subtle pt-2">
-          {actions}
-        </footer>
-      ) : null}
-    </article>
+      {actions ? <footer className={styles.footer()}>{actions}</footer> : null}
+    </Card>
   );
 }
 
-function DefaultBoardCardBody<TRow extends Row>({
+/** The default card: the first column not used for grouping as its title, then up to three detail rows. */
+export function DefaultBoardCardBody<TRow extends Row>({
   columns,
   groupFields,
   modelMetadata,

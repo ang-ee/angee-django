@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 
-import { act, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen } from "@testing-library/react";
 import { beforeEach, describe, expect, test, vi } from "vitest";
 
 import { BoardView } from "./BoardView";
@@ -231,6 +231,34 @@ describe("BoardView", () => {
       expect.objectContaining({ id: "1" }),
       expect.objectContaining({ kind: "board", laneId: "data", dragging: false }),
     );
+  });
+
+  test("builds the card on the shared recipe: an inset frame by default, flush on request", () => {
+    const view = renderBoard({ dragEnabled: true, onCardMove: vi.fn() });
+    const inset = view.container.querySelector("[data-slot='board-card']");
+    expect(inset?.getAttribute("data-frame")).toBe("inset");
+    expect(inset?.className).toContain("p-3");
+    expect(inset?.className).toContain("shadow-xs");
+    // The inset handle stays in the card's control column beside the body.
+    expect(screen.getByRole("button", { name: "Move card" }).className).not.toContain("absolute");
+    view.unmount();
+    renderBoard({ dragEnabled: true, onCardMove: vi.fn(), cardFrame: "flush" });
+    const card = document.querySelector("[data-slot='board-card']");
+    expect(card?.getAttribute("data-frame")).toBe("flush");
+    expect(card?.className).toContain("p-0");
+    expect(card?.className).toContain("overflow-hidden");
+    // A flush card overlays its handle so an art header reaches the edges.
+    expect(screen.getByRole("button", { name: "Move card" }).className).toContain("absolute");
+  });
+
+  test("a selectable card toggles its row and wears the selected recipe", () => {
+    const onToggleSelected = vi.fn();
+    const renderCard = vi.fn((row: DemoRow) => <span>{row.label}</span>);
+    renderBoard({ onToggleSelected, renderCard, selectedIds: new Set(["1"]) });
+    expect(document.querySelector("[data-slot='board-card']")?.className).toContain("border-brand");
+    expect(renderCard).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ selected: true }));
+    fireEvent.click(screen.getByRole("checkbox", { name: "Select card" }));
+    expect(onToggleSelected).toHaveBeenCalledExactlyOnceWith("1", false, { id: "1", label: "Notes" });
   });
 
   test("wires dnd-kit pointer and keyboard sensors when card moves are enabled", () => {

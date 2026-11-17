@@ -11,6 +11,7 @@ import type {
   ResourceViewKind,
 } from "./resource-view-model";
 import type { ButtonVariant } from "../../ui/button";
+import type { CardFrame } from "../../ui/card";
 
 import type {
   FilterClauseField,
@@ -343,6 +344,10 @@ export interface ListViewProps<TRow extends Row = Row> {
    * The context names the surface, lane and selection; the lane grouping, frame
    * link/click, selection and the `cardActions` footer are unchanged. */
   renderCard?: CardRenderer<TRow>;
+  /** How a card's content meets its frame on both surfaces: `inset` pads it,
+   * `flush` lets an art header reach the card's edges with the controls overlaid.
+   * Defaults to each surface's own (board `inset`, gallery `flush`). */
+  cardFrame?: CardFrame;
   /** Empty-state content shown when the list has no rows. */
   emptyContent?: ListEmptyContent;
   /** Class name applied to the collection renderer root. */

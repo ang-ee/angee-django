@@ -9,6 +9,7 @@ import { cn } from "../../../lib/cn";
 import type { Tone } from "../../../lib/tones";
 import { CountBadge } from "../../../ui/count-badge";
 import { Button } from "../../../ui/button";
+import { Card, cardFrameVariants, type CardFrame } from "../../../ui/card";
 import { CollapsibleIcon, CollapsiblePanel, CollapsibleRoot, CollapsibleTrigger } from "../../../ui/collapsible";
 import { Skeleton, SkeletonStatus } from "../../../ui/skeleton";
 import { StatusDot } from "../../../ui/status-icon";
@@ -50,9 +51,9 @@ export function BoardSkeleton({
           </div>
           <div className="flex flex-col gap-2 px-2 pb-2">
             {Array.from({ length: 3 }, (_, cardIndex) => (
-              <article
+              <Card
                 key={cardIndex}
-                className="grid gap-2 rounded-8 border border-border-subtle bg-sheet p-3 shadow-xs"
+                className={cn(cardFrameVariants({ frame: "inset" }).root(), "grid gap-2")}
               >
                 <Skeleton
                   shape="text"
@@ -69,7 +70,7 @@ export function BoardSkeleton({
                     <Skeleton shape="text" size="sm" className="w-24" />
                   </div>
                 </div>
-              </article>
+              </Card>
             ))}
           </div>
         </section>
@@ -96,6 +97,9 @@ export function BoardLane<TRow extends Row>({
   onCollapsedChange,
   onCreateInLane,
   renderCard,
+  cardFrame,
+  selectedIds,
+  onToggleSelected,
 }: {
   columns: readonly ColumnDescriptor<TRow>[];
   group: RowGroup<TRow>;
@@ -114,6 +118,9 @@ export function BoardLane<TRow extends Row>({
   onCollapsedChange: (collapsed: boolean) => void;
   onCreateInLane?: (laneId: string | null, rank?: number) => void;
   renderCard?: CardRenderer<TRow>;
+  cardFrame: CardFrame;
+  selectedIds: ReadonlySet<string>;
+  onToggleSelected?: (id: string, selected: boolean, row: TRow) => void;
 }): React.ReactElement {
   const t = useUiT();
   const tone = laneDotTone(group, groupStack, columns);
@@ -139,6 +146,9 @@ export function BoardLane<TRow extends Row>({
           sortable={sortable}
           laneId={group.key}
           renderCard={renderCard}
+          frame={cardFrame}
+          selected={selectedIds.has(row.id)}
+          onToggleSelected={onToggleSelected ? (next) => onToggleSelected(row.id, next, row.original) : undefined}
         />
       ))}
       {onCreateInLane && group.dropDisabled !== true ? (

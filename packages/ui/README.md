@@ -16,7 +16,13 @@ column visibility survives saved views. Relation columns retain their authored
 field as their table ID even when metadata resolves a different display path.
 `ResourceList`/`ListView` may declare `presetIds` for route-local shipped views,
 `search={{ box, shortcuts }}` with text, facet, clause, toggle and group controls,
-and `boardCard` with a title and up to four fields. The full search box is the
+and `boardCard` with a title and up to four fields. `renderCard(row, context)` draws
+a custom card body on the board and the gallery; the context names the surface,
+the board lane, the drag state and the selection. Both surfaces frame cards on the
+shared `cardVariants` and `cardFrameVariants` recipes: `cardFrame="inset"` pads the
+body (the board's default), `"flush"` lets an art header reach the card's edges and
+overlays the checkbox and drag handle (the gallery's default). The frames carry
+`data-slot="board-card"` / `"gallery-card"` and `data-frame` for themes. The full search box is the
 default; shortcuts default it to a collapsed badge trigger (`box: true` keeps
 it full). Every control reads the shared model. The box keeps one line: the
 chips that fit, then "+N", which opens the panel listing every active item.

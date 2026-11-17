@@ -290,9 +290,7 @@ function RowsListViewBody<TRow extends StringIdRow = StringIdRow>({
           onCardClick={onRowClick}
           draggableRow={draggableRow}
           selectedIds={selectedIds}
-          onToggleSelected={selectable ? (id, selected) => resourceView.toggleSelectedId(
-            id, selected, surface.table.getCoreRowModel().rowsById[id]?.original,
-          ) : undefined}
+          onToggleSelected={selectable ? resourceView.toggleSelectedId : undefined}
           fetching={fetching}
           emptyContent={resolvedEmptyContent}
         />

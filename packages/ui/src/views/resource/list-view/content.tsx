@@ -72,6 +72,7 @@ interface ListViewContentProps<TRow extends Row> {
   cardActions: ListViewProps<TRow>["cardActions"];
   boardCard?: BoardCardSpec;
   renderCard: ListViewProps<TRow>["renderCard"];
+  cardFrame: ListViewProps<TRow>["cardFrame"];
   emptyContent: ListEmptyContent;
   className: string | undefined;
   presentation: ListViewProps<TRow>["presentation"];
@@ -121,6 +122,7 @@ export function ListViewContent<TRow extends Row = Row>({
   cardActions,
   boardCard,
   renderCard,
+  cardFrame,
   emptyContent,
   className,
   presentation,
@@ -152,6 +154,8 @@ export function ListViewContent<TRow extends Row = Row>({
   const interactive = Boolean(onRowClick || rowHref);
   const resolvedChrome = listChromeState(presentation, chrome, { ...surface.list, queryDirty: resourceView.queryDirty });
   const selectedIds = selectable ? surface.selectedIds : EMPTY_SELECTED_IDS;
+  // A card's checkbox toggles its row in the shared selection, keeping the row as its snapshot.
+  const toggleCardSelected = selectable ? resourceView.toggleSelectedId : undefined;
   const bulkDelete = useBulkDelete(
     source ? "" : resource,
     selectedIds,
@@ -296,6 +300,9 @@ export function ListViewContent<TRow extends Row = Row>({
           }
           cardActionContext={cardActionContext}
           renderCard={resolvedRenderCard}
+          cardFrame={cardFrame ?? "inset"}
+          selectedIds={selectedIds}
+          onToggleSelected={toggleCardSelected}
           fetching={surface.list.fetching}
           error={surface.list.error}
           emptyContent={emptyContent}
@@ -340,6 +347,7 @@ export function ListViewContent<TRow extends Row = Row>({
           resourceView={resourceView}
           modelMetadata={modelMetadata}
           selectedIds={selectedIds}
+          onToggleSelected={toggleCardSelected}
           interactive={interactive}
           fetching={surface.list.fetching}
           emptyContent={emptyContent}
@@ -354,6 +362,7 @@ export function ListViewContent<TRow extends Row = Row>({
           }
           cardActionContext={cardActionContext}
           renderCard={resolvedRenderCard}
+          cardFrame={cardFrame}
           dragEnabled={surface.boardDragEnabled}
           rankField={surface.boardRankField}
           rankInputField={surface.boardRankInputField}

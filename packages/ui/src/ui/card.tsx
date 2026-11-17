@@ -3,6 +3,7 @@ import * as React from "react";
 import { cn } from "../lib/cn";
 import { useRender, type UseRenderRenderProp } from "../lib/slot";
 import { tv, type VariantProps } from "../lib/variants";
+import { Checkbox } from "./checkbox";
 import { textRoleVariants } from "./text";
 import { interactiveSurface } from "./widget-control";
 
@@ -125,6 +126,73 @@ export const cardFooterVariants = tv({
     density: "md",
   },
 });
+
+/**
+ * A collection card's frame (a gallery or board card). `inset` pads the content
+ * and puts the card's controls (selection, drag handle) in a column beside it;
+ * `flush` lets the body reach the card's edges, so an art header bleeds, and
+ * overlays the controls, shown on hover and focus. The surface is `cardVariants`.
+ * @kind token
+ */
+export const cardFrameVariants = tv({
+  slots: {
+    root: "group/card relative min-w-0",
+    row: "min-w-0 max-w-full",
+    body: "min-w-0",
+    controls: "",
+    selection:
+      "opacity-0 transition-opacity group-hover/card:opacity-100 group-focus-within/card:opacity-100 data-[selected=true]:opacity-100",
+    handle: "",
+    footer: "flex items-center justify-end gap-2 border-t border-border-subtle",
+  },
+  variants: {
+    frame: {
+      inset: {
+        root: "p-3",
+        row: "flex items-start gap-2",
+        body: "flex-1",
+        controls: "flex shrink-0 flex-col items-center gap-1",
+        footer: "mt-2 pt-2",
+      },
+      flush: {
+        root: "overflow-hidden p-0",
+        controls: "contents",
+        selection: "absolute left-2 top-2 z-10",
+        handle:
+          "absolute right-2 top-2 z-10 rounded-6 bg-sheet/90 opacity-0 shadow-xs transition-opacity group-hover/card:opacity-100 group-focus-within/card:opacity-100",
+        footer: "p-2",
+      },
+    },
+  },
+  defaultVariants: {
+    frame: "inset",
+  },
+});
+
+/** How a collection card's content meets its frame. */
+export type CardFrame = NonNullable<VariantProps<typeof cardFrameVariants>["frame"]>;
+
+export interface CardSelectionProps {
+  selected: boolean;
+  onSelectedChange: (selected: boolean) => void;
+  /** The checkbox's accessible name, e.g. "Select <record>". */
+  label: string;
+  className?: string;
+}
+
+/**
+ * A collection card's selection checkbox. It is a sibling of the card's link or
+ * button, so toggling it never opens the record; it shows on hover and focus,
+ * and stays while the card is selected. The frame places it (`cardFrameVariants`).
+ * @owner Card
+ */
+export function CardSelection({ selected, onSelectedChange, label, className }: CardSelectionProps): React.ReactElement {
+  return (
+    <div data-slot="card-selection" data-selected={selected || undefined} className={className}>
+      <Checkbox checked={selected} onCheckedChange={(next) => onSelectedChange(next)} aria-label={label} />
+    </div>
+  );
+}
 
 type CardRecipeProps = VariantProps<typeof cardVariants>;
 type CardState = {

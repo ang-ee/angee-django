@@ -192,6 +192,8 @@ export interface ResourceListProps<TRow extends Row = Row> {
    * forwarded to the list. The owning-level alternative to a `ControlBand` sibling. */
   toolbarActions?: ListViewProps<TRow>["toolbarActions"];
   cardActions?: ListViewProps<TRow>["cardActions"];
+  /** Card frame forwarded to the board and gallery kinds. */
+  cardFrame?: ListViewProps<TRow>["cardFrame"];
   emptyContent?: ListViewProps<TRow>["emptyContent"];
   className?: string;
 }

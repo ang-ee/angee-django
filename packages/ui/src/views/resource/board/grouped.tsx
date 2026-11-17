@@ -3,6 +3,7 @@ import { ResourceQuery, type ModelMetadata, type Row } from "@angee/metadata";
 import { useUiT } from "../../../i18n";
 import { ListStatusMessage } from "../../../fragments/ListStatusMessage";
 import { Skeleton, SkeletonStatus } from "../../../ui/skeleton";
+import type { CardFrame } from "../../../ui/card";
 import { columnTone, type ColumnDescriptor } from "../../page";
 import { GroupedScopePager } from "../GroupedScopePager";
 import { snapshotFromNav } from "../grouped-navigation";
@@ -28,6 +29,9 @@ interface GroupedBoardBodyProps<TRow extends Row> {
   cardActions?: (row: TRow, context: CardActionContext) => React.ReactNode;
   cardActionContext: CardActionContext;
   renderCard?: CardRenderer<TRow>;
+  cardFrame: CardFrame;
+  selectedIds: ReadonlySet<string>;
+  onToggleSelected?: (id: string, selected: boolean, row: TRow) => void;
   fetching: boolean;
   error: Error | null;
   emptyContent: ListEmptyContent;
@@ -37,7 +41,7 @@ interface GroupedBoardBodyProps<TRow extends Row> {
 export function GroupedBoardBody<TRow extends Row>({
   columns, modelMetadata, groupStack, items, toggleGroup, setScopePage, setScopePageSize,
   rowHref, onRowClick, onListStateChange, cardActions, cardActionContext, renderCard,
-  fetching, error, emptyContent,
+  cardFrame, selectedIds, onToggleSelected, fetching, error, emptyContent,
 }: GroupedBoardBodyProps<TRow>): React.ReactElement | null {
   const t = useUiT();
   const groupFields = new Set(groupStack.map((group) => group.field));
@@ -90,6 +94,8 @@ export function GroupedBoardBody<TRow extends Row>({
             onRowClick={onRowClick}
             onRecordOpen={() => onListStateChange?.(snapshotFromNav<TRow>(item.nav))}
             cardActions={cardActions} cardActionContext={cardActionContext} renderCard={renderCard}
+            frame={cardFrame} selected={selectedIds.has(item.row.id)}
+            onToggleSelected={onToggleSelected ? (next) => onToggleSelected(item.row.id, next, item.row.original) : undefined}
             dragEnabled={false} sortable={false} laneId={laneId} />);
           break;
         case "skeleton":

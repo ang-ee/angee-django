@@ -217,6 +217,7 @@ function ListViewBody<TRow extends Row = Row>({
   bulkActions,
   cardActions,
   renderCard,
+  cardFrame,
   emptyContent,
   className,
   presentation = "page",
@@ -428,6 +429,7 @@ function ListViewBody<TRow extends Row = Row>({
       cardActions={cardActions}
       boardCard={boardCard}
       renderCard={renderCard}
+      cardFrame={cardFrame}
       emptyContent={resolvedEmptyContent}
       className={className}
       presentation={presentation}
