@@ -7,7 +7,10 @@ from django.apps import apps
 from django.db import connection, transaction
 from rebac import system_context
 
-from angee.agents_integrate_anthropic.compose_migrations.resources.rehome_anthropic_oauth_resources import rehome
+from angee.agents_integrate_anthropic.compose_migrations.resources.rehome_anthropic_oauth_resources import (
+    rehome,
+    restore,
+)
 from angee.resources.testing.models import Resource
 
 
@@ -26,6 +29,10 @@ def test_anthropic_resource_rehome_preserves_ledger_and_target_identity():
             assert getattr(row, field) == ("angee.agents_integrate_anthropic" if field == "source_addon" else value)
         rehome(apps, SimpleNamespace(connection=connection))
         assert not Resource.objects.filter(source_addon="angee.integrate", xref=row.xref).exists()
+        restore(apps, SimpleNamespace(connection=connection))
+        row.refresh_from_db()
+        restored = (row.source_addon, row.content_hash, row.target_id)
+        assert restored == ("angee.integrate", "retained-hash", "ocl_existing")
 
 
 @pytest.mark.django_db
