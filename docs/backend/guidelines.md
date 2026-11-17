@@ -1280,11 +1280,17 @@ exception closes the rows as failed. Tests inherit a boundary from the root
   *Applicability:* an override of `Stage.for_record` narrows a container's stages
   for one record; scope validation and `resolve_default_stage` both read it, and a
   container default the record cannot hold falls back through
-  `Stage.resolve_default_fallback` over the applicable stages. *Admission:* the
-  mixin reads the committed row once under the row lock and asks
-  `Stage.validate_transition(previous, following, *, manual, admitted, adding)` for
-  hand moves and every non-sudo write; a verb that owns a reserved entry passes
-  `save(admitted_stage=...)` and must write exactly that stage. A partial save is
+  `Stage.resolve_default_fallback` over the applicable stages. The record names
+  the fields that override reads in `stage_scope_fields` (as a hierarchy names its
+  `hierarchy_scope_fields`). A save or `clean()` judges scope and applicability
+  only when it changes the stage, the container or one of those fields against the
+  committed row, so a record resting in a stage later narrowed away from it stays
+  editable. *Admission:* the mixin reads the committed row once under the row lock
+  and asks `Stage.validate_transition(previous, following, *, manual, admitted, adding)`
+  for every move a hand verb or non-sudo write makes; a write that keeps the stage
+  is no move and is never admitted, so an override needs no same-stage guard. A
+  verb that owns a reserved entry passes `save(admitted_stage=...)` and must write
+  exactly that stage. A partial save is
   judged on the row it stores (written fields over the committed row), never on a
   stale instance; a consumer checks its own same-row invariants there through
   `validate_stored_row(persisted, stored)`, and copies the instance facts its rules

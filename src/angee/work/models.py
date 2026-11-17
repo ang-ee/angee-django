@@ -468,8 +468,6 @@ class Stage(RowLockMixin, StagePrimitive, AuditMixin, AngeeDataModel, concrete=T
         drop, a verb and a non-sudo write.
         """
 
-        if previous is not None and following is not None and previous.pk == following.pk:
-            return
         if manual and following is not None and not following.ordinary_entry_available:
             raise ValidationError({"stage": "Hand verbs cannot enter a rule-owned stage."})
         if previous is not None and previous.exit_reserved:
