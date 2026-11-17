@@ -153,6 +153,13 @@ class AccountStatus(models.TextChoices):
     REVOKED = "revoked", "Revoked"
 
 
+class TokenEndpointAuthMethod(models.TextChoices):
+    """How a confidential OAuth client authenticates its token requests (RFC 7591 names)."""
+
+    CLIENT_SECRET_POST = "client_secret_post", "Client secret in the request body"
+    CLIENT_SECRET_BASIC = "client_secret_basic", "HTTP Basic"
+
+
 class CredentialStatus(models.TextChoices):
     """Lifecycle state for per-user credential material."""
 
@@ -226,6 +233,7 @@ class OAuthClientManager[OAuthClientT: OAuthClient](_OAuthClientManagerBase[OAut
             "token_endpoint",
             "revoke_endpoint",
             "token_request_format",
+            "token_endpoint_auth_method",
             "is_enabled",
             "scopes_catalogue",
             "default_scopes",
@@ -237,6 +245,7 @@ class OAuthClientManager[OAuthClientT: OAuthClient](_OAuthClientManagerBase[OAut
             "token_params",
             "manual_redirect_uri",
             "loopback_redirect_path",
+            "token_identity_keys",
         }
     )
     setting_fields = seed_fields | frozenset({"slug", "environment", "client_secret"})
@@ -343,6 +352,11 @@ class OAuthClient(ImplDefaultsMixin, AuditMixin, AngeeDataModel, concrete=True):
     (read through the claim mappings below). Plain OAuth, not OIDC: a connect-only
     provider populates its ``ExternalAccount`` from here without any ID token."""
     token_request_format = models.CharField(max_length=16, default="form", blank=True)
+    token_endpoint_auth_method = models.CharField(
+        max_length=32,
+        choices=TokenEndpointAuthMethod.choices,
+        default=TokenEndpointAuthMethod.CLIENT_SECRET_POST,
+    )
     is_enabled = models.BooleanField(default=True, db_index=True)
     scopes_catalogue = models.JSONField(default=list, blank=True)
     default_scopes = models.JSONField(default=list, blank=True)
@@ -370,6 +384,9 @@ class OAuthClient(ImplDefaultsMixin, AuditMixin, AngeeDataModel, concrete=True):
     # it to label the account; OIDC login reuses it to identify the user.
     external_id_claim = models.CharField(max_length=128, default="sub", blank=True)
     email_claim = models.CharField(max_length=128, default="email", blank=True)
+    token_identity_keys = models.JSONField(default=list, blank=True)
+    """Non-secret token-response keys connect reads the claims from when userinfo
+    cannot identify the account."""
     display_name_claim = models.CharField(max_length=128, blank=True)
     avatar_url_claim = models.CharField(max_length=128, blank=True)
 
@@ -449,6 +466,12 @@ class OAuthClient(ImplDefaultsMixin, AuditMixin, AngeeDataModel, concrete=True):
         """Return the configured default OAuth scopes as strings."""
 
         return self._string_list(self.default_scopes)
+
+    @property
+    def token_identity_key_values(self) -> list[str]:
+        """Return the declared token-response identity keys as strings."""
+
+        return self._string_list(self.token_identity_keys)
 
     @property
     def scopes_catalogue_values(self) -> list[str]:

@@ -62,11 +62,6 @@ logger = logging.getLogger(__name__)
 # returns is dropped. ``credentials.py`` reads access_token/expires_in/scope and
 # the refresh token, and the OIDC layer reads id_token.
 _TOKEN_MATERIAL_KEYS = ("access_token", "refresh_token", "id_token", "expires_in", "scope")
-# Some OAuth providers return stable account metadata with the token response.
-# It is not credential material, but it can identify an account when a restricted
-# access token cannot call the provider's userinfo endpoint (Anthropic's long-lived
-# inference-only token is one such case).
-_TOKEN_RESPONSE_IDENTITY_KEYS = ("account", "organization")
 _GRANT_URI_ARGUMENTS = frozenset({"uri", "client_id", "response_type", "redirect_uri", "scope", "state"})
 """``prepare_grant_uri``'s own arguments, which a provider's authorize extras never replace."""
 
@@ -274,7 +269,7 @@ class OAuthClientProtocol:
         finally:
             session.close()
         response = dict(token)
-        self._token_response_claims = _token_response_identity_claims(response)
+        self._token_response_claims = self._token_identity_claims(response)
         return _token_material(response)
 
     def _json_token_request(
@@ -293,9 +288,12 @@ class OAuthClientProtocol:
             **grant,
         }
         client_secret = self._client_secret()
-        if client_secret:
+        basic = bool(client_secret) and self.oauth_client.token_endpoint_auth_method == "client_secret_basic"
+        if client_secret and not basic:
             body["client_secret"] = client_secret
         client = self._http_client()
+        if basic:
+            client.auth = httpx2.BasicAuth(str(self.oauth_client.client_id), client_secret)
         try:
             response = client.post(endpoint, json=body)
             response.raise_for_status()
@@ -315,14 +313,21 @@ class OAuthClientProtocol:
             client.close()
         if not isinstance(data, dict):
             raise OAuthFlowError(TOKEN_EXCHANGE_FAILED, 400)
-        self._token_response_claims = _token_response_identity_claims(data)
+        self._token_response_claims = self._token_identity_claims(data)
         return _token_material(data)
+
+    def _token_identity_claims(self, response: Mapping[str, Any]) -> dict[str, Any]:
+        """Keep the non-secret identity keys the registration declares for its token response."""
+
+        keys = set(self.oauth_client.token_identity_key_values).difference(_TOKEN_MATERIAL_KEYS)
+        return {key: response[key] for key in sorted(keys) if response.get(key) not in (None, "")}
 
     def _session(self) -> OAuth2Client:
         """Build the per-row Authlib OAuth2 client.
 
-        Client authentication rides the body (``client_secret_post``) to match the
-        row's stored secret; a public client (no secret) sends only ``client_id``.
+        A stored secret authenticates through the registration's
+        ``token_endpoint_auth_method`` (the body by default, HTTP Basic where the
+        provider requires it); a public client (no secret) sends only ``client_id``.
         Scope is omitted so refresh requests stay minimal — scopes are owned by the
         authorize URL. Authlib auto-refresh is left off so a rotated refresh token
         cannot be replayed behind ``Credential`` refresh locking.
@@ -332,7 +337,7 @@ class OAuthClientProtocol:
         return OAuth2Client(
             client_id=self.oauth_client.client_id,
             client_secret=secret or None,
-            token_endpoint_auth_method="client_secret_post" if secret else "none",
+            token_endpoint_auth_method=self.oauth_client.token_endpoint_auth_method if secret else "none",
             headers=dict(OUTBOUND_HEADERS),
             **_outbound_kwargs(),
         )
@@ -470,14 +475,6 @@ def _token_material(response: Mapping[str, Any]) -> dict[str, Any]:
     if not tokens.get("access_token"):
         raise OAuthFlowError(TOKEN_EXCHANGE_FAILED, 400)
     return tokens
-
-
-def _token_response_identity_claims(response: Mapping[str, Any]) -> dict[str, Any]:
-    """Return allow-listed, non-secret identity mappings from a token response."""
-
-    return {
-        key: dict(value) for key in _TOKEN_RESPONSE_IDENTITY_KEYS if isinstance((value := response.get(key)), Mapping)
-    }
 
 
 def _response_body(response: httpx2.Response) -> Any:

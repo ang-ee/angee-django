@@ -111,7 +111,8 @@ const integrate = defineBaseAddon({
   // Saved-record streams and lifecycle verbs target the MTI parent, so every
   // integration subtype's form inherits them. Connecting means a real
   // handshake wherever an integration has credentials, and the addon that owns
-  // the vendor contributes that against its own model.
+  // the vendor contributes that against its own model (`connectIntegrationAction()`
+  // for an OAuth registration).
   containers: {
     "integrate.RecordLink#statement-references": {
       "integrate.source": { content: StatementRecordLinkReference },
@@ -155,11 +156,11 @@ const integrate = defineBaseAddon({
   },
 });
 
-export { ConnectIntegration } from "./documents";
 export {
   CONNECT_RECORD_FIELDS,
   ConnectOAuthButton,
   type ConnectOAuthButtonProps,
+  connectIntegrationAction,
   parseManualCode,
   type OAuthConnectPayload,
 } from "./connect/ConnectOAuthButton";
