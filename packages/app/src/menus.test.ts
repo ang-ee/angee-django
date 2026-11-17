@@ -241,7 +241,7 @@ describe("compileMenus", () => {
     } };
     const product: MenuLayer = { id: "product", dependsOn: ["desk"], menus: { desk: { home: "desk.board", theme: "product.dark" } } };
     const deployment: MenuLayer = { id: DEPLOYMENT_LAYER_ID, dependsOn: ["desk", "product"], menus: {
-      desk: { brand: { name: "Pinned", mark: "pin" }, railExpanded: false },
+      desk: { brand: { name: "Pinned", mark: "pin" }, railExpanded: false, themeLocked: true },
     } };
     const compiled = compileMenus([desk, product, deployment]);
     expect(compiled.logical[0]).toMatchObject({ home: "desk.board", brand: { name: "Pinned", mark: "pin" }, theme: "product.dark" });
@@ -250,6 +250,8 @@ describe("compileMenus", () => {
     expect(compiled.logical[0]?.railExpanded).toBe(false);
     expect(compiled.navigation[0]?.railExpanded).toBe(false);
     expect(compiled.provenance.desk?.railExpanded).toBe(DEPLOYMENT_LAYER_ID);
+    expect(compiled.navigation[0]?.themeLocked).toBe(true);
+    expect(compiled.provenance.desk?.themeLocked).toBe(DEPLOYMENT_LAYER_ID);
     // Two unrelated layers setting one still collide.
     const other: MenuLayer = { id: "other", dependsOn: ["desk"], menus: { desk: { home: "desk.other" } } };
     expect(() => compileMenus([desk, product, other])).toThrow(/Unrelated addons "product" and "other" both set menu "desk" home/);
@@ -282,6 +284,8 @@ describe("compileMenus", () => {
     expect(work).not.toHaveProperty("railExpanded");
     expect(() => compileMenus([{ id: "desk", menus: { desk: {}, "desk.inbox": { parent: "desk", railExpanded: false } } }]))
       .toThrow(/"desk.inbox" sets railExpanded, which only a root/);
+    expect(() => compileMenus([{ id: "desk", menus: { desk: {}, "desk.inbox": { parent: "desk", themeLocked: true } } }]))
+      .toThrow(/"desk.inbox" sets themeLocked, which only a root/);
     expect(included.logical[0]).toMatchObject({ id: "suite", home: "work.inbox" });
     // appRoot is gone: the rail lists every root, or the selected app's.
     expect(() => compileMenus([{ id: "desk", menus: { desk: { appRoot: true } } } as unknown as MenuLayer])).toThrow(/unknown key "appRoot"/);
@@ -299,6 +303,8 @@ describe("compileMenus", () => {
     expect(() => compileMenus([{ id: "desk", menus: { desk: { theme: false } } } as unknown as MenuLayer])).toThrow(/theme must be a string/);
     expect(() => compileMenus([{ id: "desk", menus: { desk: { railExpanded: "false" } } } as unknown as MenuLayer]))
       .toThrow(/railExpanded must be true or false/);
+    expect(() => compileMenus([{ id: "desk", menus: { desk: { theme: "desk.light", themeLocked: "yes" } } } as unknown as MenuLayer]))
+      .toThrow(/themeLocked must be true or false/);
     expect(() => compileMenus([{ id: "desk", menus: {
       "desk": { railExpanded: "false" },
     } }] as unknown as MenuLayer[]))

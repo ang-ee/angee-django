@@ -395,3 +395,19 @@ test("immediate scheme changes preserve malformed saved options until an explici
   expect(stored().appearance).toEqual({ ...preferences.appearance, colorScheme: "dark" });
   expect(result.current.notice).toBe("options-invalid");
 });
+
+test("a locked app theme wins over the person's theme and options but keeps their scheme", () => {
+  const { result } = renderAppearance({ defaults: { ...host, themeLocked: true } });
+  expect(result.current.themeLocked).toBe(true);
+  expect(result.current.effectiveThemeId).toBe(ink.definition.id);
+  expect(result.current.effectiveColorSchemePreference).toBe("light");
+  expect(result.current.preferences).toEqual(saved);
+  expect(document.documentElement.dataset).toMatchObject({ themeId: ink.definition.id, colorScheme: "light" });
+  expect(document.documentElement.style.getPropertyValue("--surface-rail")).toBe("");
+});
+
+test("a lock with no app theme leaves the person's theme in place", () => {
+  const { result } = renderAppearance({ defaults: { colorScheme: "dark", themeLocked: true } });
+  expect(result.current.themeLocked).toBe(false);
+  expect(result.current.effectiveThemeId).toBe(paper.definition.id);
+});

@@ -316,8 +316,9 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
 - **An app root declares itself; the deployment selects the app.** A
   top-level menu root is an app. It may declare `home` (a route name inside
   the root), `brand` (`{ name, mark }`, with `mark` a registered glyph; it
-  defaults to the root's label and icon), `theme` (an installed theme id), and
-  `railExpanded` (the desktop rail's default expansion).
+  defaults to the root's label and icon), `theme` (an installed theme id),
+  `themeLocked` (`true` beside `theme`) and `railExpanded` (the desktop rail's
+  default expansion).
   They layer like any menu field, so a dependent addon or `ANGEE_UI.menus`
   overrides them, and an included app drops them. The deployment's
   `ANGEE_UI.shell` selects what the console shows; products never name
@@ -349,7 +350,11 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
   guarded: only a menu `remove` makes a page unavailable. Rail, login, public
   mark and document title read the selected brand through `useRuntimeBrand`;
   shell components hard-code no identity. The selected theme is the appearance
-  default, and the person's own choice still wins. The rail likewise takes its
+  default, and the person's own choice still wins, unless the declaration that
+  supplies the theme sets `themeLocked`: then that theme and its options win
+  within the app, the person's color scheme still applies, their saved theme
+  is kept for other apps, and Appearance says why. A lock travels with the theme
+  it is declared beside; `ANGEE_UI.shell.theme` never locks. The rail likewise takes its
   selected app's `railExpanded` default only when no expansion preference is saved;
   undeclared, it starts expanded at desktop widths. Visiting a route without
   selecting an app does not apply that app's rail default.

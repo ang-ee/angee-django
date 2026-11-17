@@ -21,15 +21,15 @@ export function assertShellSettings(shell) {
   const facts = (value, where) => {
     if (value.brand !== undefined) assertBrand(where, value.brand);
     if (value.theme !== undefined) text(value.theme, `${where}.theme`);
-    if (value.railExpanded !== undefined && typeof value.railExpanded !== "boolean") {
-      throw new Error(`${where}.railExpanded must be true or false.`);
+    for (const key of ["themeLocked", "railExpanded"]) {
+      if (value[key] !== undefined && typeof value[key] !== "boolean") throw new Error(`${where}.${key} must be true or false.`);
     }
   };
   const settings = mapping(shell, "ANGEE_UI.shell", ["brand", "theme", "apps", "hosts"]);
   facts(settings, "ANGEE_UI.shell");
   for (const [name, value] of Object.entries(mapping(settings.apps ?? {}, "ANGEE_UI.shell.apps"))) {
     const where = `ANGEE_UI.shell.apps.${name}`;
-    const app = mapping(value, where, ["rail", "brand", "theme", "home", "railExpanded"]);
+    const app = mapping(value, where, ["rail", "brand", "theme", "themeLocked", "home", "railExpanded"]);
     const rail = app.rail;
     if (!Array.isArray(rail) || !rail.length || !rail.every((id) => typeof id === "string" && id)) {
       throw new Error(`${where}.rail must be a non-empty list of menu root ids.`);

@@ -13,15 +13,18 @@ DSN and environment; without a DSN no reporting SDK is loaded. See the
 A top-level menu root is an app. Its menu entry may declare `home` (a route
 name inside the root, where `/` lands when the app is selected), `brand`
 (`{ name, mark }`, the mark a registered glyph; it defaults to the root's label
-and icon), `theme` (an installed theme id), and `railExpanded` (desktop rail
-expansion until a user saves their own choice). They layer like other menu
-fields, and an included app drops them. The deployment's `ANGEE_UI.shell`
-selects the app: `{ brand?, theme?, apps?: { <name>: { rail, brand?, theme?,
-home?, railExpanded? } }, hosts?: { <hostname>: <root id | apps name> } }`. `selectApp` (in
+and icon), `theme` (an installed theme id), `themeLocked` (`true` beside
+`theme`: within this app its theme wins over the person's own theme choice) and
+`railExpanded` (desktop rail expansion until a user saves their own choice).
+They layer like other menu fields, and an included app drops them. The
+deployment's `ANGEE_UI.shell` selects the app: `{ brand?, theme?, apps?: {
+<name>: { rail, brand?, theme?, themeLocked?, home?, railExpanded? } }, hosts?:
+{ <hostname>: <root id | apps name> } }`; the shell's own `theme` cannot be locked. `selectApp` (in
 [`boot-app.tsx`](src/boot-app.tsx)) takes `?app=`, else the hostname's `hosts`
 entry, else nothing, which shows every root with `shell.brand` and
 `shell.theme`. A root id is the one-root app; a named app takes its own brand,
-theme, home and rail default, else its first rail root's. `createApp` reads `location`
+theme, home and rail default, else its first rail root's. A theme lock travels
+with the theme it is declared beside, and boot refuses a lock with no theme. `createApp` reads `location`
 (default `window.location`) and projects the selected rail into the rail, the
 command palette and Refine's resources, keeping the personal Settings roots.
 Pages outside the rail stay reachable and sit in the selection's home root; no
