@@ -206,6 +206,53 @@ def test_connect_copy_reuses_managed_backend_and_stamps_drive_owner(
     assert queued_mounts == [(mount, {})]
 
 
+def test_connect_copy_stores_in_a_chosen_writable_backend_the_actor_reads(
+    mount_env: SimpleNamespace,
+    queued_mounts: list[Any],
+) -> None:
+    """A copy mount may store in another writable backend; a reference mount or a read-only target is refused."""
+
+    archive_root = mount_env.tmp_path / "archive"
+    archive_root.mkdir()
+    reference_root = mount_env.tmp_path / "read-only"
+    reference_root.mkdir()
+    with system_context(reason="test mount copy targets"):
+        archive = Backend._base_manager.create(
+            slug="archive",
+            label="Archive",
+            backend_class="local",
+            backend_config={"root": str(archive_root)},
+            created_by=mount_env.owner,
+        )
+        read_only = Backend._base_manager.create(
+            slug="read-only",
+            label="Read only",
+            backend_class="local_folder",
+            backend_config={"root": str(reference_root)},
+            created_by=mount_env.owner,
+        )
+    source = mount_env.tmp_path / "copy-target"
+    _write(source / "kept.txt", b"kept", mtime_ns=BASE_MTIME_NS)
+
+    for mode, target, field in (
+        (MountMode.REFERENCE, archive, "copy_backend"),
+        (MountMode.COPY, read_only, "copy_backend"),
+    ):
+        with pytest.raises(ValidationError) as refused:
+            create_local_folder_mount(mount_env.owner, name="Refused", path=str(source), mode=mode, copy_backend=target)
+        assert set(refused.value.message_dict) == {field}
+    assert queued_mounts == []
+
+    mount = create_local_folder_mount(
+        mount_env.owner, name="Archived", path=str(source), mode=MountMode.COPY, copy_backend=archive
+    )
+    assert mount.drive.backend_id == archive.pk
+    assert mount.drive.prefix == "mounts/archived"
+    assert _run_sync(mount) == 1
+    [row] = _files(mount.drive)
+    assert (archive_root / row.storage_path).read_bytes() == b"kept"
+
+
 def test_connect_refusals_are_field_keyed_for_unsafe_or_duplicate_roots(
     mount_env: SimpleNamespace,
     queued_mounts: list[Any],
@@ -454,6 +501,7 @@ def test_reference_duplicate_content_is_counted_and_retried_each_sync(
         "unchanged": 0,
         "duplicates": 1,
         "errors": 0,
+        "skipped": 0,
         "trashed": 0,
         "vanished": 0,
         "scanned": 2,

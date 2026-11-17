@@ -30,9 +30,21 @@ export const BrowseMountSource = graphql(`
   }
 `);
 
+export const MountAccounts = graphql(`
+  query MountAccounts($backendClass: String!) {
+    mount_accounts(backend_class: $backendClass) {
+      oauth_client
+      accounts {
+        id
+        display_name
+      }
+    }
+  }
+`);
+
 export const ConnectLocalFolder = graphql(`
-  mutation ConnectLocalFolder($name: String!, $path: String!, $mode: MountMode!) {
-    connect_local_folder(name: $name, path: $path, mode: $mode) {
+  mutation ConnectLocalFolder($name: String!, $path: String!, $mode: MountMode!, $copyBackendId: ID) {
+    connect_local_folder(name: $name, path: $path, mode: $mode, copy_backend_id: $copyBackendId) {
       id
       display_name
       mode

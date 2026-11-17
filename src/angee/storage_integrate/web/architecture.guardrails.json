@@ -4,7 +4,7 @@
       "namespace": "storage-integrate",
       "owner": "ConnectMountAction i18nPrefix",
       "prefix": "",
-      "values": ["mount.localFolder", "iphone.mount.connect"],
+      "values": ["mount.localFolder", "iphone.mount.connect", "gdrive.mount.connect"],
       "suffixes": [".button", ".title", ".description", ".namePlaceholder", ".error"]
     }
   ]

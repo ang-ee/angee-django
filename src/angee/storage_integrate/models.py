@@ -5,7 +5,7 @@ from __future__ import annotations
 import contextlib
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, replace
-from pathlib import Path, PurePosixPath
+from pathlib import PurePosixPath
 from typing import Any, ClassVar, Self, cast
 
 from django.apps import apps
@@ -17,6 +17,8 @@ from rebac import system_context
 from angee.base.fields.implementation import ImplClassField
 from angee.base.fields.state import StateField
 from angee.base.implementations import resolve_impl_class
+from angee.integrate.credentials import CredentialKind
+from angee.integrate.errors import IntegrationError
 from angee.integrate.models import (
     Bridge,
     IntegrationCreateMode,
@@ -29,7 +31,6 @@ from angee.storage import exceptions
 from angee.storage_integrate.mounts import MountBackend, MountBrowseResult, MountEntry, MountLocation
 
 _PROGRESS_BATCH_SIZE = 200
-_LOCAL_VENDOR_SLUG = "local"
 
 
 @dataclass(frozen=True)
@@ -41,6 +42,8 @@ class _MountFileState:
     size_bytes: int
     is_trashed: bool
     mtime_ns: int | None
+    path: str
+    """Where the row was last placed: its source path, which a path-keyed source's key already is."""
 
 
 class MountMode(models.TextChoices):
@@ -65,6 +68,41 @@ _MountManagerBase = IntegrationManager.from_queryset(MountQuerySet)
 class MountManager[MountT: Mount](_MountManagerBase[MountT]):
     """Provision mounts together with the drive their source synchronizes into."""
 
+    @staticmethod
+    def backend_impl(backend_class: str) -> type[MountBackend]:
+        """Resolve a configured mount backend, refusing an unknown key against ``backend_class``."""
+
+        try:
+            return cast(type[MountBackend], resolve_impl_class(MountBackend, backend_class))
+        except ImproperlyConfigured as error:
+            raise ValidationError({"backend_class": str(error)}) from error
+
+    def oauth_registration(self, backend_class: str) -> Any | None:
+        """Return the enabled OAuth client a credential backend's accounts connect through, if any."""
+
+        impl = self.backend_impl(backend_class)
+        if not impl.requires_credential:
+            return None
+        oauth_client_model = apps.get_model("integrate", "OAuthClient")
+        with system_context(reason="storage_integrate.mount.oauth_registration"):
+            return oauth_client_model.objects.enabled_for_slug(impl.oauth_slug())
+
+    def connectable_credentials(self, user: Any, backend_class: str) -> Any:
+        """Return ``user``'s connected OAuth credentials a backend may read its source with.
+
+        Only a backend that requires a credential has any, and only of its own
+        OAuth registration, so one vendor's token is never sent to another's API.
+        """
+
+        impl = self.backend_impl(backend_class)
+        credential_model = apps.get_model("integrate", "Credential")
+        if not impl.requires_credential:
+            return credential_model.objects.none()
+        return credential_model.objects.connected_for(user).filter(
+            kind=CredentialKind.OAUTH,
+            oauth_client__slug=impl.oauth_slug(),
+        )
+
     def browse_source(self, backend_class: str, *, credential: Any | None = None, token: str = "") -> MountBrowseResult:
         """List one bounded level of a configured mount backend's source tree, before a Mount exists.
 
@@ -72,11 +110,7 @@ class MountManager[MountT: Mount](_MountManagerBase[MountT]):
         mounted, unless the backend already blocked it for its own reason.
         """
 
-        try:
-            impl = cast(type[MountBackend], resolve_impl_class(MountBackend, backend_class))
-        except ImproperlyConfigured as error:
-            raise ValidationError({"backend_class": str(error)}) from error
-        listing = impl.browse(credential=credential, token=token)
+        listing = self.backend_impl(backend_class).browse(credential=credential, token=token)
         tokens = (location.token for location in (listing.location, *listing.entries))
         with system_context(reason="storage_integrate.browse_mount_source"):
             mounted = set(self.for_roots(tokens).values_list("config__root", flat=True))
@@ -93,33 +127,56 @@ class MountManager[MountT: Mount](_MountManagerBase[MountT]):
         user: Any,
         *,
         name: str,
-        root: Path,
+        root: str,
         mode: MountMode,
         backend_class: str,
         already_mounted_message: str,
         slug_default: str,
         reason: str,
+        credential: Any | None = None,
+        copy_backend: Any | None = None,
     ) -> MountT:
-        """Provision one pre-validated external-source Mount and its drive, then queue its first sync.
+        """Provision one external-source Mount and its drive, then queue its first sync.
 
-        A reference mount gets its own storage backend serving the source in
-        place; a copy mount stores under a key prefix of the configured default
-        drive's backend. ``reason`` names the caller's system scope.
+        ``root`` is the backend's source token (what ``browse`` offers); the
+        backend's ``source_root`` canonicalizes it and its ``check_source``
+        validates it on the unsaved row, so a refusal is keyed to ``path`` before
+        anything is created. A backend that requires a credential reads with
+        ``credential``, one of ``user``'s :meth:`connectable_credentials`,
+        attached through the integration's own attach verb; the Mount points at
+        the backend's vendor. A reference mount gets its own storage backend
+        serving the source in place; a copy mount stores under a key prefix of
+        ``copy_backend``, a writable backend ``user`` may read, or else of the
+        configured default drive's backend. ``reason`` names the caller's system
+        scope.
         """
 
         display_name = str(name).strip()
         if not display_name:
             raise ValidationError({"name": "A mount name is required."})
+        impl = self.backend_impl(backend_class)
         backend_model = apps.get_model("storage", "Backend")
         drive_model = apps.get_model("storage", "Drive")
-        mount_config = {"root": str(root)}
+        self._check_connection(user, backend_class, impl=impl, credential=credential)
+        self._check_copy_backend(user, mode=mode, copy_backend=copy_backend, backend_model=backend_model)
         storage_backend_spec: tuple[str, dict[str, Any]] | None = None
-        if mode == MountMode.REFERENCE:
-            source = self.model(backend_class=backend_class, config=mount_config)
-            storage_backend_spec = source.backend.storage_backend_spec()
+        try:
+            mount_config = {"root": impl.source_root(str(root))}
+            source = self.model(backend_class=backend_class, config=mount_config, credential=credential)
+            with contextlib.closing(source.backend) as backend:
+                backend.check_source()
+                if mode == MountMode.REFERENCE:
+                    storage_backend_spec = backend.storage_backend_spec()
+        except IntegrationError as error:
+            raise ValidationError({"path": error.public_message}) from error
+        except ValidationError as error:
+            # Django ValidationError has error_dict only for field-keyed errors.
+            if hasattr(error, "error_dict"):
+                raise
+            raise ValidationError({"path": error.messages}) from error
 
         with system_context(reason=reason), transaction.atomic():
-            if self.for_roots((str(root),)).exists():
+            if self.for_roots((mount_config["root"],)).exists():
                 raise ValidationError({"path": already_mounted_message})
             slug = self._available_slug(
                 display_name,
@@ -139,10 +196,13 @@ class MountManager[MountT: Mount](_MountManagerBase[MountT]):
                 )
                 prefix = ""
             else:
-                default = drive_model.objects.configured_default()
-                if default is None:
-                    raise ImproperlyConfigured("The configured default storage drive is missing.")
-                storage_backend = default.backend
+                if copy_backend is not None:
+                    storage_backend = copy_backend
+                else:
+                    default = drive_model.objects.configured_default()
+                    if default is None:
+                        raise ImproperlyConfigured("The configured default storage drive is missing.")
+                    storage_backend = default.backend
                 prefix = f"mounts/{slug}"
             drive = drive_model.objects.create(
                 backend_id=storage_backend.pk,
@@ -153,7 +213,7 @@ class MountManager[MountT: Mount](_MountManagerBase[MountT]):
                 created_by_id=user.pk,
             )
             mount = self.create(
-                vendor_id=apps.get_model("integrate", "Vendor").objects.seeded(_LOCAL_VENDOR_SLUG).pk,
+                vendor_id=apps.get_model("integrate", "Vendor").objects.seeded(impl.vendor_slug).pk,
                 owner_id=user.pk,
                 display_name=display_name,
                 backend_class=backend_class,
@@ -163,9 +223,41 @@ class MountManager[MountT: Mount](_MountManagerBase[MountT]):
                 config=mount_config,
                 created_by_id=user.pk,
             )
-            mount.connect()
+            if credential is None:
+                mount.connect()
+            else:
+                mount.attach_connection(credential)
         mount.request_sync()
         return mount
+
+    def _check_connection(
+        self, user: Any, backend_class: str, *, impl: type[MountBackend], credential: Any | None
+    ) -> None:
+        """Require a credential exactly when the backend reads with one, and only one of ``user``'s it may use."""
+
+        if not impl.requires_credential:
+            if credential is not None:
+                raise ValidationError({"credential": f"A {impl.label} mount reads without an account."})
+            return
+        if credential is None:
+            raise ValidationError({"credential": f"Choose the account to read this {impl.label} with."})
+        with system_context(reason="storage_integrate.mount.connectable_credential"):
+            usable = self.connectable_credentials(user, backend_class).filter(pk=credential.pk).exists()
+        if not usable:
+            raise ValidationError({"credential": f"This account cannot read a {impl.label} for you."})
+
+    @staticmethod
+    def _check_copy_backend(user: Any, *, mode: MountMode, copy_backend: Any | None, backend_model: Any) -> None:
+        """Admit a chosen copy target only for a copy mount, writable and readable by ``user``."""
+
+        if copy_backend is None:
+            return
+        if mode != MountMode.COPY:
+            raise ValidationError({"copy_backend": "Only a copy mount stores its files in a chosen backend."})
+        if not backend_model.objects.with_actor(user).filter(pk=copy_backend.pk).exists():
+            raise ValidationError({"copy_backend": "You cannot use this storage backend."})
+        if not copy_backend.storage.writable:
+            raise ValidationError({"copy_backend": "Copied files need a writable storage backend."})
 
     @staticmethod
     def _available_slug(name: str, *, slug_default: str, backend_model: Any, drive_model: Any) -> str:
@@ -248,8 +340,8 @@ class Mount(Bridge, inherits="integrate.Integration"):
         file_model = apps.get_model("storage", "File")
         folder_model = apps.get_model("storage", "Folder")
         previous = self._freshness_map(file_model)
-        previous_present = {path for path, state in previous.items() if not state.is_trashed}
-        seen_paths: set[str] = set()
+        previous_present = {key for key, state in previous.items() if not state.is_trashed}
+        seen_keys: set[str] = set()
         folder_cache: dict[tuple[str, ...], Any | None] = {(): None}
         mime_cache: dict[str, Any | None] = {}
         counts = {
@@ -257,6 +349,7 @@ class Mount(Bridge, inherits="integrate.Integration"):
             "unchanged": 0,
             "duplicates": 0,
             "errors": 0,
+            "skipped": 0,
             "trashed": 0,
             "vanished": 0,
             "scanned": 0,
@@ -266,8 +359,9 @@ class Mount(Bridge, inherits="integrate.Integration"):
 
         for entry in backend.iter_entries():
             counts["scanned"] += 1
-            seen_paths.add(entry.path)
-            prior = previous.get(entry.path)
+            source_key = self._source_key(entry)
+            seen_keys.add(source_key)
+            prior = previous.get(source_key)
             if self._entry_unchanged(entry, prior):
                 counts["unchanged"] += 1
                 self._report_batch(counts)
@@ -285,13 +379,13 @@ class Mount(Bridge, inherits="integrate.Integration"):
                 if self.mode == MountMode.REFERENCE:
                     file_model.objects.index_external(
                         drive=drive,
-                        storage_path=entry.path,
+                        storage_path=entry.storage_key,
                         filename=PurePosixPath(entry.path).name,
                         content_hash=digest,
                         size_bytes=entry.size_bytes,
                         mime_type=backend.entry_mime(entry),
                         folder=folder,
-                        metadata={"mount": {"mtime_ns": entry.mtime_ns}},
+                        metadata={"mount": self._reference_metadata(entry)},
                         mime_cache=mime_cache,
                         existing_pk=prior.pk if prior is not None else None,
                         owner_id=self.owner_id,
@@ -327,14 +421,15 @@ class Mount(Bridge, inherits="integrate.Integration"):
 
             self._report_batch(counts)
 
-        seen_paths.update(backend.observed_paths)
+        seen_keys.update(backend.observed_paths)
         counts["scanned"] += backend.scan_errors
         counts["errors"] += backend.scan_errors
-        counts["vanished"] = len(previous_present.difference(seen_paths))
+        counts["skipped"] = backend.skipped_entries
+        counts["vanished"] = len(previous_present.difference(seen_keys))
         if self.mode == MountMode.REFERENCE:
             counts["trashed"] = file_model.objects.trash_missing_external(
                 drive,
-                seen_paths,
+                seen_keys,
             )
             folder_model.objects.prune_missing(
                 drive,
@@ -343,8 +438,25 @@ class Mount(Bridge, inherits="integrate.Integration"):
         self._report_progress(counts, complete=True)
         return counts["changed"]
 
+    def _source_key(self, entry: MountEntry) -> str:
+        """Key ``entry`` as its File row records it: by storage key in reference mode, by source path in copy mode."""
+
+        return entry.storage_key if self.mode == MountMode.REFERENCE else entry.path
+
+    @staticmethod
+    def _reference_metadata(entry: MountEntry) -> dict[str, Any]:
+        """Return a reference row's mount facts: its mtime, and its path when the key is not the path.
+
+        A source keyed by stable ids can move or rename a file without touching
+        its size or mtime; the recorded path lets freshness see the new placement.
+        """
+
+        if entry.path == entry.storage_key:
+            return {"mtime_ns": entry.mtime_ns}
+        return {"mtime_ns": entry.mtime_ns, "path": entry.path}
+
     def _freshness_map(self, file_model: Any) -> dict[str, _MountFileState]:
-        """Load this drive's File-owned mount freshness in one streamed query."""
+        """Load this drive's File-owned mount freshness in one streamed query, by :meth:`_source_key`."""
 
         freshness: dict[str, _MountFileState] = {}
         with system_context(reason="storage_integrate.mount.freshness"):
@@ -381,17 +493,19 @@ class Mount(Bridge, inherits="integrate.Integration"):
                     size_bytes=int(size_bytes),
                     is_trashed=bool(is_trashed),
                     mtime_ns=mtime_ns,
+                    path=str(mount_values.get("path") or source_path),
                 )
         return freshness
 
     def _entry_unchanged(self, entry: MountEntry, previous: _MountFileState | None) -> bool:
-        """Return whether File-owned source facts prove ``entry`` is unchanged."""
+        """Return whether File-owned source facts prove ``entry`` is unchanged, placement included."""
 
         return (
             previous is not None
             and not previous.is_trashed
             and previous.size_bytes == entry.size_bytes
             and previous.mtime_ns == entry.mtime_ns
+            and previous.path == entry.path
             and bool(previous.content_hash)
         )
 

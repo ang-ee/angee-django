@@ -11,6 +11,7 @@ export function ConnectLocalFolderAction(): React.ReactElement {
       backendClass="local_folder"
       i18nPrefix="mount.localFolder"
       invalidateModel={MOUNT_MODEL}
+      choosesCopyBackend
     />
   );
 }

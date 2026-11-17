@@ -34,11 +34,16 @@ type MountLocation = BrowseResult["entries"][number];
 
 export interface MountSourceBrowserProps extends DescriptorFieldControlProps {
   backendClass: string;
+  /** The account a credential backend browses with; browsing waits for one when `requiresAccount`. */
+  credentialId?: string;
+  requiresAccount?: boolean;
 }
 
 /** Bare MutationDialog control for an opaque source-root token. */
 export function MountSourceBrowser({
   backendClass,
+  credentialId,
+  requiresAccount = false,
   id,
   readOnly,
   invalid,
@@ -59,11 +64,13 @@ export function MountSourceBrowser({
   const variables = React.useMemo<BrowseVariables>(
     () => ({
       backendClass,
+      ...(credentialId ? { credentialId } : {}),
       token,
     }),
-    [backendClass, token],
+    [backendClass, credentialId, token],
   );
-  const query = useAuthoredQuery(BrowseMountSource, variables);
+  const waitingForAccount = requiresAccount && !credentialId;
+  const query = useAuthoredQuery(BrowseMountSource, variables, { enabled: !waitingForAccount });
   const result = query.data?.browse_mount_source;
 
   const navigate = React.useCallback(
@@ -77,6 +84,10 @@ export function MountSourceBrowser({
   const currentReason = result
     ? displayBlockedReason(result.location, t)
     : "";
+
+  if (waitingForAccount) {
+    return <InlineEmpty icon="user" label={t("mount.browse.chooseAccount")} />;
+  }
 
   return (
     <div

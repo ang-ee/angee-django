@@ -59,6 +59,7 @@ dependencies = [
     "angee-spaces==3.0.0",
     "angee-storage==3.0.0",
     "angee-storage-integrate==3.0.0",
+    "angee-storage-integrate-gdrive==3.0.0",
     "angee-storage-integrate-iphone==3.0.0",
     "angee-tags==3.0.0",
     "angee-theme-angee==3.0.0",
@@ -172,6 +173,7 @@ angee-server = {workspace = true}
 angee-spaces = {workspace = true}
 angee-storage = {workspace = true}
 angee-storage-integrate = {workspace = true}
+angee-storage-integrate-gdrive = {workspace = true}
 angee-storage-integrate-iphone = {workspace = true}
 angee-tags = {workspace = true}
 angee-theme-angee = {workspace = true}
