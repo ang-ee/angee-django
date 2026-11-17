@@ -8,7 +8,8 @@ by overriding ``TIME_ZONE`` per case.
 
 from __future__ import annotations
 
-from datetime import UTC, datetime, time
+from datetime import UTC, datetime, time, timedelta
+from time import perf_counter
 from zoneinfo import ZoneInfo
 
 import pytest
@@ -24,7 +25,7 @@ from pydantic import TypeAdapter
 from pydantic import ValidationError as PydanticValidationError
 
 from angee.scheduling.fields import RecurrenceField, TimeZoneField
-from angee.scheduling.recurrence import Recurrence
+from angee.scheduling.recurrence import MAX_OCCURRENCES, Recurrence
 from angee.scheduling.zones import ZoneName, get_zone_info
 
 with isolate_apps("angee.scheduling"):
@@ -295,6 +296,67 @@ def test_the_occurrence_after_unrolls_in_the_named_zone() -> None:
     following = Recurrence("FREQ=MONTHLY").get_occurrence_after(start, start, zone="America/Barbados")
     assert following == datetime(2026, 3, 31, 14, tzinfo=barbados)
     assert following is not None and following.tzinfo is UTC
+
+
+@override_settings(TIME_ZONE="UTC")
+@pytest.mark.parametrize("rule", [
+    "FREQ=DAILY;BYMONTH=2;BYMONTHDAY=30", "FREQ=MINUTELY;BYMONTH=4;BYMONTHDAY=31", "FREQ=YEARLY;BYYEARDAY=367",
+])
+def test_a_rule_whose_days_never_match_expands_to_nothing_without_scanning(rule: str) -> None:
+    """dateutil checks an end only at a candidate; a never-matching rule is decided in one cycle instead."""
+
+    start = _utc(2026, 1, 1)
+    recurrence = Recurrence(rule)
+    clock = perf_counter()
+    assert recurrence.never_occurs()
+    assert recurrence.get_occurrence_after(start, start) is None
+    assert recurrence.occurrences(start, start, _utc(2036, 1, 1)) == []
+    assert recurrence.occurrences_after(start, start, _utc(2036, 1, 1)) == []
+    assert perf_counter() - clock < 1
+    assert not Recurrence("FREQ=YEARLY;BYMONTH=2;BYMONTHDAY=29").never_occurs()
+    assert not Recurrence("FREQ=MONTHLY;BYDAY=5MO").never_occurs()
+
+
+@override_settings(TIME_ZONE="UTC")
+def test_occurrences_after_is_open_at_after_and_closed_at_until_and_pages() -> None:
+    daily = Recurrence("FREQ=DAILY")
+    start = _utc(2026, 7, 1, 9)
+    days = [_utc(2026, 7, day, 9) for day in (2, 3, 4)]
+    assert daily.occurrences_after(start, start, _utc(2026, 7, 4, 9)) == days
+    assert daily.occurrences_after(start, start, _utc(2026, 7, 4, 9), limit=2) == days[:2]
+    assert daily.occurrences_after(start, days[1], _utc(2026, 7, 4, 9), limit=2) == days[2:]
+    assert daily.occurrences_after(start, days[-1], days[-1]) == []
+    assert Recurrence("").occurrences_after(start, _utc(2026, 6, 1), start) == [start]
+    with pytest.raises(ValueError):
+        daily.occurrences_after(start, start, days[-1], limit=MAX_OCCURRENCES + 1)
+
+
+@override_settings(TIME_ZONE="UTC")
+def test_occurrences_after_refuses_more_than_the_cap_unless_the_caller_pages() -> None:
+    start = _utc(2026, 7, 1)
+    secondly = Recurrence("FREQ=SECONDLY")
+    with pytest.raises(ValidationError) as refused:
+        secondly.occurrences_after(start, start, _utc(2026, 7, 2))
+    assert refused.value.code == "too_many_occurrences"
+    paged = secondly.occurrences_after(start, start, _utc(2026, 7, 2), limit=MAX_OCCURRENCES)
+    assert len(paged) == MAX_OCCURRENCES and paged[0] == _utc(2026, 7, 1, 0, 0) + (paged[1] - paged[0])
+
+
+@override_settings(TIME_ZONE="UTC")
+def test_an_hourly_wall_clock_rule_repeats_or_skips_an_instant_at_a_dst_change() -> None:
+    """Brussels: 02:00 local does not exist in spring and happens twice in autumn; hourly wall clocks follow.
+
+    In spring the missing 02:00 lands on the instant of 03:00, which counts once. In
+    autumn the repeated 02:00 runs once, leaving a two-hour gap in instants.
+    """
+
+    hourly = Recurrence("FREQ=HOURLY")
+    spring = _utc(2026, 3, 28, 22)
+    spring_moments = hourly.occurrences_after(spring, spring, spring + timedelta(hours=6), zone="Europe/Brussels")
+    assert spring_moments == [spring + timedelta(hours=hour) for hour in range(1, 7)]
+    autumn = _utc(2026, 10, 24, 22)
+    autumn_moments = hourly.occurrences_after(autumn, autumn, autumn + timedelta(hours=6), zone="Europe/Brussels")
+    assert autumn_moments == [autumn + timedelta(hours=hour) for hour in (1, 2, 4, 5, 6)]
 
 
 @pytest.mark.parametrize("name", ["America/Barbados", "UTC", ""])
