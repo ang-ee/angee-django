@@ -423,10 +423,17 @@ def test_iam_integrate_oidc_config_installs_oauth_client_oidc_defaults() -> None
     config = apps.get_app_config("iam_integrate_oidc")
     manifest = resource_manifest_for(config)
 
-    assert manifest["install"] == (
-        {"path": "resources/install/010_integrate.oauthclient.yaml", "adopt": ("slug", "environment")},
-    )
+    released, google = manifest["install"]
+    assert released == {
+        "path": "resources/install/010_integrate.oauthclient.yaml", "adopt": ("slug", "environment"),
+    }
+    assert google["path"] == "resources/install/020_integrate.oauthclient.yaml"
+    assert google["create_only"] == ("login_enabled", "link_on_email_match")
     assert manifest["demo"] == ()
+    google_rows = _resource_rows(config, "install", "resources/install/020_integrate.oauthclient.yaml")
+    assert google_rows["oauth_google_oidc"] == {
+        "slug": "google", "environment": "prod", "login_enabled": True, "link_on_email_match": True,
+    }
 
     oidc_rows = ResourceEntry.from_declaration(config, "install", manifest["install"][0]).read_groups()[0].dataset.dict
     assert (
@@ -436,8 +443,7 @@ def test_iam_integrate_oidc_config_installs_oauth_client_oidc_defaults() -> None
     oidc_by_xref = {
         row["_xref"]: {key: value for key, value in row.items() if value is not NOT_PROVIDED} for row in oidc_rows
     }
-    # Released rows, unchanged so existing installations are not re-applied; the
-    # deployment's `google` client gets no login row (seeding cannot tell new from adopted).
+    # Released rows, unchanged so existing installations are not re-applied.
     assert oidc_by_xref == {
         "oauth_gemini_oidc": {
             "_xref": "oauth_gemini_oidc", "slug": "gemini", "environment": "prod", "provider_type": "google",

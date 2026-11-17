@@ -2,7 +2,7 @@
 
 from django.db import migrations
 
-REHOMED_XREFS = ("oauth_gemini",)
+from angee.resources.models import move_seed_ledger
 
 
 def applies(project_state):
@@ -10,17 +10,9 @@ def applies(project_state):
 
 
 def rehome(apps, schema_editor):
-    resources = apps.get_model("resources", "Resource")._base_manager.using(schema_editor.connection.alias)
-    for xref in REHOMED_XREFS:
-        old = resources.filter(source_addon="angee.integrate", xref=xref).first()
-        if old is None:
-            continue
-        if resources.filter(source_addon="angee.integrate_google", xref=xref).exists():
-            raise RuntimeError(
-                f"Both Integrate and integrate_google own {xref}; reconcile the ledger identities "
-                "before applying this migration. No resource target was changed."
-            )
-        resources.filter(pk=old.pk).update(source_addon="angee.integrate_google")
+    move_seed_ledger(
+        apps, schema_editor, xrefs=("oauth_gemini",), from_addon="angee.integrate", to_addon="angee.integrate_google",
+    )
 
 
 class Migration(migrations.Migration):

@@ -2,8 +2,7 @@
 # This file updates the existing rows by (slug, environment) only when the OIDC
 # addon is composed, because these fields are contributed by the addon extension.
 # The rows keep their released content so existing installations are not
-# re-applied. The deployment's `google` client gets no row here: seeding cannot
-# tell a new row from an adopted one, so its sign-in switch is the operator's.
+# re-applied. The deployment's `google` client is in 020, whose fields are create-only.
 - xref: oauth_gemini_oidc
   slug: gemini
   environment: prod

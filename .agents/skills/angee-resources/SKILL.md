@@ -96,7 +96,10 @@ description: "Declares and loads an addon's master, install and demo data: pypro
    `adopt = "<unique field>"` or `adopt = ["f1", "f2"]`, the exact field set of a model-owned
    `unique`, `unique_together` or non-expression `UniqueConstraint` (`_unique_adoption_field` in `loader.py`;
    `notes/pyproject.toml` adopts `["user", "name"]` through `Credential`'s conditional
-   constraint). If a relation names another addon's seed → `depends_on = "<label>:resources/…"`
+   constraint). If a seeded value is the operator's once the row exists (a policy switch) →
+   `create_only = ["<field>", …]`: applied only to a row the load creates, never on adoption
+   or re-application (`after_init_instance` and `load_scope` in `loader.py`;
+   `iam_integrate_oidc/pyproject.toml`). If a relation names another addon's seed → `depends_on = "<label>:resources/…"`
    in a tier at or below yours (`EntryGraph.ordered` in `entries.py`). **Owner rule:** the manifest selects files
    and keys; the model owns uniqueness, so no field is adoptable without it
    ([addon declarations](../../../docs/composer.md#addon-declarations)).

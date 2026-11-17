@@ -105,7 +105,8 @@ class OidcLoginCompletion:
 
         Links the verified external identity to the start-flow user and stores its
         OAuth credential under ``(user, provider, account)`` — the same shape as
-        connect, but gated on a nonce-bound ID token.
+        connect, but gated on a nonce-bound ID token. Like connect, a first attempt
+        whose grant lacks a refresh token raises ``ConsentRequired``.
         """
 
         record = flow.consume_validated_state(
@@ -122,6 +123,7 @@ class OidcLoginCompletion:
             claims=claims,
             next_path=record.next_path or "/",
             reason="iam_integrate_oidc.link",
+            flow_record=record,
         )
         return LinkCompletion(
             account=completion.account,

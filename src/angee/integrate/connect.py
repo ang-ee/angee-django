@@ -116,9 +116,7 @@ def complete_account_connect(
     account is labelled from the provider userinfo and its OAuth credential stored
     under ``(user, provider, account)``. A grant that cannot read userinfo
     identifies its account from token-response metadata or the code exchange's
-    verified ID token. The upsert checks the grant (``CredentialManager.upsert_for_user``);
-    a first attempt that lacks a refresh token raises ``ConsentRequired``, and a
-    consent attempt stores what the provider gave.
+    verified ID token. The grant checks are ``complete_external_account_link``'s.
     """
 
     record = flow.consume_validated_state(
@@ -151,23 +149,18 @@ def complete_account_connect(
     if not external_id:
         raise OAuthFlowError(EXTERNAL_ACCOUNT_RESOLUTION_FAILED, 400)
     defaults = set(oauth_client.default_scope_values)
-    try:
-        return complete_external_account_link(
-            oauth_client,
-            user=user,
-            external_id=external_id,
-            tokens=tokens,
-            claims=claims,
-            next_path=record.next_path or "/",
-            integration_id=record.integration_id,
-            reason="integrate.oauth.connect",
-            require_refresh_token=not record.consent,
-            required_scopes=[scope for scope in record.scopes if scope not in defaults],
-        )
-    except OAuthFlowError as error:
-        if error.code == CONSENT_REQUIRED:
-            raise ConsentRequired(record) from error
-        raise
+    return complete_external_account_link(
+        oauth_client,
+        user=user,
+        external_id=external_id,
+        tokens=tokens,
+        claims=claims,
+        next_path=record.next_path or "/",
+        integration_id=record.integration_id,
+        reason="integrate.oauth.connect",
+        flow_record=record,
+        required_scopes=[scope for scope in record.scopes if scope not in defaults],
+    )
 
 
 def complete_external_account_link(
@@ -180,10 +173,16 @@ def complete_external_account_link(
     next_path: str = "/",
     integration_id: str = "",
     reason: str = "integrate.oauth.connect",
-    require_refresh_token: bool = False,
+    flow_record: StateRecord | None = None,
     required_scopes: Iterable[str] = (),
 ) -> AccountConnectCompletion:
-    """Link an external account to ``user`` and store its OAuth credential (``connect_oauth``)."""
+    """Link an external account to ``user`` and store its OAuth credential (``connect_oauth``).
+
+    A browser flow passes its consumed ``flow_record``: its first attempt must
+    bring the refresh token a refreshable client needs, or ``ConsentRequired``
+    asks the caller to restart it with consent; a consent attempt stores what the
+    provider gave.
+    """
 
     Account = cast(Any, apps.get_model("integrate", "ExternalAccount"))
     try:
@@ -194,9 +193,13 @@ def complete_external_account_link(
             tokens=tokens,
             claims=claims,
             reason=reason,
-            require_refresh_token=require_refresh_token,
+            require_refresh_token=flow_record is not None and not flow_record.consent,
             required_scopes=required_scopes,
         )
+    except OAuthFlowError as error:
+        if flow_record is not None and error.code == CONSENT_REQUIRED:
+            raise ConsentRequired(flow_record) from error
+        raise
     except ValidationError as error:
         if error.code == ACCOUNT_ALREADY_LINKED:
             raise OAuthFlowError(ACCOUNT_ALREADY_LINKED, 409) from error

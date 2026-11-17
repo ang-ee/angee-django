@@ -27,7 +27,7 @@ from angee.iam_integrate_oidc.protocol import OAuthClientOidcProtocol
 from angee.integrate.errors import IntegrationError
 from angee.integrate.oauth import flow as oauth_flow
 from angee.integrate.oauth import state as oauth_state
-from angee.integrate.oauth.errors import CLIENT_NOT_CONFIGURED, PROVIDER_UNAVAILABLE, OAuthFlowError
+from angee.integrate.oauth.errors import CLIENT_NOT_CONFIGURED, PROVIDER_UNAVAILABLE, ConsentRequired, OAuthFlowError
 from angee.integrate.schema import (
     ConnectableAccount,
     ConnectedExternalAccountType,
@@ -70,6 +70,8 @@ class LinkAccountResult:
     claims: JSON | None = None
     error: str | None = None
     error_code: str | None = None
+    restart: OAuthStartPayload | None = None
+    """With ``consent_required``: the same link started again asking for consent; follow it."""
 
 
 def _available_connections(info: strawberry.Info) -> Any:
@@ -236,6 +238,16 @@ class OidcLoginMutation:
                 code=code,
                 state_token=state,
                 redirect_uri=redirect_uri,
+            )
+        except ConsentRequired as refused:
+            try:
+                restart = oauth_flow.restart_with_consent(
+                    request, oauth_client, refused.record, authorize_url_builder=_oidc_authorize_url,
+                )
+            except OAuthFlowError as error:
+                return LinkAccountResult(error=error.public_message, error_code=error.code)
+            return LinkAccountResult(
+                error=refused.public_message, error_code=refused.code, restart=OAuthStartPayload.from_start(restart),
             )
         except OAuthFlowError as error:
             return LinkAccountResult(error=error.public_message, error_code=error.code)

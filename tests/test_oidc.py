@@ -1264,7 +1264,7 @@ def test_userinfo_claims_merge_into_link_and_login_claims(db: None) -> None:
         "preferred_username": "id-token-name",
         "groups": ["ops"],
     }
-    provider = OidcProvider(userinfo={
+    provider = OidcProvider(token={"access_token": "access", "refresh_token": "refresh"}, userinfo={
         "sub": "sub-merged",
         "email": "userinfo@example.com",
         "preferred_username": "userinfo-name",
@@ -1395,7 +1395,10 @@ def test_complete_link_binds_to_state_user_after_session_swap(db: None) -> None:
         user_id=str(start_user.pk),
         flow="link",
     )
-    provider = OidcProvider(id_claims={"sub": "sub-swapped", "email": "start@example.com", "nonce": record.nonce})
+    provider = OidcProvider(
+        token={"access_token": "access", "refresh_token": "refresh"},
+        id_claims={"sub": "sub-swapped", "email": "start@example.com", "nonce": record.nonce},
+    )
 
     with mock_transport(provider):
         result = identity.complete_link(
@@ -1673,7 +1676,7 @@ def test_oidc_link_refines_the_grant_before_userinfo_and_credential_persistence(
         "generic_oauth2": "tests.integrate_fixtures.RefiningProvider",
     }), system_context(reason="test refined OIDC link"):
         user = get_user_model().objects.create_user(username="refined-link")
-        client = _oauth_client("refined-link-client")
+        client = _oauth_client("refined-link-client", supports_refresh=False)
         state_token, record = oauth_state.issue(
             client, "https://app.example/callback", user_id=str(user.pk), flow="link",
         )
@@ -1723,6 +1726,31 @@ def test_connect_completion_without_a_refresh_token_returns_the_consent_restart(
     assert restart["authorize_url"].startswith("https://issuer.example/oauth/authorize?")
     assert restart["state"] and restart["state"] != token
     assert (restart["mode"], restart["redirect_uri"]) == ("auto", redirect)
+
+
+@pytest.mark.django_db
+def test_link_completion_without_a_refresh_token_returns_the_consent_restart() -> None:
+    with system_context(reason="test link consent restart"):
+        user = get_user_model().objects.create_user(username="link-consent-restart")
+        client = _oauth_client("link-consent-restart")
+    request = graphql_request(user, session=True)
+    token, record, redirect = _bound_flow(request, client, oauth_state.StateFlow.LINK, user)
+    provider = OidcProvider(id_claims={"sub": "link-subject", "nonce": record.nonce})
+
+    with mock_transport(provider):
+        result = _complete(
+            _console_schema(), request, "link_account_complete", token, redirect,
+            "error_code account { id } restart { authorize_url state redirect_uri }",
+        )
+
+    assert result["error_code"] == "consent_required" and result["account"] is None
+    restart = parse.urlsplit(result["restart"]["authorize_url"])
+    query = dict(parse.parse_qsl(restart.query))
+    # The login builder restarts it: openid and a fresh nonce, bound to a new state.
+    assert "openid" in query["scope"].split() and query["nonce"] != record.nonce
+    assert result["restart"]["state"] != token and result["restart"]["redirect_uri"] == redirect
+    with system_context(reason="test link consent wrote nothing"):
+        assert not ExternalAccount.objects.filter(oauth_client=client).exists()
 
 
 @pytest.mark.django_db

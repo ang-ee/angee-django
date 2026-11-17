@@ -1,0 +1,8 @@
+# Sign-in on the deployment's `google` client (seeded by integrate_google). The
+# entry declares both fields `create_only`: a load that creates the row turns
+# sign-in on; an existing, adopted or operator-edited row is never forced.
+- xref: oauth_google_oidc
+  slug: google
+  environment: prod
+  login_enabled: true
+  link_on_email_match: true

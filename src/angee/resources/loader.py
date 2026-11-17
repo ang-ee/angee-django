@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import functools
 from collections import defaultdict
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterator, Mapping, Sequence
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, cast
 
@@ -43,6 +45,24 @@ if TYPE_CHECKING:
 
 class DryRunRollback(Exception):
     """Signal that a successful dry run should roll back its transaction."""
+
+
+_created_in_load: ContextVar[set[tuple[str, Any]] | None] = ContextVar("angee.resources.created_in_load", default=None)
+
+
+@contextmanager
+def load_scope() -> Iterator[None]:
+    """Scope one load, so a row any entry creates in it counts as created for every later entry.
+
+    An entry's ``create_only`` fields then also reach a row another entry of the
+    same load created moments earlier, which no operator can have edited yet.
+    """
+
+    token = _created_in_load.set(set())
+    try:
+        yield
+    finally:
+        _created_in_load.reset(token)
 
 
 @dataclass(frozen=True)
@@ -116,6 +136,7 @@ class AngeeResource(resources.ModelResource):
         del kwargs
         self._validate_catalogue_tier()
         self._validate_headers(list(dataset.headers or []))
+        self._validate_headers(list(self.entry.create_only), declared="create_only field(s)")
         self._hash_skips = set()
         self._instances.clear()
         self._row_hashes.clear()
@@ -153,8 +174,15 @@ class AngeeResource(resources.ModelResource):
     def after_init_instance(
         self, instance: models.Model, new: bool, row: dict[str, Any], **kwargs: Any,
     ) -> None:
-        """Leave live state intact on existing targets, including adopted rows."""
+        """Leave live state and ``create_only`` fields intact on existing targets, including adopted rows.
 
+        A target created earlier in the same load (``load_scope``) still takes the
+        entry's ``create_only`` fields: no one can have edited it yet.
+        """
+
+        if not new and not self._created_in_this_load(instance):
+            for column in self._create_only_columns:
+                row.pop(column, None)
         if not new:
             for field in self._transition_state_fields:
                 if field.column_name in row and not field.readonly:
@@ -231,6 +259,8 @@ class AngeeResource(resources.ModelResource):
 
         if is_create:
             instance.save()
+            if (created := _created_in_load.get()) is not None:
+                created.add((instance._meta.label_lower, instance.pk))
         else:
             instance.save(update_fields=update_fields_with_auto_now(instance, self._update_fields))
 
@@ -378,9 +408,13 @@ class AngeeResource(resources.ModelResource):
             )
 
     def _row_content_hash(self, row: Mapping[str, Any]) -> str:
-        """Hash updateable seed values, excluding identity and initial state."""
+        """Hash updateable seed values, excluding identity and initial state (transition and ``create_only``)."""
 
-        excluded = {"_xref", *(field.column_name for field in self._transition_state_fields)}
+        excluded = {
+            "_xref",
+            *(field.column_name for field in self._transition_state_fields),
+            *self._create_only_columns,
+        }
         payload = {key: value for key, value in sorted(row.items()) if key not in excluded}
         digest = canonical_json_sha256(chunks=(ASCII_JSON.encode(json_safe(payload)),))
         return f"sha256:{digest}"
@@ -684,8 +718,23 @@ class AngeeResource(resources.ModelResource):
 
         return not field.primary_key and bool(field.unique)
 
-    def _validate_headers(self, headers: Sequence[str]) -> None:
-        """Reject primary-key and unknown field headers."""
+    @functools.cached_property
+    def _create_only_columns(self) -> tuple[str, ...]:
+        """Project the entry's ``create_only`` field names onto import columns."""
+
+        return tuple(
+            self.fields[name].column_name if name in self.fields else name for name in self.entry.create_only
+        )
+
+    @staticmethod
+    def _created_in_this_load(instance: models.Model) -> bool:
+        """Whether the current load created ``instance`` (through any entry)."""
+
+        created = _created_in_load.get()
+        return created is not None and (instance._meta.label_lower, instance.pk) in created
+
+    def _validate_headers(self, headers: Sequence[str], *, declared: str = "field(s)") -> None:
+        """Reject primary-key and unknown field headers (or ``create_only`` names)."""
 
         allowed = set(self.fields) | {field.column_name for field in self.fields.values()}
         pk = self._meta.model._meta.pk
@@ -700,7 +749,7 @@ class AngeeResource(resources.ModelResource):
         if unknown:
             names = ", ".join(unknown)
             raise ResourceLoadError(
-                f"{self.entry.display}: unknown field(s) for {self._meta.model._meta.label}: {names}"
+                f"{self.entry.display}: unknown {declared} for {self._meta.model._meta.label}: {names}"
             )
 
     def _validate_catalogue_tier(self) -> None:

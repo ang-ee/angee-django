@@ -116,6 +116,19 @@ def test_the_seeded_google_client_takes_its_endpoints_from_the_preset() -> None:
 
 
 @pytest.mark.django_db
+@pytest.mark.parametrize("existing", [False, True])
+def test_seeds_turn_google_sign_in_on_only_for_a_google_client_they_create(existing: bool) -> None:
+    with system_context(reason="test Google sign-in seed"):
+        if existing:
+            OAuthClient.objects.create(slug="google", provider_type="google", display_name="Operator")
+        addons = [apps.get_app_config(label) for label in ("integrate", "integrate_google", "iam_integrate_oidc")]
+        Resource.objects.load_addons(addons, tiers=[Resource.Tier.INSTALL])
+        google = OAuthClient.objects.get(slug="google", environment="prod")
+
+    assert (google.login_enabled, google.link_on_email_match) == (not existing, not existing)
+
+
+@pytest.mark.django_db
 def test_align_step_fills_the_preset_on_existing_google_clients_and_keeps_operator_values() -> None:
     with system_context(reason="test Google client upgrade"):
         demo = OAuthClient.objects.create(
@@ -157,7 +170,7 @@ def test_gemini_ledger_rehome_preserves_identity_and_refuses_a_competing_ledger(
         assert (row.source_addon, row.content_hash) == ("angee.integrate_google", "retained-hash")
 
         Resource.objects.create(source_addon="angee.integrate", **values)
-        with pytest.raises(RuntimeError, match="Both Integrate and integrate_google"), transaction.atomic():
+        with pytest.raises(RuntimeError, match="Both angee.integrate and angee.integrate_google"), transaction.atomic():
             rehome(apps, SimpleNamespace(connection=connection))
 
 

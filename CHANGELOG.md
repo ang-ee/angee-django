@@ -15,8 +15,13 @@ live in code docstrings.
   deployment's blank `google` client and Google's public `gemini` client
   ([Register the deployment's Google client](docs/howto/google-oauth-client.md)).
   `iam_integrate_oidc` depends on it and no longer ships `GoogleType` or the demo
-  `google` row. Google sign-in is off until the operator turns on the `google`
-  client's login switch.
+  `google` row; it turns sign-in on for a `google` row the load creates, never for
+  an existing one.
+- A resource entry may declare `create_only` fields: they reach a row only when
+  the load creates it (through any of its entries), never an adopted, existing or
+  re-applied row, and they stay out of the row hash like transition-owned state.
+  `angee.resources.models.move_seed_ledger` moves seed ledger rows to the addon
+  that now ships them in a data migration; the Anthropic and Gemini steps use it.
 - Consumers declare the scopes they need (`IntegrationImpl.oauth_scopes`).
   Credentials are keyed by (user, OAuth client, external account), so one user
   connects several accounts through one client, and an integration stays bound to

@@ -14,5 +14,11 @@ dynamic = ["entry-points"]
 path = "install/010_integrate.oauthclient.yaml"
 adopt = ["slug", "environment"]
 
+[[tool.angee.resources.install]]
+path = "install/020_integrate.oauthclient.yaml"
+adopt = ["slug", "environment"]
+create_only = ["login_enabled", "link_on_email_match"]
+depends_on = "integrate_google:install/010_integrate.oauthclient.yaml"
+
 [tool.angee.platform]
 category = "Integration"

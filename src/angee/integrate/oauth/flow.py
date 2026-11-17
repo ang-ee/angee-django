@@ -129,12 +129,18 @@ def start(
     )
 
 
-def restart_with_consent(request: HttpRequest, oauth_client: OAuthClient, record: state.StateRecord) -> OAuthStart:
-    """Start the consumed connect again, asking the provider for consent.
+def restart_with_consent(
+    request: HttpRequest,
+    oauth_client: OAuthClient,
+    record: state.StateRecord,
+    *,
+    authorize_url_builder: Callable[[OAuthClient, str, state.StateRecord, str], str] | None = None,
+) -> OAuthStart:
+    """Start the consumed flow again, asking the provider for consent.
 
     The completion refused a grant without the refresh token it needs
-    (``ConsentRequired``); the new flow keeps the user, scopes, hint, target and
-    redirect of the first.
+    (``ConsentRequired``); the new flow keeps the kind, user, scopes, hint, target
+    and redirect of the first, and the builder its start used (connect by default).
     """
 
     return start(
@@ -148,6 +154,7 @@ def restart_with_consent(request: HttpRequest, oauth_client: OAuthClient, record
         oauth_scopes=record.scopes,
         login_hint=record.login_hint,
         consent=True,
+        authorize_url_builder=authorize_url_builder,
     )
 
 
