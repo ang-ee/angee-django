@@ -16,7 +16,7 @@
   icon: google
 # Google's public Gemini CLI client: a fixed, published client id with no secret
 # and its own scopes. Its content is the row integrate released, so the declared
-# ledger move (`upgrades.rehome_gemini_seed`) keeps existing rows untouched.
+# ledger move (the `rehome_gemini_seed` migration template) keeps existing rows untouched.
 - xref: oauth_gemini
   slug: gemini
   environment: prod

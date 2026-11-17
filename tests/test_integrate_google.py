@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
-from types import SimpleNamespace
+from types import ModuleType
 
 import httpx2
 import pytest
 from django.apps import apps
 from django.contrib.auth import get_user_model
-from django.db import connection, transaction
+from django.db import connection
+from django.db.migrations.state import ProjectState
 from django.db.models.fields import NOT_PROVIDED
 from rebac import system_context
 
@@ -18,8 +19,9 @@ from angee.integrate.oauth.client import OAuthClientProtocol
 from angee.integrate.oauth.errors import OAuthFlowError
 from angee.integrate.testing.http import mock_transport
 from angee.integrate.testing.oidc import OidcProvider
+from angee.integrate_google.compose_migrations.integrate import align_google_clients as align_template
+from angee.integrate_google.compose_migrations.resources import rehome_gemini_seed as rehome_template
 from angee.integrate_google.providers import GoogleType
-from angee.integrate_google.upgrades import PRESET_ENDPOINT_FIELDS, align_google_clients, rehome_gemini_seed
 from angee.resources.entries import ResourceEntry, resource_manifest_for
 from angee.resources.testing.models import Resource
 from tests.conftest import OAuthClient
@@ -31,6 +33,21 @@ def _seed_rows(app_label: str, path: str) -> dict[str, dict]:
     rows = ResourceEntry.from_declaration(config, "install", declaration).read_groups()[0].dataset.dict
     # One dataset carries every column any row names; a row's own values are the declared ones.
     return {row["_xref"]: {key: value for key, value in row.items() if value is not NOT_PROVIDED} for row in rows}
+
+
+def _apply(template: ModuleType, app_label: str, *, reverse: bool = False) -> None:
+    """Run a migration template's ``Migration`` over the installed models' migration state.
+
+    The callables get historical models (no sqid, managers or methods), as a host's copy does.
+    """
+
+    migration = template.Migration(template.__name__.rpartition(".")[2], app_label)
+    with connection.schema_editor() as editor:
+        state = ProjectState.from_apps(apps)
+        if reverse:
+            migration.unapply(state, editor)
+        else:
+            migration.apply(state, editor)
 
 
 def test_google_preset_owns_endpoints_metadata_scopes_and_no_login_policy() -> None:
@@ -105,7 +122,7 @@ def test_the_seeded_google_client_takes_its_endpoints_from_the_preset() -> None:
         google = OAuthClient.objects.get(slug="google", environment="prod")
 
     preset = GoogleType.effective_defaults()
-    for field in PRESET_ENDPOINT_FIELDS:
+    for field in align_template.PRESET_ENDPOINT_FIELDS:
         assert getattr(google, field) == preset[field]
     assert google.scopes_catalogue == preset["scopes_catalogue"]
     assert (google.client_id, google.configuration_state) == ("", "needs_client")
@@ -124,8 +141,8 @@ def test_seeds_turn_google_sign_in_on_only_for_a_google_client_they_create(exist
     assert (google.login_enabled, google.link_on_email_match) == (not existing, not existing)
 
 
-@pytest.mark.django_db
-def test_align_step_fills_the_preset_on_existing_google_clients_and_keeps_operator_values() -> None:
+@pytest.mark.django_db(transaction=True)
+def test_align_template_fills_the_preset_on_existing_google_clients_and_keeps_operator_values() -> None:
     with system_context(reason="test Google client upgrade"):
         demo = OAuthClient.objects.create(
             slug="google", provider_type="google", display_name="Google (demo)", client_id="demo-oidc-client",
@@ -138,9 +155,13 @@ def test_align_step_fills_the_preset_on_existing_google_clients_and_keeps_operat
         )
         OAuthClient.objects.filter(pk=gemini.pk).update(scopes_catalogue=["cloud-platform"])
 
-        align_google_clients(apps, SimpleNamespace(connection=connection))
-
+        _apply(align_template, "integrate")
         demo.refresh_from_db()
+        aligned = OAuthClient.objects.values().get(pk=demo.pk)
+        # A second run changes nothing, and the reverse leaves the filled values.
+        _apply(align_template, "integrate")
+        _apply(align_template, "integrate", reverse=True)
+        assert OAuthClient.objects.values().get(pk=demo.pk) == aligned
         gemini.refresh_from_db()
     preset = GoogleType.effective_defaults()
     assert (demo.revoke_endpoint, demo.issuer, demo.jwks_uri) == (
@@ -153,21 +174,27 @@ def test_align_step_fills_the_preset_on_existing_google_clients_and_keeps_operat
     assert gemini.scopes_catalogue == ["cloud-platform"]
 
 
-@pytest.mark.django_db
-def test_gemini_ledger_rehome_preserves_identity_and_refuses_a_competing_ledger() -> None:
+@pytest.mark.django_db(transaction=True)
+def test_gemini_rehome_template_preserves_identity_reverses_and_refuses_a_competing_ledger() -> None:
     values = dict(
         source_path="resources/install/010_integrate.oauthclient.yaml", tier="install", xref="oauth_gemini",
         content_hash="retained-hash", target_model="integrate.OAuthClient", target_id="clt_existing",
     )
     with system_context(reason="test Gemini ledger rehome"):
         row = Resource.objects.create(source_addon="angee.integrate", **values)
-        rehome_gemini_seed(apps, SimpleNamespace(connection=connection))
+        _apply(rehome_template, "resources")
         row.refresh_from_db()
         assert (row.source_addon, row.content_hash) == ("angee.integrate_google", "retained-hash")
+        _apply(rehome_template, "resources", reverse=True)
+        row.refresh_from_db()
+        assert (row.source_addon, row.content_hash) == ("angee.integrate", "retained-hash")
+        _apply(rehome_template, "resources")
 
         Resource.objects.create(source_addon="angee.integrate", **values)
-        with pytest.raises(RuntimeError, match="Both angee.integrate and angee.integrate_google"), transaction.atomic():
-            rehome_gemini_seed(apps, SimpleNamespace(connection=connection))
+        with pytest.raises(RuntimeError, match="Both angee.integrate and angee.integrate_google"):
+            _apply(rehome_template, "resources")
+        row.refresh_from_db()
+        assert row.source_addon == "angee.integrate_google"
 
 
 @pytest.mark.django_db

@@ -39,20 +39,21 @@ live in code docstrings.
 - `integrate.OAuthClient` owns `issuer` and `jwks_uri`, and ID-token verification
   (with `ANGEE_OIDC_JWKS_TTL` and `pyjwt`) moved into `integrate`; the fake
   OpenID provider moved to `angee.integrate.testing.oidc`.
-- **Upgrade.** Projects author native migrations for:
-  - the schema: the two credential constraints replace
-    `uniq_integrate_credential_user_oauth_client`, and `issuer`/`jwks_uri` move to
-    the base model (new columns where the login addon was absent). The reverse
-    migration fails once any user holds two accounts at one client.
-  - `RunPython` data upgrades in `angee.integrate_google.upgrades`:
-    `align_google_clients` fills the preset's endpoints, catalogue and
-    `include_granted_scopes` on existing `google`-type clients (the demo row
-    included), never replacing client ids, secrets or values an operator set;
-    `rehome_gemini_seed` moves the `oauth_gemini` seed's ledger row from
-    `integrate` to `integrate_google` (its content is unchanged), so the row is not
-    re-applied.
-  - bridges `angee.posts_integrate_youtube.upgrades.move_youtube_client` (see its
-    README).
+- **Upgrade.** Projects author the schema migration: the two credential constraints
+  replace `uniq_integrate_credential_user_oauth_client`, and `issuer`/`jwks_uri`
+  move to the base model (new columns where the login addon was absent). The
+  reverse migration fails once any user holds two accounts at one client. For the
+  data, copy the migration templates into `runtime/<app_label>/migrations/` and
+  replace their placeholder dependencies with the host's own migrations:
+  - `integrate_google/compose_migrations/integrate/align_google_clients.py` fills the
+    preset's endpoints, catalogue and `include_granted_scopes` on existing
+    `google`-type clients (the demo row included), never replacing client ids,
+    secrets or values an operator set;
+  - `integrate_google/compose_migrations/resources/rehome_gemini_seed.py` moves the
+    `oauth_gemini` seed's ledger row from `integrate` to `integrate_google` (its
+    content is unchanged), so the row is not re-applied;
+  - bridges `posts_integrate_youtube/compose_migrations/integrate/move_youtube_client_to_google.py`,
+    before `align_google_clients` (see its README).
 - **Re-applied seed rows.** On the first provision after upgrading, the
   `oauth_google` seed adopts an existing `google`/`prod` client and sets its
   provider type, display name and icon; without the ledger step, the `oauth_gemini`
