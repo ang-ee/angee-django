@@ -127,7 +127,8 @@ and scopes once (`OAuthConnectIntent` in [`impl.py`](impl.py)). The owners of th
 connect rules are `OAuthClient.requested_scopes` (scopes),
 `CredentialManager.upsert_for_user` (one credential per external account and the
 grant checks), `Integration.attach_connection` (the account binding),
-`OAuthProviderType.authorize_params` (the prompt),
+`Integration.admit_credential` (which credentials a capability accepts, asked on
+every attachment), `OAuthProviderType.authorize_params` (the prompt),
 [`connect.complete_account_connect`](connect.py) (account identity) and
 `connect.complete_external_account_link` (the consent restart). A credential stored
 without an account, before credentials were per account, and the integrations it
