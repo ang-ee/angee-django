@@ -248,7 +248,7 @@ settings or through the `ANGEE_WEB_STATEMENT_TIMEOUT` environment variable.
 | TanStack Virtual >= 3.14.10 | Row and column virtualization, native end anchoring | Long-list wiring; transcripts compose the native `anchorTo: "end"` lifecycle |
 | nuqs | Type-safe URL query state | Remaining chrome query state such as top-menu tabs. Routed fixtures use its native TanStack Router adapter; the shared [install policy](../packages/scripts/pnpm-policy.cjs) pins and patches 2.10.1 to read the complete query snapshot from router history, preserving unrelated search keys in memory histories. |
 | i18next | Runtime translation, plural defaults and interpolation | `@angee/ui` owns the shared native initializer and provider-less defaults; `@angee/app` owns the composed active instance and provider; addons contribute namespace-relative bundles |
-| date-fns | Date and relative-time formatting | Date and timestamp widgets |
+| date-fns + @date-fns/tz | Date and relative-time formatting; calendar-bucket arithmetic in a named timezone | Date and timestamp widgets; `@angee/storybook` resource snapshots bucket date groups as the server does |
 | @number-flow/react | Animated numeric text, Intl formatting and reduced-motion-aware transitions | `MetricTile` provides the typed numeric path, binds shared motion tokens and keeps animation opt-in |
 | use-debounce | Debounced React values and callbacks | Search and filter inputs |
 | Tailwind 4 | Token styling engine | Semantic token set |
