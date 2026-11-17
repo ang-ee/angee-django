@@ -8,6 +8,9 @@ export const IamRedeemSignInLink = graphql(`
   mutation IamRedeemSignInLink($token: String!) {
     redeem_sign_in_link(token: $token) {
       ok
+      user {
+        display_name
+      }
     }
   }
 `);

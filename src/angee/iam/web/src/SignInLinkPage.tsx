@@ -1,16 +1,19 @@
+import { useSignInRedirect } from "@angee/app/auth";
 import { useAuthoredMutation } from "@angee/refine";
 import { Button, ErrorBanner } from "@angee/ui";
+import { useNavigate, useRouterState } from "@tanstack/react-router";
 import { useCallback, useEffect, useState, type ReactNode } from "react";
 
 import { IamRedeemSignInLink } from "./documents.public";
 import { useIamT } from "./i18n";
 import { IamLoginPage } from "./IamLoginPage";
 
-/** Read the link's token from the URL fragment, which no request, log or referrer carries. */
-function readToken(): string | null {
-  if (typeof window === "undefined") return null;
-  return new URLSearchParams(window.location.hash.slice(1)).get("token") || null;
-}
+type LinkState =
+  | { kind: "ready" }
+  | { kind: "pending" }
+  | { kind: "unreachable" }
+  | { kind: "refused" }
+  | { kind: "signed-in"; name: string };
 
 /**
  * The page a sign-in link opens: the login page with the link as its sign-in
@@ -22,44 +25,65 @@ export function SignInLinkPage(): ReactNode {
 
 /**
  * Redeem the link only on an explicit click, so a mail scanner that opens it
- * cannot spend it. The token leaves the address bar once read; every refusal
- * reads the same.
+ * cannot spend it. The token is read from the URL fragment, which no request,
+ * log or referrer carries, and then dropped from the address bar. A transport
+ * failure keeps the link and offers a retry; every refusal reads the same.
+ * Once signed in, the page names the account before continuing.
  */
 export function SignInLinkMethod(): ReactNode {
   const t = useIamT();
-  const [token] = useState(readToken);
-  const [pending, setPending] = useState(false);
-  const [refused, setRefused] = useState(token === null);
+  const navigate = useNavigate();
+  const hash = useRouterState({ select: (state) => state.location.hash });
+  const [token] = useState(() => new URLSearchParams(hash).get("token") || null);
+  const [state, setState] = useState<LinkState>(() => (token === null ? { kind: "refused" } : { kind: "ready" }));
   // This method renders its own refusal; no generic notification on top.
   const [redeem] = useAuthoredMutation(IamRedeemSignInLink, { errorNotification: false });
+  const proceed = useSignInRedirect();
 
   useEffect(() => {
-    if (token !== null) window.history.replaceState(null, "", window.location.pathname + window.location.search);
-  }, [token]);
+    // The router keeps a fragment only when asked to; replacing keeps the token out of history.
+    if (token !== null) void navigate({ to: ".", search: true, replace: true });
+  }, [navigate, token]);
 
   const signIn = useCallback(async () => {
     if (token === null) return;
-    setPending(true);
+    setState({ kind: "pending" });
+    let payload: { ok: boolean; user?: { display_name: string } | null } | undefined;
     try {
-      const result = await redeem({ token });
-      if (result?.redeem_sign_in_link.ok) {
-        // Keep the button disabled while the full-page navigation lands.
-        window.location.assign("/");
-        return;
-      }
+      payload = (await redeem({ token }))?.redeem_sign_in_link;
     } catch {
-      // A transport failure reads like any other refusal.
+      setState({ kind: "unreachable" });
+      return;
     }
-    setRefused(true);
-    setPending(false);
+    setState(payload?.ok && payload.user ? { kind: "signed-in", name: payload.user.display_name } : { kind: "refused" });
   }, [redeem, token]);
 
-  if (refused) {
+  if (state.kind === "signed-in") {
+    return (
+      <div className="flex flex-col gap-3" role="status">
+        <p className="text-base font-semibold text-fg">{t("signInLink.signedInAs", { name: state.name })}</p>
+        <Button className="w-full justify-center" size="lg" onClick={proceed}>
+          {t("signInLink.proceed")}
+        </Button>
+      </div>
+    );
+  }
+  if (state.kind === "refused") {
     return <ErrorBanner title={t("signInLink.refusedTitle")} description={t("signInLink.refused")} />;
   }
   return (
-    <Button className="w-full justify-center" size="lg" disabled={pending} onClick={() => void signIn()}>
-      {t("signInLink.continue")}
-    </Button>
+    <div className="flex flex-col gap-3">
+      {state.kind === "unreachable" ? (
+        <ErrorBanner title={t("signInLink.unreachableTitle")} description={t("signInLink.unreachable")} />
+      ) : null}
+      <Button
+        className="w-full justify-center"
+        size="lg"
+        disabled={state.kind === "pending"}
+        onClick={() => void signIn()}
+      >
+        {t(state.kind === "unreachable" ? "signInLink.retry" : "signInLink.continue")}
+      </Button>
+    </div>
   );
 }
