@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import base64
 import json
 from datetime import timedelta
+from urllib import parse
 from uuid import UUID
 
 import httpx2
@@ -14,12 +16,24 @@ from django.db import connection
 from rebac import actor_context, system_context
 
 from angee.graphql.testing.documents import execute_schema
+from angee.integrate.credentials import CredentialKind
 from angee.integrate.http import HttpClient
+from angee.integrate.oauth.client import OAuthClientProtocol
 from angee.integrate.states import SyncFailureKind
 from angee.integrate.streams import advance_stream, open_stream, sync_bridge
+from angee.integrate.testing.http import mock_transport, request_fields
 from angee.knowledge_integrate_notion.backend import NotionBackend, NotionResponseError
 from angee.knowledge_integrate_notion.schema import schemas
-from tests.conftest import Link, MarkdownPage, NotionConnection, Page, addon_schema, create_user, make_integration
+from tests.conftest import (
+    Link,
+    MarkdownPage,
+    NotionConnection,
+    OAuthClient,
+    Page,
+    addon_schema,
+    create_user,
+    make_integration,
+)
 
 pytestmark = pytest.mark.django_db(transaction=True)
 
@@ -438,3 +452,56 @@ def test_rewrite_converts_original_markup_once(bridge, api):
     sync_bridge(bridge)
     assert bridge.sync_streams.get().cursor == {}
     assert "a <b> c" in targets(bridge)[source].markdown.body
+
+
+@pytest.mark.parametrize("token_request_format", ["form", "json"])
+def test_notion_oauth_exchange_uses_basic_auth_and_token_response_identity(token_request_format):
+    """Notion's preset authorizes per user, authenticates with HTTP Basic and labels the account from the token."""
+    with system_context(reason="test.notion.oauth.client"):
+        client = OAuthClient.objects.create(
+            slug="notion", display_name="Notion", provider_type="notion",
+            client_id="notion-client", client_secret="notion-secret", token_request_format=token_request_format,
+        )
+    callback = "https://app.example/integrate/oauth/callback"
+    protocol = OAuthClientProtocol(client)
+    query = parse.parse_qs(parse.urlsplit(protocol.authorize_url(
+        state="state-token", redirect_uri=callback, scopes=client.default_scope_values, code_challenge="challenge",
+    )).query)
+    assert client.configuration_state == "ready"
+    assert (client.token_endpoint_auth_method, client.token_identity_keys) == (
+        "client_secret_basic", ["bot_id", "workspace_id", "workspace_name", "owner"],
+    )
+    assert query["owner"] == ["user"]
+    assert "scope" not in query and "code_challenge" not in query
+
+    token = {
+        "access_token": "notion-access", "token_type": "bearer", "bot_id": "bot-1", "workspace_id": "ws-1",
+        "workspace_name": "Acme", "workspace_icon": None,
+        "owner": {"type": "user", "user": {"id": "user-1", "avatar_url": None, "person": {"email": "a@example.com"}}},
+    }
+    with mock_transport(lambda request: httpx2.Response(200, json=token)) as requests:
+        assert protocol.exchange_code(code="auth-code", redirect_uri=callback) == {"access_token": "notion-access"}
+    [request] = requests
+    assert str(request.url) == "https://api.notion.com/v1/oauth/token"
+    assert request.headers["authorization"] == "Basic " + base64.b64encode(b"notion-client:notion-secret").decode()
+    fields = request_fields(request)
+    assert "client_secret" not in fields
+    assert {"grant_type": "authorization_code", "code": "auth-code", "redirect_uri": callback}.items() <= fields.items()
+    claims = protocol.token_response_claims
+    assert set(claims) == {"bot_id", "workspace_id", "workspace_name", "owner"}
+    assert client.external_id_from_claims(claims) == "bot-1"
+    assert client.email_from_claims(claims) == "a@example.com"
+    assert client.display_name_from_claims(claims, "a@example.com") == "Acme"
+
+
+def test_connect_resolves_the_vendor_registration_and_oauth_credentials_sync(api):
+    """Connect uses the `notion` registration; its OAuth grant reaches Notion as the same bearer token."""
+    with system_context(reason="test.notion.oauth.connect"):
+        connection = make_integration(
+            "notion", model=NotionConnection, kind=CredentialKind.OAUTH, material={"access_token": "x"},
+        )
+        assert connection.connection_oauth_slug() == "notion"
+        assert connection.is_oauth_connectable()
+        key = api.add(node(1, "Shared page"), "Body")
+        assert sync_bridge(connection) == 1
+        assert targets(connection)[key].markdown.body == "Body"

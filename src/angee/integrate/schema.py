@@ -319,6 +319,7 @@ class OAuthClientType(AngeeNode):
     manual_redirect_uri: auto
     loopback_redirect_path: auto
     token_request_format: auto
+    token_endpoint_auth_method: auto
     is_enabled: auto
     supports_refresh: auto
     refresh_rotates: auto
@@ -342,6 +343,12 @@ class OAuthClientType(AngeeNode):
         """Return the advertised OAuth scopes."""
 
         return cast(list[str], cast(Any, self).scopes_catalogue_values)
+
+    @strawberry_django.field(only=["token_identity_keys"])
+    def token_identity_keys(self) -> list[str]:
+        """Return the token-response keys that identify a connected account."""
+
+        return cast(list[str], cast(Any, self).token_identity_key_values)
 
     @strawberry_django.field(only=["authorize_params"])
     def authorize_params(self) -> JSON:
@@ -588,6 +595,7 @@ _OAUTH_CLIENT_RESOURCE = hasura_model_resource(
         "manual_redirect_uri",
         "loopback_redirect_path",
         "token_request_format",
+        "token_endpoint_auth_method",
         "is_enabled",
         "scopes_catalogue",
         "default_scopes",
@@ -601,6 +609,7 @@ _OAUTH_CLIENT_RESOURCE = hasura_model_resource(
         "email_claim",
         "display_name_claim",
         "avatar_url_claim",
+        "token_identity_keys",
         *_OAUTH_CLIENT_EXTENSION_INSERT_FIELDS,
     ],
     updatable=[
@@ -619,6 +628,7 @@ _OAUTH_CLIENT_RESOURCE = hasura_model_resource(
         "manual_redirect_uri",
         "loopback_redirect_path",
         "token_request_format",
+        "token_endpoint_auth_method",
         "is_enabled",
         "scopes_catalogue",
         "default_scopes",
@@ -632,6 +642,7 @@ _OAUTH_CLIENT_RESOURCE = hasura_model_resource(
         "email_claim",
         "display_name_claim",
         "avatar_url_claim",
+        "token_identity_keys",
         *_OAUTH_CLIENT_EXTENSION_UPDATE_FIELDS,
     ],
 )

@@ -4,9 +4,11 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import * as React from "react";
 import { beforeEach, expect, test, vi } from "vitest";
 
-import { ConnectOAuthButton, type OAuthConnectPayload } from "./ConnectOAuthButton";
+import { CONNECT_RECORD_FIELDS, ConnectOAuthButton, connectIntegrationAction, type OAuthConnectPayload } from "./ConnectOAuthButton";
 
-const mocks = vi.hoisted(() => ({ complete: vi.fn(), prompt: vi.fn(), success: vi.fn(), danger: vi.fn() }));
+const mocks = vi.hoisted(() => ({
+  complete: vi.fn(), prompt: vi.fn(), success: vi.fn(), danger: vi.fn(), record: null as Record<string, unknown> | null,
+}));
 
 vi.mock("@angee/refine", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@angee/refine")>()),
@@ -27,6 +29,15 @@ vi.mock("@angee/ui", async (importOriginal) => ({
   Glyph: () => null,
   usePrompt: () => mocks.prompt,
   useToast: () => ({ success: mocks.success, danger: mocks.danger }),
+  useRecordChromeContext: () => ({
+    resource: "vendor.Connection", recordId: "int_1", record: mocks.record, formReadOnly: false, actionsBlocked: false,
+  }),
+}));
+
+vi.mock("@tanstack/react-router", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@tanstack/react-router")>()),
+  useRouterState: ({ select }: { select: (state: { location: { href: string } }) => string }) =>
+    select({ location: { href: "/vendor/connections/int_1?tab=streams" } }),
 }));
 
 beforeEach(() => vi.clearAllMocks());
@@ -94,4 +105,21 @@ test("keeps caller-owned labels and selection without a row", async () => {
     redirectUri: `${window.location.origin}/integrate/oauth/callback`, next: "/inference",
   });
   expect(mocks.success).toHaveBeenCalledWith({ title: "Provider connected" });
+});
+
+
+test("the contributed Connect child connects its record's resource and returns to the record page", async () => {
+  mocks.record = { id: "int_1", can_connect: true };
+  mocks.complete.mockResolvedValue({ connect_integration: {
+    attached: true, authorize_url: "", error: null, mode: "redirect", state: "", redirect_uri: "",
+  } });
+  const child = connectIntegrationAction();
+  expect(child.requiredFields).toEqual([...CONNECT_RECORD_FIELDS]);
+  render(<>{child.content}</>);
+  fireEvent.click(screen.getByRole("button", { name: "Connect" }));
+  await waitFor(() => expect(mocks.success).toHaveBeenCalledOnce());
+  expect(mocks.complete).toHaveBeenCalledWith({
+    resource: "vendor.Connection", id: "int_1",
+    redirectUri: `${window.location.origin}/integrate/oauth/callback`, next: "/vendor/connections/int_1?tab=streams",
+  });
 });

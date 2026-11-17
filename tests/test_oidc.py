@@ -7,6 +7,7 @@ every ID token is verified by PyJWT against the provider's published key.
 
 from __future__ import annotations
 
+import base64
 import json
 import threading
 import time
@@ -217,6 +218,7 @@ def test_exchange_code_posts_json_body_with_pkce() -> None:
         "ignored": "not-token-material",
     })
     oauth_client = _stub_oauth_client(
+        token_identity_keys=["account", "organization"],
         supports_pkce=True,
         token_request_format="json",
         token_param_values={"audience": "https://api.example", "expires_in": 31536000},
@@ -249,6 +251,30 @@ def test_exchange_code_posts_json_body_with_pkce() -> None:
         "redirect_uri": "https://app.example/callback",
         "state": "state-token",
     }
+
+
+@pytest.mark.parametrize("request_format", ["form", "json"])
+def test_basic_client_auth_and_declared_identity_keys_follow_the_registration(request_format: str) -> None:
+    """A registration selects HTTP Basic for either body format; token material never becomes a claim."""
+
+    provider = OidcProvider(token={
+        "access_token": "access-token", "refresh_token": "refresh-token",
+        "workspace": {"id": "w-1"}, "undeclared": {"id": "x"},
+    })
+    oauth_client = _stub_oauth_client(
+        token_request_format=request_format,
+        token_endpoint_auth_method="client_secret_basic",
+        token_identity_keys=["workspace", "refresh_token"],
+    )
+    protocol = OAuthClientProtocol(oauth_client)
+
+    with mock_transport(provider) as requests:
+        protocol.exchange_code(code="auth-code", redirect_uri="https://app.example/callback")
+
+    [request] = requests
+    assert request.headers["authorization"] == "Basic " + base64.b64encode(b"oidc-client:secret").decode()
+    assert "client_secret" not in request_fields(request)
+    assert protocol.token_response_claims == {"workspace": {"id": "w-1"}}
 
 
 @pytest.mark.parametrize("request_format", ["form", "json"])
@@ -289,6 +315,7 @@ def test_fixed_public_client_never_reads_encrypted_secret(request_format: str, g
         token_endpoint = "https://issuer.example/oauth/token"
         token_request_format_value = request_format
         token_param_values: dict[str, Any] = {}
+        token_identity_key_values: list[str] = []
         supports_pkce = True
         manual_redirect_uri = "https://issuer.example/oauth/code/callback"
 
@@ -989,7 +1016,7 @@ def test_complete_account_connect_links_oauth_userinfo_claims_and_credential(db:
 
 
 def test_complete_account_connect_falls_back_to_token_response_account(db: None) -> None:
-    """Restricted tokens can resolve an account without userinfo scope."""
+    """Restricted tokens resolve an account from the token-response keys their preset declares."""
 
     link_user = get_user_model().objects.create_user(
         username="oauth-token-account",
@@ -998,6 +1025,7 @@ def test_complete_account_connect_falls_back_to_token_response_account(db: None)
     oauth_client = _oauth_client(
         slug="token-account",
         oidc=False,
+        token_identity_keys=["account", "organization"],
         external_id_claim="account.uuid",
         email_claim="account.email_address",
         display_name_claim="account.display_name",
