@@ -174,6 +174,8 @@ export const tokenNames = [
   "--elevation-popover",
   "--elevation-sm",
   "--elevation-xs",
+  "--font-display",
+  "--font-family-display",
   "--font-family-mono",
   "--font-family-sans",
   "--font-mono",
