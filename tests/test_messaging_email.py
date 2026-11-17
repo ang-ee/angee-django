@@ -393,6 +393,30 @@ def test_an_email_reply_goes_to_the_parents_reply_to_over_its_sender(mail_desk):
     assert wire["To"] == "Applicant <applicant@example.test>"
 
 
+def test_reply_addresses_parse_the_reply_to_in_order_lower_cased_with_display_names(mail_desk):
+    channel, request, _desk = mail_desk
+    listed = _receive(
+        channel,
+        _mail(
+            message_id="<listed@example.test>",
+            subject="List post",
+            sender="List <list@example.test>",
+            reply_to='"Doe, Jane" <Jane.Doe@Example.test>, bob@EXAMPLE.test, Jane <jane.doe@example.test>',
+            body="Posted to the list.",
+        ),
+        uid=6,
+    )
+    addresses = listed.reply_addresses(actor=channel.owner)
+    # A repeated address keeps its first display name; order follows the header.
+    assert list(addresses.items()) == [("jane.doe@example.test", "Doe, Jane"), ("bob@example.test", "")]
+    # Without a Reply-To there is nothing: falling back to the sender is the caller's decision.
+    assert request.reply_addresses(actor=channel.owner) == {}
+    with system_context(reason="tests.messaging.reply_addresses.stranger"):
+        stranger = get_user_model().objects.create_user(username="reply-addresses-stranger")
+    with pytest.raises(PermissionDenied):
+        listed.reply_addresses(actor=stranger)
+
+
 def test_retained_identity_and_threading_header_parts_never_render_beside_the_owned_ones(mail_desk):
     channel, request, desk = mail_desk
     reply = Message.objects.compose_reply(request, body="Which team?", sender=desk, actor=channel.owner)

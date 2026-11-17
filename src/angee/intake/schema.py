@@ -259,8 +259,8 @@ class IntakeActionMutation:
         """Ask a writable triage task's requester to clarify it and hold the task for their reply."""
 
         target = authorized_action_target(info, Task, task, "write")
-        party = None if to is None else authorized_permission_target(info, Party, to, "read")
-        target.clarify(question, to=party, reply_by=reply_by, expected_revision=expected_revision)
+        request = None if to is None else authorized_permission_target(info, Need, to, "read")
+        target.clarify(question, to=request, reply_by=reply_by, expected_revision=expected_revision)
         return ActionResult(ok=True, message="Question sent to the requester.", id=target.sqid)
 
     @strawberry.mutation

@@ -227,22 +227,28 @@ class NeedManager[NeedT: Need](_NeedManagerBase[NeedT]):
             return need
 
     def take_requester_reply(self, message: Message) -> bool:
-        """Take ``message`` as its requester's reply when it continues a captured conversation.
+        """Take ``message`` as its requester's reply to a request still under review.
 
-        An inbound message continues a request when its thread is bound as a
-        task's source and it comes from the sender, through handle merges, of one
-        of that task's captured requests. It files no new request: the thread
-        already holds it as the task's evidence. Each continued task held awaiting
-        that requester's account, or awaiting nobody, wakes with reason ``reply``.
-        Returns whether ``message`` was such a reply.
+        An inbound message replies to a request when it answers a message on a
+        conversation bound as a task's source (its ``In-Reply-To`` resolved a
+        ``parent`` there), that task is still in triage, and it comes from one of
+        the task's captured requests: from its sender, through handle merges, or
+        from an address its ``Reply-To`` named (``Need.reply_to_addresses``), where
+        a relayed requester answers. Any other sender on the thread is not the
+        requester. It files no new request: the thread already holds it as the task's evidence,
+        and work wakes the task's hold when it awaits that requester's account
+        (``TaskWorkQuerySet.wake_replied``). Any other message is a new request: a
+        fresh one that only reuses a subject, and one that arrives after the
+        review ended. Returns whether ``message`` was such a reply.
         """
 
-        if message.pk is None or message.thread_id is None or message.sender_id is None:
+        if message.pk is None or message.thread_id is None or message.sender_id is None or message.parent_id is None:
             return False
         if message.direction != type(message).Direction.INBOUND:
             return False
         attachment_model = apps.get_model("messaging", "ThreadAttachment")
         task_model = apps.get_model("projects", "Task")
+        triage = apps.get_model("work", "Stage").StageCategory.TRIAGE
         with system_context(reason="intake.need.requester_reply"):
             if self.model._base_manager.filter(source_message_id=message.pk).exists():
                 return False
@@ -254,27 +260,23 @@ class NeedManager[NeedT: Need](_NeedManagerBase[NeedT]):
                 role=attachment_model.AttachmentRole.SOURCE,
                 content_type=ContentType.objects.get_for_model(task_model),
             ).values("object_id")
-            senders = type(sender)._base_manager.redirect_group(sender.canonical()).values("pk")
-            requests = list(
-                self.model._base_manager.filter(
-                    task_id__in=models.Subquery(bound),
-                    source_message__sender_id__in=senders,
-                ).select_related("party")
+            senders = set(type(sender)._base_manager.redirect_group(sender.canonical()).values_list("pk", flat=True))
+            address = str(sender.canonical().value or "").strip().lower()
+            candidates = (
+                self.model._base_manager.filter(task_id__in=models.Subquery(bound), task__stage__category=triage)
+                .select_related("party", "source_message")
+                .order_by("pk")
             )
-            party_model = apps.get_model("parties", "Party")
-            repliers: dict[Any, set[Any]] = {}
-            for need in requests:
-                accounts = repliers.setdefault(need.task_id, set())
-                if need.admitted_user_id is not None:
-                    accounts.add(need.admitted_user_id)
-                account = party_model.objects.user_for(need.party) if need.party is not None else None
-                if account is not None:
-                    accounts.add(account.pk)
+            requests = [
+                need
+                for need in candidates
+                if need.source_message is not None
+                and (need.source_message.sender_id in senders or address in need.reply_to_addresses())
+            ]
+            repliers = {need.task_id: need.requester_account_id() for need in requests if need.task_id is not None}
         tasks = task_model.work.sudo(reason="intake.need.requester_reply.wake")
-        for task_id, accounts in sorted(repliers.items()):
-            tasks.filter(pk=task_id).filter(
-                models.Q(snoozed_awaiting__isnull=True) | models.Q(snoozed_awaiting__in=accounts),
-            ).wake_each(task_model.WakeReason.REPLY, message=message)
+        for task_id, account_id in sorted(repliers.items()):
+            tasks.filter(pk=task_id).wake_replied(message, replier_id=account_id)
         return bool(requests)
 
     def capture_from_message(
@@ -714,12 +716,14 @@ class Need(ResourceLoadMixin, HistoryMixin, OptimisticLockMixin, AuditMixin, Ang
                     if account is None or account.kind != "person" or candidate.target.thread_reader_allowed(account):
                         candidate.target.message_subscribe(party=candidate.party)
 
-    def _link_requester(self, *, allow_create: bool, system_reason: str | None = None) -> Any:
+    def _link_requester(self, *, allow_create: bool, system_reason: str | None = None, address: str = "") -> Any:
         """Resolve and assign the account; the caller persists it atomically.
 
         Ingress uses its channel's authorization and a named IAM system reason.
         The decision uses IAM's actor-gated factory. No credential or membership
         is written, and an existing person is never attached to a user.
+        ``address`` replaces the claimed email when the caller knows the
+        requester's address another way.
         """
 
         users = get_user_model().objects
@@ -728,7 +732,7 @@ class Need(ResourceLoadMixin, HistoryMixin, OptimisticLockMixin, AuditMixin, Ang
             raise ValidationError({"conflict": "The assigned account is inactive."})
         if existing is not None:
             return existing
-        email = users.normalize_email(self.claimed_email)
+        email = users.normalize_email(address or self.claimed_email)
         if not email:
             raise ValidationError({"conflict": "This request has no claimed email."})
         validate_email(email)
@@ -754,6 +758,62 @@ class Need(ResourceLoadMixin, HistoryMixin, OptimisticLockMixin, AuditMixin, Ang
             )
             self.party = party
         return user
+
+    def requester_account_id(self) -> Any | None:
+        """Return the requester's account id: the admitted account, else the account of the request's party."""
+
+        if self.admitted_user_id is not None:
+            return self.admitted_user_id
+        account = self._account_for_party(self.party_id)
+        return account.pk if account is not None else None
+
+    def reply_to_addresses(self) -> tuple[str, ...]:
+        """Return the addresses the emailed request's ``Reply-To`` names (``Message.reply_addresses``).
+
+        A relayed request (a web form, a mailing list) names its requester here;
+        messaging's email reply goes to these addresses before the sender
+        (``MessageManager.compose_reply``), so the requester answers from one of them.
+        """
+
+        source = self.source_message
+        if source is None or source.platform != "email":
+            return ()
+        with system_context(reason="intake.need.reply_to"):
+            return tuple(source.reply_addresses())
+
+    def requester_address(self) -> str:
+        """Return the requester's address: the claimed email, else an emailed request's Reply-To, else its sender."""
+
+        if self.claimed_email:
+            return self.claimed_email
+        reply_to = self.reply_to_addresses()
+        if reply_to:
+            return reply_to[0]
+        source = self.source_message
+        sender = source.sender if source is not None else None
+        if source is None or sender is None or source.platform != "email":
+            return ""
+        return str(sender.canonical().value or "").strip().lower()
+
+    def provide_requester_account(self, *, reason: str) -> Any:
+        """Return the requester's account, giving a requester without one a passwordless person.
+
+        This is the linking capture's any-domain policy runs: no credential,
+        admission or membership, and the unverified address is proposed to the
+        requester's party for review. The party assignment is system work under
+        ``reason`` and keeps the request's open access question.
+        """
+
+        account_id = self.requester_account_id()
+        if account_id is None:
+            with transaction.atomic():
+                need = type(self)._base_manager.get(pk=self.pk).sudo(reason=reason)
+                address = need.requester_address()
+                account = need._link_requester(allow_create=True, system_reason=reason, address=address)
+                need.save(_access_decision=True, update_fields=("party", "updated_at"))
+            self.refresh_from_db()
+            account_id = account.pk
+        return get_user_model()._base_manager.get(pk=account_id)
 
     def decide_access(self, action: str, expected_revision: int | None = None) -> Any:
         """Link the account and delegate the final answer to the decisions owner."""
@@ -1042,56 +1102,57 @@ class TaskIntake(Composable, extends="projects.Task"):
         self,
         question: str,
         *,
-        to: models.Model | None = None,
+        to: Need | None = None,
         reply_by: datetime | None = None,
         expected_revision: int | None = None,
     ) -> Any:
         """Ask this triage task's requester ``question``, then hold the task for their reply.
 
-        The question is a comment on the task's chatter, addressed to the
-        requester when their account may reply there (an admitted requester may);
-        one without an admitted account also gets it as a reply on their request's
-        source message when that message came by email on a channel with an
-        outbound sender. The task then snoozes in its
-        triage stage (``TaskWork.snooze``, with the task write and revision check),
-        awaiting the requester's account when they have one and until
-        ``reply_by`` when given. The requester's reply, on chatter or on their own
-        conversation, wakes it with reason ``reply``; ``reply_by`` passing wakes it
-        with ``due``. ``to`` names the requester's party when several filed the
-        task. A requester who can neither reply on the task nor be reached by
-        email is refused rather than awaited.
+        The task's row is locked first, under the task write and revision check
+        that ``TaskWork.snooze`` repeats; ``to`` names the request to ask about
+        when several requesters filed the task. A requester without an account
+        gets a passwordless one (``Need.provide_requester_account``) and the hold
+        awaits that account, so only their reply wakes it, on the task's chatter
+        or on their own conversation (``TaskWorkQuerySet.wake_replied``);
+        ``reply_by`` passing wakes it with ``due``. A hold never awaits the asker.
+        After the hold, the question is a comment on the task's chatter, addressed
+        to the requester when their account may reply there. A requester without
+        an admitted account also gets it by email when their request came as an
+        email with a sender, on a channel with an outbound sender: messaging's
+        ``compose_reply`` addresses, titles and threads that reply and queues its
+        delivery, so the answer returns onto the request's conversation. A
+        requester reachable neither way is refused rather than held for an
+        answer that cannot come.
         """
 
         question = str(question or "").strip()
         if not question:
             raise ValidationError({"question": "Write the question to ask."})
+        actor = self.require_access("write")
+        locked = type(self).system_queryset(lock=("self",)).get(pk=self.pk)
+        if expected_revision is not None:
+            locked.require_revision(expected_revision)
         requests = self._requests_to_ask(to)
-        admitted_id = next((need.admitted_user_id for need in requests if need.admitted_user_id is not None), None)
-        replier: Any
-        if admitted_id is not None:
-            replier = get_user_model()._base_manager.get(pk=admitted_id)
-            route = None
-        else:
-            party = next((need.party for need in requests if need.party is not None), None)
-            replier = apps.get_model("parties", "Party").objects.user_for(party) if party is not None else None
-            route = self._email_reply_route(requests)
-        posts = replier is not None and (
-            type(self)._base_manager.get(pk=self.pk).with_actor(replier).has_access(self.thread_post_access)
-        )
+        account = None
+        for need in requests:
+            account = need.provide_requester_account(reason="intake.clarify.requester")
+        assert account is not None
+        posts = type(self)._base_manager.get(pk=self.pk).with_actor(account).has_access(self.thread_post_access)
+        admitted = any(need.admitted_user_id is not None for need in requests)
+        route = None if admitted else self._email_reply_route(requests)
         if route is None and not posts:
             raise ValidationError(
                 {"to": "The requester can neither reply on this task nor be reached by email; approve their access."}
             )
-        cast("TaskWork", self).snooze(reply_by, awaiting=replier, expected_revision=expected_revision)
-        self.message_post(question, recipient_user_ids=(replier.pk,) if posts else ())
+        cast("TaskWork", self).snooze(reply_by, awaiting=account, expected_revision=expected_revision)
+        self.message_post(question, recipient_user_ids=(account.pk,) if posts else ())
         if route is not None:
             source, sender = route
-            actor = instance_actor(self)
             message_model = apps.get_model("messaging", "Message")
             message_model.objects.compose_reply(source, body=question, sender=sender, actor=actor, queued=True)
         return self
 
-    def _requests_to_ask(self, to: models.Model | None) -> list[Need]:
+    def _requests_to_ask(self, to: Need | None) -> list[Need]:
         """Return the task's requests from one requester: ``to``'s, or the only requester's."""
 
         requests = list(
@@ -1101,22 +1162,29 @@ class TaskIntake(Composable, extends="projects.Task"):
             .order_by("created_at", "pk")
         )
         if to is not None:
-            requests = [need for need in requests if need.party_id == to.pk]
-            if not requests:
-                raise ValidationError({"to": "Choose a party that filed this task."})
+            named = next((need for need in requests if need.pk == to.pk), None)
+            if named is None:
+                raise ValidationError({"to": "Choose a request filed on this task."})
+            key = self._requester_key(named)
+            if key is None:
+                raise ValidationError({"to": "This request has no requester to ask."})
+            return [need for need in requests if self._requester_key(need) == key]
         requesters = {key for need in requests if (key := self._requester_key(need)) is not None}
         if not requesters:
             raise ValidationError({"to": "This task has no requester to ask."})
         if len(requesters) > 1:
-            raise ValidationError({"to": "Several requesters filed this task; choose the party to ask."})
+            raise ValidationError({"to": "Several requesters filed this task; choose the request to ask about."})
         return [need for need in requests if self._requester_key(need) in requesters]
 
     @staticmethod
     def _requester_key(need: Need) -> tuple[str, Any] | None:
-        """Identify a request's requester: its party, else the sender of its source message."""
+        """Identify a request's requester: its party, else their address, else the sender of its source message."""
 
         if need.party_id is not None:
             return ("party", need.party_id)
+        address = need.requester_address()
+        if address:
+            return ("address", address.lower())
         source = need.source_message
         if source is not None and source.sender is not None:
             return ("sender", source.sender.canonical().pk)
@@ -1124,13 +1192,17 @@ class TaskIntake(Composable, extends="projects.Task"):
 
     @staticmethod
     def _email_reply_route(requests: list[Need]) -> tuple[Message, Any] | None:
-        """Return the first emailed request's source message and its channel's outbound sender handle."""
+        """Return the first emailed request's source message and its channel's outbound sender handle.
+
+        A request qualifies when ``compose_reply`` can address its reply: an email
+        with a sender, on a channel whose outbound sender is configured and connected.
+        """
 
         handle_model = apps.get_model("parties", "Handle")
         email = handle_model.Platform.EMAIL
         for need in requests:
             source = need.source_message
-            if source is None or source.platform != email:
+            if source is None or source.sender_id is None or source.message_type != type(source).MessageKind.EMAIL:
                 continue
             channel = source.transport_channel(reason="intake.clarify.channel")
             if channel is None:

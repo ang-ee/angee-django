@@ -43,7 +43,8 @@ events while retaining native content history and counter updates.
 on its parent's thread and channel under the channel's `reply` grant; the reply's
 `parent` is its In-Reply-To. An email reply (the parent's kind is `email`) is a
 complete envelope: `to` participants naming the parent's `Reply-To` addresses
-when it carries any, else the handle it was sent from (RFC 5322 §3.6.2); the
+when it carries any (`Message.reply_addresses`, the one reader of that header),
+else the handle it was sent from (RFC 5322 §3.6.2); the
 subject `Re: <thread title>` (the title is the normalized subject, so prefixes
 never stack); and a Message-ID minted as Django mints one, stored bare as its
 external id like a received email's. A parent with neither is refused. The

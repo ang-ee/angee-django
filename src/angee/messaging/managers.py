@@ -30,7 +30,6 @@ from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import nullcontext
 from contextvars import Context
 from datetime import datetime, time, timedelta
-from email.utils import getaddresses
 from functools import partial, reduce
 from itertools import batched
 from operator import or_
@@ -3027,11 +3026,7 @@ class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
         if sender is None or sender.pk is None or sender.platform != parent.platform:
             raise ValidationError({"sender": "The reply sender must use the comment's platform."})
         email = parent.message_type == self.model.MessageKind.EMAIL
-        reply_to = {
-            address.strip().lower(): name.strip()
-            for name, address in getaddresses(parent.source_header_values("reply-to", actor=actor) if email else ())
-            if "@" in address
-        }
+        reply_to = parent.reply_addresses(actor=actor) if email else {}
         if email and not reply_to and parent.sender_id is None:
             raise ValidationError("An email reply requires a parent Reply-To or sender to address.")
         values = dict(local or {})
