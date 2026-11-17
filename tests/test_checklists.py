@@ -857,6 +857,7 @@ def _override(permission: str, kind: str, expression: str) -> SchemaOverride:
         pytest.param(
             "target_read", SchemaOverride.KIND_EXTEND, "evidence->record_read", id="target-read-off-the-record"
         ),
+        pytest.param("target_read", SchemaOverride.KIND_EXTEND, "evidence_hidden", id="target-read-named-per-result"),
     ],
 )
 def test_statuses_fall_back_to_read_when_the_policy_no_longer_decomposes_it(

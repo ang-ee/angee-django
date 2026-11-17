@@ -35,17 +35,15 @@ from django.db.models.functions import Coalesce, JSONObject
 from django.db.models.lookups import Exact, In, IsNull
 from rebac import current_actor, generic_target, system_context
 from rebac.actors import is_sudo
-from rebac.backends import backend
 from rebac.field_backing import canonical_model
 from rebac.relation_loading import relation_actor
-from rebac.resources import model_resource_type
 from rebac.schema import FieldBinding, PermArrow, PermBinOp, PermExpr, PermNil, PermRef
 
 from angee.base.expressions import JSONArraySubquery
 from angee.base.managers import AngeeManager
 from angee.base.models.append_only import AppendOnlyQuerySet
 from angee.base.models.identity import public_id_for
-from angee.base.permissions import reader_queryset, require_rebac_queryset
+from angee.base.permissions import _arrows, effective_rebac_definition, reader_queryset, require_rebac_queryset
 from angee.base.prefetch import InstancePrefetch
 from angee.base.querysets import AngeeQuerySet
 from angee.checklists.contracts import ATTENTION_STATUSES, PASSING_STATUSES, Checklist, ChecklistStatus
@@ -108,17 +106,21 @@ def read_decomposes() -> bool:
 
     The status rule checks ``target_read`` once per record and ``evidence_hidden``
     per result. That stands in for ``read`` only while ``read`` is exactly
-    ``target_read - evidence_hidden`` and every arm of ``target_read`` walks an
-    unfiltered ``record``-backed relation, so it answers the same for every result
-    of one record. An override that changes either leaves it unproved, and the
+    ``target_read - evidence_hidden`` and every leaf of ``target_read`` is an arrow
+    through an unfiltered ``record``-backed relation, so it answers the same for
+    every result of one record; a relation or permission named directly would
+    answer per result. An override that changes either leaves it unproved, and the
     rule checks ``read`` per result instead.
     """
 
-    definition = backend().schema().get_definition(model_resource_type(_result_model()) or "")
+    definition = effective_rebac_definition(_result_model())
     if definition is None:
         return False
     expressions = {permission.name: permission.expression for permission in definition.permissions}
-    if expressions.get("read") != PermBinOp("-", PermRef("target_read"), PermRef("evidence_hidden")):
+    target_read = expressions.get("target_read")
+    if target_read is None or expressions.get("read") != PermBinOp(
+        "-", PermRef("target_read"), PermRef("evidence_hidden")
+    ):
         return False
     record = {
         relation.name
@@ -128,17 +130,12 @@ def read_decomposes() -> bool:
         and not relation.backing.filters
     }
 
-    def record_backed(expression: PermExpr) -> bool:
-        if isinstance(expression, PermNil):
-            return True
-        if isinstance(expression, PermArrow):
-            return expression.via in record
+    def arrows_only(expression: PermExpr) -> bool:
         if isinstance(expression, PermBinOp):
-            return record_backed(expression.left) and record_backed(expression.right)
-        return False
+            return arrows_only(expression.left) and arrows_only(expression.right)
+        return isinstance(expression, PermArrow | PermNil)
 
-    target_read = expressions.get("target_read")
-    return target_read is not None and record_backed(target_read)
+    return arrows_only(target_read) and all(arrow.via in record for arrow in _arrows(target_read))
 
 
 class _Scopes:
