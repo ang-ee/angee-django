@@ -3,6 +3,16 @@ name: reusable checks
 on:
   workflow_call:
     inputs:
+      runner:
+        description: >-
+          JSON array of runner labels every job runs on. Public repositories keep
+          GitHub-hosted runners, because a fork's pull request must never run on a
+          self-hosted runner; a private consumer may pass its organization's
+          self-hosted labels, for example ["self-hosted","Linux","X64"]. The runner
+          needs Docker for the PostgreSQL service containers, which publish port 5432.
+        required: false
+        type: string
+        default: '["ubuntu-latest"]'
       python-version:
         description: Python version for the uv test lane.
         required: false
@@ -98,7 +108,7 @@ env:
 jobs:
   python-quality:
     if: ${{ inputs.uv-enabled }}
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(inputs.runner) }}
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v5
@@ -127,7 +137,7 @@ jobs:
   uv-shard:
     name: uv ${{ matrix.group }}/6
     if: ${{ inputs.uv-enabled }}
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(inputs.runner) }}
     timeout-minutes: 60
     strategy:
       fail-fast: false
@@ -164,7 +174,7 @@ jobs:
   uv-postgres:
     name: uv postgres ${{ matrix.group }}/6
     if: ${{ inputs.uv-enabled && github.event_name != 'pull_request' }}
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(inputs.runner) }}
     timeout-minutes: 60
     strategy:
       fail-fast: false
@@ -292,7 +302,7 @@ jobs:
   uv:
     if: ${{ always() && inputs.uv-enabled }}
     needs: [python-quality, uv-shard, uv-postgres]
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(inputs.runner) }}
     timeout-minutes: 5
     steps:
       - run: |
@@ -303,7 +313,7 @@ jobs:
 
   pnpm:
     if: ${{ inputs.pnpm-enabled }}
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(inputs.runner) }}
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v5
@@ -334,7 +344,7 @@ jobs:
   stack-shard:
     name: stack ${{ matrix.group }}/${{ strategy.job-total }}
     if: ${{ inputs.stack-enabled }}
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(inputs.runner) }}
     timeout-minutes: 60
     strategy:
       fail-fast: false
@@ -666,7 +676,7 @@ jobs:
   stack:
     if: ${{ always() && inputs.stack-enabled }}
     needs: [stack-shard]
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(inputs.runner) }}
     timeout-minutes: 5
     steps:
       - run: test "${{ needs.stack-shard.result }}" = success

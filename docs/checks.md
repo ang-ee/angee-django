@@ -614,6 +614,14 @@ Calls without a consumer use one execution job. The `stack` aggregate
 passes only when every execution job succeeds, preserving one check name for
 callers. The framework and other consumers retain their own caller lanes.
 
+Every job runs on the caller's `runner` input, a JSON array of runner labels that
+defaults to `["ubuntu-latest"]`. Public repositories keep GitHub-hosted runners,
+because a fork's pull request must never run on a self-hosted runner. A private
+consumer may pass its organization's self-hosted labels, for example
+`runner: '["self-hosted","Linux","X64"]'`. That runner must be Linux with Docker,
+because the PostgreSQL lanes start service containers that publish port 5432 on
+the host.
+
 The optional `ADDON_SOURCES_TOKEN` secret must read every private source declared
 by a caller; the default GitHub token only reads the calling repository. Configure
 that secret in each consumer repository before expecting private cross-repository
