@@ -43,6 +43,7 @@ from angee.base.models.identity import public_id_for
 from angee.base.permissions import reader_queryset, require_rebac_queryset
 from angee.base.prefetch import InstancePrefetch
 from angee.base.querysets import AngeeQuerySet
+from angee.base.signals import publish_change
 from angee.checklists.contracts import ATTENTION_STATUSES, PASSING_STATUSES, Checklist, ChecklistStatus
 from angee.provenance.evidence import EvidenceReference, readable_records
 
@@ -643,6 +644,25 @@ class ChecklistResultManager[ResultT: ChecklistResult](_ChecklistResultManagerBa
                         ]
                     )
         return result
+
+    def delete_results(self, which: models.Q) -> int:
+        """Delete the results ``which`` selects and their evidence links, publishing each deletion.
+
+        The owner's teardowns call it when a checked record or an evidence record is
+        deleted: one read of the results, one delete of their links and one of the
+        results, under a named system context, so whoever deletes the record needs
+        no authority on its results. Returns the number of results deleted.
+        """
+
+        with transaction.atomic(), system_context(reason="checklists.delete_results"):
+            doomed = list(self.model._base_manager.filter(which).order_by("pk"))
+            if not doomed:
+                return 0
+            for result in doomed:
+                publish_change(result, action="delete", update_fields=None)
+            ids = [result.pk for result in doomed]
+            cast(Any, _evidence_model()._base_manager.filter(result_id__in=ids)).owner_delete()
+            return int(cast(Any, self.model._base_manager.filter(pk__in=ids)).owner_delete())
 
     def latest_readable(self, model: type[models.Model], record_ids: Sequence[Any], actor: Any) -> list[LatestResult]:
         """The latest readable result per item of each listed record, with its evidence, in one read.

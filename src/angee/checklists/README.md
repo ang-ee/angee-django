@@ -80,7 +80,10 @@ definition checklists/evidence {
 Deleting an evidence record deletes every result it supports, even one with
 other links: the result's read depended on all of them, so it must not become
 readable to more people. Its item reads `not_checked` again. Deleting the
-checked record deletes its results.
+checked record deletes its results. Both run through
+`ChecklistResultManager.delete_results` under a named system context (one read,
+two deletes, each deletion published), so whoever may delete the record needs no
+authority on its results.
 
 ## Read
 
@@ -118,7 +121,11 @@ decision's `validate_verdict`.
 
 A recorded result publishes `checklistResultChanged` to readers holding its
 record's `target_read`. The event names only the record, never the result, so a
-result its evidence hides still refreshes the record's reads.
+result its evidence hides still refreshes the record's reads. A deletion has no
+row left to evaluate `target_read` on, so it reaches the readers of the record
+references it names: for a type whose `target_read` is narrower than its
+record's read, a deletion event can reach a reader a creation event did not,
+carrying nothing but the record reference.
 
 Merging a checked record keeps its results on the merged record. The survivor's
 statuses read only its own results, since its content token differs and a

@@ -42,7 +42,7 @@ from angee.graphql.node import AngeeNode
 from angee.graphql.testing.documents import execute_schema, measure_graphql_document, result_data
 from angee.graphql.testing.publishing import capture_broadcasts
 from tests.checklistdemo.models import CraneInspection, Inspection, Notice, Report
-from tests.conftest import addon_schema, create_user
+from tests.conftest import addon_schema, create_platform_admin, create_user
 from tests.mtidemo.models import MtiParent
 
 CATEGORIES = ("identity", "content", "archive")
@@ -714,3 +714,74 @@ def test_the_timeline_is_a_chronology_of_each_readable_result(world: Any) -> Non
     assert _statuses(_assess(world, world.auditor))["owner"] == "not_checked"
     rows = list(ChecklistResultKind().queryset(world.inspection, world.auditor))
     assert [(row.key, row.status, row.detail) for row in rows] == [("owner", "passed", "Older green.")]
+
+
+@pytest.mark.parametrize("path", ["instance", "queryset"])
+def test_an_actor_deleting_evidence_deletes_the_results_it_supports(world: Any, path: str) -> None:
+    """The owner deletes the results; the actor needs no authority on them."""
+
+    admin = create_platform_admin(f"evidence-admin-{path}")
+    supported = _record(world, "owner", "passed", evidence=(world.report,))
+    kept = _record(world, "totals", "conflict", "Other source.", evidence=(world.hidden,))
+    with actor_context(admin):
+        if path == "instance":
+            Report.objects.get(pk=world.report.pk).delete()
+        else:
+            Report.objects.filter(pk=world.report.pk).delete()
+    assert set(ChecklistResult._base_manager.values_list("pk", flat=True)) == {kept.pk}
+    assert not ChecklistEvidence._base_manager.filter(result_id=supported.pk).exists()
+
+
+@pytest.mark.parametrize("path", ["instance", "queryset"])
+def test_an_actor_deleting_a_checked_record_deletes_its_results_and_no_others(world: Any, path: str) -> None:
+    admin = create_platform_admin(f"record-admin-{path}")
+    _record(world, "owner", "passed", evidence=(world.report,))
+    _record(world, "signature", "risk")
+    with system_context(reason="tests.checklists.unrelated"):
+        other = Inspection.objects.create(name="Gantry", notes="")
+    _grant(other, "writer", world.writer)
+    with actor_context(world.writer):
+        untouched = other.checklist_record("owner", "passed", evidence=(world.report,))
+    with actor_context(admin):
+        if path == "instance":
+            Inspection.objects.get(pk=world.inspection.pk).delete()
+        else:
+            Inspection.objects.filter(pk=world.inspection.pk).delete()
+    assert set(ChecklistResult._base_manager.values_list("pk", flat=True)) == {untouched.pk}
+    assert set(ChecklistEvidence._base_manager.values_list("result_id", flat=True)) == {untouched.pk}
+
+
+def test_deleting_results_takes_one_read_and_two_deletes(world: Any) -> None:
+    for key in ("owner", "signature", "totals"):
+        _record(world, key, "passed", evidence=(world.report,))
+    with CaptureQueriesContext(connection) as captured:
+        assert ChecklistResult.objects.delete_results(models.Q(object_id=world.inspection.pk)) == 3
+    checklist = [query["sql"] for query in captured if "test_checklists_" in query["sql"]]
+    assert [sql.split()[0].upper() for sql in checklist] == ["SELECT", "DELETE", "DELETE"]
+    assert not ChecklistResult._base_manager.exists() and not ChecklistEvidence._base_manager.exists()
+
+
+def test_a_deleted_results_event_reaches_its_records_readers_without_the_result(
+    world: Any,
+    django_capture_on_commit_callbacks: Any,
+) -> None:
+    _record(world, "owner", "conflict", "Private finding.", evidence=(world.hidden,))
+    with capture_broadcasts() as events, django_capture_on_commit_callbacks(execute=True):
+        with system_context(reason="tests.checklists.delete_event"):
+            Report.objects.filter(pk=world.hidden.pk).delete()
+    [payload] = [event for event in events if event["model"] == "checklists.ChecklistResult"]
+    assert payload["action"] == "delete"
+    inspection = {"model": "checklistdemo.Inspection", "id": world.inspection.sqid}
+    for actor, delivered in ((world.auditor, True), (world.outsider, False)):
+        event = ChecklistResultChangeGate(ChecklistResult, to_subject_ref(actor)).filter(payload)
+        if not delivered:
+            assert event is None
+            continue
+        assert event is not None and event.id == "" and event.action == "delete"
+        assert [{"model": ref.model, "id": ref.id} for ref in event.related_records] == [inspection]
+
+
+def test_edges_with_a_teardown_never_block_their_targets_deletion(db: None) -> None:
+    del db
+    assert not ChecklistEvidence.blocks_target_delete(Report)
+    assert not ChecklistResult.blocks_target_delete(Inspection)
