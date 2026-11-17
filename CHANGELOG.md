@@ -10,6 +10,11 @@ live in code docstrings.
 
 ## Unreleased — shared addon contracts, native embeddings and graph retrieval
 
+- Failed or retried tool calls are now recorded as failed. pydantic-ai reports
+  them as a `ToolReturnPart` whose `outcome` is not `success` (`retried` for a
+  tool raising `ModelRetry`, as built-in tools do on every error), which the
+  in-process runtime used to save as `completed`. The chat view shows them as
+  errors; turns saved before keep their `completed` status.
 - A `start_conversation` step may require grounding evidence:
   `StartConversationConfig(grounding=GroundingPolicy(search=("web_search",), fetch=("fetch_url",)))`
   names the tools that satisfy each requirement. One completed call to a named
