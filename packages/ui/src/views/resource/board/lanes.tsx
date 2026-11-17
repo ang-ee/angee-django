@@ -53,7 +53,7 @@ export function BoardSkeleton({
             {Array.from({ length: 3 }, (_, cardIndex) => (
               <Card
                 key={cardIndex}
-                className={cn(cardFrameVariants({ frame: "inset" }).root(), "grid gap-2")}
+                className={cn(cardFrameVariants({ frame: "inset" }).root(), cardFrameVariants({ frame: "inset" }).row(), "grid gap-2")}
               >
                 <Skeleton
                   shape="text"

@@ -118,7 +118,6 @@ function BoardRowCardContent<TRow extends Row>({
   drag,
 }: BoardRowCardProps<TRow> & { drag: BoardCardDrag }): React.ReactElement {
   const t = useUiT();
-  const styles = cardFrameVariants({ frame });
   const href = rowHref?.(row.original);
   const actions = cardActions?.(row.original, cardActionContext);
   const {
@@ -136,6 +135,9 @@ function BoardRowCardContent<TRow extends Row>({
         transition,
       }
     : undefined;
+  const styles = cardFrameVariants({
+    frame, handle: dragEnabled, interactive: Boolean(href || onRowClick), selected, dragging: isDragging,
+  });
   const representation = modelMetadata?.resource.recordRepresentation;
   const title = representation ? readPath(row.original, representation) : undefined;
   const selection = onToggleSelected ? (
@@ -192,15 +194,7 @@ function BoardRowCardContent<TRow extends Row>({
       data-slot="board-card"
       data-frame={frame}
       data-dragging={isDragging || undefined}
-      className={cn(
-        "board-card-grid group/record grid",
-        styles.root(),
-        isDragging
-          ? "transition-none"
-          : "transition hover:-translate-y-0.5 hover:border-border hover:shadow-md",
-        dragEnabled && "select-none",
-        isDragging && "z-10 border-border-focus shadow-lg",
-      )}
+      className={cn("board-card-grid group/record grid", styles.root(), dragEnabled && "select-none")}
     >
       <div className={styles.row()}>
         {body}
@@ -296,7 +290,7 @@ function BoardCardFrame({
   const link = useInAppLink(href, undefined, { onFollow: onRecordOpen });
   if (href) {
     return (
-      <a href={href} className={BOARD_CARD_SHELL_CLASS} {...link}>
+      <a href={href} data-slot="card-body" className={BOARD_CARD_SHELL_CLASS} {...link}>
         {children}
       </a>
     );
@@ -305,6 +299,7 @@ function BoardCardFrame({
     return (
       <button
         type="button"
+        data-slot="card-body"
         className={BOARD_CARD_SHELL_CLASS}
         onClick={() => { onRecordOpen?.(); onClick(); }}
       >

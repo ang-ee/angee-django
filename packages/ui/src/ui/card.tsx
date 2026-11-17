@@ -130,44 +130,63 @@ export const cardFooterVariants = tv({
 });
 
 /**
- * A collection card's frame (a gallery or board card). `inset` pads the content
- * and puts the card's controls (selection, drag handle) in a column beside it;
- * `flush` lets the body reach the card's edges, so an art header bleeds, and
- * overlays the controls, shown on hover and focus. The surface is `cardVariants`.
+ * A collection card's frame (a gallery or board card) on the `cardVariants`
+ * surface. `inset` pads the content; `flush` lets the body reach the card's
+ * edges, so an art header bleeds, and overlays the checkbox (top left) and the
+ * drag handle (top right). An inset card keeps a control column only for a drag
+ * handle, the checkbox joining it there; without one the checkbox overlays the
+ * top right corner, so an invisible checkbox reserves no space. Controls show on
+ * hover and focus, while selected, and always on a coarse pointer. The focus ring
+ * is the frame's, drawn when its body (`data-slot="card-body"`) has keyboard
+ * focus, so an edge-to-edge body never clips it. Hover, selection and drag states
+ * live here so a selected card keeps its brand border on hover.
  * @kind token
  */
 export const cardFrameVariants = tv({
   slots: {
-    root: "group/card relative min-w-0",
+    root: "group/card relative min-w-0 overflow-hidden outline-none has-[[data-slot=card-body]:focus-visible]:focus-ring",
     row: "min-w-0 max-w-full",
-    body: "min-w-0",
-    controls: "",
+    body: "min-w-0 outline-none",
+    controls: "contents",
     selection:
-      "opacity-0 transition-opacity group-hover/card:opacity-100 group-focus-within/card:opacity-100 data-[selected=true]:opacity-100",
+      "opacity-0 transition-opacity group-hover/card:opacity-100 group-focus-within/card:opacity-100 data-[selected=true]:opacity-100 pointer-coarse:opacity-100",
     handle: "",
-    footer: "flex items-center justify-end gap-2 border-t border-border-subtle",
+    footer: cn(cardFooterVariants({ density: "sm" }), "justify-end border-t border-border-subtle"),
   },
   variants: {
     frame: {
       inset: {
-        root: "p-3",
-        row: "flex items-start gap-2",
+        row: "flex items-start gap-2 p-3",
         body: "flex-1",
-        controls: "flex shrink-0 flex-col items-center gap-1",
-        footer: "mt-2 pt-2",
       },
       flush: {
-        root: "overflow-hidden p-0",
-        controls: "contents",
         selection: "absolute left-2 top-2 z-10",
         handle:
-          "absolute right-2 top-2 z-10 rounded-6 bg-sheet/90 opacity-0 shadow-xs transition-opacity group-hover/card:opacity-100 group-focus-within/card:opacity-100",
-        footer: "p-2",
+          "absolute right-2 top-2 z-10 rounded-6 bg-sheet/90 opacity-0 shadow-xs transition-opacity group-hover/card:opacity-100 group-focus-within/card:opacity-100 focus-visible:opacity-100 pointer-coarse:opacity-100",
       },
     },
+    /** The card carries a drag handle. */
+    handle: { true: "", false: "" },
+    /** The card's body is a link or button. */
+    interactive: { true: { root: "cursor-pointer hover:shadow-md motion-safe:hover:-translate-y-0.5" }, false: "" },
+    selected: { true: "", false: "" },
+    dragging: {
+      true: { root: "z-10 border-border-focus shadow-lg transition-none" },
+      false: { root: "transition" },
+    },
   },
+  compoundVariants: [
+    { frame: "inset", handle: true, class: { controls: "flex shrink-0 flex-col items-center gap-1" } },
+    { frame: "inset", handle: false, class: { selection: "absolute right-2 top-2 z-10" } },
+    // Only an unselected card strengthens its border on hover; a selected one keeps the brand border.
+    { interactive: true, selected: false, dragging: false, class: { root: "hover:border-border-strong" } },
+  ],
   defaultVariants: {
     frame: "inset",
+    handle: false,
+    interactive: false,
+    selected: false,
+    dragging: false,
   },
 });
 

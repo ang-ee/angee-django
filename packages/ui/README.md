@@ -23,7 +23,10 @@ a custom card body on the board and the gallery; the context names the surface,
 the board lane, the drag state and the selection. Both surfaces frame cards on the
 shared `cardVariants` and `cardFrameVariants` recipes: `cardFrame="inset"` pads the
 body (the board's default), `"flush"` lets an art header reach the card's edges and
-overlays the checkbox and drag handle (the gallery's default). The frames carry
+overlays the checkbox and drag handle (the gallery's default). The frame owns the
+card's hover, selected and dragging states (a selected card keeps its brand border on
+hover) and draws the body's focus ring itself, so an edge-to-edge body never clips
+it; card controls show on hover, focus and selection, and always on touch. The frames carry
 `data-slot="board-card"` / `"gallery-card"` and `data-frame` for themes. A model's
 card registered as the one `<app.Model>#card` child draws both kinds wherever the
 page declares no card (`renderCard`, `boardCard` or `gallery`). The full search box is the

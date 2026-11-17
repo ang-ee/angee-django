@@ -242,7 +242,7 @@ describe("BoardView", () => {
     const view = renderBoard({ dragEnabled: true, onCardMove: vi.fn() });
     const inset = view.container.querySelector("[data-slot='board-card']");
     expect(inset?.getAttribute("data-frame")).toBe("inset");
-    expect(inset?.className).toContain("p-3");
+    expect(inset?.firstElementChild?.className).toContain("p-3");
     expect(inset?.className).toContain("shadow-xs");
     // The inset handle stays in the card's control column beside the body.
     expect(screen.getByRole("button", { name: "Move card" }).className).not.toContain("absolute");
@@ -250,10 +250,33 @@ describe("BoardView", () => {
     renderBoard({ dragEnabled: true, onCardMove: vi.fn(), cardFrame: "flush" });
     const card = document.querySelector("[data-slot='board-card']");
     expect(card?.getAttribute("data-frame")).toBe("flush");
-    expect(card?.className).toContain("p-0");
+    expect(card?.firstElementChild?.className).not.toContain("p-3");
     expect(card?.className).toContain("overflow-hidden");
-    // A flush card overlays its handle so an art header reaches the edges.
-    expect(screen.getByRole("button", { name: "Move card" }).className).toContain("absolute");
+    // A flush card overlays its handle so an art header reaches the edges; touch keeps it visible.
+    const handle = screen.getByRole("button", { name: "Move card" });
+    expect(handle.className).toContain("absolute");
+    expect(handle.className).toContain("pointer-coarse:opacity-100");
+  });
+
+  test("the frame draws the body's focus ring, and a selected card keeps its brand border on hover", () => {
+    const view = renderBoard({ rowHref: () => "/notes/1", cardFrame: "flush", selectedIds: new Set(["1"]) });
+    const card = view.container.querySelector("[data-slot='board-card']");
+    expect(card?.className).toContain("has-[[data-slot=card-body]:focus-visible]:focus-ring");
+    expect(screen.getByRole("link").getAttribute("data-slot")).toBe("card-body");
+    expect(screen.getByRole("link").className).not.toContain("focus-ring");
+    expect(card?.className).toContain("hover:border-brand");
+    expect(card?.className).not.toContain("hover:border-border-strong");
+    view.unmount();
+    renderBoard({ rowHref: () => "/notes/1" });
+    expect(document.querySelector("[data-slot='board-card']")?.className).toContain("hover:border-border-strong");
+  });
+
+  test("without a drag handle an inset card's checkbox overlays its corner and reserves no column", () => {
+    renderBoard({ onToggleSelected: vi.fn() });
+    const selection = document.querySelector("[data-slot='card-selection']");
+    expect(selection?.className).toContain("absolute");
+    expect(selection?.className).toContain("pointer-coarse:opacity-100");
+    expect(selection?.parentElement?.className).toContain("contents");
   });
 
   test("a selectable card toggles its row and wears the selected recipe", () => {

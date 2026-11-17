@@ -57,9 +57,9 @@ describe("GalleryView", () => {
     const view = render(<GalleryView<Cover> rows={[ROWS[0]!]} renderCard={(row) => <span>{row.title}</span>} />);
     const card = view.container.querySelector("[data-slot='gallery-card']");
     expect(card?.getAttribute("data-frame")).toBe("flush");
-    expect(card?.className).toContain("p-0");
+    expect(card?.firstElementChild?.className).not.toContain("p-3");
     view.rerender(<GalleryView<Cover> rows={[ROWS[0]!]} cardFrame="inset" renderCard={(row) => <span>{row.title}</span>} />);
-    expect(view.container.querySelector("[data-slot='gallery-card']")?.className).toContain("p-3");
+    expect(view.container.querySelector("[data-slot='gallery-card']")?.firstElementChild?.className).toContain("p-3");
   });
 
   test("a selected card wears the card recipe's selected state", () => {

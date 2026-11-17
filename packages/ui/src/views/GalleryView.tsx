@@ -250,19 +250,17 @@ function GalleryCardFrame<TRow extends Row>({
   children,
 }: GalleryCardFrameProps<TRow>): ReactElement {
   const link = useInAppLink(href, undefined, { onFollow: () => onClick?.(row) });
-  const styles = cardFrameVariants({ frame });
-  const bodyClass = cn(
-    styles.body(),
-    "block outline-none focus-visible:focus-ring",
-    frame === "inset" ? "rounded-6" : actions ? "rounded-t-8" : "rounded-inherit",
-  );
+  const styles = cardFrameVariants({ frame, interactive: clickable, selected });
+  // The frame draws the focus ring for its body (`data-slot="card-body"`).
+  const bodyClass = cn(styles.body(), "block");
   const body = href ? (
-    <a href={href} className={bodyClass} {...link}>
+    <a href={href} data-slot="card-body" className={bodyClass} {...link}>
       {children}
     </a>
   ) : (
     <div
       {...interactiveCardBodyProps(row, onClick)}
+      data-slot="card-body"
       className={bodyClass}
     >
       {children}
@@ -279,23 +277,12 @@ function GalleryCardFrame<TRow extends Row>({
       selected={selected}
       data-slot="gallery-card"
       data-frame={frame}
-      className={cn(
-        styles.root(),
-        "outline-none",
-        clickable && "cursor-pointer hover:border-border-strong focus-visible:focus-ring",
-      )}
+      className={styles.root()}
     >
-      {frame === "inset" ? (
-        <div className={styles.row()}>
-          {body}
-          {selection ? <div className={styles.controls()}>{selection}</div> : null}
-        </div>
-      ) : (
-        <>
-          {body}
-          {selection}
-        </>
-      )}
+      <div className={styles.row()}>
+        {body}
+        {selection ? <div className={styles.controls()}>{selection}</div> : null}
+      </div>
       {actions ? <footer className={styles.footer()}>{actions}</footer> : null}
     </Card>
   );
