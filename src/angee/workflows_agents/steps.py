@@ -25,6 +25,31 @@ def conversation_timeout() -> timedelta:
     return task_time_budget() + QUEUEING_ALLOWANCE
 
 
+class GroundingPolicy(BaseModel):
+    """Tools, by name, whose completed calls must ground a completed turn's answer.
+
+    Each requirement is met by one completed call to a tool it names among the
+    turn's saved calls; a requirement naming no tool asks nothing. An unmet one
+    is reported with the calls the turn did make.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+    search: tuple[str, ...] = ()
+    fetch: tuple[str, ...] = ()
+
+    def unmet(self, turn: Any) -> str | None:
+        """Name each requirement without a completed call, with the calls the turn saved."""
+        missing = []
+        for requirement, names in (("search", self.search), ("fetch", self.fetch)):
+            if not names:
+                continue
+            calls = turn.tool_calls(*names)
+            if not any(call.status == "completed" for call in calls):
+                seen = ", ".join(f"{call.title} {call.status}" for call in calls) or "none"
+                missing.append(f"{requirement} needs a completed {' or '.join(names)} call, saw {seen}")
+        return f"The agent answer is ungrounded: {'; '.join(missing)}." if missing else None
+
+
 class StartConversationConfig(BaseModel):
     """Select an agent and plain format text over subject identity and bound JSON."""
 
@@ -32,6 +57,7 @@ class StartConversationConfig(BaseModel):
     agent: str = Field(min_length=1, json_schema_extra={"relation": {"resource": "agents.Agent"}})
     prompt_template: str = Field(min_length=1)
     timeout: timedelta = Field(default_factory=conversation_timeout, gt=timedelta())
+    grounding: GroundingPolicy = Field(default_factory=GroundingPolicy)
 
 
 class ConversationInput(BaseModel):
@@ -116,9 +142,9 @@ class StartConversation(Step[ConversationInput, ConversationOutput, StartConvers
             turn = ctx.load(turns, retained.turn, lock=True)
             if turn.session_id != session.pk or session.agent_id != agent.pk or session.context != context:
                 raise ValidationError("The retained turn belongs to a different conversation.")
-            retry = (
+            retry = ctx.step_run.retries > retained.retry and (
                 turn.status in (TurnStatus.FAILED, TurnStatus.CANCELED)
-                and ctx.step_run.retries > retained.retry
+                or (turn.status == TurnStatus.COMPLETED and ctx.config.grounding.unmet(turn) is not None)
             )
         else:
             retry = False
@@ -142,6 +168,8 @@ class StartConversation(Step[ConversationInput, ConversationOutput, StartConvers
                 deadline=deadline, retry=ctx.step_run.retries,
             )
         if turn.status == TurnStatus.COMPLETED:
+            if ungrounded := ctx.config.grounding.unmet(turn):
+                return ctx.fail(ungrounded)
             ctx.record(turn, "Agent answer")
             outcome = "done" if turn.text.strip() else "no_reply"
             ctx.note("Agent prepared an answer." if outcome == "done" else "Agent returned no reply text.")

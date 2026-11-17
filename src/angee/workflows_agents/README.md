@@ -13,6 +13,16 @@ the run actor. Continuations must have the same agent and subject context. Outpu
 names the exact `session` and completed `turn`, with `text` from `AgentTurn.text`.
 An empty or whitespace answer selects `no_reply`; other answers select `done`.
 
+Config `grounding` may require evidence before an answer counts. For example,
+`grounding: {search: [web_search], fetch: [fetch_url]}` names, for each
+requirement, the tools that satisfy it, by the name the agent calls them. One
+completed call to a named tool meets a requirement; failed calls beside it do not
+count against it. The step reads the completed turn's saved calls through
+`AgentTurn.tool_calls`, so what agents store is the evidence. An answer that
+leaves a requirement unmet fails the step with each unmet requirement and the
+calls the turn made, and operator Retry asks again with another turn. A
+requirement that names no tool asks nothing, which is the default.
+
 `AgentSession.post` queues `agents.run_session` after commit. The workflow watches
 that turn and retains its ids in the checkpoint, so waking does not post again.
 Only status changes wake the step; transcript flushes do not. A watch-only

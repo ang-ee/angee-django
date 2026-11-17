@@ -10,6 +10,16 @@ live in code docstrings.
 
 ## Unreleased — shared addon contracts, native embeddings and graph retrieval
 
+- A `start_conversation` step may require grounding evidence:
+  `StartConversationConfig(grounding=GroundingPolicy(search=("web_search",), fetch=("fetch_url",)))`
+  names the tools that satisfy each requirement. One completed call to a named
+  tool meets a requirement, read from the completed turn's saved calls; an answer
+  that leaves one unmet fails the step with the unmet requirements and the calls
+  the turn made, and operator Retry posts another turn. `AgentTurn.tool_calls(*names)`
+  folds a turn's saved ACP tool updates into one `acp.schema.ToolCall` per
+  `toolCallId`, selected by tool name: a saved tool call's `title` is its tool's
+  name (the `SessionRunner` contract). What agents store is unchanged, and a
+  step without `grounding` behaves as before.
 - A record-visibility file takes its access from its attached records, its
   direct viewers and admins. Its owner (the uploader, by default) holds it while
   the upload is a draft, which the record edge needs, and once it is published
