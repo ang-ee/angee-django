@@ -67,12 +67,14 @@ class PipelineStage(Stage):
 
 
 class PipelineRecord(StagedModelMixin[PipelineStage], models.Model):
-    """A record whose kind decides which stages apply to it."""
+    """A record whose kind decides which stages apply to it; its note decides nothing."""
 
     stage_container_field_name = "container"
+    stage_scope_fields = ("kind",)
     container = models.ForeignKey(PipelineContainer, on_delete=models.CASCADE)
     stage = models.ForeignKey(PipelineStage, null=True, on_delete=models.SET_NULL)
     kind = models.CharField(max_length=20, default="task")
+    note = models.CharField(max_length=40, blank=True)
 
     every_kind: bool = False
     """An instance fact, not a column: this write may rest in a stage of any kind."""
@@ -209,6 +211,61 @@ def test_a_partial_save_judges_applicability_on_the_row_it_stores(pipeline: Any)
         stale.save(update_fields=("stage",))
     stored = PipelineRecord.objects.get(pk=record.pk)
     assert (stored.kind, stored.stage) == ("task", stages["New"]), "a stale kind admits nothing"
+
+
+def test_a_narrowed_stage_leaves_its_resting_records_editable(pipeline: Any) -> None:
+    """Scope is judged again only when a write changes the stage, the container or a scope field."""
+
+    container, stages = pipeline
+    record = PipelineRecord.objects.create(container=container, kind="task", stage=stages["Doing"])
+    PipelineStage.objects.filter(pk=stages["Doing"].pk).update(only_kind="bug")
+
+    record.note = "Edited while resting"
+    record.full_clean()
+    record.save()
+    record.note = "Edited in part"
+    record.save(update_fields=("note",))
+    assert PipelineRecord.objects.get(pk=record.pk).note == "Edited in part"
+
+    record.kind = "chore"
+    with pytest.raises(ValidationError, match="does not apply to this pipeline record"):
+        record.full_clean()
+    with pytest.raises(ValidationError, match="does not apply to this pipeline record"):
+        record.save(update_fields=("kind",))
+    assert PipelineRecord.objects.get(pk=record.pk).kind == "task", "a changed scope field is judged"
+    record.kind = "bug"
+    record.save()
+    assert PipelineRecord.objects.get(pk=record.pk).kind == "bug"
+
+    other = PipelineRecord.objects.create(container=container, kind="task", stage=stages["New"])
+    other.stage = stages["Doing"]
+    with pytest.raises(ValidationError, match="does not apply to this pipeline record"):
+        other.save()
+
+
+def test_a_record_admitted_into_a_reserved_stage_stays_editable(pipeline: Any) -> None:
+    """A write that keeps the stage is no move, so the stage owner is not asked to admit it again."""
+
+    container, stages = pipeline
+    record = PipelineRecord.objects.create(container=container, stage=stages["New"])
+    record.stage = stages["Closed"]
+    record.save(admitted_stage=stages["Closed"])
+    admitted = len(PipelineStage.admissions)
+
+    record.note = "Closed, then annotated"
+    record.full_clean()
+    record.save()
+    record.save(update_fields=("note",))
+    assert record.stage_transition(manual=True) == (stages["Closed"], stages["Closed"])
+    assert len(PipelineStage.admissions) == admitted, "keeping the stage asks for no admission"
+    stored = PipelineRecord.objects.get(pk=record.pk)
+    assert (stored.stage, stored.note) == (stages["Closed"], "Closed, then annotated")
+
+    record.stage = stages["Doing"]
+    record.save()
+    assert PipelineStage.admissions[-1] == {
+        "previous": "Closed", "following": "Doing", "manual": False, "admitted": False, "adding": False,
+    }
 
 
 def test_a_partial_save_carries_instance_facts_into_the_row_it_stores(pipeline: Any) -> None:

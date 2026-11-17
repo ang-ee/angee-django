@@ -110,7 +110,9 @@ class Stage(models.Model):
         The default is every stage of the record's container.  A concrete model
         narrows it when some of its stages apply to only part of the container
         (stages restricted to particular jobs or projects); scope validation and
-        default resolution both read this, so one override governs both.
+        default resolution both read this, so one override governs both.  The
+        record fields an override reads are the record's
+        :attr:`StagedModelMixin.stage_scope_fields`.
         """
 
         container = record.stage_container()
@@ -161,11 +163,13 @@ class Stage(models.Model):
     ) -> None:
         """Refuse a stage move the pipeline's rules do not admit; the default admits every move.
 
-        ``manual`` marks a hand move (a board drop, a verb acting for a user); a
-        system write passes ``manual=False``.  ``admitted`` marks a move an owning
-        verb vouches for through ``save(admitted_stage=)``.  ``adding`` marks the
-        record's first save.  A concrete model raises ``ValidationError`` keyed on
-        the record's stage field.
+        The primitive asks only about a move: ``previous`` and ``following`` always
+        differ, because a write that keeps the stage is not a move.  ``manual`` marks
+        a hand move (a board drop, a verb acting for a user); a system write passes
+        ``manual=False``.  ``admitted`` marks a move an owning verb vouches for
+        through ``save(admitted_stage=)``.  ``adding`` marks the record's first
+        save.  A concrete model raises ``ValidationError`` keyed on the record's
+        stage field.
         """
 
         return None
@@ -206,6 +210,17 @@ class StagedModelMixin[StageT: Stage = Stage](models.Model):
 
     stage_field_name: ClassVar[str] = "stage"
     stage_container_field_name: ClassVar[str] = ""
+    stage_scope_fields: ClassVar[tuple[str, ...]] = ()
+    """Record fields the stage model's :meth:`Stage.for_record` reads (e.g. ``("job",)``).
+
+    A save or :meth:`clean` judges scope and applicability only when it changes
+    the record's binding: on create, or when the stage, the container or one of
+    these fields differs from the committed row.  A record resting in a stage
+    that was later narrowed away from it therefore stays editable; moving it, or
+    changing an input listed here, is judged again.  An override that reads a
+    record field it does not list here lets a change of that field leave the
+    record in a stage that does not apply.
+    """
 
     stage_entered_at = models.DateTimeField(null=True, blank=True, editable=False)
 
@@ -279,16 +294,14 @@ class StagedModelMixin[StageT: Stage = Stage](models.Model):
         """Read the persisted previous stage and the move's target, then have the stage owner admit it.
 
         ``target`` defaults to the record's current stage field.  ``lock`` holds
-        the record row until the transaction ends.  Admission runs for hand moves
-        and for every non-sudo write; a system write is trusted unless the caller
-        marks it ``manual``.
+        the record row until the transaction ends.  Admission runs for every move
+        a hand verb or a non-sudo write makes; a system write is trusted unless the
+        caller marks it ``manual``, and a target equal to the persisted stage is no
+        move.
         """
 
-        stage_attname = f"{self.stage_field_name}_id"
-        persisted = self._persisted_row(lock=lock)
-        previous_id = getattr(persisted, stage_attname) if persisted is not None else None
-        target_id = target.pk if target is not None else getattr(self, stage_attname)
-        return self._admit_stage_move(previous_id, target_id, manual=manual, admitted=admitted)
+        target_id = target.pk if target is not None else getattr(self, f"{self.stage_field_name}_id")
+        return self._admit_stage_move(self._persisted_row(lock=lock), target_id, manual=manual, admitted=admitted)
 
     def project_stage(self, previous: StageT | None, following: StageT | None) -> set[str]:
         """Write the companion facts a stage move implies and return the fields written.
@@ -324,16 +337,21 @@ class StagedModelMixin[StageT: Stage = Stage](models.Model):
         otherwise a snapshot carrying the written fields from ``self`` and every
         other field from ``persisted``.  A consumer checks its own same-row
         invariants on ``stored`` so a partial save from a stale instance is judged
-        on what it writes; stage scope and applicability are already checked there.
+        on what it writes; stage scope and applicability are already checked there
+        when the save changes the binding (:attr:`stage_scope_fields`).
         """
 
     def clean(self) -> None:
-        """Admit and project the pending stage move, run model cleaning, then enforce scope."""
+        """Admit and project the pending stage move, run model cleaning, then judge a changed binding's scope."""
 
-        previous, following = self.stage_transition()
+        persisted = self._persisted_row(lock=False)
+        previous, following = self._admit_stage_move(
+            persisted, getattr(self, f"{self.stage_field_name}_id"), manual=False, admitted=False
+        )
         self.project_stage(previous, following)
         super().clean()
-        self.validate_stage_scope()
+        if self._rebinds_stage(persisted):
+            self.validate_stage_scope()
 
     def save(self, *args: Any, admitted_stage: StageT | None = None, **kwargs: Any) -> None:
         """Persist the record with its stage move admitted, scoped and projected in one transaction.
@@ -342,7 +360,8 @@ class StagedModelMixin[StageT: Stage = Stage](models.Model):
         save must write exactly that stage.  The committed row is read once under
         the row lock; a partial save is judged on the row it stores (see
         :meth:`validate_stored_row`), so admission, scope and applicability never
-        trust a stale instance's unwritten fields.
+        trust a stale instance's unwritten fields.  Scope and applicability are
+        judged when that row changes the binding (:attr:`stage_scope_fields`).
         """
 
         stage_attname = f"{self.stage_field_name}_id"
@@ -357,12 +376,10 @@ class StagedModelMixin[StageT: Stage = Stage](models.Model):
             persisted = self._persisted_row(lock=True, using=using)
             stored = self._stored_row(persisted, update_fields)
             previous, following = self._admit_stage_move(
-                getattr(persisted, stage_attname) if persisted is not None else None,
-                getattr(stored, stage_attname),
-                manual=False,
-                admitted=admitted_stage is not None,
+                persisted, getattr(stored, stage_attname), manual=False, admitted=admitted_stage is not None
             )
-            stored.validate_stage_scope()
+            if stored._rebinds_stage(persisted):
+                stored.validate_stage_scope()
             self.validate_stored_row(persisted, stored)
             projected = self.project_stage(previous, following) if stage_written else set()
             if update_fields is not None:
@@ -422,17 +439,34 @@ class StagedModelMixin[StageT: Stage = Stage](models.Model):
         self.carry_instance_facts(stored)
         return stored
 
-    def _admit_stage_move(
-        self, previous_id: Any, target_id: Any, *, manual: bool, admitted: bool
-    ) -> tuple[StageT | None, StageT | None]:
-        """Load both stage rows once and let the stage owner admit the move between them."""
+    def _rebinds_stage(self, persisted: Self | None) -> bool:
+        """Whether this row changes the stage, the container or a :attr:`stage_scope_fields` input; a create does."""
 
+        names = (self.stage_field_name, self._stage_container_field().name, *self.stage_scope_fields)
+        fields = [
+            field for field in map(self._meta.get_field, names) if isinstance(field, models.Field) and field.concrete
+        ]
+        if len(fields) != len(names):
+            raise ImproperlyConfigured(f"{self._meta.label}.stage_scope_fields must name concrete fields.")
+        if persisted is None:
+            return True
+        return any(getattr(self, field.attname) != getattr(persisted, field.attname) for field in fields)
+
+    def _admit_stage_move(
+        self, persisted: Self | None, target_id: Any, *, manual: bool, admitted: bool
+    ) -> tuple[StageT | None, StageT | None]:
+        """Load the persisted and target stage rows once and let the stage owner admit a move between them.
+
+        A target equal to the persisted stage is no move, so the stage owner is not asked.
+        """
+
+        previous_id = getattr(persisted, f"{self.stage_field_name}_id") if persisted is not None else None
         stage_model = self.stage_model()
         stage_ids = {pk for pk in (previous_id, target_id) if pk is not None}
         stages = {stage.pk: stage for stage in stage_model._base_manager.filter(pk__in=stage_ids)} if stage_ids else {}
         previous = stages.get(previous_id) if previous_id is not None else None
         following = stages.get(target_id) if target_id is not None else None
-        if manual or not is_sudo():
+        if previous_id != target_id and (manual or not is_sudo()):
             stage_model.validate_transition(
                 previous, following, manual=manual, admitted=admitted, adding=self._state.adding
             )
