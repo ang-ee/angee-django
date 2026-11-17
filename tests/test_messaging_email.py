@@ -1,7 +1,10 @@
 """Outbound email composes Django's native mailer lifecycle without real I/O."""
 
+from email.message import EmailMessage
 from types import SimpleNamespace
+from typing import Any
 from unittest.mock import Mock
+from uuid import UUID
 
 import pytest
 from anymail.message import AnymailMessage
@@ -12,9 +15,17 @@ from django.test import override_settings
 from rebac import PermissionDenied, actor_context, system_context
 
 from angee.integrate.errors import IntegrationError
-from angee.messaging.backends import OutboundEmailChannelMissing, OutboundEmailNotConfigured
+from angee.messaging.backends import (
+    OutboundEmailChannelMissing,
+    OutboundEmailNotConfigured,
+    ParsedHandle,
+    ParsedMessage,
+    ParsedPart,
+    ParsedThread,
+)
 from angee.messaging.email import AnymailEmailChannelBackend
 from angee.messaging.testing.models import Channel, Fragment, Handle, Message, Part
+from angee.messaging_integrate_imap.parser import parse_message
 from tests.conftest import Vendor, make_integration
 
 pytestmark = pytest.mark.filterwarnings("error::django.utils.deprecation.RemovedInDjango2028Warning")
@@ -232,3 +243,162 @@ def test_outbound_email_predicate_is_lazy_and_chainable() -> None:
     assert selected.model is Channel
     assert selected._result_cache is None
     assert Channel.objects.outbound_email(backend_class="manual")._result_cache is None
+
+
+
+def _mail(
+    *, message_id: str, subject: str, sender: str | None, body: str, in_reply_to: str = "", references: str = ""
+) -> bytes:
+    """Write a plain RFC 822 message to the desk the way a mail client sends it."""
+
+    message = EmailMessage()
+    if sender is not None:
+        message["From"] = sender
+    message["To"] = "Desk <desk@example.test>"
+    message["Subject"] = subject
+    message["Message-ID"] = message_id
+    if in_reply_to:
+        message["In-Reply-To"] = in_reply_to
+    if references:
+        message["References"] = references
+    message.set_content(body)
+    return message.as_bytes()
+
+
+def _receive(channel: Any, raw: bytes, *, uid: int) -> Any:
+    """Land one received message through the email parser and messaging's ingest."""
+
+    with system_context(reason="tests.messaging.email_reply.receive"):
+        (message,) = Message.objects.ingest(
+            [parse_message(raw, mailbox="INBOX", uid=uid, uidvalidity=1)],
+            channel=channel,
+        )
+    return message
+
+
+@pytest.fixture
+def mail_desk(db: None) -> tuple[Any, Any, Any]:
+    """An email channel, the desk address that answers on it and one request it received."""
+
+    del db
+    channel = make_integration("reply-desk", model=Channel, backend_class="email")
+    request = _receive(
+        channel,
+        _mail(
+            message_id="<request@example.test>",
+            subject="Re: Access request",
+            sender="Requester <requester@example.test>",
+            body="Please add me to the project.",
+        ),
+        uid=1,
+    )
+    with system_context(reason="tests.messaging.email_reply.desk"):
+        desk = Handle.objects.upsert(platform="email", value="desk@example.test", display_name="Desk")
+    return channel, request, desk
+
+
+def test_an_email_reply_is_addressed_titled_and_threaded_so_the_answer_lands_on_its_conversation(mail_desk):
+    channel, request, desk = mail_desk
+    reply = Message.objects.compose_reply(request, body="Which team are you on?", sender=desk, actor=channel.owner)
+    assert "@" in reply.external_id and "<" not in reply.external_id
+    with system_context(reason="tests.messaging.email_reply.render"):
+        assert list(reply.participants.values_list("handle_id", "role")) == [(request.sender_id, "to")]
+        # The thread title is the normalised subject, so the reply's prefix never stacks.
+        assert reply.title() == "Re: Access request"
+        wire = channel.backend.email_message(reply).message()
+    assert (wire["From"], wire["To"]) == ("Desk <desk@example.test>", "Requester <requester@example.test>")
+    assert wire["Subject"] == "Re: Access request"
+    assert wire["Message-ID"] == f"<{reply.external_id}>"
+    assert wire["In-Reply-To"] == wire["References"] == "<request@example.test>"
+
+    # The requester answers under a subject of their own, so only the threading headers can place it.
+    answer = _receive(
+        channel,
+        _mail(
+            message_id="<answer@example.test>",
+            subject="Our team",
+            sender="Requester <requester@example.test>",
+            in_reply_to=wire["Message-ID"],
+            references=f"{wire['References']} {wire['Message-ID']}",
+            body="The platform team.",
+        ),
+        uid=2,
+    )
+    assert (answer.thread_id, answer.parent_id) == (request.thread_id, reply.pk)
+    assert reply.thread_id == request.thread_id
+
+    # A provider that rewrites the reply's Message-ID leaves References naming the request.
+    rewritten = "<rewritten@provider.example.test>"
+    follow_up = _receive(
+        channel,
+        _mail(
+            message_id="<follow-up@example.test>",
+            subject="One more thing",
+            sender="Requester <requester@example.test>",
+            in_reply_to=rewritten,
+            references=f"{wire['References']} {rewritten}",
+            body="And the data team.",
+        ),
+        uid=3,
+    )
+    assert follow_up.thread_id == request.thread_id
+
+
+def test_an_email_reply_requires_a_parent_sender_to_address(mail_desk):
+    channel, _request, desk = mail_desk
+    unsigned = _receive(
+        channel,
+        _mail(
+            message_id="<unsigned@example.test>",
+            subject="No sender",
+            sender=None,
+            body="Who sent this?",
+        ),
+        uid=4,
+    )
+    with pytest.raises(ValidationError, match="parent sender"):
+        Message.objects.compose_reply(unsigned, body="Who are you?", sender=desk, actor=channel.owner)
+    assert not Message._base_manager.filter(parent=unsigned).exists()
+
+
+def test_retained_identity_and_threading_header_parts_never_render_beside_the_owned_ones(mail_desk):
+    channel, request, desk = mail_desk
+    reply = Message.objects.compose_reply(request, body="Which team?", sender=desk, actor=channel.owner)
+    with system_context(reason="tests.messaging.email_reply.headers"):
+        for position, name in enumerate(("message-id", "in-reply-to", "references"), start=10):
+            Part.objects.create(
+                message=reply,
+                role="header",
+                name=name,
+                position=position,
+                fragment=Fragment.objects.upsert(text="<forged@example.test>"),
+            )
+        headers = channel.backend.email_message(reply).extra_headers
+    assert sorted(headers) == ["In-Reply-To", "Message-ID", "References", "X-Angee-External-ID"]
+    assert "<forged@example.test>" not in headers.values()
+
+
+def test_a_reply_of_another_kind_keeps_its_client_token_and_writes_no_envelope(db: None) -> None:
+    del db
+    channel = make_integration("reply-chat", model=Channel, backend_class="manual")
+    with system_context(reason="tests.messaging.chat_reply"):
+        (question,) = Message.objects.ingest(
+            [
+                ParsedMessage(
+                    external_id="room/1",
+                    platform="slack",
+                    subject="Standup",
+                    sender=ParsedHandle(platform="slack", value="U-asker"),
+                    thread=ParsedThread(external_id="room"),
+                    body=ParsedPart(text="Ready?"),
+                )
+            ],
+            channel=channel,
+        )
+        desk = Handle.objects.upsert(platform="slack", value="U-desk")
+    assert question.message_type == Message.MessageKind.CHAT
+    reply = Message.objects.compose_reply(question, body="Yes.", sender=desk, actor=channel.owner)
+    UUID(reply.external_id)
+    with system_context(reason="tests.messaging.chat_reply.read"):
+        assert not reply.participants.exists()
+        assert list(reply.parts.values_list("role", flat=True)) == ["body"]
