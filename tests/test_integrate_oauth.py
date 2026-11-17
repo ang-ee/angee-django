@@ -217,10 +217,14 @@ def test_expired_refreshable_grant_is_reused_but_failed_refresh_requires_consent
         credential = integration.credential
         credential.expires_at = timezone.now() - timedelta(minutes=1)
         credential.save(update_fields=["expires_at"])
-        assert Credential.objects.live_oauth_for_user(credential.user, credential.oauth_client).pk == credential.pk
+        assert Credential.objects.live_oauth_for_user(
+            credential.user, credential.oauth_client, external_account=credential.external_account,
+        ).pk == credential.pk
         credential.last_refresh_status = "failed"
         credential.save(update_fields=["last_refresh_status"])
-        assert Credential.objects.live_oauth_for_user(credential.user, credential.oauth_client) is None
+        assert Credential.objects.live_oauth_for_user(
+            credential.user, credential.oauth_client, external_account=credential.external_account,
+        ) is None
 
 
 @pytest.mark.django_db

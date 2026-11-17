@@ -7,11 +7,12 @@ that sit the third-party ``Vendor`` catalogue, the first-class ``Integration``
 an integration runs over, addon-owned concrete child integration kinds, and
 outbound ``WebhookSubscription``.
 
-This addon is pure OAuth: it connects *out* to external systems and never
-authenticates a session. OIDC login fields and ID-token verification live one
-level up in ``iam_integrate_oidc``, which extends this OAuth base and composes the
-``iam`` user. Concrete capabilities and their implementation selectors live in
-their owning addons; this addon never imports them.
+This addon connects *out* to external systems and never authenticates a
+session. It owns OIDC metadata (issuer, JWKS) and ID-token verification, which
+identify a connected account; OIDC login policy lives one level up in
+``iam_integrate_oidc``, which extends this OAuth base and composes the ``iam``
+user. Concrete capabilities and their implementation selectors live in their
+owning addons; this addon never imports them.
 """
 
 from __future__ import annotations
@@ -89,7 +90,13 @@ from angee.integrate.mixins import SyncStateMixin
 from angee.integrate.net import validate_public_url
 from angee.integrate.oauth.client import OAuthClientProtocol
 from angee.integrate.oauth.discovery import discovery_document as oidc_metadata_document
-from angee.integrate.oauth.errors import CLIENT_NOT_CONFIGURED, INVALID_STATE, OAuthFlowError
+from angee.integrate.oauth.errors import (
+    ACCOUNT_SWITCH_REFUSED,
+    CLIENT_NOT_CONFIGURED,
+    INVALID_STATE,
+    SCOPE_NOT_IN_CATALOGUE,
+    OAuthFlowError,
+)
 from angee.integrate.oauth.providers import OAuthProviderType
 from angee.integrate.registry import models_with
 from angee.integrate.signals import discovery_finished
@@ -210,9 +217,9 @@ _OAuthClientManagerBase = AngeeHistoryManager.from_queryset(OAuthClientQuerySet)
 class OAuthClientManager[OAuthClientT: OAuthClient](_OAuthClientManagerBase[OAuthClientT]):
     """Manager for settings-sourced OAuth client registration.
 
-    OAuth only: settings entries carry the OAuth base fields. The OIDC refinement
-    (issuer/JWKS/discovery + login policy) is owned by the ``iam_integrate_oidc``
-    addon and seeded there, never from here.
+    Settings entries carry the OAuth base fields, OIDC metadata included. Login
+    policy is owned by the ``iam_integrate_oidc`` addon and seeded there, never
+    from here.
     """
 
     seed_fields = frozenset(
@@ -222,6 +229,8 @@ class OAuthClientManager[OAuthClientT: OAuthClient](_OAuthClientManagerBase[OAut
             "icon",
             "client_id",
             "discovery_url",
+            "issuer",
+            "jwks_uri",
             "authorize_endpoint",
             "token_endpoint",
             "revoke_endpoint",
@@ -310,10 +319,10 @@ class OAuthClient(ImplDefaultsMixin, AuditMixin, AngeeDataModel, concrete=True):
     """OAuth2 client registration for connecting an external account.
 
     The base of the connection substrate: enough to run the authorization-code and
-    refresh flows and act against a provider's API (Gemini, Grok, Anthropic). It
-    carries no identity or login policy itself — a provider that also
-    authenticates a *login* gains direct fields from the ``iam_integrate_oidc``
-    extension when that addon is installed.
+    refresh flows, act against a provider's API (Gemini, Grok, Anthropic) and
+    verify the ID token that identifies the connected account. It carries no login
+    policy itself — a provider that also authenticates a *login* gains direct
+    fields from the ``iam_integrate_oidc`` extension when that addon is installed.
 
     Self-describing: ``slug`` is its own connect-client key and ``icon``/
     ``display_name`` its own button branding. The third-party catalogue is
@@ -335,6 +344,10 @@ class OAuthClient(ImplDefaultsMixin, AuditMixin, AngeeDataModel, concrete=True):
     client_id = models.CharField(max_length=255, blank=True)
     client_secret = EncryptedField(blank=True)
     discovery_url = models.URLField(blank=True)
+    issuer = models.URLField(blank=True)
+    """OIDC issuer an ID token must name; blank is filled from discovery."""
+    jwks_uri = models.URLField(blank=True)
+    """JWK set that signs this provider's ID tokens; blank is filled from discovery."""
     authorize_endpoint = models.URLField(blank=True)
     token_endpoint = models.URLField(blank=True)
     revoke_endpoint = models.URLField(blank=True)
@@ -456,6 +469,24 @@ class OAuthClient(ImplDefaultsMixin, AuditMixin, AngeeDataModel, concrete=True):
 
         return self._string_list(self.scopes_catalogue)
 
+    def requested_scopes(self, consumer_scopes: Iterable[str] = ()) -> list[str]:
+        """Return this client's default scopes followed by the extra scopes a consumer needs.
+
+        One registration serves every consumer of a provider, so each consumer
+        (``IntegrationImpl.oauth_scopes``) adds its own scopes to the defaults. A
+        consumer may ask only for scopes the registration offers in
+        ``scopes_catalogue``; anything else is refused before the provider redirect.
+        """
+
+        defaults = self.default_scope_values
+        requested = list(dict.fromkeys([*defaults, *consumer_scopes]))
+        offered = {*defaults, *self.scopes_catalogue_values}
+        if missing := [scope for scope in requested if scope not in offered]:
+            raise OAuthFlowError(
+                SCOPE_NOT_IN_CATALOGUE, 400, f"{self.slug} does not offer scope(s): {', '.join(missing)}",
+            )
+        return requested
+
     @property
     def authorize_param_values(self) -> dict[str, str]:
         """Return configured provider-specific authorize parameters."""
@@ -569,14 +600,16 @@ class OAuthClient(ImplDefaultsMixin, AuditMixin, AngeeDataModel, concrete=True):
             return ""
         return str(value)
 
-    # OIDC discovery key -> the blank endpoint field this client fills from it. The
-    # OAuth base owns its own transport/userinfo endpoints; discovery fills only
-    # blanks, so explicit configuration is never overwritten.
+    # OIDC discovery key -> the blank field this client fills from it: transport and
+    # userinfo endpoints, and the issuer and JWKS URI that verify an ID token.
+    # Discovery fills only blanks, so explicit configuration is never overwritten.
     DISCOVERY_ENDPOINT_FIELDS = {
         "authorize_endpoint": "authorization_endpoint",
         "token_endpoint": "token_endpoint",
         "revoke_endpoint": "revocation_endpoint",
         "userinfo_endpoint": "userinfo_endpoint",
+        "issuer": "issuer",
+        "jwks_uri": "jwks_uri",
     }
 
     def fill_endpoints_from_discovery(self, discovery: Mapping[str, Any]) -> bool:
@@ -587,13 +620,8 @@ class OAuthClient(ImplDefaultsMixin, AuditMixin, AngeeDataModel, concrete=True):
         set them by name.
         """
 
-        return self.fill_discovery_fields(discovery, self.DISCOVERY_ENDPOINT_FIELDS)
-
-    def fill_discovery_fields(self, discovery: Mapping[str, Any], fields: Mapping[str, str]) -> bool:
-        """Fill declared blank fields without replacing explicit configuration."""
-
         changed = False
-        for field, key in fields.items():
+        for field, key in self.DISCOVERY_ENDPOINT_FIELDS.items():
             if getattr(self, field, ""):
                 continue
             value = discovery.get(key)
@@ -602,14 +630,8 @@ class OAuthClient(ImplDefaultsMixin, AuditMixin, AngeeDataModel, concrete=True):
                 changed = True
         return changed
 
-    def fill_extension_fields_from_discovery(self, discovery: Mapping[str, Any]) -> bool:
-        """Hook for composed extensions to project discovery onto their own fields."""
-
-        del discovery
-        return False
-
     def discover_endpoints(self, *, persist: bool = False) -> Mapping[str, Any]:
-        """Fetch OIDC metadata and fill blank OAuth/extension endpoints on this row.
+        """Fetch OIDC metadata and fill blank endpoints, issuer and JWKS URI on this row.
 
         A protocol fills the row in memory for its current request and treats a
         row without a discovery URL as explicitly configured. ``persist`` is the
@@ -623,7 +645,6 @@ class OAuthClient(ImplDefaultsMixin, AuditMixin, AngeeDataModel, concrete=True):
             return {}
         discovery = oidc_metadata_document(self.discovery_url)
         self.fill_endpoints_from_discovery(discovery)
-        self.fill_extension_fields_from_discovery(discovery)
         if persist:
             self.save()
         return discovery
@@ -674,9 +695,10 @@ class ExternalAccountManager[ExternalAccountT: ExternalAccount](_ExternalAccount
         """Link ``user``'s verified provider identity and store its OAuth credential in one transaction.
 
         The account is labelled from the provider claims; its credential is the
-        ``(user, provider)`` upsert, so a reconnect replaces the grant in place.
-        Raises ``ValidationError`` (``account_already_linked``) when another user
-        owns the identity.
+        ``(user, provider, account)`` upsert, so a reconnect replaces that account's
+        grant in place and never touches another account's. Raises
+        ``ValidationError`` (``account_already_linked``) when another user owns the
+        identity.
         """
 
         email = oauth_client.email_from_claims(claims) or ""
@@ -992,12 +1014,22 @@ class CredentialManager[CredentialT: Credential](_CredentialManagerBase[Credenti
                 discovered_integrations__isnull=True,
             ).delete()
 
-    def live_oauth_for_user(self, user: Any, oauth_client: Any) -> Any | None:
-        """Reuse a credential whenever its owner does not require fresh consent."""
+    def live_oauth_for_user(
+        self, user: Any, oauth_client: Any, *, external_account: Any, scopes: Iterable[str] = (),
+    ) -> Any | None:
+        """Return the account's OAuth credential when it needs no fresh consent and holds ``scopes``.
+
+        ``scopes`` are what a consumer needs beyond the client's defaults, checked
+        against the scopes the provider reported granting.
+        """
 
         with system_context(reason="integrate.connections.credential.live"):
-            row = self.filter(user=user, oauth_client=oauth_client, kind=CredentialKind.OAUTH).first()
-            return row if row is not None and not row.is_reconnect_required else None
+            row = self.filter(
+                user=user, oauth_client=oauth_client, external_account=external_account, kind=CredentialKind.OAUTH,
+            ).first()
+        if row is None or row.is_reconnect_required:
+            return None
+        return row if set(scopes) <= set(row.granted_scopes or ()) else None
 
     def upsert_for_user(
         self,
@@ -1011,14 +1043,20 @@ class CredentialManager[CredentialT: Credential](_CredentialManagerBase[Credenti
         reconnect: bool = True,
         **fields: Any,
     ) -> Any:
-        """Create or update one ``(user, oauth_client)`` OAuth credential (connect/login flow)."""
+        """Create or update one ``(user, oauth_client, external_account)`` credential (connect/login flow).
+
+        Each account a user connects at a provider has its own credential, so a
+        second account never replaces the first. An OAuth grant that carries no
+        refresh token keeps the stored one: a provider may issue a refresh token on
+        first consent only (RFC 6749 §5.1, §6). A reconnect re-attaches the
+        integrations whose discovered material derives from the replaced grant.
+        """
 
         handler = CredentialKind(kind).handler
         operation_values, update_values = self._assemble_values(handler, material, fields)
-        if external_account is not None:
-            update_values["external_account_id"] = external_account.pk
+        account_id = None if external_account is None else external_account.pk
         create_values = {
-            "external_account_id": external_account.pk if external_account is not None else None,
+            "external_account_id": account_id,
             **self._blank_create_values(),
             **operation_values,
             **update_values,
@@ -1027,10 +1065,10 @@ class CredentialManager[CredentialT: Credential](_CredentialManagerBase[Credenti
         # own). Create-only so an admin rename, and token refreshes, are preserved.
         if not str(create_values.get("name") or ""):
             create_values["name"] = self._oauth_credential_name(oauth_client, external_account)
+        identity = {"user_id": user.pk, "oauth_client_id": oauth_client.pk, "external_account_id": account_id}
         with system_context(reason=self._REASON), transaction.atomic():
-            existing = self.filter(user_id=user.pk, oauth_client_id=oauth_client.pk).only("pk").first()
+            existing = self.filter(**identity).only("pk").first()
             integrations = []
-            attached = False
             if existing is not None:
                 affected = (
                     apps.get_model("integrate", "Integration")
@@ -1054,28 +1092,19 @@ class CredentialManager[CredentialT: Credential](_CredentialManagerBase[Credenti
                     integrations += [
                         integration.lock_capability() for integration in affected if integration.pk not in locked
                     ]
-                    attached = bool(integrations)
-                else:
-                    attached = affected.exists()
-            if (
-                existing is not None
-                and external_account is not None
-                and existing.external_account_id not in (None, external_account.pk)
-                and attached
-            ):
-                raise OAuthFlowError("account_switch_refused", 409)
+                if handler.kind == CredentialKind.OAUTH and not material.get("refresh_token"):
+                    if stored_refresh := existing.reveal().get("refresh_token"):
+                        operation_values["material"] = self.model.encode_material(
+                            {**material, "refresh_token": stored_refresh},
+                        )
             instance, _created = self.update_or_create(
-                user_id=user.pk,
-                oauth_client_id=oauth_client.pk,
+                **identity,
                 defaults={**operation_values, **update_values},
                 create_defaults=create_values,
             )
             if reconnect and existing is not None:
                 for integration in integrations:
-                    if (
-                        existing.external_account_id == instance.external_account_id
-                        and integration.credential_id == instance.pk
-                    ):
+                    if integration.credential_id == instance.pk:
                         continue
                     # Re-consent invalidates resource tokens derived from the old grant.
                     integration.attach_connection(instance, connect_disconnected=False)
@@ -1292,12 +1321,19 @@ class Credential(AuditMixin, AngeeDataModel, concrete=True):
         ordering = ("-updated_at",)
         rebac_resource_type = "integrate/credential"
         constraints = (
-            # OAuth identity: one credential per (user, provider). NULLs are
-            # distinct in SQL unique, so provider-less kinds need their own arm.
+            # Provider identity: one credential per (user, provider, external
+            # account), so one user connects several accounts through one client.
+            # NULLs are distinct in SQL unique, so a provider row without an
+            # account and provider-less kinds need their own arms.
+            models.UniqueConstraint(
+                fields=("user", "oauth_client", "external_account"),
+                condition=Q(oauth_client__isnull=False, external_account__isnull=False),
+                name="uniq_integrate_credential_user_oauth_client_account",
+            ),
             models.UniqueConstraint(
                 fields=("user", "oauth_client"),
-                condition=Q(oauth_client__isnull=False),
-                name="uniq_integrate_credential_user_oauth_client",
+                condition=Q(oauth_client__isnull=False, external_account__isnull=True),
+                name="uniq_integrate_credential_user_oauth_client_unlinked",
             ),
             # Provider-less identity: one named credential per user (named local
             # credentials; provider-bearing rows use the arm above).
@@ -1522,10 +1558,8 @@ class Credential(AuditMixin, AngeeDataModel, concrete=True):
                             locked.save(update_fields=["last_refresh_status", "updated_at"])
                 self.refresh_from_db()
                 raise
-            # The response fully describes the new token; a provider that does not
-            # rotate keeps the stored refresh token, so a one-time token is not dropped.
-            renewed = dict(tokens)
-            renewed.setdefault("refresh_token", refresh_value)
+            # The response fully describes the new token; the upsert keeps the stored
+            # refresh token when a provider does not rotate it.
             with transaction.atomic():
                 locked = rows.lock_if_supported().get(pk=self.pk)
                 if locked.refresh_fence == fence:
@@ -1533,7 +1567,7 @@ class Credential(AuditMixin, AngeeDataModel, concrete=True):
                         locked.user,
                         locked.oauth_client,
                         CredentialKind.OAUTH,
-                        renewed,
+                        dict(tokens),
                         external_account=locked.external_account,
                         reconnect=False,
                     )
@@ -1777,7 +1811,13 @@ class IntegrationManager[IntegrationT: Integration](_IntegrationManagerBase[Inte
     def attach_completed_connect(
         self, integration_sqid: str, user: Any, credential: Any, *, exposed_model_labels: set[str],
     ) -> None:
-        """Attach completed OAuth state only to its one owned, exposed concrete capability."""
+        """Attach completed OAuth state only to its one owned, exposed concrete capability.
+
+        An integration connected as one account at this client is never re-pointed
+        at another account: its synced state belongs to the first, so the connect
+        is refused with ``account_switch_refused``. The new account's credential
+        stays connected for the user.
+        """
 
         if not integration_sqid:
             return
@@ -1799,6 +1839,9 @@ class IntegrationManager[IntegrationT: Integration](_IntegrationManagerBase[Inte
                 raise OAuthFlowError(INVALID_STATE, 400)
         except (PermissionDenied, ValueError) as error:
             raise OAuthFlowError(INVALID_STATE, 400) from error
+        bound = target.bound_account(credential.oauth_client_id)
+        if bound is not None and bound.pk != credential.external_account_id:
+            raise OAuthFlowError(ACCOUNT_SWITCH_REFUSED, 409)
         if credential.pk != target.credential_id or target.lifecycle == IntegrationLifecycle.DISCONNECTED:
             target.attach_credential(credential)
 
@@ -1993,6 +2036,25 @@ class Integration(StatementSourceMixin, ImplDefaultsMixin, OwnerMixin, AngeeData
         """Select connection intent without constructing the capability runtime."""
 
         return self.capability_impl_class.oauth_client
+
+    @property
+    def connection_oauth_scopes(self) -> tuple[str, ...]:
+        """Return the scopes this capability needs beyond its OAuth client's defaults."""
+
+        return tuple(self.capability_impl_class.oauth_scopes)
+
+    def bound_account(self, oauth_client: Any) -> ExternalAccount | None:
+        """Return the external account this integration is connected as at ``oauth_client`` (a row or pk)."""
+
+        if self.account_id is None:
+            return None
+        with system_context(reason="integrate.integration.bound_account"):
+            return cast(
+                "ExternalAccount | None",
+                apps.get_model("integrate", "ExternalAccount")
+                .objects.filter(pk=self.account_id, oauth_client=oauth_client)
+                .first(),
+            )
 
     def connection_oauth_slug(self, owner_label: str = "") -> str:
         """Expand this capability's declared OAuth registration hint with its vendor slug."""

@@ -10,6 +10,39 @@ live in code docstrings.
 
 ## Unreleased — shared addon contracts, native embeddings and graph retrieval
 
+- One Google OAuth client per deployment serves every Google feature. The new
+  `angee.integrate_google` addon owns the `google` provider preset (endpoints,
+  OIDC metadata, claims, incremental authorization, the scope catalogue) and seeds
+  the deployment's blank `google` client and Google's public `gemini` client;
+  [Register the deployment's Google client](docs/howto/google-oauth-client.md)
+  covers the Cloud console side. `iam_integrate_oidc` depends on it and no longer
+  ships `GoogleType`, the demo `google` row or the Gemini endpoints; it sets login
+  policy on the `google` and `gemini` rows through its install seed. A
+  console-created Google client no longer defaults to sign-in; turn its login
+  switch on.
+- A consumer declares the scopes it needs beyond its client's defaults
+  (`IntegrationImpl.oauth_scopes`); connect requests
+  `OAuthClient.requested_scopes` and refuses a scope outside the client's
+  catalogue (`scope_not_in_catalogue`). Credentials are keyed by
+  (user, OAuth client, external account), so one user connects several accounts
+  through one client; connect sends `prompt=select_account` and the bound
+  account's `login_hint`, reuses only that account's live credential, and refuses
+  to re-point an integration at another account (`account_switch_refused` now
+  comes from `IntegrationManager.attach_completed_connect`). A re-consent without
+  a refresh token keeps the stored one.
+- `integrate.OAuthClient` owns `issuer` and `jwks_uri`, and
+  `OAuthClientProtocol.verify_id_token` (with `ANGEE_OIDC_JWKS_TTL` and the
+  `pyjwt` dependency) moved from the login addon; connect identifies an account
+  from the verified ID token when its grant cannot read userinfo. The fake OpenID
+  provider moved to `angee.integrate.testing.oidc`. Projects regenerate migrations
+  for the two credential constraints and the moved columns (same table, no data
+  change).
+- Data upgrade for `posts_integrate_youtube` (bridges): YouTube connects through
+  the `google` client and no longer ships `google_youtube`. Set
+  `provider_type = 'google'` on any `integrate_oauthclient` row still holding
+  `google_youtube` before upgrading, then reconnect its channels through the
+  `google` client.
+
 - `angee.scheduling` owns due rules: a `DueRule` (`angee.scheduling.due`) names due
   anchors the subject supplies later and labelled terms measured from them; the
   [scheduling README](src/angee/scheduling/README.md) lists what a rule expresses.

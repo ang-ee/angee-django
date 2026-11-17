@@ -1393,7 +1393,10 @@ def test_account_connect_schema_exposes_generic_flow_without_token_material(
     oauth_client_type = _sdl_block(console_sdl, "type OAuthClientType")
     oauth_client_insert = _sdl_block(console_sdl, "input oauth_clients_insert_input")
     oauth_client_set = _sdl_block(console_sdl, "input oauth_clients_set_input")
-    for field in ("authorize_params", "token_params", "token_request_format", "external_id_claim", "email_claim"):
+    for field in (
+        "authorize_params", "token_params", "token_request_format", "external_id_claim", "email_claim",
+        "issuer", "jwks_uri",
+    ):
         assert field in oauth_client_type
         assert field in oauth_client_insert
         assert field in oauth_client_set
@@ -1401,7 +1404,8 @@ def test_account_connect_schema_exposes_generic_flow_without_token_material(
         _sdl_block(block, "extend type OAuthClientType")
         for block in console_sdl.split("\n\n") if block.startswith("extend type OAuthClientType")
     )
-    for field in ("jwks_uri", "login_enabled", "link_on_email_match", "create_on_login"):
+    assert "jwks_uri" not in oauth_client_oidc_extension
+    for field in ("login_enabled", "link_on_email_match", "create_on_login"):
         assert field in oauth_client_oidc_extension
         assert field in oauth_client_insert
         assert field in oauth_client_set
@@ -1419,9 +1423,7 @@ def test_oauth_client_resource_metadata_includes_oidc_extension_fields(
     oauth_client = metadata["integrate.OAuthClient"]
     fields = {field.name: field for field in oauth_client.fields}
 
-    assert oauth_client.create_fields[-6:] == (
-        "issuer",
-        "jwks_uri",
+    assert oauth_client.create_fields[-4:] == (
         "login_enabled",
         "link_on_email_match",
         "create_on_login",

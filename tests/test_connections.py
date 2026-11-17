@@ -319,6 +319,7 @@ def test_connection_managers_are_idempotent_and_delegate_static_token_material()
             oauth_client,
             CredentialKind.STATIC_TOKEN,
             {"api_key": "second-key"},
+            external_account=second_account,
         )
 
         assert second_credential.pk == first_credential.pk

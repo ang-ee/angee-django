@@ -1,0 +1,36 @@
+# Google OAuth client seeds (install tier). Model inferred from the
+# `integrate.oauthclient` filename; adopted by (slug, environment) so a
+# pre-existing row is linked, not duplicated. Endpoints, OIDC metadata, claims,
+# authorize parameters and the scope catalogue come from the `google` provider
+# preset when the row is created.
+#
+# `google` is the deployment's own Google client: Google forbids publishing
+# client credentials, so every deployment registers one in its Google Cloud
+# project (docs/howto/google-oauth-client.md). The row leaves `client_id` and
+# `client_secret` blank and reads `needs_client` until an admin pastes the two
+# values. Login, mail, calendar, drive and video consumers all connect through it,
+# each requesting its own scopes on top of the default `openid email profile`.
+- xref: oauth_google
+  slug: google
+  environment: prod
+  provider_type: google
+  display_name: Google
+  icon: google
+# Google's public Gemini CLI client: a fixed, published client id with no
+# secret, so it keeps its own row and its own scopes.
+- xref: oauth_gemini
+  slug: gemini
+  environment: prod
+  provider_type: google
+  display_name: Google Gemini
+  icon: google
+  client_id: 681255809395-oo8ft2oprdrnp9e3aqf6av3hmdib135j.apps.googleusercontent.com
+  is_enabled: true
+  scopes_catalogue:
+    - https://www.googleapis.com/auth/cloud-platform
+    - https://www.googleapis.com/auth/userinfo.email
+    - https://www.googleapis.com/auth/userinfo.profile
+  default_scopes:
+    - https://www.googleapis.com/auth/cloud-platform
+    - https://www.googleapis.com/auth/userinfo.email
+    - https://www.googleapis.com/auth/userinfo.profile

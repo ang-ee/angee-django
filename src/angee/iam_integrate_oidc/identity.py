@@ -104,8 +104,8 @@ class OidcLoginCompletion:
         """Complete an authenticated OIDC account-link redirect and return the linked account.
 
         Links the verified external identity to the start-flow user and stores its
-        OAuth credential under ``(user, provider)`` — the same shape as connect, but
-        gated on a verified ID token.
+        OAuth credential under ``(user, provider, account)`` — the same shape as
+        connect, but gated on a nonce-bound ID token.
         """
 
         record = flow.consume_validated_state(

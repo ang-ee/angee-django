@@ -312,6 +312,8 @@ class OAuthClientType(AngeeNode):
     environment: auto
     client_id: auto
     discovery_url: auto
+    issuer: auto
+    jwks_uri: auto
     authorize_endpoint: auto
     token_endpoint: auto
     revoke_endpoint: auto
@@ -581,6 +583,8 @@ _OAUTH_CLIENT_RESOURCE = hasura_model_resource(
         "client_secret",
         "environment",
         "discovery_url",
+        "issuer",
+        "jwks_uri",
         "authorize_endpoint",
         "token_endpoint",
         "revoke_endpoint",
@@ -612,6 +616,8 @@ _OAUTH_CLIENT_RESOURCE = hasura_model_resource(
         "client_secret",
         "environment",
         "discovery_url",
+        "issuer",
+        "jwks_uri",
         "authorize_endpoint",
         "token_endpoint",
         "revoke_endpoint",
@@ -802,8 +808,8 @@ class ConnectionMutation:
     def discover_oauth_endpoints(self, id: PublicID) -> ActionResult:
         """Fetch OIDC metadata and fill this client's blank endpoints.
 
-        The resolved authorize/token/userinfo endpoints (and any composed extension
-        endpoints, e.g. OIDC issuer/JWKS) are persisted on the OAuth client row, so
+        The resolved authorize/token/userinfo endpoints, OIDC issuer and JWKS URI
+        are persisted on the OAuth client row, so
         the operator never types them by hand. Requires a discovery URL on the row.
         """
 

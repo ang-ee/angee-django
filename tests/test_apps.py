@@ -113,7 +113,7 @@ def test_projects_demo_graph_keeps_work_optional(with_work: bool) -> None:
 
 
 def test_integrate_config_installs_public_oauth_provider_resources() -> None:
-    """Integrate ships public OAuth clients (OAuth only) without deployment secrets."""
+    """Integrate ships public OAuth clients without deployment secrets; vendor addons ship their own."""
 
     config = apps.get_app_config("integrate")
     manifest = resource_manifest_for(config)
@@ -125,7 +125,7 @@ def test_integrate_config_installs_public_oauth_provider_resources() -> None:
     entry = ResourceEntry.from_declaration(config, "install", manifest["install"][0])
     rows = entry.read_groups()[0].dataset.dict
 
-    assert {row["_xref"] for row in rows} == {"oauth_gemini", "oauth_grok"}
+    assert {row["_xref"] for row in rows} == {"oauth_grok"}
     anthropic = apps.get_app_config("agents_integrate_anthropic")
     anthropic_manifest = resource_manifest_for(anthropic)
     declaration = next(item for item in anthropic_manifest["install"]
@@ -140,11 +140,10 @@ def test_integrate_config_installs_public_oauth_provider_resources() -> None:
     assert {row["_xref"] for row in rows} == {
         "oauth_anthropic_platform",
         "oauth_anthropic_personal",
-        "oauth_gemini",
         "oauth_grok",
     }
     assert entry.read_groups()[0].model_label == "integrate.oauthclient"
-    assert {row["slug"] for row in rows} == {"anthropic-platform", "anthropic-personal", "gemini", "grok"}
+    assert {row["slug"] for row in rows} == {"anthropic-platform", "anthropic-personal", "grok"}
     rows_by_xref = {row["_xref"]: row for row in rows}
     platform = rows_by_xref["oauth_anthropic_platform"]
     assert platform["provider_type"] == "anthropic"
@@ -179,28 +178,14 @@ def test_integrate_config_installs_public_oauth_provider_resources() -> None:
     assert personal["external_id_claim"] == "account.uuid"
     assert personal["email_claim"] == "account.email_address"
     assert "client_secret" not in personal
-    gemini = rows_by_xref["oauth_gemini"]
-    assert gemini["environment"] == "prod"
-    assert gemini["client_id"] == "681255809395-oo8ft2oprdrnp9e3aqf6av3hmdib135j.apps.googleusercontent.com"
-    assert gemini["authorize_endpoint"] == "https://accounts.google.com/o/oauth2/v2/auth"
-    assert gemini["token_endpoint"] == "https://oauth2.googleapis.com/token"
-    # Clear the former profile override so Google metadata supplies the OIDC
-    # subject-bearing endpoint (exercised by the seed profile test in test_oidc).
-    assert gemini["userinfo_endpoint"] == ""
-    assert gemini["discovery_url"] == "https://accounts.google.com/.well-known/openid-configuration"
-    assert gemini["is_enabled"] is True
-    # OIDC login trust config (issuer/jwks) lives in the OIDC login addon, not
-    # the integrate base seed.
-    assert "issuer" not in gemini
-    assert "jwks_uri" not in gemini
-    assert gemini["display_name_claim"] == "name"
-    assert gemini["avatar_url_claim"] == "picture"
-    assert "client_secret" not in gemini
     grok = rows_by_xref["oauth_grok"]
     assert grok["environment"] == "prod"
     assert grok["client_id"] == "b1a00492-073a-47ea-816f-4c329264a828"
     assert grok["authorize_endpoint"] == "https://auth.x.ai/oauth2/authorize"
     assert grok["token_endpoint"] == "https://auth.x.ai/oauth2/token"
+    # OIDC metadata is OAuth-generic: it rides on the row's own seed.
+    assert grok["issuer"] == "https://auth.x.ai"
+    assert grok["discovery_url"] == "https://auth.x.ai/.well-known/openid-configuration"
     assert grok["is_enabled"] is False
     assert "client_secret" not in grok
 
@@ -435,7 +420,7 @@ def test_knowledge_config_owns_handbook_demo_seed() -> None:
 
 
 def test_iam_integrate_oidc_config_installs_oauth_client_oidc_defaults() -> None:
-    """The OIDC login addon ships id-token trust config for OAuth client rows."""
+    """The OIDC login addon ships login policy, never endpoints, for OAuth client rows."""
 
     config = apps.get_app_config("iam_integrate_oidc")
     manifest = resource_manifest_for(config)
@@ -443,9 +428,7 @@ def test_iam_integrate_oidc_config_installs_oauth_client_oidc_defaults() -> None
     assert manifest["install"] == (
         {"path": "resources/install/010_integrate.oauthclient.yaml", "adopt": ("slug", "environment")},
     )
-    assert manifest["demo"] == (
-        {"path": "resources/demo/010_integrate.oauthclient.yaml", "adopt": ("slug", "environment")},
-    )
+    assert manifest["demo"] == ()
 
     oidc_rows = ResourceEntry.from_declaration(config, "install", manifest["install"][0]).read_groups()[0].dataset.dict
     assert (
@@ -453,25 +436,17 @@ def test_iam_integrate_oidc_config_installs_oauth_client_oidc_defaults() -> None
         == "integrate.oauthclient"
     )
     oidc_by_xref = {row["_xref"]: row for row in oidc_rows}
-    assert set(oidc_by_xref) == {"oauth_gemini_oidc", "oauth_grok_oidc"}
-    gemini_oidc = oidc_by_xref["oauth_gemini_oidc"]
-    assert gemini_oidc["slug"] == "gemini"
-    assert gemini_oidc["environment"] == "prod"
-    assert gemini_oidc["login_enabled"] is True
-    assert gemini_oidc["issuer"] == "https://accounts.google.com"
-    assert gemini_oidc["jwks_uri"] == "https://www.googleapis.com/oauth2/v3/certs"
-    assert gemini_oidc["discovery_url"] == "https://accounts.google.com/.well-known/openid-configuration"
+    assert set(oidc_by_xref) == {"oauth_google_oidc", "oauth_gemini_oidc", "oauth_grok_oidc"}
+    for row in oidc_rows:
+        assert row["environment"] == "prod"
+        assert row["login_enabled"] is True
+        assert not {"issuer", "jwks_uri", "discovery_url", "authorize_endpoint", "token_endpoint"} & row.keys()
+    assert oidc_by_xref["oauth_google_oidc"]["slug"] == "google"
+    assert oidc_by_xref["oauth_google_oidc"]["link_on_email_match"] is True
+    assert oidc_by_xref["oauth_gemini_oidc"]["slug"] == "gemini"
     grok_oidc = oidc_by_xref["oauth_grok_oidc"]
     assert grok_oidc["slug"] == "grok"
-    assert grok_oidc["environment"] == "prod"
-    assert grok_oidc["login_enabled"] is True
-    assert grok_oidc["issuer"] == "https://auth.x.ai"
-    assert grok_oidc["discovery_url"] == "https://auth.x.ai/.well-known/openid-configuration"
-    demo_rows = _resource_rows(config, "demo", "resources/demo/010_integrate.oauthclient.yaml")
-    assert demo_rows["demo_google"]["slug"] == "google"
-    assert demo_rows["demo_google"]["environment"] == "prod"
-    assert demo_rows["demo_google"]["provider_type"] == "google"
-    assert demo_rows["demo_google"]["login_enabled"] is True
+    assert grok_oidc["provider_type"] == "generic_oidc"
 
 
 def test_integrate_config_installs_agentic_vendor_resources() -> None:

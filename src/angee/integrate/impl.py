@@ -38,6 +38,12 @@ class IntegrationImpl(ImplBase):
     label = "Integration"
     icon = ""
     oauth_client: ClassVar[str] = ""
+    oauth_scopes: ClassVar[tuple[str, ...]] = ()
+    """Scopes this implementation needs beyond its OAuth client's default scopes.
+
+    Connect requests them with the defaults; each must be in the client's
+    ``scopes_catalogue`` (``OAuthClient.requested_scopes``).
+    """
     requires_connection_discovery: ClassVar[bool] = False
     """Opt into the asynchronous discover/apply connection lifecycle."""
 

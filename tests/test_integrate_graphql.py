@@ -45,6 +45,7 @@ from tests import (
 )
 from tests.conftest import (
     Credential,
+    ExternalAccount,
     Integration,
     OAuthClient,
     SchemaAddon,
@@ -818,13 +819,7 @@ def test_graphql_oauth_client_create_materializes_omitted_impl_defaults(
     client = OAuthClient.objects.as_user(admin).get(sqid=created["id"])
     assert client.discovery_url == "https://accounts.google.com/.well-known/openid-configuration"
     assert client.authorize_endpoint == "https://accounts.google.com/o/oauth2/v2/auth"
-    assert client.default_scopes == [
-        "openid",
-        "profile",
-        "email",
-        "https://www.googleapis.com/auth/userinfo.email",
-        "https://www.googleapis.com/auth/userinfo.profile",
-    ]
+    assert client.default_scopes == ["openid", "email", "profile"]
 
 
 def test_impl_choices_are_admin_only(db: None) -> None:
@@ -1065,7 +1060,10 @@ def test_attach_integration_credential_targets_owned_concrete_child(
 def test_connect_integration_reuses_live_oauth_for_explicit_concrete_child(
     db: None,
 ) -> None:
-    """OAuth ingress carries the authorized child resource and public id through attach."""
+    """OAuth ingress carries the authorized child resource and public id through attach.
+
+    The integration stays connected as its account, whose live credential is reused.
+    """
 
     bridge = make_integration(
         "oauth-concrete-target",
@@ -1073,9 +1071,13 @@ def test_connect_integration_reuses_live_oauth_for_explicit_concrete_child(
         backend_class="stub",
         model=VcsBridge,
     )
-    credential = bridge.credential
     with system_context(reason="test.integrate.oauth_concrete_target.disconnect"):
-        VcsBridge.objects.filter(pk=bridge.pk).update(credential=None, lifecycle="disconnected")
+        account = ExternalAccount.objects.link(bridge.credential.oauth_client, "concrete-account", owner=bridge.owner)
+        credential = Credential.objects.upsert_for_user(
+            bridge.owner, bridge.credential.oauth_client, CredentialKind.OAUTH, {"access_token": "token"},
+            external_account=account,
+        )
+        VcsBridge.objects.filter(pk=bridge.pk).update(credential=None, account=account, lifecycle="disconnected")
     mutation = """
         mutation Connect($resource: String!, $id: ID!) {
           connect_integration(resource: $resource, id: $id) {
@@ -1093,7 +1095,7 @@ def test_connect_integration_reuses_live_oauth_for_explicit_concrete_child(
         "integration": {
             "id": _public_id(bridge),
             "lifecycle": "CONNECTED",
-            "credential": {"display_name": "Oauth-Concrete-Target"},
+            "credential": {"display_name": "Oauth-Concrete-Target (concrete-account)"},
         },
         "error_code": None,
     }
@@ -2210,7 +2212,7 @@ def test_connect_completion_returns_account_switch_as_a_typed_result(
         )
     )["connect_account_complete"]
     assert result == {
-        "error": "Detach this credential from its integrations before changing the external account.",
+        "error": "This integration is connected to another account; add a new integration for this one.",
         "error_code": "account_switch_refused",
         "account": None,
     }

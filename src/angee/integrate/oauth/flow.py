@@ -10,7 +10,7 @@ differ between them (OAuth vs OIDC protocol).
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, cast
 
@@ -54,12 +54,16 @@ def issue_flow(
     next_path: str = "/",
     flow: state.StateFlow = state.StateFlow.CONNECT,
     integration_id: str = "",
+    scopes: Sequence[str] | None = None,
+    login_hint: str = "",
 ) -> tuple[str, state.StateRecord, str, str]:
     """Issue and session-bind state for one redirect flow.
 
     Returns ``(state_token, record, effective_redirect_uri, mode)``. The client
     owns whether the browser-proposed redirect works or a manual paste is needed;
-    the effective redirect is what we issue, sign, and exchange.
+    the effective redirect is what we issue, sign, and exchange. ``scopes`` are
+    the flow's requested scopes (``OAuthClient.requested_scopes``); omitted, the
+    client's default scopes are requested.
     """
 
     oauth_client.require_configured()
@@ -71,6 +75,8 @@ def issue_flow(
         next_path=next_path,
         flow=flow,
         integration_id=integration_id,
+        scopes=tuple(oauth_client.default_scope_values if scopes is None else scopes),
+        login_hint=login_hint,
     )
     session = cast(Any, request).session
     session[f"{_SESSION_OAUTH_CLIENT_PREFIX}{state_token}"] = str(oauth_client.sqid)
@@ -87,9 +93,15 @@ def start(
     next_path: str = "/",
     flow: state.StateFlow = state.StateFlow.CONNECT,
     integration_id: str = "",
+    scopes: Sequence[str] | None = None,
+    login_hint: str = "",
     authorize_url_builder: Callable[[OAuthClient, str, state.StateRecord, str], str] | None = None,
 ) -> OAuthStart:
-    """Issue state and return the browser redirect facts for one OAuth/OIDC flow."""
+    """Issue state and return the browser redirect facts for one OAuth/OIDC flow.
+
+    Without ``authorize_url_builder`` the flow is an account connect
+    (``_connect_authorize_url``).
+    """
 
     state_token, record, effective_redirect_uri, mode = issue_flow(
         request,
@@ -99,8 +111,10 @@ def start(
         next_path=next_path,
         flow=flow,
         integration_id=integration_id,
+        scopes=scopes,
+        login_hint=login_hint,
     )
-    builder = authorize_url_builder or _default_authorize_url
+    builder = authorize_url_builder or _connect_authorize_url
     return OAuthStart(
         authorize_url=builder(oauth_client, state_token, record, effective_redirect_uri),
         state=state_token,
@@ -173,17 +187,28 @@ def pkce_challenge(code_verifier: str | None) -> str | None:
     return create_s256_code_challenge(code_verifier)
 
 
-def _default_authorize_url(
+def _connect_authorize_url(
     oauth_client: OAuthClient,
     state_token: str,
     record: state.StateRecord,
     redirect_uri: str,
 ) -> str:
-    """Return the standard OAuth authorize URL for one started flow."""
+    """Return the account-connect authorize URL, on which the user chooses the account.
 
+    ``prompt=select_account`` (OIDC Core §3.1.2.1) joins any prompt the
+    registration configures, so one client can connect several accounts of one
+    user; ``login_hint`` preselects the account the consumer expects. Providers
+    ignore authorize parameters they do not know (RFC 6749 §3.1).
+    """
+
+    configured = oauth_client.authorize_param_values.get("prompt", "").split()
+    extras = {"prompt": " ".join(dict.fromkeys([*configured, "select_account"]))}
+    if record.login_hint:
+        extras["login_hint"] = record.login_hint
     return OAuthClientProtocol(oauth_client).authorize_url(
         state=state_token,
         redirect_uri=redirect_uri,
-        scopes=oauth_client.default_scope_values,
+        scopes=record.scopes,
         code_challenge=pkce_challenge(record.code_verifier),
+        **extras,
     )

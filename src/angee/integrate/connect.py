@@ -2,10 +2,10 @@
 
 The connect counterpart to OIDC login. It authenticates *out* to a provider on
 behalf of the already-signed-in user, labels their ``ExternalAccount`` from the
-userinfo profile, and stores the OAuth ``Credential`` the integration runtime
-acts with. No ID token, no user resolution, no session — that is login, and lives
-in ``iam_integrate_oidc``. Works for any ``OAuthClient`` (an OIDC refinement is
-not required).
+userinfo profile (or the verified ID token when the grant cannot read userinfo),
+and stores the OAuth ``Credential`` the integration runtime acts with. No user
+resolution, no session — that is login, and lives in ``iam_integrate_oidc``.
+Works for any ``OAuthClient`` (an OIDC login refinement is not required).
 """
 
 from __future__ import annotations
@@ -43,19 +43,30 @@ def connect_integration_target(
     redirect_uri: str,
     next_path: str,
 ) -> flow.OAuthStart | None:
-    """Attach an owned reusable credential, or start the owner's bound OAuth flow.
+    """Attach the bound account's live credential, or start the owner's OAuth flow.
 
-    None means attachment completed. OAuthStart is the existing native browser
-    flow contract; transports own authentication/exposure and result projection.
+    The flow requests the client's default scopes plus the capability's own
+    (``OAuthClient.requested_scopes``), and lets the user choose the account,
+    hinted with the account the integration is connected as. Only that account's
+    credential is reused, and only when it holds the capability's scopes; an
+    integration not yet connected as an account always starts the flow. None means
+    attachment completed. OAuthStart is the existing native browser flow contract;
+    transports own authentication/exposure and result projection.
     """
 
     integration.require_connect(user)
     oauth_client.require_configured()
-    credential_model = cast("type[CredentialModel]", apps.get_model("integrate", "Credential"))
-    credential = credential_model.objects.live_oauth_for_user(user, oauth_client)
-    if credential is not None:
-        integration.attach_credential(credential)
-        return None
+    consumer_scopes = integration.connection_oauth_scopes
+    scopes = oauth_client.requested_scopes(consumer_scopes)
+    account = integration.bound_account(oauth_client)
+    if account is not None:
+        credential_model = cast("type[CredentialModel]", apps.get_model("integrate", "Credential"))
+        credential = credential_model.objects.live_oauth_for_user(
+            user, oauth_client, external_account=account, scopes=consumer_scopes,
+        )
+        if credential is not None:
+            integration.attach_credential(credential)
+            return None
     if not redirect_uri:
         raise OAuthFlowError("redirect_uri_required", 400, "OAuth redirect URI is required.")
     return flow.start(
@@ -66,6 +77,8 @@ def connect_integration_target(
         next_path=flow.coerce_next_path(next_path, request),
         flow=StateFlow.CONNECT,
         integration_id=str(integration.sqid),
+        scopes=scopes,
+        login_hint="" if account is None else account.email,
     )
 
 
@@ -92,7 +105,9 @@ def complete_account_connect(
 
     The connecting user is the one captured in state when the flow started; the
     account is labelled from the provider userinfo and its OAuth credential stored
-    under ``(user, provider)``.
+    under ``(user, provider, account)``. A grant scoped to one resource may be
+    unable to read userinfo; the account then comes from the ID token the code
+    exchange returned, verified against the client's issuer and JWKS.
     """
 
     record = flow.consume_validated_state(
@@ -103,13 +118,18 @@ def complete_account_connect(
     )
     user = _state_user(record)
     protocol = OAuthClientProtocol(oauth_client)
-    tokens, claims, _id_token = protocol.exchange_identity(
+    tokens, claims, id_token = protocol.exchange_identity(
         code=code,
         redirect_uri=redirect_uri,
         code_verifier=record.code_verifier,
         state=state_token,
     )
     external_id = oauth_client.external_id_from_claims(claims)
+    if not external_id and id_token:
+        # OIDC Core §5.3.2: userinfo describes the verified token's subject, so the
+        # verified claims win over anything userinfo returned.
+        claims = {**claims, **protocol.verify_id_token(id_token)}
+        external_id = oauth_client.external_id_from_claims(claims)
     if not external_id:
         # Restricted tokens may be unable to call userinfo. Anthropic's one-year
         # inference-only exchange returns the stable ``account`` mapping in the

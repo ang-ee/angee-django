@@ -118,7 +118,23 @@ The provider's `refine_grant(protocol, tokens)` runs after code exchange and
 before profile lookup or credential persistence. It can call
 `OAuthClientProtocol.exchange_grant(grant_type, **grant)` for an additional
 wire exchange. Those names distinguish refinement from a token request.
-Product presets and registrations belong to their capability addons.
+Product presets and registrations belong to their capability addons; a vendor
+whose one client serves several capabilities has its own addon
+([`integrate_google`](../integrate_google/__init__.py)).
+
+One client serves every consumer of a provider. An implementation names its
+client with `IntegrationImpl.oauth_client` and the scopes it needs beyond the
+client's defaults with `IntegrationImpl.oauth_scopes`; connect requests
+`OAuthClient.requested_scopes`, which refuses a scope outside the client's
+`scopes_catalogue`. Each external account has its own credential, keyed
+`(user, oauth_client, external_account)`, so one user connects several accounts
+through one client. Connect sends `prompt=select_account` and hints the account
+an integration is connected as; it reuses only that account's live credential,
+and only when its granted scopes cover the implementation's. An integration
+connected as one account is never re-pointed at another
+(`account_switch_refused`). A grant that cannot read userinfo identifies its
+account from the ID token, which `OAuthClientProtocol.verify_id_token` checks
+against the client's `issuer` and `jwks_uri`.
 
 Connection adapters declare `IntegrationImpl.requires_connection_discovery = True`
 to opt into asynchronous `discover_connection`/`apply_discovery`. Manual and
@@ -134,8 +150,8 @@ connect and OIDC login/link pass them to
 `OAuthClientProtocol.fetch_userinfo(access_token, params=…)`.
 Provider proofs and query vocabulary stay in the provider addon. Connect and
 OIDC login/link share `OAuthClientProtocol.exchange_identity`, which exchanges,
-refines and reads userinfo. OIDC verifies the nonce-bound ID token from the code
-exchange, independently of the refined material stored for API access.
+refines and reads userinfo. OIDC login verifies the nonce-bound ID token from the
+code exchange, independently of the refined material stored for API access.
 Server-side signing reads confidential material only
 through `OAuthClientProtocol.confidential_client_secret()`; public clients are
 refused before secret storage is accessed; confidential clients without a secret

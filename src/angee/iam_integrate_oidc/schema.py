@@ -107,7 +107,7 @@ def _oidc_authorize_url(oauth_client: Any, state_token: str, record: oauth_state
     return OAuthClientOidcProtocol(oauth_client).authorize_url(
         state=state_token,
         redirect_uri=redirect_uri,
-        scopes=oauth_client.default_scope_values,
+        scopes=record.scopes,
         nonce=record.nonce,
         code_challenge=oauth_flow.pkce_challenge(record.code_verifier),
     )
@@ -256,14 +256,12 @@ class OidcLoginMutation:
 
 @strawberry_django.type(OAuthClient, name="OAuthClientType", extend=True)
 class OAuthClientOidcExtension:
-    """Contributes OIDC login fields onto integrate's ``OAuthClientType``.
+    """Contributes OIDC login policy fields onto integrate's ``OAuthClientType``.
 
     The composer has already folded the model extension into the runtime
     ``OAuthClient`` class, so these fields read as native scalar fields.
     """
 
-    issuer: auto
-    jwks_uri: auto
     login_enabled: auto
     link_on_email_match: auto
     create_on_login: auto

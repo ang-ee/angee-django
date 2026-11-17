@@ -7,16 +7,13 @@ from typing import TypedDict
 _Settings = TypedDict(
     "_Settings",
     {
-        "ANGEE_OIDC_JWKS_TTL": int,
         "ANGEE_OAUTH_PROVIDER_TYPE_CLASSES.generic_oidc": str,
-        "ANGEE_OAUTH_PROVIDER_TYPE_CLASSES.google": str,
     },
 )
 
 SETTINGS: _Settings = {
-    "ANGEE_OIDC_JWKS_TTL": 3600,
-    # Discovery caching and the single-use redirect-state TTL are owned by ``integrate``.
+    # Discovery and JWKS caching and the single-use redirect-state TTL are owned by
+    # ``integrate``; the Google preset by ``integrate_google``.
     "ANGEE_OAUTH_PROVIDER_TYPE_CLASSES.generic_oidc": "angee.iam_integrate_oidc.providers.GenericOidc",
-    "ANGEE_OAUTH_PROVIDER_TYPE_CLASSES.google": "angee.iam_integrate_oidc.providers.GoogleType",
 }
 """Django settings contributed when the OIDC login addon is installed."""

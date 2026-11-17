@@ -13,7 +13,6 @@ import time
 from collections.abc import Iterator
 from datetime import timedelta
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 from urllib import parse
@@ -21,7 +20,6 @@ from urllib import parse
 import httpx2
 import jwt
 import pytest
-import yaml
 from asgiref.sync import async_to_sync, sync_to_async
 from django.contrib.auth import get_user_model
 from django.contrib.auth.models import AnonymousUser
@@ -39,8 +37,6 @@ from angee.iam_integrate_oidc import identity
 from angee.iam_integrate_oidc import schema as oidc_schema
 from angee.iam_integrate_oidc.errors import IDENTITY_RESOLUTION_FAILED, IdentityFlowError
 from angee.iam_integrate_oidc.protocol import OAuthClientOidcProtocol
-from angee.iam_integrate_oidc.providers import GoogleType
-from angee.iam_integrate_oidc.testing.provider import KEY_ID, OidcProvider, signing_key
 from angee.integrate import schema as integrate_schema
 from angee.integrate.connect import complete_account_connect
 from angee.integrate.errors import IntegrationError, RequestNotSentError
@@ -62,6 +58,7 @@ from angee.integrate.oauth.errors import (
 )
 from angee.integrate.oauth.providers import GenericOAuth2
 from angee.integrate.testing.http import mock_transport, request_fields
+from angee.integrate.testing.oidc import KEY_ID, OidcProvider, signing_key
 from angee.messaging.testing.models import Handle as PartiesHandle
 from tests.conftest import Credential, ExternalAccount, OAuthClient, SchemaAddon
 from tests.test_parties_graphql import Person as PartiesPerson
@@ -1675,37 +1672,6 @@ def test_oidc_link_refines_the_grant_before_userinfo_and_credential_persistence(
         assert result.account.external_id == "linked-subject"
         assert result.account.display_name == "Linked identity"
         assert Credential.objects.get(user=user, oauth_client=client).secret_value() == "refined"
-
-
-@pytest.mark.django_db
-def test_google_preset_owns_the_subject_bearing_profile_endpoint() -> None:
-    with system_context(reason="test Google preset identity"):
-        client = OAuthClient.objects.create(slug="google-profile", provider_type="google")
-    endpoint = GoogleType.effective_defaults()["userinfo_endpoint"]
-    assert endpoint == "https://openidconnect.googleapis.com/v1/userinfo"
-    assert client.userinfo_endpoint == endpoint
-
-    with mock_transport(lambda request: httpx2.Response(200, json={"sub": "provider-subject"})) as requests:
-        claims = OAuthClientProtocol(client).fetch_userinfo("fake")
-    assert [str(request.url) for request in requests] == [endpoint]
-    assert client.external_id_from_claims(claims) == "provider-subject"
-
-
-def test_google_seed_discovers_the_preset_profile_without_a_conflicting_override() -> None:
-    seed_file = Path(__file__).parents[1] / "src/angee/integrate/resources/install/010_integrate.oauthclient.yaml"
-    seed = next(row for row in yaml.safe_load(seed_file.read_text()) if row["xref"] == "oauth_gemini")
-    client = _stub_oauth_client(**{key: value for key, value in seed.items() if key != "xref"})
-    endpoint = GoogleType.effective_defaults()["userinfo_endpoint"]
-
-    def respond(request: httpx2.Request) -> httpx2.Response:
-        if str(request.url) == client.discovery_url:
-            return httpx2.Response(200, json={"userinfo_endpoint": endpoint})
-        return httpx2.Response(200, json={"sub": "seed-subject"})
-
-    with mock_transport(respond) as requests:
-        claims = OAuthClientProtocol(client).fetch_userinfo("fake")
-    assert str(requests[-1].url) == endpoint
-    assert client.external_id_from_claims(claims) == "seed-subject"
 
 
 @pytest.mark.django_db

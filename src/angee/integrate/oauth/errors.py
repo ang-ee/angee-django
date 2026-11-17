@@ -20,6 +20,8 @@ TOKEN_EXCHANGE_FAILED = "token_exchange_failed"
 PROVIDER_UNAVAILABLE = "provider_unavailable"
 INVALID_ID_TOKEN = "invalid_id_token"
 EXTERNAL_ACCOUNT_RESOLUTION_FAILED = "external_account_resolution_failed"
+SCOPE_NOT_IN_CATALOGUE = "scope_not_in_catalogue"
+ACCOUNT_SWITCH_REFUSED = "account_switch_refused"
 
 _PUBLIC_MESSAGES = {
     INVALID_STATE: "The authorization request is invalid or has expired.",
@@ -30,10 +32,11 @@ _PUBLIC_MESSAGES = {
     PROVIDER_UNAVAILABLE: "The provider is temporarily unavailable. Try again later.",
     INVALID_ID_TOKEN: "The provider returned an invalid identity token.",
     EXTERNAL_ACCOUNT_RESOLUTION_FAILED: "The connected account could not be resolved.",
+    SCOPE_NOT_IN_CATALOGUE: "This connection does not offer the access this integration needs.",
+    ACCOUNT_SWITCH_REFUSED: "This integration is connected to another account; add a new integration for this one.",
     "redirect_uri_required": "An OAuth redirect URI is required.",
     "oauth_client_not_connectable": "This connection is not available.",
     "account_already_linked": "This account is already linked.",
-    "account_switch_refused": "Detach this credential from its integrations before changing the external account.",
 }
 
 

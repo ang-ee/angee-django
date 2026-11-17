@@ -1,9 +1,10 @@
 """Stateless OAuth2 protocol bound to one ``OAuthClient`` registration row.
 
 The base of the connection protocol: authorization-code redirect, code exchange,
-refresh, and revocation — everything needed to connect an external account for
-API access (Gemini, Grok, Anthropic), with no identity/login concern. OIDC login
-extends this in ``angee.iam_integrate_oidc.protocol.OAuthClientOidcProtocol``.
+refresh, revocation and OIDC ID-token verification — everything needed to connect
+an external account for API access (Gemini, Grok, Anthropic) and to identify it,
+with no login concern. OIDC login extends this in
+``angee.iam_integrate_oidc.protocol.OAuthClientOidcProtocol`` with its nonce.
 
 The OAuth2 protocol mechanism (token request, client authentication, PKCE, and
 the token-response parsing) is owned by Authlib's ``OAuth2Client`` over httpx2;
@@ -13,29 +14,35 @@ and client id, with no client session or secret (the OIDC layer adds its
 nonce), and the small
 ``token_request_format == "json"`` provider quirk — a non-standard JSON
 token body Authlib does not emit, plus Anthropic's required ``state`` echo —
-keeps a documented shim.
+keeps a documented shim. PyJWT owns ID-token signature and claim checks.
 
 Endpoints are taken from the row as configured; when a row has a discovery URL,
-the protocol asks the row to fill missing OAuth endpoints before failing. OIDC
-login extends this in ``iam_integrate_oidc`` for ID-token/userinfo verification.
+the protocol asks the row to fill missing OAuth endpoints, issuer and JWKS URI
+before failing.
 """
 
 from __future__ import annotations
 
 import logging
 from collections.abc import Iterable, Mapping
+from functools import cache
 from typing import TYPE_CHECKING, Any, Literal
 from urllib import parse
 
 import httpx2
+import jwt
 from authlib.integrations.base_client.errors import OAuthError
 from authlib.integrations.httpx_client import OAuth2Client
 from authlib.oauth2.rfc6749.parameters import prepare_grant_uri
+from django.conf import settings
+from jwt import PyJWKClient
+from jwt.exceptions import PyJWKClientConnectionError, PyJWKClientError, PyJWTError
 
 from angee.integrate.errors import IntegrationError, RequestNotSentError
 from angee.integrate.http import HTTP_TIMEOUT_SECONDS, HttpClient
 from angee.integrate.oauth.errors import (
     CLIENT_NOT_CONFIGURED,
+    INVALID_ID_TOKEN,
     MISSING_ENDPOINT,
     TOKEN_EXCHANGE_FAILED,
     OAuthFlowError,
@@ -69,6 +76,10 @@ _TOKEN_MATERIAL_KEYS = ("access_token", "refresh_token", "id_token", "expires_in
 _TOKEN_RESPONSE_IDENTITY_KEYS = ("account", "organization")
 _GRANT_URI_ARGUMENTS = frozenset({"uri", "client_id", "response_type", "redirect_uri", "scope", "state"})
 """``prepare_grant_uri``'s own arguments, which a provider's authorize extras never replace."""
+_ALLOWED_JWT_ALGORITHMS = (
+    "RS256",
+    "ES256",
+)
 
 
 def oauth_get_json(url: str, *, headers: dict[str, str] | None = None) -> Any:
@@ -103,10 +114,17 @@ class OAuthClientProtocol:
         redirect_uri: str,
         scopes: Iterable[str],
         code_challenge: str | None = None,
+        **extras: str,
     ) -> str:
-        """Return the provider authorization URL for one OAuth code flow."""
+        """Return the provider authorization URL for one OAuth code flow.
 
-        return self._grant_uri(state=state, redirect_uri=redirect_uri, scopes=scopes, code_challenge=code_challenge)
+        ``extras`` are the flow's own authorize parameters (``prompt``,
+        ``login_hint``); they replace the registration's configured values.
+        """
+
+        return self._grant_uri(
+            state=state, redirect_uri=redirect_uri, scopes=scopes, code_challenge=code_challenge, **extras,
+        )
 
     def exchange_code(
         self,
@@ -159,6 +177,40 @@ class OAuthClientProtocol:
             access_token, params=self.oauth_client.userinfo_params(self, access_token),
         )
         return tokens, claims, id_token
+
+    def verify_id_token(self, id_token: str, *, nonce: str | None = None) -> dict[str, Any]:
+        """Verify one OIDC ID token against this client's issuer and JWKS, and return its claims.
+
+        A blank issuer or JWKS URI is discovered first. The token must be signed by
+        a key the JWKS publishes, name this client as audience and this issuer, and
+        carry ``exp`` and ``iat``. ``nonce`` is checked when the flow sent one (OIDC
+        Core §3.1.3.7); connect sends none, login always does.
+        """
+
+        if not id_token:
+            raise OAuthFlowError(INVALID_ID_TOKEN, 400)
+        if not self.oauth_client.issuer or not self.oauth_client.jwks_uri:
+            self.ensure_endpoints()
+        issuer, jwks_uri = self.oauth_client.issuer, self.oauth_client.jwks_uri
+        if not issuer or not jwks_uri:
+            raise OAuthFlowError(MISSING_ENDPOINT, 400)
+        try:
+            signing_key = _jwks_client(jwks_uri).get_signing_key_from_jwt(id_token)
+            claims = jwt.decode(
+                id_token,
+                signing_key.key,
+                algorithms=_ALLOWED_JWT_ALGORITHMS,
+                audience=self.oauth_client.client_id,
+                issuer=issuer,
+                options={"require": ["exp", "iat"], "verify_exp": True, "verify_iss": True, "verify_aud": True},
+            )
+        except (PyJWKClientError, PyJWTError, ValueError, TypeError) as exc:
+            raise OAuthFlowError(INVALID_ID_TOKEN, 400) from exc
+        if not isinstance(claims, dict):
+            raise OAuthFlowError(INVALID_ID_TOKEN, 400)
+        if nonce is not None and claims.get("nonce") != nonce:
+            raise OAuthFlowError(INVALID_ID_TOKEN, 400)
+        return claims
 
     def fetch_userinfo(self, access_token: str, *, params: Mapping[str, str] | None = None) -> dict[str, Any]:
         """Best-effort fetch of profile claims with one OAuth access token.
@@ -434,6 +486,38 @@ class OAuthClientProtocol:
         if not value:
             raise OAuthFlowError(MISSING_ENDPOINT, 400)
         return value
+
+
+class _PinnedPyJWKClient(PyJWKClient):
+    """PyJWT JWKS parser whose fetches compose the shared OAuth GET policy."""
+
+    def __init__(self, uri: str) -> None:
+        """Bind one JWKS URI with PyJWT's JWK-set TTL cache enabled."""
+
+        super().__init__(
+            uri,
+            cache_jwk_set=True,
+            lifespan=int(settings.ANGEE_OIDC_JWKS_TTL),
+        )
+
+    def fetch_data(self) -> Any:
+        """Fetch the JWKS document through ``oauth_get_json``.
+
+        Only the transport is replaced: PyJWT's ``get_jwk_set`` validates,
+        parses and caches the payload this returns.
+        """
+
+        try:
+            return oauth_get_json(self.uri)
+        except Exception as exc:
+            raise PyJWKClientConnectionError("Failed to fetch the JWKS document.") from exc
+
+
+@cache
+def _jwks_client(jwks_uri: str) -> _PinnedPyJWKClient:
+    """Return the process-local JWKS client for one URI."""
+
+    return _PinnedPyJWKClient(jwks_uri)
 
 
 def _outbound_kwargs() -> dict[str, Any]:
