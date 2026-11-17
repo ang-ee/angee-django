@@ -39,7 +39,9 @@ export function useOrganizationFields(): React.ReactElement {
         <Field name="domain" label={t("organization.field.domain")} />
       </Group>
       {containerContents(extraFields)}
-      <Field name="notes" />
+      <Group label={t("common.notes")} pane="notes" columns={1}>
+        <Field name="notes" />
+      </Group>
     </>
   );
 }

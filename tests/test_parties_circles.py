@@ -135,7 +135,7 @@ def test_manual_contact_reuse_preserves_confirmed_owner_and_hides_foreign_handle
             label="Authoritative label",
             created_by=owner,
         )
-        confirmed_party.with_actor(owner).confirm(aspect="handle", handle=shared, values={})
+        confirmed_party.with_actor(owner).confirm_statement(aspect="handle", handle=shared, values={})
         reader_handle = Handle._base_manager.create(
             platform=Handle.Platform.EMAIL,
             value="reader-shared@example.test",
@@ -379,7 +379,7 @@ def _contested_handle(owner: Any, value: str, *links: tuple[float, bool]) -> tup
         party = Party._base_manager.create(display_name=f"Party {index}", created_by=owner)
         claims.append(
             (
-                party.with_actor(owner).confirm(aspect="handle", handle=handle, values={})
+                party.with_actor(owner).confirm_statement(aspect="handle", handle=handle, values={})
                 if is_confirmed
                 else Party.objects.assert_handle(party, handle, asserted_by=owner, confidence=confidence)
             )
@@ -456,10 +456,10 @@ def test_moving_handle_statements_retains_each_partys_decisions_and_evidence(db:
         confirmed, dismissed, stronger = (
             Party._base_manager.create(display_name=name, created_by=owner) for name in ("Bob", "Robert", "Rob")
         )
-        confirmed.with_actor(owner).confirm(aspect="handle", handle=alias, values={})
+        confirmed.with_actor(owner).confirm_statement(aspect="handle", handle=alias, values={})
         folded = Party.objects.assert_handle(confirmed, phone, asserted_by=owner, confidence=0.6, evidence=[alias])
         Party.objects.assert_handle(dismissed, alias, asserted_by=owner, confidence=0.6)
-        dismissed.with_actor(owner).dismiss(aspect="handle", handle=alias)
+        dismissed.with_actor(owner).dismiss_statement(aspect="handle", handle=alias)
         Party.objects.assert_handle(stronger, alias, asserted_by=owner, confidence=0.3)
         Party.objects.assert_handle(stronger, phone, asserted_by=owner, confidence=0.9)
         alias.refresh_from_db()
@@ -593,7 +593,7 @@ def test_merging_a_handle_fills_only_what_the_kept_handle_lacks_and_moves_its_st
         )
         Handle._base_manager.filter(pk=phone.pk).update(display_name="Bob", metadata={"jid": "p"})
         party = Party._base_manager.create(display_name="Bob", created_by=owner)
-        stance = party.with_actor(owner).confirm(aspect="handle", handle=alias, values={})
+        stance = party.with_actor(owner).confirm_statement(aspect="handle", handle=alias, values={})
 
         kept = phone.fold([alias])
 
@@ -1534,7 +1534,7 @@ def test_an_authoritative_stream_outranks_a_persons_edit_but_never_a_decision(db
         party.refresh_from_db()
         assert party.display_name == "Ada (me)"
 
-        party.with_actor(owner).confirm(aspect="identity", values={"display_name": "Ada"})
+        party.with_actor(owner).confirm_statement(aspect="identity", values={"display_name": "Ada"})
         SyncStream.objects.set_authoritative(stream, True)
         party.refresh_from_db()
         assert party.display_name == "Ada"
@@ -1605,7 +1605,7 @@ def test_dismissing_an_identity_value_clears_it_and_confirming_the_stance_restor
         owner = _user("dismiss-owner")
         party = Party._base_manager.create(display_name="Ada", created_by=owner)
         stance = party.with_actor(owner).statements.set(aspect="identity", values={"display_name": "Ada"})
-        party.with_actor(owner).dismiss(aspect="identity")
+        party.with_actor(owner).dismiss_statement(aspect="identity")
         party.refresh_from_db()
         assert party.display_name == ""
         assert party.statements.provenance("display_name").get().is_dismissed

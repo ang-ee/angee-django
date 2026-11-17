@@ -43,7 +43,10 @@ export interface ProjectFormSelection {
 }
 
 /** Standard project form, shared by every route mounting projects. */
-export function useProjectFormDeclaration(selection: ProjectFormSelection = {}): React.ReactElement {
+export function useProjectFormDeclaration(
+  selection: ProjectFormSelection = {},
+  props: Omit<FormProps, "resource" | "children"> = {},
+): React.ReactElement {
   const t = useProjectsT();
   const startResolutionOptions = useEnumOptions(PROJECT_MODEL, "start_date_resolution");
   const targetResolutionOptions = useEnumOptions(PROJECT_MODEL, "target_date_resolution");
@@ -80,31 +83,34 @@ export function useProjectFormDeclaration(selection: ProjectFormSelection = {}):
   </>;
   return (
     <Form
+      {...props}
       resource={PROJECT_MODEL}
-      returning={["permissions", "on_path", "status_changed_at", "selectable_milestones.id", "current_milestone.id", "current_milestone.name", ...(selection.returning ?? [])]}
-      contextLine={selection.contextLine}
-      headerExtras={selection.headerExtras}
-      eyebrow={selection.eyebrow ?? t("project.eyebrow")}
+      returning={["permissions", "on_path", "status_changed_at", "selectable_milestones.id", "current_milestone.id", "current_milestone.name", ...(props.returning ?? []), ...(selection.returning ?? [])]}
+      contextLine={selection.contextLine ?? props.contextLine}
+      headerExtras={selection.headerExtras ?? props.headerExtras}
+      eyebrow={selection.eyebrow ?? props.eyebrow ?? t("project.eyebrow")}
     >
       <Field name="title" title />
       <Field name="revision" readOnly hidden />
       <Field name="status" readOnly hidden />
       <Field name="current_milestone" status fill widget="projects.phase" />
       {(selection.groups ?? ["planning", "details"]).includes("planning") ? <Group label={t("project.group.planning")} columns={2}>
-        <Field name="owner" readOnly />
         <Field name="lead" />
-        <Field name="start_date" />
-        <Field name="start_date_resolution" options={startResolutionOptions} />
-        <Field name="target_date" />
-        <Field name="target_date_resolution" options={targetResolutionOptions} />
         <Field name="tags" />
+        <Field name="start_date" />
+        <Field name="target_date" />
       </Group> : null}
-      {(selection.groups ?? ["planning", "details"]).includes("details") ? <Group label={t("project.group.details")} columns={2} collapsible defaultOpen={false}>
+      <Group label={t("project.group.description")} pane="description">
+        <Field name="body" label={t("project.group.description")} widget="markdown.editor" />
+      </Group>
+      {(selection.groups ?? ["planning", "details"]).includes("details") ? <Group label={t("project.group.details")} columns={2} pane="project-settings">
+        <Field name="owner" readOnly />
+        <Field name="start_date_resolution" label={t("project.startPrecision")} options={startResolutionOptions} />
+        <Field name="target_date_resolution" label={t("project.targetPrecision")} options={targetResolutionOptions} />
         <Field name="owns_items" />
         <Field name="folder" />
         <Field name="converted_from" readOnly />
       </Group> : null}
-      <Field name="body" widget="markdown.editor" body />
       {standardActions}
       {selection.extraActions}
     </Form>
@@ -140,6 +146,8 @@ function ProjectMilestonesTab({ recordId }: RecordPanelContext): React.ReactElem
     <ListView<MilestoneRow>
       resource={MILESTONE_MODEL}
       scope="local"
+      presentation="embedded"
+      chrome={{ heading: false }}
       fields={["revision"]}
       baseFilter={{ project: { exact: recordId } }}
       order={{ sort_order: "ASC" }}
@@ -162,6 +170,7 @@ function ProjectParticipantsTab({ recordId }: RecordPanelContext): React.ReactEl
     <ListView
       resource={PARTICIPANT_MODEL}
       presentation="embedded"
+      chrome={{ heading: false }}
       fields={["id", "party.display_name", "kind", "created_at"]}
       baseFilter={{ project: { exact: recordId } }}
       columns={[
@@ -215,6 +224,7 @@ function ProjectTimelineTab({ recordId }: RecordPanelContext): React.ReactElemen
     resource={MILESTONE_MODEL}
     scope="local"
     presentation="embedded"
+    chrome={{ heading: false }}
     defaultView="gantt"
     columns={[{ field: "name" }]}
     baseFilter={{ project: { exact: recordId } }}

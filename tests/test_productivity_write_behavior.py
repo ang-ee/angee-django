@@ -305,9 +305,9 @@ def test_deferred_stage_default_and_validation_call_hooks(
     original_stages = RoutingPipelineStage.for_container
     seen = []
 
-    def legacy_default(cls: Any, container: Any) -> Any:
+    def legacy_default(cls: Any, container: Any, **kwargs: Any) -> Any:
         seen.append(("default", container._state.db))
-        return original_default(container)
+        return original_default(container, **kwargs)
 
     def legacy_stages(cls: Any, container: Any) -> Any:
         seen.append(("stages", container._state.db))
@@ -317,7 +317,8 @@ def test_deferred_stage_default_and_validation_call_hooks(
     monkeypatch.setattr(RoutingPipelineStage, "for_container", classmethod(legacy_stages))
     assert record.resolve_default_stage().pk == stage.pk
     record.validate_stage_scope()
-    assert seen == [("default", "default"), ("stages", "default"), ("stages", "default")]
+    # The applicable stages are read once for the default and once for the scope check.
+    assert seen == [("stages", "default"), ("default", "default"), ("stages", "default")]
 
 
 @pytest.mark.django_db(transaction=True)

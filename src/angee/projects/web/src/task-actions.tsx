@@ -99,7 +99,10 @@ export interface TaskFormSelection {
 }
 
 /** Shared task form for collection routes and board create flows. */
-export function useTaskFormDeclaration(selection: TaskFormSelection = {}): React.ReactElement {
+export function useTaskFormDeclaration(
+  selection: TaskFormSelection = {},
+  props: Omit<FormProps, "resource" | "children"> = {},
+): React.ReactElement {
   const t = useProjectsT();
   const visibilityOptions = useEnumOptions(TASK_MODEL, "visibility", { casing: "upper" });
   const statusOptions = useEnumOptions(TASK_MODEL, "status");
@@ -155,8 +158,8 @@ export function useTaskFormDeclaration(selection: TaskFormSelection = {}): React
       icon="projects" run={promote} /> : null}
   </>;
   return (
-    <Form resource={TASK_MODEL} contextLine={selection.contextLine} headerExtras={selection.headerExtras}
-      eyebrow={selection.eyebrow ?? t("task.eyebrow")} returning={selection.returning}>
+    <Form {...props} resource={TASK_MODEL} contextLine={selection.contextLine ?? props.contextLine} headerExtras={selection.headerExtras ?? props.headerExtras}
+      eyebrow={selection.eyebrow ?? props.eyebrow ?? t("task.eyebrow")} returning={[...(props.returning ?? []), ...(selection.returning ?? [])]}>
       <Field name="title" title />
       <Field name="allowed_visibility" hidden readOnly />
       <Field name="task_actions" hidden readOnly />
@@ -177,19 +180,19 @@ export function useTaskFormDeclaration(selection: TaskFormSelection = {}): React
       </Group> : null}
       {(selection.groups ?? ["placement", "assignment", "details"]).includes("assignment") ? <Group label={t("task.group.assignment")} columns={2}>
         <Field name="assignee" />
-        <Field name="delegate" />
         <Field name="priority" options={priorityOptions} />
         <Field name="due_date" />
-        <Field name="recurrence" />
       </Group> : null}
-      {(selection.groups ?? ["placement", "assignment", "details"]).includes("details") ? <Group label={t("task.group.details")} columns={2} collapsible defaultOpen={false}>
-        <Field name="sort_order" label={t("common.order")} createOnly />
-        <Field name="sub_sort_order" label={t("common.subtaskOrder")} createOnly />
+      {(selection.groups ?? ["placement", "assignment", "details"]).includes("details") ? <Group label={t("task.group.details")} columns={2} pane="task-details">
+        <Field name="delegate" />
+        <Field name="recurrence" />
         <Field name="dropped_reason" readOnly />
         <Field name="done_at" readOnly />
         <Field name="dropped_at" readOnly />
       </Group> : null}
-      <Field name="note" widget="markdown.editor" body />
+      <Group label={t("task.group.description")} pane="description">
+        <Field name="note" label={t("task.group.description")} widget="markdown.editor" />
+      </Group>
       {selection.extraFields}
       {standardActions}
       {selection.extraActions}

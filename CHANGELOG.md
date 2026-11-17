@@ -10,6 +10,64 @@ live in code docstrings.
 
 ## Unreleased — shared addon contracts, native embeddings and graph retrieval
 
+- A record-visibility file takes its access from its attached records, its
+  direct viewers and admins. Its owner (the uploader, by default) holds it while
+  the upload is a draft, which the record edge needs, and once it is published
+  manages it only while its records let the owner write it, so whoever loses the
+  record loses its record files, the ones they uploaded included. An inherited
+  file keeps its owner's access. `storage/file` gains the `inherited_owner` and
+  `draft_owner` relations and the `owner_writer` permission, which `transfer` and
+  `delete` use. An unattached record file is reachable only by its viewers and
+  admins, so narrowing one leaves its owner without it. Operators re-sync the
+  permission schema: storage revision 13.
+- A record's chatter thread has no owner. `ThreadAttachmentManager.ensure_for_record`
+  no longer makes the record's creator its owner, and releases the owner an
+  existing chatter thread still carries the next time the record attaches it, as
+  it already did for broadcasting hosts. The creator keeps its attribution
+  (`created_by`) and reaches the thread, its messages, parts and their files only
+  through the record (`messaging/thread#chatter_read`). A record type that
+  contributes no `chatter_read` arm (the `ThreadedModelMixin.thread_attachments`
+  contract) now lends its chatter's generic reads (part files, follower
+  identities, colleague pickers) to nobody but admins, where its creator used to
+  reach them as owner. Upgrade: such a record owner contributes the arm, and a
+  host releases the owners existing chatter threads carry with a data migration
+  over its historical models, for example
+  `Thread.objects.filter(attachments__role="chatter").exclude(owner=None).update(owner=None)`.
+- `ThreadedModelMixin.thread_moderate_access` (default `write`) names the record
+  permission chatter moderation requires: editing and deleting other people's
+  comments, trashing and restoring comments, listing the removed ones and managing
+  another party's follow. `can_moderate` and the record thread's moderation facts
+  (`can_trash`, `can_edit`, `can_delete`, `removed_message_count`) read it, so a
+  record whose `write` reaches people who may move it but not edit it declares a
+  narrower permission. Hosts that declare nothing keep moderation on `write`.
+- `StatementsMixin`'s subject verbs are `confirm_statement(*, aspect, values, **members)`
+  and `dismiss_statement(*, aspect, **members)` (were `confirm` / `dismiss`), so a
+  subject model's own `confirm` verb, such as a lifecycle transition, no longer
+  shadows or is shadowed by the statement verb. `Statement.confirm()` /
+  `dismiss()` (the stance row's verbs) and every GraphQL mutation keep their
+  names; callers of the subject verbs move to the new names.
+- `EditableLineField.readOnlyWhen(row, parentRow)` locks one line cell per row
+  from the row and its owning document, so a document's section and note rows
+  read their commercial cells while their text and row actions stay editable.
+- An adopted Person (`Party.objects.for_user(user, adopt=)`) is owned by its
+  account, like a Person the account's creation makes, so the account reads and
+  edits its own private fields. `follow_user_name` no longer renames a Person
+  whose `identity` aspect a source states: survivorship keeps the source's name.
+- `UserManager.create_person_as_system(..., identity=)` carries an existing
+  identity record on `person_created`, and `Party.objects.for_user(user,
+  adopt=)` links that Person to the new account instead of creating another:
+  an integration that imported a person's contact provisions their account
+  onto it. Adopting a Person another account holds refuses and rolls the
+  account back.
+- A `workflows.workflowextension` row may declare `points` over its own nodes,
+  and a fragment composed after it may splice there with `at`: a dependent
+  addon's phase runs at a declared point inside another addon's fragment, ahead
+  of the nodes that follow that point. Base points splice first, then fragment
+  points in declaration order; a point used before its
+  declaring fragment, or declared twice, refuses the load. Published
+  contributions retain the declared points and the authored routes a splice
+  rewrote, so a narrow reload recomposes the same graph; documents without
+  fragment points keep their published shape and fingerprints.
 - The `composed_tables` test fixture is removed: a database test requests
   pytest-django's `db` or carries a `django_db` mark, and rolls back over the
   session baseline `angee.base.testing.fixtures` records. The
@@ -25,6 +83,55 @@ live in code docstrings.
   `storage/file` `read`, `write` or `share`. Operators re-sync the permission
   schema: storage revision 12, the messaging fragment 7, the projects fragment
   10 and the notes example fragment 4.
+- Systems of record state projects, milestones and tasks. Each composes
+  `StatementsMixin` through `angee.projects.models.StatedRecordMixin` and declares
+  `StatementRecords` (identity, lifecycle and schedule; a task adds priority,
+  assignment and structure), and takes a person's edit as a stance only once a
+  source states the row. A source is admitted by the new `write_statements`
+  permission alone (`write + statement_source`), never through `read` or `write`,
+  so no row inheriting a project's or task's access reaches it. A stated lifecycle
+  applies through the row's own lifecycle verbs, and a row carrying statements
+  refuses deletion. Parties keep `statement_source` out of `read_as_subject` and
+  `write_as_subject`, so a record task about a party lends that party's source
+  nothing. Upgrade: a host project runs native `makemigrations` for the new
+  `ProjectStatement`, `MilestoneStatement` and `TaskStatement` tables and their
+  history tables, then runs `rebac sync` after migrate for projects revision 16
+  and parties revision 19. A composer of the abstract `projects.Task` under its own
+  resource type declares `permission write_statements` in its schema and keeps a
+  concrete `milestone` foreign key: the task's `structure` aspect copies
+  `project`, `milestone` and `parent` into its statement table.
+- Stages: the `angee.base` stage primitive owns every user-named pipeline.
+  `Stage` gains `description`, `fold` (a board's default-collapsed lane, read as
+  `foldField`), `rotting_days`, `for_record` applicability, a
+  `validate_transition(previous, following, *, manual, admitted, adding)` admission
+  hook and idempotent `provision(container, rows, key=...)`. `Stage.resolve_default`
+  becomes `resolve_default(container, *, stages=None)` and
+  `StagedModelMixin.resolve_default_stage` always passes the record's applicable
+  stages, so an override of `resolve_default` accepts the keyword-only `stages`,
+  and `resolve_default_fallback` receives those applicable stages rather than
+  every stage of the container. `StagedModelMixin` gains `stage_entered_at`,
+  `stage_scope_fields`, `stage_container()`, `stage_transition`, `project_stage`,
+  `writes_stage`, the `carry_instance_facts(stored)` and
+  `validate_stored_row(persisted, stored)` hooks and `save(admitted_stage=...)`. A
+  save reads the committed row once under its lock and judges a partial save on
+  the row it stores. Every save and `clean()` requires the stage to belong to the
+  record's container, read from the stage row admission already loads, so a record
+  whose stage moved to another container refuses every write. Applicability is
+  judged only when the write changes the stage, the container or a
+  `stage_scope_fields` input, so a record resting in a stage later narrowed away
+  from it stays editable; a record whose `Stage.for_record` override reads its own
+  fields lists them there. Admission asks `validate_transition` only about a move:
+  a write that keeps the stage is not admitted, so an override drops any
+  same-stage guard. `work` composes it (its private transition read, provisioning
+  loop and same-stage guard are gone; `Stage.validate_transition` takes the new
+  signature), and a work stage's `queue` is write-once (`ImmutableFieldsMixin`),
+  which replaces the narrower check that kept only a phase-mapped stage in its
+  source task's queue.
+  Projects run `makemigrations` for the new columns. Existing staged rows keep a
+  null `stage_entered_at` until their next move; a project that wants dwell time
+  at once authors an optional data migration setting `stage_entered_at` to
+  `updated_at` where `stage` is set (an approximation: the last write, not the
+  last move).
 - Native lists accept `relatedModels: readonly string[]` for columns and filter
   membership derived from related rows. Declared model changes refresh flat,
   client and grouped lists when `related_records` names any record of the list's

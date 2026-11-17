@@ -61,6 +61,13 @@ def _messages(owner: Any, *, size: int = 5, thread: Any = None) -> tuple[Any, li
     return thread, rows
 
 
+def _read_record_thread(thread: Any, user: Any) -> None:
+    """Make a record's chatter thread readable: an ungated record lends it nothing and nobody owns it."""
+
+    with system_context(reason="test message feed record thread reader"):
+        thread.grant_reader(user=user)
+
+
 def _query(
     kind: str,
     owner: Any,
@@ -245,6 +252,8 @@ def test_record_chatter_never_enters_the_inbox_thread_feed() -> None:
     with actor_context(owner):
         record = ThreadedTicket.objects.create(title="Private record", created_by=owner)
         thread, _ = _messages(owner, thread=record.message_thread())
+    _read_record_thread(thread, owner)
+    with actor_context(owner):
         assert Thread.objects.filter(pk=thread.pk).exists()
     assert _query("thread", owner, thread).errors
 
@@ -665,5 +674,7 @@ def test_revalidation_keeps_record_attached_chatter_behind_its_record_gate() -> 
     with actor_context(owner):
         record = ThreadedTicket.objects.create(title="Private record", created_by=owner)
         thread, rows = _messages(owner, thread=record.message_thread())
+    _read_record_thread(thread, owner)
+    with actor_context(owner):
         assert Thread.objects.filter(pk=thread.pk).exists()
     assert _revalidate("thread", owner, thread, [str(row.sqid) for row in rows]).errors

@@ -188,6 +188,8 @@ export interface CreateAppInput {
    * Defaults to `window.location`.
    */
   location?: { search?: string; hostname?: string };
+  /** Native router history; workshops and embedded hosts can isolate navigation. */
+  history?: AnyRouter["history"];
   /** Auth-owned sign-in destination. Defaults to `/login`. */
   loginPath?: string;
   /** Build-owned defaults used until an authenticated user overrides them. */
@@ -700,7 +702,7 @@ export function createApp(input: CreateAppInput): AngeeApp {
         .sort(([left], [right]) => compareCodePoint(left, right))
         .map(([, route]) => route),
     ]),
-    history: typeof window === "undefined" ? createMemoryHistory() : undefined,
+    history: input.history ?? (typeof window === "undefined" ? createMemoryHistory() : undefined),
     parseSearch: parseFlatSearch,
     stringifySearch: stringifyFlatSearch,
     // Hovering, focusing or touching an in-app link starts loading its route

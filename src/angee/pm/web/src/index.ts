@@ -28,9 +28,10 @@ export default defineBaseAddon({
     "work.triage-hub": { sequence: 20 },
     "projects.projects": { sequence: 30 },
     "projects.tasks": { sequence: 40 },
-    "work.boards-hub": { sequence: 50 },
-    "work.cycles-hub": { sequence: 60 },
-    "portfolio.roadmap": { sequence: 70 },
+    "pm.planning": { parent: "pm", label: "Planning", icon: "pm", sequence: 50 },
+    "work.boards-hub": { parent: "pm.planning", sequence: 10 },
+    "work.cycles-hub": { parent: "pm.planning", sequence: 20 },
+    "portfolio.roadmap": { parent: "pm.planning", sequence: 30 },
     "proposals.rounds": { sequence: 80 },
     // Teams are queues: their configuration lives in Settings, their work in the suite.
     "work.queues": { group: "platform" },

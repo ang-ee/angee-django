@@ -96,8 +96,11 @@ class WorkStageType(AngeeNode):
     """GraphQL projection of an ordered queue stage."""
 
     name: auto
+    description: auto
     tone: auto
     position: auto
+    fold: auto
+    rotting_days: auto
     category: auto
     rule_owned: auto
     on_path: bool = strawberry_django.field(only=["category"])
@@ -162,6 +165,7 @@ class TaskWorkExtension:
     number: auto
     estimate: auto
     snoozed_until: auto
+    stage_entered_at: auto
     started_triage_at: auto
     triaged_at: auto
 
@@ -195,6 +199,7 @@ class ConsoleTaskWorkExtension:
     number: auto
     estimate: auto
     snoozed_until: auto
+    stage_entered_at: auto
     started_triage_at: auto
     triaged_at: auto
 
@@ -520,7 +525,7 @@ _STAGE_LINES = HasuraLines(
     field="stages",
     model=Stage,
     node=WorkStageType,
-    writable=("name", "category", "tone", "position", "rule_owned"),
+    writable=("name", "description", "category", "tone", "position", "fold", "rotting_days", "rule_owned"),
     position_field="position",
     defaults={"category": "unstarted", "tone": "neutral"},
 )
@@ -619,6 +624,8 @@ _STAGE_RESOURCE = hasura_model_resource(
         "name",
         "tone",
         "position",
+        "fold",
+        "rotting_days",
         "category",
         "rule_owned",
         "created_at",
@@ -626,9 +633,9 @@ _STAGE_RESOURCE = hasura_model_resource(
     ],
     sortable=["queue", "position", "name", "created_at", "updated_at"],
     aggregatable=["id", "position"],
-    groupable=["queue", "tone", "category"],
-    insertable=["queue", "name", "tone", "position", "category", "rule_owned"],
-    updatable=["name", "tone", "position", "category", "rule_owned"],
+    groupable=["queue", "tone", "fold", "category"],
+    insertable=["queue", "name", "description", "tone", "position", "fold", "rotting_days", "category", "rule_owned"],
+    updatable=["name", "description", "tone", "position", "fold", "rotting_days", "category", "rule_owned"],
     field_id_decode={"queue": public_pk_decoder(Queue)},
     write_backend=AngeeHasuraWriteBackend(Stage, public_id_fields=("queue",)),
 )

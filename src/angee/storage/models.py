@@ -121,7 +121,12 @@ _OBJECT_KEY_LEAF_MAX_BYTES = 240
 
 
 class FileVisibility(models.TextChoices):
-    """Whether file access inherits its containers or its attached records."""
+    """Whether file access inherits its containers or its attached records.
+
+    An inherited file reaches its drive's, folder's and owner's users; a published
+    record file reaches only its attached records' users, its direct viewers and
+    admins, whoever owns it.
+    """
 
     INHERITED = "inherited", "Inherited"
     RECORD = "record", "Record"
@@ -1300,7 +1305,9 @@ class FileManager[FileT: File](_FileManagerBase[FileT]):
 class File(TaggedModel, TrashMixin, OwnerMixin, HistoryMixin, AngeeDataModel, concrete=True):
     """A stored asset, deduplicated per drive by content hash.
 
-    ``owner`` grants access; ``created_by`` retains upload attribution.
+    ``owner`` grants access to an inherited file; a record-visibility file takes
+    its access from its attached records instead (:class:`FileVisibility`).
+    ``created_by`` retains upload attribution.
     ``delete()`` moves the file to the trash; :meth:`purge` is the real delete.
     """
 

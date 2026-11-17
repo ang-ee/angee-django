@@ -1321,7 +1321,7 @@ def test_contact_point_edit_rewrites_only_the_changed_lines(replica: Replica) ->
         for row in person.statements_for("handle").filter(handle__value="+14155550100"):
             row.with_actor(person.created_by).dismiss()
         handle = Handle.objects.upsert(platform="phone", value="+14155550199", created_by_id=person.created_by_id)
-        person.with_actor(person.created_by).confirm(aspect="handle", handle=handle, values={})
+        person.with_actor(person.created_by).confirm_statement(aspect="handle", handle=handle, values={})
     assert push_stream(replica.stream, replica.backend).count == 1
 
     card = vobject.readOne(replica.server.cards[_HREF][0])
@@ -1353,7 +1353,7 @@ def test_a_number_listed_twice_keeps_both_lines_when_another_number_changes(repl
     person, _link = replica.baseline()
     with system_context(reason="test duplicate lines"):
         handle = Handle.objects.upsert(platform="phone", value="+14155550199", created_by_id=person.created_by_id)
-        person.with_actor(person.created_by).confirm(aspect="handle", handle=handle, values={})
+        person.with_actor(person.created_by).confirm_statement(aspect="handle", handle=handle, values={})
     assert push_stream(replica.stream, replica.backend).count == 1
 
     card = vobject.readOne(replica.server.cards[_HREF][0])

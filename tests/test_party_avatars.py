@@ -114,7 +114,7 @@ def test_a_party_shows_its_own_avatar_else_its_strongest_readable_handles() -> N
         weaker = Handle.objects.upsert(platform="email", value="ada@example.com", created_by_id=owner.pk)
         stronger = Handle.objects.upsert(platform="whatsapp", value=_PHONE, created_by_id=owner.pk)
         Party.objects.assert_handle(party, weaker, asserted_by=owner, confidence=0.6)
-        party.with_actor(owner).confirm(aspect="handle", handle=stronger, values={})
+        party.with_actor(owner).confirm_statement(aspect="handle", handle=stronger, values={})
     weaker_avatar, stronger_avatar, own_avatar = _avatar(PNG_BYTES), _avatar(GIF_BYTES), _avatar(PNG_BYTES + b"\x00")
     weaker.set_avatar(weaker_avatar)
     stronger.set_avatar(stronger_avatar)

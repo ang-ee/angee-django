@@ -12,7 +12,10 @@ from rebac import (
     RelationshipTuple,
     SubjectRef,
     actor_context,
+    delete_relationship,
     system_context,
+    to_object_ref,
+    to_subject_ref,
     write_relationships,
 )
 from rebac.testing import assert_decisions
@@ -299,6 +302,47 @@ def test_channel_thread_is_ownerless_and_channel_transfer_moves_delete_access(db
     with actor_context(successor):
         Thread.objects.get(pk=thread.pk).delete()
     assert not Thread._base_manager.filter(pk=thread.pk).exists()
+
+
+def test_a_record_chatter_thread_lends_its_creator_nothing_beyond_the_record(db):
+    """Record chatter has no owner: its creator reaches it, its parts and their files only while reading the record."""
+    creator, poster = make_user("chatter-creator"), make_user("chatter-poster")
+    with actor_context(creator):
+        record = ChatterDoc.objects.create(title="Hiring")
+    manager = RelationshipTuple(resource=to_object_ref(record), relation="manager", subject=to_subject_ref(creator))
+    with system_context(reason="test.messaging.chatter-creator.grant"):
+        write_relationships([manager])
+    with actor_context(creator):
+        thread = record.message_thread()
+    with system_context(reason="test.messaging.chatter-creator.world"):
+        backend_row = Backend.objects.create(slug="chatter-creator", label="Chatter", backend_class="local")
+        drive = Drive.objects.create(backend=backend_row, slug="chatter-creator", name="Chatter")
+        cv = File.objects.create(
+            drive=drive, filename="cv.pdf", content_hash="c" * 64, owner=poster, upload_state="ready",
+        )
+        message = Message.objects.create(thread=thread, created_by=poster)
+        part = Part.objects.create(message=message, position=0, file=cv, created_by=poster)
+        standalone = Thread.objects.create(owner=creator, created_by=creator)
+    assert (thread.owner_id, thread.created_by_id) == (None, creator.pk)
+    for row in (thread, message, part, cv):
+        assert_access(row, creator, "read", True)
+    with system_context(reason="test.messaging.chatter-creator.leaves"):
+        delete_relationship(manager)
+    for row in (thread, message, part, cv):
+        assert_access(row, creator, "read", False)
+    for action in ("write", "share", "delete", "transfer"):
+        assert_access(thread, creator, action, False)
+    for action in ("read", "share", "transfer"):
+        assert_access(standalone, creator, action, True)
+
+    # A chatter thread still owned from before is released on its next attachment.
+    with system_context(reason="test.messaging.chatter-creator.legacy"):
+        Thread._base_manager.filter(pk=thread.pk).update(owner=creator)
+    assert_access(thread, creator, "read", True)
+    with system_context(reason="test.messaging.chatter-creator.heal"):
+        ThreadAttachment.objects.ensure_for_record(record)
+    assert Thread._base_manager.get(pk=thread.pk).owner_id is None
+    assert_access(thread, creator, "read", False)
 
 
 def test_channel_identity_creation_rolls_back_as_one_transaction(db):

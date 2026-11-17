@@ -122,6 +122,21 @@ test("dynamic resolution cannot unlock a field already locked by form mode", () 
   });
 });
 
+test("explicit panes retain their long text and status fields instead of hoisting them into the hero", () => {
+  const fields: readonly FieldDescriptor[] = [
+    { name: "title", title: true },
+    { name: "description", widget: "markdown.editor" },
+    { name: "status", widget: "statusbar" },
+  ];
+  const layout = formViewFieldLayout(fields, fields, [{
+    label: "Details", pane: "details", fields: fields.slice(1), actions: [],
+  }], null);
+  expect(layout.titleField?.name).toBe("title");
+  expect(layout.bodyField).toBeUndefined();
+  expect(layout.statusField).toBeUndefined();
+  expect(layout.gridGroups[0]?.fields.map((field) => field.name)).toEqual(["description", "status"]);
+});
+
 test("keeps long text fields in declaration order when they opt out of body placement", () => {
   const addressFields: readonly FieldDescriptor[] = [
     { name: "label", title: true },

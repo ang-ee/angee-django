@@ -34,6 +34,13 @@ definition storage/file {
 }
 ```
 
+A record-scoped file takes its access from its records. Its drive and folder
+grant nothing, and its owner (the uploader, by default) holds it only while the
+upload is a draft, then manages it only while its records let the owner write it.
+Whoever loses the record therefore loses its record files; besides the records,
+only the file's direct viewers and admins reach it. Widening it back to inherited
+makes its drive, folder and owner count again.
+
 The model owner decides record read/write permissions. Storage checks the
 effective arm before accepting a record upload, `record_files` offers uploads
 (`can_upload`) only where it exists and the actor can write the record, and the

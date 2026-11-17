@@ -332,7 +332,7 @@ export function ResourceListBody<TRow extends Row = Row>({
       toolbarStart={formRenderProps.toolbarStart}
       toolbar={composeNodes(formRenderProps.toolbar, recordHeaderActions)}
       deleteAction={recordDeleteAction}
-      publishBreadcrumbLabel={routed && !resolvedCreating}
+      publishBreadcrumbLabel={routed}
     />
   ) : null;
   const recordContent = renderRecord && !resolvedCreating
