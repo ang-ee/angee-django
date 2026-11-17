@@ -399,6 +399,8 @@ def test_the_effective_edge_index_is_read_once_per_schema_revision(db: None) -> 
     del db
     first = record_edges_by_target()
     assert record_edges_by_target() is first
+    with pytest.raises(TypeError):
+        first[Task] = ()  # type: ignore[index]
     with CaptureQueriesContext(connection) as captured:
         record_edges_by_target()
     assert len(captured) <= 1

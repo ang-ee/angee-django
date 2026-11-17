@@ -12,7 +12,8 @@ and orphans edge rows on delete.
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
+from types import MappingProxyType
 from typing import Any, ClassVar, Protocol, cast
 
 from django.apps import apps
@@ -26,7 +27,7 @@ from django.utils.text import capfirst
 from rebac import system_context
 from rebac.backends import backend
 from rebac.field_backing import canonical_model
-from rebac.resources import model_for_resource_type, model_resource_type
+from rebac.resources import model_for_resource_type
 from rebac.schema import Definition, FieldBinding, Schema
 
 from angee.base.identity import public_data_id_field
@@ -373,13 +374,16 @@ class RecordRefMixin(RecordRefMergeContract):
         return self.record_ref.public_id
 
 
-_effective_edges: tuple[Schema, list[type[models.Model]], dict[type[models.Model], tuple[Any, ...]]] | None = None
+type RecordEdgeIndex = Mapping[type[models.Model], tuple[type[RecordRefMixin], ...]]
+"""Installed record edges by the canonical target they accept."""
+
+_effective_edges: tuple[Schema, list[type[models.Model]], RecordEdgeIndex] | None = None
 """The last effective index, with the schema revision and installed-model set it was read from."""
 
 
 def record_edges_by_target(
     *, definition_for: Callable[[type[models.Model]], Definition | None] = effective_rebac_definition,
-) -> dict[type[models.Model], tuple[type[RecordRefMixin], ...]]:
+) -> RecordEdgeIndex:
     """Index installed edges by every canonical target they accept, in label order.
 
     The inverse of :meth:`RecordRefMixin.accepted_target_models`: the polymorphic
@@ -387,7 +391,8 @@ def record_edges_by_target(
     :func:`rebac.generic_target` names it by. Infrastructure edges can explicitly
     accept every canonical target without declaring an independent row policy.
     The effective policy's index is read once per schema revision and installed
-    model set, so a deletion reads the policy once rather than once per edge.
+    model set, so a deletion reads the policy once rather than once per edge;
+    the shared index is read-only.
     """
 
     global _effective_edges
@@ -398,16 +403,12 @@ def record_edges_by_target(
     cached = _effective_edges
     if cached is not None and cached[0] is schema and cached[1] is installed:
         return cached[2]
-    index = _index_record_edges(
-        lambda model: schema.get_definition(resource_type) if (resource_type := model_resource_type(model)) else None,
-    )
+    index = _index_record_edges(effective_rebac_definition)
     _effective_edges = (schema, installed, index)
     return index
 
 
-def _index_record_edges(
-    definition_for: Callable[[type[models.Model]], Definition | None],
-) -> dict[type[models.Model], tuple[type[RecordRefMixin], ...]]:
+def _index_record_edges(definition_for: Callable[[type[models.Model]], Definition | None]) -> RecordEdgeIndex:
     index: dict[type[models.Model], list[type[RecordRefMixin]]] = {}
     for edge in sorted(apps.get_models(), key=lambda model: model._meta.label):
         if not issubclass(edge, RecordRefMixin):
@@ -421,7 +422,7 @@ def _index_record_edges(
             targets = edge._declared_target_models(definition)
         for target in targets.values():
             index.setdefault(target, []).append(edge)
-    return {target: tuple(edges) for target, edges in index.items()}
+    return MappingProxyType({target: tuple(edges) for target, edges in index.items()})
 
 
 def record_ref_cleanup_edges_for_target(
