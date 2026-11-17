@@ -1,6 +1,9 @@
 """Read-only ICS feed subscriptions: one calendar per feed URL, polled as full snapshots.
 
-Every poll fetches the feed through integrate's SSRF-pinned client, public
+The feed is the source's one remote calendar: the base backend's ``calendars``
+stream publishes one record for it, keyed ``feed``, and its events sync through
+the ``events`` stream partitioned by that key. Every poll fetches the feed through
+integrate's SSRF-pinned client, public
 addresses only, with the stream cursor's ETag and Last-Modified as a conditional
 GET: a 304 means no work. ``webcal://`` is fetched as ``https://``. vobject parses
 the iCalendar; the calendar's base backend owns the event projection and every
@@ -38,7 +41,6 @@ import vobject
 from django.core.exceptions import ValidationError
 from django.utils import timezone
 
-from angee.base.serialization import canonical_json_sha256
 from angee.calendar.backends import (
     ORGANIZER,
     CalendarBackend,
@@ -51,9 +53,11 @@ from angee.calendar.models import AttendeeResponse, AttendeeRole, EventStatus, E
 from angee.integrate.errors import IntegrationError
 from angee.integrate.http import ResponseTooLargeError
 from angee.integrate.net import AddressNotAllowedError, AddressResolutionError, parse_http_url
-from angee.integrate.states import LinkStatus
 from angee.integrate.streams import StreamPage
 from angee.scheduling.zones import get_zone_info, get_zone_names
+
+FEED_KEY = "feed"
+"""The key of an ICS source's one remote calendar: its feed (the calendars record and events partition)."""
 
 _FEED_CAP = 16 * 1024 * 1024
 """The largest decoded feed body read; a larger feed fails its poll with an operator message."""
@@ -101,8 +105,10 @@ def feed_url(url: str) -> str:
 class IcsCalendarBackend(CalendarBackend):
     """Polls one public ICS feed into its source's read-only calendar.
 
-    ``config["url"]`` is the feed address. The calendar takes no local edits: a feed
-    never takes a write (``writable`` stays false).
+    ``config["url"]`` is the feed address and ``config["timezone"]`` the zone read
+    from the feed when the source subscribed. The feed is the source's one remote
+    calendar, keyed :data:`FEED_KEY`. The calendar takes no local edits: a feed never
+    takes a write (``writable`` stays false).
     """
 
     key = "ics"
@@ -115,14 +121,15 @@ class IcsCalendarBackend(CalendarBackend):
         """Fetch and parse the feed once, returning its name and zone, so a dead feed is never subscribed."""
 
         feed = _read(self._fetch({}).content)
-        return ParsedCalendar(name=_text(feed, "x-wr-calname"), timezone=_feed_zone(feed))
+        return ParsedCalendar(key=FEED_KEY, name=_text(feed, "x-wr-calname"), timezone=_feed_zone(feed))
 
     def discover(self) -> list[ParsedCalendar]:
-        """Return the feed's one calendar; its facts were read when the source subscribed."""
+        """Return the feed, the source's one remote calendar, named as subscribed and in the feed's zone."""
 
-        return [ParsedCalendar(name=self.bridge.display_name)]
+        config = self.bridge.config or {}
+        return [ParsedCalendar(key=FEED_KEY, name=self.bridge.display_name, timezone=config.get("timezone", ""))]
 
-    def extract(self, stream: Any, page_bound: int, *, deadline: float | None = None) -> StreamPage:
+    def extract_events(self, stream: Any, page_bound: int, *, deadline: float | None = None) -> StreamPage:
         """Fetch a changed feed once and page its differences; the validators commit with the last page.
 
         A fresh cursor (a baseline) applies every event; a later poll applies the
@@ -131,22 +138,17 @@ class IcsCalendarBackend(CalendarBackend):
 
         cursor = dict(stream.cursor or {})
         if "pending" in cursor:
-            pending, validators = cursor["pending"], cursor["validators"]
-        else:
-            response = self._fetch(cursor)
-            if response.status_code == 304:
-                return StreamPage((), cursor)
-            validators = {
-                "etag": response.headers.get("etag", ""),
-                "last_modified": response.headers.get("last-modified", ""),
-            }
-            payloads = self._observe_feed(_read(response.content), zone=self.calendar().timezone)
-            pending = self._pending(stream, payloads, baseline="etag" not in cursor)
-        bound = max(1, page_bound)
-        batch, remaining = pending[:bound], pending[bound:]
-        records = self.record_changes(stream, {key: payload for key, payload in batch})
-        next_cursor = {"validators": validators, "pending": remaining} if remaining else validators
-        return StreamPage(records, next_cursor, exhausted=not remaining)
+            return self.page(stream, cursor["pending"], page_bound, cursor=cursor["next"])
+        response = self._fetch(cursor)
+        if response.status_code == 304:
+            return StreamPage((), cursor)
+        validators = {
+            "etag": response.headers.get("etag", ""),
+            "last_modified": response.headers.get("last-modified", ""),
+        }
+        payloads = self._observe_feed(_read(response.content), zone=self.calendar(stream).timezone)
+        return self.page(stream, self.snapshot(stream, payloads, baseline="etag" not in cursor), page_bound,
+                         cursor=validators)
 
     # --- transport ---
 
@@ -218,34 +220,6 @@ class IcsCalendarBackend(CalendarBackend):
             for instance, exception in cancelled:
                 exceptions[instance] = self.observe(exception)
         return {**exceptions, **{key: payload for key, (_sequence_, payload) in events.items()}}
-
-    def _pending(
-        self, stream: Any, payloads: Mapping[str, dict[str, Any]], *, baseline: bool
-    ) -> list[list[Any]]:
-        """Return ``[key, payload]`` for each change against the stream's links, ``[key, None]`` for a removal.
-
-        Keys sort so a series' master precedes its instances.
-        """
-
-        links = {
-            key: (source_hash, status)
-            for key, source_hash, status in stream.links.values_list("external_key", "source_hash", "status")
-        }
-        pending: list[list[Any]] = []
-        for key in sorted(payloads):
-            known = links.get(key)
-            if (
-                baseline
-                or known is None
-                or known[1] == LinkStatus.TOMBSTONE
-                or known[0] != canonical_json_sha256(payloads[key])
-            ):
-                pending.append([key, payloads[key]])
-        pending.extend(
-            [key, None] for key, (_hash, status) in sorted(links.items())
-            if key not in payloads and status != LinkStatus.TOMBSTONE
-        )
-        return pending
 
 
 def _read(content: bytes) -> Any:

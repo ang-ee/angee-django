@@ -28,10 +28,11 @@ lock on every save path.
 changes, :meth:`CalendarEvent.rebase_overrides` carries each override along.
 
 **Sources.** A :class:`CalendarSource` is a connected calendar account or feed,
-an ``integrate.Integration`` child. It mirrors the remote calendar it serves as a
-``Calendar`` whose ``source`` names it, and syncs that calendar's events through
-integrate's streams: remote ids live only in the stream's ``RecordLink`` rows, and
-:class:`CalendarEventManager` is the one write path. A calendar takes local edits
+an ``integrate.Integration`` child. Its ``calendars`` stream mirrors each remote
+calendar it serves as a ``Calendar`` whose ``source`` names it and whose identity
+the source states; each calendar's ``events`` stream syncs its events. Remote ids,
+of calendars and of events, live only in the streams' ``RecordLink`` rows, and
+:class:`CalendarEventManager` is the one event write path. A calendar takes local edits
 when it has no source or when its source's backend writes
 (:attr:`Calendar.is_writable`); a read-only subscription refuses them, and only its
 source's sync writes, cancels or removes its events.
@@ -54,6 +55,7 @@ from django.utils import timezone
 from rebac import permission_expression
 
 from angee.base.fields.implementation import ImplClassField
+from angee.base.fields.relations import RetainedGenericRelation
 from angee.base.fields.state import StateField
 from angee.base.fields.text import ColorField
 from angee.base.models.audit import AuditMixin
@@ -62,13 +64,21 @@ from angee.base.models.locks import ImmutableFieldsMixin
 from angee.base.models.merge_references import EdgeReference, references
 from angee.base.models.ownership import OwnerMixin
 from angee.base.models.timestamps import update_fields_with_auto_now
-from angee.calendar.backends import CalendarBackend, ParsedAttendee, ParsedCalendar, ParsedEvent
+from angee.calendar.backends import (
+    CALENDARS_STREAM,
+    EVENTS_STREAM,
+    CalendarBackend,
+    ParsedAttendee,
+    ParsedCalendar,
+    ParsedEvent,
+)
 from angee.integrate.models import Bridge, IntegrationCreateMode
 from angee.integrate.states import StreamDefinition, StreamDirection, StreamKind
 from angee.messaging.models import ThreadedModelMixin
 from angee.provenance.contrib.angee.history import HistoryMixin
 from angee.provenance.contrib.angee.managers import AngeeHistoryManager
 from angee.provenance.contrib.angee.querysets import AngeeHistoryQuerySet
+from angee.provenance.statements import Aspect, SourceKind, StatementRecords, StatementsMixin
 from angee.scheduling.fields import RecurrenceField, TimeZoneField
 from angee.scheduling.recurrence import Recurrence
 from angee.scheduling.zones import get_zone_info
@@ -132,7 +142,7 @@ READ_ONLY_CALENDAR = "This calendar is a read-only subscription."
 """The refusal of a local edit to an event of a calendar whose source takes no writes."""
 
 SOURCE_CALENDAR_DELETE = "This calendar mirrors a subscription; remove its source to remove it."
-"""The refusal of deleting a source's calendar on its own, which the next sync would recreate empty."""
+"""The refusal of deleting a source's calendar on its own; its source's record link and statements retain it."""
 
 _SOURCE_FIELDS = (
     "title",
@@ -225,32 +235,43 @@ def _intervals_meet(left: Sequence[tuple[datetime, datetime]], right: Sequence[t
 
 
 class CalendarManager[CalendarT: Calendar](AngeeHistoryManager[CalendarT]):
-    """Own calendar factories: the calendar a source mirrors."""
+    """Own calendar factories: the calendars a source mirrors through its record links."""
 
-    def mirror(self, source: CalendarSource, remote: ParsedCalendar) -> CalendarT:
-        """Return the calendar ``source`` serves, creating it once on its owner's person from ``remote``.
+    def mirror(self, source: CalendarSource, remote: ParsedCalendar, *, link: Any) -> CalendarT:
+        """Return the calendar ``link`` names, creating it once on the source owner's person; then state its identity.
 
-        A source mirrors one calendar (an ICS feed is one). An existing calendar
-        keeps its name, colour and zone, which its holder may edit. Runs as the
-        caller's system work, as a sync or a subscribe verb does.
+        ``link`` is the source's ``calendars``-stream ``RecordLink`` for ``remote``:
+        the remote calendar's identity. The source states the calendar's name,
+        colour and zone (its ``identity`` aspect); a person's own edit outranks the
+        source by the aspect's precedence. Runs inside the stream's application
+        transaction, as system work.
         """
 
         rows = self.model.system_queryset()
-        calendar = rows.filter(source_id=source.pk).first()
-        if calendar is not None:
-            return calendar
-        person = apps.get_model("parties", "Person").objects.for_user(source.owner)
-        return rows.create(
-            source=source,
-            party=person,
-            name=(remote.name or source.display_name)[: self.model._meta.get_field("name").max_length],
-            timezone=remote.timezone,
-            color=remote.color,
-            created_by_id=source.owner_id,
+        calendar = rows.filter(pk=link.target_object_id).first() if link.target_object_id else None
+        name = (remote.name or source.display_name)[: self.model._meta.get_field("name").max_length]
+        if calendar is None:
+            calendar = rows.create(
+                source=source,
+                party=apps.get_model("parties", "Person").objects.for_user(source.owner),
+                name=name,
+                timezone=remote.timezone,
+                color=remote.color,
+                created_by_id=source.owner_id,
+            )
+            # The link names the row before its source is admitted to state it.
+            apps.get_model("integrate", "RecordLink").objects.bind_target(link, calendar)
+        calendar.statements.set(
+            aspect="identity",
+            values={"name": name, "color": remote.color, "timezone": remote.timezone},
+            asserted_by=source.integration_ptr,
+            link=link,
         )
+        calendar.refresh_from_db()
+        return calendar
 
 
-class Calendar(OwnerMixin, HistoryMixin, AngeeDataModel, concrete=True):
+class Calendar(OwnerMixin, StatementsMixin, HistoryMixin, AngeeDataModel, concrete=True):
     """One party's calendar: the container its events belong to and take access from.
 
     ``party`` says whose calendar it is. Access is the calendar's own: its
@@ -264,11 +285,38 @@ class Calendar(OwnerMixin, HistoryMixin, AngeeDataModel, concrete=True):
     it was.
     ``source`` names the :class:`CalendarSource` a subscribed calendar mirrors; a
     local calendar has none.
+
+    A source's calendar is a stated record: the source's ``calendars``-stream
+    ``RecordLink`` names it and the source states its ``identity`` (name, colour,
+    zone). A person's own edit of those fields outranks the source, so a local
+    rename survives a remote one. A local calendar stays an ordinary record: a
+    person's edit becomes a stance only once a source states it
+    (``person_stances_once_stated``), and a source is admitted by
+    ``write_statements`` alone.
     """
 
     sqid_prefix = "cal_"
 
     rebac_grantable = {"reader": "share", "editor": "share", "free_busy": "share"}
+
+    person_stances_once_stated = True
+    statement_write_permission = "write_statements"
+    record_links = RetainedGenericRelation(
+        "integrate.RecordLink", content_type_field="target_content_type", object_id_field="target_object_id"
+    )
+    statements = StatementRecords(
+        link="integrate.RecordLink",
+        aspects={
+            "identity": Aspect(
+                fields=("name", "color", "timezone"),
+                precedence=cast(
+                    tuple[SourceKind, ...],
+                    (SourceKind.PERSON, SourceKind.SYSTEM_OF_RECORD, SourceKind.DIRECTORY, SourceKind.IMPORT),
+                ),
+            ),
+        },
+        sqid_prefix="cas_",
+    )
 
     party = models.ForeignKey("parties.Party", on_delete=models.PROTECT, related_name="calendars")
     name = models.CharField(max_length=256)
@@ -352,7 +400,7 @@ class Calendar(OwnerMixin, HistoryMixin, AngeeDataModel, concrete=True):
         return source is None or CalendarSource.backend_writable(source.backend_class)
 
     def delete_blocker(self) -> str | None:
-        """Refuse deleting a source's calendar on its own; removing the source removes it."""
+        """Refuse deleting a source's calendar on its own: its source's link and statements retain it."""
 
         if self.source_id is not None:
             return SOURCE_CALENDAR_DELETE
@@ -1156,13 +1204,24 @@ class CalendarSource(Bridge, inherits="integrate.Integration"):
     the connection substrate) and a ``Bridge`` (the scheduler and the eager
     ``syncIntegration`` mutation drive it). ``backend_class`` selects the protocol
     (``ics``, contributed by ``calendar_integrate_ics``) and ``config`` carries what
-    it needs, such as the feed URL. The source mirrors the remote calendar it
-    serves as a :class:`Calendar` on its owner's person (:meth:`calendar_stream`);
-    the calendar managers own every event write. Whether that calendar takes local
+    it needs, such as the feed URL.
+
+    The source mirrors each remote calendar it serves through its ``calendars``
+    stream (:meth:`calendars_stream`): one record per remote calendar, whose
+    ``RecordLink`` names its :class:`Calendar` on the owner's person and whose
+    source states that calendar's identity. Each remote calendar's events sync
+    through an ``events`` stream partitioned by its key (:meth:`calendar_stream`);
+    the calendar managers own every event write. Whether a calendar takes local
     edits is its backend's ``writable`` declaration (:meth:`backend_writable`).
     """
 
     integration_create_mode: ClassVar[IntegrationCreateMode | None] = IntegrationCreateMode.CONNECT
+
+    @property
+    def source_kind(self) -> SourceKind:
+        """A calendar source states its calendars as a directory: below a person's own edits."""
+
+        return cast(SourceKind, SourceKind.DIRECTORY)
 
     backend_class = ImplClassField(CalendarBackend, create_only=True)
     """Registry key of the calendar backend bound to this source."""
@@ -1187,12 +1246,38 @@ class CalendarSource(Bridge, inherits="integrate.Integration"):
 
         return key is None or cls._meta.get_field("backend_class").resolve_class(key).writable
 
-    def calendar_stream(self, remote: ParsedCalendar) -> StreamDefinition:
-        """Mirror the remote calendar as this source's calendar and declare its events stream.
+    def calendar_for_partition(self, partition: str) -> Any | None:
+        """Return the calendar an ``events`` stream partition writes to, or ``None`` before it is mirrored.
 
-        The stream is a pull-only record replica keyed by remote identity. A backend
-        that takes writes makes its calendar writable; it does not change the stream.
+        The one place that resolves a partition to its container: the
+        ``calendars``-stream ``RecordLink`` whose external key is the partition
+        names the calendar. Integrate has no partition-to-container seam yet; this
+        lookup is the interim one, to be replaced by it.
         """
 
-        apps.get_model("calendar", "Calendar").objects.mirror(self, remote)
-        return StreamDefinition("events", kind=StreamKind.RECORD_REPLICA, direction=StreamDirection.PULL)
+        return (
+            apps.get_model("calendar", "Calendar")
+            .system_queryset()
+            .filter(
+                record_links__stream__integration_id=self.pk,
+                record_links__stream__key=CALENDARS_STREAM,
+                record_links__external_key=partition,
+            )
+            .first()
+        )
+
+    def calendars_stream(self) -> StreamDefinition:
+        """Declare the stream of the remote calendars this source serves: one record per calendar."""
+
+        return StreamDefinition(CALENDARS_STREAM, kind=StreamKind.RECORD_REPLICA, direction=StreamDirection.PULL)
+
+    def calendar_stream(self, remote: ParsedCalendar) -> StreamDefinition:
+        """Declare the events stream of one remote calendar, partitioned by its key.
+
+        A pull-only record replica keyed by remote event identity. A backend that
+        takes writes makes its calendar writable; it does not change the stream.
+        """
+
+        return StreamDefinition(
+            EVENTS_STREAM, partition=remote.key, kind=StreamKind.RECORD_REPLICA, direction=StreamDirection.PULL
+        )

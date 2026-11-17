@@ -102,12 +102,21 @@ and neither do a cancelled master's moved instances.
 
 A `CalendarSource` is a connected calendar account or a subscribed feed: an
 `integrate.Integration` child, selected by `backend_class` from
-`ANGEE_CALENDAR_SOURCE_BACKEND_CLASSES`. It mirrors the remote calendar it serves as
-a calendar whose `source` names it, on its owner's person, and syncs that
-calendar's events through integrate's pull streams. Remote event ids live only in
-the stream's `RecordLink` rows: a master's key is its UID, an instance's its UID
-and `RECURRENCE-ID`. A removed master or single event is cancelled; a removed
-instance is deleted, which restores the master's occurrence.
+`ANGEE_CALENDAR_SOURCE_BACKEND_CLASSES`. It syncs through integrate's pull
+streams:
+
+- **`calendars`:** one record per remote calendar. Its `RecordLink` names the
+  mirrored calendar (on the owner's person, `source` naming the source), and the
+  source states that calendar's name, colour and zone. A person's own rename
+  outranks the source's by statement precedence, so it survives a remote rename.
+- **`events`:** one stream per remote calendar, partitioned by its key. Remote
+  event ids live only in its `RecordLink` rows: a master's key is its UID, an
+  instance's its UID and `RECURRENCE-ID`. A removed master or single event is
+  cancelled; a removed instance is deleted, which restores the master's occurrence.
+
+`CalendarSource.calendar_for_partition` resolves an events partition to its
+calendar through the calendars-stream link. Partitions drain in key order, so a
+calendar is mirrored before its events land.
 
 - **Writability.** A backend declares whether it takes writes. A local calendar
   always takes edits; a source's calendar only when its backend writes. On a
@@ -116,10 +125,11 @@ instance is deleted, which restores the master's occurrence.
   occurrences cannot be dragged. Only its source's sync writes its events.
 - **Removal.** A source's calendar goes with its source row, never on its own;
   a source that has synced is disconnected through integrate's operator verbs.
-- **One calendar per source.** A source mirrors one calendar, as an ICS feed is one.
-- **ICS.** `calendar_integrate_ics` subscribes to a public feed (`webcal://` reads
-  as `https://`) and polls it hourly with a conditional GET. Each fetched feed is a
-  full snapshot; its module docstring lists the properties it maps.
+- **ICS.** `calendar_integrate_ics` lets any signed-in user subscribe to a public
+  feed (`webcal://` reads as `https://`). The feed is the source's one remote
+  calendar, mirrored by the first sync; it is polled hourly with a conditional
+  GET. Each fetched feed is a full snapshot; its module docstring lists the
+  properties it maps.
 
 The sources page lists them with their sync status. Source addons add their
 subscribe or connect verb to its `calendar.sources#toolbar` container.

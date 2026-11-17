@@ -1,13 +1,21 @@
-"""Calendar source mapping: integrate owns the loop and the calendar owns its events.
+"""Calendar source mapping: integrate owns the loop and the calendar owns its calendars and events.
 
-A source backend discovers the remote calendar it serves and extracts neutral
-:class:`ParsedEvent` values keyed by their remote identity. Both sides of the
-three-way sync compare the same deterministic projection
-(:func:`event_projection`), and every inbound write composes the calendar
-managers (``CalendarEventManager.ingest`` and ``withdraw``). Remote identity lives
-only in the stream's ``RecordLink`` rows: a master's key is its UID and an
-instance's is the UID plus its ``RECURRENCE-ID`` instant (:func:`instance_key`).
-The manual backend declares no streams.
+A source has two kinds of stream, both pull-only record replicas:
+
+- ``calendars``: one record per remote calendar the backend discovers
+  (:class:`ParsedCalendar`), keyed by its remote key. Its ``RecordLink`` names
+  the mirrored ``Calendar`` and the source states that calendar's identity
+  (``CalendarManager.mirror``), so a person's rename outranks a remote one.
+- ``events``, one per remote calendar, partitioned by that calendar's key: one
+  record per remote event (:class:`ParsedEvent`). A master's key is its UID and an
+  instance's the UID plus its ``RECURRENCE-ID`` instant (:func:`instance_key`).
+  Every write composes the calendar managers (``CalendarEventManager.ingest`` and
+  ``withdraw``).
+
+Both sides of each three-way sync compare one deterministic projection: an event's
+(:func:`event_projection`), and for a calendar the identity this source stated, so
+a person's own edit is no local change of the source's. Remote identity lives only
+in the streams' ``RecordLink`` rows. The manual backend declares no streams.
 """
 
 from __future__ import annotations
@@ -23,26 +31,43 @@ from django.core.validators import URLValidator
 from django.db import models
 
 from angee.base.serialization import canonical_json_sha256
+from angee.integrate.errors import IntegrationError
 from angee.integrate.http import HttpClientMixin
 from angee.integrate.impl import BridgeImpl
-from angee.integrate.states import StreamDefinition, SyncFailureKind
-from angee.integrate.streams import ApplyResult, RecordChange, SemanticError
+from angee.integrate.states import LinkStatus, StreamDefinition, SyncFailureKind
+from angee.integrate.streams import ApplyResult, RecordChange, SemanticError, StreamPage
 
 ORGANIZER = "organizer"
 """The attendee role naming an event's organizer (``AttendeeRole.ORGANIZER``)."""
 
+CALENDARS_STREAM = "calendars"
+"""The stream of a source's remote calendars: one record per calendar, linked to its ``Calendar``."""
+
+EVENTS_STREAM = "events"
+"""The stream of one remote calendar's events, partitioned by the calendar's key."""
+
+_IDENTITY = ("name", "color", "timezone")
+"""The calendar fields a source states (the ``identity`` aspect of ``Calendar.statements``)."""
+
 
 @dataclass(frozen=True)
 class ParsedCalendar:
-    """A remote calendar's display facts; sync progress belongs to its ``SyncStream``.
+    """A remote calendar: its key in the source and the identity the source states.
 
-    ``timezone`` is an IANA name, or blank for the project zone: the calendar
-    expands its recurring events in it.
+    ``key`` is stable across syncs; it is the calendars-stream record key and the
+    events stream partition. ``timezone`` is an IANA name, or blank for the project
+    zone: the calendar expands its recurring events in it.
     """
 
+    key: str
     name: str
     timezone: str = ""
     color: str = ""
+
+    def payload(self) -> dict[str, Any]:
+        """Return the retained source payload of this calendar: its stated identity."""
+
+        return {"calendar": {"name": self.name, "color": self.color, "timezone": self.timezone}}
 
 
 @dataclass(frozen=True)
@@ -159,11 +184,12 @@ def event_from_payload(payload: Mapping[str, Any]) -> ParsedEvent:
 
 
 class CalendarBackend(BridgeImpl, HttpClientMixin):
-    """One events replica stream per calendar a source serves, applied through the calendar managers.
+    """A source's calendars stream and one events stream per calendar, applied through the calendar managers.
 
-    A concrete backend implements :meth:`probe`, :meth:`discover` and ``extract``;
-    it builds its page with :meth:`observe` and :meth:`record_changes`, and this
-    base applies each record. ``writable`` declares whether the source takes local
+    A concrete backend implements :meth:`probe`, :meth:`discover` and
+    :meth:`extract_events`; it builds its event pages with :meth:`observe`,
+    :meth:`snapshot` and :meth:`page`, and this base extracts the calendars stream
+    and applies every record. ``writable`` declares whether the source takes local
     edits: a read-only backend's calendars refuse them (``Calendar.is_writable``).
     """
 
@@ -175,6 +201,15 @@ class CalendarBackend(BridgeImpl, HttpClientMixin):
 
     writable: ClassVar[bool] = False
     """Whether calendars of this backend take local edits; a read-only subscription does not."""
+
+    sync_parallelism: ClassVar[int | None] = 1
+    """Drain one partition at a time, in ``sync_bridge``'s (key, partition) order.
+
+    ``calendars`` sorts before ``events``, so a calendar is mirrored before its
+    events write to it. Integrate has no ordering between streams yet; this is the
+    explicit reliance. A drain that meets an unmirrored calendar fails its
+    partition transiently (:meth:`calendar`) and retries on the next cycle.
+    """
 
     def __init__(self, integration: Any) -> None:
         """Bind to the source; ``_released`` holds the rows a page's records unbind."""
@@ -193,20 +228,83 @@ class CalendarBackend(BridgeImpl, HttpClientMixin):
         raise NotImplementedError("CalendarBackend subclasses must implement probe().")
 
     def discover(self) -> list[ParsedCalendar]:
-        """Return the remote calendar this source serves; a source mirrors one calendar."""
+        """Return the remote calendars this source serves, each with its stable key."""
 
         raise NotImplementedError("CalendarBackend subclasses must implement discover().")
 
-    def streams(self, *, deadline: float | None = None) -> Iterable[StreamDefinition]:
-        """Mirror each discovered calendar and declare its events stream."""
+    def extract_events(self, stream: Any, page_bound: int, *, deadline: float | None = None) -> StreamPage:
+        """Extract one page of the events of the remote calendar ``stream.partition`` names."""
 
-        for remote in self.discover():
+        raise NotImplementedError("CalendarBackend subclasses must implement extract_events().")
+
+    def streams(self, *, deadline: float | None = None) -> Iterable[StreamDefinition]:
+        """Declare the calendars stream, then each discovered calendar's events stream."""
+
+        yield self.bridge.calendars_stream()
+        for remote in sorted(self.discover(), key=lambda item: item.key):
             yield self.bridge.calendar_stream(remote)
 
-    def calendar(self) -> Any:
-        """Return this source's calendar, read as system work."""
+    def extract(self, stream: Any, page_bound: int, *, deadline: float | None = None) -> StreamPage:
+        """Extract the calendars stream here; an events stream through the backend's :meth:`extract_events`."""
 
-        return apps.get_model("calendar", "Calendar").system_queryset().get(source_id=self.bridge.pk)
+        if stream.key != CALENDARS_STREAM:
+            return self.extract_events(stream, page_bound, deadline=deadline)
+        cursor = dict(stream.cursor or {})
+        if "pending" in cursor:
+            return self.page(stream, cursor["pending"], page_bound, cursor=cursor["next"])
+        payloads = {remote.key: remote.payload() for remote in self.discover()}
+        pending = self.snapshot(stream, payloads, baseline=not cursor)
+        return self.page(stream, pending, page_bound, cursor={"listed": True})
+
+    def calendar(self, stream: Any) -> Any:
+        """Return the calendar the events ``stream`` writes to, found through its calendars-stream link."""
+
+        calendar = self.bridge.calendar_for_partition(stream.partition)
+        if calendar is None:
+            raise IntegrationError("The source's calendar is not mirrored yet.", transient=True)
+        return calendar
+
+    def snapshot(
+        self, stream: Any, payloads: Mapping[str, Mapping[str, Any]], *, baseline: bool
+    ) -> list[list[Any]]:
+        """Compare a full remote snapshot with the stream's links.
+
+        Returns ``[key, payload]`` for each new or changed record (every record on a
+        ``baseline``) and ``[key, None]`` for each linked key the snapshot no longer
+        carries. Keys sort, so an events series' master precedes its instances.
+        """
+
+        links = {
+            key: (source_hash, status)
+            for key, source_hash, status in stream.links.values_list("external_key", "source_hash", "status")
+        }
+        pending: list[list[Any]] = []
+        for key in sorted(payloads):
+            known = links.get(key)
+            if (
+                baseline
+                or known is None
+                or known[1] == LinkStatus.TOMBSTONE
+                or known[0] != canonical_json_sha256(payloads[key])
+            ):
+                pending.append([key, payloads[key]])
+        pending.extend(
+            [key, None] for key, (_hash, status) in sorted(links.items())
+            if key not in payloads and status != LinkStatus.TOMBSTONE
+        )
+        return pending
+
+    def page(self, stream: Any, pending: list[list[Any]], page_bound: int, *, cursor: dict[str, Any]) -> StreamPage:
+        """Return one bounded page of ``pending``; the rest rides the cursor, and ``cursor`` commits last."""
+
+        bound = max(1, page_bound)
+        batch, remaining = pending[:bound], pending[bound:]
+        records = self.record_changes(stream, {key: payload for key, payload in batch})
+        return StreamPage(
+            records,
+            {"next": cursor, "pending": remaining} if remaining else cursor,
+            exhausted=not remaining,
+        )
 
     def observe(self, event: ParsedEvent) -> dict[str, Any]:
         """Return the retained source payload of one parsed event, in the form the calendar stores.
@@ -252,13 +350,15 @@ class CalendarBackend(BridgeImpl, HttpClientMixin):
         stream: Any,
         payloads: Mapping[str, Mapping[str, Any] | None],
     ) -> list[RecordChange]:
-        """Bind observed payloads (``None`` for a removed key) to their linked events and projections.
+        """Bind observed payloads (``None`` for a removed key) to their linked rows and projections.
 
         A payload carrying ``error`` is a remote record the backend could not map;
         the driver quarantines it under its key.
         """
 
-        states = self._local_states(stream, payloads)
+        calendars = stream.key == CALENDARS_STREAM
+        states = self._calendar_states(stream, payloads) if calendars else self._local_states(stream, payloads)
+        mapped = "calendar" if calendars else "event"
         records = []
         for key, payload in payloads.items():
             target, projection = states[key]
@@ -276,12 +376,65 @@ class CalendarBackend(BridgeImpl, HttpClientMixin):
                         key,
                         dict(payload),
                         canonical_json_sha256(payload),
-                        mapped_payload=payload["event"],
+                        mapped_payload=payload[mapped],
                         target=target,
                         projection=projection,
                     )
                 )
         return records
+
+    def _calendar_states(
+        self, stream: Any, keys: Iterable[str]
+    ) -> dict[str, tuple[Any | None, dict[str, Any] | None]]:
+        """Return each key's linked calendar and the identity this source stated for it, as system work.
+
+        The source's own statement is its side of the comparison: a person's edit
+        is a separate statement, never a local change of the source's record.
+        """
+
+        keys = set(keys)
+        links = {link.external_key: link for link in stream.links.filter(external_key__in=keys)}
+        model = apps.get_model("calendar", "Calendar")
+        ids = [link.target_object_id for link in links.values() if link.target_object_id]
+        rows = {str(row.pk): row for row in model.system_queryset().filter(pk__in=ids)}
+        states: dict[str, tuple[Any | None, dict[str, Any] | None]] = {}
+        for key in keys:
+            link = links.get(key)
+            calendar = rows.get(link.target_object_id or "") if link is not None else None
+            states[key] = (calendar, self._stated(calendar, link)) if calendar is not None else (None, None)
+        return states
+
+    def _stated(self, calendar: Any, link: Any) -> dict[str, Any] | None:
+        """Return the identity this source currently asserts on ``calendar`` through ``link``, or ``None``."""
+
+        statements = calendar.statements
+        row = (
+            statements.current()
+            .filter(aspect="identity", link=link, status=statements.model.StatementStatus.ASSERTED)
+            .first()
+        )
+        if row is None:
+            return None
+        aspect = statements.model.statement_aspects["identity"]
+        return {name: getattr(row, aspect.column(name)) or "" for name in _IDENTITY}
+
+    def _apply_calendar(self, stream: Any, record: RecordChange) -> ApplyResult:
+        """Mirror one remote calendar through ``CalendarManager.mirror``; a removed one withdraws its identity.
+
+        A removed calendar keeps its row and events: the source only withdraws the
+        identity it stated, and declares no events stream for it any more.
+        """
+
+        link = stream.links.get(external_key=record.external_key)
+        calendars = apps.get_model("calendar", "Calendar").objects
+        if record.tombstone:
+            calendar, _projection = self._calendar_states(stream, (record.external_key,))[record.external_key]
+            if calendar is not None:
+                calendar.statements.withdraw(self.bridge.integration_ptr, link=link)
+            return ApplyResult(target=calendar, mapped_payload=None)
+        remote = ParsedCalendar(key=record.external_key, **record.source_payload["calendar"])
+        calendar = calendars.mirror(self.bridge, remote, link=link)
+        return ApplyResult(target=calendar, mapped_payload=self._stated(calendar, link))
 
     def _local_states(
         self, stream: Any, keys: Iterable[str], *, lock: bool = False
@@ -316,9 +469,12 @@ class CalendarBackend(BridgeImpl, HttpClientMixin):
         instance, or a row whose place in a series changed, is released: the
         result unbinds its link and :meth:`finish_page` deletes it, since a link
         retains its target. Deleting an instance restores the master's own
-        occurrence, which a cancelled override would drop.
+        occurrence, which a cancelled override would drop. A calendars-stream
+        record mirrors its calendar instead (:meth:`_apply_calendar`).
         """
 
+        if stream.key == CALENDARS_STREAM:
+            return self._apply_calendar(stream, record)
         events = apps.get_model("calendar", "CalendarEvent").objects
         target, _projection = self._local_states(stream, (record.external_key,), lock=True)[record.external_key]
         if record.tombstone:
@@ -340,7 +496,7 @@ class CalendarBackend(BridgeImpl, HttpClientMixin):
             self._released.append(target.pk)
             target = None
         event = events.ingest(
-            self.calendar(),
+            self.calendar(stream),
             parsed,
             target=target,
             series=series,
@@ -355,7 +511,7 @@ class CalendarBackend(BridgeImpl, HttpClientMixin):
         """
 
         released, self._released = self._released, []
-        if not released:
+        if not released or stream.key == CALENDARS_STREAM:
             return
         model = apps.get_model("calendar", "CalendarEvent")
         bound = set(
@@ -395,3 +551,8 @@ class ManualCalendarBackend(CalendarBackend):
         """Return no calendars."""
 
         return []
+
+    def streams(self, *, deadline: float | None = None) -> Iterable[StreamDefinition]:
+        """Declare no streams: there is nothing to sync."""
+
+        return ()

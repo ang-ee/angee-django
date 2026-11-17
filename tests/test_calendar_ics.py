@@ -19,11 +19,11 @@ import httpx2
 import pytest
 from django.core.exceptions import ValidationError
 from django.db.models import ProtectedError
-from rebac import system_context
+from rebac import actor_context, system_context
 
 from angee.calendar.models import READ_ONLY_CALENDAR, SOURCE_CALENDAR_DELETE, AttendeeResponse, AttendeeRole
 from angee.calendar.testing.models import Calendar, CalendarEvent, CalendarSource, EventAttendee
-from angee.calendar_integrate_ics.backend import IcsCalendarBackend, IcsError
+from angee.calendar_integrate_ics.backend import FEED_KEY, IcsCalendarBackend, IcsError
 from angee.calendar_integrate_ics.connect import subscribe_calendar
 from angee.integrate.states import LinkStatus
 from angee.integrate.streams import advance_stream, sync_bridge
@@ -145,7 +145,6 @@ class FakeFeed:
 @dataclass
 class Subscription:
     source: Any
-    calendar: Any
     feed: FakeFeed
 
     def poll(self) -> int:
@@ -154,8 +153,15 @@ class Subscription:
         with system_context(reason="tests.ics.poll"):
             return sync_bridge(CalendarSource.objects.get(pk=self.source.pk))
 
-    def stream(self) -> Any:
-        return SyncStream.objects.sudo(reason="tests.ics").filter(integration_id=self.source.pk).latest("generation")
+    @property
+    def calendar(self) -> Any:
+        """Return the feed's calendar, found through the source's calendars-stream link."""
+
+        return self.source.calendar_for_partition(FEED_KEY)
+
+    def stream(self, key: str = "events") -> Any:
+        rows = SyncStream.objects.sudo(reason="tests.ics").filter(integration_id=self.source.pk, key=key)
+        return rows.latest("generation")
 
     def events(self) -> dict[str, Any]:
         """Return the calendar's events by their external key."""
@@ -171,9 +177,7 @@ def subscription() -> Iterator[Subscription]:
     with mock_transport(feed):
         user = create_user("subscriber")
         source = subscribe_calendar(user, name="Team", url="webcal://feeds.example.test/team.ics")
-        with system_context(reason="tests.ics"):
-            calendar = Calendar.objects.get(source_id=source.pk)
-        yield Subscription(source, calendar, feed)
+        yield Subscription(source, feed)
 
 
 def _snapshot(subscription: Subscription) -> dict[str, tuple[Any, ...]]:
@@ -183,19 +187,56 @@ def _snapshot(subscription: Subscription) -> dict[str, tuple[Any, ...]]:
 # --- subscribe ---------------------------------------------------------------
 
 
-def test_subscribing_creates_a_source_and_its_calendar(subscription: Subscription) -> None:
-    source, calendar, feed = subscription.source, subscription.calendar, subscription.feed
+def test_subscribing_creates_a_source_whose_first_sync_mirrors_its_calendar(subscription: Subscription) -> None:
+    source, feed = subscription.source, subscription.feed
 
-    assert (source.backend_class, source.config, source.credential_id) == ("ics", {"url": FEED_URL}, None)
+    assert (source.backend_class, source.credential_id) == ("ics", None)
+    assert source.config == {"url": FEED_URL, "timezone": "America/New_York"}
     assert (source.display_name, source.poll_interval, source.vendor.slug) == ("Team", 3600, "ics")
     assert source.sync_stage == source.SyncStage.QUEUED
-    with system_context(reason="tests.ics"):
-        person = Person.objects.get(user=source.owner)
-    assert (calendar.name, calendar.timezone, calendar.party_id) == ("Team", "America/New_York", person.pk)
-    assert calendar.is_writable is False
     [probe] = feed.requests
     assert (str(probe.url), probe.method, probe.extensions["allow_private"]) == (FEED_URL, "GET", False)
     assert "if-none-match" not in probe.headers
+    assert subscription.calendar is None
+
+    subscription.poll()
+
+    calendar: Any = source.calendar_for_partition(FEED_KEY)
+    assert calendar is not None
+    with system_context(reason="tests.ics"):
+        person = Person.objects.get(user=source.owner)
+        [link] = RecordLink.objects.filter(stream=subscription.stream("calendars"))
+        [statement] = calendar.statements.current().filter(aspect="identity")
+    assert (calendar.name, calendar.timezone, calendar.party_id, calendar.source_id) == (
+        "Team", "America/New_York", person.pk, source.pk)
+    assert calendar.is_writable is False
+    assert (link.external_key, link.target_object_id) == (FEED_KEY, str(calendar.pk))
+    assert (statement.source_kind, statement.link_id, statement.name) == ("directory", link.pk, "Team")
+
+
+def test_a_remote_rename_applies_until_the_holder_renames_the_calendar(subscription: Subscription) -> None:
+    subscription.poll()
+    source = subscription.source
+
+    with system_context(reason="tests.ics"):
+        CalendarSource.objects.filter(pk=source.pk).update(display_name="Team feed")
+    subscription.poll()
+    assert subscription.calendar.name == "Team feed"
+
+    with actor_context(source.owner):
+        mine = Calendar.objects.with_actor(source.owner).get(pk=subscription.calendar.pk)
+        mine.name = "My team"
+        mine.save()
+    with system_context(reason="tests.ics"):
+        CalendarSource.objects.filter(pk=source.pk).update(display_name="Team feed v2")
+    subscription.poll()
+
+    # The holder's own statement outranks the source's directory statement.
+    calendar = subscription.calendar
+    assert calendar.name == "My team"
+    with system_context(reason="tests.ics"):
+        stated = {row.source_kind: row.name for row in calendar.statements.current().filter(aspect="identity")}
+    assert stated == {"person": "My team", "directory": "Team feed v2"}
 
 
 def test_a_private_feed_address_is_refused_by_the_pinned_transport() -> None:
@@ -224,7 +265,8 @@ def test_an_unreadable_feed_is_never_subscribed(status: int, body: str, message:
 
 
 def test_the_first_poll_creates_events_and_a_replay_changes_nothing(subscription: Subscription) -> None:
-    assert subscription.poll() == 6
+    # One sync mirrors the feed's calendar, then lands its six events.
+    assert subscription.poll() == 7
     keys = set(subscription.events())
     assert keys == {
         "standup@example.test",
@@ -296,13 +338,16 @@ def test_a_removed_uid_is_tombstoned_and_a_removed_instance_restores_its_occurre
 
 def test_pages_hold_the_pending_events_and_commit_the_validators_last(subscription: Subscription) -> None:
     backend = IcsCalendarBackend(CalendarSource.objects.sudo(reason="tests.ics").get(pk=subscription.source.pk))
-    [definition] = list(backend.streams())
+    calendars, events = list(backend.streams())
+    assert (calendars.key, calendars.partition, events.key, events.partition) == ("calendars", "", "events", FEED_KEY)
     with system_context(reason="tests.ics"):
-        stream = SyncStream.objects.current(backend.bridge, definition)
+        mirrored = advance_stream(SyncStream.objects.current(backend.bridge, calendars), backend)
+        stream = SyncStream.objects.current(backend.bridge, events)
+    assert (mirrored.count, mirrored.stream.cursor) == (1, {"listed": True})
 
     first = advance_stream(stream, backend, page_bound=4)
     assert not first.exhausted
-    assert set(first.stream.cursor) == {"validators", "pending"}
+    assert set(first.stream.cursor) == {"next", "pending"}
     # Keys sort, so a series' master lands before its instances.
     assert [key for key, _payload in first.stream.cursor["pending"]] == [
         "standup@example.test#20260309T130000Z",
@@ -405,7 +450,9 @@ def test_edits_on_an_ics_calendar_are_refused_and_a_local_calendar_is_unaffected
         organizer = EventAttendee.objects.get(event__title="Standup", role=AttendeeRole.ORGANIZER)
         with pytest.raises(ValidationError, match=READ_ONLY_CALENDAR):
             organizer.delete()
-        with pytest.raises(ValidationError, match=SOURCE_CALENDAR_DELETE):
+        # The source's link and statements retain its calendar; the model names the refusal.
+        assert subscription.calendar.delete_blocker() == SOURCE_CALENDAR_DELETE
+        with pytest.raises((ValidationError, ProtectedError)):
             subscription.calendar.delete()
         occurrences = CalendarEvent.objects.filter(pk=launch.pk).occurrences(_utc(2026, 4, 1), _utc(2026, 4, 2))
 
@@ -425,10 +472,21 @@ def test_edits_on_an_ics_calendar_are_refused_and_a_local_calendar_is_unaffected
     assert Calendar.system_queryset().filter(pk=subscription.calendar.pk).exists()
 
 
-def test_deleting_the_source_cascades_to_its_calendar(subscription: Subscription) -> None:
-    # Once a source has streams, integrate protects it: disconnecting is its removal.
+def test_a_local_calendar_edit_states_nothing_and_the_calendar_stays_deletable() -> None:
+    user = create_user("local-holder")
     with system_context(reason="tests.ics"):
-        CalendarSource.objects.get(pk=subscription.source.pk).delete()
+        person = Person.objects.for_user(user)
+        calendar = Calendar.objects.create(party=person, name="Local", created_by_id=user.pk)
 
-    assert not Calendar.system_queryset().filter(pk=subscription.calendar.pk).exists()
-    assert not CalendarEvent.system_queryset().filter(calendar_id=subscription.calendar.pk).exists()
+    with actor_context(user):
+        mine = Calendar.objects.with_actor(user).get(pk=calendar.pk)
+        mine.name = "Renamed"
+        mine.save()
+
+    with system_context(reason="tests.ics"):
+        calendar.refresh_from_db()
+        assert calendar.name == "Renamed"
+        assert not calendar.carries_statements()
+        assert calendar.delete_blocker() is None
+        calendar.delete()
+    assert not Calendar.system_queryset().filter(pk=calendar.pk).exists()
