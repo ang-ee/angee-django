@@ -1,18 +1,21 @@
-"""PostgreSQL-only account uniqueness and one-time credential serialization."""
+"""PostgreSQL-only account uniqueness and one-time credential serialization, sign-in links included."""
 
 from concurrent.futures import ThreadPoolExecutor
 from threading import Barrier
 
 import pytest
 from django.contrib.auth import get_user_model
+from django.core import mail
 from django.core.exceptions import ValidationError
 from django.db import close_old_connections, connection, connections
-from django.test.utils import CaptureQueriesContext
+from django.test.utils import CaptureQueriesContext, override_settings
 from rebac import actor_context
 
 from angee.iam.models import AccountExists
 from tests.iam_campaign import Person
 from tests.iam_campaign import iam_admin as iam_admin
+from tests.iam_models import SignInLink
+from tests.test_iam_sign_in_links import DELIVERABLE, _token
 
 pytestmark = [
     pytest.mark.django_db(transaction=True),
@@ -61,6 +64,25 @@ def test_two_password_writers_return_exactly_one_credential(iam_admin):
     stored = User._base_manager.get(pk=target.pk)
     assert stored.check_password(passwords[0])
     assert stored.password != passwords[0]
+
+
+@override_settings(**DELIVERABLE)
+def test_two_redemptions_of_one_sign_in_link_sign_in_once(iam_admin):
+    target = User.objects.create_user("link-race", "link-race@example.com")
+    with actor_context(iam_admin):
+        target.with_actor(iam_admin).issue_sign_in_link()
+    token = _token(mail.outbox[-1].body)
+    ready = Barrier(2)
+
+    def redeem():
+        ready.wait(timeout=5)
+        return SignInLink.objects.redeem(token)
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        futures = [pool.submit(_thread, redeem) for _ in range(2)]
+        outcomes = [future.result(timeout=15) for future in futures]
+    assert [user.pk for user in outcomes if user is not None] == [target.pk]
+    assert SignInLink._base_manager.get(user=target).used_at is not None
 
 
 def test_two_person_creators_commit_one_account_and_one_parties_link(iam_admin):

@@ -181,6 +181,7 @@ def test_iam_auth_throttling_comes_from_axes(tmp_path: Path) -> None:
     assert SETTINGS["AUTHENTICATION_BACKENDS:append"] == [
         "axes.backends.AxesStandaloneBackend",
         "angee.iam.auth.ModelBackend",
+        "angee.iam.auth.SignInLinkBackend",
     ]
     assert settings["AUTHENTICATION_BACKENDS"][0] == "axes.backends.AxesStandaloneBackend"
     assert "rebac.W001" in settings["SILENCED_SYSTEM_CHECKS"]
@@ -252,6 +253,7 @@ def test_auth_user_model_comes_from_iam_autoconfig(
     assert SETTINGS["AUTHENTICATION_BACKENDS:append"] == [
         "axes.backends.AxesStandaloneBackend",
         "angee.iam.auth.ModelBackend",
+        "angee.iam.auth.SignInLinkBackend",
     ]
     assert settings["AUTH_USER_MODEL"] == "iam.User"
 
@@ -444,6 +446,13 @@ def test_public_origin_joins_csrf_trusted_origins(tmp_path: Path, monkeypatch: p
     namespace = {"INSTALLED_APPS": []}
     _configure(namespace, tmp_path)
     assert namespace["CSRF_TRUSTED_ORIGINS"] == ["https://demo.example.com"]
+
+
+def test_public_origin_reaches_iams_sign_in_link_setting(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("ANGEE_PUBLIC_ORIGIN", raising=False)
+    assert _compose(tmp_path)["ANGEE_PUBLIC_ORIGIN"] == ""
+    monkeypatch.setenv("ANGEE_PUBLIC_ORIGIN", "https://demo.example.com")
+    assert _compose(tmp_path)["ANGEE_PUBLIC_ORIGIN"] == "https://demo.example.com"
 
 
 @pytest.mark.parametrize(("project", "environment", "expected"), [(None, None, 60), (30, None, 30), (30, "15", 15)])

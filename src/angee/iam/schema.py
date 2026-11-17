@@ -1,9 +1,9 @@
 """GraphQL schema contributions for Angee IAM.
 
-Pure identity: the user projection, the password session login, and the REBAC
-permission hub. The OAuth/OIDC connection substrate (clients, external accounts,
-credentials, connect/disconnect) lives in ``integrate``; OIDC *login* lives in
-``iam_integrate_oidc``.
+Pure identity: the user projection, the password and sign-in link session
+logins, and the REBAC permission hub. The OAuth/OIDC connection substrate
+(clients, external accounts, credentials, connect/disconnect) lives in
+``integrate``; OIDC *login* lives in ``iam_integrate_oidc``.
 """
 
 from __future__ import annotations
@@ -24,6 +24,7 @@ from django.core.exceptions import ValidationError
 from django.db import transaction
 from django.db.models import QuerySet
 from django.http import HttpRequest
+from django.views.decorators.debug import sensitive_variables
 from rebac import (
     RebacQuerySet,
     current_actor,
@@ -972,6 +973,25 @@ class IAMMutation:
         return LoginPayload(ok=True, user=cast(UserType, user))
 
     @strawberry.mutation
+    @sensitive_variables("token")
+    def redeem_sign_in_link(self, info: strawberry.Info, token: str) -> LoginPayload:
+        """Sign in with a single-use sign-in link and bind the person to the session.
+
+        The token authenticates through ``authenticate()``, so django-axes
+        throttles failed links as it does passwords. Every refusal is the same
+        ``ok: false``, whatever the reason.
+        """
+
+        request = get_request(info)
+        # As for passwords: the anonymous request's sign-in writes are the system work it sanctions.
+        with system_context(reason="iam.sign_in_link.redeem"):
+            user = authenticate(request, sign_in_token=token)
+            if user is None:
+                return LoginPayload(ok=False)
+            auth_login(request, user)
+        return LoginPayload(ok=True, user=cast(UserType, user))
+
+    @strawberry.mutation
     def logout(self, info: strawberry.Info) -> bool:
         """Clear the current session."""
 
@@ -1001,6 +1021,15 @@ class IAMUserAccountMutation:
 
         user = authorized_permission_target(info, User, id, str(UserAccountAction.ISSUE_PASSWORD))
         return IssuedUserPassword(username=user.username, password=user.issue_password())
+
+    @strawberry.mutation
+    @action_guard("Sending the sign-in link failed.")
+    def issue_user_sign_in_link(self, info: strawberry.Info, id: PublicID) -> ActionResult:
+        """Email the account a single-use sign-in link after the account owner's checks; the link is never returned."""
+
+        user = authorized_permission_target(info, User, id, str(UserAccountAction.ISSUE_SIGN_IN_LINK))
+        user.issue_sign_in_link()
+        return ActionResult(ok=True, message="Sign-in link sent to the account's email.")
 
     @strawberry.mutation
     def reset_user_password(
