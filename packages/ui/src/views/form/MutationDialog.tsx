@@ -1,7 +1,6 @@
 import * as React from "react";
 import { set, useForm, useWatch, type FieldErrors } from "react-hook-form";
 import { stringValue as wireStringValue, type AuthoredMutateOptions } from "@angee/refine";
-import { format } from "date-fns";
 
 import { DialogForm } from "../../fragments/DialogForm";
 import { ErrorBanner } from "../../fragments/ErrorBanner";
@@ -9,7 +8,7 @@ import { Button } from "../../ui/button";
 import type { DialogPlacement, DialogSize } from "../../ui/dialog";
 import { useToast } from "../../feedback";
 import { useUiT } from "../../i18n";
-import { dateFromUnknown } from "../../widgets/date-format";
+import { dateFromUnknown, formatDateTimeStorage } from "../../widgets/date-format";
 import { emptyValueForField, isStructuredPresenceField, structuredFieldErrorPaths } from "./field-values";
 import { isFieldControlVisible } from "./form-view-model";
 import { DescriptorFieldList, resolveDescriptorFields, type DescriptorField } from "./DescriptorFieldList";
@@ -45,8 +44,9 @@ export type MutationDialogParseValues<TValues> = (
  * `verbatimString` is the explicit exception for whitespace-sensitive secrets;
  * `integer` takes a label-aware translated formatter because malformed numeric
  * input is reachable user validation. `datetime` is the action-argument wire
- * boundary: it preserves the picked local wall time and adds that instant's
- * local UTC offset, so Django never receives a naive datetime.
+ * boundary: it writes the picked moment as the `datetime` widget stores it
+ * (`formatDateTimeStorage`: the local wall time with its UTC offset), so Django
+ * never receives a naive datetime.
  * @kind null
  * @reason Codec and transport infrastructure: translates runtime data and addresses.
  */
@@ -100,12 +100,7 @@ export const mutationDialogValueCodecs = {
         "MutationDialog invariant: datetime value was not a valid ISO-8601 date-time.",
       );
     }
-    const offsetMinutes = -parsed.getTimezoneOffset();
-    const offsetSign = offsetMinutes < 0 ? "-" : "+";
-    const absoluteOffset = Math.abs(offsetMinutes);
-    const offsetHours = String(Math.floor(absoluteOffset / 60)).padStart(2, "0");
-    const offsetRemainder = String(absoluteOffset % 60).padStart(2, "0");
-    return `${format(parsed, "yyyy-MM-dd'T'HH:mm:ss")}${offsetSign}${offsetHours}:${offsetRemainder}`;
+    return formatDateTimeStorage(parsed);
   },
 } as const;
 

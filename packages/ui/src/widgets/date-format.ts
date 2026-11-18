@@ -21,10 +21,12 @@ export type DateFormatValue = DateWidgetValue | number | undefined;
  */
 export const DATE_STORAGE_FORMAT = "yyyy-MM-dd";
 /**
+ * A picked wall time with the browser's UTC offset ("2026-11-20T10:00:00+09:00"):
+ * an instant, which a server in any zone reads as the moment the viewer meant.
  * @kind null
  * @reason Format utility: converts data to display or storage text.
  */
-export const DATETIME_STORAGE_FORMAT = "yyyy-MM-dd'T'HH:mm";
+export const DATETIME_STORAGE_FORMAT = "yyyy-MM-dd'T'HH:mm:ssxxx";
 /**
  * @kind null
  * @reason Format utility: converts data to display or storage text.
@@ -294,15 +296,19 @@ export function formatTimeInput(value: DateFormatValue): string {
   return date ? format(date, TIME_INPUT_FORMAT) : "";
 }
 
-/** Format a selected calendar day for storage.
+/** Format a calendar day for storage: a selected local day, or with `timeZone` the day an instant falls on there
+ * (a stored all-day bound read in the zone that owns its dates, whichever zone the browser is in).
  * @kind null
  * @reason Format utility: converts data to display or storage text.
  */
-export function formatDateStorage(value: Date | null): string | null {
-  return value ? format(value, DATE_STORAGE_FORMAT) : null;
+export function formatDateStorage(value: Date | null, timeZone?: string): string | null {
+  if (!value) return null;
+  return timeZone ? calendarDay(value, timeZone) : format(value, DATE_STORAGE_FORMAT);
 }
 
-/** Format a selected date-time for storage.
+/** Format a selected date-time for storage: its local wall time with the browser's offset
+ * ({@link DATETIME_STORAGE_FORMAT}), so every writer of a picked moment sends the instant meant, never a
+ * naive time the server would read in its own zone.
  * @kind null
  * @reason Format utility: converts data to display or storage text.
  */

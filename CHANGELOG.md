@@ -48,6 +48,25 @@ live in code docstrings.
   `aria-disabled`, so keyboard users reach it, and its reason, shown in full under
   the title, is its `aria-describedby` description. The connect-with-account
   field lists a refused account through it.
+- Calendar time zones follow Google Calendar's model. An all-day event is dates
+  in its effective zone, `CalendarEvent.effective_timezone` (its own, else its
+  calendar's `Calendar.effective_timezone`, else the project `TIME_ZONE`; it
+  replaces `expansion_zone`, which left the project zone blank; the
+  `effective_timezone_expression()` of `CalendarEventQuerySet` and
+  `CalendarQuerySet` reads it as a query), read as `effective_timezone` on an
+  event and on each `event_occurrences` item: the calendar grid and the event
+  form show and edit those days in every browser zone, and changing an all-day
+  event's own zone keeps its days. Dragging an all-day event sends the
+  days it lands on, which the event places at midnight in its zone; the
+  nearest-midnight snap is gone, and an instant off that midnight is refused. A
+  dragged timed event refuses a time without an offset. A
+  timed event is an instant edited on the viewer's clock: `@angee/ui`'s
+  `formatDateTimeStorage` (`DATETIME_STORAGE_FORMAT`) writes the local wall time
+  with its UTC offset (`yyyy-MM-dd'T'HH:mm:ssxxx`), so every `datetime` widget
+  (record forms, filters, structured form specs, action dialogs) sends the
+  instant meant, never a naive time the server reads in its own zone, and
+  `mutationDialogValueCodecs.datetime` composes it. `formatDateStorage(date,
+  timeZone)` reads the day an instant falls on in a zone.
 - A calendar source can publish local calendars out. `CalendarBackend.direction`
   (`PULL` by default) declares which way a source's streams sync; a `PUSH`
   backend's calendars and events streams are push streams, never swept.

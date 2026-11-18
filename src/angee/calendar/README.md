@@ -53,16 +53,22 @@ cancelled master hides its moved instances too.
   supplies is kept.
 - **Time zone:** an event may name its own zone (`timezone`), as RFC 5545's
   `DTSTART;TZID` and Google's `event.start.timeZone` do; blank means its
-  calendar's. That zone is the wall clock its recurrence, its all-day dates and
-  its overlap check expand on (`CalendarEvent.expansion_zone`), so a Berlin series
-  on a New York calendar keeps its Berlin time. Changing a calendar's zone moves
+  calendar's, and a blank calendar zone the project `TIME_ZONE`. That effective
+  zone (`CalendarEvent.effective_timezone`, the `effective_timezone` field of an
+  event and of an occurrence) is the wall clock its recurrence, its all-day dates
+  and its overlap check expand on, so a Berlin series on a New York calendar keeps
+  its Berlin time. As in Google Calendar, an all-day event is dates in that zone,
+  shown on those days to every viewer, and a timed event is an instant, shown and
+  edited in the viewer's own zone. Changing a calendar's zone moves
   only the events without a zone of their own: an all-day event keeps its local
   dates, and every series derives its end again and rebases its overrides.
+  Changing an all-day event's own zone without its dates keeps its days too. A
+  redacted timed occurrence carries its calendar's zone, never its event's own.
 - **All-day** events start and end at midnight in their zone, a whole number of
   days apart. A bound written as a date (`2026-11-20`, no offset) names a day, and
   the event places it at that midnight, so a browser in any zone sends the days its
-  viewer picked (the event form and a month-view selection do); an instant at
-  another time is refused, and a drag lands on the nearest midnights.
+  viewer picked (the event form, a month-view selection and a drag do); an instant
+  at another time is refused, never moved to a guessed day.
 - **Tags, chatter and history** come from `TaggedModel`, `ThreadedModelMixin` and
   `HistoryMixin`.
 - **Attendees** are the `through` rows of `CalendarEvent.attendees` to
@@ -74,7 +80,7 @@ cancelled master hides its moved instances too.
 
 `event_occurrences(window_start, window_end)` returns what a calendar shows in a
 half-open window of at most 400 days (`CalendarEvent.occurrence_window_limit`),
-expanded server-side in each calendar's zone.
+expanded server-side in each event's effective zone.
 
 - **Ids:** every instance of a series has the id `<series_sqid>:<original start,
   UTC basic>`, overridden or not, and a plain event has its own `<event_sqid>`;
