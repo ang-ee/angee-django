@@ -10,6 +10,46 @@ live in code docstrings.
 
 ## Unreleased — shared addon contracts, native embeddings and graph retrieval
 
+- A theme or branding fragment owns the sign-in presentation through
+  `auth.login#hero`, a framework container with one child per host. Installing
+  the fragment is enough: `LoginPage` renders the hero on `/login` and
+  `/sign-in-link`, so a host keeps the template's `main.tsx` that mounts
+  `IamLoginPage`, and a rendered host needs no re-render or new answer. The
+  fragment declares:
+
+  ```tsx
+  containers: {
+    "auth.login#hero": {
+      "theme.acme.login-hero": {
+        content: { render: AcmeLoginHero, presentation: "full-bleed", backgroundImageUrl: acmeBackdropUrl },
+      },
+    },
+  },
+  ```
+
+  An explicit `hero` prop still wins. The hero renders at every width, stacked
+  above the card on small screens; it picks its own responsive assets through CSS
+  or media queries, with no viewport hint from the page. `presentation:
+  "full-bleed"` (also a `LoginPage` prop) puts the backdrop and the floating card
+  behind any hero, so a branded host reaches the layout that only the unbranded
+  framework hero had. A host's hero is no longer hidden below `lg`. A contributed
+  hero brings its own `backgroundImageUrl`; the page's prop serves only the
+  page's own hero, so IAM's rotating backdrops stay with the framework hero. Two
+  installed contributors fail at boot; keep one by `remove: true` on the other
+  from the deployment's `ANGEE_UI.containers`.
+
+  **Host upgrade:** a host that hand-edited `main.tsx` to mount its own branded
+  page restores the template's `host-auth` route on `IamLoginPage` (revert the
+  edit, or `stack update --template`), drops the fragment's package from its own
+  `package.json` and relocks at the stack root; the fragment declares the hero
+  as above. A kept hand edit still works, since its explicit `hero` wins.
+
+- The `auth.login` route's declaration is the one spelling of the sign-in URL.
+  `createApp` reads its path for the auth gates, the auth provider and
+  `useLoginPath`, and its `loginPath` input is removed: a host that passed it
+  drops it and declares `auth.login` at that path. `DEFAULT_LOGIN_PATH` remains
+  only for a runtime that composes no `auth.login` route.
+
 - A fresh installation no longer offers "Continue with Google Gemini" on the
   sign-in page. `iam_integrate_oidc`'s install seed gave Google's public Gemini
   CLI client `login_enabled: true`, and that client ships with a published client
