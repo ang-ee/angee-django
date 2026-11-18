@@ -160,16 +160,17 @@ jobs:
   # (.test_durations_postgres, least_duration): every worker flushes the
   # whole schema between transactional tests, so one job no longer fits.
   # Six groups under the SQLite shards' 60-minute limit keep the margin the
-  # map cannot predict. Pull requests skip it; main and releases run it.
+  # map cannot predict. Main and releases run the whole selection; a pull
+  # request runs one group of the gates it must not regress before merge.
   uv-postgres:
-    name: uv postgres ${{ matrix.group }}/6
-    if: ${{ inputs.uv-enabled && github.event_name != 'pull_request' }}
+    name: uv postgres ${{ matrix.group }}/${{ strategy.job-total }}
+    if: ${{ inputs.uv-enabled }}
     runs-on: ubuntu-latest
     timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
-        group: [1, 2, 3, 4, 5, 6]
+        group: ${{ fromJSON(github.event_name == 'pull_request' && '[1]' || '[1, 2, 3, 4, 5, 6]') }}
     services:
       postgres:
         image: pgvector/pgvector:pg17
@@ -207,12 +208,16 @@ jobs:
         # decision and agent-session selection, in six duration-balanced groups.
         # These source tests register bare concrete Django models, so PostgreSQL
         # must create their tables in one sync-app pass.
+        # A pull request runs the examples profile alone: its member planner-memory
+        # gate budgets what every permission change adds to the console's reads.
         env:
           DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/angee
+          PULL_REQUEST: ${{ github.event_name == 'pull_request' }}
         run: |
-          uv run --locked python -m pytest -q -n 4 --dist loadfile --nomigrations --durations=25 --junitxml=postgresql-contracts.xml \
-            --splits 6 --group ${{ matrix.group }} --splitting-algorithm least_duration \
-            --durations-path .test_durations_postgres \
+          if [ "$PULL_REQUEST" = true ]; then
+            set -- tests/test_composed_examples.py
+          else
+            set -- \
             tests/test_workflows_definition.py tests/test_workflows_concurrency.py \
             tests/test_workflows_runtime.py tests/test_workflows_install.py \
             tests/test_workflows_subject.py tests/test_workflows_publication.py \
@@ -291,6 +296,10 @@ jobs:
             tests/test_projects_access_projections.py tests/test_timeline_concurrency.py \
             tests/test_work_intake_lock_campaign.py tests/test_work_stage_lock_campaign.py \
             tests/test_workflows_integrate_cycle.py tests/test_workflows_integrate_steps.py
+          fi
+          uv run --locked python -m pytest -q -n 4 --dist loadfile --nomigrations --durations=25 --junitxml=postgresql-contracts.xml \
+            --splits ${{ strategy.job-total }} --group ${{ matrix.group }} --splitting-algorithm least_duration \
+            --durations-path .test_durations_postgres "$@"
           uv run --locked python -c 'import xml.etree.ElementTree as ET; root = ET.parse("postgresql-contracts.xml").getroot(); cases = list(root.iter("testcase")); skipped = sum(any(child.tag.rsplit("}", 1)[-1] == "skipped" for child in case) for case in cases); assert cases and skipped == 0, f"expected executed PostgreSQL tests, got tests={len(cases)}, skipped={skipped}"; print(f"PostgreSQL tests={len(cases)}, skipped={skipped}")'
 
   # One verdict under the check name pull requests and callers already know:
@@ -305,7 +314,7 @@ jobs:
           echo "quality=${{ needs.python-quality.result }} shards=${{ needs.uv-shard.result }} postgres=${{ needs.uv-postgres.result }}"
           test "${{ needs.python-quality.result }}" = success
           test "${{ needs.uv-shard.result }}" = success
-          test "${{ needs.uv-postgres.result }}" = "${{ github.event_name == 'pull_request' && 'skipped' || 'success' }}"
+          test "${{ needs.uv-postgres.result }}" = success
 
   pnpm:
     if: ${{ inputs.pnpm-enabled }}
