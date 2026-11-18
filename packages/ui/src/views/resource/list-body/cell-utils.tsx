@@ -13,7 +13,7 @@ import { titleCase } from "../../../lib/titleCase";
 import { Chip } from "../../../ui/chip";
 import { formatJson } from "../../../widgets/json-format";
 import { ChipList } from "../../../ui/chip";
-import { dateFromUnknown, formatDate, formatDateTime } from "../../../widgets/date-format";
+import { dateFromUnknown, formatDate, formatDateTime, formatTime } from "../../../widgets/date-format";
 import { canonicalOptionValue } from "../../../widgets/types";
 import { RecordReferenceChips } from "../../relation/RecordReference";
 import { columnTone } from "../../page";
@@ -68,6 +68,10 @@ export function cellContent<TRow extends Row>(
     ? dateFromUnknown(value)
     : null;
   if (date) return <CompactDate value={date} />;
+  if (field?.kind === "scalar" && field.scalar === "Time" && typeof value === "string") {
+    const time = formatTime(value);
+    if (time) return <time dateTime={value} className="tabular-nums">{time}</time>;
+  }
   return displayValue(value, t);
 }
 

@@ -84,6 +84,18 @@ live in code docstrings.
   releases and is removed in 4.0; a host upgrading from an earlier release
   applies it through a 3.x release first.
 
+- Time-of-day fields can be exposed as resources. Resource metadata accepts the
+  GraphQL `Time` scalar, which it previously refused at schema build, and a Django
+  `TimeField` defaults to the new `time` widget. It filters with Date's operators
+  (`exact`, `ne`, `gt`, `gte`, `lt`, `lte`, `inList`, `notInList`, `isNull`), sorts,
+  and groups by value without calendar extractions. On the web, `Time` is a
+  generated `string` (`HH:MM[:SS]`, no zone); `@angee/ui` registers the `time`
+  widget, which edits through the native time control and reads and lists through
+  `formatTime`. `formatTime` and `formatTimeInput` accept a `Time` value and read
+  it as written, an empty time drafts as `null`, the filter editor offers a `time`
+  field type, and the client row model compares clocks as SQL does (`09:30` equals
+  `09:30:00`).
+
 - Storage mounts read Google Drive: `angee.storage_integrate_google_drive` mounts
   My Drive, a folder or a shared drive, in place (read-only) or copied into a chosen
   writable backend, reading with one of the connecting user's Google accounts that
@@ -647,6 +659,13 @@ live in code docstrings.
 - The provenance typing plugin preserves its declared protocol when Django
   has no configured storage setting; it does not invent that setting. Bare-host
   fixtures declare the required settings of the capabilities they exercise.
+- The provenance typing plugin types an abstract composed source's history and
+  statement rows as those of the model registered under its label (a `Project`
+  source's `history` yields `HistoricalProject`); only a pure mixin keeps its
+  declaration's row bound. `StatementPair.statements` is typed as its descriptor,
+  so a pair row reads its statements as the class does. Framework `merge_policies`
+  redeclarations take the owner's `ClassVar[Mapping[str, Any]]`, so a consumer
+  donor composing another owner-typed base passes mypy's base-compatibility check.
 - Source retirement: `ChangesetQuerySet.history_written_only_by(record, predicate)`
   shares document history selection with `touching_filter`, requires a creation
   snapshot and refuses unmatched or unattributed writes. The reference owner adds

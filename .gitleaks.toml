@@ -28,3 +28,18 @@ condition = "AND"
 paths = ['''^tests/''']
 regexTarget = "line"
 regexes = ['''name="Empty key", idempotency_key=""''']
+[[rules.allowlists]]
+description = "A calendar test's event identity (a series UID with its date) reads as a key and its value."
+condition = "AND"
+paths = ['''^tests/''']
+regexTarget = "line"
+regexes = ['''external_key="standup/20260316"''']
+
+[[rules]]
+id = "private-key"
+[[rules.allowlists]]
+description = "Test parameters that pass a bare PEM header as an invalid key file; a real key has a newline, never a closing quote, after its header."
+condition = "AND"
+paths = ['''^tests/''']
+regexTarget = "match"
+regexes = ['''^-----BEGIN PRIVATE KEY-----", ''']

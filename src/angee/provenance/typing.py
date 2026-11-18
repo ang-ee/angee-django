@@ -47,7 +47,13 @@ class ProvenancePlugin(Plugin):
         return self._history_hook(fullname)
 
     def history_manager(self, ctx: AttributeContext, *, name: str) -> MypyType:
-        """Bind concrete descriptors or retained source declarations to native row contracts."""
+        """Bind the registered model's descriptor, or a pure mixin's declaration, to native row contracts.
+
+        The source's label names its registered model: the source itself, or the
+        class composition registered for an abstract source. A pure mixin, an
+        abstract source with no model under its label, binds its declared manager
+        to the row variable's bound.
+        """
         receiver = get_proper_type(ctx.type)
         if isinstance(receiver, TypeType):
             receiver = get_proper_type(receiver.item)
@@ -65,19 +71,17 @@ class ProvenancePlugin(Plugin):
         source = vars(module).get(receiver.type.name) if module is not None else None
         if source is models.Model or not isinstance(source, type) or not issubclass(source, models.Model):
             return ctx.default_attr_type
-        if source._meta.abstract:
+        try:
+            # The runtime source owns the identity of its registered row.
+            model = apps.get_model(source._meta.app_label, source._meta.model_name)
+        except LookupError:
             declaration = getattr_static(source, name, None)
-            if not isinstance(declaration, HistoricalRecords):
+            if not source._meta.abstract or not isinstance(declaration, HistoricalRecords):
                 return ctx.default_attr_type
             runtime_manager = declaration.history_manager
             runtime_queryset = declaration.historical_queryset
             history_info = None
         else:
-            try:
-                # The runtime source owns the identity of its registered row.
-                model = apps.get_model(source._meta.app_label, source._meta.model_name)
-            except LookupError:
-                return ctx.default_attr_type
             descriptor = getattr_static(model, name, None)
             if not isinstance(descriptor, HistoryDescriptor):
                 return ctx.default_attr_type

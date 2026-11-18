@@ -30,6 +30,7 @@ const SCALAR_WIDGET: Readonly<Record<string, string>> = {
   Decimal: "float",
   DateTime: "datetime",
   Date: "date",
+  Time: "time",
   JSON: "json",
 };
 
@@ -39,7 +40,8 @@ export type ResourceFilterFieldType =
   | "datetime"
   | "number"
   | "selection"
-  | "text";
+  | "text"
+  | "time";
 
 export interface ChoiceFacetSupport {
   fieldName: string;
@@ -51,7 +53,7 @@ export interface ChoiceFacetSupport {
 
 /**
  * The default widget family for a generated resource field. The backend owns the
- * widget vocabulary (`angee.graphql.data.field_classification`). Status-display
+ * widget vocabulary (`angee.graphql.data.resource_fields`). Status-display
  * metadata selects the status owner; otherwise an explicit `widget` — e.g.
  * `"money"` over a Decimal scalar — wins. A field with no backend widget falls
  * back to the kind/scalar-derived default: a computed, model-less field, and a
@@ -90,6 +92,7 @@ export function filterFieldType(
   ) {
     return "number";
   }
+  if (field?.kind === "scalar" && field.scalar === "Time") return "time";
   if (isDateField(field, fieldName)) {
     return field?.scalar === "Date" ? "date" : "datetime";
   }

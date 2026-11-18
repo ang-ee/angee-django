@@ -213,6 +213,12 @@ test("nested object fields qualify their owning model's row projection", () => {
   expect([...paths]).toEqual(["version.payload.kind", "version.payload.target.id"]);
 });
 
+test("an empty date or time field drafts as null, never a blank wire string", () => {
+  expect(emptyDraft([
+    { name: "due", widget: "date" }, { name: "at", widget: "datetime" }, { name: "starts", widget: "time" },
+  ])).toEqual({ due: null, at: null, starts: null });
+});
+
 describe("dotted form fields", () => {
   test("seed and read nested record values through native RHF-shaped data", () => {
     expect(emptyDraft(fields, { config: { local_root: "/srv/repo" } })).toEqual({
