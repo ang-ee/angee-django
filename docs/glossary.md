@@ -515,9 +515,10 @@ running app.
 when selected. A **named app** is a deployment's rail of roots
 (`ANGEE_UI.shell.apps`).
 
-**Selection** — the app the console shows: `?app=` or the hostname's
-`ANGEE_UI.shell.hosts` entry picks a root or a named app, whose **rail** of
-roots the rail, palette and menus follow; nothing selected shows every root.
+**Selection** — the app the console shows: `?app=`, else the hostname's
+`ANGEE_UI.shell.hosts` entry, else `ANGEE_UI.shell.app` picks a root or a named
+app, whose **rail** of roots the rail, palette and menus follow; nothing
+selected, or a named app without a rail, shows every root.
 It shapes navigation and identity, never which routes open.
 
 **Aggregator** — an addon that places other addons' apps under its own menu root

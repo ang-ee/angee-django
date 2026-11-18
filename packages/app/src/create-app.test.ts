@@ -198,6 +198,13 @@ describe("createApp selection", () => {
     });
     expect(select({ search: "?app=nowhere", hostname: "elsewhere.localhost" })).toMatchObject({ app: null, rail: null, brand: null });
     expect(select({ search: "" })).toMatchObject({ app: null, rail: null, diagnostics: [] });
+    // A host that opens one app still reaches every root through a named app without a rail.
+    const console = deployment({ apps: { console: {} }, app: "requests.files" });
+    const opened = (search: string) => createApp({ ...testAppInput([...addons, console], layouts), location: { search } });
+    expect(opened("").explain.selection).toMatchObject({ app: "requests.files", rail: ["requests.files"] });
+    const full = opened("?app=console");
+    expect(full.explain.selection).toMatchObject({ app: "console", rail: null, sources: { app: "?app=console" } });
+    expect(full.explain.selection.rail).toBeNull();
     // Without a location the page's own URL selects.
     const { location: _location, ...unlocated } = input;
     history.replaceState(null, "", "/files?app=requests");
@@ -233,6 +240,11 @@ describe("createApp selection", () => {
     expect(() => createApp(input(valid, { hosts: { "requests.localhost": "nothing" } }))).toThrow(
       'ANGEE_UI.shell.hosts["requests.localhost"] selects "nothing", which is neither a menu root id nor an ANGEE_UI.shell.apps name.',
     );
+    expect(() => createApp(input(valid, { app: "nothing" }))).toThrow(
+      'ANGEE_UI.shell.app selects "nothing", which is neither a menu root id nor an ANGEE_UI.shell.apps name.',
+    );
+    expect(() => createApp(input(valid, { apps: { console: {} }, app: "requests", hosts: { "requests.localhost": "console" } })))
+      .not.toThrow();
     expect(() => createApp(input(valid, { hosts: { "Requests.localhost": "requests" } }))).toThrow(
       'ANGEE_UI.shell.hosts["Requests.localhost"] must be a lower-case hostname.',
     );

@@ -328,16 +328,23 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
   ANGEE_UI = {"shell": {
       "brand": {"name": "Suite", "mark": "suite"},  # nothing selected: every root
       "theme": "suite.light",
-      "apps": {"payables": {"rail": ["accounting", "files"], "home": "accounting.bills"}},
+      "apps": {
+          "payables": {"rail": ["accounting", "files"], "home": "accounting.bills"},
+          "console": {},  # no rail: every root, reached by ?app=console on any host
+      },
       "hosts": {"payables.example.com": "payables", "work.example.com": "pm"},
+      "app": "payables",  # neither ?app= nor the host selects: open payables
   }}
   ```
 
   [`selectApp`](../../packages/app/src/boot-app.tsx) takes `?app=<root id |
-  apps name>`, else the hostname's `hosts` entry, else nothing; no choice is
-  stored. A root id is the one-root app with the root's home, brand, theme and rail default.
+  apps name>`, else the hostname's `hosts` entry, else `shell.app`, else
+  nothing; no choice is stored. A root id is the one-root app with the root's home, brand, theme and rail default.
   A named app takes its own, else its first rail root's; an unset theme falls
-  back to `shell.theme`. Nothing selected shows every root with `shell.brand`
+  back to `shell.theme`. A named app without a rail shows every root with its
+  own brand and theme, else the shell's, and declares no home, so a host whose
+  name or `shell.app` opens one app still reaches the full console. Nothing
+  selected shows every root with `shell.brand`
   and `shell.theme`. An unknown `?app=` warns in development and falls back.
   `createApp` checks every root, app and host at boot, selected or not: a
   rail lists top-level roots, an app name is no root id, a home lies inside

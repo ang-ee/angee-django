@@ -1039,7 +1039,7 @@ function validateContainerConditions(
 
 /**
  * Every app the deployment can select, selected or not: each menu root, each
- * `ANGEE_UI.shell.apps` entry and each `hosts` entry. Its rail lists top-level
+ * `ANGEE_UI.shell.apps` entry, each `hosts` entry and `ANGEE_UI.shell.app`. Its rail lists top-level
  * roots, its home lies inside the rail, its brand mark is a registered glyph,
  * its theme is installed and a theme lock has its theme beside it; a
  * misconfigured app fails at boot, not on its host.
@@ -1071,6 +1071,9 @@ function validateSelections(
     if (!appSelection(key, shell, roots, host)) {
       throw new Error(`ANGEE_UI.shell.hosts["${host}"] selects "${key}", which is neither a menu root id nor an ANGEE_UI.shell.apps name.`);
     }
+  }
+  if (shell.app !== undefined && !appSelection(shell.app, shell, roots, "ANGEE_UI.shell.app")) {
+    throw new Error(`ANGEE_UI.shell.app selects "${shell.app}", which is neither a menu root id nor an ANGEE_UI.shell.apps name.`);
   }
   const declarations = [
     ...roots.map((root) => ({ where: `Menu root "${root.id}"`, key: root.id, declared: root })),
