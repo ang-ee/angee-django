@@ -78,6 +78,8 @@ export function CalendarPage(): React.ReactElement {
   const [reschedule] = useActionMutation<ActionFieldName>("reschedule_event", { invalidateModels: EVENT_MODELS });
   const settle = useActionResultRun();
 
+  // A drop without a later end sends its start again: the event's `reschedule` owns that move's
+  // length, one day for an all-day event.
   const onReschedule = React.useCallback<NonNullable<ResourceListCalendarSpec["onReschedule"]>>(
     async (occurrence, start, end) => {
       const outcome = await settle(() => reschedule(occurrence.event_sqid, {

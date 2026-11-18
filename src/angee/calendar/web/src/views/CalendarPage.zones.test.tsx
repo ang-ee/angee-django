@@ -215,6 +215,18 @@ describe("CalendarPage drag", () => {
     });
   });
 
+  // `CalendarEvent.reschedule` makes an all-day move without a later end one day long, so the page sends
+  // the day it lands on as both bounds and keeps no copy of that rule.
+  test("an all-day drop without an end sends the day it lands on, which the event makes one day long", async () => {
+    const onReschedule = (await spec()).onReschedule!;
+
+    await onReschedule({ ...ROW, all_day: true }, new Date(2026, 10, 22), null);
+
+    expect(requests.find(({ fields }) => fields.includes("reschedule_event"))?.variables).toEqual({
+      id: "cev_a", start: "2026-11-22", end: "2026-11-22",
+    });
+  });
+
   test("a refused reschedule rejects the drop, so the surface reverts", async () => {
     outcome = { ok: false, message: "This calendar is already busy at this time." };
     const onReschedule = (await spec()).onReschedule!;

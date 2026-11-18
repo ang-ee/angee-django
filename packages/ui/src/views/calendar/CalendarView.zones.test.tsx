@@ -194,6 +194,21 @@ describe("CalendarView", () => {
     expect(allow({ allDay: false }, { allDay: true })).toBe(false);
   });
 
+  // The suite runs in the runner's zone and under each zone the shared Vitest defaults pin: under UTC a
+  // bare day read as UTC midnight is also the local midnight, so only another zone tells them apart.
+  test("a drop without a start keeps an all-day occurrence's own first day, read as the viewer's local day", async () => {
+    const onEventDrop = vi.fn();
+    const allDay: Occurrence = { ...EDITABLE, occurrence_id: "cev_c", all_day: true, start: "2026-11-20", end: "2026-11-21" };
+    render(<CalendarView view="month" range={RANGE} occurrences={[allDay]} onEventDrop={onEventDrop} />);
+    await screen.findByTestId("fc");
+
+    const revert = vi.fn();
+    surface().eventDrop?.({ event: { start: null, end: null, extendedProps: { occurrence: allDay } }, revert });
+
+    expect(onEventDrop).toHaveBeenCalledWith(allDay, new Date(2026, 10, 20), null);
+    expect(revert).not.toHaveBeenCalled();
+  });
+
   test("reverts the optimistic change when the reschedule handler rejects", async () => {
     const onEventDrop = vi.fn().mockRejectedValue(new Error("server rejected"));
     render(
