@@ -10,6 +10,16 @@ live in code docstrings.
 
 ## Unreleased — shared addon contracts, native embeddings and graph retrieval
 
+- `storage/file#write_granted` holds only the fragments' record arms; `write`
+  derives the drive, folder, inherited-owner, draft-owner and admin arms itself,
+  and `owner_writer` is `inherited_owner + draft_owner + (owner & write_granted)`.
+  Every `read`, `write`, `share`, `delete` and `transfer` decision is unchanged;
+  a file's read statement no longer compiles its folder's write, which `delete`
+  reached through `owner_writer`. Fragments contribute `write_granted` arms as
+  before. `write_granted` and `owner_writer` are composition terms: a caller that
+  checked either directly checks `write`, `delete` or `transfer`. Operators re-sync
+  the permission schema: storage revision 14.
+
 - A resource row naming a `to_field` foreign key by xref stores the named row's
   target column, not its primary key: `AngeeResource.get_fk_widget` binds the xref
   widget's native `field` to the relation's `target_field`, so a seed can set

@@ -4837,7 +4837,9 @@ class PartManager[PartT: Part](_PartManagerBase[PartT]):
     def _parts_for_message(self, message: Message) -> tuple[dict[Any, Part], dict[Any | None, list[Part]]]:
         """Index one message read by primary key and ordered siblings.
 
-        Foreign parents remain absent from the index, so navigation never
+        Each part's parent inside the message is linked from these same rows, so
+        reading it costs no statement and keeps the row's actor stamp. Foreign
+        parents remain absent from the index and unlinked, so navigation never
         follows a forward FK descriptor onto another message.
         """
 
@@ -4873,6 +4875,11 @@ class PartManager[PartT: Part](_PartManagerBase[PartT]):
         for part in parts:
             by_id[part.pk] = part
             siblings.setdefault(part.parent_id, []).append(part)
+        parent_field = self.model.parent.field
+        for part in parts:
+            parent = by_id.get(part.parent_id)
+            if parent is not None:
+                parent_field.set_cached_value(part, parent)
         for rows in siblings.values():
             rows.sort(key=lambda part: (part.position, str(part.sqid)))
         return by_id, siblings
