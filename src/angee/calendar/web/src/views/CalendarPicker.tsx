@@ -28,6 +28,15 @@ const CALENDAR_RELATION: RelationFieldInfo = {
   colorField: "color",
 };
 
+/**
+ * What a record's `field`, rendered by this picker, reads of its calendar: the identity,
+ * label and colour the picker shows. The form selects exactly these (`Field.selectionPaths`).
+ */
+export function calendarPickerSelection(field: string): readonly string[] {
+  const { labelField, colorField } = CALENDAR_RELATION;
+  return ["id", labelField, ...(colorField ? [colorField] : [])].map((name) => `${field}.${name}`);
+}
+
 /** The server's `writable` filter (a refine filter): the calendars the viewer may write, and so add events to. */
 const WRITABLE = [{ field: "writable", operator: "eq", value: true }] as const;
 

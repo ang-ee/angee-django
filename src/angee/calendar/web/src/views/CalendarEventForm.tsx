@@ -3,7 +3,10 @@ import { Field, Form, Group, registerForm, type RegisteredFormProps } from "@ang
 
 import { useCalendarT } from "../i18n";
 import { EVENT_MODEL } from "../resources";
-import { CALENDAR_PICKER_WIDGET, useWritableCalendarIds } from "./CalendarPicker";
+import { CALENDAR_PICKER_WIDGET, calendarPickerSelection, useWritableCalendarIds } from "./CalendarPicker";
+
+// The picker renders the calendar itself, so the field names what it reads; `isReplica` reads `is_writable`.
+const CALENDAR_SELECTION = [...calendarPickerSelection("calendar"), "calendar.is_writable"];
 
 /** A read-only subscription's event is its source's replica: the saved record offers no edits. */
 function isReplica(row: Record<string, unknown>): boolean {
@@ -16,10 +19,11 @@ function CalendarEventForm({ resource: _resource, ...props }: RegisteredFormProp
   const writable = useWritableCalendarIds();
   const soleCalendar = writable?.length === 1 ? writable[0] : undefined;
   return (
-    <Form {...props} resource={EVENT_MODEL} returning={["calendar.is_writable"]} readOnlyWhen={isReplica}>
+    <Form {...props} resource={EVENT_MODEL} readOnlyWhen={isReplica}>
       <Field name="title" title />
       <Group label={t("form.when")} columns={2}>
-        <Field name="calendar" widget={CALENDAR_PICKER_WIDGET} required defaultValue={soleCalendar} />
+        <Field name="calendar" widget={CALENDAR_PICKER_WIDGET} selectionPaths={CALENDAR_SELECTION} required
+          defaultValue={soleCalendar} />
         <Field name="status" />
         <Field name="start" />
         <Field name="end" />
