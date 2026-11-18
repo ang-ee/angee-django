@@ -20,7 +20,7 @@ The external key is the UID (its digest when too long), plus the
 ``RECURRENCE-ID`` instant for an instance. A feed produces at most 10,000
 events, cancelled instances included, and defines at most 100 time zones; both
 are counted before it is parsed. A rule is validated by the event's own field
-before any ``EXDATE`` expands it.
+before any ``EXDATE`` is judged (``cancelled_instances``).
 
 **Zones are resolved per parse.** icalendar's parser caches each feed-defined
 ``VTIMEZONE`` in a process-wide registry, so a resolved value can carry another
@@ -39,13 +39,13 @@ Mapped properties:
   keeps its ``DTSTART`` zone as its own ``timezone`` when that maps to an IANA name
   (a UTC time keeps ``UTC``); a custom zone, a date or a floating time keeps the
   feed's ``X-WR-TIMEZONE``, else its calendar's zone;
-- the first ``RRULE``; each ``EXDATE`` becomes a cancelled instance (``RDATE`` is
-  not mapped);
+- the first ``RRULE`` (``series_rule``); each ``EXDATE`` that is an instance becomes
+  a cancelled one (``RDATE`` is not mapped);
 - ``STATUS``, ``TRANSP`` (``TRANSPARENT`` is free), ``CLASS`` (``PUBLIC`` is
   public, ``PRIVATE`` and ``CONFIDENTIAL`` private, none the calendar's default);
   an instance that states no ``TRANSP`` or ``CLASS`` takes its master's;
 - ``ORGANIZER`` and ``ATTENDEE`` ``mailto:`` addresses with ``CN``, ``ROLE`` and
-  ``PARTSTAT``;
+  ``PARTSTAT``, the organizer first (``organizer_first``);
 - the conference URL: ``CONFERENCE`` (RFC 7986), ``X-GOOGLE-CONFERENCE``,
   ``X-MICROSOFT-ONLINEMEETINGEXTERNALLINK``, ``X-MICROSOFT-SKYPETEAMSMEETINGURL``,
   then ``URL``, the first web address.
@@ -60,7 +60,7 @@ import hashlib
 import ipaddress
 from collections import Counter
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from datetime import UTC, date, datetime, time, timedelta, tzinfo
 from itertools import islice, takewhile
 from time import monotonic
@@ -69,7 +69,6 @@ from urllib.parse import urlsplit
 
 import icalendar
 from dateutil.rrule import rrulestr
-from django.apps import apps
 from django.core.exceptions import ValidationError
 from django.utils import timezone
 from icalendar.parser import Contentlines
@@ -80,8 +79,12 @@ from angee.calendar.backends import (
     ParsedAttendee,
     ParsedCalendar,
     ParsedEvent,
+    cancelled_instances,
+    excluded_dates,
     instance_key,
+    organizer_first,
     series_key,
+    series_rule,
 )
 from angee.calendar.choices import AttendeeResponse, AttendeeRole, EventStatus, EventTransparency, EventVisibility
 from angee.integrate.credentials import CredentialKind
@@ -559,16 +562,10 @@ def _events(
     """Map one VEVENT to its keyed event, then a master's cancelled ``EXDATE`` instances.
 
     ``master`` is the series' master VEVENT when the feed carries it. An instance
-    that states no ``TRANSP`` or ``CLASS`` takes its master's. A rule is validated
-    by the event's own owner first (``CalendarEvent.validate_rule``: its daily
-    floor, its ``COUNT`` bound, and an occurrence within about 30 years of its
-    start), so an invalid rule makes the master an invalid event before anything
-    expands it. The series then expands once, through the recurrence owner that
-    counts every occurrence from its start, up to its latest ``EXDATE``, in the
-    zone the stored series uses: an ``EXDATE`` that is
-    no instance is dropped, and a cancelled instance ends where the event owner's
-    arithmetic puts it (``CalendarEvent.occurrence_end``: an all-day instance spans
-    local days). ``calendar_zone`` is the calendar's.
+    that states no ``TRANSP`` or ``CLASS`` takes its master's. A master's rule and
+    its ``EXDATE``s go through :func:`~angee.calendar.backends.cancelled_instances`,
+    which validates the rule (an invalid one makes the master an invalid event) and
+    keeps each ``EXDATE`` that is an instance. ``calendar_zone`` is the calendar's.
     """
 
     start_prop = component["DTSTART"]
@@ -576,15 +573,8 @@ def _events(
     start = _instant(start_prop.dt, _param(start_prop, "TZID"), zones, zone)
     end = _end(component, start_prop.dt, start, all_day=all_day, zones=zones, zone=zone)
     rid = component.get("RECURRENCE-ID")
-    recurrence = "" if rid is not None else _rule(component)
+    recurrence = "" if rid is not None else series_rule(component)
     event_zone = _event_zone(start_prop, zones, feed_zone)
-    expansion = event_zone or calendar_zone
-    # The unsaved row only lends its owner's rule checks and occurrence arithmetic; nothing writes it.
-    series: Any = apps.get_model("calendar", "CalendarEvent")(
-        start=start, end=end, all_day=all_day, recurrence=recurrence, timezone=event_zone
-    )
-    if recurrence:
-        series.validate_rule(zone=expansion)
     original_start = _instant(rid.dt, _param(rid, "TZID"), zones, zone) if rid is not None else None
     override = original_start is not None and master is not None and master is not component
     series_master = master if override else None
@@ -618,31 +608,8 @@ def _events(
         attendees=_attendees(component),
     )
     observed = [(instance_key(uid, original_start) if original_start is not None else series_key(uid), event)]
-    excluded = sorted(
-        {
-            _instant(value.dt, _param(exdate, "TZID"), zones, zone)
-            for exdate in (_values(component, "EXDATE") if recurrence else ())
-            for value in exdate.dts
-        }
-    )
-    if excluded:
-        observed.extend(
-            (
-                instance_key(uid, moment),
-                replace(
-                    event,
-                    start=moment,
-                    end=series.occurrence_end(moment, zone=expansion),
-                    recurrence="",
-                    series=series_key(uid),
-                    original_start=moment,
-                    status=EventStatus.CANCELLED,
-                    attendees=(),
-                ),
-            )
-            for moment in excluded
-            if series.is_instance(moment, zone=expansion)
-        )
+    excluded = [_instant(value, tzid, zones, zone) for value, tzid in excluded_dates(component)] if recurrence else []
+    observed.extend(cancelled_instances(event, uid, excluded, calendar_zone=calendar_zone))
     return observed
 
 
@@ -711,35 +678,22 @@ def _end(
 
 
 def _attendees(component: Any) -> tuple[ParsedAttendee, ...]:
-    """Return the ``mailto:`` attendees, the organizer first as the ``organizer`` attendee."""
+    """Return the ``mailto:`` attendees as listed, the organizer first (``organizer_first``)."""
 
-    listed: dict[str, ParsedAttendee] = {}
-    for prop in _values(component, "ATTENDEE"):
-        address = _mailto(prop)
-        if address:
-            listed.setdefault(
-                address.lower(),
-                ParsedAttendee(
-                    address=address,
-                    role=_ROLES.get(_param(prop, "ROLE").upper(), AttendeeRole.REQUIRED),
-                    response=_RESPONSES.get(_param(prop, "PARTSTAT").upper(), AttendeeResponse.NEEDS_ACTION),
-                    display_name=_param(prop, "CN"),
-                ),
-            )
-    organizer = component.get("ORGANIZER")
-    address = _mailto(organizer) if organizer is not None else ""
-    if not address:
-        return tuple(listed.values())
-    listed_as = listed.pop(address.lower(), None)
-    return (
+    listed = [
         ParsedAttendee(
             address=address,
-            role=AttendeeRole.ORGANIZER,
-            response=listed_as.response if listed_as is not None else AttendeeResponse.ACCEPTED,
-            display_name=_param(organizer, "CN") or (listed_as.display_name if listed_as is not None else ""),
-        ),
-        *listed.values(),
-    )
+            role=_ROLES.get(_param(prop, "ROLE").upper(), AttendeeRole.REQUIRED),
+            response=_RESPONSES.get(_param(prop, "PARTSTAT").upper(), AttendeeResponse.NEEDS_ACTION),
+            display_name=_param(prop, "CN"),
+        )
+        for prop in _values(component, "ATTENDEE")
+        if (address := _mailto(prop))
+    ]
+    organizer = component.get("ORGANIZER")
+    if organizer is None:
+        return organizer_first(listed, "")
+    return organizer_first(listed, _mailto(organizer), name=_param(organizer, "CN"))
 
 
 def _values(component: Any, name: str) -> list[Any]:
@@ -768,13 +722,6 @@ def _stated(component: Any, master: Any, name: str) -> str:
     """Return a property's text, else its series master's when ``master`` is given, else ``""``."""
 
     return _text(component, name) or (_text(master, name) if master is not None else "")
-
-
-def _rule(component: Any) -> str:
-    """Return the first ``RRULE`` as its RFC 5545 text, or ``""``."""
-
-    rules = _values(component, "RRULE")
-    return rules[0].to_ical().decode().strip() if rules else ""
 
 
 def _param(prop: Any, name: str) -> str:

@@ -710,6 +710,33 @@ def test_attendees_become_handles_with_one_organizer(subscription: Subscription)
     }
 
 
+def test_an_unlisted_organizer_leads_and_a_twice_listed_attendee_keeps_its_stronger_role(
+    subscription: Subscription,
+) -> None:
+    review = """BEGIN:VEVENT
+UID:review@example.test
+DTSTART:20260402T150000Z
+DTEND:20260402T160000Z
+SUMMARY:Review
+ORGANIZER;CN=Dana:mailto:dana@example.test
+ATTENDEE;ROLE=OPT-PARTICIPANT;PARTSTAT=NEEDS-ACTION:mailto:erin@example.test
+ATTENDEE;ROLE=REQ-PARTICIPANT;PARTSTAT=TENTATIVE;CN=Erin:mailto:Erin@example.test
+END:VEVENT"""
+    subscription.feed.body = _feed(review)
+    subscription.poll()
+
+    with system_context(reason="tests.ics"):
+        event = subscription.events()["review@example.test"]
+        rows = {
+            row.handle.normalized_value: (row.role, row.response)
+            for row in EventAttendee.objects.filter(event=event).select_related("handle")
+        }
+    assert rows == {
+        "dana@example.test": (AttendeeRole.ORGANIZER, AttendeeResponse.ACCEPTED),
+        "erin@example.test": (AttendeeRole.REQUIRED, AttendeeResponse.TENTATIVE),
+    }
+
+
 def test_feed_shapes_take_the_event_owners_stored_form(subscription: Subscription) -> None:
     weekly = """BEGIN:VEVENT
 UID:offsite@example.test

@@ -25,6 +25,7 @@ from rebac import actor_context, system_context
 from angee.calendar.backends import ParsedAttendee, organizer_first
 from angee.calendar.models import AttendeeResponse, AttendeeRole
 from angee.calendar.models import CalendarSource as CalendarSourceContract
+from angee.calendar.tasks import purge_unsubscribed_sources
 from angee.calendar.testing.models import CalendarEvent, CalendarSource, EventAttendee
 from angee.calendar_integrate_google.backend import CALENDAR_READONLY
 from angee.calendar_integrate_google.connect import connect_google_calendar
@@ -32,7 +33,8 @@ from angee.integrate.states import LinkStatus, StreamState
 from angee.integrate.streams import sync_bridge
 from angee.integrate.testing.http import mock_transport
 from angee.integrate.testing.models import RecordLink, SyncStream
-from tests.conftest import ExternalAccount, OAuthClient, Vendor, create_user
+from angee.jobs.celery import app as celery_app
+from tests.conftest import Credential, ExternalAccount, OAuthClient, Vendor, create_user
 
 pytestmark = pytest.mark.django_db(transaction=True)
 
@@ -354,7 +356,7 @@ def test_a_series_keeps_its_rule_and_its_moved_and_cancelled_instances(connected
     cancelled = events["standup#20260323T130000Z"]
 
     assert (master.recurrence, master.timezone, master.series_id) == (
-        "FREQ=WEEKLY;BYDAY=MO;COUNT=5", "America/New_York", None
+        "FREQ=WEEKLY;COUNT=5;BYDAY=MO", "America/New_York", None
     )
     assert (moved.series_id, moved.original_start, moved.title) == (
         master.pk, _utc(2026, 3, 9, 9, zone=NEW_YORK), "Standup (moved)"
@@ -451,6 +453,28 @@ def test_a_hidden_calendar_retires_its_events_and_they_come_back_when_it_returns
         assert not [row.code for link_row in failures for row in link_row.failures(open_only=True)]
     assert standup.status == "confirmed"
     assert connected.events()["standup"].pk == standup.pk
+
+
+def test_unsubscribing_a_google_source_keeps_the_account_credential_and_revokes_nothing(
+    connected: Connected, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    connected.poll()
+    monkeypatch.setattr(celery_app, "send_task", lambda name, **options: None)
+    with system_context(reason="tests.google"):
+        OAuthClient.objects.filter(pk=connected.client.pk).update(revoke_endpoint="https://accounts.example.test/revoke")
+        source = CalendarSource.objects.get(pk=connected.sources["work-token"].pk)
+        credential = source.credential
+        source.unsubscribe()
+    connected.google.requests.clear()
+
+    assert purge_unsubscribed_sources() > 0
+
+    # The account's own disconnect retires its credential; the purge only detached it.
+    with system_context(reason="tests.google"):
+        assert CalendarSource.objects.get(pk=source.pk).credential_id is None
+        assert Credential.objects.filter(pk=credential.pk).exists()
+        assert ExternalAccount.objects.filter(credential=credential).exists()
+    assert not [request for request in connected.google.requests if request.url.path.endswith("/revoke")]
 
 
 def test_the_organizer_carries_its_listed_answer_or_accepts() -> None:

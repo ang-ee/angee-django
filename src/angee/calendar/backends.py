@@ -28,10 +28,11 @@ from __future__ import annotations
 import hashlib
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from typing import Any, ClassVar
 
 from django.apps import apps
+from icalendar import Component
 
 from angee.base.serialization import canonical_json_sha256
 from angee.calendar.choices import AttendeeResponse, AttendeeRole, EventStatus
@@ -300,6 +301,30 @@ def event_from_payload(payload: Mapping[str, Any]) -> ParsedEvent:
     )
 
 
+def series_rule(component: Component) -> str:
+    """Return the one rule a parsed VEVENT's series keeps: its first ``RRULE`` as RFC 5545 text, else ``""``.
+
+    A stored series has one bare rule (``CalendarEvent.validate_rule``), so a source
+    that states several keeps the first; ``RDATE`` and ``EXRULE`` are not mapped.
+    """
+
+    rules = component.get("RRULE")
+    first = rules[0] if isinstance(rules, list) and rules else rules
+    return first.to_ical().decode().strip() if first else ""
+
+
+def excluded_dates(component: Component) -> list[tuple[date | datetime, str]]:
+    """Return each ``EXDATE`` value of a parsed VEVENT with the ``TZID`` it names (``""`` for none).
+
+    A value is a date, a UTC time, a floating time, or a wall-clock time the source
+    reads in the named zone itself: the zone icalendar attached is not the source's.
+    """
+
+    found = component.get("EXDATE")
+    props = found if isinstance(found, list) else [found] if found is not None else []
+    return [(value.dt, str(prop.params.get("TZID") or "")) for prop in props for value in prop.dts]
+
+
 def cancelled_instances(
     event: ParsedEvent, uid: str, excluded: Iterable[datetime], *, calendar_zone: str
 ) -> list[tuple[str, ParsedEvent]]:
@@ -309,12 +334,13 @@ def cancelled_instances(
     :func:`instance_key`. The rule is validated by the event's own owner first
     (``CalendarEvent.validate_rule``: its frequency floor, its ``COUNT`` bound, and
     an occurrence within about 30 years of its start), so an invalid rule raises
-    ``ValidationError`` before anything expands it. The series then expands once, up
-    to its latest excluded moment, in the zone the stored series uses (the event's
-    own, else ``calendar_zone``) through ``CalendarEvent.instances``: an excluded
-    moment that is no instance is dropped, and a cancelled instance ends where the
-    event owner's arithmetic puts it (``CalendarEvent.occurrence_end``). Each keeps
-    the master's fields, without its rule and attendees. A blank rule returns none.
+    ``ValidationError`` before anything expands it. Each excluded moment is then
+    judged on its own (``CalendarEvent.is_instance``, in the zone the stored series
+    uses: the event's own, else ``calendar_zone``), so a far ``EXDATE`` reads only
+    its own window: one that is no instance is dropped, and a cancelled instance
+    ends where the event owner's arithmetic puts it (``CalendarEvent.occurrence_end``:
+    an all-day instance spans local days). Each keeps the master's fields, without
+    its rule and attendees. A blank rule returns none.
     """
 
     if not event.recurrence:
@@ -325,10 +351,6 @@ def cancelled_instances(
         start=event.start, end=event.end, all_day=event.all_day, recurrence=event.recurrence, timezone=event.timezone
     )
     series.validate_rule(zone=zone)
-    moments = sorted(set(excluded))
-    if not moments:
-        return []
-    instances = series.instances(event.start, moments[-1], zone=zone)
     return [
         (
             instance_key(uid, moment),
@@ -343,8 +365,8 @@ def cancelled_instances(
                 attendees=(),
             ),
         )
-        for moment in moments
-        if moment in instances
+        for moment in sorted(set(excluded))
+        if series.is_instance(moment, zone=zone)
     ]
 
 

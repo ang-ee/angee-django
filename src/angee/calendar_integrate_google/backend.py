@@ -17,8 +17,9 @@ its master's id plus the instance's original start, so each remote instance owns
 its own placement. An exception carrying ``recurringEventId`` and
 ``originalStartTime`` is an override row; a cancelled exception is a cancelled
 override, and so is each ``EXDATE`` of a master's ``recurrence``. A cancelled
-master or single event is a removal (a tombstone). ``RDATE`` and ``EXRULE`` are
-not mapped; only the first ``RRULE`` is.
+master or single event is a removal (a tombstone). The ``recurrence`` lines are
+RFC 5545 and read through icalendar: only the first ``RRULE`` is kept
+(``series_rule``), and ``RDATE`` and ``EXRULE`` are not mapped.
 
 Mapped fields: ``summary``, ``description``, ``location``; ``start``/``end``
 (``date`` is all-day, local midnight in the event's or the calendar's zone;
@@ -43,6 +44,7 @@ from typing import Any, ClassVar
 
 from django.core.exceptions import ValidationError
 from django.utils import timezone
+from icalendar import Component, Event
 from rebac import system_context
 
 from angee.calendar.backends import (
@@ -51,10 +53,12 @@ from angee.calendar.backends import (
     ParsedCalendar,
     ParsedEvent,
     cancelled_instances,
+    excluded_dates,
     instance_key,
     organizer_first,
     parse_key,
     series_key,
+    series_rule,
 )
 from angee.calendar.choices import AttendeeResponse, AttendeeRole, EventStatus, EventTransparency, EventVisibility
 from angee.calendar_integrate_google.client import MAX_PAGE_SIZE, GoogleCalendarClient, SyncTokenExpired
@@ -288,7 +292,8 @@ class GoogleCalendarBackend(CalendarBackend):
                 return [(key, None)]
             observed: list[tuple[str, ParsedEvent]] = [(key, event)]
             if event.recurrence:
-                exdates = _exdates(item.get("recurrence") or (), event.timezone or zone)
+                local = event.timezone or zone
+                exdates = [_instant(value, tzid, local) for value, tzid in excluded_dates(_recurrence(item))]
                 observed.extend(cancelled_instances(event, event_id, exdates, calendar_zone=zone))
         except Exception:  # noqa: BLE001 — the driver quarantines semantic input per record.
             return [(_own_key(item, zone), {"error": "invalid_event"})]
@@ -358,7 +363,7 @@ def _event(item: Mapping[str, Any], zone: str) -> tuple[str, ParsedEvent | None]
         start=start,
         end=end,
         all_day=all_day,
-        recurrence="" if master_id else _rule(item.get("recurrence") or ()),
+        recurrence="" if master_id else series_rule(_recurrence(item)),
         timezone=event_zone,
         series=series_key(master_id) if master_id else "",
         original_start=original,
@@ -421,49 +426,27 @@ def _known_zone(name: Any, names: Iterable[str]) -> str:
     return text if text and text in names else ""
 
 
-def _rule(lines: Iterable[str]) -> str:
-    """Return the first ``RRULE`` value of a Google ``recurrence``, or ``""``."""
+def _recurrence(item: Mapping[str, Any]) -> Component:
+    """Return a Google event's ``recurrence`` lines (RFC 5545 ``RRULE``, ``EXDATE``, ``RDATE``) parsed as one VEVENT."""
 
-    for line in lines:
-        name, _colon, value = str(line).partition(":")
-        if name.upper() == "RRULE":
-            return value.strip()
-    return ""
+    lines = [str(line).strip() for line in item.get("recurrence") or ()]
+    return Event.from_ical("\r\n".join(["BEGIN:VEVENT", *lines, "END:VEVENT"]))
 
 
-def _exdates(lines: Iterable[str], zone: str) -> list[datetime]:
-    """Return every ``EXDATE`` of a Google ``recurrence`` as aware UTC.
+def _instant(value: date | datetime, tzid: str, zone: str) -> datetime:
+    """Return one ``EXDATE`` value as aware UTC.
 
-    A ``TZID`` the project knows reads the wall clock there, a trailing ``Z`` is
-    UTC, and a floating time or a date reads in ``zone`` (the series' zone).
+    A date is local midnight in ``zone`` (the series' zone); a time with a ``TZID``
+    the project knows reads its wall clock there; a UTC time keeps its instant; a
+    floating time, or one in a zone the project does not know, reads in ``zone``.
     """
 
-    names = get_zone_names()
-    moments: list[datetime] = []
-    for line in lines:
-        head, _colon, values = str(line).partition(":")
-        name, *params = head.split(";")
-        if name.upper() != "EXDATE":
-            continue
-        parameters = dict(param.split("=", 1) for param in params if "=" in param)
-        local = get_zone_info(_known_zone(parameters.get("TZID"), names) or zone)
-        for value in filter(None, (text.strip() for text in values.split(","))):
-            if "T" not in value:
-                moments.append(
-                    timezone.make_aware(datetime.combine(date.fromisoformat(_iso_day(value)), time.min), local)
-                    .astimezone(UTC)
-                )
-                continue
-            wall = datetime.strptime(value.removesuffix("Z"), "%Y%m%dT%H%M%S")
-            aware = wall.replace(tzinfo=UTC) if value.endswith("Z") else timezone.make_aware(wall, local)
-            moments.append(aware.astimezone(UTC))
-    return moments
-
-
-def _iso_day(value: str) -> str:
-    """Return an iCalendar ``YYYYMMDD`` date as ISO ``YYYY-MM-DD``."""
-
-    return f"{value[:4]}-{value[4:6]}-{value[6:8]}"
+    if not isinstance(value, datetime):
+        return _moment({"date": value}, zone)
+    if not tzid and value.tzinfo is not None:
+        return value.astimezone(UTC)
+    local = _known_zone(tzid, get_zone_names()) or zone
+    return timezone.make_aware(value.replace(tzinfo=None), get_zone_info(local)).astimezone(UTC)
 
 
 def _conference_url(item: Mapping[str, Any]) -> str:

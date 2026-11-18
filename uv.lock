@@ -580,6 +580,7 @@ dependencies = [
     { name = "angee-scheduling" },
     { name = "angee-tags" },
     { name = "angee-web" },
+    { name = "icalendar" },
 ]
 
 [package.metadata]
@@ -596,6 +597,7 @@ requires-dist = [
     { name = "angee-scheduling", editable = "src/angee/scheduling" },
     { name = "angee-tags", editable = "src/angee/tags" },
     { name = "angee-web", editable = "src/angee/web" },
+    { name = "icalendar", specifier = ">=6.3,<8" },
 ]
 
 [[package]]
@@ -609,6 +611,7 @@ dependencies = [
     { name = "angee-integrate" },
     { name = "angee-integrate-google" },
     { name = "angee-scheduling" },
+    { name = "icalendar" },
 ]
 
 [package.metadata]
@@ -619,6 +622,7 @@ requires-dist = [
     { name = "angee-integrate", editable = "src/angee/integrate" },
     { name = "angee-integrate-google", editable = "src/angee/integrate_google" },
     { name = "angee-scheduling", editable = "src/angee/scheduling" },
+    { name = "icalendar", specifier = ">=6.3,<8" },
 ]
 
 [[package]]
