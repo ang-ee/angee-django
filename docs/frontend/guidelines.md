@@ -337,6 +337,11 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
   }}
   ```
 
+  `ANGEE_UI` is authored in the host's or the deployment's `settings.yaml`,
+  never the environment. It is a compiler input, so a change to it alone
+  recomposes on the stack's `compose --if-stale`
+  ([integration inputs](../composer.md#runtime-build-and-import)).
+
   [`selectApp`](../../packages/app/src/boot-app.tsx) takes `?app=<root id |
   apps name>`, else the hostname's `hosts` entry, else `shell.app`, else
   nothing; no choice is stored. A root id is the one-root app with the root's home, brand, theme and rail default.
@@ -1759,8 +1764,11 @@ framework's), so IAM's rotating backdrops never show behind a contributed hero.
 The hero renders at every width: beside the card from `lg` up, stacked above it
 on small screens. `LoginPage` passes it no props and no viewport hint; the hero
 picks its own responsive assets (a lighter image or video on phones) through
-ordinary CSS or media queries. The backdrop image is one URL that covers the page
-at every width.
+ordinary CSS or media queries. Below `lg` the hero's wrapper has no height of its
+own, so a hero built to fill the `lg` column (`absolute inset-0`) collapses there:
+the hero gives itself a small-screen height, for example
+`relative h-[34svh] lg:absolute lg:inset-0 lg:h-auto`. The backdrop image is one
+URL that covers the page at every width.
 
 The container is unique per address, as a model's card is: two installed
 contributors fail at boot ("… are both its one child"). Keep one by removing the

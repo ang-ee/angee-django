@@ -2227,6 +2227,22 @@ def test_localhost_production_frontend_needs_no_edge_lookup() -> None:
     assert "header_up X-Forwarded-For {client_ip}" in command
 
 
+def test_stack_root_installs_with_the_framework_pnpm() -> None:
+    """A container job's Corepack takes pnpm from the stack root's packageManager, the framework's own.
+
+    Without it Corepack downloads the latest pnpm, whose patch parser refused the
+    framework's patched dependencies (pnpm 12 on the first staging boot).
+    """
+
+    framework = json.loads((ROOT / "package.json").read_text(encoding="utf-8"))["packageManager"]
+    rendered = json.loads(
+        DEV_PACKAGE_TEMPLATE.read_text(encoding="utf-8").replace("{{ project_name }}", "example")
+    )
+    assert rendered["packageManager"] == framework
+    include = '{% include "../dev/template/package.json.jinja" %}'
+    assert STAGING_PACKAGE_TEMPLATE.read_text(encoding="utf-8").strip() == include
+
+
 def test_playwright_image_matches_e2e_lock_version() -> None:
     lock = yaml.safe_load(PNPM_LOCK.read_text(encoding="utf-8"))
     version = lock["importers"]["packages/e2e"]["devDependencies"]["@playwright/test"]["version"]

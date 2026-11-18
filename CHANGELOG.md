@@ -16,6 +16,38 @@ live in code docstrings.
   before, the receipt stayed current while the web manifest's roots named the old
   location, and the frontend build failed on a missing addon entry.
 
+- A change to `ANGEE_UI` alone now recomposes. `angee.web` renders it into
+  `runtime/web/manifest.json` but never declared it a compiler input, so
+  `compose --if-stale`, the stack's compose job, found the receipt current and
+  kept the old deployment layer while `compose --check` reported it stale. The
+  web autoconfig appends `ANGEE_UI` to `COMPOSE_FINGERPRINT_SETTINGS`. Like
+  every structural input, `ANGEE_UI` is authored YAML: a deployment that set it
+  through `ANGEE_UI` or `YAMLCONF_ANGEE_UI` in the environment is refused and
+  moves it to its `settings.yaml`. GraphQL had the same gap for the SDL: its
+  autoconfig now appends `STRAWBERRY_DJANGO` and `ANGEE_GRAPHQL_RESOURCE_FILTERS`,
+  so a host override of either alone recomposes, and neither comes from the
+  environment.
+
+- The sign-in card's "or use password" divider shows only beside a sign-in method
+  that renders. A contributed method that renders nothing, such as the OIDC
+  method with no configured connection, no longer leaves an orphan divider above
+  the password form.
+
+- The Django images run as the owner of the mounted project, so a Docker-mode
+  stack works on a Linux host whose stack root does not belong to uid 1000. The
+  entrypoint gives its `angee` user the project's uid and gid before dropping
+  privileges, as the operator image already does; a root-owned project keeps the
+  image's own user. Before, `py-sync` failed with `Permission denied` creating
+  `caches/uv`, and runtime files were left owned by uid 1000.
+
+- A Docker-mode framework stack (`stacks/dev` with `runtime_mode: docker`,
+  `stacks/staging`) installs its JS dependencies with the framework's pnpm. The
+  stack root's `package.json` now declares `packageManager: pnpm@11.1.3`, the
+  framework's own. Without it Corepack in the `deps` container downloaded the
+  latest pnpm, and pnpm 12 refused the framework's patched dependencies
+  (`ERR_PNPM_INVALID_PATCH` on `nuqs-2.10.1.patch`). An existing stack adds the
+  line to its root `package.json`, or re-renders with `stack update --template`.
+
 - Permission statements are compiled for the stored grants their actor can hold
   (django-zed-rebac 0.35.1, actor grant profiles). Inside an evaluator scope one small
   statement reads which stored relations name the actor, directly, by wildcard or
