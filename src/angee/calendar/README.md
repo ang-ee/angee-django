@@ -62,6 +62,8 @@ cancelled master hides its moved instances too.
   edited in the viewer's own zone. Changing a calendar's zone moves
   only the events without a zone of their own: an all-day event keeps its local
   dates, and every series derives its end again and rebases its overrides.
+  Changing an all-day event's own zone without its dates keeps its days too. A
+  redacted timed occurrence carries its calendar's zone, never its event's own.
 - **All-day** events start and end at midnight in their zone, a whole number of
   days apart. A bound written as a date (`2026-11-20`, no offset) names a day, and
   the event places it at that midnight, so a browser in any zone sends the days its

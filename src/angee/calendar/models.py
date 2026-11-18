@@ -114,7 +114,7 @@ from angee.provenance.contrib.angee.querysets import AngeeHistoryQuerySet
 from angee.provenance.statements import Aspect, SourceKind, StatementRecords, StatementsMixin
 from angee.scheduling.fields import RecurrenceField, TimeZoneField
 from angee.scheduling.recurrence import Recurrence, moment_after, utc_stamp
-from angee.scheduling.zones import get_zone_info
+from angee.scheduling.zones import get_zone_info, require_aware
 from angee.tags.models import TaggedModel
 
 READ_ONLY_CALENDAR = "This calendar is a read-only subscription."
@@ -150,7 +150,8 @@ class EventOccurrence:
     ``calendar`` is the calendar's public id. ``effective_timezone`` is its event's
     (:attr:`CalendarEvent.effective_timezone`): an all-day occurrence is the days its
     bounds fall on there, whichever zone the viewer is in, and a redacted one keeps it
-    so its busy days show where they lie. A ``redacted`` occurrence is busy time an
+    so its busy days show where they lie; a redacted timed one carries its calendar's
+    (:attr:`Calendar.effective_timezone`). A ``redacted`` occurrence is busy time an
     actor may see but not read: it carries no title and opens nothing. ``editable``
     is whether the actor may drag it: a single row it may write.
     """
@@ -186,12 +187,6 @@ def _midnight(day: date, tz: Any) -> datetime:
     """The midnight that starts ``day`` in ``tz``: where an all-day bound on that date lies."""
 
     return timezone.make_aware(datetime.combine(day, time.min), tz)
-
-
-def _same_local_day(moment: datetime, old_tz: Any, new_tz: Any) -> datetime:
-    """The midnight in ``new_tz`` on the local date ``moment`` has in ``old_tz``: an all-day bound keeps its date."""
-
-    return _midnight(moment.astimezone(old_tz).date(), new_tz)
 
 
 logger = logging.getLogger(__name__)
@@ -275,6 +270,15 @@ class CalendarQuerySet[CalendarT: Calendar](ArchiveQuerySet[CalendarT], AngeeHis
         writable = [key for key in field.registered_keys() if CalendarSource.is_backend_writable(key)]
         return Q(source__isnull=True) | Q(source__backend_class__in=writable)
 
+    @staticmethod
+    def effective_timezone_expression(path: str = "") -> Coalesce:
+        """:attr:`Calendar.effective_timezone` as a query, of the calendar at ``path``.
+
+        ``"calendar__"`` reads an event's (:meth:`CalendarEventQuerySet.effective_timezone_expression`).
+        """
+
+        return Coalesce(NullIf(F(f"{path}timezone"), Value("")), Value(timezone.get_default_timezone_name()))
+
     def taking_local_edits(self) -> Self:
         """Calendars that take local edits: the ones an event form may offer, and a user's own may be."""
 
@@ -353,9 +357,9 @@ class Calendar(OwnerMixin, ArchiveMixin, StatementsMixin, HistoryMixin, AngeeDat
     transferable ``owner`` (the creator by default), its holder (the user of the
     person it belongs to), and the users and groups it is shared with as
     ``reader``, ``editor`` or ``free_busy``; a ``free_busy`` grantee sees the
-    calendar's busy time and nothing else. A blank ``timezone`` expands recurrence
-    in the project ``TIME_ZONE``; changing it carries the events without a zone of
-    their own onto the new wall clock (:meth:`_follow_zone`). History keeps
+    calendar's busy time and nothing else. A blank ``timezone`` is the project
+    ``TIME_ZONE`` (:attr:`effective_timezone`); changing it carries the events without
+    a zone of their own onto the new wall clock (:meth:`_follow_zone`). History keeps
     ``party``, so reverting a merge of the owning parties restores whose calendar
     it was.
     ``source`` names the :class:`CalendarSource` a subscribed calendar mirrors, or
@@ -452,22 +456,19 @@ class Calendar(OwnerMixin, ArchiveMixin, StatementsMixin, HistoryMixin, AngeeDat
         """Carry the events that keep this calendar's zone from ``previous_zone`` onto the current one.
 
         An all-day event (a single row, a master or an override) keeps its local
-        dates: its ``start`` and ``end`` move to the same midnights on the new wall
-        clock. Every series derives its ``series_end`` again, and then each master
-        rebases its overrides from its previous start and zone. This is the
-        calendar's own derived work, written without the event save path.
+        dates (:meth:`CalendarEvent._keep_days`). Every series derives its
+        ``series_end`` again, and then each master rebases its overrides from its
+        previous start and zone. This is the calendar's own derived work, written
+        without the event save path.
         """
 
         model = cast("type[CalendarEvent]", self._meta.get_field("events").related_model)
         rows = model._base_manager.filter(calendar_id=self.pk, timezone="")
-        old_tz, new_tz = get_zone_info(previous_zone), get_zone_info(self.timezone)
         previous_starts: dict[Any, datetime] = {}
         for event in rows.filter(Q(all_day=True) | ~Q(recurrence="")).order_by("pk"):
             previous_starts[event.pk] = event.start
-            if event.all_day:
-                event.start = _same_local_day(event.start, old_tz, new_tz)
-                event.end = _same_local_day(event.end, old_tz, new_tz)
             event.calendar = self
+            event._keep_days(previous_zone)
             model._base_manager.filter(pk=event.pk).update(
                 start=event.start, end=event.end, series_end=event._derive_series_end()
             )
@@ -476,6 +477,16 @@ class Calendar(OwnerMixin, ArchiveMixin, StatementsMixin, HistoryMixin, AngeeDat
             master.calendar = self
             previous_start = previous_starts.get(master.pk, master.start)
             master.rebase_overrides(previous_start=previous_start, previous_zone=previous_zone)
+
+    @property
+    def effective_timezone(self) -> str:
+        """The IANA zone this calendar keeps: its own, else the project ``TIME_ZONE``.
+
+        Its events without a zone of their own keep it (:attr:`CalendarEvent.effective_timezone`).
+        :meth:`CalendarQuerySet.effective_timezone_expression` reads it as a query.
+        """
+
+        return self.timezone or timezone.get_default_timezone_name()
 
     @property
     def source_backend_key(self) -> str | None:
@@ -541,6 +552,17 @@ class Calendar(OwnerMixin, ArchiveMixin, StatementsMixin, HistoryMixin, AngeeDat
 class CalendarEventQuerySet(AngeeHistoryQuerySet[Any]):
     """Event rows that expand to the occurrences a calendar shows."""
 
+    @staticmethod
+    def effective_timezone_expression() -> Coalesce:
+        """:attr:`CalendarEvent.effective_timezone` as a query: the event's own zone, else its calendar's.
+
+        The calendar's is :meth:`CalendarQuerySet.effective_timezone_expression`. Many
+        rows read the chain in their one query: :meth:`moments` expands each row on it,
+        and the event's GraphQL field annotates it.
+        """
+
+        return Coalesce(NullIf(F("timezone"), Value("")), CalendarQuerySet.effective_timezone_expression("calendar__"))
+
     def moments(
         self,
         window_start: datetime,
@@ -576,11 +598,7 @@ class CalendarEventQuerySet(AngeeHistoryQuerySet[Any]):
             return []
         rows = list(
             self.annotate(
-                occurrence_zone=Coalesce(
-                    NullIf(F("timezone"), Value("")),
-                    NullIf(F("calendar__timezone"), Value("")),
-                    Value(timezone.get_default_timezone_name()),
-                ),
+                occurrence_zone=self.effective_timezone_expression(),
                 occurrence_calendar=F("calendar__sqid"),
                 occurrence_series=F("series__sqid"),
                 occurrence_backend=F("calendar__source__backend_class"),
@@ -634,11 +652,12 @@ class CalendarEventQuerySet(AngeeHistoryQuerySet[Any]):
         The rows are those the actor may ``see_busy``. The same row query projects
         whether the actor may ``read`` each row (else it is redacted busy time: no
         title, and nothing at all for a free event) and ``write`` it (a single row it
-        may write is draggable). Called on an actor-scoped queryset, the REBAC policy
-        is the preflight: an event the actor may not see never enters the set; as
-        system work every row reads and writes. A window spans at most
-        :attr:`CalendarEvent.occurrence_window_limit`; narrow to calendars by
-        filtering this queryset first.
+        may write is draggable). A redacted timed occurrence carries its calendar's
+        zone, never its event's own: its instants need none. Called on an
+        actor-scoped queryset, the REBAC policy is the preflight: an event the actor
+        may not see never enters the set; as system work every row reads and writes.
+        A window spans at most :attr:`CalendarEvent.occurrence_window_limit`; narrow
+        to calendars by filtering this queryset first.
         """
 
         limit = self.model.occurrence_window_limit
@@ -654,9 +673,11 @@ class CalendarEventQuerySet(AngeeHistoryQuerySet[Any]):
                 "occurrence_read": permission_expression(self.model, "read", actor=actor),
                 "occurrence_write": permission_expression(self.model, "write", actor=actor),
             }
+        calendar_zone = CalendarQuerySet.effective_timezone_expression("calendar__")
+        rows = self.with_action("see_busy").annotate(**granted, occurrence_calendar_zone=calendar_zone)
         result: list[EventOccurrence] = []
-        for moment in self.with_action("see_busy").annotate(**granted).moments(window_start, window_end):
-            event = moment.event
+        for moment in rows.moments(window_start, window_end):
+            event = cast(Any, moment.event)
             redacted = not event.occurrence_read
             if redacted and event.transparency == EventTransparency.FREE:
                 continue
@@ -669,11 +690,13 @@ class CalendarEventQuerySet(AngeeHistoryQuerySet[Any]):
                     start=moment.start,
                     end=moment.end,
                     all_day=event.all_day,
-                    effective_timezone=cast(Any, event).occurrence_zone,
+                    effective_timezone=(
+                        event.occurrence_calendar_zone if redacted and not event.all_day else event.occurrence_zone
+                    ),
                     editable=bool(event.occurrence_write)
                     and not event.recurrence
                     and not redacted
-                    and CalendarSource.is_backend_writable(cast(Any, event).occurrence_backend),
+                    and CalendarSource.is_backend_writable(event.occurrence_backend),
                     redacted=redacted,
                 )
             )
@@ -1006,27 +1029,29 @@ class CalendarEvent(
 
     @property
     def effective_timezone(self) -> str:
-        """The IANA zone this event keeps: its own, else its calendar's, else the project ``TIME_ZONE``.
+        """The IANA zone this event keeps: its own, else its calendar's (:attr:`Calendar.effective_timezone`).
 
         Its recurrence, its all-day dates and its overlap check expand on it, and a
         client reads an all-day event's days in it: an all-day event is dates in this
-        zone, a timed event an instant. :meth:`CalendarEventQuerySet.moments` reads the
-        same chain as a query.
+        zone, a timed event an instant.
+        :meth:`CalendarEventQuerySet.effective_timezone_expression` reads it as a query.
         """
 
-        return self.timezone or self.calendar.timezone or timezone.get_default_timezone_name()
+        return self.timezone or self.calendar.effective_timezone
 
     def clean(self) -> None:
         """Validate the interval, the all-day bounds and an override's series; this row alone.
 
         Its moments lie within the representable range calendar arithmetic needs
         (two days inside Python's). An all-day event's ``start`` and ``end`` are
-        midnights in its effective zone, a whole number of days apart; a bound
-        written as a date is first placed there (:meth:`_place_all_day_dates`). The
-        overlap policy reads other rows, so :meth:`save` checks it, after the write,
-        under the calendar's lock.
+        midnights in its effective zone, a whole number of days apart; a change of
+        its own zone first carries its stored days there (:meth:`_follow_own_zone`),
+        and a bound written as a date is placed there (:meth:`_place_all_day_dates`).
+        The overlap policy reads other rows, so :meth:`save` checks it, after the
+        write, under the calendar's lock.
         """
 
+        self._follow_own_zone()
         self._place_all_day_dates()
         super().clean()
         errors: dict[str, Any] = {}
@@ -1115,6 +1140,39 @@ class CalendarEvent(
             tz = get_zone_info(self.effective_timezone)
             for name, day in days.items():
                 setattr(self, name, _midnight(day, tz))
+
+    def _keep_days(self, previous_zone: str) -> None:
+        """Keep this all-day event's days when the zone it keeps changes from ``previous_zone``.
+
+        An all-day event is its days: each bound, a midnight in ``previous_zone``,
+        moves to the midnight of the same date in its effective zone. A timed event is
+        an instant and stays. A calendar zone change carries the events that follow
+        it (:meth:`Calendar._follow_zone`), and an event's own (:meth:`_follow_own_zone`).
+        """
+
+        if self.all_day:
+            old_tz, new_tz = get_zone_info(previous_zone), get_zone_info(self.effective_timezone)
+            self.start = _midnight(self.start.astimezone(old_tz).date(), new_tz)
+            self.end = _midnight(self.end.astimezone(old_tz).date(), new_tz)
+
+    def _follow_own_zone(self) -> None:
+        """Keep a saved all-day event's days when its own zone changes and its bounds do not.
+
+        Its stored bounds are midnights in the zone it kept, so an edit of
+        ``timezone`` alone moves them to the same days in its new effective zone
+        (:meth:`_keep_days`). Bounds the writer changed are the writer's: a date is
+        placed in the new zone (:meth:`_place_all_day_dates`), an instant held to its
+        midnight there (:meth:`_all_day_errors`).
+        """
+
+        if not self.all_day or self._state.adding or self.pk is None or self.calendar_id is None:
+            return
+        if any(bound is None or timezone.is_naive(bound) for bound in (self.start, self.end)):
+            return
+        stored = type(self)._base_manager.filter(pk=self.pk, all_day=True, start=self.start, end=self.end)
+        previous = stored.values_list(CalendarEventQuerySet.effective_timezone_expression(), flat=True).first()
+        if previous is not None and previous != self.effective_timezone:
+            self._keep_days(previous)
 
     def _all_day_errors(self) -> dict[str, str]:
         """Return why this all-day event's bounds are not local midnights in its zone."""
@@ -1250,18 +1308,25 @@ class CalendarEvent(
           result; a refusal rolls the whole save back.
 
         The rule frequency floor and ``series_end`` are enforced and derived here, so
-        every save path (a form, a drag, a sync) keeps them, and so is an all-day
-        bound written as a date placed (:meth:`_place_all_day_dates`): a create
-        validates a copy of the row, then saves the values it was given. So is writability: a
+        every save path (a form, a drag, a sync) keeps them. So does an all-day event
+        keep its days across a change of its own zone (:meth:`_follow_own_zone`; a save
+        naming ``timezone`` writes the bounds with it), and so is an all-day bound
+        written as a date placed (:meth:`_place_all_day_dates`): a create validates a
+        copy of the row, then saves the values it was given. So is writability: a
         replica of a read-only calendar is written only by its source's own work
         (:meth:`_refuse_read_only`), and its series is the source's, so a moved
         master never rebases its overrides there: the source re-sends each instance
         under its own key.
         """
 
+        update_fields = kwargs.get("update_fields")
+        if update_fields is None or "timezone" in update_fields:
+            self._follow_own_zone()
+            if update_fields is not None and self.all_day:
+                # An all-day event's bounds are its days in its zone: a save of the zone writes them.
+                update_fields = kwargs["update_fields"] = [*update_fields, "start", "end"]
         self._place_all_day_dates()
         self._refuse_read_only()
-        update_fields = kwargs.get("update_fields")
         schedule_changes = update_fields is None or bool(_SCHEDULE_FIELDS & set(update_fields))
         takes_time = update_fields is None or bool(_TIME_FIELDS & set(update_fields))
         if schedule_changes:
@@ -1291,7 +1356,7 @@ class CalendarEvent(
                 and previous[:4] != (self.start, self.all_day, self.recurrence, self.timezone)
                 and self.calendar.is_writable
             ):
-                self.rebase_overrides(previous_start=previous[0], previous_zone=previous[3] or previous[4])
+                self.rebase_overrides(previous_start=previous[0], previous_zone=previous[4])
             if takes_time and self.calendar_id is not None:
                 self._refuse_overlap()
 
@@ -1314,7 +1379,7 @@ class CalendarEvent(
             raise ValidationError({"recurrence": error.error_list}) from None
 
     def _previous_schedule(self) -> tuple[datetime, bool, str, str, str] | None:
-        """The stored ``(start, all_day, recurrence, timezone, calendar zone)`` of a master with overrides.
+        """The stored ``(start, all_day, recurrence, timezone, effective zone)`` of a master with overrides.
 
         ``None`` for a new row, an override, or a master without overrides.
         """
@@ -1324,7 +1389,8 @@ class CalendarEvent(
         if not type(self)._base_manager.filter(series_id=self.pk).exists():
             return None
         rows = type(self)._base_manager.filter(pk=self.pk)
-        return rows.values_list("start", "all_day", "recurrence", "timezone", "calendar__timezone").first()
+        zone = CalendarEventQuerySet.effective_timezone_expression()
+        return rows.values_list("start", "all_day", "recurrence", "timezone", zone).first()
 
     def lock_subject(self, members: Mapping[str, Any] | None = None) -> Self:
         """Lock the calendar, then this event: the calendar row serializes its schedule and overlap rule."""
@@ -1540,17 +1606,21 @@ class CalendarEvent(
         day it was dropped on, as the viewer sees the event's days) is placed at that
         midnight in its effective zone (:meth:`_place_all_day_dates`), and an instant
         off that midnight is refused, never moved to a guessed day; a move without a
-        later end lasts one day. The moved fields are validated before the write
-        (:meth:`clean`: the interval and the series) and the overlap policy by the
-        save, so an invalid move surfaces as a ``ValidationError``, never an
-        ``IntegrityError``. The ordinary save joins the caller's changeset, so
-        provenance owns the resulting field delta and reason.
+        later end lasts one day. A timed event moves to instants: a time without an
+        offset is refused (``naive_datetime``), never read in the server's zone. The
+        moved fields are validated before the write (:meth:`clean`: the interval and
+        the series) and the overlap policy by the save, so an invalid move surfaces
+        as a ``ValidationError``, never an ``IntegrityError``. The ordinary save joins
+        the caller's changeset, so provenance owns the resulting field delta and
+        reason.
         """
 
         if self.recurrence:
             raise ValidationError(
                 {"start": "A recurring event's occurrences cannot be dragged; edit the series instead."}
             )
+        if not self.all_day:
+            require_aware(start=start, end=end)
         self.start = start
         self.end = end
         if self.all_day:

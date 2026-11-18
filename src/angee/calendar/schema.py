@@ -45,7 +45,7 @@ from strawberry import auto
 from angee.calendar.backends import EVENT_FIELDS
 from angee.calendar.models import Calendar as CalendarModel
 from angee.calendar.models import CalendarEvent as CalendarEventModel
-from angee.calendar.models import CalendarQuerySet, EventOccurrence, EventTransparency
+from angee.calendar.models import CalendarEventQuerySet, CalendarQuerySet, EventOccurrence, EventTransparency
 from angee.graphql.access import ChangeReadGate
 from angee.graphql.actions import ActionResult, action_guard, authorized_action_target, session_user
 from angee.graphql.capabilities import permission_expression, permissions_field
@@ -138,11 +138,17 @@ class CalendarEventType(TaggedNode, AngeeNode):
     recurrence: auto
     timezone: auto
 
-    @strawberry_django.field(only=["timezone", "calendar__timezone"])
+    @strawberry_django.field(
+        annotate={"_effective_timezone": lambda info: CalendarEventQuerySet.effective_timezone_expression()}
+    )
     def effective_timezone(self) -> str:
         """The zone the event keeps (its own, its calendar's or the project's), where an all-day event's days lie."""
 
-        return str(cast(Any, self).effective_timezone)
+        event = cast(Any, self)
+        if "_effective_timezone" in event.__dict__:
+            return str(event._effective_timezone)
+        # A mutation returns its row rather than an annotated queryset: the model reads the chain.
+        return str(event.effective_timezone)
 
     original_start: auto
     status: auto

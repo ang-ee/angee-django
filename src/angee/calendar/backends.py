@@ -365,21 +365,27 @@ def cancelled_instances(
     an occurrence within about 30 years of its start), so an invalid rule raises
     ``ValidationError`` before anything expands it. Each excluded moment is then
     judged on its own (``CalendarEvent.is_instance``, in the zone the stored series
-    uses: the event's own, else ``calendar_zone``), so a far ``EXDATE`` reads only
-    its own window; ``check_deadline``, the backend's own refusal of a parse past
-    its deadline, runs before each. One that is no instance is dropped, and a
-    cancelled instance ends where the event owner's arithmetic puts it
-    (``CalendarEvent.occurrence_end``: an all-day instance spans local days). Each
-    keeps the master's fields, without its rule and attendees. A blank rule returns none.
+    keeps: ``CalendarEvent.effective_timezone`` on a calendar in ``calendar_zone``),
+    so a far ``EXDATE`` reads only its own window; ``check_deadline``, the backend's
+    own refusal of a parse past its deadline, runs before each. One that is no
+    instance is dropped, and a cancelled instance ends where the event owner's
+    arithmetic puts it (``CalendarEvent.occurrence_end``: an all-day instance spans
+    local days). Each keeps the master's fields, without its rule and attendees. A
+    blank rule returns none.
     """
 
     if not event.recurrence:
         return []
-    zone = event.timezone or calendar_zone
-    # The unsaved row only lends its owner's rule checks and occurrence arithmetic; nothing writes it.
+    # The unsaved rows only lend their owners' zone, rule checks and occurrence arithmetic; nothing writes them.
     series: Any = apps.get_model("calendar", "CalendarEvent")(
-        start=event.start, end=event.end, all_day=event.all_day, recurrence=event.recurrence, timezone=event.timezone
+        calendar=apps.get_model("calendar", "Calendar")(timezone=calendar_zone),
+        start=event.start,
+        end=event.end,
+        all_day=event.all_day,
+        recurrence=event.recurrence,
+        timezone=event.timezone,
     )
+    zone = series.effective_timezone
     series.validate_rule(zone=zone)
     cancelled = []
     for moment in sorted(set(excluded)):

@@ -808,6 +808,37 @@ def test_an_all_day_event_edited_to_dates_keeps_them_in_its_own_zone(db: None) -
     assert (holiday.start, holiday.end) == (datetime(2026, 7, 9, tzinfo=tokyo), datetime(2026, 7, 11, tzinfo=tokyo))
 
 
+@pytest.mark.parametrize("changed", ["its-own-zone", "its-calendars-zone"])
+def test_an_all_day_event_keeps_its_days_when_the_zone_it_keeps_changes(db: None, changed: str) -> None:
+    """Its bounds move to the same days' midnights in the new zone, as the event form sends a zone alone."""
+
+    calendar = _calendar(zone="America/New_York")
+    holiday = _event(calendar, title="Holiday", all_day=True, start=_ny(2026, 7, 7), end=_ny(2026, 7, 9))
+
+    _save(holiday if changed == "its-own-zone" else calendar, timezone="Asia/Tokyo")
+    _refreshed(holiday)
+
+    tokyo = ZoneInfo("Asia/Tokyo")
+    assert holiday.effective_timezone == "Asia/Tokyo"
+    assert (holiday.start, holiday.end) == (datetime(2026, 7, 7, tzinfo=tokyo), datetime(2026, 7, 9, tzinfo=tokyo))
+
+
+def test_a_partial_save_of_an_all_day_events_zone_writes_its_days_with_it(db: None) -> None:
+    """A save naming only ``timezone`` (a sync's changed columns) still writes the bounds that follow it."""
+
+    calendar = _calendar(zone="America/New_York")
+    holiday = _event(calendar, title="Holiday", all_day=True, start=_ny(2026, 7, 7), end=_ny(2026, 7, 8))
+
+    with system_context(reason="tests.calendar.edit"):
+        holiday.timezone = "Europe/London"
+        holiday.full_clean()
+        holiday.save(update_fields=["timezone", "updated_at"])
+    _refreshed(holiday)
+
+    london = ZoneInfo("Europe/London")
+    assert (holiday.start, holiday.end) == (datetime(2026, 7, 7, tzinfo=london), datetime(2026, 7, 8, tzinfo=london))
+
+
 @pytest.mark.parametrize(
     ("event_zone", "calendar_zone", "expected"),
     [
@@ -910,6 +941,8 @@ def test_reschedule_moves_a_plain_event_and_records_its_history(db: None) -> Non
     [
         pytest.param("FREQ=WEEKLY", _utc(2026, 7, 7, 9), _utc(2026, 7, 7, 10), id="a-recurring-master"),
         pytest.param("", _utc(2026, 7, 6, 12), _utc(2026, 7, 6, 11), id="an-inverted-interval"),
+        # A timed event moves to instants: a time without an offset names none.
+        pytest.param("", datetime(2026, 7, 7, 11), datetime(2026, 7, 7, 12), id="a-naive-time"),
     ],
 )
 def test_reschedule_refuses_and_leaves_the_row_unchanged(

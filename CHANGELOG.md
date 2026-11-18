@@ -12,12 +12,16 @@ live in code docstrings.
 
 - Calendar time zones follow Google Calendar's model. An all-day event is dates
   in its effective zone, `CalendarEvent.effective_timezone` (its own, else its
-  calendar's, else the project `TIME_ZONE`; it replaces `expansion_zone`, which
-  left the project zone blank), read as `effective_timezone` on an event and on
-  each `event_occurrences` item: the calendar grid and the event form show and
-  edit those days in every browser zone. Dragging an all-day event sends the
+  calendar's `Calendar.effective_timezone`, else the project `TIME_ZONE`; it
+  replaces `expansion_zone`, which left the project zone blank; the
+  `effective_timezone_expression()` of `CalendarEventQuerySet` and
+  `CalendarQuerySet` reads it as a query), read as `effective_timezone` on an
+  event and on each `event_occurrences` item: the calendar grid and the event
+  form show and edit those days in every browser zone, and changing an all-day
+  event's own zone keeps its days. Dragging an all-day event sends the
   days it lands on, which the event places at midnight in its zone; the
   nearest-midnight snap is gone, and an instant off that midnight is refused. A
+  dragged timed event refuses a time without an offset. A
   timed event is an instant edited on the viewer's clock: `@angee/ui`'s
   `formatDateTimeStorage` (`DATETIME_STORAGE_FORMAT`) writes the local wall time
   with its UTC offset (`yyyy-MM-dd'T'HH:mm:ssxxx`), so every `datetime` widget
