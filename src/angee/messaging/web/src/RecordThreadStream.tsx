@@ -154,8 +154,8 @@ function InlineCreateComposer({ action, composer, submitKey = "enter", onCreated
   const [body, setBody] = React.useState("");
   const form = useActionForm<Record<string, string>>({
     fieldNames: [composer.bodyArg],
-    submit: async (values) => {
-      const result = await action.submit(values, { record: action.record ?? null, selectedIds: [] });
+    submit: async (values, options) => {
+      const result = await action.submit(values, { record: action.record ?? null, selectedIds: [] }, options);
       return result && "status" in result ? result : actionOutcomeSubmitResult(result);
     },
     onSuccess: () => { setBody(""); onCreated?.(); },

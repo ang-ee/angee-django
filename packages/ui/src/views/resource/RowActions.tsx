@@ -15,6 +15,7 @@ import { useAuthoredResourceMutation } from "./authored-resource-mutation";
 import { useRuntimeViewAs } from "../../runtime";
 import { useLatestRef } from "../../lib/use-latest-ref";
 import { ActionFormDialog } from "../form/ActionFormDialog";
+import { SURFACE_RENDERS_FAILURE } from "../form/validation-errors";
 import type { ActionDescriptor, ActionConfirm } from "../page/Action";
 import { useActionResultRun } from "./action-result-run";
 
@@ -211,9 +212,10 @@ export function useDescriptorRowActions<TRow extends Row>(
       const record = options.contextRecord?.(row) ?? row;
       if (options.valuesFromRow) {
         if (action.submit) await settle(async () => {
+          // The settle owner toasts a failure, so the authored call raises none besides.
           const result = await action.submit!(options.valuesFromRow!(action, row), {
             record, selectedIds: [String(row.id)],
-          });
+          }, SURFACE_RENDERS_FAILURE);
           if (!result || !("status" in result)) return result;
           if (result.status === "ok") return result.data;
           return result.status === "conflict"

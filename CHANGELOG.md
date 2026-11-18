@@ -27,6 +27,12 @@ live in code docstrings.
   add-source dialogs run their owner's call as `mutation` (deleting their
   `onSubmit` result wrappers); the operator's workspace-create and secret dialogs
   pass the options on from `validate` and `onSubmit`.
+- `@angee/ui`: an action's `submit(values, context, options)` gets the same
+  `AuthoredMutateOptions` from the surface running it: `useActionForm` (so
+  `ActionFormDialog` and the stream composers) renders a failure in its form, and
+  a row's direct submit settles it in one toast. The framework's action submits
+  pass them on to their authored call, and `useRecordChromeActionOutcome`'s
+  authored transport forwards them, so a transport failure is reported once.
 - `angee.integrate`: `Integration.credential_blocker(credential)` is a
   capability's one admission rule, a public-safe refusal or `None`;
   `admit_credential` raises it on every attachment and the connect picker shows

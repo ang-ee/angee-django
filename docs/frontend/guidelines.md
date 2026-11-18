@@ -1076,7 +1076,9 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
   caller passes them on to the authored call it makes; an owner that wraps an
   authored mutation (`ActionMutate`, a store binding, the operator's `run`) takes
   them per call. `onSubmit` is for any other submission. Record actions declare `args` + `submit` on `<Action>`;
-  `RecordActionBar` composes `ActionFormDialog` for their inputs. Record-specific
+  `RecordActionBar` composes `ActionFormDialog` for their inputs. The action form
+  (`useActionForm`) and a row's direct submit render a failure the same way, so
+  `submit(values, context, options)` gets the same options to pass on. Record-specific
   schemas compose `jsonSchemaActionArgs` in the action's `args` callback; the
   shared form owns branching, validation and draft retention across record refreshes.
 - Submit owners return [FormSubmitResult](../../packages/ui/src/views/form/validation-errors.ts):

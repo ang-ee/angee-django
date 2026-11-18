@@ -28,7 +28,7 @@ describe("useActionForm", () => {
     });
 
     expect(ok).toBe(true);
-    expect(submit).toHaveBeenCalledWith({ x: "1" });
+    expect(submit).toHaveBeenCalledWith({ x: "1" }, { errorNotification: false });
     expect(onSuccess).toHaveBeenCalledWith(
       { x: "1" },
       { id: "one" },
@@ -97,6 +97,8 @@ describe("useActionForm", () => {
     expect(ok).toBe(false);
     expect(result.current.formError).toBe("boom");
     expect(result.current.fieldErrors).toEqual({});
+    // The form renders the failure, so the submission was told to keep refine's toast off.
+    expect(submit).toHaveBeenCalledExactlyOnceWith({}, { errorNotification: false });
   });
 
   test("uses the fallback for an invalid result without messages", async () => {
@@ -177,7 +179,7 @@ test("validates native values through the resolver without resetting dirty or to
   expect(result.current.form.getFieldState("title").error?.message).toBe("Enter a title.");
   act(() => result.current.form.setValue("title", "  Draft  ", { shouldDirty: true, shouldTouch: true }));
   await act(async () => { expect(await result.current.run()).toBe(true); });
-  expect(submit).toHaveBeenCalledWith({ title: "Draft" });
+  expect(submit).toHaveBeenCalledWith({ title: "Draft" }, { errorNotification: false });
   expect(result.current.form.getValues("title")).toBe("  Draft  ");
   expect(result.current.form.getFieldState("title")).toMatchObject({ isDirty: true, isTouched: true });
   expect(result.current.form.formState.defaultValues).toEqual({ title: "" });
@@ -207,7 +209,7 @@ test.each([false, true])("shows editor errors together with field validation (re
   act(() => result.current.form.setValue("title", "Ready"));
   editorValidation.mockReturnValue(undefined);
   await act(async () => { expect(await result.current.run()).toBe(true); });
-  expect(submit).toHaveBeenCalledWith({ title: "Ready", payload: "retained" });
+  expect(submit).toHaveBeenCalledWith({ title: "Ready", payload: "retained" }, { errorNotification: false });
   expect(result.current.form.formState.errors).toEqual({});
   unregister();
 });

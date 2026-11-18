@@ -14,7 +14,8 @@ import { emptyValueForField, isStructuredPresenceField, structuredFieldErrorPath
 import { isFieldControlVisible } from "./form-view-model";
 import { DescriptorFieldList, resolveDescriptorFields, type DescriptorField } from "./DescriptorFieldList";
 import {
-  applyFormErrors, formSubmitError, invalidFormSubmit, savedFormSubmitResult, type FormSubmitResult, type ValidationErrors,
+  SURFACE_RENDERS_FAILURE, applyFormErrors, formSubmitError, invalidFormSubmit, savedFormSubmitResult,
+  type FormSubmitResult, type ValidationErrors,
 } from "./validation-errors";
 import { useFieldValidation } from "./use-field-validation";
 import { ActionFormProvider } from "./ActionFormProvider";
@@ -219,14 +220,12 @@ export function submitMutationDialog<TValues, TResult, TData>(
   values: TValues,
   fallback: string,
 ): FormSubmitResult<TResult> | Promise<FormSubmitResult<TResult>> {
-  if (!submission.mutation) return submission.onSubmit(values, DIALOG_RENDERS_FAILURE);
+  if (!submission.mutation) return submission.onSubmit(values, SURFACE_RENDERS_FAILURE);
   const { mutation, mutationResult } = submission;
-  return mutation(values, DIALOG_RENDERS_FAILURE).then((data) => data == null
+  return mutation(values, SURFACE_RENDERS_FAILURE).then((data) => data == null
     ? savedFormSubmitResult<TResult>(null, fallback)
     : mutationResult ? mutationResult(data) : { status: "ok", data: data as unknown as TResult });
 }
-
-const DIALOG_RENDERS_FAILURE: AuthoredMutateOptions = { errorNotification: false };
 
 function MutationDialogInstance<TValues extends Record<string, unknown>, TResult, TData>({
   open,
@@ -333,7 +332,7 @@ function MutationDialogInstance<TValues extends Record<string, unknown>, TResult
     let accepted: { result: Extract<FormSubmitResult<TResult>, { status: "ok" }>; values: TValues } | undefined;
     try {
       const submittedValues = parseValues(collected);
-      const validation = await validate?.(submittedValues, DIALOG_RENDERS_FAILURE);
+      const validation = await validate?.(submittedValues, SURFACE_RENDERS_FAILURE);
       if (!mounted.current || session.current !== submittedSession) return;
       if (validation) {
         applyFormErrors(form, invalidFormSubmit(validation), errorOptions);
