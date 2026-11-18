@@ -10,6 +10,10 @@ live in code docstrings.
 
 ## Unreleased — shared addon contracts, native embeddings and graph retrieval
 
+- `@angee/ui`: `CommandBand.editable` keeps an editable record's command band
+  row while nothing in it renders, so the Save and Discard its first edit brings
+  shift nothing; `FormView` sets it from the form's own read-only fact. A record
+  that takes no edits and has no verbs still collapses the band.
 - `@angee/ui`: every call `MutationDialog` makes for its caller (`validate`,
   `onSubmit`, `mutation`) gets the `AuthoredMutateOptions` that turn refine's
   generic error notification off, so a failure is reported once, in the dialog.

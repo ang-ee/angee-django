@@ -340,6 +340,7 @@ function FormViewContent({ surface, ...props }: FormViewProps & {
   const rawControlBand = readOnly && props.hideRecordChrome && !toolbarStartNode && !toolbar ? null : (
     <CommandBand
       className={formIsDirty ? dirtyControlBandClassName : undefined}
+      editable={!formReadOnly}
       verbs={<>
         {toolbarStartNode}
         <SaveDiscardActions
