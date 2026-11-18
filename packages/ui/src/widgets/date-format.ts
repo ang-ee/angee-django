@@ -159,16 +159,28 @@ export function formatRelativeTime(
   }).format(amount, unit);
 }
 
+/** A GraphQL `Time` wire value ("13:45", "13:45:30.5"): a time of day with no date and no zone. */
+const TIME_OF_DAY = /^([01]\d|2[0-3]):([0-5]\d)(?::([0-5]\d)(?:\.\d+)?)?$/;
+
+/** A time of day at a fixed UTC anchor, so formatting in UTC reads it back as written. */
+function timeOfDayFromValue(value: DateFormatValue): Date | null {
+  const match = typeof value === "string" ? TIME_OF_DAY.exec(value) : null;
+  return match ? new Date(Date.UTC(1970, 0, 1, Number(match[1]), Number(match[2]), Number(match[3] ?? 0))) : null;
+}
+
 /** Clock time without seconds ("1:45 PM", "13:45"), for a row whose day a label already names.
+ * A GraphQL `Time` value ("13:45:00") is a time of day: it carries no zone and reads as written.
  * @kind null
  * @reason Format utility: converts data to display or storage text.
  */
 export function formatTime(value: DateFormatValue, options: HumanDateOptions = {}): string {
-  const date = dateFromValue(value);
+  const timeOfDay = timeOfDayFromValue(value);
+  const date = timeOfDay ?? dateFromValue(value);
   if (!date) return "";
+  const timeZone = timeOfDay ? "UTC" : options.timeZone;
   return new Intl.DateTimeFormat(localeCode(options.locale), {
     timeStyle: "short",
-    ...(options.timeZone ? { timeZone: options.timeZone } : {}),
+    ...(timeZone ? { timeZone } : {}),
   }).format(date);
 }
 
@@ -270,11 +282,14 @@ export function formatDateTime(
   }).format(date);
 }
 
-/** Format a value for a native `type=time` control.
+/** Format a value for a native `type=time` control, whose `HH:mm` value is also a GraphQL `Time` input.
+ * A `Time` value keeps its own hours and minutes; any other value is read in local time.
  * @kind null
  * @reason Format utility: converts data to display or storage text.
  */
 export function formatTimeInput(value: DateFormatValue): string {
+  const timeOfDay = timeOfDayFromValue(value);
+  if (timeOfDay) return timeOfDay.toISOString().slice(11, 16);
   const date = dateFromValue(value);
   return date ? format(date, TIME_INPUT_FORMAT) : "";
 }

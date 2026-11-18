@@ -973,7 +973,9 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
   [command band](../../packages/storybook/src/stories/CommandBand.stories.tsx) (story id `page-commandband--default`).
   A read-only inspector with only secondary actions composes `ActionMenu` and
   `RecordChrome` in `RecordHeader.actions`; it does not reserve an empty command
-  band. Collection and transcript controls remain in their owning pane toolbar.
+  band. The command band itself takes no row while none of its items renders
+  (a contribution that offers nothing renders `null`), and returns with the
+  first one, an edit's Save and Discard included. Collection and transcript controls remain in their owning pane toolbar.
 - **Trash composes the shared owner.** A resource whose metadata marks a field
   `trashable` gets Trash and Restore from [the trash module](../../packages/ui/src/views/resource/trash.tsx):
   `useTrashActions` for record forms, `useTrashRowActions` for lists, and
@@ -1042,7 +1044,9 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
   [`useRelationForms`](../../packages/ui/src/views/relation/RelationRecordDialog.tsx).
 - Toolbar and record action menus compose [ActionMenu](../../packages/ui/src/toolbars/ActionMenu.tsx).
   Contributions use `ActionTrigger` to adapt between a toolbar button and a native
-  menu item and report pending state to the menu trigger. Render menu-opened
+  menu item and report pending state to the menu trigger. A menu whose
+  contributions render no item shows no trigger, so a contribution that offers
+  nothing for this record renders `null`. Render menu-opened
   dialogs inside the menu: the shared owner keeps them mounted after it closes
   and returns focus to its toolbar trigger. `DialogContent` resets menu context
   for its body, so nested dialogs return to their own triggers. Pages supply
@@ -1052,7 +1056,10 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
   Declare `DescriptorField`s; the shared [DescriptorFieldList](../../packages/ui/src/views/form/DescriptorFieldList.tsx)
   owns controls and requires a native RHF `FormProvider`. Decode raw controls with
   `parseValues` and `mutationDialogValueCodecs`; required/verbatim codecs express
-  authored field contracts. Record actions declare `args` + `submit` on `<Action>`;
+  authored field contracts. An authored mutation is the dialog's `mutation` (with
+  `mutationResult` to read its data), never an `onSubmit` wrapping it: the dialog runs
+  the call with the generic error notification off and reports a refusal once, under
+  the field it names, else in the dialog. `onSubmit` is for any other submission. Record actions declare `args` + `submit` on `<Action>`;
   `RecordActionBar` composes `ActionFormDialog` for their inputs. Record-specific
   schemas compose `jsonSchemaActionArgs` in the action's `args` callback; the
   shared form owns branching, validation and draft retention across record refreshes.

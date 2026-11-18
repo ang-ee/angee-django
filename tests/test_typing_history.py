@@ -86,25 +86,36 @@ def test_native_history_projection_preserves_runtime_and_type_checks(tmp_path: P
         "assert_type(Subject.history.filter().label(), int)\n"
         "SubjectStatement.history.filter().latest_of_each()\n"
         "from simple_history.models import HistoricalChanges\n"
-        "from tests.typing_history.models import Subject as AbstractSubject\n"
-        "assert_type(AbstractSubject.history.get(), HistoricalChanges)\n"
+        "from tests.typing_history.models import Subject as AbstractSubject, Tracked\n"
+        "from runtime.typing_history.models import SubjectSameAsPair, SubjectSameAsPairStatement\n"
+        "assert_type(AbstractSubject.history.get(), HistoricalSubject)\n"
         "def abstract_history(record: AbstractSubject) -> None:\n"
-        "    assert_type(record.history.filter().tagged(), FixtureHistoricalQuerySet[HistoricalChanges])\n"
-        "assert_type(AbstractSubject.statements.get(), Statement)\n"
-        "assert_type(AbstractSubject.same_as.get(), StatementPair)\n"
+        "    assert_type(record.history.filter().tagged(), FixtureHistoricalQuerySet[HistoricalSubject])\n"
+        "    assert_type(record.history.order_by('history_date').first(), HistoricalSubject | None)\n"
+        "assert_type(AbstractSubject.statements.get(), SubjectStatement)\n"
+        "assert_type(AbstractSubject.same_as.get(), SubjectSameAsPair)\n"
         "def generic_history[T: AbstractSubject](record: T, model: type[T]) -> None:\n"
-        "    assert_type(record.history.filter().tagged().get(), HistoricalChanges)\n"
-        "    assert_type(model.history.filter().latest_of_each(), FixtureHistoricalQuerySet[HistoricalChanges])\n"
-        "    assert_type(record.statements.get(), Statement)\n"
-        "    assert_type(model.same_as.filter().get(), StatementPair)\n"
+        "    assert_type(record.history.filter().tagged().get(), HistoricalSubject)\n"
+        "    assert_type(model.history.filter().latest_of_each(), FixtureHistoricalQuerySet[HistoricalSubject])\n"
+        "    assert_type(record.statements.get(), SubjectStatement)\n"
+        "    assert_type(model.same_as.filter().get(), SubjectSameAsPair)\n"
+        "assert_type(Tracked.history.get(), HistoricalChanges)\n"
+        "def mixin_history[T: Tracked](record: Tracked, generic: T) -> None:\n"
+        "    assert_type(record.history.filter().tagged(), FixtureHistoricalQuerySet[HistoricalChanges])\n"
+        "    assert_type(generic.history.filter().tagged().get(), HistoricalChanges)\n"
         "from django.db.models import Prefetch\n"
-        "assert_type(AbstractSubject.same_as.model._base_manager.filter(left_id=1, right_id=2).get(), StatementPair)\n"
+        "assert_type(AbstractSubject.same_as.model._base_manager.filter(left_id=1, right_id=2).get(), "
+        "SubjectSameAsPair)\n"
         "AbstractSubject.same_as.model._base_manager.prefetch_related("
         "Prefetch('left', queryset=AbstractSubject.objects.all()))\n"
         "def union_history(record: AbstractSubject | SubjectStatement) -> None:\n"
-        "    assert_type(record.history.filter().get(), HistoricalChanges)\n"
+        "    assert_type(record.history.filter().get(), HistoricalSubject | HistoricalSubjectStatement)\n"
         "def union_statements(record: AbstractSubject | Subject) -> None:\n"
-        "    assert_type(record.statements.get(), Statement)\n"
+        "    assert_type(record.statements.get(), SubjectStatement)\n"
+        "def pair_statements(pair: StatementPair, carrier: SubjectSameAsPair) -> None:\n"
+        "    assert_type(pair.statements.get(), Statement)\n"
+        "    assert_type(type(pair).statements.get(), Statement)\n"
+        "    assert_type(carrier.statements.get(), SubjectSameAsPairStatement)\n"
     )
     invalid = tmp_path / "invalid.py"
     invalid.write_text(
@@ -128,6 +139,11 @@ def test_native_history_projection_preserves_runtime_and_type_checks(tmp_path: P
         "AbstractSubject.same_as.model._base_manager.filter(left_id__in=1)\n"
         "AbstractSubject.same_as.model._base_manager.filter(right_id__isnull='bad')\n"
         "AbstractSubject.same_as.model._base_manager.filter(missing_pair_field=1)\n"
+        "from tests.typing_history.models import Tracked\n"
+        "Tracked.history.filter().missing_queryset_method()\n"
+        "from angee.provenance.statements import StatementPair\n"
+        "def invalid_pair(pair: StatementPair) -> None:\n"
+        "    pair.statements.missing_method()\n"
     )
     # The native plugin owns TypeInfos only. Compare actual Django model/state
     # identities after semantic analysis to the fixture's pre-analysis snapshot.
@@ -158,8 +174,8 @@ def test_native_history_projection_preserves_runtime_and_type_checks(tmp_path: P
     assert positive.returncode == 0, positive.stdout + positive.stderr
     negative = subprocess.run([*command, str(invalid)], cwd=root, env=env, capture_output=True, text=True, check=False)
     assert negative.returncode == 1, negative.stdout + negative.stderr
-    assert negative.stdout.count(": error:") == 16, negative.stdout
-    for line in (2, 3, 4, 5, 6, 7, 8, 9, 11, 12, 14, 15, 17, 18, 19, 20):
+    assert negative.stdout.count(": error:") == 18, negative.stdout
+    for line in (2, 3, 4, 5, 6, 7, 8, 9, 11, 12, 14, 15, 17, 18, 19, 20, 22, 25):
         assert f"invalid.py:{line}: error:" in negative.stdout, negative.stdout
     assert {path.relative_to(runtime): path.read_bytes() for path in runtime.rglob("*.py")} == before
     assert not tuple(runtime.rglob("*.pyi"))

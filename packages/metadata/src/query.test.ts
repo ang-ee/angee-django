@@ -740,6 +740,17 @@ test("time filters validate native ISO clocks without losing offsets or precisio
   }
 });
 
+test("client time comparisons read clocks as SQL compares time", () => {
+  const query = ResourceQuery.forRows({ fields: { time: { scalar: "Time" } } });
+  const row = { time: "09:30:00" };
+  expect(query.matches(row, { time: { exact: "09:30" } })).toBe(true);
+  expect(query.matches(row, { time: { inList: ["09:30:00.000"] } })).toBe(true);
+  expect(query.matches(row, { time: { exact: "09:30:00.000001" } })).toBe(false);
+  expect(query.matches(row, { time: { gte: "09:30", lt: "10:00" } })).toBe(true);
+  expect(query.matches({ time: "09:30:00.5" }, { time: { gt: "09:30:00" } })).toBe(true);
+  expect(query.value("time", { time: "09:30" })).toBe(query.value("time", row));
+});
+
 test("decimal predicates and client text sorting preserve their intended ordering", () => {
   const query = ResourceQuery.forRows({ fields: { amount: { scalar: "Decimal" }, name: { scalar: "String" } } });
   const row = { amount: "9007199254740993.000000000000000001" };

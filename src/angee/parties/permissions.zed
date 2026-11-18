@@ -1,7 +1,7 @@
 // Authorization schema for the parties addon.
 // @rebac_package: parties
 // @rebac_package_version: 0.1.0
-// @rebac_schema_revision: 19
+// @rebac_schema_revision: 20
 
 // Parties, folders and circles are grant roots: each is owned through its
 // transferable `owner` column (OwnerMixin), which an insert defaults to the row's
@@ -142,15 +142,21 @@ definition parties/address {
     permission delete = creator + admin->member
 }
 
+// A synced folder is an address book: its directory states the folder's name
+// through the address-book link targeting it (angee statements). Statement
+// admission reads `write_statements` alone, so the directory reaches no other
+// read or write of the folder.
 definition parties/folder {
     relation owner: auth/user // rebac:field=owner
     relation editor: auth/user | auth/group#member
     relation reader: auth/user | auth/group#member
+    relation directory: integrate/integration // rebac:field=record_links__stream__integration
     relation admin: angee/role // rebac:const=admin
 
     permission create = authenticated
     permission read   = owner + editor + reader + admin->member
     permission write  = owner + editor + admin->member
+    permission write_statements = write + directory
     permission delete = owner + admin->member
     permission transfer = owner + admin->member
     permission write__owner = transfer

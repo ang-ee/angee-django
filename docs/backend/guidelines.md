@@ -1626,6 +1626,15 @@ retains its native routing contract.
   Seeds must omit those fields to preserve their live values.
   Unchanged rows with hashes from the previous state-inclusive rule migrate
   only their ledger hash; changed seed values or keys still trigger import.
+- **A seed field an operator owns after creation is declared `create_only` on its entry.**
+  The [resource loader](../../src/angee/resources/loader.py) applies it only to a row
+  the current load creates, through any entry (`load_scope`), and never to an
+  adopted, existing or re-applied row; like transition-owned state it stays out of
+  the row hash. A row an owner verb persists (`resource_class`) counts as created
+  when the load found none to adopt. Put such rows in their own entry, so other rows keep their policy: adding
+  `create_only` to a shipped entry changes its rows' hashes, so each existing row is
+  re-applied once (without the create-only fields). An adoption field cannot be
+  create-only, and grant entries take none.
 - **Demo resource tiers are additive across installed addons.** A deployment that
   needs demo rows but not one permissive seed must exclude that exact entry with
   `ANGEE_RESOURCE_EXCLUDED_ENTRIES`, keyed as `addon.name:resources/path.yaml`;
@@ -2118,10 +2127,9 @@ validated at the driver boundary.
 RecordLink is a pointing row with `merge_policy = MOVE`. Merging its target
 moves every link to the survivor; both remote cards receive the survivor's
 projection through their existing write-back policies and remote preconditions.
-`StreamDefinition` declarations own the five generation-seed knobs: `cursor`,
-`reconcile_interval`, `absence_threshold`, `tombstone_retention`, and `config`.
-Persisted stream rows carry runtime state; management pages do not redefine
-those declaration facts.
+[`StreamDefinition`](../../src/angee/integrate/states.py) declarations own every
+stream knob, including the generation seeds. Persisted stream rows carry runtime
+state; management pages do not redefine those declaration facts.
 
 Public-feed responding composes [held replies, reply hold, feed streams and
 delivery settlement](../glossary.md#workflows) through the
@@ -2306,11 +2314,22 @@ bridge advisory lock as polling and delivery settlement.
   [`OperatorDaemonConflict`](../../src/angee/operator/daemon.py) whose `kind` and
   `name` come from the daemon's error body; never parse the message or re-derive
   the name.
-- **MCP bearers are per agent and derived from the server credential.**
-  `MCPServer.bearer_for()` mints `<agent sqid>.<hmac>` for an internal server; rotating
-  the credential (or changing placement) invalidates every provisioned agent's bearer
-  until reprovision. The verifier logs each decline with its reason; FastMCP's 401 text
-  about "expired" tokens is boilerplate.
+- **One owner sends an MCP server's authorization.**
+  [`MCPServer.authorization_for(agent)`](../../src/angee/agents/models.py) returns the
+  whole `Authorization` value, for the in-process transport and the provisioned
+  `.mcp.json` alike (its env var `ANGEE_MCP_AUTHORIZATION_<sqid>` carries that value).
+  An external server receives the credential's own authorization, freshened first:
+  a static token, OAuth or basic auth only, so key-only and per-scope minting kinds are
+  refused, as are an inactive credential and an empty secret.
+- **MCP bearers are per agent and derived from the internal server's key.**
+  `MCPServer.bearer_for()` mints `<agent sqid>.<hmac>` for an internal server, keyed by
+  an active static token of at least 32 characters that no other record references and
+  binding the server's own sqid, so servers never accept each other's bearers. An empty,
+  weak, inactive or refused key mints and verifies nothing; `MCPServer.clean` refuses it
+  at save. The key is never freshened. Rotating it (or changing placement) invalidates
+  every provisioned agent's bearer until reprovision, and revoking it cuts them off. The
+  verifier logs each decline with its reason; FastMCP's 401 text about "expired" tokens is
+  boilerplate.
 
 ### Workflow contracts
 

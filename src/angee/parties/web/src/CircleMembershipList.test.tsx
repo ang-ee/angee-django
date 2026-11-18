@@ -78,7 +78,7 @@ describe("CircleMembershipList", () => {
       expect(mocks.add).toHaveBeenCalledWith({
         circle: "circle-2",
         party: "person-1",
-      }),
+      }, { errorNotification: false }),
     );
   });
 });

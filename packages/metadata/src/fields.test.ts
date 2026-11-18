@@ -66,6 +66,13 @@ describe("field metadata helpers", () => {
     expect(defaultWidgetForModelField(queried.fields.reviewers, queried)).toBe("many2many");
   });
 
+  test("resolves a Time scalar to the time widget and filter, ahead of date-name inference", () => {
+    const field = resourceField({ name: "starts_at", kind: "scalar", scalar: "Time" });
+
+    expect(defaultWidgetForModelField(field)).toBe("time");
+    expect(filterFieldType("starts_at", field)).toBe("time");
+  });
+
   test("uses date-name inference only when field metadata is absent", () => {
     const stringField = resourceField({
       name: "published_at",

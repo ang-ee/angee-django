@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 from contextlib import nullcontext
 from dataclasses import replace
-from typing import Any
+from typing import Any, ClassVar
 
 import pytest
 import strawberry
@@ -73,7 +73,7 @@ class TaskPromotion(MergeContractMixin):
     Like ``projects.Project.converted_from``, the lineage key stays on a merged task.
     """
 
-    merge_policies = {"converted_from": MergePolicy.KEEP}
+    merge_policies: ClassVar[Mapping[str, Any]] = {"converted_from": MergePolicy.KEEP}
 
     converted_from = models.ForeignKey(ProjectAccessTask, on_delete=models.CASCADE, related_name="promoted_projects")
     current_milestone = models.ForeignKey(Scope, null=True, on_delete=models.SET_NULL)

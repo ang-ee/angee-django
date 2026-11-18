@@ -4,6 +4,7 @@ from typing import Any
 from urllib.parse import parse_qs, urlsplit
 
 import pytest
+from asgiref.sync import async_to_sync
 from django.contrib.auth import get_user_model
 from django.contrib.auth.models import AnonymousUser
 from django.contrib.contenttypes.models import ContentType
@@ -345,6 +346,12 @@ def test_guarded_relation_rechecks_sudo_cache_and_reuses_actor_scoped_cache(
             assert factory("folder").base_resolver.wrapped_func(empty) is None
 
 
+async def _streamed_body(response: Any) -> bytes:
+    """Collect a download's asynchronously streamed body."""
+
+    return b"".join([block async for block in response.streaming_content])
+
+
 @pytest.mark.django_db(transaction=True)
 def test_download_bearer_rechecks_issuing_actor_before_conditional_response(drive: Any) -> None:
     row = _proxy_upload(drive, PNG_BYTES)
@@ -361,7 +368,7 @@ def test_download_bearer_rechecks_issuing_actor_before_conditional_response(driv
     response = views.download(request, row.filename)
     assert response.status_code == 200
     etag = response["ETag"]
-    assert b"".join(response.streaming_content) == PNG_BYTES
+    assert async_to_sync(_streamed_body)(response) == PNG_BYTES
     response.close()
     conditional = RequestFactory().get(f"/download?token={token}", HTTP_IF_NONE_MATCH=etag)
     assert views.download(conditional, row.filename).status_code == 304

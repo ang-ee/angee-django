@@ -226,7 +226,9 @@ test.each(["invalid", "conflict"] as const)("retains the draft after %s and clea
   expect(result.current.form.getValues("title")).toBe("Draft");
   expect(result.current.form.getFieldState("title").isDirty).toBe(true);
   expect(onSuccess).not.toHaveBeenCalled();
-  expect(result.current.form.formState.errors.root?.server?.type).toBe(status === "conflict" ? "conflict" : "server");
+  // A refusal its field shows is not repeated as the form-level fallback; a conflict names the form.
+  expect(result.current.form.formState.errors.root?.server?.type).toBe(status === "conflict" ? "conflict" : undefined);
+  if (status === "invalid") expect(result.current.fieldErrors).toEqual({ title: ["Choose another title."] });
   expect(result.current.saveConflict).toBe(status === "conflict");
   await act(async () => { expect(await result.current.run()).toBe(true); });
   expect(result.current.fieldErrors).toEqual({});

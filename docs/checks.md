@@ -58,13 +58,21 @@ model registry to make a missing native type visible. The composed typing host
 is isolated from the running stack and pytest's bare source-model settings.
 
 Projects author data upgrades as ordinary Django migrations with explicit
-dependencies, historical models and the schema editor's database alias. Compose
-preserves those files. The [native-history tests](../tests/test_native_initial_history.py)
+dependencies, historical models and the schema editor's database alias, copying an
+addon's migration template from `compose_migrations/<app_label>/` and pinning their
+own dependencies ([project migration history](composer.md#project-migration-history)).
+Compose preserves those files. Ruff and mypy check templates like any source. A
+template's test adds the legacy schema to a `ProjectState` derived from the
+installed models and to the table, then applies and unapplies the template's
+`Migration` through Django's `MigrationExecutor`, so its callables run on
+historical models; fixtures and assertions may use live models (the
+[address-book template test](../tests/test_parties_addressbook_upgrade.py)).
+The [native-history tests](../tests/test_native_initial_history.py)
 cover initial authoring, project data operations and preservation across rebuilds;
 the [migration-policy tests](../tests/test_runtime_migrations.py) cover Resources'
-retirement policy and the native drop guard. Previously shipped transition sources
-are historical upgrade assets only; retire them after the supported upgrade cutoff
-and preserve Python imports still required by retained migration history.
+retirement policy and the native drop guard. Retire a template after its
+upgrade cutoff and preserve Python imports still required by retained migration
+history.
 
 Framework import boundaries are `[tool.importlinter]` contracts in
 [`pyproject.toml`](../pyproject.toml), checked by `lint-imports`.
@@ -264,7 +272,11 @@ read.assert_ceiling(statements=10)
 ```
 
 A ceiling is the measured statement count; generated SQL text has no size budget,
-and its shape is asserted with the classifiers above. A change that lowers a cost
+and its shape is asserted with the classifiers above. `read.repeated` counts the
+statements beyond the first of each statement text, bound values apart, and
+`assert_ceiling(statements=..., repeated=...)` pins it: a lookup issued once per row
+and a read asked twice both repeat a text, which a statement count cannot tell from
+a new read. A change that lowers a cost
 lowers its ceiling in the same change; a rise is a regression to fix, never a reason
 to raise the ceiling. Assert the rows a read returns beside its ceiling, so a read
 that loses rows cannot pass. The
@@ -429,7 +441,7 @@ measurements.
 | Package/exports architecture and the UX component ontology guard (addons compose `@angee/ui` owners: no raw elements, lucide renders, deleted classes or owners, locale bypasses, local recipes or tone maps; covers `../angee-arp` and `../angee-phrogg` when materialized) | Framework source root | `pnpm --config.verify-deps-before-run=false --fail-if-no-match --filter @angee/app exec vitest run src/architecture-guardrails.test.ts` |
 | Design-system catalog and token-name drift | Stack root | `pnpm --config.verify-deps-before-run=false --filter @angee/storybook --fail-if-no-match run catalog:check` |
 | All composed fragment types | Stack root, after SDL/codegen | `pnpm --config.verify-deps-before-run=false --dir web run typecheck` |
-| All composed fragment tests | Stack root, after SDL/codegen | `pnpm --config.verify-deps-before-run=false -r run test` |
+| All composed fragment tests, one package at a time since each Vitest run sizes its workers to the machine | Stack root, after SDL/codegen | `pnpm --config.verify-deps-before-run=false --fail-if-no-match -r --workspace-concurrency=1 --filter '!./workspaces/src/angee/packages/**' run test` |
 
 After changing export annotations, story owners or token CSS, regenerate with
 `pnpm --config.verify-deps-before-run=false --filter @angee/storybook --fail-if-no-match run catalog:generate`
@@ -526,7 +538,8 @@ The current tiers are:
 - **Packages:** framework package typecheck/test/build and export/distribution
   checks.
 - **Composed stack:** compose the host, check generated documents
-  and addon fragments, smoke the composed models, and run the bridges repository's
+  and addon fragments (framework packages stay with the packages job; fragments
+  test one package at a time), smoke the composed models, and run the bridges repository's
   pytest suite with its
   native source-test settings and collection policy. Bridge tests use the
   composed stack's runtime dependencies plus the framework's locked check tools,
@@ -597,11 +610,15 @@ Consumer repositories call the same reusable checks with `uv-enabled: false`,
 `consumer-sources` (repository, sibling slot path, ref), `consumer-roots`,
 `consumer-path`, `consumer-tests`, and optional `consumer-pytest-plugins` inputs.
 The caller revision replaces its source ref; dependency revisions remain explicit.
-The full declared Python collection runs once across six `stack-shard` jobs,
-using native pytest-split `least_duration` assignment. Without stored consumer
-timings, the plugin balances test counts with equal weights. Each shard renders
-its own host, resolves native distribution requirements, composes/provisions it, and
-collects the declared Python paths with `python_files=test*.py` on PostgreSQL.
+A consumer call runs six `stack-shard` jobs. Each renders and composes its own
+host and resolves native distribution requirements. Group 1 provisions the host
+database, smokes it and runs the composed checks below. Groups 2–6 split the
+full declared Python collection five ways with native pytest-split
+`least_duration` assignment, so no shard carries both the checks and a test
+share inside the 60-minute job limit. Without stored consumer timings, the plugin
+balances test counts with equal weights. The test shards collect the declared
+Python paths with `python_files=test*.py` on PostgreSQL and never read the host
+database.
 Four native pytest-xdist workers use `--dist worksteal` inside each shard, so long
 consumer intake modules can use every worker. Each worker loads the configured
 host through its authored `settings` module; pytest-django owns its separate test
@@ -613,7 +630,7 @@ must defer model imports until Django's app registry is populated. Check tools
 come from the framework lockfile.
 
 Group 1 runs consumer Ruff/mypy and, after host SDL/codegen, the consumer's web
-fragment typechecks and tests. Mypy resolves composition targets through the
+fragment typechecks and tests; it runs no consumer Python tests. Mypy resolves composition targets through the
 native source roots of all declared `consumer-sources`, including sibling
 dependencies. Optional full-profile bridge tests also run only in group 1.
 Calls without a consumer use one execution job. The `stack` aggregate

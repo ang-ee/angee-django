@@ -130,13 +130,10 @@ function CircleMembershipList({
         submittingLabel={t("circle.membership.adding")}
         errorFallback={t("circle.membership.addError")}
         parseValues={parseMembershipValues}
-            onSubmit={async (values) => ({
-              status: "ok",
-              data: await add({
-                circle: anchor === "circle" ? anchorId : values.selection,
-                party: anchor === "person" ? anchorId : values.selection,
-              }),
-            })}
+            mutation={(values, options) => add({
+              circle: anchor === "circle" ? anchorId : values.selection,
+              party: anchor === "person" ? anchorId : values.selection,
+            }, options)}
           />
         }
         emptyContent={

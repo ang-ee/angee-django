@@ -7,13 +7,13 @@ every ID token is verified by PyJWT against the provider's published key.
 
 from __future__ import annotations
 
+import base64
 import json
 import threading
 import time
 from collections.abc import Iterator
 from datetime import timedelta
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 from urllib import parse
@@ -21,7 +21,6 @@ from urllib import parse
 import httpx2
 import jwt
 import pytest
-import yaml
 from asgiref.sync import async_to_sync, sync_to_async
 from django.contrib.auth import get_user_model
 from django.contrib.auth.models import AnonymousUser
@@ -39,8 +38,6 @@ from angee.iam_integrate_oidc import identity
 from angee.iam_integrate_oidc import schema as oidc_schema
 from angee.iam_integrate_oidc.errors import IDENTITY_RESOLUTION_FAILED, IdentityFlowError
 from angee.iam_integrate_oidc.protocol import OAuthClientOidcProtocol
-from angee.iam_integrate_oidc.providers import GoogleType
-from angee.iam_integrate_oidc.testing.provider import KEY_ID, OidcProvider, signing_key
 from angee.integrate import schema as integrate_schema
 from angee.integrate.connect import complete_account_connect
 from angee.integrate.errors import IntegrationError, RequestNotSentError
@@ -54,14 +51,17 @@ from angee.integrate.oauth import state as oauth_state
 from angee.integrate.oauth.client import OAuthClientProtocol
 from angee.integrate.oauth.errors import (
     DISCOVERY_FAILED,
+    ENDPOINT_NOT_ALLOWED,
     EXTERNAL_ACCOUNT_RESOLUTION_FAILED,
     INVALID_ID_TOKEN,
     INVALID_STATE,
+    PROVIDER_UNAVAILABLE,
     TOKEN_EXCHANGE_FAILED,
     OAuthFlowError,
 )
 from angee.integrate.oauth.providers import GenericOAuth2
 from angee.integrate.testing.http import mock_transport, request_fields
+from angee.integrate.testing.oidc import KEY_ID, OidcProvider, signing_key
 from angee.messaging.testing.models import Handle as PartiesHandle
 from tests.conftest import Credential, ExternalAccount, OAuthClient, SchemaAddon
 from tests.test_parties_graphql import Person as PartiesPerson
@@ -217,6 +217,7 @@ def test_exchange_code_posts_json_body_with_pkce() -> None:
         "ignored": "not-token-material",
     })
     oauth_client = _stub_oauth_client(
+        token_identity_keys=["account", "organization"],
         supports_pkce=True,
         token_request_format="json",
         token_param_values={"audience": "https://api.example", "expires_in": 31536000},
@@ -249,6 +250,30 @@ def test_exchange_code_posts_json_body_with_pkce() -> None:
         "redirect_uri": "https://app.example/callback",
         "state": "state-token",
     }
+
+
+@pytest.mark.parametrize("request_format", ["form", "json"])
+def test_basic_client_auth_and_declared_identity_keys_follow_the_registration(request_format: str) -> None:
+    """A registration selects HTTP Basic for either body format; token material never becomes a claim."""
+
+    provider = OidcProvider(token={
+        "access_token": "access-token", "refresh_token": "refresh-token",
+        "workspace": {"id": "w-1"}, "undeclared": {"id": "x"},
+    })
+    oauth_client = _stub_oauth_client(
+        token_request_format=request_format,
+        token_endpoint_auth_method="client_secret_basic",
+        token_identity_keys=["workspace", "refresh_token"],
+    )
+    protocol = OAuthClientProtocol(oauth_client)
+
+    with mock_transport(provider) as requests:
+        protocol.exchange_code(code="auth-code", redirect_uri="https://app.example/callback")
+
+    [request] = requests
+    assert request.headers["authorization"] == "Basic " + base64.b64encode(b"oidc-client:secret").decode()
+    assert "client_secret" not in request_fields(request)
+    assert protocol.token_response_claims == {"workspace": {"id": "w-1"}}
 
 
 @pytest.mark.parametrize("request_format", ["form", "json"])
@@ -289,6 +314,7 @@ def test_fixed_public_client_never_reads_encrypted_secret(request_format: str, g
         token_endpoint = "https://issuer.example/oauth/token"
         token_request_format_value = request_format
         token_param_values: dict[str, Any] = {}
+        token_identity_key_values: list[str] = []
         supports_pkce = True
         manual_redirect_uri = "https://issuer.example/oauth/code/callback"
 
@@ -517,8 +543,10 @@ def test_oauth_protocol_round_trips_over_the_real_pinned_transport(
     assert received[3]["fields"]["token"] == "renewed-access"
     assert {request["user_agent"] for request in received} == {oauth_protocol.USER_AGENT}
     metadata_endpoint = _stub_oauth_client(token_endpoint="http://169.254.169.254/oauth/token")
-    with pytest.raises(AddressNotAllowedError):
+    with pytest.raises(OAuthFlowError) as refused:
         OAuthClientProtocol(metadata_endpoint).exchange_code(code="code", redirect_uri="https://app.example/callback")
+    assert (refused.value.body, refused.value.transient) == ({"error": ENDPOINT_NOT_ALLOWED}, False)
+    assert isinstance(refused.value.__cause__, AddressNotAllowedError)
 
 
 @pytest.mark.parametrize("claim,value", [("iss", "https://wrong.example"), ("aud", "other-client"), ("nonce", "wrong")])
@@ -568,7 +596,7 @@ def test_jwks_is_fetched_once_per_uri_through_the_oauth_get_policy() -> None:
 
 
 @pytest.mark.parametrize("failure", ["transport", "http", "json"])
-def test_jwks_fetch_failure_refuses_the_id_token(failure: str) -> None:
+def test_jwks_fetch_failure_is_a_transient_provider_outage(failure: str) -> None:
     def respond(request: httpx2.Request) -> httpx2.Response:
         if failure == "transport":
             raise httpx2.ConnectError("unavailable", request=request)
@@ -578,7 +606,35 @@ def test_jwks_fetch_failure_refuses_the_id_token(failure: str) -> None:
     oidc = _stub_login_oauth_client(issuer=provider.issuer, jwks_uri=provider.metadata["jwks_uri"])
     with mock_transport(respond), pytest.raises(OAuthFlowError) as refused:
         OAuthClientOidcProtocol(oidc).verify_id_token(provider.id_token(sub="s", nonce="n"), nonce="n")
+    assert (refused.value.code, refused.value.transient) == (PROVIDER_UNAVAILABLE, True)
+
+
+def test_verify_id_token_tolerates_clock_skew_and_checks_azp_for_several_audiences() -> None:
+    provider = OidcProvider(issuer="https://skew.example")
+    client = _stub_login_oauth_client(issuer=provider.issuer, jwks_uri=provider.metadata["jwks_uri"])
+    protocol = OAuthClientProtocol(client)
+    now = int(time.time())
+    several = [provider.client_id, "another-client"]
+    with mock_transport(provider):
+        assert protocol.verify_id_token(provider.id_token(sub="skewed", iat=now + 30))["sub"] == "skewed"
+        assert protocol.verify_id_token(provider.id_token(sub="lapsed", exp=now - 30))["sub"] == "lapsed"
+        shared = provider.id_token(sub="shared", aud=several, azp=provider.client_id)
+        assert protocol.verify_id_token(shared)["sub"] == "shared"
+        with pytest.raises(OAuthFlowError) as refused:
+            protocol.verify_id_token(provider.id_token(sub="foreign", aud=several, azp="another-client"))
     assert refused.value.code == INVALID_ID_TOKEN
+
+
+def test_verified_claims_take_userinfo_only_about_the_same_subject() -> None:
+    provider = OidcProvider(issuer="https://merge.example")
+    client = _stub_login_oauth_client(issuer=provider.issuer, jwks_uri=provider.metadata["jwks_uri"])
+    protocol = OAuthClientProtocol(client)
+    with mock_transport(provider):
+        token = provider.id_token(sub="subject", email="verified@example.com")
+        same = protocol.verified_claims(token, {"sub": "subject", "email": "userinfo@example.com", "name": "N"})
+        other = protocol.verified_claims(token, {"sub": "someone-else", "name": "Other"})
+    assert (same["email"], same["name"]) == ("verified@example.com", "N")
+    assert "name" not in other
 
 
 def test_resolver_existing_external_account_returns_owner(
@@ -989,7 +1045,7 @@ def test_complete_account_connect_links_oauth_userinfo_claims_and_credential(db:
 
 
 def test_complete_account_connect_falls_back_to_token_response_account(db: None) -> None:
-    """Restricted tokens can resolve an account without userinfo scope."""
+    """Restricted tokens resolve an account from the token-response keys their preset declares."""
 
     link_user = get_user_model().objects.create_user(
         username="oauth-token-account",
@@ -998,6 +1054,7 @@ def test_complete_account_connect_falls_back_to_token_response_account(db: None)
     oauth_client = _oauth_client(
         slug="token-account",
         oidc=False,
+        token_identity_keys=["account", "organization"],
         external_id_claim="account.uuid",
         email_claim="account.email_address",
         display_name_claim="account.display_name",
@@ -1678,34 +1735,50 @@ def test_oidc_link_refines_the_grant_before_userinfo_and_credential_persistence(
 
 
 @pytest.mark.django_db
-def test_google_preset_owns_the_subject_bearing_profile_endpoint() -> None:
-    with system_context(reason="test Google preset identity"):
-        client = OAuthClient.objects.create(slug="google-profile", provider_type="google")
-    endpoint = GoogleType.effective_defaults()["userinfo_endpoint"]
-    assert endpoint == "https://openidconnect.googleapis.com/v1/userinfo"
-    assert client.userinfo_endpoint == endpoint
+def test_connect_completion_without_a_refresh_token_returns_the_consent_restart() -> None:
+    with system_context(reason="test consent restart payload"):
+        user = get_user_model().objects.create_user(username="consent-restart-payload")
+        # Google can be asked for consent again; a generic provider cannot.
+        client = _oauth_client("consent-restart-payload", provider_type="google")
+    request = graphql_request(user, session=True)
+    token, _record, redirect = _bound_flow(request, client, oauth_state.StateFlow.CONNECT, user)
 
-    with mock_transport(lambda request: httpx2.Response(200, json={"sub": "provider-subject"})) as requests:
-        claims = OAuthClientProtocol(client).fetch_userinfo("fake")
-    assert [str(request.url) for request in requests] == [endpoint]
-    assert client.external_id_from_claims(claims) == "provider-subject"
+    with mock_transport(OidcProvider(userinfo={"sub": "consent-subject"})):
+        result = _complete(
+            _console_schema(), request, "connect_account_complete", token, redirect,
+            "error_code account { id } restart { authorize_url mode state redirect_uri }",
+        )
+
+    assert result["error_code"] == "consent_required" and result["account"] is None
+    restart = result["restart"]
+    assert restart["authorize_url"].startswith("https://issuer.example/oauth/authorize?")
+    assert restart["state"] and restart["state"] != token
+    assert (restart["mode"], restart["redirect_uri"]) == ("auto", redirect)
 
 
-def test_google_seed_discovers_the_preset_profile_without_a_conflicting_override() -> None:
-    seed_file = Path(__file__).parents[1] / "src/angee/integrate/resources/install/010_integrate.oauthclient.yaml"
-    seed = next(row for row in yaml.safe_load(seed_file.read_text()) if row["xref"] == "oauth_gemini")
-    client = _stub_oauth_client(**{key: value for key, value in seed.items() if key != "xref"})
-    endpoint = GoogleType.effective_defaults()["userinfo_endpoint"]
+@pytest.mark.django_db
+def test_link_completion_without_a_refresh_token_returns_the_consent_restart() -> None:
+    with system_context(reason="test link consent restart"):
+        user = get_user_model().objects.create_user(username="link-consent-restart")
+        client = _oauth_client("link-consent-restart", provider_type="google")
+    request = graphql_request(user, session=True)
+    token, record, redirect = _bound_flow(request, client, oauth_state.StateFlow.LINK, user)
+    provider = OidcProvider(id_claims={"sub": "link-subject", "nonce": record.nonce})
 
-    def respond(request: httpx2.Request) -> httpx2.Response:
-        if str(request.url) == client.discovery_url:
-            return httpx2.Response(200, json={"userinfo_endpoint": endpoint})
-        return httpx2.Response(200, json={"sub": "seed-subject"})
+    with mock_transport(provider):
+        result = _complete(
+            _console_schema(), request, "link_account_complete", token, redirect,
+            "error_code account { id } restart { authorize_url state redirect_uri }",
+        )
 
-    with mock_transport(respond) as requests:
-        claims = OAuthClientProtocol(client).fetch_userinfo("fake")
-    assert str(requests[-1].url) == endpoint
-    assert client.external_id_from_claims(claims) == "seed-subject"
+    assert result["error_code"] == "consent_required" and result["account"] is None
+    restart = parse.urlsplit(result["restart"]["authorize_url"])
+    query = dict(parse.parse_qsl(restart.query))
+    # The login builder restarts it: openid and a fresh nonce, bound to a new state.
+    assert "openid" in query["scope"].split() and query["nonce"] != record.nonce
+    assert result["restart"]["state"] != token and result["restart"]["redirect_uri"] == redirect
+    with system_context(reason="test link consent wrote nothing"):
+        assert not ExternalAccount.objects.filter(oauth_client=client).exists()
 
 
 @pytest.mark.django_db

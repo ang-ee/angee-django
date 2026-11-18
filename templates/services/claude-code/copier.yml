@@ -37,7 +37,9 @@ _angee:
       default: ""
       help: >-
         Pre-rendered YAML env lines (one per credentialed MCP server) setting each
-        server's bearer from its operator secret; .mcp.json reads them via ${VAR}.
+        server's whole Authorization value (MCPServer.authorization_for, Bearer or
+        Basic) from its operator secret as ANGEE_MCP_AUTHORIZATION_<sqid>; the
+        .mcp.json Authorization header is exactly that ${VAR}.
     git_user_name:
       type: str
       default: Angee Agent

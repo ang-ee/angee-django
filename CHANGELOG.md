@@ -10,6 +10,317 @@ live in code docstrings.
 
 ## Unreleased — shared addon contracts, native embeddings and graph retrieval
 
+- `storage/file#write_granted` holds only the fragments' record arms; `write`
+  derives the drive, folder, inherited-owner, draft-owner and admin arms itself,
+  and `owner_writer` is `inherited_owner + draft_owner + (owner & write_granted)`.
+  Every `read`, `write`, `share`, `delete` and `transfer` decision is unchanged;
+  a file's read statement no longer compiles its folder's write, which `delete`
+  reached through `owner_writer`. Fragments contribute `write_granted` arms as
+  before. `write_granted` and `owner_writer` are composition terms: a caller that
+  checked either directly checks `write`, `delete` or `transfer`. Operators re-sync
+  the permission schema: storage revision 14.
+
+- An `angee.integrate` stream names its container: `StreamDefinition.container`,
+  persisted as `SyncStream.container` (a `PROTECT` key to `integrate.RecordLink`,
+  `related_name="child_streams"`), is the parent stream's link whose record
+  holds the partition; the partition is its external key. The container is
+  immutable on the model; a stream declared before containers existed adopts it
+  once. The parent declares `holds_containers` (`SyncStream.holds_containers`).
+  `SyncStream.partition` widens to 512 characters: a child's partition is its
+  container's external key, so both take `integrate.states.EXTERNAL_KEY_LENGTH`;
+  the driver refuses a longer replica identity once, as a coalesced stream
+  failure, and the page goes on.
+  `RecordLinkQuerySet.observing_rule()` and `live_container_rule()` (observing,
+  bound to a target, no absence counted) are the one rule for joined reads,
+  `observing()`, `live_containers()` and `containers_of(bridge, key)` apply it.
+  A container missing from a complete listing (`StreamPage.absent`) counts
+  against the parent's absence threshold: an unavailable container pauses its
+  child, which is neither declared nor retired; a container that stops observing
+  (tombstoned or withdrawn) retires it. Retirement flips the child to
+  `StreamState.RETIRED` inside the parent's page
+  (`SyncStreamManager.retire_children`); a bounded, resumable pass over
+  `reconcile_state` then tombstones the child's links and closes their open
+  failures (`RecordLinkManager.mark_absent(..., confirmed=True)`) with
+  `on_absent`, nothing is deleted, and the pass pauses while the container
+  observes again (reopening drops it). `mark_absent` now returns the links whose
+  status changed.
+  `bump_generation` reopens a retired generation only while its container is
+  live, and `reset_stream` reports a retired one exhausted. `sync_bridge` drains
+  every declared partition in its first wave, a container-held partition only
+  after the stream holding its container applied its pages and sweep (in holder
+  depth order, or concurrently once that worker finished), runs the holders'
+  retirement passes last, declares again only after a container-holding stream
+  gained a live container, and opens no partition and starts no wave after its
+  deadline. A cyclic or self-held container declaration fails fast. New
+  `RecordLinkQuerySet.observing()` and `SyncStreamQuerySet.latest_generations()`.
+  A page of a superseded generation is refused as a "superseded stream generation".
+  `ImmutableFieldsMixin` checks only the immutable fields a partial save's
+  `update_fields` writes.
+- `angee.parties` address books are records of the directory's `addressbooks`
+  stream: each book's link targets its `Folder` (`FolderManager.ingest_addressbook`,
+  which truncates an over-long name) and holds its contacts stream; both
+  declarations live on `DirectoryBackend` (`addressbooks_stream`,
+  `contacts_stream`). The folder's name is an `identity` statement, so a person's
+  rename outranks a remote one; `Folder` composes statements and history, and
+  `parties/folder#write_statements` admits the directory (parties revision 20).
+  A book missing from one listing pauses its contacts; once its absence is
+  confirmed it is tombstoned, its statements are withdrawn (as a read tombstone
+  withdraws them) and its contacts stream retires. An empty listing confirms
+  nothing. CardDAV discovery raises when the server refuses the principal or
+  home-set request instead of falling back to the server URL.
+  Removed: `Folder.source_href` and `uq_folder_directory_source`,
+  `FolderManager.sync_addressbook`, `Directory.addressbook_stream`, GraphQL
+  `ContactFolderType.source_href`, and the `folder` argument of
+  `PartyManager.ingest_contact`, which now takes the page's `stream` and finds
+  its folder through that stream's container. `StatedRecordMixin` moves from
+  `angee.projects.models` (which still imports it) to `angee.integrate.mixins`,
+  beside `LinkedRecordMixin`, the `record_links` relation `Party` composes;
+  `Folder` composes `StatedRecordMixin`. A source backend implements `discover`,
+  `extract_contacts` and `read_contacts`.
+  Upgrade: a host runs `makemigrations integrate` for the `container` and
+  `holds_containers` columns and the widened `partition`, copies the migration template
+  `src/angee/parties/compose_migrations/parties/addressbook_links.py` into
+  `runtime/parties/migrations/` and pins its placeholder dependencies to its own
+  leaves, then runs `makemigrations` for the folder's history and statement
+  tables, `migrate` and `rebac sync`. Every folder, contact and link is kept and
+  nothing is downloaded again. A folder whose href is longer than a link's
+  external key never synced; the template skips it and logs a warning. The first
+  sync states each listed book's name on its folder, so a folder renamed after
+  the last sync before the upgrade takes the directory's name. A book removed
+  before the upgrade misses its first listing then: its contacts pause in that
+  sync, unopened, and retire on the sync that confirms its absence (the second,
+  at the default threshold of two). The template reverses by restoring each
+  folder's `source_href`. Upgrade cutoff: the template ships through the 3.x
+  releases and is removed in 4.0; a host upgrading from an earlier release
+  applies it through a 3.x release first.
+
+- A resource row naming a `to_field` foreign key by xref stores the named row's
+  target column, not its primary key: `AngeeResource.get_fk_widget` binds the xref
+  widget's native `field` to the relation's `target_field`, so a seed can set
+  `projects.Task.activity_type` (keyed by `ActivityType.key`), which previously
+  failed validation, and export renders the key back. An adoption condition
+  compares a related row by the same column.
+
+- Time-of-day fields can be exposed as resources. Resource metadata accepts the
+  GraphQL `Time` scalar, which it previously refused at schema build, and a Django
+  `TimeField` defaults to the new `time` widget. It filters with Date's operators
+  (`exact`, `ne`, `gt`, `gte`, `lt`, `lte`, `inList`, `notInList`, `isNull`), sorts,
+  and groups by value without calendar extractions. On the web, `Time` is a
+  generated `string` (`HH:MM[:SS]`, no zone); `@angee/ui` registers the `time`
+  widget, which edits through the native time control and reads and lists through
+  `formatTime`. `formatTime` and `formatTimeInput` accept a `Time` value and read
+  it as written, an empty time drafts as `null`, the filter editor offers a `time`
+  field type, and the client row model compares clocks as SQL does (`09:30` equals
+  `09:30:00`).
+
+- Storage mounts read Google Drive: `angee.storage_integrate_google_drive` mounts
+  My Drive, a folder or a shared drive, in place (read-only) or copied into a chosen
+  writable backend, reading with one of the connecting user's Google accounts that
+  granted `drive.readonly`; Google-native documents and shortcuts are skipped and
+  counted. One `connect_mount(backend_class, name, source_root, mode, credential_id,
+  copy_backend_id)` mutation replaces `connect_local_folder` and the per-backend
+  connect mutations, and `mount_backend(backend_class)` tells the dialog what a
+  backend asks for. A mount's root is its backend's source token
+  (`MountBackend.source_root`), `MountEntry.storage_key` keeps a file's row across
+  renames and moves, `Backend.writable` and `ExternalStorageBackend` own read-only
+  serving, and a refused download answers 404, 403 or 502 instead of 500.
+- Integration follow-ups across the OAuth, credential and mount owners:
+  - every token request (the authorization-code and refresh grants, the JSON shim and
+    the JWT bearer assertion grant, now `angee.integrate.oauth.client.jwt_bearer_grant`)
+    maps its failures once and keeps the response's real HTTP status, so a JSON 429 on
+    an OAuth refresh is transient instead of failing the credential; a token endpoint
+    the address policy refuses is the permanent `endpoint_not_allowed` refusal;
+  - `CredentialKindHandler.carry_forward` decides what a new grant keeps of a
+    credential's stored material (the OAuth kind keeps its refresh token);
+  - a code exchange whose response omits `scope` granted the requested scopes
+    (RFC 6749 §5.1), so the credential records them;
+  - `connect_account_start(scopes:)` requests a consumer's scopes, `@angee/integrate`
+    exports `ConnectAccountButton` and `useConnectAccountStart`, and the Drive account
+    picker connects another account with `drive.readonly`;
+  - `Integration.admit_credential` is asked on every attachment; a Mount admits only
+    an account its backend reads with (`Mount.reads_with`);
+  - `angee.integrate.http.retry_after` is the one `Retry-After` parser (delay-seconds
+    or a future HTTP-date, at most a day); posts, Notion and Google Drive compose it,
+    and posts keeps its one-minute fallback;
+  - the Anthropic, work, uom and WhatsApp migration templates carry named placeholder
+    dependencies and no `applies()`; the Anthropic rehome gains its reverse, `restore`.
+- `angee.calendar` is the framework calendar, moved from arpee's `arp.calendar`
+  and reshaped: a `Calendar` belongs to a `parties.Party` and is the access root
+  of its events, an exception to a recurring event is an override row (`series`,
+  `original_start`), attendees are `parties.Handle` rows with the organizer as a
+  role, calendars share as reader, editor or free/busy, and a `refuse` calendar
+  rejects overlapping busy time. The event form offers the calendars the viewer
+  writes, defaults to the only one, and offers a user with none their own personal
+  calendar (`Calendar.objects.ensure_personal`), never creating one unasked. The
+  [calendar README](src/angee/calendar/README.md) lists what it expresses.
+  `angee.projects_calendar` overlays the viewer's due tasks on the calendar page;
+  projects no longer depends on a calendar.
+  `Recurrence.get_last_occurrence` returns where a series ends, `None` when any
+  rule it holds is open-ended. Recurrence is bounded for every consumer: a `COUNT`
+  over `MAX_OCCURRENCES` (10,000) is invalid and an expansion past it
+  raises `ValidationError` instead of running on (`series_too_long`): a read is
+  re-anchored at its window, like libical's, and a save counts a series from its
+  start to a horizon; a rule is one bare `RRULE`, and one with no
+  occurrence within about 30 years of its start is refused (`never_occurs`);
+  `RecurrenceField(finest_frequency=…)` refuses finer rules (a calendar event
+  repeats at most daily). A calendar read skips a row it cannot expand.
+  A `refuse` calendar judges an event's overlap only from now, over two years
+  and no further than the event ends, a series and a single event alike: an event
+  wholly before now is never judged, and nothing is judged against its past. The
+  check fails closed: a save beside another busy event it cannot expand is
+  refused (`unexpandable`, naming that event) where a read skips it; a free one,
+  or the saved event's own series, is skipped. `angee.integrate.sync` gains the
+  sync's deadline seam, `sync_deadline()` and `sync_deadline_context(deadline)`:
+  the bridge sync sets it once per cycle and every stream driver given a
+  `deadline=` enters it, so an adapter's nested parse or identity read stops by
+  it.
+  **Host upgrade:** the `calendar` app label carries the deleted `arp.calendar`'s
+  migration history and no data moves (clean slate). Each host writes a `calendar`
+  migration (`0003`) that purges the old event, attendee and history rows and the
+  `arp.calendar` resource-ledger rows, then applies the generated schema
+  operations; then run `rebac --skip-checks sync --prune-stale --yes` (calendar
+  revision 3, arp revision 7) and `resources load`. Add `angee.calendar` (and
+  `angee.projects_calendar` where projects is composed) to `INSTALLED_APPS` in
+  place of `arp.calendar`.
+- `angee.calendar` mirrors connected calendars. A `CalendarSource` (an
+  `integrate.Integration` child and a `Bridge`, its protocol selected by
+  `backend_class` from `ANGEE_CALENDAR_SOURCE_BACKEND_CLASSES`) mirrors each remote
+  calendar it serves through its `calendars` stream as a `Calendar` on its owner's
+  person, whose `source` names it and whose name, colour and zone the source states
+  (a person's own edit outranks it); each calendar's events sync through an
+  `events` stream partitioned by its key. A backend declares `writable`: a
+  read-only source's calendar refuses local edits on every save path
+  (`Calendar.is_writable`), and `CalendarQuerySet.local_edits_rule()`
+  (`taking_local_edits()`) is the same decision as a query, so the event form's
+  `writable` calendars and `Calendar.objects.ensure_personal` take only calendars
+  that accept local events. Its owner syncs it (`sync_calendar_source`) and
+  unsubscribes it (`unsubscribe_calendar_source`): the source disconnects at once
+  and the `calendar.purge_source` job deletes its events, archives its calendar and
+  retires its credential. How many sources a user keeps, and how fast they add them,
+  are bounded (`ANGEE_CALENDAR_SOURCES_PER_OWNER`, `ANGEE_CALENDAR_SUBSCRIBE_RATE`).
+  The new `angee.calendar_integrate_ics` addon is the read-only `ics` backend: any
+  signed-in user subscribes to a feed (`webcal://` reads as `https://`), whose
+  address is the source credential's material; it is polled with a conditional GET
+  through integrate's bounded download and parsed by python-icalendar (`VEVENT`,
+  `VTIMEZONE`, `RRULE`, `EXDATE`, `RECURRENCE-ID`). It seeds the `ics` vendor in the
+  master tier.
+  **Host upgrade:** add `angee.calendar_integrate_ics` to `INSTALLED_APPS` beside
+  `angee.calendar` and install its distribution (it requires `icalendar`); write the
+  `calendar` migration with `makemigrations calendar` (`CalendarSource`, a calendar's
+  `source` and `is_archived`, calendar statements and their history, and the event
+  recurrence's daily floor; the ICS addon has no tables); then `migrate`,
+  `rebac --skip-checks sync --prune-stale --yes` (calendar revision 4) and
+  `resources load` (the `ics` vendor).
+- One Google OAuth client per deployment serves every Google feature. The new
+  `angee.integrate_google` addon owns the `google` provider preset and seeds the
+  deployment's blank `google` client and Google's public `gemini` client
+  ([Register the deployment's Google client](docs/howto/google-oauth-client.md)).
+  `iam_integrate_oidc` depends on it and no longer ships `GoogleType` or the demo
+  `google` row; it turns sign-in on for a `google` row the load creates, never for
+  an existing one.
+- A resource entry may declare `create_only` fields: they reach a row only when
+  the load creates it (through any of its entries or an owner verb), never an
+  adopted, existing or re-applied row, and they stay out of the row hash like
+  transition-owned state. Adding it to a shipped entry re-applies that entry's
+  existing rows once.
+  `angee.resources.models.move_seed_ledger` moves seed ledger rows to the addon
+  that now ships them in a data migration; the Anthropic and Gemini steps use it.
+- Consumers declare the scopes they need (`IntegrationImpl.oauth_scopes`).
+  Credentials are keyed by (user, OAuth client, external account), so one user
+  connects several accounts through one client, and an integration stays bound to
+  the account it was connected as (`account_switch_refused`). The integration
+  resource's `account` is no longer updatable: the binding follows the credential,
+  and only ownership transfer releases it, detaching the previous owner's
+  credential and disconnecting the integration in the same transaction. When the
+  provider can be asked for consent again (`OAuthProviderType.authorize_params`),
+  a connect whose grant lacks the refresh token a refreshable client needs restarts
+  asking for it (`consent_required`); one whose grant drops a scope an attached
+  integration uses is refused (`scope_not_granted`). Retired provider keys
+  (`OAuthProviderType.retired`) still load but are not offered for new clients.
+- `integrate.OAuthClient` owns `issuer` and `jwks_uri`, and ID-token verification
+  (with `ANGEE_OIDC_JWKS_TTL` and `pyjwt`) moved into `integrate`; the fake
+  OpenID provider moved to `angee.integrate.testing.oidc`.
+- **Upgrade.** Projects author the schema migration: the two credential constraints
+  replace `uniq_integrate_credential_user_oauth_client`, and `issuer`/`jwks_uri`
+  move to the base model (new columns where the login addon was absent). The
+  reverse migration fails once any user holds two accounts at one client. For the
+  data, copy the migration templates into `runtime/<app_label>/migrations/` and
+  replace their placeholder dependencies with the host's own migrations:
+  - `integrate_google/compose_migrations/integrate/align_google_clients.py` fills the
+    preset's endpoints, catalogue and `include_granted_scopes` on existing
+    `google`-type clients (the demo row included), never replacing client ids,
+    secrets or values an operator set;
+  - `integrate_google/compose_migrations/resources/rehome_gemini_seed.py` moves the
+    `oauth_gemini` seed's ledger row from `integrate` to `integrate_google` (its
+    content is unchanged), so the row is not re-applied;
+  - bridges `posts_integrate_youtube/compose_migrations/integrate/move_youtube_client_to_google.py`,
+    before `align_google_clients` (see its README).
+- **Re-applied seed rows.** On the first provision after upgrading, the
+  `oauth_google` seed adopts an existing `google`/`prod` client and sets its
+  provider type, display name and icon; without the ledger step, the `oauth_gemini`
+  row re-applies its released values. No other OAuth seed row changes.
+
+- `MCPServer.authorization_for(agent)` owns the whole `Authorization` value an MCP
+  server receives, for the in-process transport and the provisioned `.mcp.json`
+  alike. Breaking for consumers and provisioned agents:
+  - the container env var is renamed `ANGEE_MCP_BEARER_<sqid>` →
+    `ANGEE_MCP_AUTHORIZATION_<sqid>` and now carries the whole header value
+    (`Bearer …` or `Basic …`); `.mcp.json` renders `"Authorization": "${VAR}"`;
+  - `Agent.mcp_bearer_env` is renamed `Agent.mcp_authorization_env`, and
+    `MCPServer.config_entry(bearer_env=…)` takes `authorization_env=…`;
+  - `MCPServer.bearer_for` mints only an internal server's per-agent bearer and
+    refuses other placements, which receive `authorization_for`;
+  - an external server sends its credential's own header: a basic-auth credential
+    sends `Basic`, and a static token or OAuth sends `Bearer` (refreshed first);
+    before, every kind's secret was sent as `Bearer`;
+  - MCP credential kinds are restricted, and `MCPServer.clean` enforces it at save.
+    External servers take a static token, OAuth or basic auth. An internal server
+    takes only an active static token of at least 32 characters (stripped) that no
+    other server, agent or integration references; an external server may not hold an
+    internal key;
+  - the internal HMAC now binds the server's sqid, an empty or weak key mints and
+    verifies nothing (no `<sqid>.<HMAC("", sqid)>` forgery), and revoking the key cuts
+    every agent bearer off.
+
+  Reprovision every agent with MCP servers. Reprovision now re-renders the
+  workspace's `.mcp.json` (`OperatorDaemon.update_workspace`, `PATCH /workspaces/{name}`)
+  and refuses a locally modified one rather than overwriting it. The demo internal
+  server's key is generated at load by the `agents.mcpserverkey` resource kind; the
+  committed `demo-mcp-bearer-token` credential row is gone (an existing database keeps it
+  orphaned until deleted).
+- `integrate` gains the `jwt_bearer` credential kind: a pasted provider key file (a
+  Google service-account key is one accepted vocabulary) minting per-scope access
+  tokens through the RFC 7523 JWT bearer grant, via `Credential.auth_headers(scopes=…)`
+  or `Credential.scoped_access_token(scopes)`. `CredentialKindHandler` gains `clean`,
+  `probe`, `mint_access_token` and `records_failure`. A `jwt_bearer` credential's
+  `secret_value()` is empty, so its signing key is never revealed or sent as a bearer.
+  `Integration.probe_credential()` refuses any credential that needs reconnecting
+  ("Reconnect this account.") before the kind's probe.
+
+- Notion connections connect through Notion's public-integration OAuth from the
+  saved record's **Connect** action; an internal integration's API token remains an
+  alternative. `angee.knowledge_integrate_notion` installs a `notion` OAuth
+  registration whose `notion` preset seeds Notion's endpoints, per-user `owner`,
+  HTTP Basic client authentication and token-response identity; the deployment
+  supplies the client id and secret. `OAuthClient` gains
+  `token_endpoint_auth_method` (`client_secret_post` or `client_secret_basic`,
+  honoured by both token-request formats) and `token_identity_keys` (the non-secret
+  token-response keys connect reads the account from when userinfo cannot; token
+  material is never among them). Projects author the `integrate` migration that
+  adds both columns. The token-response keys were previously hard-coded as
+  `account`/`organization` for every registration; Anthropic's install rows now
+  declare them, and a resource reload updates existing rows.
+- `connectIntegrationAction()` in `@angee/integrate` is the saved record's OAuth
+  Connect child a vendor addon contributes at its own model's `#actions`; posts
+  composes it, so `FeedConnectAction` and the `ConnectIntegration` re-export are
+  removed.
+- The Notion Markdown converter supports embeds, link previews and meeting notes,
+  labels links that export no text by their kind, and removes the tabs Notion nests
+  a heading's, paragraph's, quote's or container's children by (lists keep theirs;
+  fences and tables keep their opener's). Toggle-heading children are no longer
+  rendered as code, and pages carrying those blocks are no longer quarantined. The
+  Notion mapping version advances, so the next sync re-reads every connection.
+
 - `Message.objects.compose_reply` composes an email reply as a complete envelope:
   addressed to the parent's `Reply-To` when it carries one, else its sender (RFC
   5322 §3.6.2; `Message.reply_addresses(actor=)` is the one reader of `Reply-To`:
@@ -408,6 +719,13 @@ live in code docstrings.
 - The provenance typing plugin preserves its declared protocol when Django
   has no configured storage setting; it does not invent that setting. Bare-host
   fixtures declare the required settings of the capabilities they exercise.
+- The provenance typing plugin types an abstract composed source's history and
+  statement rows as those of the model registered under its label (a `Project`
+  source's `history` yields `HistoricalProject`); only a pure mixin keeps its
+  declaration's row bound. `StatementPair.statements` is typed as its descriptor,
+  so a pair row reads its statements as the class does. Framework `merge_policies`
+  redeclarations take the owner's `ClassVar[Mapping[str, Any]]`, so a consumer
+  donor composing another owner-typed base passes mypy's base-compatibility check.
 - Source retirement: `ChangesetQuerySet.history_written_only_by(record, predicate)`
   shares document history selection with `touching_filter`, requires a creation
   snapshot and refuses unmatched or unattributed writes. The reference owner adds

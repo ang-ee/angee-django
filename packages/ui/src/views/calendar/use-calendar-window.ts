@@ -1,12 +1,14 @@
 import { useMemo, type ReactNode } from "react";
 import {
-  useAuthoredQuery,
+  useAuthoredQueryBatch,
   type AuthoredDocument,
-  type AuthoredQueryOptions,
+  type AuthoredQueryBatchScope,
   type AuthoredVariables,
   type DocumentData,
 } from "@angee/refine";
-import { useCanonicalResourceModelLabels } from "@angee/metadata";
+import { canonicalResourceModelLabels, useSchemaFieldMetadata } from "@angee/metadata";
+
+import type { LabelKey } from "../../lib/labels";
 
 import type { CalendarWindow, Occurrence } from "./CalendarView";
 
@@ -47,8 +49,8 @@ export interface CalendarWindowSource<TDocument extends AuthoredDocument> {
    * gets a toolbar toggle that hides or shows its occurrences.
    */
   key?: string;
-  /** The toolbar toggle's label; requires `key`. */
-  label?: ReactNode;
+  /** The toolbar toggle's label, rendered content or an addon message key; requires `key`. */
+  label?: ReactNode | LabelKey;
   /** The authored occurrence query returning the occurrence wire shape. */
   document: TDocument;
   /** Build the query variables for a window — the source owns its argument names (compose `calendarWindowBounds`). */
@@ -86,6 +88,7 @@ export function calendarWindowSource<TDocument extends AuthoredDocument>(
   return source as AnyCalendarWindowSource;
 }
 
+/** The merged fetch across a page's occurrence sources for one window. */
 export interface UseCalendarWindowResult {
   occurrences: readonly Occurrence[];
   fetching: boolean;
@@ -93,39 +96,85 @@ export interface UseCalendarWindowResult {
   refetch: () => void;
 }
 
+export interface CalendarWindowOptions {
+  /** Keys of sources whose occurrences stay off the grid: they leave the batch, so nothing fetches for them. */
+  hidden?: ReadonlySet<string>;
+  /** Skip every fetch while false (e.g. before the grid reports its window). */
+  enabled?: boolean;
+}
+
 const NO_OCCURRENCES: readonly Occurrence[] = [];
+const dataIdentities = new WeakMap<object, number>();
+let nextDataIdentity = 0;
+
+/** A key naming each result's identity: query data is structurally shared, so unchanged data keeps its key. */
+function dataIdentityKey(results: readonly unknown[]): string {
+  return results.map((data) => {
+    if (typeof data !== "object" || data === null) return String(data);
+    let identity = dataIdentities.get(data);
+    if (identity === undefined) {
+      identity = ++nextDataIdentity;
+      dataIdentities.set(data, identity);
+    }
+    return `#${identity}`;
+  }).join(",");
+}
 
 /**
- * The window adapter: fetch a source's occurrences for a window and hand them to
- * {@link CalendarView} in the occurrence wire shape, refetching when the window
- * changes. Transport is the `@angee/refine` authored-query owner
- * ({@link useAuthoredQuery}) — the window bounds ride the query variables, so a
- * new window is a new key and the owner refetches; the caller stays a thin
- * composer and never re-authors the mapping per page.
+ * The window adapter: fetch a page's occurrence sources for a window and hand
+ * {@link CalendarView} their occurrences in the wire shape, refetching when the
+ * window changes. Transport is one `@angee/refine` batch read
+ * ({@link useAuthoredQueryBatch}) over every shown source, so a source set that
+ * grows or shrinks (a calendar list loading, a toggle) changes no hook order and
+ * never remounts the grid; sources sharing a document and variables share one
+ * request. The window bounds ride each source's variables, so a new window is a
+ * new key and the owner refetches. A hidden source, and one that opts out
+ * (`enabled: false`), leave the batch. The sources share one data provider.
  * @owner CalendarView
  */
-export function useCalendarWindow<TDocument extends AuthoredDocument>(
-  source: CalendarWindowSource<TDocument>,
+export function useCalendarWindow(
+  sources: readonly AnyCalendarWindowSource[],
   window: CalendarWindow,
+  { hidden, enabled = true }: CalendarWindowOptions = {},
 ): UseCalendarWindowResult {
-  const canonicalModels = useCanonicalResourceModelLabels(source.models);
-  const options: AuthoredQueryOptions = {
-    models: canonicalModels,
-    dataProviderName: source.dataProviderName,
-    enabled: source.enabled,
-  };
-  const query = useAuthoredQuery(source.document, source.variables(window), options);
-  // FullCalendar compares its events option element-wise by reference, so a new
-  // selected array each render re-parses the source. `query.data` is stable
-  // across renders (react-query structural sharing), so memoize the projection.
+  const metadata = useSchemaFieldMetadata();
+  const shown = useMemo(
+    () => sources.filter((source) => (source.key === undefined || !hidden?.has(source.key)) && (source.enabled ?? true)),
+    [sources, hidden],
+  );
+  const providers = new Set(shown.map((source) => source.dataProviderName));
+  if (providers.size > 1) throw new Error("A calendar's occurrence sources must share one data provider.");
+  const scopes = useMemo<readonly AuthoredQueryBatchScope<AuthoredDocument>[]>(
+    () => shown.map((source, index) => ({
+      // Source keys hold only letters, digits, `_`, `-` and `.`; an unkeyed one is labelled by position.
+      key: source.key ?? `#${index}`,
+      document: source.document,
+      variables: source.variables(window),
+      models: canonicalResourceModelLabels(metadata, source.models),
+    })),
+    [shown, window, metadata],
+  );
+  const results = useAuthoredQueryBatch(scopes, { enabled, dataProviderName: shown[0]?.dataProviderName });
+  const answered = scopes.map((scope) => results.get(scope.key));
+  const data = answered.map((result) => result?.data);
+  const dataKey = dataIdentityKey(data);
+  // FullCalendar compares its events option element-wise by reference, so the merged
+  // array changes only when a source or one of its results does.
   const occurrences = useMemo(
-    () => source.select(query.data) ?? NO_OCCURRENCES,
-    [source, query.data],
+    () => {
+      const parts = shown.map((source, index) => source.select(data[index] as never) ?? NO_OCCURRENCES);
+      if (parts.length === 0) return NO_OCCURRENCES;
+      return parts.length === 1 ? parts[0]! : parts.flat();
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [shown, dataKey],
   );
   return {
     occurrences,
-    fetching: query.isFetching,
-    error: query.error,
-    refetch: query.refetch,
+    fetching: answered.some((result) => result?.isFetching === true),
+    error: answered.find((result) => result?.error)?.error ?? null,
+    refetch: () => {
+      for (const result of answered) void result?.refetch();
+    },
   };
 }

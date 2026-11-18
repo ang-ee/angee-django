@@ -13,6 +13,7 @@ import type {
 } from "@base-ui/react/menu";
 
 import { Glyph } from "../chrome/Glyph";
+import { useActionMenuItem } from "./action-menu-context";
 import { useInAppLink } from "../lib/in-app-link";
 import { tv, type VariantProps } from "../lib/variants";
 import { POPUP_BASE } from "./popover";
@@ -270,6 +271,7 @@ export function createStyledMenuParts(
     { className, inset = false, variant = "default", ...props },
     ref,
   ) {
+    useActionMenuItem();
     const styles = recipe({ inset, variant });
     return (
       <BaseMenu.Item
@@ -286,6 +288,7 @@ export function createStyledMenuParts(
       { className, inset = false, variant = "default", href, onClick, ...props },
       ref,
     ) {
+      useActionMenuItem();
       const styles = recipe({ inset, variant });
       const link = useInAppLink(href, { ...props, onClick });
       return (
@@ -306,6 +309,7 @@ export function createStyledMenuParts(
       { className, inset = true, variant = "default", ...props },
       ref,
     ) {
+      useActionMenuItem();
       const styles = recipe({ inset, variant });
       return (
         <BaseMenu.CheckboxItem
@@ -343,6 +347,7 @@ export function createStyledMenuParts(
       { className, inset = true, variant = "default", ...props },
       ref,
     ) {
+      useActionMenuItem();
       const styles = recipe({ inset, variant });
       return (
         <BaseMenu.RadioItem
@@ -384,6 +389,7 @@ export function createStyledMenuParts(
       },
       ref,
     ) {
+      useActionMenuItem();
       const styles = recipe({ inset, variant });
       return (
         <BaseMenu.SubmenuTrigger

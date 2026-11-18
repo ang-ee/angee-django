@@ -1,6 +1,6 @@
 import * as React from "react";
 import { set, useForm, useWatch, type FieldErrors } from "react-hook-form";
-import { stringValue as wireStringValue } from "@angee/refine";
+import { stringValue as wireStringValue, type AuthoredMutateOptions } from "@angee/refine";
 import { format } from "date-fns";
 
 import { DialogForm } from "../../fragments/DialogForm";
@@ -13,7 +13,9 @@ import { dateFromUnknown } from "../../widgets/date-format";
 import { emptyValueForField, isStructuredPresenceField, structuredFieldErrorPaths } from "./field-values";
 import { isFieldControlVisible } from "./form-view-model";
 import { DescriptorFieldList, resolveDescriptorFields, type DescriptorField } from "./DescriptorFieldList";
-import { applyFormErrors, formSubmitError, invalidFormSubmit, type FormSubmitResult, type ValidationErrors } from "./validation-errors";
+import {
+  applyFormErrors, formSubmitError, invalidFormSubmit, savedFormSubmitResult, type FormSubmitResult, type ValidationErrors,
+} from "./validation-errors";
 import { useFieldValidation } from "./use-field-validation";
 import { ActionFormProvider } from "./ActionFormProvider";
 import { useRuntimeViewAs } from "../../runtime";
@@ -106,9 +108,35 @@ export const mutationDialogValueCodecs = {
   },
 } as const;
 
-export interface MutationDialogProps<
+/** The one submission of a {@link MutationDialog}: any `onSubmit`, or an authored `mutation` the dialog runs. */
+export type MutationDialogSubmission<TValues, TResult, TData = TResult> =
+  | {
+      onSubmit: (values: TValues) => FormSubmitResult<TResult> | Promise<FormSubmitResult<TResult>>;
+      mutation?: never;
+      mutationResult?: never;
+    }
+  | {
+      /**
+       * The authored mutation the dialog runs with the parsed values, as
+       * `useAuthoredMutation` (or `useAuthoredResourceMutation`) returns it. The dialog
+       * renders its refusal itself, under the field it names or else in the dialog, so
+       * the call turns refine's generic error notification off: a failure is reported once.
+       */
+      mutation: (variables: TValues, options: AuthoredMutateOptions) => Promise<TData | undefined>;
+      /** Read the mutation's data as the submit result; by default the data is the result. */
+      mutationResult?: (data: TData) => FormSubmitResult<TResult>;
+      onSubmit?: never;
+    };
+
+export type MutationDialogProps<
   TValues extends Record<string, unknown>,
   TResult = unknown,
+  TData = TResult,
+> = MutationDialogBaseProps<TValues, TResult> & MutationDialogSubmission<TValues, TResult, TData>;
+
+interface MutationDialogBaseProps<
+  TValues extends Record<string, unknown>,
+  TResult,
 > {
   /** Controlled visibility. Omit with `trigger` to let the dialog own it. */
   open?: boolean;
@@ -130,7 +158,6 @@ export interface MutationDialogProps<
   validate?: (
     values: TValues,
   ) => ValidationErrors | null | undefined | Promise<ValidationErrors | null | undefined>;
-  onSubmit: (values: TValues) => FormSubmitResult<TResult> | Promise<FormSubmitResult<TResult>>;
   onSubmitted?: (result: TResult, values: TValues) => void;
   closeOnSubmit?: boolean;
   /** Additional domain readiness gate evaluated from the current raw form values. */
@@ -143,13 +170,15 @@ export interface MutationDialogProps<
  * FieldDescriptor-driven mutation dialog for addon toolbar actions. It owns the
  * copied dialog ceremony: reset-on-close, value state, required gating,
  * submit busy/error state, and rendering descriptor fields through the shared
- * widget registry.
+ * widget registry. It reports a failure once: under the field a refusal names,
+ * else in the dialog; an authored `mutation` it runs raises no toast besides.
  * @kind surface
  */
 export function MutationDialog<
   TValues extends Record<string, unknown>,
   TResult = unknown,
->(props: MutationDialogProps<TValues, TResult>): React.ReactElement | null {
+  TData = TResult,
+>(props: MutationDialogProps<TValues, TResult, TData>): React.ReactElement | null {
   const [open, setOpen] = React.useState(false);
   const controlled = props.open !== undefined;
   const visible = props.open ?? open;
@@ -161,7 +190,28 @@ export function MutationDialog<
   return <MutationDialogInstance {...props} open={visible} onOpenChange={onOpenChange} />;
 }
 
-function MutationDialogInstance<TValues extends Record<string, unknown>, TResult>({
+/**
+ * Run a dialog's one submission: its `onSubmit`, or its authored `mutation` with the
+ * generic error notification off (the dialog renders the refusal). A mutation that
+ * returns no data does not acknowledge the dialog: it fails with `fallback`.
+ * @kind null
+ * @reason Runtime infrastructure: the dialog's submission contract, shared with its test double.
+ */
+export function submitMutationDialog<TValues, TResult, TData>(
+  submission: MutationDialogSubmission<TValues, TResult, TData>,
+  values: TValues,
+  fallback: string,
+): FormSubmitResult<TResult> | Promise<FormSubmitResult<TResult>> {
+  if (!submission.mutation) return submission.onSubmit(values);
+  const { mutation, mutationResult } = submission;
+  return mutation(values, DIALOG_RENDERS_FAILURE).then((data) => data == null
+    ? savedFormSubmitResult<TResult>(null, fallback)
+    : mutationResult ? mutationResult(data) : { status: "ok", data: data as unknown as TResult });
+}
+
+const DIALOG_RENDERS_FAILURE: AuthoredMutateOptions = { errorNotification: false };
+
+function MutationDialogInstance<TValues extends Record<string, unknown>, TResult, TData>({
   open,
   onOpenChange,
   title,
@@ -175,13 +225,16 @@ function MutationDialogInstance<TValues extends Record<string, unknown>, TResult
   parseValues,
   validate,
   onSubmit,
+  mutation,
+  mutationResult,
   onSubmitted,
   closeOnSubmit = true,
   canSubmit,
   size = "md",
   placement = "prompt",
   trigger,
-}: Omit<MutationDialogProps<TValues, TResult>, "open" | "onOpenChange"> & {
+}: Omit<MutationDialogBaseProps<TValues, TResult>, "open" | "onOpenChange">
+  & MutationDialogSubmission<TValues, TResult, TData> & {
   open: boolean;
   onOpenChange: (open: boolean) => void;
 }): React.ReactElement {
@@ -270,7 +323,8 @@ function MutationDialogInstance<TValues extends Record<string, unknown>, TResult
         await allowRootErrorRetry();
         return;
       }
-      const result = await onSubmit(submittedValues);
+      const submission = (mutation ? { mutation, mutationResult } : { onSubmit }) as MutationDialogSubmission<TValues, TResult, TData>;
+      const result = await submitMutationDialog(submission, submittedValues, errorOptions.fallback);
       if (!mounted.current || session.current !== submittedSession) return;
       if (applyFormErrors(form, result, errorOptions)) {
         await allowRootErrorRetry();

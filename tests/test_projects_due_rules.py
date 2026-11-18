@@ -23,11 +23,7 @@ from rebac import (
     write_relationships,
 )
 
-from angee.projects.compose_migrations.projects.task_recurrence_due_rule import (
-    applies,
-    calendar_rule,
-    task_due_rule,
-)
+from angee.projects.compose_migrations.projects.task_recurrence_due_rule import calendar_rule, task_due_rule
 from angee.projects.testing.models import Milestone, Project, Task
 from angee.scheduling.due import Align, Anchor, Due, DueRule, DueStatus, Offset, Repeat, Term
 from tests.test_projects_statements import Source
@@ -173,6 +169,23 @@ def test_an_insert_with_a_date_holds_and_one_without_follows() -> None:
     assert _reload(_task(owner, project, due_rule=ON_LAST_SLOT, due_date=date(2026, 12, 2))).due_held()
     following = _reload(_task(owner, project, due_rule=ON_LAST_SLOT))
     assert (following.due_date, following.due_held()) == (date(2026, 12, 14), False)
+
+
+@pytest.mark.parametrize("blank", [pytest.param({}, id="empty-object"), pytest.param("", id="empty-string")])
+def test_a_blank_rule_is_no_rule_so_the_date_stays_a_persons(blank: Any) -> None:
+    owner = _user("due-blank")
+    project = _project(owner)
+    _anchor(owner, project, "last_slot", date(2026, 12, 14))
+    undated = _reload(_task(owner, project, due_rule=blank))
+    assert (undated.due_rule, undated.due_basis, undated.due_date) == (None, {}, None)
+    dated = _reload(_task(owner, project, due_rule=blank, due_date=date(2026, 12, 2)))
+    assert (dated.due_rule, dated.due_basis, dated.due_date) == (None, {}, date(2026, 12, 2))
+    with actor_context(owner):
+        ruled = Task.objects.get(pk=_task(owner, project, due_rule=ON_LAST_SLOT).pk)
+        ruled.due_rule = blank
+        ruled.save()
+    cleared = _reload(ruled)
+    assert (cleared.due_rule, cleared.due_basis, cleared.due_date) == (None, {}, date(2026, 12, 14))
 
 
 def test_a_task_following_its_rule_moves_with_a_rule_edit() -> None:
@@ -430,11 +443,3 @@ def test_the_recurrence_upgrade_keeps_the_date_and_turns_count_into_until() -> N
     with pytest.raises((ValidationError, ValueError)):
         task_due_rule("FREQ=SOMETIMES", due_date=None, created_at=created)
 
-
-def test_the_recurrence_upgrade_applies_while_the_column_exists() -> None:
-    class State:
-        def __init__(self, fields: tuple[str, ...]) -> None:
-            self.models = {("projects", "task"): type("TaskState", (), {"fields": dict.fromkeys(fields)})()}
-
-    assert applies(State(("title", "recurrence")))
-    assert not applies(State(("title", "due_rule")))

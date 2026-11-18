@@ -1,4 +1,8 @@
-"""OIDC OAuth provider presets contributed by the login addon."""
+"""The generic OIDC login preset contributed by the login addon.
+
+Vendor presets (``integrate_google``) carry no login policy; this addon sets it on
+the vendor rows it signs users in with, through its install seed.
+"""
 
 from __future__ import annotations
 
@@ -33,38 +37,3 @@ class GenericOidc(OAuthProviderType):
         "avatar_url_claim": "picture",
     }
 
-
-class GoogleType(GenericOidc):
-    """Google OpenID Connect provider preset."""
-
-    key = "google"
-    label = "Google"
-    icon = "google"
-    defaults = {
-        "discovery_url": "https://accounts.google.com/.well-known/openid-configuration",
-        "issuer": "https://accounts.google.com",
-        "jwks_uri": "https://www.googleapis.com/oauth2/v3/certs",
-        "authorize_endpoint": "https://accounts.google.com/o/oauth2/v2/auth",
-        "token_endpoint": "https://oauth2.googleapis.com/token",
-        "userinfo_endpoint": "https://openidconnect.googleapis.com/v1/userinfo",
-        "authorize_params": {"access_type": "offline"},
-        "external_id_claim": "sub",
-        "email_claim": "email",
-        "display_name_claim": "name",
-        "avatar_url_claim": "picture",
-        "scopes_catalogue": [
-            "openid",
-            "profile",
-            "email",
-            "https://www.googleapis.com/auth/cloud-platform",
-            "https://www.googleapis.com/auth/userinfo.email",
-            "https://www.googleapis.com/auth/userinfo.profile",
-        ],
-        "default_scopes": [
-            "openid",
-            "profile",
-            "email",
-            "https://www.googleapis.com/auth/userinfo.email",
-            "https://www.googleapis.com/auth/userinfo.profile",
-        ],
-    }

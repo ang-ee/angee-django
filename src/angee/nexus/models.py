@@ -21,7 +21,8 @@ from __future__ import annotations
 
 import datetime
 import math
-from typing import Any
+from collections.abc import Mapping
+from typing import Any, ClassVar
 
 from django.apps import apps
 from django.conf import settings
@@ -44,7 +45,7 @@ class Tie(AngeeDataModel, concrete=True):
     """
 
     sqid_prefix = "tie_"
-    merge_policies = {"party_a": MergePolicy.KEEP, "party_b": MergePolicy.KEEP}
+    merge_policies: ClassVar[Mapping[str, Any]] = {"party_a": MergePolicy.KEEP, "party_b": MergePolicy.KEEP}
 
     party_a = models.ForeignKey(
         "parties.Party",

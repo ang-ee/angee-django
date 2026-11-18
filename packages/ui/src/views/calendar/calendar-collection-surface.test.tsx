@@ -15,7 +15,8 @@ import { InAppLinkProvider, type InAppNavigator } from "../../lib/in-app-link";
 const mocks = vi.hoisted(() => ({
   navigate: vi.fn(),
   calendarProps: undefined as CalendarViewProps | undefined,
-  windowCalls: [] as Array<{ enabled: boolean | undefined; key?: string }>,
+  gridMounts: 0,
+  windowCalls: [] as Array<{ enabled: boolean | undefined; hidden: string[]; keys: Array<string | undefined> }>,
   resultFor: undefined as ((source: AnyCalendarWindowSource) => {
     occurrences: readonly Occurrence[]; fetching: boolean; error: Error | null; refetch: () => void;
   }) | undefined,
@@ -34,14 +35,25 @@ vi.mock("@tanstack/react-router", () => ({
 vi.mock("./CalendarView", () => ({
   CalendarView: (props: CalendarViewProps) => {
     mocks.calendarProps = props;
+    React.useEffect(() => {
+      mocks.gridMounts += 1;
+    }, []);
     return <div data-testid="calendar-view" />;
   },
 }));
 
 vi.mock("./use-calendar-window", () => ({
-  useCalendarWindow: (source: AnyCalendarWindowSource) => {
-    mocks.windowCalls.push({ enabled: source.enabled, key: source.key });
-    return mocks.resultFor?.(source) ?? mocks.result;
+  useCalendarWindow: (
+    sources: readonly AnyCalendarWindowSource[],
+    _window: unknown,
+    options: { hidden?: ReadonlySet<string>; enabled?: boolean } = {},
+  ) => {
+    mocks.windowCalls.push({
+      enabled: options.enabled, hidden: [...(options.hidden ?? [])], keys: sources.map((source) => source.key),
+    });
+    if (!mocks.resultFor) return mocks.result;
+    const shown = sources.filter((source) => source.key === undefined || !options.hidden?.has(source.key));
+    return { ...mocks.result, occurrences: shown.flatMap((source) => mocks.resultFor!(source).occurrences) };
   },
 }));
 
@@ -93,6 +105,7 @@ const OCC_NO_ROUTE: Occurrence = { ...OCC_WITH_ROUTE, occurrence_id: "cev_b", to
 beforeEach(() => {
   mocks.navigate.mockClear();
   mocks.calendarProps = undefined;
+  mocks.gridMounts = 0;
   mocks.windowCalls = [];
   mocks.resultFor = undefined;
   mocks.result = {
@@ -118,7 +131,7 @@ describe("CalendarCollectionSurface", () => {
     mocks.windowCalls = [];
     fireEvent.click(within(toggles).getByRole("button", { name: "Agenda" }));
     expect(mocks.calendarProps?.occurrences.map((occurrence) => occurrence.occurrence_id)).toEqual(["events"]);
-    expect(mocks.windowCalls.filter((call) => call.key === "agenda").every((call) => call.enabled === false)).toBe(true);
+    expect(mocks.windowCalls.at(-1)?.hidden).toEqual(["agenda"]);
     expect(within(toggles).getByRole("button", { name: "Agenda" }).getAttribute("aria-pressed")).toBe("false");
   });
 
@@ -159,6 +172,33 @@ describe("CalendarCollectionSurface", () => {
     fireEvent.click(screen.getByRole("button", { name: "Show all" }));
     expect(screen.getByRole("button", { name: "Agenda" }).getAttribute("aria-pressed")).toBe("true");
     expect(screen.queryByText("Every source is hidden, so the calendar shows nothing.")).toBeNull();
+  });
+
+  test("the grid stays mounted while the source set grows and shrinks", () => {
+    const events = { ...SOURCE, key: "events", label: "Events" } as AnyCalendarWindowSource;
+    const agenda = { ...SOURCE, key: "agenda", label: "Agenda" } as AnyCalendarWindowSource;
+    const view = render(
+      <ResourceViewProvider scope="local" resource="calendar.Event" initialState={{ view: "calendar", anchor: "2026-06-15" }}>
+        <Harness spec={surfaceProps({ sources: [events] })} />
+      </ResourceViewProvider>,
+    );
+    for (const sources of [[events, agenda], [events]]) {
+      view.rerender(
+        <ResourceViewProvider scope="local" resource="calendar.Event" initialState={{ view: "calendar", anchor: "2026-06-15" }}>
+          <Harness spec={surfaceProps({ sources })} />
+        </ResourceViewProvider>,
+      );
+    }
+    expect(mocks.gridMounts).toBe(1);
+    expect(mocks.windowCalls.at(-1)?.keys).toEqual(["events"]);
+  });
+
+  test("a source label may name an addon message key", () => {
+    const keyed = { ...SOURCE, key: "tasks", label: { namespace: "tasks", key: "source.mine", fallback: "My tasks" } };
+    const other = { ...SOURCE, key: "events", label: "Events" } as AnyCalendarWindowSource;
+    expect(calendarSourceToggles([keyed as AnyCalendarWindowSource, other])[0]).toEqual({ value: "tasks", label: "My tasks" });
+    const i18n = { getFixedT: () => (key: string) => `translated ${key}` };
+    expect(calendarSourceToggles([keyed as AnyCalendarWindowSource, other], i18n)[0]?.label).toBe("translated source.mine");
   });
 
   test("source toggles need unique keys a URL carries; one source gets none", () => {
@@ -212,6 +252,7 @@ describe("CalendarCollectionSurface", () => {
     mocks.calendarProps?.onSelectRange?.(
       new Date("2026-06-17T14:00:00.000Z"),
       new Date("2026-06-17T15:00:00.000Z"),
+      false,
     );
     expect(onSelectRange).toHaveBeenCalledTimes(1);
   });

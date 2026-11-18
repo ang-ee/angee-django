@@ -1,10 +1,9 @@
-import { useAuthoredMutation } from "@angee/refine";
 import * as React from "react";
 import { Action, Column, ResourceList, Field, Form, Group, List, useEnumOptions, useImplPrefill, useRecordAction, useRecordActionMutation, useRouteHref, type RecordActionRunner } from "@angee/ui";
 import type { ActionFieldName } from "@angee/gql/console/actions";
 
 import { useIntegrateT } from "../../i18n";
-import { IntegrateConnectAccountStart } from "../documents.public";
+import { useConnectAccountStart } from "../ConnectAccountButton";
 import { connectCallbackRedirectUri } from "../redirects";
 import { useOAuthAuthorization } from "../use-oauth-authorization";
 
@@ -22,9 +21,11 @@ const providerList = (
 
 // The registration owner's readiness rule (`OAuthClient.configuration_state`)
 // admits discovery-backed endpoints, which the connect flow resolves at startup.
+// It is no form field, so the form reads it (`returning`) for this predicate.
 function canConnectAccount(record: Record<string, unknown>): boolean {
   return record.configuration_state === "ready";
 }
+const CONNECT_READS = ["configuration_state"];
 
 function fieldString(value: unknown): string {
   return typeof value === "string" ? value.trim() : "";
@@ -34,7 +35,7 @@ function fieldString(value: unknown): string {
 export function ProvidersPage(): React.ReactElement {
   const t = useIntegrateT();
   const routeHref = useRouteHref();
-  const [connectAccountStart] = useAuthoredMutation(IntegrateConnectAccountStart);
+  const connectAccountStart = useConnectAccountStart();
   const { authorize } = useOAuthAuthorization();
   // Fill and persist transport endpoints from the client's discovery URL.
   const [discover] = useRecordActionMutation<ActionFieldName>(
@@ -45,12 +46,11 @@ export function ProvidersPage(): React.ReactElement {
   const connectById = React.useCallback<RecordActionRunner>(
     async (id, ctx) => {
       if (typeof window === "undefined") return;
-      const result = await connectAccountStart({
+      const payload = await connectAccountStart({
         id,
         redirectUri: connectCallbackRedirectUri(),
         next: routeHref("integrate.accounts"),
       });
-      const payload = result?.connect_account_start;
       if (!payload?.authorize_url) {
         throw new Error(payload?.error ?? t("providers.connect.startError"));
       }
@@ -76,7 +76,7 @@ export function ProvidersPage(): React.ReactElement {
   return (
     <ResourceList resource={MODEL} placement="inline" routed>
       {providerList}
-      <Form resource={MODEL}>
+      <Form resource={MODEL} returning={CONNECT_READS}>
         <Field name="display_name" title />
         <Group label={t("providers.group.client")} columns={2}>
           <Field
@@ -96,11 +96,14 @@ export function ProvidersPage(): React.ReactElement {
         </Group>
         <Group label={t("providers.group.endpoints")} columns={2}>
           <Field name="discovery_url" />
+          <Field name="issuer" />
+          <Field name="jwks_uri" />
           <Field name="authorize_endpoint" />
           <Field name="token_endpoint" />
           <Field name="revoke_endpoint" />
           <Field name="userinfo_endpoint" />
           <Field name="token_request_format" />
+          <Field name="token_endpoint_auth_method" />
           <Field name="manual_redirect_uri" />
         </Group>
         <Group label={t("providers.group.behavior")} columns={2}>
@@ -119,6 +122,7 @@ export function ProvidersPage(): React.ReactElement {
           <Field name="email_claim" />
           <Field name="display_name_claim" />
           <Field name="avatar_url_claim" />
+          <Field name="token_identity_keys" widget="tagInput" />
         </Group>
         <Group label={t("providers.group.oauthMetadata")} columns={2}>
           <Field name="authorize_params" />

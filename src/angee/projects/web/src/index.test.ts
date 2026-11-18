@@ -1,3 +1,4 @@
+import { composeAddons } from "@angee/app";
 import { expectValidBaseAddon } from "@angee/app/testing";
 import type { ChatterTabContent, ChatterViewContext, ContainerChild } from "@angee/ui/runtime";
 import { describe, expect, test } from "vitest";
@@ -23,5 +24,12 @@ describe("projects addon manifest", () => {
     expect(offered([TASK_MODEL])).toBe(true);
     expect(offered(["messaging.ThreadAttachment", "storage.FileAttachment"])).toBe(false);
     expect(offered()).toBe(false);
+  });
+
+  test("composes on a host without a calendar: it names only containers its own requirements declare", () => {
+    // Projects requires timeline (its `timeline#kinds` owner) and no calendar; the
+    // due-task overlay lives in the projects_calendar bridge.
+    const timeline = { id: "timeline", containers: { "timeline#kinds": {} } };
+    expect(() => composeAddons([timeline, projects], { canonicalModelLabel: (model) => model })).not.toThrow();
   });
 });

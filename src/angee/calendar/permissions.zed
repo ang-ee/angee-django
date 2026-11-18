@@ -1,0 +1,92 @@
+// Authorization schema for the calendar addon.
+// @rebac_package: calendar
+// @rebac_package_version: 0.1.0
+// @rebac_schema_revision: 4
+
+// A calendar belongs to one party and is the access root of its events.
+//
+//   - `owner` is the calendar's transferable owner (OwnerMixin), the creator by
+//     default; it or a platform admin transfers it.
+//   - `holder` is the user of the person whose calendar it is, read live through
+//     the party's person (no tuple mirrors it); it writes, shares and deletes its
+//     calendar even when system work created it.
+//   - `reader`, `editor` and `free_busy` are the share surface (`rebac_grantable`):
+//     a `free_busy` grantee sees the calendar's busy time and reads nothing else.
+//   - `party->write` admits a new calendar: whoever may edit a party may give it a
+//     calendar (a person's own user owns their person).
+//   - A calendar source whose retained calendars-stream link names this calendar
+//     states its identity (angee statements). Statement admission reads
+//     `write_statements` alone: a source is in no `read` or `write`, so no event
+//     inheriting them reaches it.
+//
+// Consumers widen `read_granted`, `write`, `share`, `delete` and `transfer` from
+// their own `permissions.extends.zed`, as a company scope does.
+definition calendar/calendar {
+    relation party: parties/party // rebac:field=party
+    relation owner: auth/user // rebac:field=owner
+    relation holder: auth/user // rebac:field=party__person__user
+    relation reader: auth/user | auth/group#member
+    relation editor: auth/user | auth/group#member
+    relation free_busy: auth/user | auth/group#member
+    relation admin: angee/role // rebac:const=admin
+    relation directory: integrate/integration // rebac:field=record_links__stream__integration
+    permission statement_source = directory
+
+    permission create = party->write + admin->member
+    permission write = owner + holder + editor + admin->member
+    permission write_statements = write + statement_source
+    permission read_granted = reader + write
+    permission read = read_granted
+    permission see_busy = read + free_busy
+    permission share = owner + holder + editor + admin->member
+    permission delete = owner + holder + admin->member
+    permission transfer = owner + admin->member
+    permission write__owner = transfer
+}
+
+// An event takes its access from its calendar. Its details follow its
+// visibility: a `default` event is read by the calendar's readers, a `public`
+// one also by its free/busy viewers, and a `private` one only by its writers.
+// Whoever sees the calendar's busy time sees every event's (`see_busy`); the
+// occurrence read projects the events they may not `read` as busy time only.
+definition calendar/event {
+    relation calendar: calendar/calendar // rebac:field=calendar
+    relation default_calendar: calendar/calendar // rebac:field={"path":"calendar","filters":{"visibility":"default"}}
+    relation public_calendar: calendar/calendar // rebac:field={"path":"calendar","filters":{"visibility":"public"}}
+    relation admin: angee/role // rebac:const=admin
+
+    permission create = calendar->write + admin->member
+    permission write = calendar->write + admin->member
+    permission delete = calendar->write + admin->member
+    permission read_granted = default_calendar->read + public_calendar->see_busy + write
+    permission read = read_granted
+    permission see_busy = calendar->see_busy + admin->member
+}
+
+// A calendar source is an integrate.Integration child (a subscribed feed or a
+// connected account), so its access derives from the parent integration the way
+// parties/directory does; platform admins reach all. Any signed-in user may
+// subscribe: the source and its calendar are the subscriber's, who holds the
+// calendar as the person it belongs to.
+definition calendar/calendar_source {
+    relation integration: integrate/integration // rebac:field=integration_ptr
+    relation admin: angee/role // rebac:const=admin
+
+    permission create = authenticated
+    permission read   = integration->read + admin->member
+    permission write  = integration->write + admin->member
+    permission delete = integration->write + admin->member
+    permission write__owner = integration->transfer
+}
+
+// An attendee rides its event, the way an order line rides its order; the handle
+// is a data reference, not a subject.
+definition calendar/event_attendee {
+    relation event: calendar/event // rebac:field=event
+    relation admin: angee/role // rebac:const=admin
+
+    permission read   = event->read + admin->member
+    permission create = event->write + admin->member
+    permission write  = event->write + admin->member
+    permission delete = event->write + admin->member
+}

@@ -26,6 +26,7 @@ import {
   type AppRuntime,
 } from "@angee/ui";
 import {
+  ActiveDataProviderNameProvider,
   createAngeeHasuraDataProviders,
   OperationDocumentsProvider,
   Refine,
@@ -145,8 +146,8 @@ export interface RuntimeFixtureProps {
 
 /**
  * Wrap a data-bound view in the modal host, refine data providers over `schemas`,
- * active schema metadata, and the composed runtime — the stack every fetching
- * view needs to render in isolation.
+ * the active schema's name and metadata, and the composed runtime — the stack every
+ * fetching view needs to render in isolation.
  */
 export function RuntimeFixture({
   activeSchema = "public",
@@ -197,14 +198,17 @@ export function RuntimeFixture({
           liveProvider={liveProvider}
           resources={resources ?? [...refineResourcesFromAngeeSchemaMetadata(normalized[activeSchema]?.metadata)]}
           routerProvider={routed ? tanStackRouterProvider : undefined}
-          options={{ syncWithLocation, ...(queryClient ? { reactQuery: { clientConfig: queryClient } } : {}) }}
+          options={{ syncWithLocation, disableTelemetry: true, ...(queryClient ? { reactQuery: { clientConfig: queryClient } } : {}) }}
         >
           <OperationDocumentsProvider documents={operationDocuments}>
-            <ModelMetadataProvider metadata={fieldMetadata}>
-              <QueryStateAdapter>
-                <ToastProvider><ModalsHost>{children}</ModalsHost></ToastProvider>
-              </QueryStateAdapter>
-            </ModelMetadataProvider>
+            {/* As the app's layout route does: hooks outside a resource surface resolve the active schema. */}
+            <ActiveDataProviderNameProvider name={activeSchema}>
+              <ModelMetadataProvider metadata={fieldMetadata}>
+                <QueryStateAdapter>
+                  <ToastProvider><ModalsHost>{children}</ModalsHost></ToastProvider>
+                </QueryStateAdapter>
+              </ModelMetadataProvider>
+            </ActiveDataProviderNameProvider>
           </OperationDocumentsProvider>
         </Refine>
       </AppearanceProvider>

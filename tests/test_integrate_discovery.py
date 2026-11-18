@@ -28,7 +28,6 @@ from angee.integrate.connect import complete_account_connect, complete_external_
 from angee.integrate.constants import DISCOVERY_ATTEMPT_LIMIT, DISCOVERY_TASK
 from angee.integrate.discovery import ConnectionDiscovery
 from angee.integrate.oauth import state
-from angee.integrate.oauth.errors import OAuthFlowError
 from angee.integrate.schema import (
     IntegrationActionMutation,
     IntegrationCredentialMutation,
@@ -255,12 +254,20 @@ def test_reconsent_preserves_direct_attachments_and_rediscovers_derived_credenti
         assert sibling.discovery_pending and not sibling.discovery_ready
         assert sibling.credential_id == completion.credential.pk
         assert sibling.lifecycle == "paused"
-        with pytest.raises(OAuthFlowError) as refused:
-            complete_external_account_link(
-                client, user=owner, external_id="account-two",
-                tokens={"access_token": "other"}, claims={"sub": "account-two"},
-            )
-        assert refused.value.code == "account_switch_refused"
+        generations = {row.pk: row.discovery_generation for row in (bridge, sibling)}
+        other = complete_external_account_link(
+            client, user=owner, external_id="account-two",
+            tokens={"access_token": "other"}, claims={"sub": "account-two"},
+        )
+        # A second account is a credential of its own; the first account's grant and
+        # the integrations it backs are untouched.
+        assert other.credential.pk != completion.credential.pk
+        completion.credential.refresh_from_db()
+        assert completion.credential.reveal()["access_token"] == "rotated"
+        for row in (bridge, sibling):
+            row.refresh_from_db()
+            assert row.discovery_generation == generations[row.pk]
+        assert bridge.credential_id == completion.credential.pk
 
 
 def test_derived_material_applies_after_fencing_and_retains_the_source_for_reconnect(bridge):

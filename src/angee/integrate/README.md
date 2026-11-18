@@ -86,6 +86,20 @@ a declaration never changes an existing stream.
 A declared snapshot with no reconciliation interval closes after its baseline;
 explicit resync opens a new generation. Missing cadence alone never means read-once.
 
+A [container](../../../docs/glossary.md#backend) (an address book, a
+calendar) is a record of a parent stream, declared with
+[`holds_containers`](states.py), and the partition of a child stream whose
+declaration names the container's link (`StreamDefinition.container`). The
+container row is created on the parent's apply path like any record. A container is live, and its child
+declared, only while
+[`RecordLinkQuerySet.live_containers`](models.py) admits it: a container whose
+absence is being counted pauses its child, and one that stops observing retires
+it ([`SyncStreamManager.retire_children`](models.py)); the retirement pass
+tombstones the child's links and deletes nothing. The
+[driver](streams.py) (`sync_bridge`) owns ordering, deadlines and re-declaration.
+
+A replica identity longer than [`EXTERNAL_KEY_LENGTH`](states.py) can hold no link: the
+driver records one coalesced stream failure for it, and the rest of the page applies.
 Several inbound problems can coexist. For one record link, new source or mapping
 evidence closes older versions of the same non-conflict problem while retaining
 their history. Stream-level event failures remain independent.
@@ -118,7 +132,27 @@ The provider's `refine_grant(protocol, tokens)` runs after code exchange and
 before profile lookup or credential persistence. It can call
 `OAuthClientProtocol.exchange_grant(grant_type, **grant)` for an additional
 wire exchange. Those names distinguish refinement from a token request.
-Product presets and registrations belong to their capability addons.
+`OAuthClient.token_endpoint_auth_method` selects body or HTTP Basic client
+authentication for both token-request formats. `OAuthClient.token_identity_keys`
+names the non-secret token-response keys connect reads the account from when
+userinfo cannot; token material is never among them. Presets seed both through
+`defaults`, like the other registration fields.
+Product presets and registrations belong to their capability addons; a vendor
+whose one client serves several capabilities has its own addon
+([`integrate_google`](../integrate_google/__init__.py)).
+
+One client serves every consumer of a provider: a capability declares its client
+and scopes once (`OAuthConnectIntent` in [`impl.py`](impl.py)). The owners of the
+connect rules are `OAuthClient.requested_scopes` (scopes),
+`CredentialManager.upsert_for_user` (one credential per external account and the
+grant checks), `Integration.attach_connection` (the account binding),
+`Integration.admit_credential` (which credentials a capability accepts, asked on
+every attachment), `OAuthProviderType.authorize_params` (the prompt),
+[`connect.complete_account_connect`](connect.py) (account identity: userinfo, the
+`token_identity_keys`, then the verified ID token) and
+`connect.complete_external_account_link` (the consent restart). A credential stored
+without an account, before credentials were per account, and the integrations it
+serves without a binding bind to the first account that connects.
 
 Connection adapters declare `IntegrationImpl.requires_connection_discovery = True`
 to opt into asynchronous `discover_connection`/`apply_discovery`. Manual and
@@ -134,8 +168,8 @@ connect and OIDC login/link pass them to
 `OAuthClientProtocol.fetch_userinfo(access_token, params=…)`.
 Provider proofs and query vocabulary stay in the provider addon. Connect and
 OIDC login/link share `OAuthClientProtocol.exchange_identity`, which exchanges,
-refines and reads userinfo. OIDC verifies the nonce-bound ID token from the code
-exchange, independently of the refined material stored for API access.
+refines and reads userinfo. OIDC login verifies the nonce-bound ID token from the
+code exchange, independently of the refined material stored for API access.
 Server-side signing reads confidential material only
 through `OAuthClientProtocol.confidential_client_secret()`; public clients are
 refused before secret storage is accessed; confidential clients without a secret
@@ -150,7 +184,12 @@ configuration fields, never client secrets. OIDC
 metadata discovery resolves OAuth endpoints independently of connection
 discovery. Host
 settings are applied through `oauth_clients` after resources load.
-`Credential.is_reconnect_required` uses status, failed refresh and expiry.
+`Credential.is_reconnect_required` uses status, failed refresh or mint, and expiry.
+A `jwt_bearer` credential holds a provider signing key (a pasted key file, such as a
+Google service-account key) and mints one access token per scope set through the
+JWT bearer grant (RFC 7523); consumers call `Credential.auth_headers(scopes=...)`.
+Only a refusal of the key or identity marks it failed, re-entering the key file
+clears that, and the signing key is never its generic secret.
 `Credential.refreshable` derives refreshability from the current client and grant
 material; it is never stored as a copy of client policy. Ordinary access-token
 expiry with a refresh grant does not ask for new consent.
@@ -214,7 +253,9 @@ projected. Live sessions require completed discovery in addition to healthy
 runtime status.
 `ConnectOAuthButton` accepts optional vendor-owned labels. Its optional `row`
 path consumes `CONNECT_RECORD_FIELDS`; existing callers may keep their own
-selection and supply `start({redirectUri, next})` without a row.
+selection and supply `start({redirectUri, next})` without a row. A vendor addon
+whose saved record connects through an OAuth registration contributes
+`connectIntegrationAction()` at its own model's `#actions`.
 
 Integration capabilities use native Hasura resources with
 `IntegrationWriteBackend`. Its creation factory prepares implementation defaults

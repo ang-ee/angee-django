@@ -26,7 +26,8 @@ class ImmutableFieldsMixin(models.Model):
     """Reject changes to loaded immutable attnames declared anywhere in the MRO.
 
     Donors contribute plain tuples. An owning verb permits its next write through
-    ``allow_immutable_save``; unloaded deferred values remain untouched.
+    ``allow_immutable_save``; unloaded deferred values remain untouched, and a
+    partial save checks only the immutable fields its ``update_fields`` writes.
     """
 
     immutable_fields: ClassVar[tuple[str, ...]] = ()
@@ -54,6 +55,13 @@ class ImmutableFieldsMixin(models.Model):
                     name for base in type(self).__mro__ for name in base.__dict__.get("immutable_fields", ())
                 )
                 checked = tuple(name for name in declared if name not in allowed and name in self.__dict__)
+                if (update_fields := kwargs.get("update_fields")) is not None:
+                    written = {
+                        field.attname
+                        for field in self._meta.concrete_fields
+                        if field.name in update_fields or field.attname in update_fields
+                    }
+                    checked = tuple(name for name in checked if name in written)
                 if checked:
                     # Compare committed identities without loading unrelated deferred columns.
                     with system_context(reason=f"{self._meta.label_lower}.immutable_fields"):

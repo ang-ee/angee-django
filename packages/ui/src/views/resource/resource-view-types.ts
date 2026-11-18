@@ -60,8 +60,8 @@ export interface CalendarViewSpec {
     start: Date,
     end: Date | null,
   ) => void | Promise<unknown>;
-  /** Quick-create seam: a range select seeds and opens the create form. */
-  onSelectRange?: (start: Date, end: Date) => void;
+  /** Quick-create seam: a range select (whole days when `allDay`) seeds and opens the create form. */
+  onSelectRange?: (start: Date, end: Date, allDay: boolean) => void;
 }
 
 export interface BoardLaneSource {

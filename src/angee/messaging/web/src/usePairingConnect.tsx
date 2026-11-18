@@ -2,6 +2,7 @@ import {
   useAuthoredMutation,
   type AuthoredDocument,
   type AuthoredMutate,
+  type AuthoredMutateOptions,
   type DocumentData,
 } from "@angee/refine";
 import * as React from "react";
@@ -36,8 +37,9 @@ export function usePairingConnect<
     async (
       variables?: Parameters<AuthoredMutate<TDocument>>[0],
       nextStep?: PairingNextStep,
+      options?: AuthoredMutateOptions,
     ) => {
-      const data = await mutate(variables);
+      const data = await mutate(variables, options);
       const result = data?.[resultField] as PairingMutationResult;
       const id = result?.id;
       if (id) {

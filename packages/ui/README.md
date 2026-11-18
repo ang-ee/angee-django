@@ -136,6 +136,9 @@ read as one span from the start date and time to the end date and time.
 Shared `formatDate` uses a compact, locale-aware calendar date and adds the year
 outside the current year. Date and datetime list cells use `density: "list"`
 with the full value on hover; record reads retain full labels.
+`formatTime` also reads a GraphQL `Time` value (`HH:MM[:SS]`, no zone) as
+written; the `time` widget edits it through the native time control, whose
+`HH:MM` value is the wire input.
 `formatDateRange`, `formatRelativeTime`, and
 `formatDuration` cover ranges, activity labels, and compact or full units.
 The app runtime i18n provider sets the shared formatter language. Pure calls

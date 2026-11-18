@@ -1,0 +1,9 @@
+# The ICS feed vendor (master tier). Model inferred from the `integrate.vendor`
+# filename; adopted by slug, so a pre-existing `ics` row (one an earlier
+# subscription created) is linked instead of duplicated. Every ICS source names
+# it, so it exists before any feed is subscribed.
+- xref: ics
+  slug: ics
+  display_name: ICS feed
+  website_url: https://www.rfc-editor.org/rfc/rfc5545
+  icon: calendar

@@ -1,4 +1,5 @@
 import { defineBaseAddon, resourcePageRoutes } from "@angee/app";
+import { connectIntegrationAction } from "@angee/integrate";
 import { lazyRouteComponent } from "@tanstack/react-router";
 
 import { NOTION_CONNECTION_MODEL, notionConnectionForm } from "./NotionConnectionForm";
@@ -17,4 +18,9 @@ export default defineBaseAddon({
     "knowledge_integrate_notion.connections": { label: "Notion", icon: "integration", route: "knowledge_integrate_notion.connections", parent: "integrate" },
   },
   forms: { [NOTION_CONNECTION_MODEL]: notionConnectionForm },
+  containers: {
+    [`${NOTION_CONNECTION_MODEL}#actions`]: {
+      "knowledge_integrate_notion.connect": connectIntegrationAction(),
+    },
+  },
 });
