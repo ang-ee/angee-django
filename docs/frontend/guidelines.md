@@ -973,7 +973,9 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
   [command band](../../packages/storybook/src/stories/CommandBand.stories.tsx) (story id `page-commandband--default`).
   A read-only inspector with only secondary actions composes `ActionMenu` and
   `RecordChrome` in `RecordHeader.actions`; it does not reserve an empty command
-  band. Collection and transcript controls remain in their owning pane toolbar.
+  band. The command band itself takes no row while none of its items renders
+  (a contribution that offers nothing renders `null`), and returns with the
+  first one, an edit's Save and Discard included. Collection and transcript controls remain in their owning pane toolbar.
 - **Trash composes the shared owner.** A resource whose metadata marks a field
   `trashable` gets Trash and Restore from [the trash module](../../packages/ui/src/views/resource/trash.tsx):
   `useTrashActions` for record forms, `useTrashRowActions` for lists, and
