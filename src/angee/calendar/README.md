@@ -189,9 +189,12 @@ calendar's events stream in the same sync.
   calendar stays writable, and its events push through the events stream that link
   holds; nothing is read back, so a remote edit surfaces as a held conflict the
   next time Angee writes that event. Keeping Google's side of that conflict
-  accepts its version, and the next local edit writes over it. Deleting an event
-  deletes it remotely, and deleting an override restores its instance; a
-  published calendar itself is refused deletion until it is unpublished. A
+  accepts its version (an event Google cancelled included), and the next local
+  edit writes over it. Deleting an event deletes it remotely, and deleting an
+  override restores its instance; keeping Google's side of a delete that
+  conflicts leaves Google's event in place, and Angee no longer manages it. A
+  published calendar itself is refused deletion, from any delete that reaches
+  it, until it is unpublished. A
   calendar another source mirrors or publishes is refused, and so is a remote
   calendar another source publishes to. `ANGEE_CALENDAR_PUBLISH_TARGETS` (`None`:
   any; else a list, matched whole) lists the remote calendars a deployment

@@ -39,7 +39,7 @@ from django.contrib.contenttypes.models import ContentType
 from django.core import checks
 from django.core.exceptions import ImproperlyConfigured, ValidationError
 from django.db import connection, models, transaction
-from django.db.models import OuterRef, Prefetch, Q, Subquery
+from django.db.models import BooleanField, ExpressionWrapper, OuterRef, Prefetch, Q, Subquery
 from django.db.models.functions import JSONObject
 from django.utils import timezone
 from django.utils.text import capfirst
@@ -4755,6 +4755,18 @@ class SyncStreamQuerySet[SyncStreamT: SyncStream](AngeeHistoryQuerySet[SyncStrea
         )
         return self.filter(generation=Subquery(latest))
 
+    def in_lock_order(self) -> Self:
+        """Order streams as integrate locks them: roots, then contained streams, by key, partition and generation.
+
+        A page or push locks its stream, then the child streams it retires
+        (:meth:`SyncStreamManager.retire_children`). A caller locking several streams
+        of a bridge at once (a purge) takes them in this order, so it never waits on
+        such a page holding them the other way round.
+        """
+
+        contained = ExpressionWrapper(Q(container__isnull=False), output_field=BooleanField())
+        return self.order_by(contained, "key", "partition", "generation")
+
     def retiring(self, stream: models.Model) -> Self:
         """The current child streams of ``stream`` with a pending retirement pass and a container still gone.
 
@@ -5048,7 +5060,7 @@ class SyncStreamManager[SyncStreamT: SyncStream](_SyncStreamManagerBase[SyncStre
                 .exclude(state=StreamState.RETIRED)
                 .latest_generations()
                 .only("pk")
-                .order_by("key", "partition")
+                .in_lock_order()
             )
             retired = 0
             for child in children:
@@ -5932,7 +5944,10 @@ class RecordLink(
         becomes the link's applied base, with its ``remote_version``, over the local
         projection as it stands; nothing is copied into the local row. Nothing is
         pushed until the row changes locally again, and that push writes over the
-        version accepted here.
+        version accepted here. A remote the adapter still reads, even one it reports
+        cancelled, is a live version, not a tombstone. Keeping the remote of a
+        removal (the row was deleted locally) keeps the remote record, which no local
+        row names any more: the push never writes it again, and it stays unmanaged.
         """
 
         if keep not in ConflictKeep.values:

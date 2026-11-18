@@ -463,10 +463,10 @@ class GoogleCalendarBackend(_GoogleBackend):
                         event, google_id, exdates, calendar_zone=zone, check_deadline=self._require_time
                     )
                 )
+            return [(key, self.observe(event)) for key, event in observed]
         except _UNREADABLE:
             # The driver quarantines semantic input per record; a deadline (``IntegrationError``) stops the listing.
             return [(_own_key(item, series_zone), {"error": "invalid_event"})]
-        return [(key, self.observe(event)) for key, event in observed]
 
     def _client_scopes(self) -> tuple[str, ...]:
         """Read with the scope the account granted at connect: :attr:`oauth_scopes`."""
@@ -634,19 +634,33 @@ class GooglePublishingCalendarBackend(_GoogleBackend, PublishingCalendarBackend)
         """Remove a published event deleted locally; its link is then a tombstone.
 
         A master or single event is deleted, and an override's instance restored to
-        the series as last written, both under ``If-Match`` (a ``412`` is a held
-        conflict). An event, series or instance Google no longer has is already gone.
+        the series as last written, both under ``If-Match``. An event, series or
+        instance Google no longer has (``404`` on a served calendar, ``410``) is
+        already gone. On ``412`` the event is read: one Google has cancelled or no
+        longer has, or an instance already holding what the restore writes, is a
+        removal that landed before its answer was lost (as :meth:`_write_instance`
+        adopts a landed write); anything else is a remote edit, a held conflict.
         """
 
         if not expected_version:
             raise RemoteRejected("remote_version_missing")
         stream = link.stream
         written = str((link.source_payload or {}).get("id") or link.external_key)
-        if original is None:
-            client.delete(stream.partition, written, etag=expected_version)
-        elif (sent := self._series(stream, series)) is not None:
-            restored = _body(_instance_of(sent, original), instance=True, patch=True)
-            client.patch(stream.partition, written, restored, etag=expected_version)
+        restored: dict[str, Any] | None = None
+        try:
+            if original is None:
+                client.delete(stream.partition, written, etag=expected_version)
+            elif (sent := self._series(stream, series)) is not None:
+                restored = _instance_of(sent, original)
+                body = _body(restored, instance=True, patch=True)
+                client.patch(stream.partition, written, body, etag=expected_version)
+        except PreconditionFailed:
+            item = client.event(stream.partition, written)
+            removed = item is None or item.get("status") == "cancelled" or (
+                restored is not None and _remote_published(item, self._zone(stream), stamped=False) == restored
+            )
+            if not removed:
+                raise
         return WriteBackResult("", "", {"id": written}, tombstone=True)
 
     def _create(self, client: GoogleCalendarClient, stream: Any, key: str, projection: Mapping[str, Any]) -> Any:
@@ -980,7 +994,9 @@ def _known_zone(name: Any) -> str:
 def _series_zone(master: Mapping[str, Any]) -> str:
     """Return the zone a Google series expands in: its master's ``start.timeZone``, else ``""`` (the calendar's)."""
 
-    return _known_zone((master.get("start") or {}).get("timeZone"))
+    start = master.get("start")
+    # A malformed start is that event's own quarantine (``_observe_item``), not its page's failure.
+    return _known_zone(start.get("timeZone") if isinstance(start, Mapping) else None)
 
 
 def _recurrence(item: Mapping[str, Any]) -> Component:

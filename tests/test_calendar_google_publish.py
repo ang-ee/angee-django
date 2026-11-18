@@ -25,7 +25,9 @@ import httpx2
 import pytest
 from django.core.cache import caches
 from django.core.exceptions import ValidationError
-from django.db import connection, transaction
+from django.db import connection, router, transaction
+from django.db.models.deletion import Collector
+from django.test.utils import CaptureQueriesContext
 from joserfc import jwt
 from rebac import PermissionDenied, actor_context, system_context, to_subject_ref
 
@@ -34,7 +36,13 @@ from angee.calendar.apps import check_publish_targets
 from angee.calendar.backends import CalendarBackend, PublishingCalendarBackend
 from angee.calendar.tasks import purge_unsubscribed_sources
 from angee.calendar.testing.models import Calendar, CalendarEvent, CalendarSource
-from angee.calendar_integrate_google.backend import CALENDAR_EVENTS, STAMP, GooglePublishingCalendarBackend, event_id
+from angee.calendar_integrate_google.backend import (
+    CALENDAR_EVENTS,
+    CALENDAR_READONLY,
+    STAMP,
+    GooglePublishingCalendarBackend,
+    event_id,
+)
 from angee.calendar_integrate_google.connect import connect_google_calendar_publishing
 from angee.graphql.testing.documents import execute_schema, result_data
 from angee.integrate.errors import IntegrationError
@@ -56,6 +64,8 @@ BERLIN = ZoneInfo("Europe/Berlin")
 API = "/calendar/v3/"
 ROOM = "c_room-1@resource.calendar.google.com"
 OTHER_ROOM = "c_room-2@resource.calendar.google.com"
+CALENDAR = "https://www.googleapis.com/auth/calendar"
+"""Google's full calendar scope: with ``calendar.readonly``, the scopes ``calendars.get`` allows."""
 
 
 def _berlin(month: int, day: int, hour: int, minute: int = 0) -> datetime:
@@ -80,6 +90,8 @@ class FakeCalendar:
     """Inserts that land but whose answer never arrives: a crash between Google's create and the link."""
     lost_patches: int = 0
     """Patches that land but whose answer never arrives."""
+    lost_deletes: int = 0
+    """Deletes that land but whose answer never arrives."""
     refused: set[str] = field(default_factory=set)
     """Summaries Google refuses as invalid (``400``): that one event's refusal."""
     stamped_instances: bool = False
@@ -89,6 +101,7 @@ class FakeCalendar:
     before_patch: Callable[[], None] | None = None
     """Run once, as the first patch lands."""
     scopes: list[str] = field(default_factory=list)
+    """The scope of each token the key minted, in order; a token reads only what its scope allows."""
     requests: list[httpx2.Request] = field(default_factory=list)
 
     def edit(self, calendar_id: str, event: str, **fields: Any) -> None:
@@ -105,8 +118,10 @@ class FakeCalendar:
         if str(request.url) == TOKEN_ENDPOINT:
             claims = jwt.decode(request_fields(request)["assertion"], signing_key(), algorithms=["RS256"]).claims
             self.scopes.append(claims["scope"])
-            return httpx2.Response(200, json={"access_token": "room-token", "token_type": "Bearer", "expires_in": 3600})
-        assert request.headers["authorization"] == "Bearer room-token"
+            token = f"room-token-{len(self.scopes)}"
+            return httpx2.Response(200, json={"access_token": token, "token_type": "Bearer", "expires_in": 3600})
+        minted = int(request.headers["authorization"].removeprefix("Bearer room-token-"))
+        granted = set(self.scopes[minted - 1].split())
         url = urlsplit(str(request.url))
         params = {key: values[0] for key, values in parse_qs(url.query).items()}
         parts = [unquote(part) for part in url.path.removeprefix(API).split("/")]
@@ -115,7 +130,13 @@ class FakeCalendar:
         events = self.calendars[parts[1]]
         body = json.loads(request.content) if request.content else {}
         if parts[2:] == []:
+            # calendars.get needs a calendar scope; an events-only token is refused, as Google refuses it.
+            if not granted & {CALENDAR, CALENDAR_READONLY}:
+                return _refusal(403, "insufficientPermissions")
             return httpx2.Response(200, json={"id": parts[1]})
+        if parts[2:] == ["events"] and request.method == "GET" and "privateExtendedProperty" not in params:
+            assert params == {"maxResults": "1", "fields": "kind"}
+            return httpx2.Response(200, json={"kind": "calendar#events"})
         if parts[2:] == ["events"] and request.method == "GET":
             name, _equals, value = params["privateExtendedProperty"].partition("=")
             found = [] if self.lagging else [row for row in events.values() if _stamp(row, name) == value]
@@ -146,11 +167,17 @@ class FakeCalendar:
         if request.method == "GET":
             return httpx2.Response(200, json=event)
         assert request.method in {"PATCH", "DELETE"} and params["sendUpdates"] == "none"
+        if request.method == "DELETE" and event.get("status") == "cancelled" and parts[3] in events:
+            # Deleting an event Google already deleted: gone, whatever ETag it names.
+            return _refusal(410, "deleted")
         if request.headers.get("if-match") != event["etag"]:
             return _refusal(412, "conditionNotMet")
         if request.method == "DELETE":
             # Google keeps a deleted event, cancelled, for a while.
             self._store(events, {**event, "status": "cancelled"})
+            if self.lost_deletes:
+                self.lost_deletes -= 1
+                raise httpx2.ReadTimeout("The answer was lost.", request=request)
             return httpx2.Response(204)
         patched = _merge(event, body)
         if patched.get("summary") in self.refused:
@@ -644,6 +671,39 @@ def test_a_published_calendar_is_not_deleted_until_it_is_unpublished(published: 
     assert [link.target_object_id for link in published.links("calendars").values()] == [str(published.calendar.pk)]
 
 
+def test_a_delete_its_owner_cascades_to_a_published_calendar_is_refused(published: Published) -> None:
+    """Judged at the calendar's own deletion, whatever the delete started from (here its owner's removal)."""
+
+    published.publish()
+    published.event(start=_berlin(5, 4, 10), end=_berlin(5, 4, 12))
+    published.poll()
+
+    with system_context(reason="tests.google.publish"):
+        calendar = Calendar.objects.get(pk=published.calendar.pk)
+        cascade = Collector(using=router.db_for_write(Calendar), origin=published.user)
+        cascade.collect([calendar])
+        with pytest.raises(ValidationError, match="unpublish it"):
+            cascade.delete()
+        assert Calendar.objects.filter(pk=calendar.pk).exists()
+        assert CalendarEvent.objects.filter(calendar_id=calendar.pk).count() == 1
+
+
+def test_judging_a_calendars_deletion_reads_its_sources_backend_key_not_its_source(published: Published) -> None:
+    published.publish()
+    with system_context(reason="tests.google.publish"):
+        calendar = Calendar.objects.get(pk=published.calendar.pk)
+        with CaptureQueriesContext(connection) as queries:
+            refusal = calendar.delete_blocker()
+        assert not Calendar.source.is_cached(calendar)
+        loaded = Calendar.objects.select_related("source").get(pk=published.calendar.pk)
+        with CaptureQueriesContext(connection) as preloaded:
+            assert loaded.delete_blocker() == refusal
+    assert refusal == PublishingCalendarBackend.calendar_delete_refusal
+    # One read of the source's backend key alone; none once the caller loaded the source.
+    assert (len(queries), len(preloaded)) == (1, 0)
+    assert "backend_class" in queries[0]["sql"] and '"config"' not in queries[0]["sql"]
+
+
 def test_a_published_calendar_takes_local_edits_and_its_publisher_states_nothing_about_it(
     published: Published,
 ) -> None:
@@ -714,6 +774,33 @@ def test_keeping_angees_side_restores_an_event_cancelled_in_google(published: Pu
 
     assert (published.remote()[key]["status"], published.remote()[key]["summary"]) == ("confirmed", "Workshop (moved)")
     assert published.open_failures(key) == []
+
+
+def test_keeping_google_on_an_event_it_cancelled_accepts_it_and_a_later_local_edit_restores_it(
+    published: Published,
+) -> None:
+    published.publish()
+    workshop = published.event(start=_berlin(5, 4, 10), end=_berlin(5, 4, 12))
+    published.poll()
+    key = event_id(workshop.sqid)
+    published.google.edit(ROOM, key, status="cancelled")
+    published.edit(workshop, title="Workshop (moved)")
+    published.poll()
+    assert published.open_failures(key) == [(SyncFailureKind.CONFLICT, "remote_version_changed")]
+
+    # The cancelled event is Google's live version, with its ETag: no tombstone, so nothing is created again later.
+    published.resolve(key, ConflictKeep.REMOTE)
+    link = published.links()[key]
+    assert (link.status, link.remote_version) == (LinkStatus.CURRENT, published.remote()[key]["etag"])
+    seen = len(published.google.writes())
+    published.poll()
+    assert published.google.writes()[seen:] == []
+
+    published.edit(workshop, location="Hall")
+    published.poll()
+    remote = published.remote()[key]
+    assert (remote["status"], remote["summary"], remote["location"]) == ("confirmed", "Workshop (moved)", "Hall")
+    assert [request.method for request in published.google.writes()[seen:]] == ["PATCH"]
 
 
 def test_an_unsubscribe_during_a_push_ends_its_writes_and_binds_nothing(
@@ -884,6 +971,59 @@ def test_a_series_moved_while_its_override_is_pushed_leaves_no_duplicate_instanc
     assert remote[f"{master}_{_basic(_berlin(5, 11, 10))}"]["location"] == "Hall"
 
 
+@pytest.mark.parametrize("case", ["lost-delete", "lost-restore", "edited-in-google"])
+def test_a_removal_that_landed_before_its_answer_was_lost_is_done_and_a_remote_edit_is_held(
+    published: Published, case: str
+) -> None:
+    published.publish()
+    workshop = published.event(start=_berlin(5, 4, 12), end=_berlin(5, 4, 13))
+    standup = published.event(
+        title="Standup", start=_berlin(5, 4, 9), end=_berlin(5, 4, 9, 30), recurrence="FREQ=WEEKLY;COUNT=4"
+    )
+    moved = published.event(
+        title="Standup (moved)", series=standup, original_start=_berlin(5, 11, 9),
+        start=_berlin(5, 11, 10), end=_berlin(5, 11, 10, 45),
+    )
+    published.poll()
+    master = event_id(standup.sqid)
+    key, written = (
+        (f"{master}#{_basic(_berlin(5, 11, 9))}", f"{master}_{_basic(_berlin(5, 11, 9))}")
+        if case == "lost-restore" else (event_id(workshop.sqid),) * 2
+    )
+    if case == "edited-in-google":
+        published.google.edit(ROOM, written, summary="Workshop (Google)")
+        published.delete(workshop)
+        published.poll()
+        # Google changed it since Angee wrote it: deleting it is a held conflict, and Google keeps its edit.
+        assert published.open_failures(key) == [(SyncFailureKind.CONFLICT, "remote_version_changed")]
+        assert published.remote()[written]["status"] == "confirmed"
+        # Keeping Google's side keeps its event, which no local row names any more: Angee stops managing it.
+        published.resolve(key, ConflictKeep.REMOTE)
+        seen = len(published.google.writes())
+        published.poll()
+        assert (published.open_failures(key), published.google.writes()[seen:]) == ([], [])
+        assert (published.remote()[written]["summary"], published.links()[key].target_object_id) == (
+            "Workshop (Google)", None
+        )
+        return
+
+    published.delete(moved if case == "lost-restore" else workshop)
+    if case == "lost-restore":
+        published.google.lost_patches = 1
+    else:
+        published.google.lost_deletes = 1
+    with pytest.raises(BridgeSyncError):
+        published.poll()
+
+    # The retry finds the removal already landed: Google answers 410 for the deleted event, 412 for the restored
+    # instance, which already holds the series' own.
+    published.poll()
+
+    assert (published.links()[key].status, published.open_failures(key)) == (LinkStatus.TOMBSTONE, [])
+    remote = published.remote()[written]
+    assert remote["status"] == "cancelled" if case == "lost-delete" else remote["summary"] == "Standup"
+
+
 def test_an_event_switched_from_all_day_to_timed_clears_its_date(published: Published) -> None:
     published.publish()
     day = published.event(all_day=True, start=_berlin(5, 4, 0), end=_berlin(5, 5, 0))
@@ -996,3 +1136,26 @@ def test_two_sources_racing_to_publish_to_one_remote_calendar_bind_it_once(publi
     with system_context(reason="tests.google.publish"):
         bound = RecordLink.objects.filter(stream__key="calendars", external_key=ROOM).exclude(target_object_id=None)
         assert [link.stream.integration_id for link in bound] == [published.source.pk]
+
+
+@pytest.mark.skipif(connection.vendor != "postgresql", reason="Real PostgreSQL row locks are required.")
+def test_a_publish_holding_its_vendor_lets_another_source_of_that_vendor_connect(published: Published) -> None:
+    """The publish's no-key vendor lock serializes publishes only: a new row naming the vendor never waits on it."""
+
+    key = create_jwt_bearer("room-writer-3", google_key_file(), user=published.user)
+
+    def connect() -> Any:
+        with actor_context(published.user):
+            return connect_google_calendar_publishing(published.user, key)
+
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        with transaction.atomic():
+            published.publish(ROOM)
+            contender, _pid = submit(pool, connect)
+            # The vendor's row is still held: the new source's foreign key check does not wait on it.
+            connected = contender.result(timeout=10)
+
+    with system_context(reason="tests.google.publish"):
+        assert CalendarSource.objects.get(pk=connected.pk).vendor_id == CalendarSource.objects.get(
+            pk=published.source.pk
+        ).vendor_id

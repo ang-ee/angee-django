@@ -91,10 +91,9 @@ class FakeGoogle:
         parts = [unquote(part) for part in url.path.removeprefix(API).split("/")]
         if parts == ["users", "me", "calendarList"]:
             return httpx2.Response(200, json={"items": list(account.calendars.values())})
-        if parts[2:] == []:
-            # The calendar a read of one missing event confirms is still served.
-            served = parts[1] in account.calendars or parts[1] in account.events
-            return httpx2.Response(200, json={"id": parts[1]}) if served else httpx2.Response(404)
+        if parts[1] not in account.calendars and parts[1] not in account.events:
+            # A calendar the account no longer reads: what a read of one missing event's calendar learns.
+            return httpx2.Response(404)
         events = account.events.get(parts[1], {})
         if parts[2:] == ["events"]:
             return self._list(events, params)
@@ -483,6 +482,34 @@ def test_a_removed_event_is_cancelled_and_read_back_by_identity(connected: Conne
         payloads = backend.read_events(connected.stream(), ["holiday", "standup#20260309T130000Z", "missing"])
     assert payloads["holiday"] is None and payloads["missing"] is None
     assert payloads["standup#20260309T130000Z"]["event"]["title"] == "Standup (moved)"
+
+
+MALFORMED = (
+    {"id": "no-start", "status": "confirmed", "summary": "No start"},
+    {"id": "bad-time", "status": "confirmed", "start": {"dateTime": "soon"}, "end": {"dateTime": "later"}},
+    {"id": "typed", "status": "confirmed", "start": "2026-03-02", "recurrence": ["RRULE:FREQ=DAILY"]},
+    {
+        "id": "bad-rule",
+        "status": "confirmed",
+        "start": {"dateTime": "2026-03-02T09:00:00Z"},
+        "end": {"dateTime": "2026-03-02T10:00:00Z"},
+        "recurrence": ["RRULE:FREQ=SOMETIMES"],
+    },
+)
+"""Items Google should never send: no start, an unreadable time, a start that is no object, an unknown rule."""
+
+
+def test_a_malformed_google_event_is_set_aside_and_the_rest_of_its_page_syncs(connected: Connected) -> None:
+    for event in MALFORMED:
+        connected.google.put("work-token", "work@example.test", event)
+
+    connected.poll()
+
+    with system_context(reason="tests.google"):
+        links = RecordLink.objects.filter(stream=connected.stream(), external_key__in=[row["id"] for row in MALFORMED])
+        failures = {link.external_key: [row.code for row in link.failures(open_only=True)] for link in links}
+    assert failures == {row["id"]: ["invalid_event"] for row in MALFORMED}
+    assert {"standup", "holiday"} <= set(connected.events())
 
 
 def test_a_hidden_calendar_retires_its_events_and_they_come_back_when_it_returns(connected: Connected) -> None:

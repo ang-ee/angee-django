@@ -24,7 +24,7 @@ import icalendar
 import pytest
 from django.apps import apps
 from django.core.cache import caches
-from django.core.exceptions import ValidationError
+from django.core.exceptions import ImproperlyConfigured, ValidationError
 from django.db import connection, transaction
 from django.db.models import ProtectedError
 from django.utils import timezone
@@ -311,6 +311,18 @@ def test_the_ics_vendor_is_seeded_before_any_feed_and_adopted_by_slug() -> None:
     _load_vendor()
     with system_context(reason="tests.ics"):
         assert list(Vendor.objects.filter(slug="ics").values_list("display_name", flat=True)) == ["ICS feed"]
+
+
+def test_subscribing_before_the_vendor_is_seeded_says_to_load_resources() -> None:
+    """The backend's defaults name the vendor; its impl-defaults owner gives the load guidance, and nothing is kept."""
+
+    user = create_user("unseeded-subscriber")
+    with system_context(reason="tests.ics"):
+        Vendor.objects.filter(slug="ics").delete()
+    with pytest.raises(ImproperlyConfigured, match=r"Vendor slug 'ics'.*Run `manage\.py resources load`"):
+        subscribe_calendar(user, name="Team", url=FEED_URL)
+    with system_context(reason="tests.ics"):
+        assert (CalendarSource.objects.count(), Credential.objects.filter(user=user).count()) == (0, 0)
 
 
 def test_subscribing_fetches_nothing_and_the_first_sync_mirrors_the_calendar(subscription: Subscription) -> None:

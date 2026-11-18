@@ -25,13 +25,9 @@ def subscribe_calendar(user: Any, *, name: str, url: str) -> Any:
     """
 
     credential_model = apps.get_model("integrate", "Credential")
-    vendor_model = apps.get_model("integrate", "Vendor")
     feed = feed_url(url)
     label = feed_label(feed)
     with system_context(reason="calendar_integrate_ics.subscribe"), transaction.atomic():
-        # The addon's master resource seeds the vendor the backend's defaults name
-        # (resources/master/010_integrate.vendor.yaml); a host that never loaded it is told to.
-        vendor_model.objects.seeded("ics")
         credential = credential_model.objects.create_local_credential(
             user,
             kind="static_token",

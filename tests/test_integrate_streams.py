@@ -2391,6 +2391,18 @@ def test_a_child_stream_names_one_live_container_of_its_own_bridge(stream_bridge
         books.save(update_fields=["container", "updated_at"])
 
 
+def test_streams_lock_roots_before_the_streams_their_containers_hold(stream_bridge: Channel) -> None:
+    """``in_lock_order``: whatever their keys and primary keys, a root stream comes before a contained one."""
+
+    shelves = current_stream(stream_bridge, "zz-shelves", kind=StreamKind.RECORD_REPLICA)
+    shelf = RecordLink.objects.observe(shelves, "a", target=shelves)
+    books = current_stream(stream_bridge, "books", "a", kind=StreamKind.RECORD_REPLICA, container=shelf)
+    notes = current_stream(stream_bridge, "notes", kind=StreamKind.RECORD_REPLICA)
+
+    ordered = SyncStream.objects.filter(integration_id=stream_bridge.pk).in_lock_order()
+    assert [row.pk for row in ordered] == [notes.pk, shelves.pk, books.pk]
+
+
 def test_a_tombstoned_container_retires_its_streams_and_its_revival_reopens_them(
     stream_bridge: Channel, monkeypatch: pytest.MonkeyPatch
 ) -> None:

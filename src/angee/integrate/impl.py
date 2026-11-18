@@ -212,7 +212,14 @@ class BridgeImpl(IntegrationImpl):
         raise AdapterContractError("Push adapters must project local changes.")
 
     def write_back(self, link: Any, projection: Any, *, expected_version: str) -> WriteBackResult:
-        """Conditionally write a remote record or raise RemoteRejected."""
+        """Conditionally write a remote record or raise RemoteRejected.
+
+        ``projection`` is ``None`` for a removal: on a PUSH stream, a link whose row
+        went (released by its deletion, ``RecordLinkManager.release_pushes``) is
+        written as ``write_back(link, None)``, and a result with ``tombstone=True``
+        tombstones the link. An adapter's :meth:`local_changes` may yield a ``None``
+        projection too, for a record it removes itself.
+        """
 
         raise AdapterContractError("Push adapters must implement conditional write-back.")
 

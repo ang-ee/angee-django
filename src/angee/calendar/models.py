@@ -457,11 +457,25 @@ class Calendar(OwnerMixin, ArchiveMixin, StatementsMixin, HistoryMixin, AngeeDat
             master.rebase_overrides(previous_start=previous_start, previous_zone=previous_zone)
 
     @property
+    def source_backend_key(self) -> str | None:
+        """The ``backend_class`` key of this calendar's source; ``None`` for a local calendar.
+
+        Read from the source when it is loaded, else by ``source_id`` (that one
+        column), so judging a calendar never loads its source row.
+        """
+
+        if self.source_id is None:
+            return None
+        if cast(Any, type(self)).source.is_cached(self):
+            return str(cast("CalendarSource", self.source).backend_class)
+        sources = type(self)._meta.get_field("source").related_model
+        return str(sources._base_manager.filter(pk=self.source_id).values_list("backend_class", flat=True).get())
+
+    @property
     def is_writable(self) -> bool:
         """Whether this calendar takes local edits: a local calendar always, a source's when its backend writes."""
 
-        source = self.source
-        return source is None or CalendarSource.is_backend_writable(source.backend_class)
+        return CalendarSource.is_backend_writable(self.source_backend_key)
 
     def takes_write(self) -> bool:
         """Whether a write to this calendar's events and attendees is admitted now.
@@ -483,18 +497,21 @@ class Calendar(OwnerMixin, ArchiveMixin, StatementsMixin, HistoryMixin, AngeeDat
             return bool(origin.integration_id == self.source_id)
         return isinstance(origin, apps.get_model("integrate", "Integration")) and origin.pk == self.source_id
 
-    def delete_blocker(self) -> str | None:
-        """Refuse deleting a source's calendar on its own, as its backend words it (``calendar_delete_refusal``).
+    def delete_blocker(self, *, cascaded: bool = False) -> str | None:
+        """Refuse deleting a source's calendar, as its backend words it (``calendar_delete_refusal``).
 
-        A mirrored calendar is retained by its source's link and statements. A
-        published calendar stays until it is unpublished: its events' deletes would
+        A mirrored calendar is retained by its source's link and statements: a
+        delete started at it is refused, and one another row ``cascaded`` to it (its
+        source's removal) proceeds. A published calendar stays until it is
+        unpublished, whatever the delete started from: its events' deletes would
         propagate, and deleting it must not empty its remote calendar.
         """
 
-        source = cast("CalendarSource | None", self.source)
-        if source is not None:
-            return source.get_backend_class_impl().calendar_delete_refusal
-        return cast(Any, super()).delete_blocker()
+        key = self.source_backend_key
+        backend = CalendarSource.backend_class_for(key) if key is not None else None
+        if backend is not None and (not cascaded or backend.direction == StreamDirection.PUSH):
+            return backend.calendar_delete_refusal
+        return None if cascaded else cast(Any, super()).delete_blocker()
 
 
 class CalendarEventQuerySet(AngeeHistoryQuerySet[Any]):
@@ -1771,7 +1788,8 @@ class CalendarSource(Bridge, inherits="integrate.Integration"):
             source = self.lock_capability()
             if source.lifecycle != IntegrationLifecycle.CONNECTED:
                 raise ValidationError("This calendar source is not connected.")
-            apps.get_model("integrate", "Vendor").objects.lock_if_supported().get(pk=source.vendor_id)
+            # A no-key lock serializes publishes to the vendor's remote ids, and lets sources and mounts still insert.
+            apps.get_model("integrate", "Vendor").objects.lock_if_supported(no_key=True).get(pk=source.vendor_id)
             stream = streams.lock_current(streams.current(self, self.calendars_stream()))
             bound = calendar.lock_subject()
             if bound.source_id not in (None, self.pk):
@@ -1799,13 +1817,19 @@ class CalendarSource(Bridge, inherits="integrate.Integration"):
         return link
 
     @classmethod
+    def backend_class_for(cls, key: str) -> type[CalendarBackend]:
+        """Return the backend class a source's ``backend_class`` key selects."""
+
+        return cast(type[CalendarBackend], cls._meta.get_field("backend_class").resolve_class(key))
+
+    @classmethod
     def is_backend_writable(cls, key: str | None) -> bool:
         """Whether a calendar whose source has backend ``key`` takes local edits; no source (``None``) does.
 
         Its backend's ``direction`` decides: a pulled calendar is a read-only replica.
         """
 
-        return key is None or cls._meta.get_field("backend_class").resolve_class(key).direction != StreamDirection.PULL
+        return key is None or cls.backend_class_for(key).direction != StreamDirection.PULL
 
     def admit_credential(self, credential: Any) -> None:
         """Admit only a credential this source's backend uses (``CalendarBackend.admit_credential``).
@@ -1883,8 +1907,9 @@ class CalendarSource(Bridge, inherits="integrate.Integration"):
         job, and again from the reconciler while anything is left
         (:meth:`purge_unsubscribed`), as this source's own work
         (:meth:`Calendar.takes_write`), in integrate's lock order: the integration
-        row (``lock_capability``), then every stream of the source by primary key,
-        then each calendar, then their links and events. A sync page or a push
+        row (``lock_capability``), then every stream of the source, parents before
+        their children (``SyncStreamQuerySet.in_lock_order``), then each calendar,
+        then their links and events. A sync page or a push
         still in flight waits on its stream and then finds the source disconnected
         (``CalendarBackend.prepare_page``, ``PublishingCalendarBackend.admit_push``),
         so nothing it read or wrote re-creates or re-binds anything. Each calendar's
@@ -1902,7 +1927,7 @@ class CalendarSource(Bridge, inherits="integrate.Integration"):
             transaction.atomic(),
         ):
             source = self.lock_capability()
-            list(streams.system_queryset(lock=("self",)).filter(integration_id=self.pk).order_by("pk"))
+            list(streams.system_queryset(lock=("self",)).filter(integration_id=self.pk).in_lock_order())
             if source.lifecycle != IntegrationLifecycle.DISCONNECTED:
                 return 0
             owned = [

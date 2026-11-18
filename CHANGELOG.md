@@ -41,6 +41,28 @@ live in code docstrings.
   version as the link's base over the local projection, copies nothing, and
   pushes again only after the next local change. `push_stream` reads the cycle's
   deadline (`sync_deadline()`) between candidates. `push_candidates` is public.
+- Base's target-delete receiver filters, then tears down: an edge that
+  `blocks_target_delete` has the rows naming the target read once, those its
+  `live_reference_filter` selects refuse with `ProtectedError` (the rule creation
+  undo applies), and its teardown or policy runs only while a row names the
+  target; a teardown never blocks. `RecordLink`'s teardown only releases push
+  links (`RecordLinkManager.release_pushes` no longer refuses; it locks the row
+  before its links). `push_stream` locks a written candidate's row before its
+  link and binds no row once the row was deleted, or its link released, during
+  the write (a moved override), so the next push writes the removal.
+  `SyncStreamQuerySet.in_lock_order` is integrate's stream lock order (roots
+  before contained streams), composed by `retire_children` and the calendar
+  purge. A missing seeded row an implementation default names raises
+  `ImproperlyConfigured` with the `manage.py resources load` guidance (was
+  `ValueError`). A delete another row cascades to a published calendar is
+  refused too (`Calendar.delete_blocker(cascaded=True)`), and judging a calendar
+  reads only its source's backend key (`Calendar.source_backend_key`,
+  `CalendarSource.backend_class_for`). `publish` takes a no-key lock on the
+  vendor. Google's `require_calendar` probes with `events.list` (one event, the
+  `kind` field), which the publishing key's `calendar.events` scope allows; a
+  removal whose `412` finds the event already cancelled, gone or restored is
+  done, and every mapping error of one synced event, its `observe` included, is
+  that event's quarantine.
 - A publishing calendar backend implements `write_event` and `read_written`;
   `PublishingCalendarBackend.write_back` and `read_keys` run them after `admit_push`, which
   refuses an unsubscribed source and a remote calendar

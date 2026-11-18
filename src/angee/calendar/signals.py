@@ -38,15 +38,21 @@ def refuse_source_owned_delete(sender: Any, instance: Any, *, origin: Any, **kwa
     removing the source proceeds. A queryset delete judges each row it starts from,
     reading each calendar's writability once (a source's purge reads it once per
     calendar, not per row); a row it only cascades to (an event's attendees) goes
-    with the row it started from.
+    with the row it started from. A calendar is judged at its own deletion too,
+    whatever the delete started from: one another row cascades to (its owner's
+    removal) is refused while it is published (``Calendar.delete_blocker(cascaded=True)``).
     """
 
     if isinstance(origin, models.Model):
         root = origin
     elif isinstance(origin, models.QuerySet) and not isinstance(instance, origin.model):
-        return
+        root = None
     else:
         root = instance
+    if root is not instance and isinstance(instance, Calendar):
+        if blocker := instance.delete_blocker(cascaded=True):
+            raise ValidationError(blocker)
+        return
     if not isinstance(root, _OWNED):
         return
     if isinstance(root, CalendarEvent) and isinstance(origin, models.QuerySet):

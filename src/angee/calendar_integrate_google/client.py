@@ -43,6 +43,9 @@ _CALENDAR_LIST = {"fields": _CALENDAR_FIELDS, "showHidden": "true", "minAccessRo
 _QUIET = {"sendUpdates": "none"}
 """A write tells no attendee: a published event is the calendar's, not an invitation."""
 
+_PROBE = {"maxResults": "1", "fields": "kind"}
+"""What :meth:`GoogleCalendarClient.require_calendar` reads of a calendar: whether it lists, nothing of its events."""
+
 _STAMPED_PAGE = 10
 """How many stamped events one lookup reads: a stamp names one event, so more is already a conflict."""
 
@@ -141,10 +144,15 @@ class GoogleCalendarClient:
         return self.api.json(response)
 
     def require_calendar(self, calendar_id: str) -> None:
-        """Refuse, as the calendar's failure, a calendar Google no longer serves; each is read once per client."""
+        """Refuse, as the calendar's failure, a calendar Google no longer serves; each is read once per client.
+
+        The probe lists one event (``events.list``), a read every scope this client
+        reads or writes events under allows; ``calendars.get`` needs a calendar
+        scope, which a publishing key (``calendar.events``) never holds.
+        """
 
         if calendar_id not in self._served:
-            self._get(f"calendars/{_segment(calendar_id)}", {"fields": "id"})
+            self._get(f"calendars/{_segment(calendar_id)}/events", _PROBE)
             self._served.add(calendar_id)
 
     def event(self, calendar_id: str, event_id: str) -> dict[str, Any] | None:
