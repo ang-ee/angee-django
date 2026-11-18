@@ -10,6 +10,13 @@ live in code docstrings.
 
 ## Unreleased — shared addon contracts, native embeddings and graph retrieval
 
+- The Django images run as the owner of the mounted project, so a Docker-mode
+  stack works on a Linux host whose stack root does not belong to uid 1000. The
+  entrypoint gives its `angee` user the project's uid and gid before dropping
+  privileges, as the operator image already does; a root-owned project keeps the
+  image's own user. Before, `py-sync` failed with `Permission denied` creating
+  `caches/uv`, and runtime files were left owned by uid 1000.
+
 - A Docker-mode framework stack (`stacks/dev` with `runtime_mode: docker`,
   `stacks/staging`) installs its JS dependencies with the framework's pnpm. The
   stack root's `package.json` now declares `packageManager: pnpm@11.1.3`, the
