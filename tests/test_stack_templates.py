@@ -1,13 +1,13 @@
 """Regression coverage for operator stack templates.
 
-Both stack templates (``stacks/dev`` = process or docker mode, ``stacks/local`` =
-docker mode) render from ONE shared manifest body
+Every stack template (``stacks/dev`` = process or docker mode, ``stacks/local`` and
+``stacks/staging`` = docker mode) renders from ONE shared manifest body
 (``stacks/_shared/stack-body.yaml.jinja``): each ``angee.yaml.jinja`` is a thin
 ``{% set %}`` header that includes it. The mini-renderer below inlines that include,
 then evaluates the template constructs the operator's pongo2 engine handles —
-``{% set %}``, nested equality/bare-flag conditionals, and the celery
-``{% for role in [...] %}`` loop — so the contract tests pin whatever the templates
-compute, never a value re-derived here.
+``{% set %}``, nested equality/bare-flag conditionals, the celery
+``{% for role in [...] %}`` loop, and loops over a JSON list or a split string — so
+the contract tests pin whatever the templates compute, never a value re-derived here.
 """
 
 from __future__ import annotations
@@ -42,6 +42,14 @@ DEV_CLAUDE_TEMPLATE = DEV_TEMPLATE.with_name("CLAUDE.md")
 DEV_STACK_GITIGNORE = DEV_TEMPLATE.with_name(".gitignore.jinja")
 DEV_PACKAGE_TEMPLATE = DEV_TEMPLATE.with_name("package.json.jinja")
 DEV_TEMPLATES_SYMLINK = DEV_TEMPLATE.with_name("templates")
+STAGING_COPIER = ROOT / "templates" / "stacks" / "staging" / "copier.yml"
+STAGING_TEMPLATE = ROOT / "templates" / "stacks" / "staging" / "template" / "angee.yaml.jinja"
+STAGING_PNPM_WORKSPACE = STAGING_TEMPLATE.with_name("pnpm-workspace.yaml.jinja")
+STAGING_AGENTS_TEMPLATE = STAGING_TEMPLATE.with_name("AGENTS.md.jinja")
+STAGING_CLAUDE_TEMPLATE = STAGING_TEMPLATE.with_name("CLAUDE.md")
+STAGING_STACK_GITIGNORE = STAGING_TEMPLATE.with_name(".gitignore.jinja")
+STAGING_PACKAGE_TEMPLATE = STAGING_TEMPLATE.with_name("package.json.jinja")
+STAGING_TEMPLATES_SYMLINK = STAGING_TEMPLATE.with_name("templates")
 SHARED_BODY = ROOT / "templates" / "stacks" / "_shared" / "stack-body.yaml.jinja"
 SRC_WORKSPACE_COPIER = ROOT / "templates" / "workspaces" / "src" / "copier.yml"
 SHARED_AGENTS = ROOT / "templates" / "stacks" / "_shared" / "AGENTS.md.jinja"
@@ -117,8 +125,8 @@ def _render_stack_manifest(
     """Render a wrapper manifest + its shared body into a YAML contract dict.
 
     Runs the template passes in dependency order: inline the shared-body include,
-    strip comments, bind ``{% set %}`` variables, expand the celery ``{% for %}``
-    loop, evaluate nested/inline conditionals, evaluate the queue worker's
+    strip comments, bind ``{% set %}`` variables, expand the item loops and the celery
+    ``{% for %}`` loop, evaluate nested/inline conditionals, evaluate the queue worker's
     ``{{ var|split:…|length * n }}`` product, then substitute the remaining
     ``{{ var }}`` interpolations.
     """
@@ -126,6 +134,9 @@ def _render_stack_manifest(
     text = _inline_includes(manifest_path)
     text = _strip_jinja_comments(text)
     text = _render_jinja_set_tags(text, variables)
+    # Item loops first: the shared Python environment carries one, and it is included
+    # inside the celery role loop, whose expansion ends at the first `endfor`.
+    text = _render_item_loops(text, variables)
     text = _render_for_loops(text, variables)
     text = _render_conditionals(text, variables)
     text = _render_length_products(text, variables)
@@ -329,6 +340,55 @@ def _render_for_loops(text: str, variables: dict[str, str]) -> str:
         text,
         flags=re.DOTALL,
     )
+
+
+_ITEM_LOOP = re.compile(
+    r'{%\s*for\s+(\w+)\s+in\s+(\w+)(?:\|split:"([^"]*)")?\s*%}(.*?){%\s*endfor\s*%}', flags=re.DOTALL,
+)
+_LITERAL_CONDITIONAL = re.compile(
+    r'{%\s*if\s+"([^"]*)"\s*%}((?:(?!{%\s*if\s).)*?)(?:{%\s*else\s*%}((?:(?!{%\s*if\s).)*?))?{%\s*endif\s*%}',
+    flags=re.DOTALL,
+)
+
+
+def _render_item_loops(text: str, variables: dict[str, str]) -> str:
+    """Expand ``{% for item in var %}`` over a JSON list and ``var|split:"sep"`` over a string.
+
+    The operator hands a ``type: json`` input to pongo2 as a list of mappings, so a
+    template reads ``{{ item.key }}`` and tests ``{% if item.key %}``; a comma list
+    is split in the template and its empty item guarded by ``{% if item %}``. Each
+    item's own values and tests resolve here; conditions on other variables stay
+    for the conditional pass.
+    """
+
+    def literal(value: Any) -> str:
+        if isinstance(value, bool):
+            return "true" if value else ""
+        return str(value)
+
+    def render(body: str, name: str, item: Any) -> str:
+        def value_of(key: str | None) -> str:
+            return literal(item[key] if key else item)
+
+        def expression(match: re.Match[str]) -> str:
+            value = value_of(match.group(1))
+            return value.replace(match.group(2), "") if match.group(2) is not None else value
+
+        body = re.sub(rf'{{{{\s*{name}(?:\.(\w+))?(?:\|cut:"([^"]*)")?\s*}}}}', expression, body)
+        body = re.sub(
+            r"{%.*?%}",
+            lambda tag: re.sub(rf"\b{name}(?:\.(\w+))?\b", lambda m: f'"{value_of(m.group(1))}"', tag.group(0)),
+            body,
+        )
+        return _LITERAL_CONDITIONAL.sub(lambda m: m.group(2) if m.group(1) else (m.group(3) or ""), body)
+
+    def expand(match: re.Match[str]) -> str:
+        name, source, separator, body = match.groups()
+        raw = variables.get(source, "")
+        items: list[Any] = raw.split(separator) if separator is not None else json.loads(raw or "[]")
+        return "".join(render(body, name, item) for item in items)
+
+    return _ITEM_LOOP.sub(expand, text)
 
 
 def _eval_condition(condition: str, variables: dict[str, str]) -> bool:
@@ -544,6 +604,64 @@ def _render_dev_docker_stack(
     )
 
 
+def _repository(repo: str, *, ref: str = "") -> dict[str, Any]:
+    """Return one entry as the operator canonicalizes ``--repository`` / ``--extra-source``."""
+
+    name = repo.rstrip("/").rsplit("/", 1)[-1].rsplit(":", 1)[-1].removesuffix(".git")
+    return {"name": name, "ref": ref, "repo": repo, "ssh": repo.startswith(("git@", "ssh://"))}
+
+
+def _render_staging_stack(
+    *,
+    repositories: tuple[dict[str, Any], ...] = (),
+    extra_sources: tuple[dict[str, Any], ...] = (),
+    deploy_keys: bool = True,
+    settings_file: str = "",
+    ingress_domain: str = "staging.example.com",
+    ingress_aliases: str = "",
+    celery_queues: str = "",
+    enable_celery: bool = True,
+    operator_home: str = "",
+) -> dict[str, Any]:
+    """Render the staging stack with the inputs its copier.yml declares, and no others."""
+
+    variables = {
+        "admin_email": "admin@example.com",
+        "admin_username": "admin",
+        "caddy_image": "caddy:2.9-alpine",
+        "celery_queues": celery_queues,
+        "db_pool_max_size": "2",
+        "db_pool_timeout": "5",
+        "deploy_keys": "true" if deploy_keys else "",
+        "django_image": "ghcr.io/ang-ee/django-angee-base:latest",
+        "django_port": "8000",
+        "edge_port": "80",
+        "enable_celery": "true" if enable_celery else "",
+        "extra_sources": json.dumps(list(extra_sources)),
+        "ingress_aliases": ingress_aliases,
+        "ingress_domain": ingress_domain,
+        "node_image": "node:22-bookworm-slim",
+        "operator_home": operator_home,
+        "operator_image": "ghcr.io/ang-ee/angee-operator:latest",
+        "operator_port": "9000",
+        "process_compose_port": "8080",
+        "project_name": "app",
+        "repositories": json.dumps(list(repositories)),
+        "sentry_dsn": "",
+        "sentry_web_dsn": "",
+        "serve_workers": "0",
+        "settings_file": settings_file,
+        "ui_port": "5173",
+        "web_path": "web",
+    }
+    declared = yaml.safe_load(STAGING_COPIER.read_text(encoding="utf-8"))
+    questions = {name for name in declared if not name.startswith("_")}
+    # Inputs the chained project consumes and the stack body never reads.
+    project_only = {"addon_namespace", "roots", "appearance_theme_id", "appearance_color_scheme", "appearance_options"}
+    assert set(variables) == questions - project_only
+    return _render_stack_manifest(STAGING_TEMPLATE, variables)
+
+
 def _render_project_settings(
     *,
     addon_installer_backend: str = "local",
@@ -553,10 +671,12 @@ def _render_project_settings(
     include_arp: bool = False,
     framework_source_path: str = "",
     framework: str = "source",
+    roots: str = "",
 ) -> dict[str, Any]:
     """Render project settings enough for stack-owned contract tests."""
 
     text = PROJECT_SETTINGS_TEMPLATE.read_text(encoding="utf-8")
+    text = _render_item_loops(text, {"roots": roots})
     text = _render_project_settings_conditionals(
         text,
         conditions={
@@ -592,10 +712,12 @@ def _render_project_pyproject(
     framework: str = "source",
     framework_workspace: bool = False,
     include_arp: bool = False,
+    repositories: tuple[dict[str, Any], ...] = (),
 ) -> tuple[str, dict[str, Any]]:
     """Render the project Python manifest enough for dependency contract tests."""
 
     text = PROJECT_PYPROJECT_TEMPLATE.read_text(encoding="utf-8")
+    text = _render_item_loops(text, {"repositories": json.dumps(list(repositories))})
     text = _render_project_settings_conditionals(
         text,
         conditions={
@@ -641,34 +763,26 @@ def _render_project_settings_conditionals(text: str, *, conditions: dict[str, bo
 # --- shared-body contract ------------------------------------------------------
 
 
-def test_both_stacks_render_from_one_shared_body() -> None:
-    """Both wrappers include the single shared manifest body and share its services."""
+def test_every_stack_renders_from_one_shared_body() -> None:
+    """Every wrapper includes the single shared manifest body and shares its services."""
 
     assert SHARED_BODY.exists()
-    dev_text = DEV_TEMPLATE.read_text(encoding="utf-8")
-    local_text = LOCAL_TEMPLATE.read_text(encoding="utf-8")
-
     # Copier resolves includes from the template root that holds copier.yml, never
-    # the including file's dir or the `_subdirectory` copy root — so BOTH templates
-    # name `../_shared/`, the root's sibling; `_angee.include_root` lets them read it.
-    assert '{% include "../_shared/stack-body.yaml.jinja" %}' in dev_text
-    assert '{% include "../_shared/stack-body.yaml.jinja" %}' in local_text
-    dev_include = (_template_root(DEV_TEMPLATE) / "../_shared/stack-body.yaml.jinja").resolve()
-    local_include = (_template_root(LOCAL_TEMPLATE) / "../_shared/stack-body.yaml.jinja").resolve()
-    assert dev_include == SHARED_BODY == local_include
-    for copier_path in (DEV_COPIER, LOCAL_COPIER):
+    # the including file's dir or the `_subdirectory` copy root — so EVERY template
+    # names `../_shared/`, the root's sibling; `_angee.include_root` lets them read it.
+    for template, copier_path in (
+        (DEV_TEMPLATE, DEV_COPIER), (LOCAL_TEMPLATE, LOCAL_COPIER), (STAGING_TEMPLATE, STAGING_COPIER),
+    ):
+        assert '{% include "../_shared/stack-body.yaml.jinja" %}' in template.read_text(encoding="utf-8")
+        assert (_template_root(template) / "../_shared/stack-body.yaml.jinja").resolve() == SHARED_BODY
         include_root = yaml.safe_load(copier_path.read_text(encoding="utf-8"))["_angee"]["include_root"]
         assert SHARED_BODY.is_relative_to((copier_path.parent / include_root).resolve())
 
-    dev = _render_dev_stack()
-    dev_docker = _render_dev_docker_stack()
-    local = _render_local_stack()
-    assert SHARED_SERVICES <= set(dev["services"])
-    assert SHARED_SERVICES <= set(dev_docker["services"])
-    assert SHARED_SERVICES <= set(local["services"])
+    for stack in (_render_dev_stack(), _render_dev_docker_stack(), _render_local_stack(), _render_staging_stack()):
+        assert SHARED_SERVICES <= set(stack["services"])
 
 
-def test_both_stacks_render_shared_root_agent_instructions() -> None:
+def test_every_stack_renders_shared_root_agent_instructions() -> None:
     """Every stack root renders the shared agent instructions, ending with the project host body."""
 
     # The stack overlay overwrites the project's root AGENTS.md, so the stack contract
@@ -678,15 +792,17 @@ def test_both_stacks_render_shared_root_agent_instructions() -> None:
     )
     assert _inline_includes(DEV_AGENTS_TEMPLATE).count("# Angee Project Host") == 1
 
-    for agents_template, restart_job in ((DEV_AGENTS_TEMPLATE, "deps"), (LOCAL_AGENTS_TEMPLATE, "py-sync")):
+    for agents_template, restart_job in (
+        (DEV_AGENTS_TEMPLATE, "deps"), (LOCAL_AGENTS_TEMPLATE, "py-sync"), (STAGING_AGENTS_TEMPLATE, "deps"),
+    ):
         include = f'{{% include "../_shared/AGENTS.md.jinja" with restart_job="{restart_job}" %}}'
         assert agents_template.read_text(encoding="utf-8").strip() == include
 
-    for claude_template in (DEV_CLAUDE_TEMPLATE, LOCAL_CLAUDE_TEMPLATE):
+    for claude_template in (DEV_CLAUDE_TEMPLATE, LOCAL_CLAUDE_TEMPLATE, STAGING_CLAUDE_TEMPLATE):
         assert claude_template.is_symlink()
         assert claude_template.readlink() == Path("AGENTS.md")
 
-    for copier_path in (DEV_COPIER, LOCAL_COPIER):
+    for copier_path in (DEV_COPIER, LOCAL_COPIER, STAGING_COPIER):
         copier = yaml.safe_load(copier_path.read_text(encoding="utf-8"))
         assert copier["_preserve_symlinks"] is True
 
@@ -2457,3 +2573,257 @@ def test_worker_free_hosts_have_no_celery_services_or_dependency_holds(render) -
     assert not any(name.startswith("celery-") for name in stack["services"])
     assert stack["jobs"]["py-sync"]["holds"] == ["django"]
     assert stack["jobs"]["compose"]["holds"] == ["django"]
+
+
+# --- staging contracts ---------------------------------------------------------
+
+OMELAS = _repository("git@github.com:phro-gg/angee-omelas.git")
+ARP = _repository("git@github.com:ang-ee/angee-arp.git", ref="release/1")
+BRIDGES = _repository("https://github.com/ang-ee/angee-messaging-bridges.git")
+
+
+def test_staging_stack_asks_only_what_a_deployment_decides() -> None:
+    """Staging fixes the dev stack's mode questions and chains the same project host."""
+
+    manifest = yaml.safe_load(STAGING_COPIER.read_text(encoding="utf-8"))
+    assert manifest["_angee"]["name"] == "staging"
+    assert "inputs" not in manifest["_angee"]
+    fixed = {
+        "runtime_mode", "serve_mode", "addons_profile", "include_arp", "arp_repo", "vcs", "slot_mode",
+        "sources_home", "framework_path", "project_path", "postgres_mode", "redis_mode", "enable_ollama",
+        "storybook_port", "playwright_image", "playwright_mcp_image", "work_state_source",
+    }
+    assert not fixed & set(manifest)
+    for name in ("repositories", "extra_sources"):
+        assert (manifest[name]["type"], manifest[name]["default"]) == ("json", "[]")
+    assert (manifest["deploy_keys"]["type"], manifest["deploy_keys"]["default"]) == ("bool", True)
+
+    (chain,) = manifest["_angee"]["chain"]
+    assert chain["template"] == "../../projects/web"
+    project = yaml.safe_load(PROJECT_COPIER.read_text(encoding="utf-8"))
+    assert set(chain["inputs"]) <= {name for name in project if not name.startswith("_")}
+    for name in ("project_name", "addon_namespace", "repositories", "roots", "appearance_theme_id"):
+        assert chain["inputs"][name] == f"${{inputs.{name}}}"
+    assert chain["inputs"]["framework_workspace"] is True
+    assert (project["repositories"]["type"], project["repositories"]["default"]) == ("json", "[]")
+    # The project resolves the framework from the slot the wrapper names as the stack's framework source.
+    stack = _render_staging_stack()
+    assert chain["inputs"]["framework_source_path"] == stack["sources"]["framework"]["path"] == "workspaces/src/angee"
+    assert str(STAGING_TEMPLATES_SYMLINK.readlink()) == "workspaces/src/angee/templates"
+
+
+def test_staging_stack_is_the_containerized_dev_shape_with_production_serving() -> None:
+    """One wrapper sets what a deployment does not choose; the body renders the rest."""
+
+    stack = _render_staging_stack()
+    assert stack["template"] == {"active": "stacks/staging", "answers_file": ".copier-answers.stack.yml"}
+    assert _render_dev_stack()["template"]["active"] == "stacks/dev"
+    assert set(stack["sources"]) == {"app", "framework", "angee"}
+    assert stack["workspaces"]["src"] == {"template": "workspaces/src"}
+    assert "vcs" not in stack
+    assert stack["ingress"] == {
+        "type": "caddy", "routing": "path", "tls": "auto", "domain": "staging.example.com", "verify": "operator:9000",
+    }
+
+    services = stack["services"]
+    assert set(services) == {"operator", "postgres", "redis", "django", "celery-worker", "frontend"}
+    assert all(service["runtime"] == "container" for service in services.values())
+    assert "manage.py serve" in services["django"]["command"][-1]
+    assert services["django"]["command"][-1].endswith("--workers 0 --production")
+    assert services["django"]["after"] == ["provision", "frontend"]
+    assert services["frontend"]["image"] == "caddy:2.9-alpine"
+    assert services["frontend"]["route"] == {"port": 80, "path": "/", "auth": "none"}
+    assert "ports" not in services["frontend"]
+    # The operator's host port stays on loopback; the edge and the SPA reach it over the compose network.
+    assert services["operator"]["ports"] == ["127.0.0.1:${ports.operator}:9000"]
+    assert "--allowed-origin" in services["operator"]["command"]
+
+    jobs = stack["jobs"]
+    assert set(jobs) == {
+        "deps", "py-sync", "compose", "makemigrations", "provision", "operator-schema", "frontend-build",
+    }
+    assert "--no-editable" in jobs["py-sync"]["command"][-1]
+    assert jobs["frontend-build"]["depends_on"] == ["deps", "compose", "operator-schema"]
+    assert stack["ports"]["ui"] == {"value": 5173, "export_env": "ANGEE_UI_PORT"}
+
+
+def test_dev_tools_render_only_for_framework_development() -> None:
+    """Storybook and the Playwright services follow the dev wrapper's flag, not the flavor."""
+
+    dev_tools = {"storybook", "playwright-server", "playwright-mcp"}
+    assert dev_tools <= set(_render_dev_docker_stack()["services"])
+    for stack in (_render_staging_stack(), _render_local_stack()):
+        assert not dev_tools & set(stack["services"])
+        assert "storybook" not in stack["ports"]
+        assert "playwright-profile" not in stack["persist"]
+
+
+def test_first_admin_and_authored_history_follow_their_wrapper_flags() -> None:
+    """Local and staging bootstrap an administrator; only staging authors its own history."""
+
+    staging = _render_staging_stack()
+    local = _render_local_stack()
+    for stack in (staging, local):
+        assert stack["secrets"]["admin-password"] == {"generated": True, "length": 32}
+        env = stack["jobs"]["provision"]["env"]
+        assert env["YAMLCONF_ANGEE_BOOTSTRAP_ADMIN_USERNAME"] == "admin"
+        assert env["YAMLCONF_ANGEE_BOOTSTRAP_ADMIN_EMAIL"] == "admin@example.com"
+        assert env["YAMLCONF_ANGEE_BOOTSTRAP_ADMIN_PASSWORD"] == "${secret.admin-password}"
+    for stack in (_render_dev_stack(), _render_dev_docker_stack()):
+        assert "admin-password" not in stack["secrets"]
+        assert not any("BOOTSTRAP_ADMIN" in key for key in stack["jobs"]["provision"]["env"])
+
+    # A host with no repository of its own authors the history provision then checks.
+    history = staging["jobs"]["makemigrations"]
+    assert history["command"] == ["uv", "run", "--no-sync", "python", "manage.py", "makemigrations", "--noinput"]
+    assert history["depends_on"] == ["compose"]
+    assert history["holds"] == ["django", "celery-worker"]
+    assert history["env"] == staging["jobs"]["compose"]["env"]
+    assert staging["jobs"]["provision"]["depends_on"] == ["compose", "makemigrations", "postgres"]
+    for stack in (_render_dev_stack(), _render_dev_docker_stack(), local):
+        assert "makemigrations" not in stack["jobs"]
+        assert "makemigrations" not in stack["jobs"]["provision"]["depends_on"]
+
+
+def test_repositories_become_sources_with_a_slot_and_their_own_deploy_key() -> None:
+    """Each entry is one git source the src workspace gets a slot for; SSH ones name a key."""
+
+    stack = _render_staging_stack(repositories=(OMELAS,), extra_sources=(ARP, BRIDGES))
+    assert stack["sources"]["angee-omelas"] == {
+        "kind": "git",
+        "repo": "git@github.com:phro-gg/angee-omelas.git",
+        "default_ref": "main",
+        "cache_path": "sources/angee-omelas",
+        "slot": True,
+        "auth": {"ssh_key_secret": "deploy-key-angee-omelas"},
+    }
+    assert stack["sources"]["angee-arp"] == {
+        "kind": "git",
+        "repo": "git@github.com:ang-ee/angee-arp.git",
+        "default_ref": "release/1",
+        "cache_path": "sources/angee-arp",
+        "slot": True,
+        "auth": {"ssh_key_secret": "deploy-key-angee-arp"},
+    }
+    assert stack["sources"]["angee-messaging-bridges"] == {
+        "kind": "git",
+        "repo": "https://github.com/ang-ee/angee-messaging-bridges.git",
+        "default_ref": "main",
+        "cache_path": "sources/angee-messaging-bridges",
+        "slot": True,
+    }
+    keys = {name: spec for name, spec in stack["secrets"].items() if name.startswith("deploy-key-")}
+    assert keys == {"deploy-key-angee-omelas": {"required": True}, "deploy-key-angee-arp": {"required": True}}
+    # The workspace stays declared once: the operator cuts one slot per marked source.
+    assert stack["workspaces"]["src"] == {"template": "workspaces/src"}
+
+    # A host whose own SSH identity reads every repository asks for no keys.
+    ambient = _render_staging_stack(repositories=(OMELAS,), extra_sources=(ARP,), deploy_keys=False)
+    assert "auth" not in ambient["sources"]["angee-omelas"] and "auth" not in ambient["sources"]["angee-arp"]
+    assert not any(name.startswith("deploy-key-") for name in ambient["secrets"])
+
+
+def test_staging_js_workspace_is_the_dev_one_plus_a_glob_per_repository() -> None:
+    """Staging renders the dev stack's root files through one include each."""
+
+    for staging_file, dev_file in (
+        (STAGING_PNPM_WORKSPACE, DEV_PNPM_WORKSPACE),
+        (STAGING_PACKAGE_TEMPLATE, DEV_PACKAGE_TEMPLATE),
+        (STAGING_STACK_GITIGNORE, DEV_STACK_GITIGNORE),
+    ):
+        include = f'{{% include "../dev/template/{dev_file.name}" %}}'
+        assert staging_file.read_text(encoding="utf-8").strip() == include
+        assert _inline_includes(staging_file).strip() == dev_file.read_text(encoding="utf-8").strip()
+
+    variables = {
+        "web_path": "web", "repositories": json.dumps([OMELAS]), "extra_sources": json.dumps([ARP]),
+    }
+    text = _render_conditionals(_render_item_loops(_inline_includes(STAGING_PNPM_WORKSPACE), variables), variables)
+    workspace = yaml.safe_load(text.replace("{{ web_path }}", "web"))
+    assert workspace["packages"] == [
+        "web",
+        "src/*/*/web",
+        "workspaces/src/angee/packages/*",
+        "workspaces/src/angee/src/angee/*/web",
+        "workspaces/src/angee-omelas/src/*/*/web",
+        "workspaces/src/angee-arp/src/*/*/web",
+    ]
+    assert workspace["globalPnpmfile"] == "workspaces/src/angee/packages/scripts/pnpm-policy.cjs"
+
+
+def test_project_installs_each_repository_from_its_slot_and_appends_named_roots() -> None:
+    """The host requires a repository's distribution by name; the roster takes the named roots."""
+
+    _text, project = _render_project_pyproject(
+        framework_source_path="workspaces/src/angee", framework_workspace=True, repositories=(OMELAS,),
+    )
+    assert project["project"]["dependencies"] == ["angee[postgres]>=3,<4", "angee-omelas"]
+    assert project["tool"]["uv"]["sources"] == {
+        "angee": {"path": "workspaces/src/angee", "editable": True},
+        "angee-omelas": {"path": "workspaces/src/angee-omelas", "editable": True},
+    }
+    # Outside a framework workspace no repository name is ever requested from an index.
+    _text, plain = _render_project_pyproject(framework_source_path="sources/angee", repositories=(OMELAS,))
+    assert plain["project"]["dependencies"] == ["angee[postgres]>=3,<4"]
+    assert set(plain["tool"]["uv"]["sources"]) == {"angee"}
+
+    base = _render_project_settings()["INSTALLED_APPS"]
+    assert _render_project_settings(roots="omelas.operations, omelas.seeds")["INSTALLED_APPS"] == [
+        *base, "omelas.operations", "omelas.seeds",
+    ]
+
+
+def test_public_production_hosts_turn_off_the_development_settings() -> None:
+    """Behind a public name, production rendering overrides the project's DEBUG and wildcard hosts."""
+
+    staging = _render_staging_stack(ingress_aliases="a.example.com, b.example.com")
+    nodes = (staging["services"]["django"], staging["services"]["celery-worker"], staging["jobs"]["provision"])
+    for node in nodes:
+        assert node["env"]["YAMLCONF_DEBUG"] == "false"
+        assert json.loads(node["env"]["YAMLCONF_ALLOWED_HOSTS"]) == [
+            "staging.example.com", "a.example.com", "b.example.com", "django", "localhost", "127.0.0.1",
+        ]
+    dev_public = _render_dev_stack(_runtime_mode="docker", serve_mode="production", ingress_domain="dev.example.com")
+    assert json.loads(dev_public["services"]["django"]["env"]["YAMLCONF_ALLOWED_HOSTS"]) == [
+        "dev.example.com", "django", "localhost", "127.0.0.1",
+    ]
+
+    # Development serving and a localhost stack keep the project's development defaults.
+    for stack in (
+        _render_dev_stack(),
+        _render_dev_docker_stack(ingress_domain="dev.example.com"),
+        _render_dev_stack(_runtime_mode="docker", serve_mode="production"),
+        _render_local_stack(serve_mode="production"),
+        _render_staging_stack(ingress_domain="localhost"),
+    ):
+        env = stack["services"]["django"]["env"]
+        assert "YAMLCONF_DEBUG" not in env and "YAMLCONF_ALLOWED_HOSTS" not in env
+
+
+def test_py_sync_authors_a_missing_python_lock_once() -> None:
+    """A freshly rendered host has no uv.lock; py-sync authors it before the locked sync."""
+
+    for stack in (_render_dev_stack(), _render_dev_docker_stack(), _render_local_stack(), _render_staging_stack()):
+        command = stack["jobs"]["py-sync"]["command"][-1]
+        subprocess.run(["sh", "-n", "-c", command], check=True, timeout=10)
+        assert command.index("if [ ! -f uv.lock ]; then uv lock || exit; fi;") < command.index("exec uv sync --locked")
+
+
+def test_a_product_settings_file_is_the_final_settings_layer_of_every_python_node() -> None:
+    """Staging names a repository's settings file once; every Python node loads it last."""
+
+    plain = _render_staging_stack()
+    product = _render_staging_stack(settings_file="workspaces/src/angee-shop/deploy/settings.yaml")
+    python_nodes = [
+        *(product["jobs"][name] for name in ("py-sync", "compose", "makemigrations", "provision", "operator-schema")),
+        product["services"]["django"],
+        product["services"]["celery-worker"],
+    ]
+    for node in python_nodes:
+        assert node["env"]["YAMLCONF_CONFFILE"] == "/app/workspaces/src/angee-shop/deploy/settings.yaml"
+    for stack in (plain, _render_dev_stack(), _render_dev_docker_stack(), _render_local_stack()):
+        assert not any("YAMLCONF_CONFFILE" in node.get("env", {}) for node in stack["services"].values())
+
+    manifest = yaml.safe_load(STAGING_COPIER.read_text(encoding="utf-8"))
+    assert manifest["settings_file"]["default"] == ""
+    assert "relative to the stack root" in manifest["settings_file"]["validator"]

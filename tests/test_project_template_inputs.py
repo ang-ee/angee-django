@@ -65,3 +65,72 @@ def test_native_project_render_resolves_framework_source_inputs(tmp_path: Path, 
         assert "sources" not in project["tool"]["uv"]
     else:
         assert project["tool"]["uv"]["sources"]["angee"] == {"path": "sources/angee", "editable": True}
+
+
+def test_native_staging_render_wires_repositories_and_their_deploy_keys(tmp_path: Path) -> None:
+    """The operator renders a staging host from repositories alone, with no file edited after."""
+
+    operator = shutil.which("angee")
+    if operator is None:
+        pytest.skip("Native stack rendering requires the Angee operator CLI.")
+    usage = subprocess.run([operator, "init", "--help"], capture_output=True, text=True, timeout=30)
+    if "--repository" not in usage.stdout + usage.stderr:
+        pytest.skip("stacks/staging needs an operator with --repository.")
+    target = tmp_path / "staging"
+    result = subprocess.run(
+        [
+            operator, "init", str(target), "--yes",
+            "--template", str(ROOT / "templates/stacks/staging"),
+            "--input", "project_name=shop",
+            "--input", "ingress_domain=shop.example.com",
+            "--input", "roots=shop.storefront,shop.checkout",
+            "--input", "settings_file=workspaces/src/angee-shop/deploy/settings.yaml",
+            "--repository", "git@github.com:acme/angee-shop.git",
+            "--extra-source", "acme/angee-catalog@release/1",
+        ],
+        cwd=tmp_path, capture_output=True, text=True, timeout=60,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+
+    stack = yaml.safe_load((target / "angee.yaml").read_text())
+    assert stack["template"]["active"] == "stacks/staging"
+    assert stack["ingress"]["domain"] == "shop.example.com"
+    # An addon repository given by SSH URL: a slot, and its own deploy key.
+    assert stack["sources"]["angee-shop"] == {
+        "kind": "git",
+        "repo": "git@github.com:acme/angee-shop.git",
+        "default_ref": "main",
+        "cache_path": "sources/angee-shop",
+        "slot": True,
+        "auth": {"ssh_key_secret": "deploy-key-angee-shop"},
+    }
+    # An extra source given as owner/name@ref: GitHub over https, no key.
+    assert stack["sources"]["angee-catalog"] == {
+        "kind": "git",
+        "repo": "https://github.com/acme/angee-catalog.git",
+        "default_ref": "release/1",
+        "cache_path": "sources/angee-catalog",
+        "slot": True,
+    }
+    assert stack["secrets"]["deploy-key-angee-shop"] == {"required": True}
+    assert "deploy-key-angee-catalog" not in stack["secrets"]
+    assert stack["secrets"]["admin-password"]["generated"] is True
+    assert stack["jobs"]["provision"]["depends_on"] == ["compose", "makemigrations", "postgres"]
+    assert "storybook" not in stack["services"]
+    django_env = stack["services"]["django"]["env"]
+    assert django_env["YAMLCONF_DEBUG"] == "false"
+    assert django_env["YAMLCONF_CONFFILE"] == "/app/workspaces/src/angee-shop/deploy/settings.yaml"
+
+    # The host installs the addon repository from its slot and enables the named roots.
+    project = tomllib.loads((target / "pyproject.toml").read_text())
+    assert "angee-shop" in project["project"]["dependencies"]
+    assert project["tool"]["uv"]["sources"]["angee-shop"] == {"path": "workspaces/src/angee-shop", "editable": True}
+    assert "angee-catalog" not in project["tool"]["uv"]["sources"]
+    settings = yaml.safe_load((target / "settings.yaml").read_text())
+    assert settings["INSTALLED_APPS"][-2:] == ["shop.storefront", "shop.checkout"]
+    workspace = yaml.safe_load((target / "pnpm-workspace.yaml").read_text())
+    assert {
+        "workspaces/src/angee-shop/src/*/*/web", "workspaces/src/angee-catalog/src/*/*/web",
+    } <= set(workspace["packages"])
+    assert (target / "templates").readlink() == Path("workspaces/src/angee/templates")
+    assert "deploy-key-angee-shop" in result.stdout + result.stderr

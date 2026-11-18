@@ -1,11 +1,11 @@
-{# Shared stack manifest body for BOTH stack templates. NOTE: pongo2 (the operator's #}
+{# Shared stack manifest body for EVERY stack template. NOTE: pongo2 (the operator's #}
 {# renderer) only supports SINGLE-LINE jinja comments — never span lines with one {#. #}
-{# The two thin wrappers each set `stack_flavor`, `runtime_mode`, and address #}
+{# The thin wrappers each set `stack_flavor`, `runtime_mode`, and address #}
 {# variables in a `{% set %}` header, then include this one file at column 0. #}
 {# Everything below is the single source of truth for the manifest. stack_flavor #}
 {# selects framework-dev versus self-contained instance structure; runtime_mode #}
 {# selects process versus container execution where those genuinely differ. #}
-{# framework = stacks/dev — owns ingress, the framework source roster, and src workspace. #}
+{# framework = stacks/dev and stacks/staging — owns ingress, the framework source roster, and src workspace. #}
 {#   Both runtimes expose one-shot preparation as jobs in the dependency graph. #}
 {#   Both modes run directly against the framework workspace's source checkouts. #}
 {# instance = stacks/local — owns bootstrap-admin secrets and the static frontend. #}
@@ -14,6 +14,10 @@
 {# (the body composes database_url, redis_url, and celery_broker_url from them), operator_url, #}
 {# mcp_url, operator_bind, pgdata_mount, (process only) app_source; framework_source — plus the dev #}
 {# copier inputs postgres_mode and redis_mode (unset for local), addons_profile, work_state_source, vcs, slot_mode, and (both templates) sentry_dsn / sentry_web_dsn. #}
+{# Three more wrapper-set flags, each empty unless a wrapper sets it: bootstrap_admin (with admin_username and #}
+{# admin_email) renders the first-admin secret and its provision values; dev_tools renders Storybook and the #}
+{# Playwright services of a containerized framework stack; author_history renders the makemigrations job. #}
+{# stack_template is the ref a framework-flavored wrapper records as template.active. #}
 {# Process mode always renders development, even if a caller bypasses the Copier validator. #}
 {% set effective_serve_mode = "development" %}{% if runtime_mode == "docker" %}{% set effective_serve_mode = serve_mode %}{% endif %}{% set database_url = "postgres://"|add:postgres_user|add:":${secret.db-password}@"|add:postgres_address|add:"/"|add:postgres_db %}{% set redis_url = "redis://"|add:redis_address|add:"/"|add:redis_db %}{% set celery_broker_url = "redis://"|add:redis_address|add:"/"|add:redis_broker_db %}
 version: 1
@@ -27,7 +31,7 @@ name: {{ instance_name }}
 
 template:
 {% if stack_flavor == "framework" %}
-  active: stacks/dev
+  active: {{ stack_template }}
 {% endif %}
 {% if stack_flavor == "instance" %}
   active: {{ _src_path }}
@@ -83,7 +87,7 @@ secrets:
   # in .env, so a re-render keeps the key stable.
   secret-key: { generated: true, length: 50 }
   operator-token: { generated: true, length: 32 }
-{% if stack_flavor == "instance" %}
+{% if bootstrap_admin %}
   # First-admin password. Generated into .env and consumed through YAMLCONF so the
   # IAM bootstrap reads the same declarative surface as any operator override.
   admin-password: { generated: true, length: 32 }
@@ -94,6 +98,14 @@ secrets:
   # the DATABASE_URL userinfo with no percent-encoding) and shared by the postgres
   # service and the django DATABASE_URL.
   db-password: { generated: true, length: 32 }{% endif %}
+{% if deploy_keys %}{% for repository in repositories %}{% if repository.ssh %}
+  # The deploy key that reads {{ repository.name }}. Set it before the first bring-up:
+  #   angee secret set deploy-key-{{ repository.name }} --stdin < <private key file>
+  deploy-key-{{ repository.name }}: { required: true }
+{% endif %}{% endfor %}{% for repository in extra_sources %}{% if repository.ssh %}
+  # The deploy key that reads {{ repository.name }}; set it the same way.
+  deploy-key-{{ repository.name }}: { required: true }
+{% endif %}{% endfor %}{% endif %}
 
 ports:
   # The operator daemon's port — services reference it as ${ports.operator}.
@@ -108,11 +120,9 @@ ports:
 {% if postgres_mode == "external" %}{% else %}  postgres: { value: {{ postgres_port }}, export_env: POSTGRES_PORT }
 {% endif %}{% if redis_mode == "external" %}{% else %}  redis: { value: {{ redis_port }}, export_env: REDIS_PORT }{# Optional entries share the outer endif line so disabled output stays byte-identical. #}
 {% endif %}{% if enable_ollama %}  ollama: { value: {{ ollama_port }}, export_env: OLLAMA_PORT }{% endif %}{% endif %}
-{% if runtime_mode == "docker" %}{% if stack_flavor == "framework" %}
+{% if runtime_mode == "docker" %}
   ui: { value: {{ ui_port }}, export_env: ANGEE_UI_PORT }
-  storybook: { value: {{ storybook_port }}, export_env: STORYBOOK_PORT }
-{% endif %}{% if stack_flavor == "instance" %}
-  ui: { value: {{ ui_port }}, export_env: ANGEE_UI_PORT }
+{% if dev_tools %}  storybook: { value: {{ storybook_port }}, export_env: STORYBOOK_PORT }
 {% endif %}{% endif %}
 
 # Local state angee owns and must guarantee exists before any job/container runs.
@@ -125,7 +135,7 @@ persist:
 {% endif %}{% if enable_ollama %}  ollama: { subpath: ./data/ollama, scope: stack }{% endif %}{% endif %}
 {% if runtime_mode == "docker" %}
   # App media/static follows ANGEE_DATA_DIR through the project data mount.
-  app-data: { subpath: ./data, scope: stack }{% if stack_flavor == "framework" %}
+  app-data: { subpath: ./data, scope: stack }{% if dev_tools %}
   # Playwright MCP's persistent Chromium user-data directory.
   playwright-profile: { subpath: ./data/playwright, scope: stack }{% endif %}
 {% if postgres_mode == "external" %}{% else %}  # The Postgres data volume under ./data so one dir holds the instance's mutable state.
@@ -178,6 +188,7 @@ sources:
     default_ref: main
     cache_path: {% if sources_home %}{{ sources_home }}/angee-arp{% else %}sources/angee-arp{% endif %}
 {% endif %}
+{% for repository in repositories %}{% include "../_shared/repository-source.yaml.jinja" %}{% endfor %}{% for repository in extra_sources %}{% include "../_shared/repository-source.yaml.jinja" %}{% endfor %}
 {% if work_state_source and work_state_repo %}
   # The private work-state repo (plans, notes, memory, handovers) the src workspace
   # binds at `.work/`. Declared only when both the name and the repo location are set;
@@ -241,7 +252,8 @@ workspaces:
 jobs:
 {% if stack_flavor == "framework" %}
   # A fresh generated host has no lock: author it once at its JS workspace owner.
-  # Later starts consume that lock; dependency changes author it explicitly.
+  # Later starts consume that lock; dependency changes author it explicitly. py-sync
+  # does the same for a missing uv.lock.
   deps:
 {% if runtime_mode == "process" %}    runtime: local
     workdir: source://app
@@ -276,6 +288,7 @@ jobs:
       - "-c"
       - >-
         if [ "{{ job_dollar }}ANGEE_DEPENDENCY_ACTION" = sync ]; then
+        if [ ! -f uv.lock ]; then uv lock || exit; fi;
         exec uv sync --locked{% if effective_serve_mode == "production" %} --no-editable{% endif %}; fi;
         exec "{{ job_dollar }}UV_PROJECT_ENVIRONMENT/bin/python" -m angee.platform_integrate_operator.preflight{% if effective_serve_mode == "production" %} --no-editable{% endif %}
         -- "{{ job_dollar }}ANGEE_DEPENDENCY_ACTION" "{{ job_dollar }}ANGEE_DEPENDENCY_REQUIREMENT"
@@ -288,13 +301,23 @@ jobs:
     holds: *python-consumers
     depends_on: [py-sync]
 
+{% if author_history %}
+  # This host has no repository of its own to carry reviewed migrations, so it authors
+  # the project history itself before provision checks it. Its data is disposable: a
+  # change that needs a reviewed data step, or drops a populated table, stops here.
+  makemigrations:
+{% include "../_shared/python-runtime.yaml.jinja" with pool_for_django="" %}
+    command: ["uv", "run", "--no-sync", "python", "manage.py", "makemigrations", "--noinput"]
+    holds: *python-consumers
+    depends_on: [compose]
+{% endif %}
   provision:
 {% include "../_shared/python-runtime.yaml.jinja" with pool_for_django="" %}
-{% if stack_flavor == "instance" %}      YAMLCONF_ANGEE_BOOTSTRAP_ADMIN_USERNAME: "admin"
-      YAMLCONF_ANGEE_BOOTSTRAP_ADMIN_EMAIL: "admin@example.com"
+{% if bootstrap_admin %}      YAMLCONF_ANGEE_BOOTSTRAP_ADMIN_USERNAME: "{{ admin_username }}"
+      YAMLCONF_ANGEE_BOOTSTRAP_ADMIN_EMAIL: "{{ admin_email }}"
       YAMLCONF_ANGEE_BOOTSTRAP_ADMIN_PASSWORD: "${secret.admin-password}"
 {% endif %}    command: ["uv", "run", "--no-sync", "python", "manage.py", "provision", "--wait-db", "60"]
-    depends_on: [compose{% if runtime_mode == "docker" %}{% if postgres_mode == "external" %}{% else %}, postgres{% endif %}{% endif %}]
+    depends_on: [compose{% if author_history %}, makemigrations{% endif %}{% if runtime_mode == "docker" %}{% if postgres_mode == "external" %}{% else %}, postgres{% endif %}{% endif %}]
 
   # Compose owns application SDL; this job exports the live operator SDL.
   # Both feed Vite generation and need no provisioned DB.
@@ -534,7 +557,7 @@ services:
     ports:
       - "${ports.ui}:{{ ui_port }}"{% else %}
     route: { port: {{ ui_port }}, path: /, auth: none }{% endif %}{% endif %}
-
+{% if dev_tools %}
   # The workspace dependency job also prepares the workshop and browser tools.
   storybook:
     runtime: container
@@ -583,4 +606,4 @@ services:
     command: ["--headless", "--browser", "chromium", "--no-sandbox", "--host", "0.0.0.0", "--port", "8931", "--allowed-hosts", "*", "--user-data-dir", "/data/profile"]
     after: [frontend]
     route: { port: 8931, auth: forward }
-{% endif %}{% endif %}{% if stack_flavor == "instance" or effective_serve_mode == "production" %}{% include "../_shared/static-frontend.yaml.jinja" %}{% endif %}
+{% endif %}{% endif %}{% endif %}{% if stack_flavor == "instance" or effective_serve_mode == "production" %}{% include "../_shared/static-frontend.yaml.jinja" %}{% endif %}
