@@ -114,8 +114,9 @@ angee --root /srv/shop secret reveal admin-password
 - **Deploy keys.** Every repository given by SSH URL declares a required secret
   `deploy-key-<name>` and `sources.<name>.auth.ssh_key_secret`. The operator
   fetches that source with that key alone, so two private repositories on one git
-  host need no `~/.ssh/config` aliases. `angee up` stops on an unset key and names
-  it. `--input deploy_keys=false` falls back to the SSH identity under
+  host need no `~/.ssh/config` aliases. `angee secret list` shows the keys a
+  stack declares; `angee up` stops before cloning on an unset one and gives the
+  command that sets it. `--input deploy_keys=false` falls back to the SSH identity under
   `operator_home`.
 - **Migration history.** The `makemigrations` job runs between `compose` and
   `provision` and writes `runtime/*/migrations` on the host. That history exists

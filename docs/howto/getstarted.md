@@ -280,7 +280,8 @@ angee --root /srv/shop up
 angee --root /srv/shop secret reveal admin-password
 ```
 
-`init` prints the deploy keys the stack requires. `angee up` clones the
+`angee secret list` names the deploy keys the stack requires; `angee up`
+stops before cloning and gives the command for any key still unset. It clones the
 repositories, cuts the `workspaces/src` slots, installs, composes, authors the
 host's migration history, provisions with a first administrator and builds the
 SPA. The flags, the deploy keys and the disposable-data contract are described in

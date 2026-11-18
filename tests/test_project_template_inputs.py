@@ -133,4 +133,10 @@ def test_native_staging_render_wires_repositories_and_their_deploy_keys(tmp_path
         "workspaces/src/angee-shop/src/*/*/web", "workspaces/src/angee-catalog/src/*/*/web",
     } <= set(workspace["packages"])
     assert (target / "templates").readlink() == Path("workspaces/src/angee/templates")
-    assert "deploy-key-angee-shop" in result.stdout + result.stderr
+    # The keys to set before the first bring-up are the stack's declared deploy-key secrets.
+    listed = subprocess.run(
+        [operator, "--root", str(target), "secret", "list"], cwd=tmp_path, capture_output=True, text=True, timeout=30,
+    )
+    assert listed.returncode == 0, listed.stdout + listed.stderr
+    assert "deploy-key-angee-shop" in listed.stdout
+    assert "deploy-key-angee-catalog" not in listed.stdout
