@@ -1,0 +1,25 @@
+{# stacks/staging wrapper: a remote, public, container host. It renders the shared #}
+{# body the way stacks/dev's Docker mode does, with the choices a deployment does #}
+{# not make fixed here instead of asked: containers, production serving, bundled #}
+{# Postgres and Redis, and the framework slot of the src workspace. #}
+{% set stack_flavor = "framework" %}
+{% set stack_template = "stacks/staging" %}
+{% set runtime_mode = "docker" %}
+{% set serve_mode = "production" %}
+{# A host with no repository of its own: first administrator at provision, and its own migration history. #}
+{% set bootstrap_admin = "true" %}
+{% set author_history = "true" %}
+{% set container_project_dir = "/app" %}
+{% set ingress_domain_value = ingress_domain %}
+{% set app_source = "." %}
+{% set framework_source = "workspaces/src/angee" %}
+{# Address variables: containers reach services and the operator through Compose DNS. #}
+{% set postgres_user = "angee" %}{% set postgres_db = "angee" %}{% set postgres_address = "postgres:5432" %}
+{% set redis_address = "redis:6379" %}{% set redis_db = "0" %}{% set redis_broker_db = "1" %}
+{% set operator_url = "http://operator:9000" %}
+{% set mcp_url = "http://django:8000/mcp" %}
+{# The edge and the frontend reach the operator over the compose network; its host port stays on loopback. #}
+{% set operator_bind = "127.0.0.1" %}
+{% set pgdata_mount = "./data/pgdata" %}
+{% set uv_cache_dir = "/app/caches/uv" %}
+{% include "../_shared/stack-body.yaml.jinja" %}
