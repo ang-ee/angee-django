@@ -848,7 +848,7 @@ def test_attendees_keep_the_address_the_feed_gave(subscription: Subscription) ->
 
 
 def test_a_feed_over_the_event_cap_fails_its_poll(subscription: Subscription, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(ics_backend, "_EVENTS_PER_FEED", 2)
+    monkeypatch.setattr(IcsCalendarBackend, "events_per_feed", 2)
 
     with pytest.raises(BridgeSyncError) as refused:
         subscription.poll()
@@ -880,16 +880,12 @@ def test_a_feed_rule_beyond_the_fields_bounds_is_an_invalid_event(subscription: 
     assert "launch@example.test" in subscription.events()
 
 
-def test_a_status_only_change_derives_no_series_end(
-    subscription: Subscription, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_a_status_only_change_derives_no_series_end(subscription: Subscription) -> None:
     subscription.poll()
-    series_end = subscription.events()["standup@example.test"].series_end
-
-    def refuse(self: Any) -> None:
-        raise AssertionError("a status-only save derived the series end")
-
-    monkeypatch.setattr(CalendarEvent, "_derive_series_end", refuse)
+    master = subscription.events()["standup@example.test"]
+    # A stored series end the rule would never derive: a save that derived it again would replace it.
+    series_end = master.series_end + timedelta(days=7)
+    CalendarEvent.system_queryset().filter(pk=master.pk).update(series_end=series_end)
     subscription.feed.body = _feed(
         STANDUP.replace("SUMMARY:Standup", "SUMMARY:Standup\nSTATUS:TENTATIVE"), MOVED, HOLIDAY, BERLIN_EVENT, LAUNCH
     )
@@ -932,7 +928,7 @@ def test_cancelled_instances_count_against_the_feed_cap(
     subscription: Subscription, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     # Five VEVENTs pass the count before parsing; with its cancelled 16 March instance the feed produces six.
-    monkeypatch.setattr(ics_backend, "_EVENTS_PER_FEED", 5)
+    monkeypatch.setattr(IcsCalendarBackend, "events_per_feed", 5)
 
     with pytest.raises(BridgeSyncError) as refused:
         subscription.poll()
@@ -943,7 +939,7 @@ def test_cancelled_instances_count_against_the_feed_cap(
 def test_a_feed_over_the_time_zone_cap_fails_before_it_is_parsed(
     subscription: Subscription, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr(ics_backend, "_TIMEZONES_PER_FEED", 0)
+    monkeypatch.setattr(IcsCalendarBackend, "timezones_per_feed", 0)
 
     with pytest.raises(BridgeSyncError) as refused:
         subscription.poll()
@@ -1190,7 +1186,7 @@ END:VEVENT"""
 def test_a_parameterised_begin_line_counts_against_the_time_zone_cap(
     subscription: Subscription, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr(ics_backend, "_TIMEZONES_PER_FEED", 0)
+    monkeypatch.setattr(IcsCalendarBackend, "timezones_per_feed", 0)
     subscription.feed.body = subscription.feed.body.replace("BEGIN:VTIMEZONE", "BEGIN;X-NOTE=1:VTIMEZONE")
 
     with pytest.raises(BridgeSyncError) as refused:
@@ -1399,7 +1395,7 @@ def test_the_reconciler_goes_on_past_a_source_whose_purge_fails(
 
 def test_every_parse_path_runs_against_a_deadline(subscription: Subscription, monkeypatch: pytest.MonkeyPatch) -> None:
     subscription.poll()
-    monkeypatch.setattr(ics_backend, "_PARSE_SECONDS", -1.0)
+    monkeypatch.setattr(IcsCalendarBackend, "parse_seconds", -1.0)
     backend = IcsCalendarBackend(CalendarSource.objects.sudo(reason="tests.ics").get(pk=subscription.source.pk))
 
     # An identity read before any extraction knows no sync deadline: it gets the parse budget.
@@ -1482,7 +1478,11 @@ def test_each_parse_path_stops_at_the_sync_deadline(subscription: Subscription) 
         with pytest.raises(IcsError, match="took too long"):
             advance_stream(subscription.stream(), backend)
     # Zone resolution, observance by observance.
-    feed = ics_backend._read(_custom_zone_feed("-0500", "-0400").encode())
+    feed = ics_backend._read(
+        _custom_zone_feed("-0500", "-0400").encode(),
+        events=IcsCalendarBackend.events_per_feed,
+        timezones=IcsCalendarBackend.timezones_per_feed,
+    )
     with pytest.raises(IcsError, match="took too long"):
         ics_backend._Zones(feed, deadline=past).resolve("Custom Zone")
     # An identity read reads the same one; outside the sync there is none.
@@ -1515,13 +1515,13 @@ def test_a_bridge_sync_hands_its_deadline_to_every_partition(
     subscription: Subscription, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     seen: list[float | None] = []
-    events_now = IcsCalendarBackend._events_now
+    event_keys = IcsCalendarBackend.event_keys
 
-    def watched(self: IcsCalendarBackend, stream: Any) -> Any:
+    def watched(self: IcsCalendarBackend, stream: Any) -> list[str]:
         seen.append(sync_deadline())
-        return events_now(self, stream)
+        return event_keys(self, stream)
 
-    monkeypatch.setattr(IcsCalendarBackend, "_events_now", watched)
+    monkeypatch.setattr(IcsCalendarBackend, "event_keys", watched)
     subscription.poll()
     subscription.sweep()
 
@@ -1593,7 +1593,11 @@ END:VEVENT"""
 
 
 def test_an_exdate_list_stops_at_the_sync_deadline() -> None:
-    feed = ics_backend._read(_feed(STANDUP).encode())
+    feed = ics_backend._read(
+        _feed(STANDUP).encode(),
+        events=IcsCalendarBackend.events_per_feed,
+        timezones=IcsCalendarBackend.timezones_per_feed,
+    )
     [standup] = feed.walk("VEVENT")
     zones = ics_backend._Zones(feed)
 
@@ -1601,7 +1605,8 @@ def test_an_exdate_list_stops_at_the_sync_deadline() -> None:
     with pytest.raises(IcsError, match="took too long"):
         ics_backend._events(
             standup, uid="standup@example.test", zones=zones, zone="America/New_York", feed_zone="America/New_York",
-            calendar_zone="UTC", master=standup, deadline=monotonic() - 1,
+            calendar_zone="UTC", master=standup, exdate_cap=IcsCalendarBackend.events_per_feed,
+            deadline=monotonic() - 1,
         )
 
 
