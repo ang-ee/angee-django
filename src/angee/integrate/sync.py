@@ -46,9 +46,15 @@ def sync_deadline_context(deadline: float | None) -> Iterator[float | None]:
     """Make ``deadline`` (a ``time.monotonic()`` instant) the one the sync running here must stop by.
 
     The bridge sync sets it once for its cycle; a partition drained on a pool
-    worker inherits it through the copied context.
+    worker inherits it through the copied context. A stream driver called with a
+    ``deadline=`` enters it too, so a direct caller's deadline reaches the adapter's
+    nested reads; ``None`` keeps the enclosing one (a driver called without a
+    deadline under a sync stops by the sync's).
     """
 
+    if deadline is None:
+        yield _sync_deadline.get()
+        return
     token = _sync_deadline.set(deadline)
     try:
         yield deadline
@@ -60,7 +66,8 @@ def sync_deadline() -> float | None:
     """Return the ``time.monotonic()`` instant the sync running here must stop by, or ``None`` outside one.
 
     An adapter that parses or fetches where the driver passes no deadline (an
-    identity read, the absence sweep's enumeration) stops there.
+    extraction's nested parse, an identity read, the absence sweep's enumeration)
+    stops there.
     """
 
     return _sync_deadline.get()

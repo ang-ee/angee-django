@@ -37,6 +37,7 @@ from angee.integrate.impl import BridgeImpl
 from angee.integrate.models import IntegrationLifecycle
 from angee.integrate.states import LinkStatus, StreamDefinition, SyncFailureKind
 from angee.integrate.streams import ApplyResult, RecordChange, SemanticError, StreamPage
+from angee.scheduling.recurrence import utc_stamp
 
 CALENDARS_STREAM = "calendars"
 """The stream of a source's remote calendars: one record per calendar, linked to its ``Calendar``."""
@@ -151,20 +152,10 @@ def series_key(uid: str) -> str:
     return "sha256:" + hashlib.sha256(uid.encode()).hexdigest()
 
 
-def basic_instant(moment: datetime) -> str:
-    """Return a moment as UTC ISO-8601 basic: an occurrence id's and an instance key's suffix.
-
-    ``isoformat`` pads every year to four digits on every platform; ``strftime`` need not.
-    """
-
-    stamp = moment.astimezone(UTC).replace(tzinfo=None).isoformat(timespec="seconds")
-    return stamp.replace("-", "").replace(":", "") + "Z"
-
-
 def instance_key(uid: str, original_start: datetime) -> str:
     """Return the external key of one instance of the series ``uid``: its series key plus its UTC instant."""
 
-    return f"{series_key(uid)}#{basic_instant(original_start)}"
+    return f"{series_key(uid)}#{utc_stamp(original_start)}"
 
 
 def normalized_address(address: str) -> str:

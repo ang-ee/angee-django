@@ -43,10 +43,12 @@ writes, cancels or removes its events (:meth:`Calendar.takes_write`).
 from __future__ import annotations
 
 import logging
+import operator
 from collections import defaultdict
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime, time, timedelta
+from functools import reduce
 from typing import Any, ClassVar, Self, cast
 
 from celery.exceptions import SoftTimeLimitExceeded
@@ -82,7 +84,6 @@ from angee.calendar.backends import (
     ParsedAttendee,
     ParsedCalendar,
     ParsedEvent,
-    basic_instant,
     normalized_address,
 )
 from angee.calendar.choices import (
@@ -103,7 +104,7 @@ from angee.provenance.contrib.angee.managers import AngeeHistoryManager
 from angee.provenance.contrib.angee.querysets import AngeeHistoryQuerySet
 from angee.provenance.statements import Aspect, SourceKind, StatementRecords, StatementsMixin
 from angee.scheduling.fields import RecurrenceField, TimeZoneField
-from angee.scheduling.recurrence import Recurrence, moment_after
+from angee.scheduling.recurrence import Recurrence, moment_after, utc_stamp
 from angee.scheduling.zones import get_zone_info
 from angee.tags.models import TaggedModel
 
@@ -229,21 +230,11 @@ def _row_moments(
 ) -> list[EventMoment]:
     """Return one annotated row's shown moments meeting ``[window_start, window_end)``, minus ``replaced``."""
 
-    zone = cast(Any, row).occurrence_zone
-    if row.recurrence:
-        lower = _earlier(window_start, row.end - row.start + timedelta(days=1))
-        starts = Recurrence(row.recurrence).occurrences(row.start, lower, window_end, zone=zone)
-        starts = [start for start in starts if start not in replaced]
-    else:
-        starts = [row.start]
-    moments = []
-    for start in starts:
-        end = row.occurrence_end(start, zone=zone)
-        if start < window_end and (end > window_start or start >= window_start):
-            moments.append(
-                EventMoment(row, cast(Any, row).occurrence_calendar, cast(Any, row).occurrence_series or "", start, end)
-            )
-    return moments
+    annotated = cast(Any, row)
+    return [
+        EventMoment(row, annotated.occurrence_calendar, annotated.occurrence_series or "", start, end)
+        for start, end in row.spans(window_start, window_end, zone=annotated.occurrence_zone, replaced=replaced)
+    ]
 
 
 def _intervals_meet(left: Sequence[tuple[datetime, datetime]], right: Sequence[tuple[datetime, datetime]]) -> bool:
@@ -472,7 +463,13 @@ class Calendar(OwnerMixin, ArchiveMixin, StatementsMixin, HistoryMixin, AngeeDat
 class CalendarEventQuerySet(AngeeHistoryQuerySet[Any]):
     """Event rows that expand to the occurrences a calendar shows."""
 
-    def moments(self, window_start: datetime, window_end: datetime, *, strict: bool = False) -> list[EventMoment]:
+    def moments(
+        self,
+        window_start: datetime,
+        window_end: datetime,
+        *,
+        refuse_unreadable: Callable[[Any], bool] | None = None,
+    ) -> list[EventMoment]:
         """Return every shown moment of these rows that meets ``[window_start, window_end)``.
 
         A moment meets the window when it starts before ``window_end`` and ends
@@ -488,9 +485,11 @@ class CalendarEventQuerySet(AngeeHistoryQuerySet[Any]):
         ``series_end`` is at or before it. An open-ended series is always read. A row
         whose expansion is refused (:data:`UNEXPANDABLE`: a window past the cap, an
         occurrence past the representable dates) is skipped, noted at debug level, so
-        it never fails the read; a ``strict`` read (the overlap check) refuses
-        instead, naming that row (:data:`UNEXPANDABLE_MESSAGE`, code ``unexpandable``),
-        since a row it cannot read might be the one it meets.
+        it never fails the read, unless ``refuse_unreadable`` holds for it (the overlap
+        check's: a row that might be the one it meets): then the read refuses, naming
+        that row (:data:`UNEXPANDABLE_MESSAGE`, code ``unexpandable``). Order the
+        queryset to name the same row each time. The predicate never narrows the rows
+        read, so every override still replaces its instance.
         """
 
         window_start, window_end = _clamped(window_start), _clamped(window_end)
@@ -533,7 +532,7 @@ class CalendarEventQuerySet(AngeeHistoryQuerySet[Any]):
                 codes = _codes(error)
                 if not codes or not codes <= UNEXPANDABLE:
                     raise
-                if strict:
+                if refuse_unreadable is not None and refuse_unreadable(row):
                     raise ValidationError(
                         UNEXPANDABLE_MESSAGE, code="unexpandable", params={"title": row.title or row.sqid}
                     ) from error
@@ -1017,20 +1016,6 @@ class CalendarEvent(
             return {"end": "An all-day event lasts at least one day."}
         return {}
 
-    def _held_by_record_edges(self) -> bool:
-        """Whether a live record edge outside this row (a sync's record link) still names it.
-
-        Such a row belongs to that edge's owner: its sync removes or rewrites it
-        through its own stream, so the calendar neither deletes nor detaches it.
-        Which edge rows are live and blocking is each edge's own policy
-        (:meth:`~angee.base.models.merge_references.Reference.live_rows`).
-        """
-
-        return any(
-            isinstance(reference, EdgeReference) and reference.live_rows(self).exists()
-            for reference in references(type(self))
-        )
-
     def series_defaults(self) -> dict[str, str]:
         """The values an override of this master takes when its insert omits them: visibility and transparency."""
 
@@ -1069,6 +1054,32 @@ class CalendarEvent(
             raise ValidationError(OUT_OF_RANGE_MESSAGE, code="out_of_range")
         return set(Recurrence(self.recurrence).occurrences(self.start, first, end, zone=zone))
 
+    def spans(
+        self, window_start: datetime, window_end: datetime, *, zone: str, replaced: Collection[datetime] = ()
+    ) -> list[tuple[datetime, datetime]]:
+        """Return this row's ``(start, end)`` spans meeting ``[window_start, window_end)`` in ``zone``, sorted.
+
+        A span meets the window when it starts before ``window_end`` and ends after
+        ``window_start`` (a zero-length one at ``window_start`` counts). A single row
+        is its own span; a series' instances are read from one instance's length (and
+        a day) before the window, so one that began earlier and runs into it meets it,
+        minus the instances in ``replaced`` (its overrides'). The one span reader of a
+        calendar read (``CalendarEventQuerySet.moments``) and the overlap check.
+        """
+
+        if self.recurrence:
+            lower = _earlier(window_start, self.end - self.start + timedelta(days=1))
+            starts = Recurrence(self.recurrence).occurrences(self.start, lower, window_end, zone=zone)
+            starts = [start for start in starts if start not in replaced]
+        else:
+            starts = [self.start]
+        found = []
+        for start in starts:
+            end = self.occurrence_end(start, zone=zone)
+            if start < window_end and (end > window_start or start >= window_start):
+                found.append((start, end))
+        return found
+
     def horizon_end(self, since: datetime) -> datetime:
         """Return where :attr:`overlap_horizon` from ``since`` ends, within the dates the calendar reaches.
 
@@ -1080,21 +1091,20 @@ class CalendarEvent(
         return min(moment_after(since, self.overlap_horizon) or _LATEST, _LATEST)
 
     def _overlap_span(self) -> tuple[datetime, datetime]:
-        """Return the span ``[since, until)`` whose instances of this series the overlap check judges.
+        """Return the span ``[since, until)`` of this row the overlap check judges (D-R8).
 
-        From now, or the series' start when that is later, :attr:`overlap_horizon` on
-        (:meth:`horizon_end`), and no further than its stored ``series_end``; a series
-        that ended before now is judged on its last horizon. However old or long the
-        series, the check reads one horizon of it and of every other row.
+        From now, or the row's start when that is later, :attr:`overlap_horizon` on
+        (:meth:`horizon_end`), and no further than the row ends: a series' stored
+        ``series_end``, a single row's ``end``. A series and a single row alike: one
+        wholly before now has an empty span and is never judged, and nothing is
+        judged against its past. However old or long the series, the check reads one
+        horizon of it and of every other row.
         """
 
-        now = timezone.now()
-        if self.series_end is not None and self.series_end <= now:
-            since = max(self.start, _earlier(self.series_end, self.overlap_horizon))
-        else:
-            since = max(self.start, now)
+        since = max(self.start, timezone.now())
         until = self.horizon_end(since)
-        return since, until if self.series_end is None else min(until, self.series_end)
+        ends = self.series_end if self.recurrence else self.end
+        return since, until if ends is None else min(until, ends)
 
     def _refuse_unreadable_series(self) -> None:
         """Refuse a series past the save-time cap (R-R1), open-ended or bounded alike.
@@ -1217,9 +1227,11 @@ class CalendarEvent(
         representable dates is no instance. Each moved override is judged on its own
         (:meth:`is_instance`, one window each), however far apart they lie. Overrides
         move in the shift's direction, so two never claim the same instance at once.
-        An override a
-        sync still links (a protecting record edge names it) is left to that sync,
-        neither detached nor deleted: a stranded one suppresses no instance.
+        An override a sync still links (a live record edge outside it names it, each
+        edge's own policy:
+        :meth:`~angee.base.models.merge_references.Reference.live_pointing`) is left to
+        that sync, neither detached nor deleted: a stranded one suppresses no instance.
+        Which overrides are so held is read once, for all of them.
         """
 
         old_tz, zone = get_zone_info(previous_zone), self.expansion_zone
@@ -1228,7 +1240,14 @@ class CalendarEvent(
             tzinfo=None
         )
         order = "-original_start" if shift > timedelta(0) else "original_start"
-        overrides = list(type(self)._base_manager.filter(series_id=self.pk).order_by(order, "pk"))
+        rows = type(self)._base_manager.filter(series_id=self.pk)
+        overrides = list(rows.order_by(order, "pk"))
+        edges = [
+            reference.live_pointing(type(self))
+            for reference in references(type(self))
+            if isinstance(reference, EdgeReference)
+        ]
+        held = set(rows.filter(reduce(operator.or_, edges)).values_list("pk", flat=True)) if edges else set()
         moves: dict[Any, datetime | None] = {}
         for override in overrides:
             # The check constraint keeps an override's original_start set.
@@ -1246,7 +1265,7 @@ class CalendarEvent(
                 override.original_start = moved
                 override.allow_immutable_save("original_start")
                 override.save(update_fields=["original_start", "updated_at"])
-            elif override._held_by_record_edges():
+            elif override.pk in held:
                 # A synced row: its sync tombstones the old instance through its own stream.
                 continue
             elif override.status == EventStatus.CANCELLED:
@@ -1259,15 +1278,20 @@ class CalendarEvent(
     def _refuse_overlap(self) -> None:
         """Refuse this busy event when any of its instances meets another busy occurrence on a ``refuse`` calendar.
 
-        A single row's ``[start, end)`` is checked, or each instance of a series in
-        its :meth:`_overlap_span` (a horizon from now), minus the instances its own
-        overrides replace. Both sides are sorted and swept once. This row's stored
-        copy, a master's own overrides, and the instance an override replaces are not
-        others. :meth:`save` calls it after the write it judges, which the REBAC save
-        gates have admitted (a rehearsed save never reaches it), so every row is read
-        as system work; the refusal names no other event. It fails closed: another
-        row it cannot expand refuses the save, naming that row
-        (:data:`UNEXPANDABLE_MESSAGE`), rather than pass as no clash.
+        This row is judged over its :meth:`_overlap_span` only, from now (D-R8): a
+        single row's ``[start, end)``, or each instance of a series, minus the
+        instances its own overrides replace, each from now at the earliest. A row
+        wholly before now is not judged. Both sides are sorted and swept once. This
+        row's stored copy, a master's own overrides, and the instance an override
+        replaces are not others. :meth:`save` calls it after the write it judges,
+        which the REBAC save gates have admitted (a rehearsed save never reaches it),
+        so every row is read as system work; the refusal names no other event.
+
+        It fails closed: another row it cannot expand refuses the save, naming that
+        row (the first by primary key; :data:`UNEXPANDABLE_MESSAGE`), rather than pass
+        as no clash, when it could be the clash: a busy row that is not this row's
+        own (its stored copy, its overrides, the master behind this override). A free
+        unreadable row, or this row's own, is skipped as any read skips it.
         """
 
         if self.calendar_id is None or self.start is None or self.end is None or self.end <= self.start:
@@ -1281,12 +1305,18 @@ class CalendarEvent(
         mine = self._own_instances()
         if not mine:
             return
-        rows = type(self).system_queryset().filter(calendar_id=self.calendar_id)
+        rows = type(self).system_queryset().filter(calendar_id=self.calendar_id).order_by("pk")
         # The window stops short of the largest date, so another series expanding in a
         # zone ahead of UTC cannot overflow it; nothing past that margin is judged.
         window = (min(mine[0][0], _LATEST), min(max(end for _start, end in mine), _LATEST))
+
+        def could_clash(other: Any) -> bool:
+            return other.transparency == EventTransparency.BUSY and not (
+                self._owns(other) or other.pk == self.series_id
+            )
+
         try:
-            shown = rows.moments(*window, strict=True)
+            shown = rows.moments(*window, refuse_unreadable=could_clash)
         except ValidationError as error:
             if _codes(error) != {"unexpandable"}:
                 raise
@@ -1300,26 +1330,32 @@ class CalendarEvent(
             raise ValidationError({"start": OVERLAP_MESSAGE})
 
     def _own_instances(self) -> list[tuple[datetime, datetime]]:
-        """This row's instances, sorted: itself, or its series' in its :meth:`_overlap_span`."""
+        """This row's spans in its :meth:`_overlap_span`, sorted, none starting before that span.
 
-        if not self.recurrence:
-            return [(self.start, self.end)]
-        zone = self.expansion_zone
-        # The horizon stops short of the largest date, so a far-future start cannot overflow it.
-        starts = Recurrence(self.recurrence).occurrences(self.start, *self._overlap_span(), zone=zone)
+        A single row, or a series' instance, that began before now is judged from
+        now; a row wholly before now has none.
+        """
+
+        since, until = self._overlap_span()
+        if until <= since:
+            return []
         replaced: set[datetime] = set()
-        if self.pk is not None:
+        if self.recurrence and self.pk is not None:
             stored = type(self)._base_manager.filter(series_id=self.pk)
             replaced = {start for start in stored.values_list("original_start", flat=True) if start is not None}
-        return [(start, self.occurrence_end(start, zone=zone)) for start in starts if start not in replaced]
+        spans = self.spans(since, until, zone=self.expansion_zone, replaced=replaced)
+        return sorted((max(start, since), end) for start, end in spans)
+
+    def _owns(self, other: Any) -> bool:
+        """Whether ``other`` is this row: its stored copy, or (a master's) one of its overrides."""
+
+        return self.pk is not None and (other.pk == self.pk or other.series_id == self.pk)
 
     def _is_own(self, moment: EventMoment) -> bool:
         """Whether ``moment`` is this row's own: its stored copy, its overrides, or the instance it replaces."""
 
         other = moment.event
-        if self.pk is not None and (other.pk == self.pk or other.series_id == self.pk):
-            return True
-        return other.pk == self.series_id and moment.start == self.original_start
+        return self._owns(other) or (other.pk == self.series_id and moment.start == self.original_start)
 
     def occurrence_end(self, start: datetime, *, zone: str = "") -> datetime:
         """Return the end of this row's occurrence starting at ``start``, expanded in ``zone``.
@@ -1354,10 +1390,10 @@ class CalendarEvent(
         if self.series_id is not None and self.original_start is not None:
             if not series:
                 raise ValueError("An override's occurrence id needs its master's public id.")
-            return f"{series}:{basic_instant(self.original_start)}"
+            return f"{series}:{utc_stamp(self.original_start)}"
         if not self.recurrence:
             return self.sqid
-        return f"{self.sqid}:{basic_instant(start)}"
+        return f"{self.sqid}:{utc_stamp(start)}"
 
     def reschedule(self, start: datetime, end: datetime) -> Self:
         """Move this single row to new ``start``/``end``, validate, and persist with history.

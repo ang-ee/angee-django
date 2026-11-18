@@ -415,7 +415,7 @@ def advance_stream(
         raise RuntimeError("Stream extraction must run outside a database transaction.")
     if page_bound < 1:
         raise ValueError("page_bound must be positive.")
-    with system_context(reason="integrate.stream.advance"):
+    with system_context(reason="integrate.stream.advance"), sync_deadline_context(deadline):
         stream.refresh_from_db()
         if stream.resync_required:
             return reset_stream(stream, cursor={})
@@ -678,7 +678,11 @@ def push_stream(
         raise RuntimeError("Remote writes must run outside a database transaction.")
     count = 0
     failures: list[str] = []
-    with changeset(fresh=True, activity="push", origin=stream), system_context(reason="integrate.stream.push"):
+    with (
+        changeset(fresh=True, activity="push", origin=stream),
+        system_context(reason="integrate.stream.push"),
+        sync_deadline_context(deadline),
+    ):
         stream.refresh_from_db()
         if not stream.writes_back or stream.adopts_baseline():
             return PageResult(stream, exhausted=True)
@@ -819,7 +823,11 @@ def reconcile_stream(stream: Any, adapter: BridgeImpl, *, page_bound: int = 100,
         raise RuntimeError("Remote enumeration must run outside a database transaction.")
     if page_bound < 1:
         raise ValueError("page_bound must be positive.")
-    with changeset(fresh=True, activity="pull", origin=stream), system_context(reason="integrate.stream.reconcile"):
+    with (
+        changeset(fresh=True, activity="pull", origin=stream),
+        system_context(reason="integrate.stream.reconcile"),
+        sync_deadline_context(deadline),
+    ):
         manager = type(stream).objects
         identity_reads = adapter.supports_identity_reads
         stream.refresh_from_db()

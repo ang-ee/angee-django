@@ -14,6 +14,7 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
+from django.utils import timezone
 from rebac import PermissionDenied, actor_context, system_context, to_subject_ref
 from rebac.testing import assert_decisions
 
@@ -248,10 +249,14 @@ mutation ($calendar: ID!, $start: DateTime!, $end: DateTime!) {
 """
 
 
-def test_a_refused_insert_on_a_refuse_calendar_learns_nothing_of_its_events(world: SimpleNamespace) -> None:
+def test_a_refused_insert_on_a_refuse_calendar_learns_nothing_of_its_events(
+    world: SimpleNamespace, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """A reader may not insert; the refusal names no event and does not say the time is taken."""
 
     w = world
+    # The overlap check judges from now: before this July's events.
+    monkeypatch.setattr(timezone, "now", lambda: datetime(2026, 7, 1, tzinfo=UTC))
     with system_context(reason="tests.calendar.access.setup"):
         w.calendar.overlap_policy = "refuse"
         w.calendar.save(update_fields=["overlap_policy", "updated_at"])
