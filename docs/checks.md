@@ -597,13 +597,15 @@ Consumer repositories call the same reusable checks with `uv-enabled: false`,
 `consumer-sources` (repository, sibling slot path, ref), `consumer-roots`,
 `consumer-path`, `consumer-tests`, and optional `consumer-pytest-plugins` inputs.
 The caller revision replaces its source ref; dependency revisions remain explicit.
-The full declared Python collection runs once across six `stack-shard` jobs,
-using native pytest-split `least_duration` assignment. Without stored consumer
-timings, the plugin balances test counts with equal weights. Each shard renders
-and composes its own host, resolves native distribution requirements, and
-collects the declared Python paths with `python_files=test*.py` on PostgreSQL.
-Only group 1 provisions the host database, for its smoke; the test shards never
-read it.
+A consumer call runs six `stack-shard` jobs. Each renders and composes its own
+host and resolves native distribution requirements. Group 1 provisions the host
+database, smokes it and runs the composed checks below. Groups 2–6 split the
+full declared Python collection five ways with native pytest-split
+`least_duration` assignment, so no shard carries both the checks and a test
+share inside the 60-minute job limit. Without stored consumer timings, the plugin
+balances test counts with equal weights. The test shards collect the declared
+Python paths with `python_files=test*.py` on PostgreSQL and never read the host
+database.
 Four native pytest-xdist workers use `--dist worksteal` inside each shard, so long
 consumer intake modules can use every worker. Each worker loads the configured
 host through its authored `settings` module; pytest-django owns its separate test
@@ -615,7 +617,7 @@ must defer model imports until Django's app registry is populated. Check tools
 come from the framework lockfile.
 
 Group 1 runs consumer Ruff/mypy and, after host SDL/codegen, the consumer's web
-fragment typechecks and tests. Mypy resolves composition targets through the
+fragment typechecks and tests; it runs no consumer Python tests. Mypy resolves composition targets through the
 native source roots of all declared `consumer-sources`, including sibling
 dependencies. Optional full-profile bridge tests also run only in group 1.
 Calls without a consumer use one execution job. The `stack` aggregate
