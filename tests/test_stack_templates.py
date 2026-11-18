@@ -2875,3 +2875,18 @@ def test_the_shared_celery_worker_runs_a_bounded_prefork_pool(render) -> None:
     for path in (DEV_COPIER, LOCAL_COPIER, STAGING_COPIER):
         question = yaml.safe_load(path.read_text(encoding="utf-8"))["celery_concurrency"]
         assert (question["type"], question["default"]) == ("int", 2)
+
+
+def test_caddy_script_opens_without_a_blank_line_whatever_the_ingress() -> None:
+    """The operator re-saves the manifest; a block scalar opening with a blank line comes back unparsable."""
+
+    for stack in (
+        _render_staging_stack(ingress_domain="localhost"),
+        _render_staging_stack(),
+        _render_dev_stack(_runtime_mode="docker", serve_mode="production"),
+        _render_local_stack(),
+    ):
+        frontend = stack["services"]["frontend" if "frontend" in stack["services"] else "caddy"]
+        script = frontend["command"][-1]
+        assert script == script.lstrip("\n"), script[:80]
+        assert "cat >/etc/caddy/Caddyfile" in script

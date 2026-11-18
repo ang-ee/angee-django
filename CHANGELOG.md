@@ -10,6 +10,11 @@ live in code docstrings.
 
 ## Unreleased — shared addon contracts, native embeddings and graph retrieval
 
+- A Docker-mode framework stack serving production on `localhost` comes up: the
+  Caddy `frontend` script no longer opens with a blank line, which the operator
+  re-saved as an unparsable `|4-` block once it had cut the `src` workspace
+  (`Stack prepare: yaml: … did not find expected '-' indicator`).
+
 - The shared Celery worker runs a bounded prefork pool: `celery_concurrency`
   (default 2) in `stacks/dev`, `stacks/local` and `stacks/staging`. It ran
   Celery's default of one child per CPU, each loading the whole application,
