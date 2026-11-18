@@ -27,14 +27,15 @@ from django.core.cache import caches
 from django.core.exceptions import ValidationError
 from django.db import connection, transaction
 from joserfc import jwt
-from rebac import actor_context, system_context
+from rebac import PermissionDenied, actor_context, system_context, to_subject_ref
 
 from angee.calendar import schema as calendar_schema
 from angee.calendar.apps import check_publish_targets
+from angee.calendar.backends import CalendarBackend, PublishingCalendarBackend
 from angee.calendar.tasks import purge_unsubscribed_sources
 from angee.calendar.testing.models import Calendar, CalendarEvent, CalendarSource
-from angee.calendar_integrate_google.backend import CALENDAR_EVENTS, STAMP, event_id
-from angee.calendar_integrate_google.connect import connect_google_resource_calendars
+from angee.calendar_integrate_google.backend import CALENDAR_EVENTS, STAMP, GooglePublishingCalendarBackend, event_id
+from angee.calendar_integrate_google.connect import connect_google_calendar_publishing
 from angee.graphql.testing.documents import execute_schema, result_data
 from angee.integrate.errors import IntegrationError
 from angee.integrate.models import CredentialStatus
@@ -291,19 +292,25 @@ def published() -> Iterator[Published]:
             calendar = Calendar.objects.create(party=person, name="Room 1", timezone="Europe/Berlin", owner=user)
         key = create_jwt_bearer("room-writer", google_key_file(), user=user)
         with actor_context(user):
-            source = connect_google_resource_calendars(user, key)
+            source = connect_google_calendar_publishing(user, key)
         yield Published(user, google, key, source, calendar)
 
 
 def test_a_local_event_pushes_exactly_one_remote_event(published: Published) -> None:
     published.publish()
-    workshop = published.event(start=_berlin(5, 4, 10), end=_berlin(5, 4, 12), location="Room 1")
+    workshop = published.event(
+        start=_berlin(5, 4, 10), end=_berlin(5, 4, 12), location="Room 1", visibility="private", transparency="free"
+    )
     published.poll()
 
     key = event_id(workshop.sqid)
     remote = published.remote()
     assert list(remote) == [key]
     assert (remote[key]["summary"], remote[key]["location"]) == ("Workshop", "Room 1")
+    # Written through the inverse of the table sync-in reads: one table per field.
+    assert (remote[key]["status"], remote[key]["visibility"], remote[key]["transparency"]) == (
+        "confirmed", "private", "transparent"
+    )
     assert _stamp(remote[key]) == workshop.sqid
     assert remote[key]["start"] == {"dateTime": _berlin(5, 4, 10).isoformat(), "timeZone": "Europe/Berlin"}
     assert "attendees" not in remote[key]
@@ -456,8 +463,9 @@ def test_publish_binds_a_local_calendar_once_and_refuses_another_binding(publish
         [binding] = published.links("calendars").values()
         assert (binding.external_key, binding.target_object_id) == (ROOM, str(calendar.pk))
         streams = SyncStream.objects.filter(integration_id=published.source.pk)
-        assert {(row.key, row.direction, row.reconcile_interval) for row in streams} >= {
-            ("calendars", StreamDirection.PUSH, None)
+        # Integrate never sweeps a push stream, whatever interval it declares (``SyncStream.accepts_rescan``).
+        assert {(row.key, row.direction, row.accepts_rescan()) for row in streams} >= {
+            ("calendars", StreamDirection.PUSH, False)
         }
     published.poll()
     with system_context(reason="tests.google.publish"):
@@ -477,7 +485,7 @@ def test_publish_binds_a_local_calendar_once_and_refuses_another_binding(publish
         CalendarSource.objects.sudo(reason="tests").get(pk=published.source.pk).publish(other_calendar, ROOM)
     second_key = create_jwt_bearer("room-writer-2", google_key_file(), user=published.user)
     with actor_context(published.user):
-        second = connect_google_resource_calendars(published.user, second_key)
+        second = connect_google_calendar_publishing(published.user, second_key)
     with pytest.raises(ValidationError, match="Another calendar source"):
         second.publish(published.calendar, OTHER_ROOM)
 
@@ -496,7 +504,7 @@ def test_a_publishing_source_admits_only_a_service_account_key(published: Publis
         claims={"sub": "person", "email": "person@example.test"},
     )
     with actor_context(published.user), pytest.raises(ValidationError, match="service-account key"):
-        connect_google_resource_calendars(published.user, account.credential)
+        connect_google_calendar_publishing(published.user, account.credential)
     with system_context(reason="tests.google.publish"), pytest.raises(ValidationError, match="service-account key"):
         CalendarSource.objects.get(pk=published.source.pk).attach_credential(account.credential)
     with system_context(reason="tests.google.publish"):
@@ -511,7 +519,10 @@ def test_unpublishing_unbinds_the_calendar_and_keeps_its_events_and_key(
     published.poll()
     monkeypatch.setattr(celery_app, "send_task", lambda name, **options: None)
     with system_context(reason="tests.google.publish"):
-        CalendarSource.objects.get(pk=published.source.pk).unsubscribe()
+        # The owner says what its purge does, as the publishing backend words it.
+        assert CalendarSource.objects.get(pk=published.source.pk).unsubscribe() == (
+            PublishingCalendarBackend.unsubscribed
+        )
     seen = len(published.google.requests)
 
     purge_unsubscribed_sources()
@@ -622,7 +633,65 @@ def test_a_published_calendar_is_not_deleted_until_it_is_unpublished(published: 
         Calendar.objects.get(pk=published.calendar.pk).delete()
     with system_context(reason="tests.google.publish"):
         assert Calendar.objects.filter(pk=published.calendar.pk).exists()
+        assert Calendar.objects.get(pk=published.calendar.pk).delete_blocker() == (
+            PublishingCalendarBackend.calendar_delete_refusal
+        )
     assert [link.target_object_id for link in published.links("calendars").values()] == [str(published.calendar.pk)]
+
+
+def test_a_published_calendar_takes_local_edits_and_its_publisher_states_nothing_about_it(
+    published: Published,
+) -> None:
+    """``direction`` alone decides local edits; a publishing source holds no ``statement_source`` grant."""
+
+    published.publish()
+    # One fact: a pulled backend's calendars are replicas, a publishing backend's stay the person's own.
+    assert (CalendarSource.is_backend_writable("google"), CalendarSource.is_backend_writable("google_publishing")) == (
+        False, True
+    )
+    assert issubclass(GooglePublishingCalendarBackend, PublishingCalendarBackend)
+    assert not issubclass(CalendarBackend, PublishingCalendarBackend)
+    with system_context(reason="tests.google.publish"):
+        calendar = Calendar.objects.get(pk=published.calendar.pk)
+        source = CalendarSource.objects.get(pk=published.source.pk)
+        assert calendar.is_writable and source.publishes
+        publisher = to_subject_ref(source.integration_ptr)
+    # The calendars link names the calendar, yet the publisher may state nothing about it.
+    with pytest.raises(PermissionDenied):
+        calendar.require_statement_write(publisher)
+
+
+def test_local_changes_given_keys_read_only_the_events_they_name(published: Published) -> None:
+    """Given keys, the projection reads the events (and a named override's series) those keys name, nothing else."""
+
+    published.publish()
+    standup = published.event(
+        title="Standup", start=_berlin(5, 4, 9), end=_berlin(5, 4, 9, 30), recurrence="FREQ=WEEKLY;COUNT=4"
+    )
+    moved = published.event(
+        title="Standup (moved)", series=standup, original_start=_berlin(5, 11, 9),
+        start=_berlin(5, 11, 10), end=_berlin(5, 11, 10, 45),
+    )
+    others = [published.event(title=f"Other {day}", start=_berlin(5, day, 10), end=_berlin(5, day, 11))
+              for day in (5, 6, 7)]
+    published.poll()
+    fresh = published.event(title="New", start=_berlin(5, 8, 10), end=_berlin(5, 8, 11))
+    master = event_id(standup.sqid)
+    override = f"{master}#{_basic(_berlin(5, 11, 9))}"
+    with system_context(reason="tests.google.publish"):
+        backend = CalendarSource.objects.get(pk=published.source.pk).backend
+        stream = SyncStream.objects.get(integration_id=published.source.pk, key="events")
+        every = {change.external_key: change.target.pk for change in backend.local_changes(stream)}
+        named = {
+            change.external_key: change.target.pk
+            for change in backend.local_changes(stream, keys=frozenset({override, event_id(fresh.sqid)}))
+        }
+
+    assert every == {
+        master: standup.pk, override: moved.pk, event_id(fresh.sqid): fresh.pk,
+        **{event_id(row.sqid): row.pk for row in others},
+    }
+    assert named == {override: moved.pk, event_id(fresh.sqid): fresh.pk}
 
 
 def test_keeping_angees_side_restores_an_event_cancelled_in_google(published: Published) -> None:
@@ -793,14 +862,14 @@ def test_a_lost_series_create_is_adopted_though_its_instances_carry_its_stamp(pu
 def test_a_delegated_service_account_key_cannot_publish(published: Published) -> None:
     delegated = create_jwt_bearer("room-delegated", google_key_file(subject="person@example.test"), user=published.user)
     with actor_context(published.user), pytest.raises(ValidationError, match="without delegation"):
-        connect_google_resource_calendars(published.user, delegated)
+        connect_google_calendar_publishing(published.user, delegated)
 
 
 def test_one_remote_calendar_is_published_by_one_source(published: Published) -> None:
     published.publish(ROOM)
     second_key = create_jwt_bearer("room-writer-2", google_key_file(), user=published.user)
     with actor_context(published.user):
-        second = connect_google_resource_calendars(published.user, second_key)
+        second = connect_google_calendar_publishing(published.user, second_key)
     with system_context(reason="tests.google.publish"):
         person = Person.objects.create(display_name="Room 1, again")
         other = Calendar.objects.create(party=person, name="Room 1, again", owner=published.user)
@@ -826,7 +895,7 @@ def test_a_push_stops_between_events_at_the_sync_deadline(published: Published) 
 def test_two_racing_publishes_of_one_calendar_bind_it_once(published: Published) -> None:
     second_key = create_jwt_bearer("room-writer-2", google_key_file(), user=published.user)
     with actor_context(published.user):
-        second = connect_google_resource_calendars(published.user, second_key)
+        second = connect_google_calendar_publishing(published.user, second_key)
 
     def contend() -> Any:
         return second.publish(published.calendar, OTHER_ROOM)
@@ -850,7 +919,7 @@ def test_two_racing_publishes_of_one_calendar_bind_it_once(published: Published)
 def test_two_sources_racing_to_publish_to_one_remote_calendar_bind_it_once(published: Published) -> None:
     second_key = create_jwt_bearer("room-writer-2", google_key_file(), user=published.user)
     with actor_context(published.user):
-        second = connect_google_resource_calendars(published.user, second_key)
+        second = connect_google_calendar_publishing(published.user, second_key)
     with system_context(reason="tests.google.publish"):
         person = Person.objects.create(display_name="Room 1, again")
         other = Calendar.objects.create(party=person, name="Room 1, again", owner=published.user)

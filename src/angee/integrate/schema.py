@@ -305,10 +305,10 @@ class ConnectedCredentialType(AngeeNode):
 class ConnectWithAccount:
     """What connecting a capability with one of the session user's accounts asks for.
 
-    A capability's connect-facts type implements it (``MountBackendType``,
-    ``CalendarSourceBackendType``) and is built with :meth:`of` from an unsaved
-    row of the capability. ``@angee/integrate``'s connect-with-account action
-    reads it through its ``ConnectWithAccountFields`` fragment.
+    A capability's connect-facts type implements it and is built with :meth:`of`
+    from an unsaved row of the capability (``IntegrationManager.build``).
+    ``@angee/integrate``'s connect-with-account action reads it through its
+    ``ConnectWithAccountFields`` fragment.
     """
 
     oauth_client: strawberry.ID | None
@@ -322,16 +322,11 @@ class ConnectWithAccount:
     def of(cls, integration: Any, user: Any, **fields: Any) -> Self:
         """Project ``integration``'s connect facts for ``user``, beside the implementing type's own ``fields``."""
 
-        with system_context(reason="integrate.graphql.connect_with_account"):
-            try:
-                registration = integration.connect_oauth_client(capfirst(str(integration._meta.verbose_name)))
-            except OAuthFlowError:
-                registration = None
-            scopes = list(integration.connection_oauth_scopes)
+        registration = integration.ready_oauth_client()
         accounts = integration.connectable_credentials(user).order_by("pk")
         return cls(
             oauth_client=strawberry.ID(registration.public_id) if registration is not None else None,
-            oauth_scopes=scopes,
+            oauth_scopes=list(integration.connection_oauth_scopes),
             accounts=cast(list[ConnectedCredentialType], list(accounts)),
             **fields,
         )

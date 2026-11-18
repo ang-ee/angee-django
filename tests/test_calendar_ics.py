@@ -31,10 +31,10 @@ from django.utils import timezone
 from rebac import actor_context, system_context
 
 from angee.calendar import models as calendar_models
+from angee.calendar.backends import CalendarBackend
 from angee.calendar.models import (
     PURGE_SOURCE_TASK,
     READ_ONLY_CALENDAR,
-    SOURCE_CALENDAR_DELETE,
     AttendeeResponse,
     AttendeeRole,
 )
@@ -1780,7 +1780,7 @@ def test_a_replica_refuses_every_local_write_and_a_local_calendar_takes_them(
         with pytest.raises(ValidationError, match=READ_ONLY_CALENDAR):
             EventAttendee.objects.get(pk=organizer.pk).delete()
         # The source's calendars-stream link retains its calendar; the calendar names the refusal in the preview.
-        assert subscription.calendar.delete_blocker() == SOURCE_CALENDAR_DELETE
+        assert subscription.calendar.delete_blocker() == CalendarBackend.calendar_delete_refusal
         with pytest.raises(ProtectedError):
             subscription.calendar.delete()
         occurrences = CalendarEvent.objects.filter(pk=launch.pk).occurrences(_utc(2026, 4, 1), _utc(2026, 4, 2))

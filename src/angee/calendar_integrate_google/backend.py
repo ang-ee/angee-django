@@ -32,12 +32,12 @@ its series follows that wall clock across DST); ``status``; ``transparency``
 an optional attendee); the conference URL (a video entry point, else
 ``hangoutLink``).
 
-The calendars are synced, not locally writable: the backend is read-only
-(``writable`` stays false) and reads with ``calendar.readonly``.
+The calendars are synced, not locally writable: the backend pulls (its ``direction``
+is ``PULL``) and reads with ``calendar.readonly``.
 
-**Publish out** (:class:`GoogleResourceCalendarBackend`). A publishing source writes
-local calendars to Google calendars shared with its service-account key, such as a
-Workspace resource calendar, and never reads them back. A new master or single event
+**Publish out** (:class:`GooglePublishingCalendarBackend`). A publishing source writes
+local calendars to any Google calendar shared with its service-account key, a
+Workspace resource calendar among them, and never reads them back. A new master or single event
 is created under a Google id derived from its public id (:func:`event_id`), stamped
 with that public id (``extendedProperties.private.angee_event``), and found by its
 stamp before any insert. A series' rule is its ``recurrence`` line; each override
@@ -52,6 +52,7 @@ calendar's other events still push.
 from __future__ import annotations
 
 import base64
+import binascii
 from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, time, timedelta
@@ -74,7 +75,10 @@ from angee.calendar.backends import (
     ParsedAttendee,
     ParsedCalendar,
     ParsedEvent,
+    PublishingCalendarBackend,
     cancelled_instances,
+    canonical_rule,
+    event_columns,
     excluded_dates,
     instance_key,
     organizer_first,
@@ -94,7 +98,7 @@ from angee.calendar_integrate_google.client import (
 from angee.integrate.credentials import CredentialKind
 from angee.integrate.errors import IntegrationError
 from angee.integrate.models import IntegrationLifecycle
-from angee.integrate.states import UNSET, StreamDirection
+from angee.integrate.states import UNSET
 from angee.integrate.streams import (
     CursorInvalid,
     LocalChange,
@@ -122,7 +126,45 @@ deployments publishing to one remote calendar could adopt each other's events.
 _SWEEP_PAGE = 250
 """Events per page of a sweep's full listing: well under the transport's 8 MiB answer cap."""
 
-_STATUSES = {"confirmed": EventStatus.CONFIRMED, "tentative": EventStatus.TENTATIVE}
+_STATUSES = {
+    "confirmed": EventStatus.CONFIRMED,
+    "tentative": EventStatus.TENTATIVE,
+    "cancelled": EventStatus.CANCELLED,
+}
+"""Google's event ``status`` in the calendar's vocabulary; an unknown one reads as confirmed."""
+
+_TRANSPARENCIES = {"opaque": EventTransparency.BUSY, "transparent": EventTransparency.FREE}
+"""Google's ``transparency``; an unknown one reads as busy."""
+
+_VISIBILITIES = {
+    "default": EventVisibility.DEFAULT,
+    "public": EventVisibility.PUBLIC,
+    "private": EventVisibility.PRIVATE,
+    "confidential": EventVisibility.PRIVATE,
+}
+"""Google's ``visibility``; an unknown one reads as default."""
+
+
+def _written(table: Mapping[str, str]) -> dict[str, str]:
+    """Return a Google-to-Angee table the other way: the first Google value naming an Angee value is what is written."""
+
+    inverse: dict[str, str] = {}
+    for google, angee in table.items():
+        inverse.setdefault(angee, google)
+    return inverse
+
+
+_WRITTEN_STATUSES = _written(_STATUSES)
+_WRITTEN_TRANSPARENCIES = _written(_TRANSPARENCIES)
+_WRITTEN_VISIBILITIES = _written(_VISIBILITIES)
+
+_UNREADABLE = (ArithmeticError, AttributeError, KeyError, TypeError, ValueError, ValidationError)
+"""What mapping a Google event Angee cannot read raises: a missing or malformed field, a zone or rule it refuses."""
+
+_PUBLISHED_COLUMNS = (
+    "title", "description", "location", "start", "end", "all_day", "status", "transparency", "visibility"
+)
+"""The event columns a published event writes as they stand (``event_columns``); attendees and links stay local."""
 
 
 def _sweep(stream: Any) -> tuple[Any, ...]:
@@ -130,11 +172,8 @@ def _sweep(stream: Any) -> tuple[Any, ...]:
 
     started = (stream.reconcile_state or {}).get("started_at")
     return (stream.partition, stream.generation, started) if started else ()
-_VISIBILITIES = {
-    "public": EventVisibility.PUBLIC,
-    "private": EventVisibility.PRIVATE,
-    "confidential": EventVisibility.PRIVATE,
-}
+
+
 _RESPONSES = {
     "accepted": AttendeeResponse.ACCEPTED,
     "declined": AttendeeResponse.DECLINED,
@@ -299,7 +338,8 @@ class GoogleCalendarBackend(_GoogleBackend):
             if moment is None or master is None:
                 found[key] = dict(self._observe_item(master, zone)).get(key) if master is not None else None
                 continue
-            item = client.instance(stream.partition, master_id, _original_start(master, moment, zone))
+            day_zone = (_series_zone(master) or zone) if "date" in (master.get("start") or {}) else None
+            item = client.instance(stream.partition, master_id, moment, all_day_zone=day_zone)
             observed = dict(self._observe_item(master, zone))
             if item is not None:
                 observed.update(self._observe_item(item, zone, series_zones={master_id: _series_zone(master)}))
@@ -406,8 +446,8 @@ class GoogleCalendarBackend(_GoogleBackend):
         cannot take is a quarantine payload under its own key.
         """
 
-        event_id = str(item.get("id") or "")
-        if not event_id:
+        google_id = str(item.get("id") or "")
+        if not google_id:
             return []
         series_zone = (series_zones or {}).get(str(item.get("recurringEventId") or "")) or zone
         try:
@@ -419,11 +459,12 @@ class GoogleCalendarBackend(_GoogleBackend):
                 local = event.timezone or zone
                 exdates = [_instant(value, tzid, local) for value, tzid in excluded_dates(_recurrence(item))]
                 observed.extend(
-                    cancelled_instances(event, event_id, exdates, calendar_zone=zone, check_deadline=self._require_time)
+                    cancelled_instances(
+                        event, google_id, exdates, calendar_zone=zone, check_deadline=self._require_time
+                    )
                 )
-        except IntegrationError:
-            raise
-        except Exception:  # noqa: BLE001 — the driver quarantines semantic input per record.
+        except _UNREADABLE:
+            # The driver quarantines semantic input per record; a deadline (``IntegrationError``) stops the listing.
             return [(_own_key(item, series_zone), {"error": "invalid_event"})]
         return [(key, self.observe(event)) for key, event in observed]
 
@@ -433,26 +474,25 @@ class GoogleCalendarBackend(_GoogleBackend):
         return self.oauth_scopes
 
 
-class GoogleResourceCalendarBackend(_GoogleBackend):
-    """Publishes local calendars to Google calendars a service-account key writes, such as Workspace resource calendars.
+class GooglePublishingCalendarBackend(_GoogleBackend, PublishingCalendarBackend):
+    """Publishes local calendars to any Google calendar shared with a service-account key, resource ones among them.
 
-    A publishing source (``direction`` is ``PUSH``): ``CalendarSource.publish`` binds
-    a local calendar to a Google calendar id (a resource calendar's
-    ``c_…@resource.calendar.google.com``) shared with the key's service account as
-    writer, and that calendar keeps taking local edits. The source's credential is
-    the key, a ``jwt_bearer`` credential (:meth:`admit_credential`) minted for
-    :data:`CALENDAR_EVENTS` without delegation; it connects through no OAuth client.
-    Each event of a published calendar is projected (:meth:`local_changes`) and
-    written conditionally (:meth:`write_back`); nothing is ever read back to sync.
+    A publishing source (``PublishingCalendarBackend``): ``CalendarSource.publish``
+    binds a local calendar to a Google calendar id shared with the key's service
+    account as writer (a Workspace resource calendar's is
+    ``c_…@resource.calendar.google.com``), and that calendar keeps taking local
+    edits. The source's credential is the key, a ``jwt_bearer`` credential
+    (:meth:`admit_credential`) minted for :data:`CALENDAR_EVENTS` without
+    delegation; it connects through no OAuth client. Each event of a published
+    calendar is projected (:meth:`local_changes`) and written conditionally
+    (:meth:`write_event`); nothing is ever read back to sync.
     """
 
-    key = "google_resource"
-    label = "Google resource calendars"
+    key = "google_publishing"
+    label = "Google Calendar publishing"
     icon = "google"
     defaults: ClassVar[dict[str, Any]] = {"vendor": "google", "poll_interval": 300}
     oauth_client: ClassVar[str] = ""
-    direction: ClassVar[StreamDirection] = StreamDirection.PUSH
-    writable: ClassVar[bool] = True
 
     def admit_credential(self, credential: Any) -> None:
         """Admit only a service-account key (``jwt_bearer``) acting as itself: the source never writes as a person.
@@ -472,44 +512,61 @@ class GoogleResourceCalendarBackend(_GoogleBackend):
         return (CALENDAR_EVENTS,)
 
     def local_changes(self, stream: Any, *, keys: frozenset[str] | None = None) -> Iterator[LocalChange]:
-        """Project each event of the published calendar under its key, masters before their overrides.
+        """Project each event of the published calendar under its key, in key order.
 
         An event keeps the key of the link that names it. A new master or single
         event is keyed :func:`event_id`, the Google id it is created under; a new
-        override, by its series' key and original start (``instance_key``). Integrate
-        writes only the events whose projection differs from their link's base. The
-        calendars stream pushes nothing: its links are :meth:`CalendarSource.publish`'s.
+        override, by its series' key and original start (``instance_key``). Given
+        ``keys``, only the events those keys name are read. Integrate writes only the
+        events whose projection differs from their link's base. The calendars stream
+        pushes nothing: its links are :meth:`CalendarSource.publish`'s.
         """
 
         if stream.key != EVENTS_STREAM:
             return
+        zone = self._zone(stream)
         calendar = self.get_calendar(stream)
-        zone = calendar.timezone or settings.TIME_ZONE
-        events = apps.get_model("calendar", "CalendarEvent")
-        rows = list(events.system_queryset().filter(calendar=calendar).order_by("pk"))
-        linked = dict(stream.links.exclude(target_object_id=None).values_list("target_object_id", "external_key"))
-        named: dict[Any, str] = {}
-        for row in sorted(rows, key=lambda row: row.series_id is not None):
-            named[row.pk] = linked.get(str(row.pk)) or (
-                event_id(row.sqid) if row.series_id is None else instance_key(named[row.series_id], row.original_start)
-            )
-        parsed = events.objects.project_events(rows)
-        for row in sorted(rows, key=lambda row: named[row.pk]):
-            if keys is None or named[row.pk] in keys:
+        events = apps.get_model("calendar", "CalendarEvent").system_queryset().filter(calendar=calendar)
+        if keys is not None:
+            events = events.filter(self._named(stream, keys))
+        rows = list(events.select_related("series").order_by("pk"))
+        pks = {str(row.pk) for row in rows} | {str(row.series_id) for row in rows if row.series_id is not None}
+        linked = dict(stream.links.filter(target_object_id__in=pks).values_list("target_object_id", "external_key"))
+
+        def key_of(row: Any) -> str:
+            own = linked.get(str(row.pk))
+            if own:
+                return own
+            if row.series_id is None:
+                return event_id(row.sqid)
+            return instance_key(key_of(row.series), row.original_start)
+
+        for key, row in sorted(((key_of(row), row) for row in rows), key=lambda pair: pair[0]):
+            if keys is None or key in keys:
                 stamp = row.sqid if row.series_id is None else ""
-                yield LocalChange(named[row.pk], _published(parsed[row.pk], zone, stamp=stamp), target=row)
+                yield LocalChange(key, _published(row, zone, stamp=stamp), target=row)
+
+    def _named(self, stream: Any, keys: frozenset[str]) -> Q:
+        """Select the events ``keys`` may name, a series' overrides included: bound by a link, or new by their id."""
+
+        names = set(keys) | {series for key in keys if (series := parse_key(key)[0]) is not None}
+        bound = stream.links.filter(external_key__in=names).exclude(target_object_id=None)
+        named = Q(pk__in=list(bound.values_list("target_object_id", flat=True))) | Q(
+            sqid__in=[sqid for name in names if (sqid := _sqid(name))]
+        )
+        return named | Q(series__in=apps.get_model("calendar", "CalendarEvent").system_queryset().filter(named))
 
     def write_event(self, link: Any, projection: Any, *, expected_version: str) -> WriteBackResult:
         """Write one published event to Google conditionally; a refusal is integrate's held outbox entry.
 
-        The calendar base admitted the call (``CalendarBackend.admit_push``). A master
-        or single event without a version is created once (:meth:`_create`); with one
-        it is patched under ``If-Match``. An override patches its series' instance
-        (:meth:`_write_instance`). An event deleted locally is removed (:meth:`_remove`).
-        A stale ETag (``412``) is a held conflict (``RemoteRejected``), and so is an
-        event Google no longer has: Angee never overwrites or recreates a remote change.
-        Google's refusal of this one event (``EventRefused``) sets it aside for a retry,
-        and the push goes on with the next.
+        The publishing base admitted the call (``PublishingCalendarBackend.admit_push``). A
+        master or single event without a version is created once (:meth:`_create`);
+        with one it is patched under ``If-Match``. An override patches its series'
+        instance (:meth:`_write_instance`). An event deleted locally is removed
+        (:meth:`_remove`). A stale ETag (``412``) is a held conflict
+        (``RemoteRejected``), and so is an event Google no longer has: Angee never
+        overwrites or recreates a remote change. Google's refusal of this one event
+        (``EventRefused``) sets it aside for a retry, and the push goes on with the next.
         """
 
         stream = link.stream
@@ -555,7 +612,7 @@ class GoogleResourceCalendarBackend(_GoogleBackend):
                 item = client.event(stream.partition, str(written.get(key) or key))
             else:
                 sent = self._series(stream, str(series))
-                item = self._instance(client, stream, str(series), original, sent) if sent is not None else None
+                item = _instance(client, stream, str(series), original, sent) if sent is not None else None
             if item is None:
                 changes.append(RecordChange(key, {}, "", tombstone=True))
                 continue
@@ -644,7 +701,7 @@ class GoogleResourceCalendarBackend(_GoogleBackend):
         sent = self._series(stream, series)
         if sent is None:
             raise RemoteRejected("series_unavailable", conflict=False)
-        item = self._instance(client, stream, series, original, sent)
+        item = _instance(client, stream, series, original, sent)
         if item is None:
             raise RemoteRejected("instance_unavailable", conflict=False)
         remote = _remote_published(item, self._zone(stream), stamped=False)
@@ -665,26 +722,19 @@ class GoogleResourceCalendarBackend(_GoogleBackend):
         base = link.applied_base if link is not None else None
         return dict(base.mapped_payload) if base is not None and base.mapped_payload else None
 
-    def _instance(
-        self, client: GoogleCalendarClient, stream: Any, series: str, original: datetime, sent: Mapping[str, Any]
-    ) -> Any:
-        """Read the instance of the series ``series``, last written as ``sent``, originally at ``original``.
-
-        ``None`` when Google has none. Google names an all-day series' instance by its
-        local date, any other by its UTC instant.
-        """
-
-        start = (
-            _local_day(original, sent["timezone"]).isoformat()
-            if sent["all_day"]
-            else original.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
-        )
-        return client.instance(stream.partition, series, start)
-
     def _zone(self, stream: Any) -> str:
         """Return the zone the published calendar keeps: its own, else the project's."""
 
         return self.get_calendar(stream).timezone or settings.TIME_ZONE
+
+
+def _instance(
+    client: GoogleCalendarClient, stream: Any, series: str, original: datetime, sent: Mapping[str, Any]
+) -> dict[str, Any] | None:
+    """Read the instance at ``original`` of the series ``series`` (last written as ``sent``), or ``None``."""
+
+    day_zone = sent["timezone"] if sent["all_day"] else None
+    return client.instance(stream.partition, series, original, all_day_zone=day_zone)
 
 
 def event_id(sqid: str) -> str:
@@ -697,29 +747,31 @@ def event_id(sqid: str) -> str:
     return base64.b32hexencode(sqid.encode()).decode().rstrip("=").lower()
 
 
-def _published(event: ParsedEvent, zone: str, *, stamp: str = "") -> dict[str, Any]:
+def _sqid(key: str) -> str:
+    """Return the public id an :func:`event_id` key was made from, or ``""`` for any other key."""
+
+    try:
+        return base64.b32hexdecode(key.upper() + "=" * (-len(key) % 8)).decode("ascii")
+    except (binascii.Error, UnicodeDecodeError, ValueError):
+        return ""
+
+
+def _published(event: Any, zone: str, *, stamp: str = "") -> dict[str, Any]:
     """Return what publishing writes of one event, the shape both sides of a push compare.
 
-    ``zone`` is the calendar's (the project's when blank): an event without a zone
-    of its own keeps it, since Google expands a series in a named zone. The rule is
-    icalendar's canonical text (``series_rule``), so a rule reads back as it was
-    sent. ``stamp`` is a master's or single event's public id; an instance has none.
+    ``event`` is a stored ``CalendarEvent`` or a :class:`ParsedEvent` read from
+    Google: calendar's column projection (``event_columns``) of the columns Google
+    keeps, its rule in the form icalendar reads it back (``canonical_rule``), its zone
+    and its stamp. ``zone`` is the calendar's (the project's when blank): an event
+    without a zone of its own keeps it, since Google expands a series in a named
+    zone. ``stamp`` is a master's or single event's public id; an instance has none.
     Attendees and the conference link are not published.
     """
 
-    rule = series_rule(_recurrence({"recurrence": [f"RRULE:{event.recurrence}"]})) if event.recurrence else ""
     return {
-        "title": event.title,
-        "description": event.description,
-        "location": event.location,
-        "start": event.start.astimezone(UTC).isoformat(),
-        "end": event.end.astimezone(UTC).isoformat(),
-        "all_day": event.all_day,
-        "recurrence": rule,
+        **event_columns(event, _PUBLISHED_COLUMNS),
+        "recurrence": canonical_rule(event.recurrence),
         "timezone": event.timezone or zone,
-        "status": str(event.status),
-        "transparency": str(event.transparency),
-        "visibility": str(event.visibility),
         "stamp": stamp,
     }
 
@@ -733,7 +785,7 @@ def _remote_published(item: Mapping[str, Any], zone: str, *, stamped: bool) -> d
 
     try:
         _key, event = _event(item, zone, zone)
-    except Exception:  # noqa: BLE001 — an event Angee cannot read is not one Angee wrote.
+    except _UNREADABLE:  # An event Angee cannot read is not one Angee wrote.
         return None
     if event is None:
         return None
@@ -744,15 +796,16 @@ def _instance_of(series: Mapping[str, Any], original: datetime) -> dict[str, Any
     """Return the projection a series (as last written) gives its unchanged instance at ``original``.
 
     The instance ends where the event owner's arithmetic puts it
-    (``CalendarEvent.occurrence_end``: an all-day instance spans local days).
+    (``CalendarEvent.span_end``: an all-day instance spans local days).
     """
 
-    shape: Any = apps.get_model("calendar", "CalendarEvent")(
-        start=datetime.fromisoformat(series["start"]),
-        end=datetime.fromisoformat(series["end"]),
+    end = apps.get_model("calendar", "CalendarEvent").span_end(
+        datetime.fromisoformat(series["start"]),
+        datetime.fromisoformat(series["end"]),
         all_day=series["all_day"],
+        at=original,
+        zone=series["timezone"],
     )
-    end = shape.occurrence_end(original, zone=series["timezone"])
     return {
         **series,
         "start": original.astimezone(UTC).isoformat(),
@@ -788,9 +841,9 @@ def _body(published: Mapping[str, Any], *, instance: bool, patch: bool) -> dict[
         "location": published["location"],
         "start": moment("start"),
         "end": moment("end"),
-        "status": published["status"],
-        "transparency": "transparent" if published["transparency"] == EventTransparency.FREE else "opaque",
-        "visibility": published["visibility"],
+        "status": _WRITTEN_STATUSES[published["status"]],
+        "transparency": _WRITTEN_TRANSPARENCIES[published["transparency"]],
+        "visibility": _WRITTEN_VISIBILITIES[published["visibility"]],
     }
     if not instance:
         body["recurrence"] = [f"RRULE:{published['recurrence']}"] if published["recurrence"] else []
@@ -822,11 +875,11 @@ def _event(item: Mapping[str, Any], zone: str, series_zone: str) -> tuple[str, P
     expands in, where its all-day original start is read.
     """
 
-    event_id = str(item["id"])
+    google_id = str(item["id"])
     master_id = str(item.get("recurringEventId") or "")
     cancelled = item.get("status") == "cancelled"
     if not master_id:
-        key = series_key(event_id)
+        key = series_key(google_id)
         if cancelled:
             return key, None
         original = None
@@ -869,8 +922,8 @@ def _event(item: Mapping[str, Any], zone: str, series_zone: str) -> tuple[str, P
         timezone=event_zone,
         series=series_key(master_id) if master_id else "",
         original_start=original,
-        status=EventStatus.CANCELLED if cancelled else _STATUSES.get(str(item.get("status")), EventStatus.CONFIRMED),
-        transparency=EventTransparency.FREE if item.get("transparency") == "transparent" else EventTransparency.BUSY,
+        status=_STATUSES.get(str(item.get("status")), EventStatus.CONFIRMED),
+        transparency=_TRANSPARENCIES.get(str(item.get("transparency")), EventTransparency.BUSY),
         visibility=_VISIBILITIES.get(str(item.get("visibility")), EventVisibility.DEFAULT),
         conference_url=_conference_url(item),
         attendees=_attendees(item),
@@ -887,7 +940,7 @@ def _own_key(item: Mapping[str, Any], zone: str) -> str:
     try:
         if master_id:
             return instance_key(master_id, _moment(item["originalStartTime"], zone))
-    except Exception:  # noqa: BLE001 — an unreadable instance keeps a key of its own Google id.
+    except _UNREADABLE:  # An unreadable instance keeps a key of its own Google id.
         pass
     return series_key(str(item["id"]))
 
@@ -915,14 +968,6 @@ def _local_day(moment: datetime, zone: str) -> date:
     """Return the local date of ``moment`` in ``zone``."""
 
     return moment.astimezone(get_zone_info(zone)).date()
-
-
-def _original_start(master: Mapping[str, Any], moment: datetime, zone: str) -> str:
-    """Return the ``originalStart`` Google reads one instance of ``master`` by: a date for an all-day series."""
-
-    if "date" in (master.get("start") or {}):
-        return _local_day(moment, _series_zone(master) or zone).isoformat()
-    return moment.strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def _known_zone(name: Any) -> str:

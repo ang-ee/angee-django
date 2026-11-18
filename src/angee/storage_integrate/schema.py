@@ -135,7 +135,7 @@ class StorageIntegrateQuery:
 
         impl = Mount.objects.backend_impl(backend_class)
         return MountBackendType.of(
-            Mount.objects.build(backend_class),
+            Mount.objects.build(backend_class=backend_class),
             session_user(info),
             key=impl.key,
             label=str(impl.label),

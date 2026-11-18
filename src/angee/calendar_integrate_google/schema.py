@@ -6,7 +6,7 @@ import strawberry
 from django.apps import apps
 
 from angee.calendar.schema import CalendarSourceType
-from angee.calendar_integrate_google.connect import connect_google_calendar, connect_google_resource_calendars
+from angee.calendar_integrate_google.connect import connect_google_calendar, connect_google_calendar_publishing
 from angee.graphql.actions import resolve_action_target, session_user
 from angee.graphql.ids import PublicID
 
@@ -38,22 +38,22 @@ class GoogleCalendarMutation:
         return cast(CalendarSourceType, connect_google_calendar(user, credential))
 
     @strawberry.mutation
-    def connect_google_resource_calendars(self, info: strawberry.Info, credential_id: PublicID) -> CalendarSourceType:
+    def connect_google_calendar_publishing(self, info: strawberry.Info, credential_id: PublicID) -> CalendarSourceType:
         """Connect one of the signed-in user's service-account keys as a source that publishes calendars.
 
         The key is the user's own (an unknown id and another user's fail alike), and
         the source is theirs, within their source quota and rate. Calendars are
-        published through it with ``publishCalendar``; nothing is sent here.
+        published through it with ``publish_calendar``; nothing is sent here.
         """
 
         user = session_user(info)
         credential = resolve_action_target(
             Credential,
             credential_id,
-            reason="calendar_integrate_google.connect_resource",
-            queryset=Credential.objects.filter(user=user),
+            reason="calendar_integrate_google.connect_publishing",
+            queryset=Credential.objects.owned_by(user),
         )
-        return cast(CalendarSourceType, connect_google_resource_calendars(user, credential))
+        return cast(CalendarSourceType, connect_google_calendar_publishing(user, credential))
 
 
 schemas = {"console": {"mutation": [GoogleCalendarMutation]}}

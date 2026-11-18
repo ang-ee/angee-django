@@ -176,7 +176,9 @@ export {
   type ConnectWithAccountActionProps,
   type ConnectWithAccountFacts,
   type ConnectWithAccountFieldOptions,
+  type ConnectWithAccountQuery,
   useConnectWithAccountField,
+  useConnectWithAccountQuery,
 } from "./connect/ConnectWithAccountAction";
 export {
   useOAuthAuthorization,

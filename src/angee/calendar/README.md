@@ -180,8 +180,9 @@ calendar's events stream in the same sync.
   calendar's events sync with Google's sync tokens, and an expired token reads the
   calendar again in full. The calendars are read-only. Its module docstring lists
   the fields it maps.
-- **Publishing.** A backend whose `direction` is `PUSH` publishes local calendars
-  out. `CalendarSource.publish(calendar, remote_id)` (the `publish_calendar`
+- **Publishing.** A backend whose `direction` is `PUSH` (a
+  `PublishingCalendarBackend`) publishes local calendars out; `direction` alone
+  decides whether a source's calendars take local edits. `CalendarSource.publish(calendar, remote_id)` (the `publish_calendar`
   mutation: `write` on the source, `delete` on the calendar) binds an existing local
   calendar to a remote calendar: the source's `calendars` link keyed by the remote
   id targets the calendar, and the calendar's `source` names the source. The
@@ -194,12 +195,15 @@ calendar's events stream in the same sync.
   calendar another source mirrors or publishes is refused, and so is a remote
   calendar another source publishes to. `ANGEE_CALENDAR_PUBLISH_TARGETS` (`None`:
   any; else a list, matched whole) lists the remote calendars a deployment
-  publishes to: every remote call of a push passes `CalendarBackend.admit_push`,
+  publishes to: every remote call of a push passes `PublishingCalendarBackend.admit_push`,
   so a test profile is refused before any call, once per push. Unsubscribing a
-  publishing source unbinds: its streams move to a new generation, its calendars
-  are local again with every event kept, and its key is detached, not retired.
-  `calendar_integrate_google`'s `google_resource` backend publishes to Google
-  calendars a service-account key writes, such as Workspace resource calendars.
+  publishing source unbinds (`PublishingCalendarBackend.release`): its streams
+  move to a new generation, its calendars are local again with every event kept,
+  and its key is detached, not retired. The publishing source states nothing
+  about a calendar it publishes: only a pulling source holds `statement_source`.
+  `calendar_integrate_google`'s `google_publishing` backend publishes to any
+  Google calendar shared with its service-account key, Workspace resource
+  calendars among them.
 
 The sources page lists them with their sync status. Source addons add their
 subscribe or connect verb to its `calendar.sources#toolbar` container. A verb that

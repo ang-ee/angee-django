@@ -186,8 +186,8 @@ class IcsCalendarBackend(CalendarBackend):
     """Polls one public ICS feed into its source's read-only calendar.
 
     The feed is the source's one remote calendar, keyed :data:`FEED_KEY`; its address
-    is the source credential's secret. The calendar takes no local edits: a feed
-    never takes a write (``writable`` stays false).
+    is the source credential's secret. The calendar takes no local edits: a feed is
+    only pulled (``direction`` stays ``PULL``).
     """
 
     key = "ics"

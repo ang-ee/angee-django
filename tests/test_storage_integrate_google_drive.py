@@ -917,8 +917,8 @@ def test_a_mount_offers_only_the_users_own_google_grants_with_the_drive_scope(
         # A grant in every other respect: only its kind keeps the Mount from reading with it.
         Credential.objects.filter(pk=key_pair.pk).update(kind=CredentialKind.JWT_BEARER)
         key_pair.refresh_from_db()
-        mount = Mount.objects.build("google_drive")
-        local = Mount.objects.build("local_folder")
+        mount = Mount.objects.build(backend_class="google_drive")
+        local = Mount.objects.build(backend_class="local_folder")
         offered = set(mount.connectable_credentials(drive_env.owner))
 
     assert offered == {drive_env.credential}

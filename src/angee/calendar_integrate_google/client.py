@@ -25,10 +25,12 @@ Every other refusal is a :class:`GoogleCalendarError`, as the transport names it
 from __future__ import annotations
 
 from collections.abc import Collection, Iterator, Mapping
+from datetime import UTC, datetime
 from typing import Any
 from urllib.parse import quote, urlencode
 
 from angee.integrate_google.api import GoogleApi, GoogleApiError, error_reason
+from angee.scheduling.zones import get_zone_info
 
 CALENDAR_API = "https://www.googleapis.com/calendar/v3"
 MAX_PAGE_SIZE = 2500
@@ -150,9 +152,21 @@ class GoogleCalendarClient:
 
         return self._event_or_none(calendar_id, f"events/{_segment(event_id)}", {})
 
-    def instance(self, calendar_id: str, event_id: str, original_start: str) -> dict[str, Any] | None:
-        """Return the instance of the series ``event_id`` originally at ``original_start``, cancelled ones included."""
+    def instance(
+        self, calendar_id: str, event_id: str, original: datetime, *, all_day_zone: str | None = None
+    ) -> dict[str, Any] | None:
+        """Return the instance of the series ``event_id`` originally at ``original``, cancelled ones included.
 
+        Google names an instance by its ``originalStart``: an all-day series' by its
+        local date in ``all_day_zone`` (the zone the series expands in; blank is the
+        project's), any other's (``all_day_zone`` ``None``) by its UTC instant.
+        """
+
+        original_start = (
+            original.astimezone(get_zone_info(all_day_zone)).date().isoformat()
+            if all_day_zone is not None
+            else original.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+        )
         page = self._event_or_none(
             calendar_id,
             f"events/{_segment(event_id)}/instances",

@@ -7,7 +7,7 @@ from typing import Any
 from django.apps import apps
 from django.core.exceptions import ValidationError
 
-from angee.calendar_integrate_google.backend import GoogleCalendarBackend, GoogleResourceCalendarBackend
+from angee.calendar_integrate_google.backend import GoogleCalendarBackend, GooglePublishingCalendarBackend
 
 
 def connect_google_calendar(user: Any, credential: Any) -> Any:
@@ -33,21 +33,22 @@ def connect_google_calendar(user: Any, credential: Any) -> Any:
     )
 
 
-def connect_google_resource_calendars(user: Any, credential: Any) -> Any:
+def connect_google_calendar_publishing(user: Any, credential: Any) -> Any:
     """Connect ``credential``, a service-account key of ``user``'s, as a source that publishes calendars.
 
-    ``credential`` must be one of the user's own (the mutation looks it up among
-    them). The calendar owner connects it (``CalendarSourceManager.subscribe``), and
-    the backend admits only a ``jwt_bearer`` key
-    (``GoogleResourceCalendarBackend.admit_credential``). The source publishes
-    nothing until a calendar is published through it (``CalendarSource.publish``).
+    ``credential`` must be one of the user's own (``CredentialQuerySet.owned_by``;
+    the mutation looks it up there). The calendar owner connects it
+    (``CalendarSourceManager.subscribe``), and the backend admits only a
+    ``jwt_bearer`` key (``GooglePublishingCalendarBackend.admit_credential``). The
+    source publishes nothing until a calendar is published through it
+    (``CalendarSource.publish``).
     """
 
-    if not apps.get_model("integrate", "Credential").objects.filter(user=user, pk=credential.pk).exists():
+    if not apps.get_model("integrate", "Credential").objects.owned_by(user).filter(pk=credential.pk).exists():
         raise ValidationError({"credential": "Choose one of your own credentials."})
     return apps.get_model("calendar", "CalendarSource").objects.subscribe(
         user,
         credential,
-        backend_class=GoogleResourceCalendarBackend.key,
-        display_name=credential.name or GoogleResourceCalendarBackend.label,
+        backend_class=GooglePublishingCalendarBackend.key,
+        display_name=credential.name or GooglePublishingCalendarBackend.label,
     )

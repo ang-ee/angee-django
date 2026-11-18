@@ -1,5 +1,11 @@
 import { type DocumentType } from "@angee/gql/console";
 import {
+  useAuthoredQuery,
+  type AuthoredDocument,
+  type AuthoredVariables,
+  type DocumentData,
+} from "@angee/refine";
+import {
   ActionTrigger,
   InlineEmpty,
   MutationDialog,
@@ -22,6 +28,32 @@ export type ConnectWithAccountFacts = DocumentType<typeof ConnectWithAccountFiel
 
 /** The dialog value naming the chosen account's credential. */
 export const CONNECT_WITH_ACCOUNT_FIELD = "credentialId";
+
+/** The model whose rows a connect-with-account query lists: the session user's credentials. */
+const CREDENTIAL_MODEL = "integrate.Credential";
+
+/** A consumer's connect-facts query: its data, and the reload once another account connected in place. */
+export interface ConnectWithAccountQuery<TDocument extends AuthoredDocument> {
+  data: DocumentData<TDocument> | undefined;
+  /** Reload the facts: pass it as {@link ConnectWithAccountFieldOptions.onConnected}. */
+  onConnected: () => void;
+}
+
+/**
+ * Read a consumer's connect facts (a query spreading `ConnectWithAccountFields`)
+ * as the session user's accounts change: the query depends on their credentials,
+ * so a connected or removed account reloads it, and `onConnected` reloads it at
+ * once after a manual-code connect.
+ */
+export function useConnectWithAccountQuery<TDocument extends AuthoredDocument>(
+  document: TDocument,
+  variables?: AuthoredVariables<TDocument>,
+): ConnectWithAccountQuery<TDocument> {
+  const query = useAuthoredQuery(document, variables, { models: [CREDENTIAL_MODEL] });
+  const refetch = query.refetch;
+  const onConnected = React.useCallback(() => { void refetch(); }, [refetch]);
+  return { data: query.data, onConnected };
+}
 
 export interface ConnectWithAccountFieldOptions {
   /** The consumer's connect facts (its `ConnectWithAccount` query); none while they load. */

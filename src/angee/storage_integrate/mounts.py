@@ -71,15 +71,16 @@ class MountBrowseResult:
 
 
 class MountBackend(BridgeImpl):
-    """Descriptor contract for walking and reading an external storage source."""
+    """Descriptor contract for walking and reading an external storage source.
+
+    Its ``defaults`` name the integrate catalogue vendor a Mount of it points at.
+    """
     registry_setting = "ANGEE_STORAGE_MOUNT_BACKEND_CLASSES"
 
     category = "mount"
     label = "Mount"
     requires_credential: ClassVar[bool] = False
     """Whether the source is read with the connecting user's credential, which provisioning attaches."""
-    vendor_slug: ClassVar[str]
-    """The integrate catalogue vendor a Mount of this backend points at; each backend names its own."""
     oauth_scopes: ClassVar[tuple[str, ...]] = ()
     """OAuth scopes a credential backend reads with; only accounts that granted all of them are offered."""
 
@@ -195,7 +196,7 @@ class LocalFolderMountBackend(MountBackend):
 
     key = "local_folder"
     label = "Local folder"
-    vendor_slug = "local"
+    defaults: ClassVar[dict[str, Any]] = {"vendor": "local"}
     requires_credential = False
 
     @classmethod

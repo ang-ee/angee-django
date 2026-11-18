@@ -159,12 +159,13 @@ serves without a binding bind to the first account that connects.
 
 A capability connected with one of the user's accounts projects its connect facts
 through the `ConnectWithAccount` GraphQL interface ([`schema.py`](schema.py)),
-built with `ConnectWithAccount.of` from an unsaved row. Its dialog spreads the
-`ConnectWithAccountFields` fragment and composes `ConnectWithAccountAction`, or
-`useConnectWithAccountField` among its other fields
+built with `ConnectWithAccount.of` from an unsaved row (`IntegrationManager.build`).
+Its query spreads the `ConnectWithAccountFields` fragment and is read through
+`useConnectWithAccountQuery`, which reloads it as the user's accounts change; its
+dialog composes `ConnectWithAccountAction`, or `useConnectWithAccountField` among
+its other fields
 ([`ConnectWithAccountAction.tsx`](web/src/connect/ConnectWithAccountAction.tsx)):
 the account choice and "Connect another account" with the capability's scopes.
-Storage mounts and Google calendar sources compose it.
 
 Connection adapters declare `IntegrationImpl.requires_connection_discovery = True`
 to opt into asynchronous `discover_connection`/`apply_discovery`. Manual and

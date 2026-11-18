@@ -42,6 +42,7 @@ from django.db import connection, models, transaction
 from django.db.models import BooleanField, ExpressionWrapper, OuterRef, Prefetch, ProtectedError, Q, Subquery
 from django.db.models.functions import JSONObject
 from django.utils import timezone
+from django.utils.text import capfirst
 from django_compose.models import Composable
 from rebac import (
     PermissionDenied,
@@ -968,8 +969,17 @@ class CredentialQuerySet[CredentialT: Credential](AngeeHistoryQuerySet[Credentia
             )
         )
 
+    def owned_by(self, user: Any) -> Self:
+        """Return ``user``'s own credentials: the rows whose ``user`` is them, whatever their kind.
+
+        A verb that takes one of the caller's credentials looks it up here, so an
+        unknown id and another user's fail alike.
+        """
+
+        return self.filter(user=user)
+
     def connected_for(self, user: Any) -> Self:
-        """Return ``user``'s external-account-backed credentials.
+        """Return ``user``'s external-account-backed credentials (:meth:`owned_by`, with an account).
 
         Each row is a credential whose ``external_account`` (and that account's
         ``credential``) is preloaded under the ambient actor's scope. Owns the
@@ -977,8 +987,7 @@ class CredentialQuerySet[CredentialT: Credential](AngeeHistoryQuerySet[Credentia
         connected-accounts surface.
         """
 
-        return self.filter(
-            user=user,
+        return self.owned_by(user).filter(
             external_account__isnull=False,
         ).rebac_select_related("external_account", "external_account__credential")
 
@@ -1048,8 +1057,8 @@ class CredentialManager[CredentialT: Credential](_CredentialManagerBase[Credenti
     ) -> bool:
         """Retire one credential: prepare its disconnect, then delete it; return whether a row went.
 
-        The verb a credential's owner retires it through (an account disconnect, a
-        calendar subscription's purge). :meth:`prepare_disconnect` owns vetoes,
+        The verb a credential's owner retires it through (an account disconnect, an
+        integration's purge of what it held). :meth:`prepare_disconnect` owns vetoes,
         derived releases and after-commit remote revocation; ``before_delete`` runs
         the caller's own release between the two (an account's), and ``rows`` scopes
         the delete (an actor's ``with_action("delete")``). A credential an
@@ -1098,7 +1107,7 @@ class CredentialManager[CredentialT: Credential](_CredentialManagerBase[Credenti
         account binds one either way round (``Credential.external_account``, or
         ``ExternalAccount.credential``): only the account's own disconnect
         (:meth:`disconnect_account`) retires such a credential, so an integration
-        that borrowed it (a calendar source on the user's connected account) never
+        that borrowed it (one reading with the user's connected account) never
         retires it when it lets go.
         """
 
@@ -1151,7 +1160,7 @@ class CredentialManager[CredentialT: Credential](_CredentialManagerBase[Credenti
             ).first()
         if row is None or row.is_reconnect_required:
             return None
-        return row if set(oauth_scopes) <= set(row.granted_scopes or ()) else None
+        return row if row.grants(oauth_scopes) else None
 
     def upsert_for_user(
         self,
@@ -1470,6 +1479,11 @@ class Credential(AuditMixin, AngeeDataModel, concrete=True):
             and self.oauth_client.supports_refresh
             and bool(self.reveal().get("refresh_token"))
         )
+
+    def grants(self, scopes: Iterable[str]) -> bool:
+        """Whether this grant covers every scope in ``scopes``, as the provider reported granting them."""
+
+        return set(scopes) <= set(self.granted_scopes or ())
 
     @property
     def delegated(self) -> bool:
@@ -2166,17 +2180,33 @@ class IntegrationManager[IntegrationT: Integration](_IntegrationManagerBase[Inte
         if credential.pk != target.credential_id or target.lifecycle == IntegrationLifecycle.DISCONNECTED:
             target.attach_credential(credential)
 
-    def create_capability(self, **fields: Any) -> IntegrationT:
-        """Prepare model-owned defaults and connection identity before native validation."""
+    def build(self, **fields: Any) -> IntegrationT:
+        """Return an unsaved capability row of ``fields``, as a saved one would answer before anything is created.
+
+        It carries the effective actor when there is one, its implementation's
+        defaults (its vendor among them, ``ImplDefaultsMixin.prepare_impl_defaults``;
+        an unknown implementation key is refused on its field) and the account of
+        its credential, unless ``fields`` name one. A connect verb or a connect
+        query builds one to ask what the capability reads with
+        (:meth:`Integration.connectable_credentials`) or connects through
+        (:meth:`Integration.ready_oauth_client`); :meth:`create_capability` saves one.
+        """
 
         instance = self.model(**fields)
-        actor, _sudo = self.effective_actor(strict=True)
+        actor, _sudo = self.effective_actor()
         if actor is not None:
             instance.with_actor(actor)
         instance.prepare_impl_defaults()
         credential = instance.credential
         if "account" not in fields and "account_id" not in fields and credential is not None:
             instance.account = credential.external_account
+        return instance
+
+    def create_capability(self, **fields: Any) -> IntegrationT:
+        """Insert the row :meth:`build` prepares, after native validation; an actor (or sudo) is required."""
+
+        self.effective_actor(strict=True)
+        instance = self.build(**fields)
         instance.full_clean()
         return self.get_queryset().insert(instance)
 
@@ -2376,7 +2406,7 @@ class Integration(StatementSourceMixin, ImplDefaultsMixin, OwnerMixin, AngeeData
 
         scopes = self.connection_oauth_scopes
         credential = self._credential_health() if scopes else None
-        return credential is not None and not set(scopes) <= set(credential.granted_scopes or ())
+        return credential is not None and not credential.grants(scopes)
 
     def bound_account(self, oauth_client_pk: int) -> ExternalAccount | None:
         """Return the external account this integration is connected as at one OAuth client."""
@@ -2413,6 +2443,19 @@ class Integration(StatementSourceMixin, ImplDefaultsMixin, OwnerMixin, AngeeData
             raise OAuthFlowError(OAUTH_CLIENT_NOT_CONNECTABLE, 400, f"{owner_label} has no enabled OAuth client.")
         return oauth_client
 
+    def ready_oauth_client(self) -> Any | None:
+        """Return the enabled OAuth registration another account connects through, or ``None`` while there is none.
+
+        :meth:`connect_oauth_client` under this capability's own label, its refusal
+        (no registration hint, or none enabled) read as ``None``.
+        """
+
+        with system_context(reason="integrate.integration.ready_oauth_client"):
+            try:
+                return self.connect_oauth_client(capfirst(str(self._meta.verbose_name)))
+            except OAuthFlowError:
+                return None
+
     def reads_with(self, credential: Any) -> bool:
         """Whether this capability reads with ``credential``: an OAuth grant of its client that covers its scopes.
 
@@ -2434,14 +2477,13 @@ class Integration(StatementSourceMixin, ImplDefaultsMixin, OwnerMixin, AngeeData
                 return False
             scopes = self.connection_oauth_scopes
             client = credential.oauth_client
-        return client is not None and client.slug == oauth_slug and set(scopes) <= set(credential.granted_scopes or ())
+        return client is not None and client.slug == oauth_slug and credential.grants(scopes)
 
     def connectable_credentials(self, user: Any) -> models.QuerySet[Credential]:
         """Return ``user``'s connected accounts this capability reads with (:meth:`reads_with`).
 
-        A capability offers them before it exists through an unsaved row of it,
-        which its manager builds (``MountManager.build``,
-        ``CalendarSourceManager.build``).
+        A capability offers them before it exists through an unsaved row of it
+        (:meth:`IntegrationManager.build`).
         """
 
         credential_model = apps.get_model("integrate", "Credential")

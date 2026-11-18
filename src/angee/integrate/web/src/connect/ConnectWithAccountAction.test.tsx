@@ -1,12 +1,22 @@
 // @vitest-environment happy-dom
 
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, renderHook, screen, waitFor } from "@testing-library/react";
 import type { DescriptorField, DescriptorFieldControlProps } from "@angee/ui";
 import { beforeEach, describe, expect, test, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   connectAnother: vi.fn(),
   dialogProps: null as Record<string, unknown> | null,
+  query: vi.fn(),
+  refetch: vi.fn(),
+}));
+
+vi.mock("@angee/refine", async (original) => ({
+  ...await original<object>(),
+  useAuthoredQuery: (document: unknown, variables: unknown, options: unknown) => {
+    mocks.query(document, variables, options);
+    return { data: { facts: "loaded" }, refetch: mocks.refetch };
+  },
 }));
 
 vi.mock("./ConnectAccountButton", () => ({
@@ -36,6 +46,7 @@ import {
   CONNECT_WITH_ACCOUNT_FIELD,
   ConnectWithAccountAction,
   type ConnectWithAccountFacts,
+  useConnectWithAccountQuery,
 } from "./ConnectWithAccountAction";
 
 const SCOPE = "https://www.googleapis.com/auth/calendar.readonly";
@@ -126,5 +137,17 @@ describe("ConnectWithAccountAction", () => {
 
     expect(screen.getByText("No connected account can read this source yet.")).toBeTruthy();
     expect(mocks.connectAnother).not.toHaveBeenCalled();
+  });
+});
+
+describe("useConnectWithAccountQuery", () => {
+  test("reads the consumer's facts as the user's credentials change, and reloads them once another connected", () => {
+    const document = { kind: "Document" } as unknown as Parameters<typeof useConnectWithAccountQuery>[0];
+    const { result } = renderHook(() => useConnectWithAccountQuery(document, undefined));
+
+    expect(mocks.query).toHaveBeenCalledWith(document, undefined, { models: ["integrate.Credential"] });
+    expect(result.current.data).toEqual({ facts: "loaded" });
+    result.current.onConnected();
+    expect(mocks.refetch).toHaveBeenCalledOnce();
   });
 });

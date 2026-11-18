@@ -20,8 +20,9 @@ live in code docstrings.
   (`None`: any) bounds the remote calendars a deployment publishes to, checked
   again before every remote call. A publishing source's purge unbinds its
   calendars and keeps their events and its key. `angee.calendar_integrate_google`
-  adds the `google_resource` backend: a `jwt_bearer` key minted for
-  `calendar.events` (no delegation) and `connect_google_resource_calendars(credential_id)`.
+  adds the `google_publishing` backend, which publishes to any Google calendar
+  shared with its key: a `jwt_bearer` key minted for `calendar.events` (no
+  delegation) and `connect_google_calendar_publishing(credential_id)`.
   It creates each master or single event once under an id derived from its
   public id, stamped `extendedProperties.private.angee_event` and looked up by
   that stamp before any insert (a `409` adopts the event when the stamp and the
@@ -41,7 +42,7 @@ live in code docstrings.
   pushes again only after the next local change. `push_stream` reads the cycle's
   deadline (`sync_deadline()`) between candidates. `push_candidates` is public.
 - A publishing calendar backend implements `write_event` and `read_written`;
-  `CalendarBackend.write_back` and `read_keys` run them after `admit_push`, which
+  `PublishingCalendarBackend.write_back` and `read_keys` run them after `admit_push`, which
   refuses an unsubscribed source and a remote calendar
   `ANGEE_CALENDAR_PUBLISH_TARGETS` does not list, once per push as the stream's
   failure. The setting is matched whole and checked at startup (`calendar.E001`).
@@ -55,13 +56,41 @@ live in code docstrings.
   (`400`, or a `403` naming the event) is `EventRefused`, that event's own
   `RemoteRejected("event_refused")`; a `404` reads as a gone event only once the
   calendar is known to be served, else it is the calendar's failure.
+- Calendar sources dispatch on their backend. `CalendarBackend.direction` is the
+  one fact of whether a source's calendars take local edits (`writable` is
+  deleted; `CalendarSource.is_backend_writable` reads `direction != PULL`); a
+  publishing backend extends `PublishingCalendarBackend`, which owns
+  `admit_push`, `write_back`, `read_keys` and its purge (`release`: unbind),
+  while `CalendarBackend.release` deletes a mirror's events and archives its
+  calendars. `CalendarSource.unsubscribe` returns the backend's `unsubscribed`
+  message, and `Calendar.delete_blocker` its `calendar_delete_refusal` (the
+  `SOURCE_CALENDAR_DELETE` and `PUBLISHED_CALENDAR_DELETE` constants are
+  deleted). A purge locks every stream of the source. Push streams declare the
+  poll interval like pulled ones; integrate never sweeps them. The Google
+  publishing backend is `google_publishing` (`GooglePublishingCalendarBackend`,
+  `connect_google_calendar_publishing(credential_id)`; formerly
+  `google_resource`). A publishing source holds no `statement_source` on the
+  calendars it publishes (calendar REBAC revision 5). `event_columns(event,
+  fields)` is calendar's public column projection, which Google's push
+  projection composes with `canonical_rule`; `CalendarEvent.span_end` gives an
+  occurrence's end without a row; `GoogleCalendarClient.instance` takes the
+  original start as a moment and owns its wire form. Given keys, Google's
+  `local_changes` reads only the events they name, and no projection reads
+  attendees.
+- `angee.integrate`: `IntegrationManager.build(**fields)` returns the unsaved
+  capability row `create_capability` saves; `Credential.grants(scopes)`,
+  `CredentialQuerySet.owned_by(user)` and `Integration.ready_oauth_client()` are
+  the one rule each (`ConnectWithAccount.of` is a pure projection). A Mount's
+  vendor is its backend's `defaults` (`MountBackend.vendor_slug` is deleted).
+  `@angee/integrate` adds `useConnectWithAccountQuery`, which Mount's and
+  Google Calendar's connect actions compose.
 - One connect-with-account surface in `angee.integrate`: `Integration.reads_with`
   (an OAuth grant of the capability's client covering its `oauth_scopes`) and
   `Integration.connectable_credentials(user)` replace `Mount.reads_with`'s rule,
   `MountManager.connectable_credentials` and `MountManager.connect_oauth_client`;
   a capability offers accounts before it exists from an unsaved row
-  (`MountManager.build`, the new `CalendarSourceManager.build`, which
-  `subscribe` now composes). The `ConnectWithAccount` GraphQL interface
+  (`IntegrationManager.build`, which `create_capability`, `CalendarSourceManager.subscribe`
+  and `MountManager.build` compose). The `ConnectWithAccount` GraphQL interface
   (`oauth_client`, `oauth_scopes`, `accounts`) is implemented by `MountBackendType`
   and the new `calendar_source_backend(backend_class)` query's type.
   `@angee/integrate` exports `ConnectWithAccountAction` and
@@ -69,12 +98,12 @@ live in code docstrings.
   their consumers spread. `ConnectMountAction` composes the field
   (`MountAccountPicker` is deleted; its `mount.account.*` copy moves to the
   `integrate` namespace), and `@angee/calendar-integrate-google` adds "Connect
-  Google Calendar" to the sources toolbar over `connectGoogleCalendar(credentialId)`.
+  Google Calendar" to the sources toolbar over `connect_google_calendar(credential_id)`.
   `GoogleCalendarBackend.admit_credential` composes `reads_with` and keeps only
   one source per account.
 - `angee.calendar_integrate_google` syncs a connected Google account's calendars
   (the `google` client, `calendar.readonly`) with sync tokens;
-  `connectGoogleCalendar(credentialId)` connects one of the user's accounts as
+  `connect_google_calendar(credential_id)` connects one of the user's accounts as
   one source, and `GoogleCalendarBackend.admit_credential` refuses an account
   another source already syncs, on every attachment. Every calendar connect verb
   runs `CalendarSourceManager.subscribe` (quota and rate under the owner's row

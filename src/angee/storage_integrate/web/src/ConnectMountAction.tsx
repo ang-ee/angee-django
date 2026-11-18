@@ -1,4 +1,4 @@
-import { CONNECT_WITH_ACCOUNT_FIELD, useConnectWithAccountField } from "@angee/integrate";
+import { CONNECT_WITH_ACCOUNT_FIELD, useConnectWithAccountField, useConnectWithAccountQuery } from "@angee/integrate";
 import { useAuthoredMutation, useAuthoredQuery } from "@angee/refine";
 import {
   ActionTrigger,
@@ -50,17 +50,14 @@ export function ConnectMountAction({
   const [connect] = useAuthoredMutation(ConnectMount, {
     invalidateModels: [MOUNT_MODEL],
   });
-  // The backend's accounts are the user's credentials; a connected account joins them.
-  const factsQuery = useAuthoredQuery(MountBackendFacts, { backendClass }, { models: ["integrate.Credential"] });
+  const factsQuery = useConnectWithAccountQuery(MountBackendFacts, { backendClass });
   const facts = factsQuery.data?.mount_backend;
-  const refetchFacts = factsQuery.refetch;
   const targets = useAuthoredQuery(MountCopyTargets).data?.backends;
   const requiresCredential = facts?.requires_credential === true;
-  const onAccountConnected = React.useCallback(() => { void refetchFacts(); }, [refetchFacts]);
   const accountField = useConnectWithAccountField({
     facts,
     returnRoute: "storage-integrate.mounts",
-    onConnected: onAccountConnected,
+    onConnected: factsQuery.onConnected,
   });
   const sourceControl = React.useCallback(
     (props: DescriptorFieldControlProps) => {

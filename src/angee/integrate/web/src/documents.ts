@@ -38,9 +38,9 @@ export const ConnectOAuthResultFields = graphql(`
   }
 `);
 
-// What a connect-with-account action reads, on any type implementing `ConnectWithAccount`
-// (storage-integrate's `mount_backend`, calendar's `calendar_source_backend`). One owner
-// for the selection; consumers spread it in their own query.
+// What a connect-with-account action reads, on any type implementing `ConnectWithAccount`.
+// One owner for the selection; consumers spread it in their own query, which
+// `useConnectWithAccountQuery` reads.
 export const ConnectWithAccountFields = graphql(`
   fragment ConnectWithAccountFields on ConnectWithAccount {
     oauth_client

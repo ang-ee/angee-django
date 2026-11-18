@@ -23,12 +23,12 @@ integrate's absence sweep finds what it stopped serving (:meth:`CalendarBackend.
 events stream, whose events are then withdrawn as removed records. The manual backend
 declares no streams.
 
-A publishing backend (``direction`` is ``PUSH``) mirrors local calendars out instead:
-``CalendarSource.publish`` observes the ``calendars`` link of a remote calendar the
-source writes, targeting an existing local calendar, and each event of that calendar
-is pushed through the events stream the link holds. A push stream never reads its
-remote, so it is never swept; the backend writes conditionally and integrate holds a
-refused write in the link's outbox.
+A publishing backend (:class:`PublishingCalendarBackend`, ``direction`` ``PUSH``)
+mirrors local calendars out instead: ``CalendarSource.publish`` observes the
+``calendars`` link of a remote calendar the source writes, targeting an existing local
+calendar, and each event of that calendar is pushed through the events stream the link
+holds. A push stream never reads its remote, so integrate never sweeps it; the backend
+writes conditionally and integrate holds a refused write in the link's outbox.
 """
 
 from __future__ import annotations
@@ -41,7 +41,7 @@ from typing import Any, ClassVar
 
 from django.apps import apps
 from django.core.exceptions import ValidationError
-from icalendar import Component
+from icalendar import Component, vRecur
 
 from angee.base.serialization import canonical_json_sha256
 from angee.calendar.choices import AttendeeResponse, AttendeeRole, EventStatus
@@ -79,8 +79,8 @@ An event's place in a series (``series``, ``original_start``) is set when it is
 inserted, and its attendees are rows of their own.
 """
 
-_PROJECTED = (*EVENT_FIELDS, "original_start")
-"""The columns an event's comparison projection carries, with its attendees."""
+PROJECTED_FIELDS = (*EVENT_FIELDS, "original_start")
+"""The columns an event's comparison projection carries, with its attendees (:func:`event_columns`)."""
 
 _MOMENTS = frozenset({"start", "end", "original_start"})
 """The projected columns that are moments, carried as UTC ISO-8601 text."""
@@ -235,14 +235,19 @@ def attendee_identity(handle: Any | None, address: str) -> str:
     return str(handle.pk) if handle is not None else f"new:{normalized_address(address)}"
 
 
-def _columns(event: ParsedEvent) -> dict[str, Any]:
-    """Return the event's projected columns as JSON: moments as UTC ISO-8601 text."""
+def event_columns(event: Any, fields: Sequence[str] = PROJECTED_FIELDS) -> dict[str, Any]:
+    """Return ``fields`` of an event as JSON, moments as UTC ISO-8601 text: the one column projection.
+
+    ``event`` is a :class:`ParsedEvent` or a stored ``CalendarEvent``: both carry
+    the columns by name. ``fields`` is a subset of :data:`PROJECTED_FIELDS`; a
+    projection that compares fewer columns (a push's) names its own.
+    """
 
     def value(name: str) -> Any:
         found = getattr(event, name)
         return found.astimezone(UTC).isoformat() if name in _MOMENTS and found is not None else found
 
-    return {name: value(name) for name in _PROJECTED}
+    return {name: value(name) for name in fields}
 
 
 def event_projection(event: ParsedEvent, identities: Mapping[str, str] | None = None) -> dict[str, Any]:
@@ -264,7 +269,7 @@ def event_projection(event: ParsedEvent, identities: Mapping[str, str] | None = 
         invitation = (attendee.role, attendee.response)
         attendees[identity] = invitation if seen is None else collapse(seen, invitation)
     return {
-        **_columns(event),
+        **event_columns(event),
         "attendees": sorted([identity, role, response] for identity, (role, response) in attendees.items()),
     }
 
@@ -278,7 +283,7 @@ def event_payload(event: ParsedEvent) -> dict[str, Any]:
     """
 
     return {
-        "event": _columns(event),
+        "event": event_columns(event),
         "series": event.series,
         "attendees": [
             [attendee.address, attendee.role, attendee.response, attendee.display_name] for attendee in event.attendees
@@ -296,7 +301,7 @@ def event_from_payload(payload: Mapping[str, Any]) -> ParsedEvent:
         return datetime.fromisoformat(found) if name in _MOMENTS and found else found
 
     return ParsedEvent(
-        **{name: value(name) for name in _PROJECTED},
+        **{name: value(name) for name in PROJECTED_FIELDS},
         series=payload["series"],
         attendees=tuple(
             ParsedAttendee(address=address, role=role, response=response, display_name=name)
@@ -315,6 +320,16 @@ def series_rule(component: Component) -> str:
     rules = component.get("RRULE")
     first = rules[0] if isinstance(rules, list) and rules else rules
     return first.to_ical().decode().strip() if first else ""
+
+
+def canonical_rule(rule: str) -> str:
+    """Return a stored rule's text as :func:`series_rule` reads it back from a source: icalendar's canonical form.
+
+    A backend that writes a rule compares what it wrote with what the source holds
+    in this form, so a rule reads back unchanged. Blank stays blank.
+    """
+
+    return vRecur.from_ical(rule).to_ical().decode().strip() if rule else ""
 
 
 def excluded_dates(component: Component) -> list[tuple[date | datetime, str]]:
@@ -418,13 +433,11 @@ class CalendarBackend(BridgeImpl, HttpClientMixin):
     :meth:`read_events` and :meth:`event_keys`; it builds its event pages with
     :meth:`observe` and :meth:`page`, and this base extracts the calendars stream,
     applies every record and applies integrate's absence sweep (:meth:`on_absent`).
-    ``writable`` declares whether the source takes local edits: a read-only
-    backend's calendars refuse them (``Calendar.is_writable``). A backend that reads
-    with one kind of credential refuses any other (:meth:`admit_credential`). A
-    publishing backend (:attr:`direction` ``PUSH``) implements integrate's
-    ``local_changes``, and :meth:`write_event` and :meth:`read_written` instead of
-    the extraction methods: this base runs integrate's ``write_back`` and
-    ``read_keys`` through them, after :meth:`admit_push`.
+    Its calendars are its source's replicas: they take no local edits
+    (``Calendar.is_writable`` reads :attr:`direction`). A backend that reads with
+    one kind of credential refuses any other (:meth:`admit_credential`). An
+    unsubscribed source's replica goes through :meth:`release`. A publishing
+    backend extends :class:`PublishingCalendarBackend` instead.
     """
 
     registry_setting = "ANGEE_CALENDAR_SOURCE_BACKEND_CLASSES"
@@ -433,16 +446,21 @@ class CalendarBackend(BridgeImpl, HttpClientMixin):
     label = "Calendar"
     icon = "calendar"
 
-    writable: ClassVar[bool] = False
-    """Whether calendars of this backend take local edits; a read-only subscription does not."""
-
     direction: ClassVar[StreamDirection] = StreamDirection.PULL
-    """Which way this backend's streams sync: ``PULL`` mirrors remote calendars in.
+    """Which way this backend's streams sync, the one fact of whether its calendars take local edits.
 
-    ``PUSH`` publishes local calendars out (``CalendarSource.publish``): the
-    backend projects each event of a published calendar (``local_changes``) and
-    writes it conditionally (``write_back``); its calendars take local edits.
+    ``PULL`` mirrors remote calendars in, as read-only replicas. ``PUSH``
+    (:class:`PublishingCalendarBackend`) publishes local calendars out; they stay
+    the person's own and take every local edit.
     """
+
+    unsubscribed: ClassVar[str] = "Unsubscribed; its events are being removed."
+    """What unsubscribing a source of this backend does, as ``CalendarSource.unsubscribe`` reports it."""
+
+    calendar_delete_refusal: ClassVar[str] = (
+        "This calendar mirrors a subscription; unsubscribe to stop it, which archives the calendar."
+    )
+    """The refusal of deleting one of this backend's calendars on its own (``Calendar.delete_blocker``)."""
 
     supports_identity_reads: ClassVar[bool] = True
     """Both stream kinds re-read identities (:meth:`read_keys`), so a retried or held record reads its source."""
@@ -470,48 +488,9 @@ class CalendarBackend(BridgeImpl, HttpClientMixin):
 
         raise NotImplementedError("CalendarBackend subclasses must implement event_keys().")
 
-    def write_event(self, link: Any, projection: Any, *, expected_version: str) -> WriteBackResult:
-        """Write one event of a published calendar to its remote calendar: a publishing backend implements it.
-
-        ``projection`` is ``None`` for an event deleted locally: its remote is removed.
-        """
-
-        raise NotImplementedError("A publishing CalendarBackend must implement write_event().")
-
-    def read_written(self, stream: Any, keys: Sequence[str]) -> list[RecordChange]:
-        """Read the remote events ``keys`` name, each with its version: a publishing backend implements it."""
-
-        raise NotImplementedError("A publishing CalendarBackend must implement read_written().")
-
-    def admit_push(self, stream: Any) -> None:
-        """Refuse a publishing ``stream``'s remote call, as the stream's failure, before anything is sent.
-
-        Every remote call of a publishing backend (a write, an identity read, and the
-        token the first one mints) runs behind it: the source is still subscribed (an
-        unsubscribe stops the writes of a push already running) and the deployment
-        publishes to the stream's remote calendar (``CalendarSource.may_publish_to``).
-        Its refusal fails the stream's push once per cycle, never record by record.
-        """
-
-        self._require_subscribed()
-        if not self.bridge.may_publish_to(stream.partition):
-            raise IntegrationError("This deployment does not publish to this calendar.")
-
-    def write_back(self, link: Any, projection: Any, *, expected_version: str) -> WriteBackResult:
-        """Write one local change of a published calendar out: :meth:`admit_push`, then :meth:`write_event`."""
-
-        self.admit_push(link.stream)
-        return self.write_event(link, projection, expected_version=expected_version)
-
     def read_keys(self, stream: Any, keys: Sequence[str]) -> list[RecordChange]:
-        """Re-read the requested identities, each once, a missing one as a tombstone (integrate's identity reads).
+        """Re-read the requested identities, each once, a missing one as a tombstone (integrate's identity reads)."""
 
-        A publishing backend reads what it wrote (:meth:`read_written`), after :meth:`admit_push`.
-        """
-
-        if self.direction == StreamDirection.PUSH:
-            self.admit_push(stream)
-            return self.read_written(stream, keys)
         if stream.key == CALENDARS_STREAM:
             remotes = {remote.key: remote.payload() for remote in self._listed_calendars(stream)}
             payloads: Mapping[str, Any] = {key: remotes.get(key) for key in keys}
@@ -550,6 +529,34 @@ class CalendarBackend(BridgeImpl, HttpClientMixin):
         """
 
         del credential
+
+    def release(self, calendars: Sequence[Any]) -> int:
+        """Let an unsubscribed source's replica go; return how many events went.
+
+        ``CalendarSource.purge`` calls it on the backend of the locked, disconnected
+        source, with ``calendars`` (the source's) locked and every stream of the
+        source fenced. The events streams' links release their targets in bulk
+        (``RecordLinkManager.release_targets``), the calendars' events are deleted
+        and the calendars archived, with their history and statements. The feed
+        credential is detached, and retired through its owner once nothing else
+        attaches it (``CredentialManager.retire_unattached``: two subscriptions to
+        one feed share it).
+        """
+
+        source = self.bridge
+        links = apps.get_model("integrate", "RecordLink").objects
+        events = apps.get_model("calendar", "CalendarEvent")
+        links.release_targets(links.filter(stream__integration_id=source.pk, stream__key=EVENTS_STREAM))
+        _deleted, per_model = events.system_queryset().filter(calendar__in=calendars).delete()
+        for calendar in calendars:
+            if not calendar.is_archived:
+                calendar.is_archived = True
+                calendar.save(update_fields=["is_archived", "updated_at"])
+        credential = source.credential
+        if credential is not None:
+            source.attach_credential(None)
+            apps.get_model("integrate", "Credential").objects.retire_unattached(credential)
+        return per_model.get(events._meta.label, 0)
 
     def streams(self, *, deadline: float | None = None) -> Iterable[StreamDefinition]:
         """Declare the calendars stream, then the events stream each live calendar link holds.
@@ -866,7 +873,7 @@ class CalendarBackend(BridgeImpl, HttpClientMixin):
         """Refuse a page extracted before its source was unsubscribed.
 
         Called once the page holds its stream's lock (the driver's) and, for an
-        events page, its calendar's: the purge takes the events stream first, so a
+        events page, its calendar's: the purge takes every stream of the source first, so a
         page waiting on it reads the disconnect the purge committed and writes
         nothing. Extraction ends a drain quietly (:meth:`extract`); this guards only
         the page already extracted, and fails it rather than revalidate links onto
@@ -883,6 +890,87 @@ class CalendarBackend(BridgeImpl, HttpClientMixin):
             return None
         events = apps.get_model("calendar", "CalendarEvent").objects
         return event_projection(events.project_events((event,))[event.pk])
+
+
+class PublishingCalendarBackend(CalendarBackend):
+    """A backend that publishes local calendars out (``direction`` ``PUSH``) instead of mirroring remote ones.
+
+    ``CalendarSource.publish`` binds a local calendar to a remote one; the calendar
+    stays the person's own and takes every local edit. A concrete backend
+    implements integrate's ``local_changes``, and :meth:`write_event` and
+    :meth:`read_written` instead of the extraction methods: this base runs
+    integrate's ``write_back`` and ``read_keys`` through them, after
+    :meth:`admit_push`. Its purge unbinds (:meth:`release`).
+    """
+
+    direction: ClassVar[StreamDirection] = StreamDirection.PUSH
+
+    unsubscribed: ClassVar[str] = "Unpublished; its calendars are local again."
+
+    calendar_delete_refusal: ClassVar[str] = "This calendar is published; unpublish it before deleting it."
+    """Deleting a published calendar must never remove its remote calendar's events."""
+
+    def write_event(self, link: Any, projection: Any, *, expected_version: str) -> WriteBackResult:
+        """Write one event of a published calendar to its remote calendar.
+
+        ``projection`` is ``None`` for an event deleted locally: its remote is removed.
+        """
+
+        raise NotImplementedError("A PublishingCalendarBackend must implement write_event().")
+
+    def read_written(self, stream: Any, keys: Sequence[str]) -> list[RecordChange]:
+        """Read the remote events ``keys`` name, each with its version."""
+
+        raise NotImplementedError("A PublishingCalendarBackend must implement read_written().")
+
+    def admit_push(self, stream: Any) -> None:
+        """Refuse a publishing ``stream``'s remote call, as the stream's failure, before anything is sent.
+
+        Every remote call (a write, an identity read, and the token the first one
+        mints) runs behind it: the source is still subscribed (an unsubscribe stops
+        the writes of a push already running) and the deployment publishes to the
+        stream's remote calendar (``CalendarSource.may_publish_to``). Its refusal
+        fails the stream's push once per cycle, never record by record.
+        """
+
+        self._require_subscribed()
+        if not self.bridge.may_publish_to(stream.partition):
+            raise IntegrationError("This deployment does not publish to this calendar.")
+
+    def write_back(self, link: Any, projection: Any, *, expected_version: str) -> WriteBackResult:
+        """Write one local change of a published calendar out: :meth:`admit_push`, then :meth:`write_event`."""
+
+        self.admit_push(link.stream)
+        return self.write_event(link, projection, expected_version=expected_version)
+
+    def read_keys(self, stream: Any, keys: Sequence[str]) -> list[RecordChange]:
+        """Read what was written (:meth:`read_written`), after :meth:`admit_push`."""
+
+        self.admit_push(stream)
+        return self.read_written(stream, keys)
+
+    def release(self, calendars: Sequence[Any]) -> int:
+        """Unbind an unsubscribed publishing source: nothing remote changes and no event goes; return ``0``.
+
+        Each current stream of the source moves to a new generation first, so a push
+        already writing finds its generation superseded and binds nothing it wrote.
+        Then every link of the source releases its target, ``calendars`` become local
+        again with every event kept, and the credential (the deployment's key) is
+        detached, never retired.
+        """
+
+        source = self.bridge
+        streams = apps.get_model("integrate", "SyncStream").objects
+        links = apps.get_model("integrate", "RecordLink").objects
+        for stream in streams.current_for_bridge(source):
+            streams.bump_generation(stream)
+        links.release_targets(links.filter(stream__integration_id=source.pk))
+        for calendar in calendars:
+            calendar.source = None
+            calendar.save(update_fields=["source", "updated_at"])
+        if source.credential is not None:
+            source.attach_credential(None)
+        return 0
 
 
 class ManualCalendarBackend(CalendarBackend):

@@ -327,9 +327,10 @@ class CalendarQuery:
         takes one of them.
         """
 
-        source = CalendarSource.objects.build(backend_class)
+        user = session_user(info)
+        source = CalendarSource.objects.build(backend_class=backend_class)
         impl = source.get_backend_class_impl()
-        return CalendarSourceBackendType.of(source, session_user(info), key=impl.key, label=str(impl.label))
+        return CalendarSourceBackendType.of(source, user, key=impl.key, label=str(impl.label))
 
 
 @strawberry.type
@@ -401,17 +402,11 @@ class CalendarSourceActionMutation:
     def unsubscribe_calendar_source(self, info: strawberry.Info, id: PublicID) -> ActionResult:
         """End the subscription after the ``delete`` preflight: disconnect it now and queue its purge.
 
-        A publishing source's purge unbinds its calendars, which keep their events.
+        The message says what the purge does (``CalendarSource.unsubscribe``).
         """
 
         source = authorized_action_target(info, CalendarSource, id, "delete")
-        source.unsubscribe()
-        message = (
-            "Unpublished; its calendars are local again."
-            if source.publishes
-            else "Unsubscribed; its events are being removed."
-        )
-        return ActionResult(ok=True, message=message, id=source.sqid)
+        return ActionResult(ok=True, message=source.unsubscribe(), id=source.sqid)
 
 
 _SOURCE_RESOURCE = hasura_model_resource(

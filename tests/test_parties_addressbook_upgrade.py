@@ -143,7 +143,7 @@ def _upgrade_round_trip(caplog: pytest.LogCaptureFixture, config: dict[str, Any]
                     # The wide book's contacts stream could not exist before the partition widened.
                     assert set(held.values_list("container_id", flat=True)) == (set() if href == _WIDE else {link.pk})
             for unadopted in ("manual", "long"):
-                assert not RecordLink.objects.filter(target_object_id=str(rows["folders"][unadopted].pk)).exists()
+                assert not RecordLink.objects.filter(RecordLink.record_filter(rows["folders"][unadopted])).exists()
             long_folder = rows["folders"]["long"].pk
             assert any(
                 f"Folder {long_folder} keeps no address-book link" in record.getMessage() for record in caplog.records

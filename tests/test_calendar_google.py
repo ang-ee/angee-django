@@ -353,7 +353,7 @@ def test_a_source_offers_only_the_users_own_google_grants_with_calendar_access(c
         Credential.objects.filter(pk=key_pair.pk).update(kind=CredentialKind.JWT_BEARER)
         key_pair.refresh_from_db()
         own = {connected.source(token).credential for token in ("work-token", "home-token")}
-        source = CalendarSource.objects.build("google")
+        source = CalendarSource.objects.build(backend_class="google")
         offered = set(source.connectable_credentials(connected.user))
         assert offered == own
         assert source.reads_with(foreign)

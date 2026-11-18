@@ -82,19 +82,15 @@ class MountManager[MountT: Mount](_MountManagerBase[MountT]):
         except ImproperlyConfigured as error:
             raise ValidationError({"backend_class": str(error)}) from error
 
-    def build(self, backend_class: str, **fields: Any) -> MountT:
-        """Return an unsaved Mount of ``backend_class`` pointing at its backend's vendor.
+    def build(self, **fields: Any) -> MountT:
+        """Return an unsaved Mount (``IntegrationManager.build``), refusing an unknown ``backend_class``.
 
-        It answers what a saved row would before anything is created: its
-        backend, its OAuth registration (``connect_oauth_client``), the user's
-        accounts it reads with (``connectable_credentials``) and its source's
-        canonical root.
+        Its backend's defaults name its vendor. It also answers its source's
+        canonical root before anything is created.
         """
 
-        impl = self.backend_impl(backend_class)
-        with system_context(reason="storage_integrate.mount.vendor"):
-            vendor = apps.get_model("integrate", "Vendor").objects.seeded(impl.vendor_slug)
-        return self.model(backend_class=backend_class, vendor_id=vendor.pk, **fields)
+        self.backend_impl(str(fields.get("backend_class") or ""))
+        return super().build(**fields)
 
     def browse_source(
         self,
@@ -160,7 +156,7 @@ class MountManager[MountT: Mount](_MountManagerBase[MountT]):
         drive_model = apps.get_model("storage", "Drive")
         self._check_connection(user, backend_class, impl=impl, credential=credential)
         self._check_copy_backend(user, mode=mode, copy_backend=copy_backend, backend_model=backend_model)
-        source = self.build(backend_class, config={"root": str(root)}, credential=credential, mode=mode)
+        source = self.build(backend_class=backend_class, config={"root": str(root)}, credential=credential, mode=mode)
         storage_backend_spec: tuple[str, dict[str, Any]] | None = None
         try:
             with contextlib.closing(source.backend) as backend:
@@ -247,7 +243,8 @@ class MountManager[MountT: Mount](_MountManagerBase[MountT]):
         if credential is None:
             raise ValidationError({"credential": f"Choose the account to read this {impl.label} with."})
         with system_context(reason="storage_integrate.mount.connectable_credential"):
-            usable = self.build(backend_class).connectable_credentials(user).filter(pk=credential.pk).exists()
+            readable = self.build(backend_class=backend_class).connectable_credentials(user)
+            usable = readable.filter(pk=credential.pk).exists()
         if not usable:
             raise ValidationError({"credential": f"This account cannot read a {impl.label} for you."})
 
