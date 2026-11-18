@@ -714,6 +714,23 @@ def test_a_trashed_record_file_stays_with_its_owner_only_while_the_owner_writes_
     assert reach() == (True,) * 6, "writing the task keeps it, to list, restore and manage"
 
 
+def test_an_admin_keeps_a_record_file_it_owns_without_writing_its_records(drive: Any) -> None:
+    """A platform admin who owns a published record file no record lets it write still manages it as admin."""
+
+    admin = get_user_model().objects.create_user(username="storage-record-admin")
+    grant(actor=admin, role="angee/role:admin")
+    with system_context(reason="test storage admin-owned record file"):
+        row = File.objects.create(
+            drive=drive, filename="orphan.txt", content_hash="c" * 64, storage_path="orphan.txt",
+            visibility=storage_models.FileVisibility.RECORD, owner=admin, upload_state=UploadState.READY,
+        )
+    bound = row.with_actor(admin)
+    assert not FileAttachment._base_manager.filter(file=row).exists()
+    assert [bound.has_access(action) for action in ("delete", "transfer", "write__owner")] == [True] * 3
+    assert [bound.has_access(action) for action in ("read", "write", "share")] == [True] * 3
+    assert File.objects.with_actor(admin).filter(pk=row.pk).exists()
+
+
 def test_a_record_upload_follows_its_task_while_an_inherited_file_stays_its_owners(drive: Any) -> None:
     """The uploader owns a record upload but reaches it only through the task, and loses it with the task."""
 
