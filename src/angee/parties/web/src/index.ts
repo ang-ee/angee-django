@@ -3,6 +3,7 @@ import { lazyRouteComponent } from "@tanstack/react-router";
 import { AtSign, Building2, CircleDot, Contact, HeartHandshake, LayoutDashboard, UserCheck, Users } from "lucide-react";
 import { enPartiesMessages } from "./i18n";
 import { directoryForm } from "./DirectoryForm";
+import { folderForm } from "./FolderForm";
 import { organizationForm } from "./OrganizationForm";
 import { personForm } from "./PersonForm";
 import { partyForm } from "./PartyForm";
@@ -62,6 +63,8 @@ const parties = defineBaseAddon({
       component: lazyRouteComponent(() => import("./MergePage"), "MergePage"),
     },
     ...resourcePageRoutes("parties.directories", "/parties/directories", lazyRouteComponent(() => import("./DirectoriesPage"), "DirectoriesPage"), "parties.Directory"),
+    // Under the directories' path, so the folders keep their Settings place.
+    ...resourcePageRoutes("parties.folders", "/parties/directories/folders", lazyRouteComponent(() => import("./FoldersPage"), "FoldersPage"), "parties.Folder"),
   ],
   menus: {
     // The route-less root lands on the first visible child, People.
@@ -73,7 +76,10 @@ const parties = defineBaseAddon({
     "parties.relationships": { parent: "parties", label: "Relationships", route: "parties.relationships", icon: "relationship", hide: true },
     "parties.handles": { parent: "parties", label: "Handles", route: "parties.handles", icon: "handle", hide: true },
     "parties.review": { parent: "parties", label: "Review", route: "parties.review", icon: "user-check", sequence: 40 },
-    "parties.directories": { parent: "parties", label: "Contact directories", route: "parties.directories", icon: "address-book", group: "platform" },
+    // A Settings category: each directory's synced address books list beside the directories.
+    "parties.directories": { parent: "parties", label: "Contact directories", icon: "address-book", group: "platform" },
+    "parties.directories.list": { parent: "parties.directories", label: "Directories", route: "parties.directories", icon: "address-book" },
+    "parties.folders": { parent: "parties.directories", label: "Folders", route: "parties.folders", icon: "folder" },
   },
   icons: {
     parties: Users,
@@ -88,6 +94,7 @@ const parties = defineBaseAddon({
   i18n: { parties: enPartiesMessages },
   forms: {
     "parties.Directory": directoryForm,
+    "parties.Folder": folderForm,
     "parties.Party": partyForm,
     "parties.Organization": organizationForm,
     "parties.Person": personForm,

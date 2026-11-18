@@ -63,6 +63,7 @@ export const enPartiesMessages: Record<string, string> = {
   "directory.group.lastSync": "Last sync",
   "directory.action.sync": "Sync now",
   "directory.connect.menu": "Connect",
+  "folder.empty": "No folders yet. A connected directory adds one for each address book it syncs.",
   "person.tabs.identity": "Identity",
   "person.tabs.circles": "Circles",
   "person.tabs.relationships": "Relationships",

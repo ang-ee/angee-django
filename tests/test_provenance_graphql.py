@@ -523,6 +523,7 @@ def test_metadata_marks_a_resource_that_keeps_history() -> None:
     resources = {item.model_label: item for item in schema.angee_resources}
     assert resources["knowledge.Page"].history is True
     assert resources["parties.Party"].history is True
+    assert resources["parties.Folder"].history is True
     assert resources["parties.PartyStatement"].history is False
     wire = {item["modelLabel"]: item for item in schema._schema.extensions["angee"]["resources"]}
     assert wire["knowledge.Page"]["history"] is True
