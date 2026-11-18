@@ -33,6 +33,7 @@ export {
   type ResolveContainerOptions,
   type ResourceViewKindContent,
   type ResourceCardContent,
+  type LoginHeroContent,
   type DockedDrawerContent,
 } from "./containers";
 export {

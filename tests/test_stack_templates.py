@@ -913,6 +913,17 @@ def test_project_web_host_leaves_home_and_confinement_to_the_composed_shell() ->
     assert "confineTo" not in template
 
 
+def test_project_web_host_route_owns_the_sign_in_url_and_mounts_the_default_page() -> None:
+    """``auth.login`` spells the sign-in URL once; a fragment's hero brands ``IamLoginPage`` at runtime."""
+
+    project = ROOT / "templates" / "projects" / "web"
+    template = (project / "template" / "{{ web_path }}" / "src" / "main.tsx.jinja").read_text()
+
+    assert 'name: "auth.login"' in template
+    assert "component: IamLoginPage" in template
+    assert "loginPath" not in template
+
+
 def test_project_python_dependencies_use_native_package_metadata() -> None:
     """Fresh hosts install static meta requirements; explicit jobs compose runtime."""
 
