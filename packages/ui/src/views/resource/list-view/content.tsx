@@ -5,6 +5,7 @@ import type { ModelFieldMetadata, Row } from "@angee/metadata";
 import { useUiT } from "../../../i18n";
 import { titleCase } from "../../../lib/titleCase";
 import { BoardView } from "../BoardView";
+import { GalleryView, useGalleryRows } from "../../GalleryView";
 import { GroupedBoardBody } from "../board/grouped";
 import { type ResourceViewContextValue } from "../resource-view-context";
 import { type ResourceViewFilter, type ResourceViewGroup, type ResourceViewKind } from "../resource-view-model";
@@ -14,13 +15,14 @@ import { GroupedListBody } from "../GroupedList";
 import { FlatListBody, groupMeasuresFromColumns, hasuraMeasuresFromGroupMeasures, type FlatListBodyProps, type GroupMeasure } from "../resource-view-list-body";
 import { ResourceListFrame } from "../ResourceListFrame";
 import { listChromeState, type BoardCardSpec, type CardActionContext, type ListEmptyContent, type ListViewProps } from "../resource-view-types";
-import { DeclaredBoardCardBody } from "../board/cards";
+import { DeclaredBoardCardBody, DefaultBoardCardBody } from "../board/cards";
 import { columnsWithMetadataDefaults } from "../model-metadata-defaults";
 import { createLabelForResource } from "../resource-view-utils";
 import type { ColumnDescriptor } from "../../page";
 import { useRelationFacets } from "../../relation/relation-facet";
 import { useScalarFacets } from "../../relation/scalar-facet";
 import { useBulkDelete } from "../useBulkDelete";
+import { recordRepresentationValue, titleText } from "../../form/form-view-model";
 import { requireDataResource, useAggregateOperation } from "../resource-operations";
 import { useResourceSearch } from "../search/use-resource-search";
 import { useSearchCatalog } from "../search/catalog";
@@ -71,7 +73,9 @@ interface ListViewContentProps<TRow extends Row> {
   bulkActions: ListViewProps<TRow>["bulkActions"];
   cardActions: ListViewProps<TRow>["cardActions"];
   boardCard?: BoardCardSpec;
+  gallery: ListViewProps<TRow>["gallery"];
   renderCard: ListViewProps<TRow>["renderCard"];
+  cardFrame: ListViewProps<TRow>["cardFrame"];
   emptyContent: ListEmptyContent;
   className: string | undefined;
   presentation: ListViewProps<TRow>["presentation"];
@@ -120,7 +124,9 @@ export function ListViewContent<TRow extends Row = Row>({
   bulkActions,
   cardActions,
   boardCard,
+  gallery,
   renderCard,
+  cardFrame,
   emptyContent,
   className,
   presentation,
@@ -152,6 +158,8 @@ export function ListViewContent<TRow extends Row = Row>({
   const interactive = Boolean(onRowClick || rowHref);
   const resolvedChrome = listChromeState(presentation, chrome, { ...surface.list, queryDirty: resourceView.queryDirty });
   const selectedIds = selectable ? surface.selectedIds : EMPTY_SELECTED_IDS;
+  // A card's checkbox toggles its row in the shared selection, keeping the row as its snapshot.
+  const toggleCardSelected = selectable ? resourceView.toggleSelectedId : undefined;
   const bulkDelete = useBulkDelete(
     source ? "" : resource,
     selectedIds,
@@ -187,6 +195,17 @@ export function ListViewContent<TRow extends Row = Row>({
     <DeclaredBoardCardBody columns={declaredCardColumns} modelMetadata={modelMetadata} row={row} />,
   [declaredCardColumns, modelMetadata]);
   const resolvedRenderCard = renderCard ?? (boardCard ? boardCardBody : undefined);
+  // The gallery draws the page's card, else its declared image/title/subtitle card,
+  // else the board's column card (declared or the leading columns) in an inset frame.
+  const columnCardBody = React.useCallback((row: TRow) =>
+    <DefaultBoardCardBody columns={resolvedColumns} groupFields={NO_GROUP_FIELDS} modelMetadata={modelMetadata} row={row} />,
+  [resolvedColumns, modelMetadata]);
+  const galleryRenderCard = renderCard ?? (gallery ? undefined : boardCard ? boardCardBody : columnCardBody);
+  const galleryFrame = cardFrame ?? (renderCard || gallery ? "flush" : "inset");
+  const galleryRows = useGalleryRows(surface.rowModels);
+  // A card is named by its record representation, as the form header and the board are.
+  const representationLabel = React.useCallback(
+    (row: TRow) => titleText(recordRepresentationValue(row, modelMetadata), ""), [modelMetadata]);
   const search = useResourceSearch({ resourceView, catalog, groupStack: effectiveGroupStack,
     groupingEnabled: !boardGroupingPinned, maxGroupDepth });
   const heading = chrome?.heading ?? (resolvedChrome.compact
@@ -279,6 +298,25 @@ export function ListViewContent<TRow extends Row = Row>({
       {renderPaneRow ? (
         <PaneListBody surface={surface} renderRow={renderPaneRow} renderGroupLabel={renderGroupLabel}
           groupStack={effectiveGroupStack} emptyContent={emptyContent} toolbar={pane ? toolbar : undefined} />
+      ) : resourceView.state.view === "gallery" ? (
+        <GalleryView<TRow>
+          rows={galleryRows.rows}
+          getRowId={galleryRows.getRowId}
+          imageField={gallery?.image}
+          titleField={gallery?.title}
+          cardLabel={representationLabel}
+          subtitleField={gallery?.subtitle}
+          renderCard={galleryRenderCard}
+          cardFrame={galleryFrame}
+          cardActions={cardActions || renderRowActions ? (row) => boardCardActions(row, cardActionContext) : undefined}
+          cardHref={rowHref ? (row) => rowHref(row, surface.listState.navigationScope) : undefined}
+          onCardClick={onRowClick}
+          draggableRow={draggableRow}
+          selectedIds={selectedIds}
+          onToggleSelected={toggleCardSelected}
+          fetching={surface.list.fetching}
+          emptyContent={emptyContent}
+        />
       ) : surface.kind === "grouped" && resourceView.state.view === "board" ? (
         <GroupedBoardBody
           columns={resolvedColumns}
@@ -296,6 +334,9 @@ export function ListViewContent<TRow extends Row = Row>({
           }
           cardActionContext={cardActionContext}
           renderCard={resolvedRenderCard}
+          cardFrame={cardFrame ?? "inset"}
+          selectedIds={selectedIds}
+          onToggleSelected={toggleCardSelected}
           fetching={surface.list.fetching}
           error={surface.list.error}
           emptyContent={emptyContent}
@@ -340,6 +381,7 @@ export function ListViewContent<TRow extends Row = Row>({
           resourceView={resourceView}
           modelMetadata={modelMetadata}
           selectedIds={selectedIds}
+          onToggleSelected={toggleCardSelected}
           interactive={interactive}
           fetching={surface.list.fetching}
           emptyContent={emptyContent}
@@ -354,6 +396,7 @@ export function ListViewContent<TRow extends Row = Row>({
           }
           cardActionContext={cardActionContext}
           renderCard={resolvedRenderCard}
+          cardFrame={cardFrame}
           dragEnabled={surface.boardDragEnabled}
           rankField={surface.boardRankField}
           rankInputField={surface.boardRankInputField}
@@ -429,6 +472,8 @@ export function ListViewContent<TRow extends Row = Row>({
     </ResourceListFrame>
   );
 }
+
+const NO_GROUP_FIELDS: ReadonlySet<string> = new Set();
 
 export function isBoardRankField(
   field: ModelFieldMetadata | undefined,

@@ -26,7 +26,7 @@ The reference example is `examples/src/example/notes` (steps, rows, trigger, tes
 | `src/angee/workflows/decision_steps.py` | `apply_proposals`, `DecisionStep`, built-in `AskDecision` | docstrings |
 | `src/angee/workflows/definition.py`, `models.py`, `managers.py` | `Definition`, `WorkflowExtension`; `Workflow`, `WorkflowVersion`, `Trigger`; `WorkflowManager.install_definition`, `save_draft`, `publish`, `WorkflowRunManager.start` | [README](../../README.md) |
 | `src/angee/workflows/resources.py` | `WorkflowDefinitionResource`, `TriggerResource`, `WorkflowExtensionResourceKind` | docstrings |
-| `src/angee/workflows/triggers.py`, `subjects.py` | `TriggerSource`, `RecordChangedOptIn`, `TriggerGrantTarget`, `RecordChanged`; `RunSubject` | docstrings |
+| `src/angee/workflows/triggers.py`, `subjects.py` | `TriggerSource`, `RecordChangedOptIn`, `TriggerGrantTarget`, `RecordChanged`, `Schedule`; `RunSubject` | docstrings |
 | `src/angee/workflows/testing/` | `register_steps`, `load_workflow`, `publish_draft`, `start_run`, `decide`, `run_until`, `RunFactory` (`drivers.py`); fixtures `register_step`, `execution`, `run_factory` (`fixtures.py`) | `testing/__init__.py` docstring |
 
 ## Reuse first
@@ -138,7 +138,9 @@ The reference example is `examples/src/example/notes` (steps, rows, trigger, tes
 
    The trigger row (`110_workflows.trigger.yaml`) names `workflow: example.notes.note_publish`, `source: record_changed`,
    `model_label` and a Hasura-style `condition`; it installs disabled (`TriggerResource`, `resources.py`) and an eligible
-   user enables it in the console. **Owner rule:** the source declares grant targets and the model its own scope; enablement
+   user enables it in the console. A timed workflow uses `source: schedule` with a `recurrence` (an RRULE) and a
+   `recurrence_start` instead of a model and condition; its workflow declares no `subject_model`, and the tick starts one
+   run per due occurrence (`Schedule` in `triggers.py`). **Owner rule:** the source declares grant targets and the model its own scope; enablement
    writes tuples to the workflow principal ([REBAC](../../../../../docs/backend/guidelines.md#rebac); `workflows.E001`, `check_record_changed_models` in `triggers.py`).
 
 8. **Own the root-run lifecycle on the record (optional).** Compose `RunSubject`; implement `admit_run(run)` and `settle_run(run, status)`

@@ -114,7 +114,7 @@ describe("AddonSourceControls contribution", () => {
     const dialog = mocks.dialog.mock.calls[0]![0];
     const values = dialog.parseValues({ vcsBridgeId: "bridge-1", name: "angee/framework" });
 
-    const result = await dialog.onSubmit(values);
+    const result = await dialog.onSubmit!(values);
     expect(result).toEqual({ status: "ok", data: { ok: true, message: "Source added." }, message: "Source added." });
     expect(mocks.toast.success).not.toHaveBeenCalled();
     if (result.status !== "ok") throw new Error("Expected a successful source addition.");
@@ -134,7 +134,7 @@ describe("AddonSourceControls contribution", () => {
     const dialog = mocks.dialog.mock.calls[0]![0];
     const values = dialog.parseValues({ vcsBridgeId: "bridge-1", name: "angee/framework" });
 
-    await expect(dialog.onSubmit(values)).resolves.toEqual({
+    await expect(dialog.onSubmit!(values)).resolves.toEqual({
       status: "invalid", issues: { fieldErrors: { name: ["Choose another name."] }, formErrors: ["Source refused."] },
     });
 

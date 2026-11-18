@@ -23,3 +23,11 @@ test("measures format numeric values and preserve other strings", () => {
   expect(formatMeasure("12345678901234567890", { unit: "" })).toBe("12,345,678,901,234,567,890");
   expect(formatMeasure("unknown", { unit: "" })).toBe("unknown");
 });
+
+test("a Time scalar cell reads its clock label as written", () => {
+  const time = { fields: { starts: { kind: "scalar", scalar: "Time" } } } as unknown as ModelMetadata;
+  const { container } = render(<>{cellContent({ field: "starts" }, { starts: "13:45:00" }, t, time)}</>);
+  expect(container.querySelector("time")?.getAttribute("datetime")).toBe("13:45:00");
+  expect(screen.getByText("1:45 PM")).toBeTruthy();
+  expect(cellContent({ field: "starts" }, { starts: null }, t, time)).toBe("—");
+});

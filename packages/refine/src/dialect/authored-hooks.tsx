@@ -172,7 +172,18 @@ export function useSetAuthoredQueryData(): <TDocument extends AuthoredDocument>(
 
 export type AuthoredMutate<TDocument extends AuthoredDocument> = (
   variables?: AuthoredVariables<TDocument>,
+  options?: AuthoredMutateOptions,
 ) => Promise<DocumentData<TDocument> | undefined>;
+
+/** One call's options: the surface that runs the call may render its failure itself. */
+export interface AuthoredMutateOptions {
+  /**
+   * `false` turns off refine's generic error notification for this call, as the
+   * hook option does for every call: the surface running it (a dialog under its
+   * fields) renders the failure, so no toast repeats it.
+   */
+  errorNotification?: false;
+}
 
 export interface AuthoredMutationOptions<
   TData = unknown,
@@ -187,7 +198,9 @@ export interface AuthoredMutationOptions<
   /**
    * `false` turns off refine's generic error notification, for a caller that
    * renders the failure itself (a callback page, a form's own error). The
-   * mutation still rejects with the error.
+   * mutation still rejects with the error. A surface that runs one call and
+   * renders its failure (`MutationDialog`) turns it off for that call instead
+   * ({@link AuthoredMutateOptions}).
    */
   errorNotification?: false;
   /**
@@ -294,15 +307,15 @@ export function useAuthoredMutation<TDocument extends AuthoredDocument>(
     transient: options.transient,
     errorNotification: options.errorNotification,
   };
-  const mutate = useCallback<AuthoredMutate<TDocument>>(async (variables) => {
+  const mutate = useCallback<AuthoredMutate<TDocument>>(async (variables, callOptions) => {
     const {
       dataProviderName,
       document,
       ordinaryRun,
       transientRun,
       transient,
-      errorNotification,
     } = mutationRef.current;
+    const errorNotification = callOptions?.errorNotification ?? mutationRef.current.errorNotification;
     // Guard synchronously, before native MutationObserver creates an operation.
     // Also protect a transient operation if the next render changes its policy.
     if (inFlight.current.count > 0 && (transient || inFlight.current.transient)) {

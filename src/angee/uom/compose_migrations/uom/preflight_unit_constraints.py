@@ -1,23 +1,28 @@
-"""Refuse ambiguous legacy unit data before adding quantity constraints.
+"""Migration template: refuse ambiguous legacy unit data before adding quantity constraints.
+
+Copy this module into the host's ``runtime/uom/migrations/`` under the host's next
+migration name, then replace the placeholder dependency below with the host's own
+explicit migration (never ``__latest__``), and make the host migration that adds the
+``uom.Uom`` ratio and rounding constraints depend on it. A host whose ``uom.Uom``
+already carries ``uom_uom_rounding_power_of_ten`` skips this template.
 
 No conversion semantics can be inferred from a nonpositive ratio or a rounding
-increment such as 0.5. An operator must choose the intended unit definition.
+increment such as 0.5. An operator must choose the intended unit definition. The
+preflight changes nothing, so its reverse has nothing to undo.
 """
+
+from __future__ import annotations
 
 from decimal import Decimal
 
+from django.apps.registry import Apps
 from django.db import migrations, models
+from django.db.backends.base.schema import BaseDatabaseSchemaEditor
 
 
-def applies(project_state):
-    unit = project_state.models.get(("uom", "uom"))
-    return unit is not None and not any(
-        constraint.name == "uom_uom_rounding_power_of_ten"
-        for constraint in unit.options.get("constraints", ())
-    )
+def preflight(apps: Apps, schema_editor: BaseDatabaseSchemaEditor) -> None:
+    """Refuse the migration, listing up to 20 units, while a ratio or rounding step is ambiguous."""
 
-
-def preflight(apps, schema_editor):
     units = apps.get_model("uom", "Uom")._base_manager.using(schema_editor.connection.alias)
     steps = tuple(Decimal(10) ** exponent for exponent in range(-6, 6))
     invalid = units.exclude(models.Q(ratio__gt=0) & models.Q(rounding__in=steps))
@@ -31,5 +36,6 @@ def preflight(apps, schema_editor):
 
 
 class Migration(migrations.Migration):
-    dependencies = []
+    # Placeholder: the host's latest migration of ``uom.Uom`` before its ratio and rounding constraints.
+    dependencies = [("uom", "HOST_MIGRATION_BEFORE_THE_UNIT_CONSTRAINTS")]
     operations = [migrations.RunPython(preflight, migrations.RunPython.noop)]

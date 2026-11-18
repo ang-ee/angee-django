@@ -15,9 +15,11 @@ from unittest.mock import patch
 from uuid import uuid4
 
 import pytest
+from asgiref.sync import async_to_sync
 from django.contrib.auth import get_user_model
 from django.contrib.auth.models import AnonymousUser
 from django.core.exceptions import SuspiciousFileOperation, ValidationError
+from django.core.signals import request_finished
 from django.db import close_old_connections, connection, connections, models, transaction
 from django.db.models.signals import post_save
 from django.db.utils import OperationalError
@@ -678,6 +680,95 @@ def test_a_fragment_grant_cannot_reach_a_trashed_file(drive: Any) -> None:
     assert reach(editor) == (False, False, False, False)
     assert reach(drive.alice) == (True, True, True, True)
     assert check_derived_permissions() == []
+
+
+def test_a_trashed_record_file_stays_with_its_owner_only_while_the_owner_writes_its_record(drive: Any) -> None:
+    """A trashed record file's owner keeps it through the record's write, not its read."""
+
+    owner = get_user_model().objects.create_user(username="storage-record-owner")
+    with system_context(reason="test storage trashed record file"):
+        project = Project.objects.create(title="Files", owner=drive.alice)
+        task = Task.objects.create(title="Spec", project=project, owner=drive.alice)
+        row = File.objects.create(
+            drive=drive, filename="spec.txt", content_hash="b" * 64, storage_path="spec.txt",
+            visibility=storage_models.FileVisibility.RECORD, owner=owner, upload_state=UploadState.READY,
+        )
+        FileAttachment.objects.attach(row, task)
+        write_relationships([
+            RelationshipTuple(resource=to_object_ref(task), relation="reader", subject=to_subject_ref(owner)),
+        ])
+
+    def reach() -> tuple[bool, ...]:
+        bound = row.with_actor(owner)
+        listed = File.objects.with_actor(owner).filter(pk=row.pk).exists()
+        return (*(bound.has_access(action) for action in ("read", "write", "share", "delete", "transfer")), listed)
+
+    assert reach() == (True, False, False, False, False, True), "a task reader reads its record file"
+    with system_context(reason="test storage trash the record file"):
+        File._base_manager.filter(pk=row.pk).update(is_trashed=True)
+    assert reach() == (False,) * 6, "reading the task does not keep a trashed record file"
+    with system_context(reason="test storage the owner writes the task"):
+        write_relationships([
+            RelationshipTuple(resource=to_object_ref(task), relation="editor", subject=to_subject_ref(owner)),
+        ])
+    assert reach() == (True,) * 6, "writing the task keeps it, to list, restore and manage"
+
+
+def test_an_admin_keeps_a_record_file_it_owns_without_writing_its_records(drive: Any) -> None:
+    """A platform admin who owns a published record file no record lets it write still manages it as admin."""
+
+    admin = get_user_model().objects.create_user(username="storage-record-admin")
+    grant(actor=admin, role="angee/role:admin")
+    with system_context(reason="test storage admin-owned record file"):
+        row = File.objects.create(
+            drive=drive, filename="orphan.txt", content_hash="c" * 64, storage_path="orphan.txt",
+            visibility=storage_models.FileVisibility.RECORD, owner=admin, upload_state=UploadState.READY,
+        )
+    bound = row.with_actor(admin)
+    assert not FileAttachment._base_manager.filter(file=row).exists()
+    assert [bound.has_access(action) for action in ("delete", "transfer", "write__owner")] == [True] * 3
+    assert [bound.has_access(action) for action in ("read", "write", "share")] == [True] * 3
+    assert File.objects.with_actor(admin).filter(pk=row.pk).exists()
+
+
+def test_a_record_upload_follows_its_task_while_an_inherited_file_stays_its_owners(drive: Any) -> None:
+    """The uploader owns a record upload but reaches it only through the task, and loses it with the task."""
+
+    uploader = get_user_model().objects.create_user(username="storage-record-uploader")
+    with system_context(reason="test storage record upload"):
+        project = Project.objects.create(title="Hiring", owner=drive.alice)
+        task = Task.objects.create(title="Candidate", project=project, owner=drive.alice, assignee=uploader)
+        personal, _created = File.objects.ingest_bytes(
+            b"personal notes", filename="notes.txt", owner_id=uploader.pk, drive_id=str(drive.sqid),
+        )
+    with actor_context(drive.alice):
+        drive.with_actor(drive.alice).grant_record_access("editor", uploader)
+    with actor_context(uploader):
+        draft = File.objects.draft(
+            filename="cv.png", mime_type="image/png", size_bytes=len(PNG_BYTES), drive_id=str(drive.sqid),
+            visibility=storage_models.FileVisibility.RECORD, record=task,
+        )
+        File.objects.for_upload_token(draft.issue_upload_token()).receive_bytes(BytesIO(PNG_BYTES))
+        cv = File.objects.all().from_public_id(str(draft.sqid)).finalize(
+            expected_hash=PNG_SHA256, expected_size=len(PNG_BYTES),
+        )
+    assert (cv.upload_state, cv.owner_id, personal.owner_id) == (UploadState.READY, uploader.pk, uploader.pk)
+
+    def reach(row: Any) -> tuple[bool, ...]:
+        bound = row.with_actor(uploader)
+        listed = File.objects.with_actor(uploader).filter(pk=row.pk).exists()
+        return (*(bound.has_access(action) for action in ("read", "write", "share", "delete", "transfer")), listed)
+
+    assert reach(cv) == (True,) * 6, "the assignee manages its upload through the task"
+    token = cv.issue_download_token(actor=uploader)
+    with actor_context(drive.alice):
+        drive.with_actor(drive.alice).revoke_record_access("editor", uploader)
+    with system_context(reason="test storage record upload leaves the task"):
+        Task._base_manager.filter(pk=task.pk).update(assignee=None)
+    assert reach(cv) == (False,) * 6, "losing the task loses its record file, whoever owns it"
+    with pytest.raises(exceptions.UploadDenied):
+        File.objects.for_download_token(token)
+    assert reach(personal) == (True,) * 6, "an inherited file stays its owner's"
 
 
 def test_storage_resource_metadata_exposes_delete_previews() -> None:
@@ -1347,6 +1438,97 @@ def test_proxy_download_sets_content_cache_headers_and_honors_etag(
     )
     assert failed_precondition.status_code == 412
     assert "immutable" not in failed_precondition.get("Cache-Control", "")
+
+
+def test_a_download_streams_its_first_block_before_reading_the_rest(
+    drive: Any,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The proxy download yields block by block, sized from the row, without reading the whole file first."""
+
+    from angee.storage import views
+
+    payload = PNG_BYTES + bytes(views.DOWNLOAD_BLOCK_BYTES * 3)
+    row = _proxy_upload(drive, payload)
+    reads: list[int] = []
+    opened = File.open_stream
+
+    class CountedStream:
+        """Record each block size read from the stored stream."""
+
+        def __init__(self, stream: Any) -> None:
+            self.stream = stream
+
+        def read(self, size: int = -1) -> bytes:
+            reads.append(size)
+            return self.stream.read(size)
+
+        def close(self) -> None:
+            self.stream.close()
+
+    monkeypatch.setattr(File, "open_stream", lambda self: CountedStream(opened(self)))
+    with actor_context(drive.alice):
+        token = row.issue_download_token()
+    response = views.download(RequestFactory().get(f"/storage/download/{row.filename}?token={token}"), row.filename)
+    assert response["Content-Length"] == str(len(payload))
+    assert response["Content-Disposition"].startswith("inline")
+
+    async def first_block_then_rest() -> tuple[bytes, list[int], bytes]:
+        blocks = aiter(response.streaming_content)
+        first = await anext(blocks)
+        reads_at_first = list(reads)
+        rest = b"".join([block async for block in blocks])
+        return first, reads_at_first, rest
+
+    first, reads_at_first, rest = async_to_sync(first_block_then_rest)()
+    assert reads_at_first == [views.DOWNLOAD_BLOCK_BYTES]
+    assert len(first) == views.DOWNLOAD_BLOCK_BYTES
+    assert first + rest == payload
+
+
+def test_closing_a_download_closes_its_stream_unread(drive: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Django closes the download body with the response, so an abandoned download releases its stream."""
+
+    from angee.storage import views
+
+    row = _proxy_upload(drive, PNG_BYTES)
+    closed: list[bool] = []
+    opened = File.open_stream
+
+    class TrackedStream:
+        """Record that the stored stream was closed."""
+
+        def __init__(self, stream: Any) -> None:
+            self.stream = stream
+
+        def read(self, size: int = -1) -> bytes:
+            return self.stream.read(size)
+
+        def close(self) -> None:
+            closed.append(True)
+            self.stream.close()
+
+    monkeypatch.setattr(File, "open_stream", lambda self: TrackedStream(opened(self)))
+    with actor_context(drive.alice):
+        token = row.issue_download_token()
+    response = views.download(RequestFactory().get(f"/storage/download/{row.filename}?token={token}"), row.filename)
+    # A request's end closes old database connections; this test's transaction must outlive it.
+    request_finished.disconnect(close_old_connections)
+    try:
+        response.close()
+    finally:
+        request_finished.connect(close_old_connections)
+    assert closed == [True]
+
+
+def test_a_cached_backend_knows_its_row_by_identity_only(drive: Any) -> None:
+    """``Backend.storage`` hands its instance the row's identity, never row state that could go stale."""
+
+    with system_context(reason="test storage backend row identity"):
+        backend = Backend._base_manager.get(pk=drive.backend_id)
+        storage = backend.storage
+    assert storage.backend_row == backend
+    assert {"slug", "backend_config"} <= storage.backend_row.get_deferred_fields()
 
 
 SANDBOXED = "default-src 'none'; style-src 'unsafe-inline'; sandbox"

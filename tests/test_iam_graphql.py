@@ -19,7 +19,8 @@ from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
 from functools import partial
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
+from urllib.parse import parse_qs, urlsplit
 from uuid import uuid4
 
 import httpx2
@@ -53,7 +54,7 @@ from angee.graphql.views import graphql_endpoint
 from angee.integrate.credentials import CredentialKind
 from angee.integrate.oauth import state
 from angee.integrate.oauth.client import OAuthClientProtocol
-from angee.integrate.oauth.errors import OAuthFlowError
+from angee.integrate.oauth.errors import SCOPE_NOT_IN_CATALOGUE, OAuthFlowError
 from angee.integrate.testing.http import mock_transport
 from tests import (
     test_agents_graphql,  # noqa: F401 -- register the concrete relation graph
@@ -572,6 +573,32 @@ def test_link_account_complete_returns_account_claims_intent_and_coerced_next(
         "error": None,
         "error_code": None,
     }
+
+
+def test_connect_account_start_requests_a_consumers_scopes_from_the_catalogue(iam_connection_tables: None) -> None:
+    """An account connected for a consumer asks for its scopes; one the client does not offer is refused."""
+
+    user = User.objects.create_user(username="connect-scoped", email="scoped@example.com")
+    oauth_client = _oauth_client("connect-scoped", is_oidc=False, scopes_catalogue=["files.read"])
+    start = """
+        mutation Start($id: ID!, $scopes: [String!]) {
+          connect_account_start(id: $id, redirect_uri: "https://app.example/callback", scopes: $scopes) {
+            authorize_url
+            error_code
+          }
+        }
+    """
+
+    def started(scopes: list[str]) -> dict[str, Any]:
+        result = _execute(
+            _schema("public"), start, {"id": str(oauth_client.sqid), "scopes": scopes},
+            request=graphql_request(user, session=True),
+        )
+        return cast(dict[str, Any], _data(result)["connect_account_start"])
+
+    granted = started(["files.read"])
+    assert parse_qs(urlsplit(granted["authorize_url"]).query)["scope"] == ["openid email files.read"]
+    assert started(["files.write"]) == {"authorize_url": "", "error_code": SCOPE_NOT_IN_CATALOGUE}
 
 
 @pytest.mark.parametrize("http_status", [400, 429, 503])
@@ -1393,7 +1420,10 @@ def test_account_connect_schema_exposes_generic_flow_without_token_material(
     oauth_client_type = _sdl_block(console_sdl, "type OAuthClientType")
     oauth_client_insert = _sdl_block(console_sdl, "input oauth_clients_insert_input")
     oauth_client_set = _sdl_block(console_sdl, "input oauth_clients_set_input")
-    for field in ("authorize_params", "token_params", "token_request_format", "external_id_claim", "email_claim"):
+    for field in (
+        "authorize_params", "token_params", "token_request_format", "external_id_claim", "email_claim",
+        "issuer", "jwks_uri",
+    ):
         assert field in oauth_client_type
         assert field in oauth_client_insert
         assert field in oauth_client_set
@@ -1401,7 +1431,8 @@ def test_account_connect_schema_exposes_generic_flow_without_token_material(
         _sdl_block(block, "extend type OAuthClientType")
         for block in console_sdl.split("\n\n") if block.startswith("extend type OAuthClientType")
     )
-    for field in ("jwks_uri", "login_enabled", "link_on_email_match", "create_on_login"):
+    assert "jwks_uri" not in oauth_client_oidc_extension
+    for field in ("login_enabled", "link_on_email_match", "create_on_login"):
         assert field in oauth_client_oidc_extension
         assert field in oauth_client_insert
         assert field in oauth_client_set
@@ -1419,9 +1450,7 @@ def test_oauth_client_resource_metadata_includes_oidc_extension_fields(
     oauth_client = metadata["integrate.OAuthClient"]
     fields = {field.name: field for field in oauth_client.fields}
 
-    assert oauth_client.create_fields[-6:] == (
-        "issuer",
-        "jwks_uri",
+    assert oauth_client.create_fields[-4:] == (
         "login_enabled",
         "link_on_email_match",
         "create_on_login",

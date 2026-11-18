@@ -13,7 +13,7 @@ import ipaddress
 import json
 import xml.etree.ElementTree as ElementTree
 from collections.abc import Collection, Iterator
-from dataclasses import asdict, dataclass, replace
+from dataclasses import dataclass, replace
 from datetime import date, timedelta
 from io import StringIO
 from typing import Any
@@ -30,6 +30,7 @@ from django.core.exceptions import ValidationError
 from django.core.management import call_command
 from django.db import connection
 from django.db.models.fetch_modes import FetchMode
+from django.test.utils import CaptureQueriesContext
 from django.utils import timezone
 from rebac import system_context
 
@@ -42,6 +43,7 @@ from angee.integrate.states import (
     StreamDirection,
     StreamKind,
     StreamPhase,
+    StreamState,
     SyncFailureKind,
     SyncFailureStatus,
 )
@@ -128,6 +130,7 @@ class FakeDav:
         self.has_ctag = False
         self.list_etags = True
         self.read_only = False
+        self.books = {_BOOK: "Contacts"}
         self.store(_HREF, _card())
 
     @property
@@ -181,10 +184,14 @@ class FakeDav:
                 if token in self.invalid_tokens:
                     return httpx2.Response(403, content=b'<d:error xmlns:d="DAV:"><d:valid-sync-token/></d:error>')
                 since = int(token.rsplit("/", 1)[1]) if token else 0
-                changed = {href: removed for version, href, removed in self.events if version > since}
+                changed = {
+                    href: removed
+                    for version, href, removed in self.events
+                    if version > since and href.startswith(url)
+                }
                 responses = "".join(self._response(href, removed=removed) for href, removed in sorted(changed.items()))
                 if self.include_collection_response:
-                    responses = self._property(_BOOK, "<d:resourcetype><d:collection/></d:resourcetype>") + responses
+                    responses = self._property(url, "<d:resourcetype><d:collection/></d:resourcetype>") + responses
                 return self._multistatus(responses, token=True)
             assert root.tag == "{urn:ietf:params:xml:ns:carddav}addressbook-multiget"
             hrefs = [urljoin(url, item.text or "") for item in root.findall("d:href", _NAMESPACES)]
@@ -206,20 +213,28 @@ class FakeDav:
             )
         if url == f"{_BASE}books/":
             return self._multistatus(
-                self._property(
-                    _BOOK,
-                    "<d:resourcetype><d:collection/><card:addressbook/></d:resourcetype>"
-                    "<d:displayname>Contacts</d:displayname>",
+                "".join(
+                    self._property(
+                        book,
+                        "<d:resourcetype><d:collection/><card:addressbook/></d:resourcetype>"
+                        f"<d:displayname>{escape(name)}</d:displayname>",
+                    )
+                    for book, name in sorted(self.books.items())
                 )
             )
-        assert url == _BOOK
+        if url not in self.books:
+            return httpx2.Response(404)
         collection = self._property(
-            _BOOK,
+            url,
             "<d:resourcetype><d:collection/></d:resourcetype>"
             + (f"<d:sync-token>{self.token}</d:sync-token>" if self.has_sync_token else "")
             + (f"<cs:getctag>{self.version}</cs:getctag>" if self.has_ctag else ""),
         )
-        members = "".join(self._response(href) for href in sorted(self.cards)) if headers.get("depth") == "1" else ""
+        members = (
+            "".join(self._response(href) for href in sorted(self.cards) if href.startswith(url))
+            if headers.get("depth") == "1"
+            else ""
+        )
         return self._multistatus(collection + members)
 
     def _response(self, href: str, *, removed: bool = False, data: bool = False) -> str:
@@ -252,12 +267,25 @@ class FakeDav:
         return httpx2.Response(207, content=xml.encode())
 
 
+def contact_links() -> Any:
+    """Contact identities, apart from the address-book link holding their stream."""
+
+    return RecordLink.objects.filter(stream__key="contacts")
+
+
+def contact_applications() -> Any:
+    """Contact application snapshots, apart from the address book's own."""
+
+    return applied_history().filter(stream__key="contacts")
+
+
 @dataclass
 class Replica:
     directory: Any
     backend: CardDavDirectoryBackend
     server: FakeDav
     stream: Any
+    addressbooks: Any
 
     def pull(self) -> Any:
         result = advance_stream(self.stream, self.backend)
@@ -320,23 +348,27 @@ def replica(db: None) -> Iterator[Replica]:
 
         with mock_transport(answer):
             backend = CardDavDirectoryBackend(directory)
-            definitions = tuple(backend.streams())
-            assert len(definitions) == 1
-            definition = definitions[0]
+            (parent,) = backend.streams()
+            assert (parent.key, parent.partition, parent.direction) == ("addressbooks", "", StreamDirection.PULL)
+            addressbooks = advance_stream(SyncStream.objects.current(directory, parent), backend).stream
+            _, definition = backend.streams()
             assert (definition.key, definition.partition, definition.kind, definition.direction) == (
                 "contacts",
                 _BOOK,
                 StreamKind.RECORD_REPLICA,
                 StreamDirection.BIDIRECTIONAL,
             )
-            stream = current_stream(directory, **asdict(definition))
-            yield Replica(directory, backend, server, stream)
+            assert definition.container == RecordLink.objects.get(stream=addressbooks, external_key=_BOOK)
+            stream = SyncStream.objects.current(directory, definition)
+            server.requests.clear()
+            yield Replica(directory, backend, server, stream, addressbooks)
             backend.close()
 
 
 def test_new_remote_contact_uses_ingest_identity_and_both_bases(replica: Replica) -> None:
     person, link = replica.baseline()
-    assert link.stream.partition == Folder.objects.get(directory=replica.directory, source_href=_BOOK).source_href
+    folder = Folder.objects.get(directory=replica.directory)
+    assert (link.stream.partition, link.stream.container.target) == (_BOOK, folder)
     assert link.target_object_id == str(person.pk)
     assert link.remote_version == replica.server.cards[_HREF][1]
     assert link.applied_base.source_hash and canonical_json_sha256(link.applied_base.mapped_payload)
@@ -489,7 +521,7 @@ def test_tokenless_collection_without_complete_etag_inventory_reports_a_safe_err
     )
     replica.stream.refresh_from_db()
     assert replica.stream.cursor == {}
-    assert not RecordLink.objects.exists()
+    assert not contact_links().exists()
 
 
 @pytest.mark.parametrize("reset_before_baseline", [False, True])
@@ -509,7 +541,7 @@ def test_baseline_adopts_existing_contacts_across_pages_without_write_back(
     replica.server.store(f"{_BOOK}grace.vcf", _card(uid="grace", name="Grace Hopper", notes="Remote Grace"))
     if reset_before_baseline:
         replica.stream = SyncStream.objects.bump_generation(replica.stream)
-    assert not applied_history().exists()
+    assert not contact_applications().exists()
     replica.server.requests.clear()
 
     for index, (uid, person) in enumerate(existing.items(), start=1):
@@ -534,9 +566,9 @@ def test_baseline_adopts_existing_contacts_across_pages_without_write_back(
         assert link.applied_base.source_hash == canonical_json_sha256(contact_projection(remote))
         assert link.remote_version == etag
         assert applied_history().filter(id=link.pk, applied_at__isnull=False).count() == 1
-        assert applied_history().count() == index
+        assert contact_applications().count() == index
 
-    assert Person.objects.count() == RecordLink.objects.count() == 2
+    assert Person.objects.count() == contact_links().count() == 2
     assert not bool(SyncStream.objects.get(pk=replica.stream.pk).sync_failures(open_only=False))
     assert push_stream(replica.stream, replica.backend).count == 0
     assert not [request for request in replica.server.requests if request[0] in {"PUT", "DELETE"}]
@@ -554,7 +586,7 @@ def test_local_only_contact_waits_until_first_baseline_completes(replica: Replic
     replica.server.requests.clear()
 
     assert push_stream(replica.stream, replica.backend).count == 0
-    assert not RecordLink.objects.filter(applied_base__isnull=False).exists()
+    assert not contact_links().filter(applied_base__isnull=False).exists()
     assert not replica.server.requests
 
     if bounded:
@@ -959,6 +991,7 @@ def test_the_preview_command_reports_each_current_stream_without_a_request(repli
     out = StringIO()
     call_command("preview_push", replica.directory.sqid, "--keys", stdout=out)
     assert out.getvalue().splitlines() == [
+        f"{replica.directory.sqid} addressbooks : 0 to write, 0 held back by conflicts or refusals",
         f"{replica.directory.sqid} contacts {_BOOK}: 1 to write, 0 held back by conflicts or refusals",
         "  write ada",
     ]
@@ -1321,7 +1354,7 @@ def test_contact_point_edit_rewrites_only_the_changed_lines(replica: Replica) ->
         for row in person.statements_for("handle").filter(handle__value="+14155550100"):
             row.with_actor(person.created_by).dismiss()
         handle = Handle.objects.upsert(platform="phone", value="+14155550199", created_by_id=person.created_by_id)
-        person.with_actor(person.created_by).confirm(aspect="handle", handle=handle, values={})
+        person.with_actor(person.created_by).confirm_statement(aspect="handle", handle=handle, values={})
     assert push_stream(replica.stream, replica.backend).count == 1
 
     card = vobject.readOne(replica.server.cards[_HREF][0])
@@ -1353,7 +1386,7 @@ def test_a_number_listed_twice_keeps_both_lines_when_another_number_changes(repl
     person, _link = replica.baseline()
     with system_context(reason="test duplicate lines"):
         handle = Handle.objects.upsert(platform="phone", value="+14155550199", created_by_id=person.created_by_id)
-        person.with_actor(person.created_by).confirm(aspect="handle", handle=handle, values={})
+        person.with_actor(person.created_by).confirm_statement(aspect="handle", handle=handle, values={})
     assert push_stream(replica.stream, replica.backend).count == 1
 
     card = vobject.readOne(replica.server.cards[_HREF][0])
@@ -1811,7 +1844,7 @@ def test_oversized_multiget_splits_until_every_card_fits_and_advances_sync(
     result = replica.pull()
 
     assert result.count == 4 and result.exhausted
-    assert Person.objects.count() == applied_history().count() == 4
+    assert Person.objects.count() == contact_applications().count() == 4
     assert not bool(SyncStream.objects.get(pk=replica.stream.pk).sync_failures(open_only=False))
     assert replica.stream.cursor == {"sync_token": replica.server.token}
     batches = [
@@ -2151,7 +2184,7 @@ def test_uidless_cards_with_same_name_use_distinct_resource_hrefs(replica: Repli
             "external_key", flat=True
         )
     ) == {_HREF, other_href}
-    assert set(RecordLink.objects.values_list("external_key", flat=True)) == {_HREF, other_href}
+    assert set(contact_links().values_list("external_key", flat=True)) == {_HREF, other_href}
 
 
 @pytest.mark.parametrize("sweep", [False, True])
@@ -2247,7 +2280,7 @@ def test_read_keys_returns_tombstone_for_missing_unbound_href(replica: Replica, 
     assert records[0].external_key == missing_href
     assert records[0].tombstone
     assert records[0].metadata["href"] == missing_href
-    assert RecordLink.objects.exists() is linked
+    assert contact_links().exists() is linked
 
 
 def test_enumeration_sweep_reads_present_href_and_marks_vanished_unavailable(replica: Replica) -> None:
@@ -2299,7 +2332,7 @@ def test_enumeration_sweep_imports_unlinked_contact_once_across_later_delta(repl
     assert replica.pull().count == 0
     link.refresh_from_db()
     assert link.target_object_id == str(person.pk)
-    assert Person.objects.count() == RecordLink.objects.count() == applied_history().count() == 2
+    assert Person.objects.count() == contact_links().count() == contact_applications().count() == 2
     assert not bool(SyncStream.objects.get(pk=replica.stream.pk).sync_failures(open_only=False))
 
 
@@ -2324,7 +2357,7 @@ def test_sweep_imported_identity_survives_remote_href_relocation(replica: Replic
     assert link.metadata["href"] == moved_href
     assert link.metadata["uid"] == "ada"
     assert link.status == LinkStatus.CURRENT
-    assert Person.objects.count() == RecordLink.objects.count() == 1
+    assert Person.objects.count() == contact_links().count() == 1
     assert replica.stream.cursor == {"sync_token": replica.server.token}
     remote_version = replica.server.cards[moved_href][1]
     person.notes = "Edited after relocation"
@@ -2340,7 +2373,7 @@ def test_sweep_imported_identity_survives_remote_href_relocation(replica: Replic
     assert vobject.readOne(replica.server.cards[moved_href][0]).uid.value == "ada"
     link.refresh_from_db()
     assert link.remote_version == replica.server.cards[moved_href][1]
-    assert Person.objects.count() == RecordLink.objects.count() == 1
+    assert Person.objects.count() == contact_links().count() == 1
 
 
 def test_enumeration_sweep_resumes_checkpoint_after_apply_crash(
@@ -2377,7 +2410,7 @@ def test_enumeration_sweep_resumes_checkpoint_after_apply_crash(
     assert replica.stream.reconcile_state == committed_reconcile_state
     assert RecordLink.objects.get(stream=replica.stream, external_key="alpha").target.notes == "Original"
     assert Person.objects.count() == 2
-    assert applied_history().count() == 3
+    assert contact_applications().count() == 3
 
     replica.backend = CardDavDirectoryBackend(replica.directory)
     replica.stream = SyncStream.objects.get(pk=replica.stream.pk)
@@ -2386,8 +2419,8 @@ def test_enumeration_sweep_resumes_checkpoint_after_apply_crash(
     assert replica.stream.cursor == old_cursor
     assert replica.stream.last_reconciled_at is not None
     assert RecordLink.objects.get(stream=replica.stream, external_key="alpha").target.notes == "Second page"
-    assert Person.objects.count() == RecordLink.objects.count() == 3
-    assert applied_history().count() == 5
+    assert Person.objects.count() == contact_links().count() == 3
+    assert contact_applications().count() == 5
     fetched = [
         [item.text for item in ElementTree.fromstring(body).findall("d:href", _NAMESPACES)]
         for method, _, _, body in replica.server.requests
@@ -2497,3 +2530,172 @@ def test_extract_multigets_the_complete_bounded_page_once(replica: Replica) -> N
     multigets = [body for method, _, _, body in replica.server.requests if method == "REPORT" and "multiget" in body]
     assert len(multigets) == 1
     assert {item.text for item in ElementTree.fromstring(multigets[0]).findall("d:href", _NAMESPACES)} == set(hrefs)
+
+
+def _stated_name(folder: Any, book: Any) -> Any:
+    """The name the address book's link currently states on its folder."""
+
+    return Folder.statements.filter(subject=folder, link=book).current().get().stated_value("name")
+
+
+def test_declaring_streams_reads_local_state_and_writes_nothing(replica: Replica) -> None:
+    with CaptureQueriesContext(connection) as queries:
+        definitions = tuple(replica.backend.streams())
+    assert [(item.key, item.partition) for item in definitions] == [("addressbooks", ""), ("contacts", _BOOK)]
+    assert queries.captured_queries
+    assert all(query["sql"].lstrip().upper().startswith("SELECT") for query in queries.captured_queries)
+    assert not replica.server.requests
+
+
+def test_an_address_book_is_a_linked_folder_with_its_name_stated_and_its_history(replica: Replica) -> None:
+    folder = Folder.objects.get(directory=replica.directory)
+    book = RecordLink.objects.get(stream=replica.addressbooks, external_key=_BOOK)
+    assert (book.target, book.status, folder.name, folder.owner_id) == (
+        folder,
+        LinkStatus.CURRENT,
+        "Contacts",
+        replica.directory.owner_id,
+    )
+    assert _stated_name(folder, book) == "Contacts"
+    assert Folder.history.filter(id=folder.pk).exists()
+    assert applied_history().filter(id=book.pk).exists()
+    assert replica.stream.container == book
+
+
+def test_replaying_an_unchanged_directory_creates_or_changes_nothing(replica: Replica) -> None:
+    replica.baseline()
+    sync_bridge(replica.directory)  # Completes the first daily contact sweep.
+    rows = (Folder, Person, RecordLink, Folder.statements.model, Party.statements.model)
+    before = {model: list(model._base_manager.order_by("pk").values()) for model in rows}
+    history = (RecordLink.history.count(), Folder.history.count())
+    replica.server.requests.clear()
+
+    assert sync_bridge(replica.directory) == 0
+    assert {model: list(model._base_manager.order_by("pk").values()) for model in rows} == before
+    assert (RecordLink.history.count(), Folder.history.count()) == history
+    assert not [request for request in replica.server.requests if "addressbook-multiget" in request[3]]
+
+
+def test_a_new_address_book_becomes_a_folder_and_syncs_its_contacts_in_the_same_cycle(replica: Replica) -> None:
+    replica.baseline()
+    work = f"{_BASE}books/work/"
+    replica.server.books[work] = "Work"
+    replica.server.store(f"{work}grace.vcf", _card(uid="grace", name="Grace Hopper"))
+
+    assert sync_bridge(replica.directory) == 2
+    folder = Folder.objects.get(directory=replica.directory, name="Work")
+    book = RecordLink.objects.get(stream=replica.addressbooks, external_key=work)
+    held = SyncStream.objects.current_for_bridge(replica.directory, "contacts").get(partition=work)
+    assert (book.target, held.container, _stated_name(folder, book)) == (folder, book, "Work")
+    assert RecordLink.objects.get(stream=held, external_key="grace").target.display_name == "Grace Hopper"
+    assert RecordLink.objects.get(stream=replica.stream, external_key="ada").stream_id == replica.stream.pk
+
+
+def test_an_address_book_rename_restates_its_folder_and_a_persons_rename_outranks_it(replica: Replica) -> None:
+    replica.baseline()
+    folder = Folder.objects.get(directory=replica.directory)
+    book = RecordLink.objects.get(stream=replica.addressbooks, external_key=_BOOK)
+    replica.server.books[_BOOK] = "Personal"
+    assert sync_bridge(replica.directory) == 1
+    folder.refresh_from_db()
+    assert folder.name == _stated_name(folder, book) == "Personal"
+
+    folder.with_actor(replica.directory.owner).statements.set(aspect="identity", values={"name": "Mine"})
+    replica.server.books[_BOOK] = "Family"
+    assert sync_bridge(replica.directory) == 1
+    folder.refresh_from_db()
+    assert (folder.name, _stated_name(folder, book)) == ("Mine", "Family")
+
+
+def test_an_address_book_name_longer_than_a_folder_name_is_truncated(replica: Replica) -> None:
+    replica.server.books[_BOOK] = "N" * 300
+    assert sync_bridge(replica.directory) == 2  # The renamed book and the contact baseline.
+    folder = Folder.objects.get(directory=replica.directory)
+    assert folder.name == "N" * Folder._meta.get_field("name").max_length
+    assert RecordLink.objects.get(stream=replica.addressbooks).status == LinkStatus.CURRENT
+
+
+def test_a_removed_address_book_pauses_its_contacts_then_retires_them_once_its_absence_is_confirmed(
+    replica: Replica,
+) -> None:
+    person, link = replica.baseline()
+    folder = Folder.objects.get(directory=replica.directory)
+    book = RecordLink.objects.get(stream=replica.addressbooks, external_key=_BOOK)
+    work = f"{_BASE}books/work/"
+    replica.server.books[work] = "Work"  # The listing stays non-empty, so the missing book is evidence.
+    sync_bridge(replica.directory)
+    asserted = Folder.statements.model.StatementStatus.ASSERTED
+    del replica.server.books[_BOOK]
+
+    for confirmed in (False, True):
+        replica.server.requests.clear()
+        assert sync_bridge(replica.directory) == 0
+        for row in (book, replica.stream, link):
+            row.refresh_from_db()
+        assert not [request for request in replica.server.requests if request[1].startswith(_BOOK)]
+        assert [(item.key, item.partition) for item in replica.backend.streams()] == [
+            ("addressbooks", ""),
+            ("contacts", work),
+        ]
+        if not confirmed:
+            # One missed listing only pauses the book's contacts.
+            assert (book.status, book.absence_count, replica.stream.state) == (
+                LinkStatus.UNAVAILABLE,
+                1,
+                StreamState.OPEN,
+            )
+            assert link.status == LinkStatus.CURRENT
+            assert Folder.statements.filter(subject=folder, link=book, status=asserted).current().exists()
+    # A confirmed removal withdraws the book's statements, as a read tombstone does.
+    assert not Folder.statements.filter(subject=folder, link=book, status=asserted).current().exists()
+    assert (book.status, replica.stream.state, replica.stream.reconcile_state) == (
+        LinkStatus.TOMBSTONE,
+        StreamState.RETIRED,
+        {},
+    )
+    assert (link.status, link.target_object_id) == (LinkStatus.TOMBSTONE, str(person.pk))
+    assert Person.objects.filter(pk=person.pk).exists() and Folder.objects.filter(pk=folder.pk).exists()
+
+
+def test_a_listed_href_longer_than_a_link_key_is_refused_while_the_directory_syncs(replica: Replica) -> None:
+    replica.baseline()
+    long_book = f"{_BASE}books/{'x' * 600}/"
+    replica.server.books[long_book] = "Too long"
+    replica.server.store(f"{_BOOK}grace.vcf", _card(uid="grace", name="Grace Hopper"))
+
+    for _cycle in range(2):
+        sync_bridge(replica.directory)
+    assert RecordLink.objects.get(stream=replica.stream, external_key="grace").target.display_name == "Grace Hopper"
+    assert not RecordLink.objects.filter(stream=replica.addressbooks, external_key=long_book).exists()
+    (refusal,) = SyncStream.objects.get(pk=replica.addressbooks.pk).sync_failures(open_only=True)
+    assert (refusal.code, refusal.link_id) == ("identity_too_long", None)
+
+
+def test_a_failed_discovery_raises_and_leaves_every_address_book_in_place(
+    replica: Replica, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    replica.baseline()
+    book = RecordLink.objects.get(stream=replica.addressbooks, external_key=_BOOK)
+    original = replica.server.handle_request
+
+    def unavailable(request: httpx2.Request) -> httpx2.Response:
+        if request.method == "PROPFIND" and b"current-user-principal" in request.content:
+            return httpx2.Response(503)
+        return original(request)
+
+    monkeypatch.setattr(replica.server, "handle_request", unavailable)
+    with pytest.raises(BridgeSyncError) as refused:
+        sync_bridge(replica.directory)
+    assert [failure.definition.key for failure in refused.value.failures] == ["addressbooks"]
+    book.refresh_from_db()
+    replica.stream.refresh_from_db()
+    assert (book.status, book.absence_count, replica.stream.state) == (LinkStatus.CURRENT, 0, StreamState.OPEN)
+
+
+def test_an_empty_listing_confirms_no_address_book_absence(replica: Replica) -> None:
+    replica.baseline()
+    sync_bridge(replica.directory)  # Completes the first daily contact sweep.
+    replica.server.books.clear()
+    assert sync_bridge(replica.directory) == 0
+    book = RecordLink.objects.get(stream=replica.addressbooks, external_key=_BOOK)
+    assert (book.status, book.absence_count) == (LinkStatus.CURRENT, 0)

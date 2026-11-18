@@ -8,13 +8,24 @@ import pytest
 from django.core.exceptions import ValidationError
 from django.db import connection, models
 from django.test.utils import isolate_apps
+from rebac import system_context
 
 from angee.base.fields.state import StateField
 from angee.integrate.credentials import CredentialKind
+from angee.integrate.errors import IntegrationError
 from angee.integrate.models import Bridge, IntegrationLifecycle, IntegrationRuntimeStatus
 from angee.integrate.registry import models_with
 from angee.integrate_vcs.registry import check_source_kind_contracts, source_kind_models
-from tests.conftest import Credential, Integration, Source, Template
+from tests.conftest import (
+    Credential,
+    Integration,
+    OAuthClient,
+    Source,
+    Template,
+    VcsBridge,
+    Vendor,
+    create_user,
+)
 
 
 @pytest.mark.parametrize(
@@ -224,3 +235,35 @@ def test_report_status_updates_unsaved_integration_in_memory() -> None:
 
     assert integration.runtime_status == IntegrationRuntimeStatus.ERROR
     assert integration.last_error == "Integration operation failed."
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("kind", [CredentialKind.OAUTH, CredentialKind.STATIC_TOKEN])
+def test_test_connection_refuses_a_credential_that_needs_reconnecting(kind: str) -> None:
+    """Every kind fails closed: a failed refresh or a revoked credential asks to reconnect."""
+
+    user = create_user(f"probe-reconnect-{kind}")
+    with system_context(reason="test probe reconnect"):
+        if kind == CredentialKind.OAUTH:
+            client = OAuthClient.objects.create(
+                slug="probe-reconnect", display_name="Probe", client_id="probe",
+                token_endpoint="https://idp.example/token", supports_refresh=True,
+            )
+            credential = Credential.objects.upsert_for_user(
+                user, client, CredentialKind.OAUTH, {"access_token": "a", "refresh_token": "r", "expires_in": 3600}
+            )
+            credential.last_refresh_status = "failed"
+        else:
+            credential = Credential.objects.create_local_credential(
+                user, kind=CredentialKind.STATIC_TOKEN, name="probe", material={"api_key": "k"}
+            )
+            credential.status = "revoked"
+        credential.save(update_fields=["last_refresh_status", "status", "updated_at"])
+        vendor = Vendor.objects.create(slug=f"probe-reconnect-{kind}", display_name="Probe")
+        integration = VcsBridge.objects.create(
+            owner=user, vendor=vendor, credential=credential, backend_class="local", lifecycle="connected",
+        )
+        with pytest.raises(IntegrationError) as refused:
+            integration.probe_credential()
+
+    assert refused.value.public_message == "Reconnect this account."

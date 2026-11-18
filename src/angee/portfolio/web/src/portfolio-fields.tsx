@@ -20,10 +20,9 @@ function ReleaseDescription(): React.ReactElement {
 
 /** Same-row portfolio fields contributed into the projects-owned Project form. */
 export const projectPortfolioFormSection = (
-  <Group label={<ProjectPortfolioLabel />} columns={2}>
+  <Group label={<ProjectPortfolioLabel />} columns={2} pane="portfolio">
     <Field name="product" />
     <Field name="priority" />
-    <Field name="sort_order" />
     <Field name="health" widget="statusBadge" readOnly />
     <Field name="health_updated_at" readOnly />
   </Group>
@@ -31,7 +30,7 @@ export const projectPortfolioFormSection = (
 
 /** Release attribution contributed into the projects-owned Task form. */
 export const taskReleaseFormSection = (
-  <Group label={<ReleaseLabel />} columns={2}>
+  <Group label={<ReleaseLabel />} columns={2} pane="release">
     <Field
       name="release"
       label={<ReleaseLabel />}

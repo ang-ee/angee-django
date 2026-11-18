@@ -269,4 +269,22 @@ describe("RowsListView selection", () => {
 
     expect(screen.getByText("1 selected")).toBeTruthy();
   });
+
+  test("the gallery is the view state, so a link opens on it", async () => {
+    renderInRouter(
+      <RowsListView<Item>
+        query={query}
+        rows={ROWS}
+        columns={columns}
+        selectable
+        gallery={{ title: "name", subtitle: "region" }}
+      />,
+      ["/?view=gallery"],
+    );
+
+    expect(await screen.findByLabelText("Select Alpha")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Grid view" }).getAttribute("aria-pressed")).toBe("true");
+    fireEvent.click(screen.getByRole("button", { name: "List view" }));
+    await waitFor(() => expect(screen.queryByLabelText("Select Alpha")).toBeNull());
+  });
 });

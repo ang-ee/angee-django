@@ -1,8 +1,9 @@
 import type { BaseAddonRoute } from "@angee/app";
 import { defineBaseAddon, resourcePageRoutes, type MenuDeclarations } from "@angee/app";
 import { lazyRouteComponent } from "@tanstack/react-router";
-import { Briefcase, ClipboardCheck, Kanban, ListChecks } from "lucide-react";
+import { Briefcase, ClipboardCheck, Copy, Kanban, ListChecks } from "lucide-react";
 
+import { projectForm, taskForm } from "./record-forms";
 import { enProjectsMessages } from "./i18n";
 import { PROJECT_MODEL, TASK_MODEL } from "./resources";
 import { ProjectPhaseControl } from "./project-phase";
@@ -16,8 +17,8 @@ export {
 } from "./resources";
 /** The manager's phase dropdown for one project, composable onto a consumer's project page. */
 export { ProjectPhaseControl } from "./project-phase";
-export { projectListDeclaration, useProjectListDeclaration, projectGanttSpec, projectRecordTabs, projectRecordTabsFor, projectTimelineSpec, projectTimelineTab, useProjectFormDeclaration, type ProjectFormSelection, type ProjectTabSelection } from "./project-declarations";
-export { taskRecordTabs, taskRecordTabsFor, useTaskListDeclaration } from "./task-declarations";
+export { PROJECT_TEMPLATES, PROJECTS_OUTSIDE_TEMPLATES, projectListDeclaration, useProjectListDeclaration, projectGanttSpec, projectRecordTabs, projectRecordTabsFor, projectTimelineSpec, projectTimelineTab, useProjectFormDeclaration, type ProjectFormSelection, type ProjectTabSelection } from "./project-declarations";
+export { TASKS_OUTSIDE_TEMPLATES, taskRecordTabs, taskRecordTabsFor, useTaskListDeclaration } from "./task-declarations";
 export { TASK_ACTION_FIELDS, offersTaskAction, useTaskFormDeclaration, type TaskFormSelection } from "./task-actions";
 export { TaskBoardSurface, type TaskBoardSurfaceProps } from "./task-board-surface";
 
@@ -28,6 +29,14 @@ const projectsRoutes: readonly BaseAddonRoute[] = [
     component: lazyRouteComponent(
       () => import("./views/MyWorkPage"),
       "MyWorkPage",
+    ),
+  },
+  {
+    name: "projects.templates",
+    path: "/projects/templates",
+    component: lazyRouteComponent(
+      () => import("./views/ProjectTemplatesPage"),
+      "ProjectTemplatesPage",
     ),
   },
   {
@@ -58,12 +67,14 @@ const projectsMenu: MenuDeclarations = {
   "projects.projects": { label: "Projects", icon: "projects", route: "projects.projects", parent: "projects" },
   "projects.tasks": { label: "Tasks", icon: "project-task", route: "projects.tasks", parent: "projects" },
   "projects.board": { label: "Task board", icon: "task-board", route: "projects.board", parent: "projects" },
+  "projects.templates": { label: "Templates", icon: "project-template", route: "projects.templates", parent: "projects" },
 };
 
 const projects = defineBaseAddon({
   id: "projects",
   routes: projectsRoutes,
   menus: projectsMenu,
+  forms: { [PROJECT_MODEL]: projectForm, [TASK_MODEL]: taskForm },
   i18n: { projects: enProjectsMessages },
   widgets: { "projects.phase": { read: ProjectPhaseControl, edit: ProjectPhaseControl } },
   containers: {
@@ -88,6 +99,7 @@ const projects = defineBaseAddon({
     "project-task": ListChecks,
     "task-board": Kanban,
     "my-work": ClipboardCheck,
+    "project-template": Copy,
   },
 });
 

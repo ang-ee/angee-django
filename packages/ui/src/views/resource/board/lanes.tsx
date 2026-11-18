@@ -9,13 +9,14 @@ import { cn } from "../../../lib/cn";
 import type { Tone } from "../../../lib/tones";
 import { CountBadge } from "../../../ui/count-badge";
 import { Button } from "../../../ui/button";
+import { Card, cardFrameVariants, type CardFrame } from "../../../ui/card";
 import { CollapsibleIcon, CollapsiblePanel, CollapsibleRoot, CollapsibleTrigger } from "../../../ui/collapsible";
 import { Skeleton, SkeletonStatus } from "../../../ui/skeleton";
 import { StatusDot } from "../../../ui/status-icon";
 import type { ResourceViewGroup } from "../resource-view-model";
 import { type RowGroup } from "../resource-view-list-body";
 import type { ColumnDescriptor } from "../../page";
-import type { CardActionContext } from "../resource-view-types";
+import type { CardActionContext, CardRenderer } from "../resource-view-types";
 import { boardAppendRank } from "../board-ordering";
 import { BoardRowCard, laneDotTone } from "./cards";
 import { BOARD_SCROLL_SURFACE_CLASS } from "./view";
@@ -50,9 +51,9 @@ export function BoardSkeleton({
           </div>
           <div className="flex flex-col gap-2 px-2 pb-2">
             {Array.from({ length: 3 }, (_, cardIndex) => (
-              <article
+              <Card
                 key={cardIndex}
-                className="grid gap-2 rounded-8 border border-border-subtle bg-sheet p-3 shadow-xs"
+                className={cn(cardFrameVariants({ frame: "inset" }).root(), cardFrameVariants({ frame: "inset" }).row(), "grid gap-2")}
               >
                 <Skeleton
                   shape="text"
@@ -69,7 +70,7 @@ export function BoardSkeleton({
                     <Skeleton shape="text" size="sm" className="w-24" />
                   </div>
                 </div>
-              </article>
+              </Card>
             ))}
           </div>
         </section>
@@ -96,6 +97,9 @@ export function BoardLane<TRow extends Row>({
   onCollapsedChange,
   onCreateInLane,
   renderCard,
+  cardFrame,
+  selectedIds,
+  onToggleSelected,
 }: {
   columns: readonly ColumnDescriptor<TRow>[];
   group: RowGroup<TRow>;
@@ -113,7 +117,10 @@ export function BoardLane<TRow extends Row>({
   collapsed: boolean;
   onCollapsedChange: (collapsed: boolean) => void;
   onCreateInLane?: (laneId: string | null, rank?: number) => void;
-  renderCard?: (row: TRow) => React.ReactNode;
+  renderCard?: CardRenderer<TRow>;
+  cardFrame: CardFrame;
+  selectedIds: ReadonlySet<string>;
+  onToggleSelected?: (id: string, selected: boolean, row: TRow) => void;
 }): React.ReactElement {
   const t = useUiT();
   const tone = laneDotTone(group, groupStack, columns);
@@ -138,7 +145,11 @@ export function BoardLane<TRow extends Row>({
           dragEnabled={dragEnabled}
           sortable={sortable}
           laneId={group.key}
+          laneIdentity={group.identity}
           renderCard={renderCard}
+          frame={cardFrame}
+          selected={selectedIds.has(row.id)}
+          onToggleSelected={onToggleSelected ? (next) => onToggleSelected(row.id, next, row.original) : undefined}
         />
       ))}
       {onCreateInLane && group.dropDisabled !== true ? (

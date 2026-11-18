@@ -27,7 +27,7 @@ from angee.iam_integrate_oidc.protocol import OAuthClientOidcProtocol
 from angee.integrate.errors import IntegrationError
 from angee.integrate.oauth import flow as oauth_flow
 from angee.integrate.oauth import state as oauth_state
-from angee.integrate.oauth.errors import CLIENT_NOT_CONFIGURED, PROVIDER_UNAVAILABLE, OAuthFlowError
+from angee.integrate.oauth.errors import CLIENT_NOT_CONFIGURED, PROVIDER_UNAVAILABLE, ConsentRequired, OAuthFlowError
 from angee.integrate.schema import (
     ConnectableAccount,
     ConnectedExternalAccountType,
@@ -70,6 +70,8 @@ class LinkAccountResult:
     claims: JSON | None = None
     error: str | None = None
     error_code: str | None = None
+    restart: OAuthStartPayload | None = None
+    """With ``consent_required``: the same link started again asking for consent; follow it."""
 
 
 def _available_connections(info: strawberry.Info) -> Any:
@@ -107,9 +109,11 @@ def _oidc_authorize_url(oauth_client: Any, state_token: str, record: oauth_state
     return OAuthClientOidcProtocol(oauth_client).authorize_url(
         state=state_token,
         redirect_uri=redirect_uri,
-        scopes=oauth_client.default_scope_values,
+        scopes=record.scopes,
         nonce=record.nonce,
         code_challenge=oauth_flow.pkce_challenge(record.code_verifier),
+        flow=record.flow,
+        consent=record.consent,
     )
 
 
@@ -235,6 +239,16 @@ class OidcLoginMutation:
                 state_token=state,
                 redirect_uri=redirect_uri,
             )
+        except ConsentRequired as refused:
+            try:
+                restart = oauth_flow.restart_with_consent(
+                    request, oauth_client, refused.record, authorize_url_builder=_oidc_authorize_url,
+                )
+            except OAuthFlowError as error:
+                return LinkAccountResult(error=error.public_message, error_code=error.code)
+            return LinkAccountResult(
+                error=refused.public_message, error_code=refused.code, restart=OAuthStartPayload.from_start(restart),
+            )
         except OAuthFlowError as error:
             return LinkAccountResult(error=error.public_message, error_code=error.code)
         except IntegrationError as error:
@@ -256,14 +270,12 @@ class OidcLoginMutation:
 
 @strawberry_django.type(OAuthClient, name="OAuthClientType", extend=True)
 class OAuthClientOidcExtension:
-    """Contributes OIDC login fields onto integrate's ``OAuthClientType``.
+    """Contributes OIDC login policy fields onto integrate's ``OAuthClientType``.
 
     The composer has already folded the model extension into the runtime
     ``OAuthClient`` class, so these fields read as native scalar fields.
     """
 
-    issuer: auto
-    jwks_uri: auto
     login_enabled: auto
     link_on_email_match: auto
     create_on_login: auto

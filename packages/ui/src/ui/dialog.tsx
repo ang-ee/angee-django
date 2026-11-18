@@ -35,7 +35,8 @@ export const dialogVariants = tv({
     ),
     footer:
       "flex items-center justify-end gap-2 border-t border-border-subtle bg-sheet-2 px-5 py-3",
-    title: "text-base font-semibold leading-snug text-fg",
+    // The shared title role (display face, weight, color) at the dialog's size.
+    title: cn(textRoleVariants({ role: "title" }), "text-base leading-snug"),
     description: cn(textRoleVariants({ role: "description" }), "leading-relaxed"),
     close:
       "inline-flex size-icon-btn-sm items-center justify-center rounded-6 text-fg-muted outline-none transition-colors hover:bg-inset hover:text-fg focus-visible:focus-ring [&_svg]:size-3.5",

@@ -27,5 +27,6 @@ describe("CalendarView code-splitting", () => {
     expect(surface).toMatch(/from "@fullcalendar\/daygrid"/);
     expect(surface).toMatch(/from "@fullcalendar\/timegrid"/);
     expect(surface).toMatch(/from "@fullcalendar\/interaction"/);
+    expect(surface).toMatch(/from "@fullcalendar\/list"/);
   });
 });

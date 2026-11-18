@@ -12,6 +12,11 @@ export interface FacetProps {
   pageSize?: number;
   /** Custom group axis; `false` suppresses group option generation. */
   group?: ResourceViewGroup | false;
+  /** Field of the related record whose value heads its option's picker group
+   * (e.g. `category.name`); grouped options list under their headings. */
+  optionGroupField?: string;
+  /** Number on the related record ordering those groups (e.g. `category.position`). */
+  optionGroupOrderField?: string;
 }
 
 export interface FacetDescriptor extends FacetProps {}

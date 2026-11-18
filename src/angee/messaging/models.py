@@ -25,6 +25,7 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from email.utils import getaddresses
 from typing import Any, ClassVar, Self, cast
 
 from django.apps import apps
@@ -747,8 +748,9 @@ class Thread(
     def broadcasts_changes(self) -> bool:
         """Whether this thread's changes reach the generic ``changes`` subscription.
 
-        Record chatter stays off the generic surface: its own ``owner``/``admin`` read
-        would otherwise deliver change events to a subject who cannot read the record.
+        Record chatter stays off the generic surface: its thread's own grants and
+        admin read would otherwise deliver change events to a subject who cannot read
+        the record.
         A host opts back in per model (a chat room): ``host_broadcasts_changes``, stamped
         from :attr:`ThreadedModelMixin.thread_broadcasts_changes` at attachment, streams
         the thread's changes to its members (who hold ``messaging/thread.reader``) while
@@ -1118,7 +1120,7 @@ class Message(
     resolve ``sender`` through the handle's merge redirect.
     """
 
-    merge_policies = {"sender": MergePolicy.KEEP}
+    merge_policies: ClassVar[Mapping[str, Any]] = {"sender": MergePolicy.KEEP}
 
     _inbox_attachment: ThreadAttachment | None = None
     """Authorized notification context set by the notification read owner."""
@@ -1389,9 +1391,9 @@ class Message(
             ),
             # Receipt scans and mark-read walk (thread, id > anchor) directly.
             models.Index(fields=("thread", "id"), name="ix_message_thread_id"),
-            # In-Reply-To / References resolution is platform-wide (a reply through
-            # account B must find the parent account A ingested), which the
-            # channel-led unique index cannot serve — this digest probe can.
+            # Cross-channel identity reads (an email's copies in other accounts, a
+            # platform's post ids) span channels, which the channel-led unique index
+            # cannot serve — this digest probe can. Reply threading stays channel-scoped.
             models.Index(
                 MD5("external_id"),
                 name="ix_message_external_id_md5",
@@ -1425,6 +1427,22 @@ class Message(
         return tuple(parts.filter(
             parent__isnull=True, role="header", name__iexact=name, fragment__isnull=False,
         ).order_by("position", "pk").values_list("fragment__text", flat=True))
+
+    def reply_addresses(self, *, actor: Any = None) -> dict[str, str]:
+        """Return the addresses this message's ``Reply-To`` names, lower-cased, each with its display name.
+
+        The header is read through :meth:`source_header_values` with the caller's
+        access, in header order; a repeated address keeps its first display name and
+        an entry without ``@`` is no address. Without a ``Reply-To`` the mapping is
+        empty: whether a reply then goes to the sender is the caller's decision.
+        """
+
+        addresses: dict[str, str] = {}
+        for name, address in getaddresses(self.source_header_values("reply-to", actor=actor)):
+            address = address.strip().lower()
+            if "@" in address:
+                addresses.setdefault(address, name.strip())
+        return addresses
 
     def webform_submission(self) -> WebformSubmission | None:
         """Read the public-form envelope without interpreting it in consumers."""
@@ -2143,7 +2161,7 @@ class Participant(AuditMixin, AngeeDataModel, concrete=True):
     resolve ``handle`` through the handle's merge redirect.
     """
 
-    merge_policies = {"handle": MergePolicy.KEEP}
+    merge_policies: ClassVar[Mapping[str, Any]] = {"handle": MergePolicy.KEEP}
 
     class ParticipantRole(models.TextChoices):
         """The RFC-5322 envelope role of a participant."""

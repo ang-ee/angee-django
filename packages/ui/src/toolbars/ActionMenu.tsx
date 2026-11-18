@@ -102,6 +102,8 @@ export interface ActionMenuProps {
 }
 
 /** A toolbar menu whose contributed dialogs survive item activation and closing.
+ * Its content stays mounted while closed, so it knows whether any item rendered:
+ * a menu whose contributions all render nothing shows no trigger.
  * @kind primitive
  */
 export function ActionMenu({
@@ -125,12 +127,21 @@ export function ActionMenu({
     setPendingCount((count) => count + 1);
     return () => setPendingCount((count) => count - 1);
   }, []);
-  const menu = React.useMemo(() => ({ blocked, registerPending }), [blocked, registerPending]);
+  const [itemCount, setItemCount] = React.useState(0);
+  const registerItem = React.useCallback(() => {
+    setItemCount((count) => count + 1);
+    return () => setItemCount((count) => count - 1);
+  }, []);
+  const menu = React.useMemo(
+    () => ({ blocked, registerPending, registerItem }),
+    [blocked, registerPending, registerItem],
+  );
   return (
     <DropdownMenu.Root>
       <DropdownMenu.Trigger render={
         <Button ref={triggerRef} type="button" variant={variant} size={size} disabled={disabled} badge={badge}
-          className={className} aria-label={ariaLabel} loading={loading || pendingCount > 0}>
+          className={className} aria-label={ariaLabel} loading={loading || pendingCount > 0}
+          hidden={itemCount === 0}>
           {glyph ? <Glyph decorative name={glyph} /> : null}
           {label === undefined ? t("list.actions") : label}
         </Button>

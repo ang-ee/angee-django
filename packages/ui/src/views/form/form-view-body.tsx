@@ -52,6 +52,7 @@ import { SectionHeading } from "./SectionHeading";
 import { AbsoluteTime } from "../../fragments/AbsoluteTime";
 import { RecordHeader, type RecordHeaderProps } from "../../fragments/RecordHeader";
 import { RecordFieldMarkControl } from "./record-field-marks";
+import { createLabelForResource } from "../resource/utils/labels";
 
 const EDITABLE_FIELD_CONTROL_CLASS = cn(
   "-mx-2 min-h-8 rounded-6 border border-transparent bg-transparent px-2",
@@ -163,7 +164,10 @@ export function FormViewRecordHeader({
   const resolvedStatusField = statusField
     ? resolveField(statusField, headerValues)
     : undefined;
-  const currentStatusField = resolvedStatusField && !resolvedStatusField.hidden
+  const statusValue = useWatch({ control: form.control, name: statusField?.name ?? "", disabled: !statusField });
+  const emptyGeneratedStatus = surface.isCreate && resolvedStatusField && fieldReadOnly(resolvedStatusField)
+    && (statusValue == null || statusValue === "");
+  const currentStatusField = resolvedStatusField && !resolvedStatusField.hidden && !emptyGeneratedStatus
     && (!resolvedStatusField.showWhen || resolvedStatusField.showWhen(headerValues))
     ? resolvedStatusField : undefined;
   const statusRestricted = Boolean(currentStatusField && fieldIsRedacted(displayRecord, currentStatusField.name));
@@ -248,7 +252,9 @@ export function FormViewRecordHeader({
               titleRelation
                 ? titleSelectedOption?.label ?? relationValueId(controller.value)
                 : controller.value,
-              t("form.untitled"),
+              surface.isCreate
+                ? createLabelForResource(modelMetadata?.resource.modelLabel ?? "record", t, modelMetadata?.label)
+                : t("form.untitled"),
             )}</>
           ) : titleRelation ? (
             <RelationFieldWidget
@@ -264,7 +270,7 @@ export function FormViewRecordHeader({
               relation={titleRelation}
               filters={currentTitleField.filters}
               selectedOption={titleSelectedOption}
-              placeholder={currentTitleField.placeholder ?? t("form.untitled")}
+              placeholder={currentTitleField.placeholder ?? t("relation.placeholder")}
               aria-label={fieldAriaLabel(currentTitleField)}
             />
           ) : (
@@ -593,8 +599,8 @@ function RecordFactsLine({
     if (value == null || value === "") return [];
     const control = <FieldDescriptorControl key={field.name} resource={resource} field={field}
       value={value} row={record} readOnly />;
-    // A bare date says nothing about what it is; a date fact carries its label ("due date Oct 15").
-    const dated = field.widget === "date" || field.widget === "datetime";
+    // A bare date or time says nothing about what it is; it carries its label ("due date Oct 15").
+    const dated = field.widget === "date" || field.widget === "datetime" || field.widget === "time";
     return dated && field.label ? [
       <span key={field.name} className="inline-flex min-w-0 items-baseline gap-1">
         <span className="lowercase">{field.label}</span>{control}
@@ -673,7 +679,7 @@ function FormSection({
     <>
       {section.fields.length > 0 ? (
         <FormGrid
-          columns={section.columns === 1 ? "one" : "two"}
+          columns={section.columns === 1 ? "one" : "adaptiveTwo"}
           density="comfortable"
           className="gap-x-8 gap-y-4 pb-2"
         >

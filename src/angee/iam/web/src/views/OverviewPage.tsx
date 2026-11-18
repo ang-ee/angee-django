@@ -2,7 +2,7 @@ import { useMemo, type ReactElement } from "react";
 import { useAuthoredQuery } from "@angee/refine";
 
 import {
-  formSubmitError, Button, DashboardView, InlineEmpty, Metric, MiniCard, MutationDialog, RowsListView, SurfacePanel, formatNumber, mutationDialogValueCodecs, titleCase, useAuthoredResourceMutation, useResourceRecordHref, useRouteHref, type DescriptorField, type ListColumn } from "@angee/ui";
+  Button, DashboardView, InlineEmpty, Metric, MiniCard, MutationDialog, RowsListView, SurfacePanel, formatNumber, mutationDialogValueCodecs, titleCase, useAuthoredResourceMutation, useResourceRecordHref, useRouteHref, type DescriptorField, type ListColumn, type MutationDialogValues } from "@angee/ui";
 
 import {
   IamGrantRole,
@@ -118,16 +118,11 @@ export function OverviewPage(): ReactElement {
                 initialValues={{ role: roleOptions[0]?.value ?? "" }}
                 submitLabel={t("overview.grant.submit")}
                 errorFallback={t("overview.grant.error")}
-                parseValues={(values) => ({
+                parseValues={(values: MutationDialogValues) => ({
                   subject: mutationDialogValueCodecs.requiredString(values.subject, "subject"),
                   role: mutationDialogValueCodecs.requiredString(values.role, "role"),
                 })}
-                onSubmit={async (values) => {
-                  const result = await grantRole(values);
-                  return result?.grant_role === true
-                    ? { status: "ok", data: result }
-                    : formSubmitError(t("overview.grant.error"));
-                }}
+                mutation={grantRole}
               />
             )}
           >

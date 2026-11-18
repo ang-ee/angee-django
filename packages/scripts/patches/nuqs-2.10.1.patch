@@ -15,7 +15,7 @@ diff --git a/dist/adapters/tanstack-router.js b/dist/adapters/tanstack-router.js
  	}
  	const activeSearch = !isPathStable && ownedPathnameRef.current !== pathname ? cachedSearchRef.current : search;
  	return {
-+		getSearchParamsSnapshot: () => new URLSearchParams(router.state.location.searchStr),
++		getSearchParamsSnapshot: useCallback(() => new URLSearchParams(router.state.location.searchStr), [router]),
  		searchParams: useMemo(() => new URLSearchParams(Object.entries(activeSearch).flatMap(([key, value]) => {
  			if (Array.isArray(value)) return value.map((v) => [key, v]);
  			else if (typeof value === "object" && value !== null) return [[key, JSON.stringify(value)]];

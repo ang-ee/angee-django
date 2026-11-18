@@ -1,6 +1,9 @@
-"""Abstract source model for the resource import ledger."""
+"""Abstract source model for the resource import ledger, and its move between addons in a data migration."""
 
 from __future__ import annotations
+
+from collections.abc import Iterable
+from typing import Any
 
 from django.db import models
 
@@ -12,6 +15,27 @@ from angee.resources.entries import resolve_model
 from angee.resources.exceptions import ResourceLoadError
 from angee.resources.managers import ResourceManager
 from angee.resources.tiers import ResourceTier
+
+
+def move_seed_ledger(
+    apps: Any, schema_editor: Any, *, xrefs: Iterable[str], from_addon: str, to_addon: str,
+) -> None:
+    """Hand seed rows' ledger identities to the addon that now ships them, in a data migration.
+
+    A seed file that moves between addons keeps its ledger row, target and content
+    hash, so the next load skips the row instead of adopting and re-applying it.
+    Refuses, before changing anything, an xref the receiving addon already ledgers.
+    """
+
+    ledger = apps.get_model("resources", "Resource")._base_manager.using(schema_editor.connection.alias)
+    moved = ledger.filter(source_addon=from_addon, xref__in=tuple(xrefs))
+    clashes = sorted(ledger.filter(source_addon=to_addon, xref__in=moved.values("xref")).values_list("xref", flat=True))
+    if clashes:
+        raise RuntimeError(
+            f"Both {from_addon} and {to_addon} own {', '.join(clashes)}; reconcile the ledger identities "
+            "before applying this migration. No resource target was changed."
+        )
+    moved.update(source_addon=to_addon)
 
 
 class Resource(AngeeModel, concrete=True):
@@ -34,7 +58,7 @@ class Resource(AngeeModel, concrete=True):
     """Addon-local external reference for the source row."""
 
     content_hash = models.CharField(max_length=71)
-    """Hash of updateable source values, excluding identity and transition-owned initial state."""
+    """Hash of updateable source values, excluding identity and initial state (transition-owned or ``create_only``)."""
 
     target_model = ModelLabelField(max_length=120)
     """Django model label for the imported target row."""

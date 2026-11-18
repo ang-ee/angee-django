@@ -22,8 +22,11 @@ export {
   ListView,
   type ListViewProps,
   type BoardCardSpec,
+  type GalleryCardSpec,
   type ListChrome,
   type CardActionContext,
+  type CardRenderContext,
+  type CardRenderer,
   type ListEmptyAction,
   type ListEmptyContent,
   type ListEmptyState,
@@ -230,13 +233,13 @@ export {
   calendarWindowSource,
   type AnyCalendarWindowSource,
   type CalendarWindowBounds,
+  type CalendarWindowOptions,
   type CalendarWindowSource,
   type UseCalendarWindowResult,
 } from "./calendar/use-calendar-window";
 export {
   CalendarCollectionSurface,
   type CalendarCollectionSurfaceProps,
-  type CalendarWindowFetch,
 } from "./calendar/calendar-collection-surface";
 export {
   Tree,

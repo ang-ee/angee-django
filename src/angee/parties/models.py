@@ -24,7 +24,6 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from dataclasses import replace
-from datetime import timedelta
 from typing import Any, ClassVar, cast
 
 from django.apps import apps
@@ -44,7 +43,6 @@ from rebac import PermissionDenied, actor_context, system_context
 from rebac.mixins import RebacModelBase
 
 from angee.base.fields.implementation import ImplClassField
-from angee.base.fields.relations import RetainedGenericRelation
 from angee.base.fields.state import StateField
 from angee.base.fields.text import ColorField
 from angee.base.lineage import concrete_child, concrete_child_models, most_derived_concrete
@@ -57,9 +55,9 @@ from angee.base.models.ownership import OwnerMixin
 from angee.base.models.trash import TrashMixin
 from angee.base.permissions import actor_user_id, instance_actor, reader_queryset
 from angee.base.prefetch import prefetched
+from angee.integrate.mixins import LinkedRecordMixin, StatedRecordMixin
 from angee.integrate.models import Bridge, IntegrationCreateMode
-from angee.integrate.states import StreamDefinition, StreamDirection, StreamKind
-from angee.parties.backends import DirectoryBackend, ParsedAddressbook
+from angee.parties.backends import DirectoryBackend
 from angee.parties.connections import ConnectionHandle
 from angee.parties.fields import CountryCodeField
 from angee.parties.managers import (
@@ -87,7 +85,15 @@ from angee.tags.models import TaggedModel
 
 
 class Party(
-    MergeableMixin, TrashMixin, StatementsMixin, HistoryMixin, TaggedModel, OwnerMixin, AngeeDataModel, concrete=True
+    MergeableMixin,
+    TrashMixin,
+    LinkedRecordMixin,
+    StatementsMixin,
+    HistoryMixin,
+    TaggedModel,
+    OwnerMixin,
+    AngeeDataModel,
+    concrete=True,
 ):
     """A person or organisation the project tracks.
 
@@ -117,9 +123,6 @@ class Party(
         # The member carries the handle's key; resolution locks and reloads that row itself.
         apps.get_model("parties", "Handle")(pk=member["handle"]).resolve()
 
-    record_links = RetainedGenericRelation(
-        "integrate.RecordLink", content_type_field="target_content_type", object_id_field="target_object_id"
-    )
     statements = StatementRecords(
         link="integrate.RecordLink",
         aspects={
@@ -320,7 +323,7 @@ class Party(
                 if declaration.members or not declaration.admits_person or decided.isdisjoint(declaration.fields):
                     continue
                 values = {name: kept[name] if name in kept else getattr(survivor, name) for name in declaration.fields}
-                survivor.confirm(aspect=aspect, values=values)
+                survivor.confirm_statement(aspect=aspect, values=values)
                 decided.difference_update(declaration.fields)
         edits = [name for name in sorted(decided.intersection(overrides)) if getattr(survivor, name) != kept[name]]
         for name in edits:
@@ -510,7 +513,8 @@ class Party(
         super().merge_fields(merged, **options)
         for row in merged:
             self.keep_merge_fields(row, field_overrides)
-            self.same_as.for_pair(self, row).with_actor(instance_actor(self)).confirm(aspect="same_as", values={})
+            pair = self.same_as.for_pair(self, row).with_actor(instance_actor(self))
+            pair.confirm_statement(aspect="same_as", values={})
 
 
 class Person(Composable, metaclass=RebacModelBase, inherits="parties.Party"):
@@ -1138,20 +1142,33 @@ class Address(TrashMixin, PartyAspectMixin, HistoryMixin, AuditMixin, AngeeDataM
         return ", ".join(part for part in (self.street, self.city, self.country) if part)
 
 
-class Folder(OwnerMixin, AngeeDataModel, concrete=True):
+class Folder(StatedRecordMixin, HistoryMixin, OwnerMixin, AngeeDataModel, concrete=True):
     """A group of parties — the local mirror of a synced address book.
 
     The contacts counterpart of storage's ``Drive``/``Folder`` and knowledge's
     ``Vault`` container idea, kept to exactly what sync needs today: the directory
-    it mirrors, the collection ``source_href`` (one folder per ``(directory,
-    source_href)`` makes the folder upsert idempotent). Sync progress belongs to
-    ``integrate.SyncStream``. Owned through its transferable ``owner``, which a
-    sync's insert takes from the directory owner it stamps as ``created_by``;
-    deleting a folder leaves its linked parties. Manual creation and a folder
-    tree (``parent``) are deferred until a create path lands to exercise them.
+    it mirrors and its name. The address book's identity is the
+    ``integrate.RecordLink`` of the directory's ``addressbooks`` stream that targets
+    this folder; that link is the container of the address book's contacts stream.
+    The source states the name through that link, so a person's rename outranks a
+    remote one. Owned through its transferable ``owner``, which a sync's insert
+    takes from the directory owner it stamps as ``created_by``. A folder no source
+    has stated stays an ordinary row (``person_stances_once_stated``). Manual
+    creation and a folder tree (``parent``) are deferred until a create path lands
+    to exercise them.
     """
 
     sqid_prefix = "fol_"
+    statements = StatementRecords(
+        link="integrate.RecordLink",
+        aspects={
+            "identity": Aspect(
+                fields=("name",),
+                precedence=cast(tuple[SourceKind, ...], (SourceKind.PERSON, SourceKind.DIRECTORY)),
+            ),
+        },
+        sqid_prefix="fos_",
+    )
     name = models.CharField(max_length=200)
     directory = models.ForeignKey(
         "parties.Directory",
@@ -1160,7 +1177,6 @@ class Folder(OwnerMixin, AngeeDataModel, concrete=True):
         on_delete=models.CASCADE,
         related_name="folders",
     )
-    source_href = models.CharField(max_length=1024, blank=True, default="")
 
     objects = FolderManager()
 
@@ -1170,13 +1186,6 @@ class Folder(OwnerMixin, AngeeDataModel, concrete=True):
         abstract = True
         ordering = ("name", "sqid")
         rebac_resource_type = "parties/folder"
-        constraints = (
-            models.UniqueConstraint(
-                fields=("directory", "source_href"),
-                condition=~models.Q(source_href=""),
-                name="uq_folder_directory_source",
-            ),
-        )
 
     def __str__(self) -> str:
         """Return the folder name for Django displays."""
@@ -1594,32 +1603,6 @@ class Directory(Bridge, inherits="integrate.Integration"):
         ordering = ("-updated_at",)
         verbose_name_plural = "directories"
         rebac_resource_type = "parties/directory"
-
-    def addressbook_stream(self, book: ParsedAddressbook) -> StreamDefinition:
-        """Mirror a discovered address book as a folder and declare its contacts stream.
-
-        The stream's deletion policy seeds from this directory's per-collection config.
-        """
-
-        apps.get_model("parties", "Folder").objects.sync_addressbook(self, book)
-        policy = {
-            "local_delete": "conflict",
-            "remote_delete": "retain",
-            **self.config.get("streams", {}).get("contacts", {}).get(book.href, {}),
-        }
-        if policy["local_delete"] not in {"conflict", "propagate"} or policy["remote_delete"] not in {
-            "retain",
-            "propagate",
-        }:
-            raise ValueError("Unknown Directory deletion policy.")
-        return StreamDefinition(
-            "contacts",
-            partition=book.href,
-            kind=StreamKind.RECORD_REPLICA,
-            direction=StreamDirection.BIDIRECTIONAL,
-            reconcile_interval=timedelta(days=1),
-            config=policy,
-        )
 
     @property
     def backend(self) -> DirectoryBackend:

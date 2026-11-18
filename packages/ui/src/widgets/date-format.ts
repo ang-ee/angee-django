@@ -1,7 +1,7 @@
 /**
  * The one owner of human dates and times. The rule: every list, row, facts line
  * and day label is absolute (`formatDate`, `formatDateTime`, `formatTime`,
- * `formatDayLabel`, `formatMonth`); relative time (`formatRelativeTime`,
+ * `formatDayLabel`, `formatMonth`, `formatDateParts`); relative time (`formatRelativeTime`,
  * `RelativeTime`) belongs only to a live header — a chat, a running job — whose
  * value keeps moving while the page is open. Never `toLocale*`, never a date-fns
  * `format` with a literal pattern, never a raw ISO string as user text.
@@ -159,16 +159,28 @@ export function formatRelativeTime(
   }).format(amount, unit);
 }
 
+/** A GraphQL `Time` wire value ("13:45", "13:45:30.5"): a time of day with no date and no zone. */
+const TIME_OF_DAY = /^([01]\d|2[0-3]):([0-5]\d)(?::([0-5]\d)(?:\.\d+)?)?$/;
+
+/** A time of day at a fixed UTC anchor, so formatting in UTC reads it back as written. */
+function timeOfDayFromValue(value: DateFormatValue): Date | null {
+  const match = typeof value === "string" ? TIME_OF_DAY.exec(value) : null;
+  return match ? new Date(Date.UTC(1970, 0, 1, Number(match[1]), Number(match[2]), Number(match[3] ?? 0))) : null;
+}
+
 /** Clock time without seconds ("1:45 PM", "13:45"), for a row whose day a label already names.
+ * A GraphQL `Time` value ("13:45:00") is a time of day: it carries no zone and reads as written.
  * @kind null
  * @reason Format utility: converts data to display or storage text.
  */
 export function formatTime(value: DateFormatValue, options: HumanDateOptions = {}): string {
-  const date = dateFromValue(value);
+  const timeOfDay = timeOfDayFromValue(value);
+  const date = timeOfDay ?? dateFromValue(value);
   if (!date) return "";
+  const timeZone = timeOfDay ? "UTC" : options.timeZone;
   return new Intl.DateTimeFormat(localeCode(options.locale), {
     timeStyle: "short",
-    ...(options.timeZone ? { timeZone: options.timeZone } : {}),
+    ...(timeZone ? { timeZone } : {}),
   }).format(date);
 }
 
@@ -186,8 +198,36 @@ export function formatMonth(value: DateFormatValue, options: HumanDateOptions = 
   }).format(date);
 }
 
-/** The calendar day of an instant in a zone, as a sortable key ("2026-09-30"). */
-function calendarDay(date: Date, timeZone?: string): string {
+/** A date's month and day, each localized on its own. */
+export interface DateParts {
+  month: string;
+  day: string;
+}
+
+/**
+ * The short month and the day of the month, each from its own formatter ("Sep" and
+ * "28", "9月" and "28日", "syys" and "28"), for a layout that sets them apart, such as
+ * a date tile. A combined month-and-day pattern would pick the month's in-context
+ * form, which is numeric in Japanese, Chinese or Finnish.
+ * @kind null
+ * @reason Format utility: converts data to display or storage text.
+ */
+export function formatDateParts(value: DateFormatValue, options: HumanDateOptions = {}): DateParts | null {
+  const date = dateFromValue(value);
+  if (!date) return null;
+  const locale = localeCode(options.locale);
+  const zone = options.timeZone ? { timeZone: options.timeZone } : {};
+  return {
+    month: new Intl.DateTimeFormat(locale, { month: "short", ...zone }).format(date),
+    day: new Intl.DateTimeFormat(locale, { day: "numeric", ...zone }).format(date),
+  };
+}
+
+/** The calendar day of an instant in a zone, as a sortable key and a `<time datetime>` value ("2026-09-30").
+ * @kind null
+ * @reason Format utility: converts data to display or storage text.
+ */
+export function calendarDay(date: Date, timeZone?: string): string {
   return new Intl.DateTimeFormat("en-CA", {
     year: "numeric", month: "2-digit", day: "2-digit",
     ...(timeZone ? { timeZone } : {}),
@@ -242,11 +282,14 @@ export function formatDateTime(
   }).format(date);
 }
 
-/** Format a value for a native `type=time` control.
+/** Format a value for a native `type=time` control, whose `HH:mm` value is also a GraphQL `Time` input.
+ * A `Time` value keeps its own hours and minutes; any other value is read in local time.
  * @kind null
  * @reason Format utility: converts data to display or storage text.
  */
 export function formatTimeInput(value: DateFormatValue): string {
+  const timeOfDay = timeOfDayFromValue(value);
+  if (timeOfDay) return timeOfDay.toISOString().slice(11, 16);
   const date = dateFromValue(value);
   return date ? format(date, TIME_INPUT_FORMAT) : "";
 }

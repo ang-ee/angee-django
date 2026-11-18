@@ -125,6 +125,16 @@ describe("useRelationFacets", () => {
     }]);
   });
 
+  test("carries a facet's declared option grouping to its search facet", () => {
+    const { result } = renderHook(
+      () => useRelationFacets("agents.InferenceModel", [
+        { field: "provider", optionGroupField: "vendor.name", optionGroupOrderField: "vendor.position" },
+      ]),
+      { wrapper: Metadata },
+    );
+    expect(result.current[0]).toMatchObject({ optionGroupField: "vendor.name", optionGroupOrderField: "vendor.position" });
+  });
+
   test("passes active filters to declared facets for neutralized counts", () => {
     renderHook(
       () =>

@@ -3,13 +3,14 @@ import { ResourceQuery, type ModelMetadata, type Row } from "@angee/metadata";
 import { useUiT } from "../../../i18n";
 import { ListStatusMessage } from "../../../fragments/ListStatusMessage";
 import { Skeleton, SkeletonStatus } from "../../../ui/skeleton";
+import type { CardFrame } from "../../../ui/card";
 import { columnTone, type ColumnDescriptor } from "../../page";
 import { GroupedScopePager } from "../GroupedScopePager";
 import { snapshotFromNav } from "../grouped-navigation";
 import { ListEmpty, type GroupedListItem } from "../resource-view-list-body";
 import type { ResourceViewGroup } from "../resource-view-model";
 import type { ListViewNavigationScope, ResourceListSnapshot } from "../resource-view-surface";
-import type { CardActionContext, ListEmptyContent } from "../resource-view-types";
+import type { CardActionContext, CardRenderer, ListEmptyContent } from "../resource-view-types";
 import { BoardRowCard } from "./cards";
 import { BoardLaneFrame, BoardSkeleton } from "./lanes";
 import { BOARD_SCROLL_SURFACE_CLASS } from "./view";
@@ -27,7 +28,10 @@ interface GroupedBoardBodyProps<TRow extends Row> {
   onListStateChange?: (state: ResourceListSnapshot<TRow>) => void;
   cardActions?: (row: TRow, context: CardActionContext) => React.ReactNode;
   cardActionContext: CardActionContext;
-  renderCard?: (row: TRow) => React.ReactNode;
+  renderCard?: CardRenderer<TRow>;
+  cardFrame: CardFrame;
+  selectedIds: ReadonlySet<string>;
+  onToggleSelected?: (id: string, selected: boolean, row: TRow) => void;
   fetching: boolean;
   error: Error | null;
   emptyContent: ListEmptyContent;
@@ -37,7 +41,7 @@ interface GroupedBoardBodyProps<TRow extends Row> {
 export function GroupedBoardBody<TRow extends Row>({
   columns, modelMetadata, groupStack, items, toggleGroup, setScopePage, setScopePageSize,
   rowHref, onRowClick, onListStateChange, cardActions, cardActionContext, renderCard,
-  fetching, error, emptyContent,
+  cardFrame, selectedIds, onToggleSelected, fetching, error, emptyContent,
 }: GroupedBoardBodyProps<TRow>): React.ReactElement | null {
   const t = useUiT();
   const groupFields = new Set(groupStack.map((group) => group.field));
@@ -48,7 +52,8 @@ export function GroupedBoardBody<TRow extends Row>({
 
   // Depth delimits each header's children in the surface-owned stream. Rendering
   // the same hierarchy keeps subgroup controls reachable even while collapsed.
-  function renderItems(start: number, end: number): React.ReactNode[] {
+  // A record's lane is the nearest header's bucket identity, as a card renderer reads it.
+  function renderItems(start: number, end: number, lane: string | null | undefined): React.ReactNode[] {
     const children: React.ReactNode[] = [];
     for (let index = start; index < end; index += 1) {
       const item = items[index]!;
@@ -62,9 +67,10 @@ export function GroupedBoardBody<TRow extends Row>({
           }
           const group = groupStack[item.depth];
           const column = columns.find((candidate) => candidate.field === group?.field);
-          const tone = column?.tone && group && modelMetadata
-            ? columnTone(column, ResourceQuery.from(modelMetadata).group(group).bucketIdentity(item.bucket))
+          const identity = group && modelMetadata
+            ? ResourceQuery.from(modelMetadata).group(group).bucketIdentity(item.bucket)
             : undefined;
+          const tone = column?.tone && identity !== undefined ? columnTone(column, identity) : undefined;
           children.push(
             <BoardLaneFrame key={item.bucketKey} label={item.label} count={item.count} tone={tone}
               collapsed={item.expandable && !item.expanded} nested={item.depth > 0}
@@ -72,7 +78,8 @@ export function GroupedBoardBody<TRow extends Row>({
               <div className="flex flex-col gap-2 px-2 pb-2">
                 {item.pager ? <GroupedScopePager pager={item.pager} label={item.label}
                   onPageChange={setScopePage} onPageSizeChange={setScopePageSize} t={t} /> : null}
-                {item.expandable ? renderItems(index + 1, next) : (
+                {item.expandable ? renderItems(index + 1, next,
+                  identity === undefined ? undefined : identity === null || identity === "" ? null : String(identity)) : (
                   <p className="text-13 text-fg-muted">{item.unavailableMessage ?? t("list.itemsUnavailable")}</p>
                 )}
               </div>
@@ -88,7 +95,9 @@ export function GroupedBoardBody<TRow extends Row>({
             onRowClick={onRowClick}
             onRecordOpen={() => onListStateChange?.(snapshotFromNav<TRow>(item.nav))}
             cardActions={cardActions} cardActionContext={cardActionContext} renderCard={renderCard}
-            dragEnabled={false} sortable={false} laneId="" />);
+            frame={cardFrame} selected={selectedIds.has(item.row.id)}
+            onToggleSelected={onToggleSelected ? (next) => onToggleSelected(item.row.id, next, item.row.original) : undefined}
+            dragEnabled={false} sortable={false} laneId="" laneIdentity={lane} />);
           break;
         case "skeleton":
           children.push(<SkeletonStatus key={item.itemKey} loadingLabel={t("list.loading")} className="grid gap-2">
@@ -103,5 +112,5 @@ export function GroupedBoardBody<TRow extends Row>({
     return children;
   }
 
-  return <div className={BOARD_SCROLL_SURFACE_CLASS}>{renderItems(0, items.length)}</div>;
+  return <div className={BOARD_SCROLL_SURFACE_CLASS}>{renderItems(0, items.length, undefined)}</div>;
 }

@@ -1,6 +1,6 @@
 // @rebac_package: decisions
 // @rebac_package_version: 0.1.0
-// @rebac_schema_revision: 7
+// @rebac_schema_revision: 8
 
 definition decisions/decision {
     relation assignee: auth/user // rebac:field=assignees
@@ -8,7 +8,9 @@ definition decisions/decision {
     relation person: iam/kind // rebac:const=person
     relation admin: angee/role // rebac:const=admin
     permission create = admin->member
-    permission read = assignee + requester + admin->member
+    // Consumers union an outside audience (a represented party's user) into read_granted; read derives from it.
+    permission read_granted = assignee + requester + admin->member
+    permission read = read_granted
     permission owner_managed = nil
     permission owner_eligible = nil
     permission eligible = (((assignee - requester) - owner_managed) + owner_eligible) & person->active_actor

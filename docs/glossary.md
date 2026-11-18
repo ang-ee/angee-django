@@ -201,6 +201,14 @@ on its `RecordLink` (or on the `SyncStream` when no link exists) with kind, code
 source hash, mapping version, details, attempts, retry and resolution. The one
 noun for that state; "discrepancy" is retired.
 
+**Container (sync)** — a record of a parent stream that is also the partition of
+a child stream: an address book holding its contacts, a calendar its events. The
+child names the container's `RecordLink` (`SyncStream.container`). The container
+is live while it observes a bound target with no absence counted; an unavailable
+one pauses its child, and one that stops observing retires it (a terminal
+`RETIRED` generation). Distinct from a composition container (a contributed UI
+slot).
+
 **Rule / Seed** — provenance's persisted non-user principals: `Rule` (one row per
 registered rule or matcher, kind RULE, created by the owning resource
 declaration) and `Seed` (one row per seed load, kind SEED). They assert the
@@ -291,6 +299,13 @@ retain it, otherwise deleted. A resource's `mergeable` says the verb serves it.
 An actor merges through `merge`; system work folds through `fold`, inside the
 caller's changeset.
 
+**Merge maintenance** — the moves a fold makes, with the collapses and drops of
+identity copies they bring (`merge_maintenance()`, set only by
+`MergeableMixin._fold` around its moves). A merge re-points identity and edits
+nothing, so a model whose rows refuse ordinary writes by a rule of their own (a
+calendar source's replicas, which only their source writes) admits it by reading
+this fact rather than carrying its own copy of the move.
+
 **Canonical record** — the operational survivor a redirect resolves to
 (`MergeableMixin.canonical()`, `objects.canonical()`): the one row readers,
 writers and counts address once its duplicates are merged. A merged record stays
@@ -363,6 +378,15 @@ protected link identifies its parent step, prior run, or trigger event when one
 caused it. A manual run has no cause. A cited cause stays retained until its
 dependent effects are pruned.
 
+**Schedule trigger** — a trigger whose source is `schedule`: the workflow tick
+records the occurrences its cursor (`next_occurrence_at`) has reached, one ledger row
+each, and starts one run with no subject for the latest due occurrence. Older missed
+occurrences are recorded as skipped. See [the workflows README](../src/angee/workflows/README.md).
+
+**Run hold** — a run's most urgent step hold (`error`, then `run`, then
+`decision`); a run with a replacement holds nothing. The run console's Incidents view
+lists runs held on `error` or `run`.
+
 **Node** — a keyed graph declaration naming a step, its bindings and outgoing
 edges in a `Definition` document.
 
@@ -412,6 +436,22 @@ answer. It is derived and pays no query cost when a list does not request it.
 
 **Inbox** — the person's readable decisions, filtered by assignment or requester
 to distinguish questions they can answer from questions they issued.
+
+## Checklists
+
+**Checklist** — the ordered categories and items a model declares through its
+`checklist()` classmethod, extended by composed donors. It holds recorded
+checks only; readiness a model can compute stays a verb-eligibility condition.
+
+**Checklist result** — one append-only outcome of one item on one record, with
+its status, detail, the record's content token and its evidence links. The
+latest result per item wins. A result shows only when its record and every
+evidence link are readable to the reader, signed in or anonymous; deleting an
+evidence record deletes the results it supports.
+
+**Content token** — the opaque string a checklist type declares through
+`checklist_revision_expression()`. A passed result recorded against another
+token reads unresolved.
 
 ## Extraction
 
@@ -490,9 +530,10 @@ running app.
 when selected. A **named app** is a deployment's rail of roots
 (`ANGEE_UI.shell.apps`).
 
-**Selection** — the app the console shows: `?app=` or the hostname's
-`ANGEE_UI.shell.hosts` entry picks a root or a named app, whose **rail** of
-roots the rail, palette and menus follow; nothing selected shows every root.
+**Selection** — the app the console shows: `?app=`, else the hostname's
+`ANGEE_UI.shell.hosts` entry, else `ANGEE_UI.shell.app` picks a root or a named
+app, whose **rail** of roots the rail, palette and menus follow; nothing
+selected, or a named app without a rail, shows every root.
 It shapes navigation and identity, never which routes open.
 
 **Aggregator** — an addon that places other addons' apps under its own menu root

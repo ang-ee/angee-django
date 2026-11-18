@@ -783,7 +783,7 @@ export function useFormViewSave({
       userEditedFieldsRef.current.add(scoped(field.name));
       clearErrors(scoped(field.name));
       if (isCreate || !field.createOnly) {
-        const seeds = field.prefill?.(value);
+        const seeds = field.prefill?.(value, (scope ? form.getValues(scope) : form.getValues()) as Row);
         if (seeds) {
           const replacements = new Set(field.prefillReplace ?? []);
           for (const [name, seed] of Object.entries(seeds)) {

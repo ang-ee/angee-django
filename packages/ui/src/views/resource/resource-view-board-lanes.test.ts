@@ -56,11 +56,11 @@ describe("rowGroupsFromLaneSource", () => {
       "Unknown stage",
     );
 
-    expect(groups.map(({ key, label, rows }) => ({ key, label, rows: rows.length })))
+    expect(groups.map(({ key, identity, label, rows }) => ({ key, identity, label, rows: rows.length })))
       .toEqual([
-        { key: "new", label: "New", rows: 1 },
-        { key: "won", label: "Won", rows: 0 },
-        { key: "legacy", label: "Legacy", rows: 1 },
+        { key: "new", identity: "new", label: "New", rows: 1 },
+        { key: "won", identity: "won", label: "Won", rows: 0 },
+        { key: "legacy", identity: "legacy", label: "Legacy", rows: 1 },
       ]);
   });
 
@@ -79,7 +79,7 @@ describe("rowGroupsFromLaneSource", () => {
         "Unknown stage",
       );
 
-      expect(group).toMatchObject({ key: "", label: "No stage", rows: [{ id: "lead_1" }] });
+      expect(group).toMatchObject({ key: "", identity: null, label: "No stage", rows: [{ id: "lead_1" }] });
       expect(group?.dropDisabled).toBe(dropDisabled);
     },
   );

@@ -42,7 +42,10 @@ and both providers that consume cancellation and Hasura, which does not.
 `nuqs-2.10.1.patch` gives the TanStack Router adapter a `getSearchParamsSnapshot`
 that reads the router's own location (`router.state.location.searchStr`). Without
 it, nuqs' update queue starts each flush from `window.location.search`, which
-drops other search params under memory or hash history. Reported upstream as
+drops other search params under memory or hash history. The getter is a
+`useCallback` on the router: `useQueryState` and `useQueryStates` list it in
+their setters' dependencies, so a new function each render would give every
+caller a new setter on each update. Reported upstream as
 [47ng/nuqs#1636](https://github.com/47ng/nuqs/issues/1636) and fixed by
 [47ng/nuqs#1637](https://github.com/47ng/nuqs/pull/1637); remove the patch and
 its install-policy entry when the first nuqs release with the adapter fix is adopted.

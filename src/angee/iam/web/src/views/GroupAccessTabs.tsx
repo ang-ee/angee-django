@@ -1,7 +1,7 @@
 import { useMemo, type ReactElement } from "react";
 import { useAuthoredQuery } from "@angee/refine";
 import {
-  formSubmitError, Button, Code, Glyph, MutationDialog, RowsListView, SubjectPicker,
+  Button, Code, Glyph, MutationDialog, RowsListView, SubjectPicker,
   defineRowAction, mutationDialogValueCodecs, useAuthoredResourceMutation,
   type ListColumn, type DescriptorField, type RecordPanelContext,
 } from "@angee/ui";
@@ -70,12 +70,7 @@ export function GroupMembersTab({ recordId }: RecordPanelContext): ReactElement 
       submitLabel={t("group.add")}
       errorFallback={t("group.addError")}
       parseValues={(values) => ({ subject: mutationDialogValueCodecs.requiredString(values.subject, "subject") })}
-      onSubmit={async ({ subject }) => {
-        const result = await addMember({ group_id: recordId, subject, caveat_name: "" });
-        return result?.add_group_member
-          ? { status: "ok", data: result }
-          : formSubmitError(t("group.addError"));
-      }}
+      mutation={({ subject }, options) => addMember({ group_id: recordId, subject, caveat_name: "" }, options)}
     />}
   />;
 }

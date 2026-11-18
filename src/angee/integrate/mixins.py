@@ -1,19 +1,21 @@
-"""Retained inbound failure state shared by record links and stream epochs."""
+"""Retained inbound failure state shared by record links and stream epochs, and the rows links target."""
 
 from __future__ import annotations
 
 from collections.abc import Mapping
 from copy import deepcopy
 from datetime import datetime, timedelta
-from typing import TYPE_CHECKING, Any, Self
+from typing import TYPE_CHECKING, Any, Self, cast
 
 from django.core.exceptions import ValidationError
 from django.db import models, transaction
 from django.utils import timezone
 
+from angee.base.fields.relations import RetainedGenericRelation
 from angee.base.querysets import AngeeQuerySet
 from angee.integrate.errors import doubling_backoff
 from angee.integrate.states import SyncFailure, SyncFailureKind, SyncFailureStatus
+from angee.provenance.statements import StatementsMixin
 
 if TYPE_CHECKING:
     from angee.integrate.models import SyncStream
@@ -170,3 +172,42 @@ class SyncStateMixin(models.Model):
             data["details"].update(details)
             data["retry_at"] = locked.failure_retry_at(row.attempts).isoformat()
             self.on_sync_state_saved(locked)
+
+
+class LinkedRecordMixin(models.Model):
+    """A row integrate's ``RecordLink`` may target; ``record_links`` is their retained reverse relation.
+
+    A retained reference blocks the row's deletion, and REBAC relations reach the
+    linking source through ``record_links__stream__integration``.
+    """
+
+    record_links = RetainedGenericRelation(
+        "integrate.RecordLink", content_type_field="target_content_type", object_id_field="target_object_id"
+    )
+
+    class Meta:
+        abstract = True
+
+
+class StatedRecordMixin(LinkedRecordMixin, StatementsMixin):
+    """A row a source states through the ``integrate.RecordLink`` naming it.
+
+    A local row stays an ordinary record: a person's edit becomes a stance only
+    once a source states it (``person_stances_once_stated``). A source is admitted
+    by ``write_statements`` alone, kept out of ``read`` and ``write`` so no row
+    inheriting them reaches a source. Statements protect a stated row and every
+    row they name, so deleting them is refused.
+    """
+
+    person_stances_once_stated = True
+    statement_write_permission = "write_statements"
+
+    class Meta:
+        abstract = True
+
+    def delete_blocker(self) -> str | None:
+        """Name the refusal the statement tables' protected key enforces on every delete path."""
+
+        if self.carries_statements():
+            return f"This {self._meta.verbose_name} carries source statements and is retained."
+        return cast(Any, super()).delete_blocker()

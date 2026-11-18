@@ -104,7 +104,7 @@ export interface CompiledMenus {
 }
 
 /** What an app root says about itself when it is selected: its landing, identity and display defaults. */
-const ROOT_FIELDS = ["home", "brand", "theme", "railExpanded"] as const satisfies readonly (keyof MenuEntry)[];
+const ROOT_FIELDS = ["home", "brand", "theme", "themeLocked", "railExpanded"] as const satisfies readonly (keyof MenuEntry)[];
 const DECLARATION_FIELDS = [
   "label", "route", "params", "defaultResourceView", "to", "icon", "requires",
   "description", "group", "status", "tone", "personal", "parent", "sequence", "before", "after", ...ROOT_FIELDS,
@@ -223,7 +223,7 @@ function validateEntry(layer: string, id: string, entry: unknown): asserts entry
   };
   if (value.include !== undefined) strings("include", value.include);
   if (value.only !== undefined) strings("only", value.only);
-  for (const key of ["remove", "hide", "personal", "force", "railExpanded"] as const) {
+  for (const key of ["remove", "hide", "personal", "force", "themeLocked", "railExpanded"] as const) {
     if (value[key] !== undefined && typeof value[key] !== "boolean") throw new Error(`${where}: ${key} must be true or false.`);
   }
   // Addons only narrow (G-14); the deployment may force an `only`, and says so.

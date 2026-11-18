@@ -291,6 +291,15 @@
   },
   {
     "package": "@angee/app",
+    "name": "useSignInRedirect",
+    "source": "packages/app/src/auth/sign-in-redirect.ts",
+    "kind": null,
+    "reason": "Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.",
+    "status": "stable",
+    "storyId": null
+  },
+  {
+    "package": "@angee/app",
     "name": "useUserPreferences",
     "source": "packages/app/src/providers/auth.tsx",
     "kind": null,
@@ -912,7 +921,7 @@
     "source": "packages/ui/src/views/calendar/CalendarView.tsx",
     "kind": "surface",
     "status": "stable",
-    "storyId": null
+    "storyId": "views-calendarview--default"
   },
   {
     "package": "@angee/ui",
@@ -952,6 +961,15 @@
   {
     "package": "@angee/ui",
     "name": "CardHeader",
+    "source": "packages/ui/src/ui/card.tsx",
+    "kind": "primitive",
+    "owner": "@angee/ui:Card",
+    "status": "stable",
+    "storyId": null
+  },
+  {
+    "package": "@angee/ui",
+    "name": "CardSelection",
     "source": "packages/ui/src/ui/card.tsx",
     "kind": "primitive",
     "owner": "@angee/ui:Card",
@@ -1833,6 +1851,14 @@
   },
   {
     "package": "@angee/ui",
+    "name": "DateTile",
+    "source": "packages/ui/src/fragments/DateTile.tsx",
+    "kind": "fragment",
+    "status": "stable",
+    "storyId": "fragments-datetile--default"
+  },
+  {
+    "package": "@angee/ui",
     "name": "DefinitionPair",
     "source": "packages/ui/src/fragments/DefinitionPair.tsx",
     "kind": "fragment",
@@ -2628,7 +2654,7 @@
     "source": "packages/ui/src/views/GalleryView.tsx",
     "kind": "surface",
     "status": "stable",
-    "storyId": null
+    "storyId": "views-galleryview--column-card"
   },
   {
     "package": "@angee/ui",
@@ -2922,6 +2948,14 @@
     "kind": "fragment",
     "status": "stable",
     "storyId": "communication-message--composer"
+  },
+  {
+    "package": "@angee/ui",
+    "name": "MessageHtmlFrame",
+    "source": "packages/ui/src/communication/message/index.tsx",
+    "kind": "fragment",
+    "status": "stable",
+    "storyId": "communication-messagehtmlframe--default"
   },
   {
     "package": "@angee/ui",
@@ -3424,6 +3458,15 @@
     "owner": "@angee/ui:Popover",
     "status": "stable",
     "storyId": null
+  },
+  {
+    "package": "@angee/ui",
+    "name": "PreviewFileContent",
+    "source": "packages/ui/src/preview/builtins.tsx",
+    "kind": "surface",
+    "owner": "@angee/ui:PreviewPane",
+    "status": "stable",
+    "storyId": "previews-previewfilecontent--default"
   },
   {
     "package": "@angee/ui",
@@ -4952,6 +4995,14 @@
   },
   {
     "package": "@angee/ui",
+    "name": "TextDiff",
+    "source": "packages/ui/src/fragments/TextDiff.tsx",
+    "kind": "fragment",
+    "status": "stable",
+    "storyId": "fragments-textdiff--default"
+  },
+  {
+    "package": "@angee/ui",
     "name": "Textarea",
     "source": "packages/ui/src/ui/textarea.tsx",
     "kind": "primitive",
@@ -5576,6 +5627,14 @@
   },
   {
     "package": "@angee/ui",
+    "name": "cardFrameVariants",
+    "source": "packages/ui/src/ui/card.tsx",
+    "kind": "token",
+    "status": "stable",
+    "storyId": null
+  },
+  {
+    "package": "@angee/ui",
     "name": "cardHeaderVariants",
     "source": "packages/ui/src/ui/card.tsx",
     "kind": "token",
@@ -5686,6 +5745,15 @@
     "name": "commandVariants",
     "source": "packages/ui/src/ui/command.tsx",
     "kind": "token",
+    "status": "stable",
+    "storyId": null
+  },
+  {
+    "package": "@angee/ui",
+    "name": "compareText",
+    "source": "packages/ui/src/fragments/TextDiff.tsx",
+    "kind": null,
+    "reason": "Format utility: converts data to display or storage text.",
     "status": "stable",
     "storyId": null
   },
@@ -5846,6 +5914,14 @@
     "source": "packages/ui/src/widgets/date-format.ts",
     "kind": null,
     "reason": "Format utility: converts data to display or storage text.",
+    "status": "stable",
+    "storyId": null
+  },
+  {
+    "package": "@angee/ui",
+    "name": "dateTileVariants",
+    "source": "packages/ui/src/fragments/DateTile.tsx",
+    "kind": "token",
     "status": "stable",
     "storyId": null
   },
@@ -6759,6 +6835,15 @@
   },
   {
     "package": "@angee/ui",
+    "name": "optionGroups",
+    "source": "packages/ui/src/lib/option-groups.ts",
+    "kind": null,
+    "reason": "Format utility: converts data to display or storage text.",
+    "status": "stable",
+    "storyId": null
+  },
+  {
+    "package": "@angee/ui",
     "name": "optionLabel",
     "source": "packages/ui/src/widgets/types.ts",
     "kind": null,
@@ -7575,6 +7660,14 @@
   },
   {
     "package": "@angee/ui",
+    "name": "textDiffVariants",
+    "source": "packages/ui/src/fragments/TextDiff.tsx",
+    "kind": "token",
+    "status": "stable",
+    "storyId": null
+  },
+  {
+    "package": "@angee/ui",
     "name": "textRoleVariants",
     "source": "packages/ui/src/ui/text.tsx",
     "kind": "token",
@@ -7954,6 +8047,16 @@
     "source": "packages/ui/src/lib/use-debounced-text.ts",
     "kind": null,
     "reason": "Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.",
+    "status": "stable",
+    "storyId": null
+  },
+  {
+    "package": "@angee/ui",
+    "name": "useDeclaredBrand",
+    "source": "packages/ui/src/runtime/runtime.ts",
+    "kind": "region",
+    "owner": "@angee/ui:AppChooser",
+    "region": "navigation-rail",
     "status": "stable",
     "storyId": null
   },

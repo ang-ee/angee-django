@@ -26,11 +26,26 @@ _DIRECTORY_LIST_LIMIT = 1000
 
 @dataclass(frozen=True)
 class MountEntry:
-    """One file exposed by an external mount backend."""
+    """One file exposed by an external mount backend.
+
+    ``path`` places the file: its drive-relative POSIX path names the folder and
+    filename it mirrors to. ``storage_key`` is the key a reference mount indexes
+    the file under (``File.storage_path``) and its storage backend reads the bytes
+    by, so it stays stable while the source file exists. A source whose paths are
+    its keys leaves it empty and keys by ``path``; a source with stable ids of its
+    own sets it, so a rename or a move keeps the indexed row.
+    """
 
     path: str
     size_bytes: int
     mtime_ns: int
+    storage_key: str = ""
+
+    def __post_init__(self) -> None:
+        """Key a path-identified source by its path."""
+
+        if not self.storage_key:
+            object.__setattr__(self, "storage_key", self.path)
 
 
 @dataclass(frozen=True)
@@ -62,6 +77,11 @@ class MountBackend(BridgeImpl):
     category = "mount"
     label = "Mount"
     requires_credential: ClassVar[bool] = False
+    """Whether the source is read with the connecting user's credential, which provisioning attaches."""
+    vendor_slug: ClassVar[str]
+    """The integrate catalogue vendor a Mount of this backend points at; each backend names its own."""
+    oauth_scopes: ClassVar[tuple[str, ...]] = ()
+    """OAuth scopes a credential backend reads with; only accounts that granted all of them are offered."""
 
     @classmethod
     def browse(
@@ -70,20 +90,57 @@ class MountBackend(BridgeImpl):
         credential: Any | None = None,
         token: str = "",
     ) -> MountBrowseResult:
-        """List child locations of ``token`` before a Mount row exists."""
+        """List child locations of ``token`` before a Mount row exists.
+
+        A backend that requires a credential reads with ``credential``, one of the
+        connecting user's (``MountManager.connectable_credentials``).
+        """
 
         raise NotImplementedError
+
+    @classmethod
+    def already_mounted_message(cls) -> str:
+        """Return the refusal for a root some Mount already uses, named by this backend's label."""
+
+        return f"This {cls.label} source is already mounted."
+
+    @classmethod
+    def slug_default(cls) -> str:
+        """Return the drive slug base for a Mount whose name slugifies to nothing: this backend's key."""
+
+        return cls.key.replace("_", "-")
+
+    def source_root(self) -> str:
+        """Validate the configured source and return the canonical root a Mount persists for it.
+
+        A browsed or typed root may be one of several spellings of one source (a
+        relative step, an alias); the canonical one makes one source one root
+        (``MountQuerySet.for_roots``), so provisioning stores it before checking
+        what is already mounted. Raises like :meth:`check_source`.
+        """
+
+        self.check_source()
+        return str(self.bridge.config.get("root") or "")
 
     def __init__(self, integration: Any) -> None:
         """Bind the Mount row and initialize per-run MIME observations."""
 
         super().__init__(integration)
         self._entry_mime_types: dict[str, str] = {}
-        self.observed_paths: set[str] = set()
+        # Storage keys of files the walk saw but could not yield (a stat race),
+        # so sync never trashes them as missing.
+        self.observed_keys: set[str] = set()
         self.scan_errors = 0
+        # Source files the backend deliberately does not mirror (a type it cannot
+        # store as bytes), reported as the sync's ``skipped`` count.
+        self.skipped_entries = 0
 
     def check_source(self) -> None:
-        """Raise :class:`ValidationError` when the configured source is unusable."""
+        """Raise :class:`ValidationError` when the configured source is unusable.
+
+        Provisioning runs it on the unsaved Mount, its credential attached, before
+        anything is created; each sync runs it before walking.
+        """
 
         raise NotImplementedError
 
@@ -138,6 +195,7 @@ class LocalFolderMountBackend(MountBackend):
 
     key = "local_folder"
     label = "Local folder"
+    vendor_slug = "local"
     requires_credential = False
 
     @classmethod
@@ -184,6 +242,11 @@ class LocalFolderMountBackend(MountBackend):
             truncated=truncated,
             supports_manual_token=True,
         )
+
+    def source_root(self) -> str:
+        """Persist the resolved absolute folder, so one folder is one root however it was typed."""
+
+        return str(self.root)
 
     def __init__(self, integration: Any) -> None:
         """Bind the Mount and reserve its per-instance validated-root cache."""
@@ -236,7 +299,7 @@ class LocalFolderMountBackend(MountBackend):
                 if path.is_symlink():
                     continue
                 relative_path = path.relative_to(root).as_posix()
-                self.observed_paths.add(relative_path)
+                self.observed_keys.add(relative_path)
                 try:
                     stat = path.stat()
                 except OSError as error:
@@ -244,7 +307,7 @@ class LocalFolderMountBackend(MountBackend):
                     logger.warning("storage.mount.stat: skipped %s: %s", path, error)
                     continue
                 if not stat_module.S_ISREG(stat.st_mode):
-                    self.observed_paths.discard(relative_path)
+                    self.observed_keys.discard(relative_path)
                     continue
                 yield MountEntry(
                     path=relative_path,

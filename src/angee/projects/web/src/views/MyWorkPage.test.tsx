@@ -73,7 +73,7 @@ describe("MyWorkPage", () => {
     expect(list.scope).toBeUndefined();
     expect(list.presentation).toBeUndefined();
     expect(list.selectable).toBeUndefined();
-    expect(list.baseFilter).toEqual({ assignee: { exact: "usr_1" }, status: { exact: "OPEN" } });
+    expect(list.baseFilter).toEqual({ assignee: { exact: "usr_1" }, status: { exact: "OPEN" }, in_template: { exact: false } });
     expect(list.order).toEqual({ due_date: "ASC", sort_order: "ASC" });
     expect(list.rowActions).toBe(mocks.rowActions);
     expect(list.rowHref?.({ id: "tsk_1" } as TaskActionRow)).toBe("/projects/tasks/tsk_1");

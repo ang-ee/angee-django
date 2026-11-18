@@ -69,8 +69,10 @@ export interface CalendarViewProps {
   /**
    * Fires when a time range is selected — the quick-create seam. The caller
    * opens the create dialog seeding start/end; the View owns no create form.
+   * `allDay` is FullCalendar's: whole days were selected (a month-view day, the
+   * all-day row), so `end` is the exclusive midnight after the last day.
    */
-  onSelectRange?: (start: Date, end: Date) => void;
+  onSelectRange?: (start: Date, end: Date, allDay: boolean) => void;
   /**
    * Fires when an occurrence is clicked. The caller composes the occurrence's
    * source-declared `to` (navigate when set, ignore when absent) or resolves the
@@ -86,7 +88,7 @@ export interface CalendarViewProps {
 const CalendarSurface = lazy(() => import("./calendar-surface"));
 
 /**
- * The month/week/day event calendar — a standalone `@angee/ui` primitive
+ * The month/week/day/list event calendar — a standalone `@angee/ui` primitive
  * (occurrences in, interaction callbacks out, the `GraphView`
  * shape) composed over FullCalendar. Recurrence is not its concern: it renders
  * server-expanded occurrences and wires drag/resize/select/click back to the

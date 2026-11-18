@@ -38,12 +38,12 @@ from graphql import (
 RESOURCE_FIELD_KINDS = frozenset({"scalar", "enum", "relation", "list", "object"})
 
 RESOURCE_FIELD_SCALARS = frozenset(
-    {"ID", "String", "Boolean", "Int", "Float", "Decimal", "DateTime", "Date", "UUID", "JSON"}
+    {"ID", "String", "Boolean", "Int", "Float", "Decimal", "DateTime", "Date", "Time", "UUID", "JSON"}
 )
 
 RESOURCE_FIELD_WIDGETS = frozenset({
-    "select", "many2one", "tagInput", "switch", "integer", "float", "money", "datetime", "date", "json", "visibility",
-    "tone", "color",
+    "select", "many2one", "tagInput", "switch", "integer", "float", "money", "datetime", "date", "time", "json",
+    "visibility", "tone", "color",
 })
 
 ENUM_FIELD_WIDGETS = frozenset({"select", "tone"})
@@ -158,6 +158,8 @@ def resource_field_widget(
         return "datetime"
     if isinstance(field, models.DateField):
         return "date"
+    if isinstance(field, models.TimeField):
+        return "time"
     if isinstance(field, models.JSONField):
         return "json"
     return None

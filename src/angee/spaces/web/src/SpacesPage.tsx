@@ -237,14 +237,11 @@ export function GroupRosterTab({ recordId, form }: RecordPanelContext): React.Re
               submittingLabel={t("group.roster.adding")}
               errorFallback={t("group.roster.addError")}
               parseValues={parseAddMembershipValues}
-              onSubmit={async (values) => ({
-                status: "ok",
-                data: await add({
-                  group: recordId,
-                  party: values.party,
-                  role: values.role,
-                }),
-              })}
+              mutation={(values, options) => add({
+                group: recordId,
+                party: values.party,
+                role: values.role,
+              }, options)}
             />
           )
         }
@@ -262,13 +259,10 @@ export function GroupRosterTab({ recordId, form }: RecordPanelContext): React.Re
         submittingLabel={t("group.roster.savingRole")}
         errorFallback={t("group.roster.roleError")}
         parseValues={parseMembershipRoleValues}
-        onSubmit={async (values) => ({
-          status: "ok",
-          data: await updateRole({
-            id: roleRow?.id ?? "",
-            role: values.role,
-          }),
-        })}
+        mutation={(values, options) => updateRole({
+          id: roleRow?.id ?? "",
+          role: values.role,
+        }, options)}
         onSubmitted={() => setRoleRow(null)}
       />
       <MutationDialog
@@ -283,14 +277,11 @@ export function GroupRosterTab({ recordId, form }: RecordPanelContext): React.Re
         submittingLabel={t("group.roster.savingRole")}
         errorFallback={t("group.roster.notificationsError")}
         parseValues={parseNotificationValues}
-        onSubmit={async (values) => ({
-          status: "ok",
-          data: await setNotifications({
-            id: notificationRow?.id ?? "",
-            policy: values.policy,
-            subtype_keys: notificationRow?.subtype_keys ?? [],
-          }),
-        })}
+        mutation={(values, options) => setNotifications({
+          id: notificationRow?.id ?? "",
+          policy: values.policy,
+          subtype_keys: notificationRow?.subtype_keys ?? [],
+        }, options)}
         onSubmitted={() => setNotificationRow(null)}
       />
     </>

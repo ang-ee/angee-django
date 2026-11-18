@@ -3,7 +3,14 @@
 Record chatter and source conversations have different identity. Chatter folds
 through core `MergeableMixin`: the retired thread redirects to its survivor,
 while its messages, follower occurrences and history stay on their physical rows.
-The current record owns read and post admission. Messaging contributes comments,
+The current record owns read, post and moderation admission through the record
+permissions its model declares on `ThreadedModelMixin`: `thread_read_access`
+(default `read`), `thread_post_access` and `thread_moderate_access` (both default
+`write`). A record whose `write` reaches people who must not edit, delete or trash
+other people's comments names a narrower `thread_moderate_access`. A record's
+chatter thread has no owner, so the record's creator keeps nothing of it, its
+messages, parts or files after losing the record; the record lends its readers the
+thread through `messaging/thread#chatter_read`. Messaging contributes comments,
 its existing composer, and linked source conversations to the framework Activity
 stream; provenance contributes record history independently through the same owner.
 
@@ -31,6 +38,22 @@ It preserves content and repairs participants and both physical thread counters.
 with envelope ingestion; absent the exact precondition, changing an explicit
 source thread remains refused. Historical ingestion suppresses live message
 events while retaining native content history and counter updates.
+
+`Message.objects.compose_reply(parent, *, body, sender, actor, ...)` writes a reply
+on its parent's thread and channel under the channel's `reply` grant; the reply's
+`parent` is its In-Reply-To. An email reply (the parent's kind is `email`) is a
+complete envelope: `to` participants naming the parent's `Reply-To` addresses
+when it carries any (`Message.reply_addresses`, the one reader of that header),
+else the handle it was sent from (RFC 5322 §3.6.2); the
+subject `Re: <thread title>` (the title is the normalized subject, so prefixes
+never stack); and a Message-ID minted as Django mints one, stored bare as its
+external id like a received email's. A parent with neither is refused. The
+email transport renders that id as `Message-ID` and the parent's as `In-Reply-To`
+and `References`, so an answer threads back onto the conversation through
+`In-Reply-To`, through `References` when a provider rewrote the reply's
+Message-ID, or through its subject; a retained header part never renders a second
+copy of these. A reply of any other kind keeps a client token for its transport's
+provider id and writes no envelope.
 
 Outbound transport implements `ChannelBackend.deliver(message)` and returns the
 two-field `DeliveryOutcome(accepted, provider_id=None)` from
@@ -161,6 +184,18 @@ no body-text resolver. Console held actions use the filterable `is_held` project
 capture displayed revisions and confirm publication. Every settled id is removed
 from selection; retrying a row refusal selects a fresh row and revision. A transport
 error retains selection. Selection-limit read errors explain disabled actions.
+
+An email file (`message/rfc822`, the type IMAP keeps raw mail under) previews as its
+message: the web fragment contributes the `messaging.email` provider to `PreviewPane`
+through the manifest `previews`, with a `maxSize` of 10 MiB, so a larger file falls
+through to the generic file fallback. postal-mime parses the file in the browser,
+and the preview keeps only what it shows. The subject, in the message's
+`Content-Language`, sits over `MessageEnvelope`, the sender, To/Cc/Bcc and date
+header `MessageReader` also uses. The body toggles between the HTML and plain-text
+alternatives when both exist, and the attachments are listed under it. The HTML
+renders in `@angee/ui`'s `MessageHtmlFrame`, the sandbox `MessagePartsView` uses: its
+inline images arrive as data URLs, and remote images stay blocked until the reader
+loads them. HTML files keep the built-in source view.
 
 Email delivery distinguishes definite refusals from uncertain acceptance. SMTP
 4xx and provider rate limits retry; SMTP 5xx and permanent HTTP 4xx fail. SMTP

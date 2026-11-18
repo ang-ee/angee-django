@@ -19,10 +19,13 @@ from __future__ import annotations
 import logging
 from collections.abc import Mapping
 from pathlib import Path
-from typing import Any, ClassVar
+from typing import TYPE_CHECKING, Any, ClassVar
 
 from django.conf import settings
 from django.core.files.storage import FileSystemStorage, Storage
+
+if TYPE_CHECKING:
+    from angee.storage.models import Backend
 
 logger = logging.getLogger(__name__)
 
@@ -51,6 +54,16 @@ class StorageBackend(Storage):
 
     writable: ClassVar[bool] = True
     """Whether callers may create new objects through this backend."""
+
+    backend_row: Backend | None = None
+    """The ``storage.Backend`` row this instance serves, as an identity only.
+
+    ``Backend.storage`` assigns it after construction: a deferred instance
+    carrying the row's primary key, whose other fields load fresh when read, so
+    a cached backend never holds stale row state. A backend serving on behalf of
+    something bound to that row (a mount's drive) finds it by this identity,
+    never by matching configuration. An instance built elsewhere has none.
+    """
 
     def __init__(self, *, backend_config: Mapping[str, Any] | None = None) -> None:
         """Store the resolved per-row backend config."""

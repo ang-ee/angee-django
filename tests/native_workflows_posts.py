@@ -10,6 +10,7 @@ from types import ModuleType, SimpleNamespace
 from unittest import skipUnless
 from unittest.mock import patch
 
+import pydantic
 import tablib
 import yaml
 from asgiref.sync import async_to_sync
@@ -37,7 +38,7 @@ from angee.agents.provisioning import ProvisioningError, provision_agent
 from angee.agents.reader_role import RESOURCE_READER_ROLE
 from angee.agents.runners import TurnOutcome
 from angee.agents.sessions import run_next_turn
-from angee.agents.testing.drivers import FakeRunner, update_chunk
+from angee.agents.testing.drivers import FakeRunner, tool_call_updates, update_chunk
 from angee.agents_runtime_pydantic.runtime import PydanticAIRuntime
 from angee.agents_runtime_pydantic.toolsets import AngeeToolset, ToolGrantAccess
 from angee.base.models.identity import instance_from_public_id
@@ -54,7 +55,12 @@ from angee.workflows.runner import runner
 from angee.workflows.tasks import cancel as cancel_workflow
 from angee.workflows.testing.drivers import load_workflow, run_until, start_run
 from angee.workflows.triggers import TriggerSource
-from angee.workflows_agents.steps import MAX_PENDING_REDISPATCHES, StartConversation, render_prompt
+from angee.workflows_agents.steps import (
+    MAX_PENDING_REDISPATCHES,
+    GroundingPolicy,
+    StartConversation,
+    render_prompt,
+)
 from tests.lock_waits import submit, wait_for_lock
 
 Agent = apps.get_model("agents", "Agent")
@@ -71,6 +77,7 @@ StepRun = apps.get_model("workflows", "StepRun")
 StepWatch = apps.get_model("workflows", "StepWatch")
 
 READ_TOOLS = {"read_comment_thread", "read_message_text", "search_pages", "list_vaults"}
+GROUNDING = {"search": ["web_search"], "fetch": ["fetch_url"]}
 
 
 class ConversationPromptTests(SimpleTestCase):
@@ -87,6 +94,59 @@ class ConversationPromptTests(SimpleTestCase):
         for template in ("{subject.channel.credential.secret_value}", "{subject[channel]}", "{run.run_as}"):
             with self.subTest(template=template), self.assertRaises(ValidationError):
                 render_prompt(template, context=context, data={})
+
+
+def emitting(*updates):
+    """A provider stand-in that streams the given saved updates during its turn."""
+
+    def during_turn(session, turn, emit):
+        for update in updates:
+            emit(update)
+
+    return during_turn
+
+
+class GroundingPolicyTests(SimpleTestCase):
+    policy = GroundingPolicy(search=("web_search", "site_search"), fetch=("fetch_url",))
+
+    def test_one_completed_call_per_requirement_meets_it_beside_failed_calls(self):
+        turn = AgentTurn(
+            updates=[
+                *tool_call_updates("web_search", "call-1", failed=True),
+                *tool_call_updates("site_search", "call-2", output="Two results."),
+                *tool_call_updates("fetch_url", "call-3", output="Page text."),
+            ]
+        )
+        self.assertIsNone(self.policy.unmet(turn))
+
+    def test_unmet_requirements_name_their_tools_and_the_calls_the_turn_made(self):
+        turn = AgentTurn(
+            updates=[
+                *tool_call_updates("web_search", "call-1", failed=True),
+                *tool_call_updates("site_search", "call-2")[:2],
+                *tool_call_updates("summarize", "call-3", output="Summary."),
+            ]
+        )
+        self.assertEqual(
+            self.policy.unmet(turn),
+            "The agent answer is ungrounded: search needs a completed web_search or site_search call; "
+            "fetch needs a completed fetch_url call. "
+            "The turn called web_search (failed), site_search (in_progress), summarize (completed).",
+        )
+
+    def test_a_requirement_naming_no_tool_asks_nothing(self):
+        fetched = AgentTurn(updates=tool_call_updates("fetch_url", "call-1", output="Page text."))
+        self.assertIsNone(GroundingPolicy().unmet(AgentTurn(updates=[])))
+        self.assertIsNone(GroundingPolicy(fetch=("fetch_url",)).unmet(fetched))
+        self.assertEqual(
+            GroundingPolicy(search=("web_search",)).unmet(AgentTurn(updates=[])),
+            "The agent answer is ungrounded: search needs a completed web_search call. The turn called no tools.",
+        )
+
+    def test_tool_names_need_at_least_one_character(self):
+        for field in ("search", "fetch"):
+            with self.subTest(field=field), self.assertRaises(pydantic.ValidationError):
+                GroundingPolicy.model_validate({field: ["web_search", ""]})
 
 
 class CommentReplyTests(TransactionTestCase):
@@ -166,14 +226,15 @@ class CommentReplyTests(TransactionTestCase):
                 owner_id=self.owner.pk,
             )[0]
 
-    def document(self):
+    def document(self, *, grounding=None):
+        config = {"agent": self.agent.sqid, "prompt_template": "Prepare an answer for {subject[sqid]}."}
         return {
             "nodes": {
                 "check": {"step": "check_replied", "next": {"open": "converse"}},
                 "converse": {
                     "step": "start_conversation",
                     "input": {"from": "input", "project": True},
-                    "config": {"agent": self.agent.sqid, "prompt_template": "Prepare an answer for {subject[sqid]}."},
+                    "config": config if grounding is None else {**config, "grounding": grounding},
                     "next": {"done": "schedule", "no_reply": "close"},
                 },
                 "schedule": {
@@ -191,8 +252,10 @@ class CommentReplyTests(TransactionTestCase):
             ],
         }
 
-    def make_workflow(self, key, *, can_reply=True):
-        workflow = load_workflow(self.document(), actor=self.admin, key=key, subject_model="messaging.Message")
+    def make_workflow(self, key, *, can_reply=True, grounding=None):
+        workflow = load_workflow(
+            self.document(grounding=grounding), actor=self.admin, key=key, subject_model="messaging.Message"
+        )
         with actor_context(self.owner):
             self.agent.with_actor(self.owner).grant_record_access("caller", workflow.user)
             self.channel.grant_record_access("reader", workflow.user)
@@ -215,7 +278,7 @@ class CommentReplyTests(TransactionTestCase):
         )
         self.assertIsNotNone(step.wake_at)
         self.assertEqual(step.attempt, 1)
-        session = instance_from_public_id(AgentSession, step.state["session"], queryset=AgentSession.system_queryset())
+        session = self.conversation(run)
         self.assertEqual(AgentTurn.system_queryset().filter(session=session).count(), 1)
         return run, session
 
@@ -236,6 +299,17 @@ class CommentReplyTests(TransactionTestCase):
 
     def replies(self):
         return Message.system_queryset().filter(parent=self.comment, direction="outbound")
+
+    def grounded_run(self, key):
+        workflow = self.make_workflow(key, grounding=GROUNDING)
+        run = start_run(workflow, actor=workflow.user, subject=self.comment)
+        run_until(run)
+        return run, self.conversation(run)
+
+    def conversation(self, run):
+        return instance_from_public_id(
+            AgentSession, self.step(run).state["session"], queryset=AgentSession.system_queryset()
+        )
 
     def test_open_comment_runs_a_turn_then_prepares_an_approval_only_reply(self):
         run, session = self.waiting_run()
@@ -320,9 +394,7 @@ class CommentReplyTests(TransactionTestCase):
         run = start_run(workflow, actor=workflow.user, subject=self.comment)
         run_until(run)
         self.assertEqual(self.step(run).status, "waiting", self.step(run).failure_reason)
-        session = instance_from_public_id(
-            AgentSession, self.step(run).state["session"], queryset=AgentSession.system_queryset()
-        )
+        session = self.conversation(run)
         self.assertEqual(AgentTurn.system_queryset().get(session=session).status, "pending")
         self.complete(run, session)
         self.assertEqual((run.status, run.outcome), ("succeeded", "scheduled"))
@@ -508,9 +580,7 @@ class CommentReplyTests(TransactionTestCase):
                 workflow = self.make_workflow(f"empty-answer-{index}")
                 run = start_run(workflow, actor=workflow.user, subject=self.comment)
                 run_until(run)
-                session = instance_from_public_id(
-                    AgentSession, self.step(run).state["session"], queryset=AgentSession.system_queryset()
-                )
+                session = self.conversation(run)
                 self.fake.outcome = TurnOutcome(kind="completed", text=text)
                 self.complete(run, session)
                 self.assertEqual((run.status, run.outcome, run.output["text"]), ("succeeded", "no_reply", text))
@@ -597,12 +667,67 @@ class CommentReplyTests(TransactionTestCase):
         self.assertEqual(AgentSession.system_queryset().get(pk=session.pk).status, "closed")
         self.assertEqual(AgentTurn.system_queryset().filter(session=session).count(), 1)
         self.assertEqual(AgentSession.system_queryset().count(), 2)
-        session = instance_from_public_id(
-            AgentSession, self.step(run).state["session"], queryset=AgentSession.system_queryset()
-        )
+        session = self.conversation(run)
         self.fake.outcome = TurnOutcome(kind="completed", text="Recovered answer.")
         self.complete(run, session)
         self.assertEqual((run.outcome, self.replies().count()), ("scheduled", 1))
+
+    def test_ungrounded_answer_fails_the_conversation_with_every_call_it_made(self):
+        run, session = self.grounded_run("ungrounded-answer")
+        self.fake.during_turn = emitting(
+            *tool_call_updates("web_search", "call-1", failed=True),
+            *tool_call_updates("fetch_page", "call-2", output="Page text."),
+        )
+        self.complete(run, session)
+        self.assertEqual((run.status, self.step(run).status), ("failed", "failed"))
+        self.assertEqual(
+            self.step(run).failure_reason,
+            "The agent answer is ungrounded: search needs a completed web_search call; "
+            "fetch needs a completed fetch_url call. The turn called web_search (failed), fetch_page (completed).",
+        )
+        self.assertEqual(AgentTurn.system_queryset().get(session=session).status, "completed")
+        self.assertFalse(self.replies().exists())
+
+    def test_empty_answer_routes_no_reply_without_the_grounding_check(self):
+        run, session = self.grounded_run("grounded-empty-answer")
+        self.fake.outcome = TurnOutcome(kind="completed", text=" \n ")
+        self.complete(run, session)
+        self.assertEqual((run.status, run.outcome), ("succeeded", "no_reply"))
+        self.assertEqual(self.step(run, "schedule").status, "skipped")
+        self.assertFalse(self.replies().exists())
+
+    def test_grounded_answer_prepares_the_reply_beside_failed_calls(self):
+        run, session = self.grounded_run("grounded-answer")
+        self.fake.during_turn = emitting(
+            *tool_call_updates("web_search", "call-1", failed=True),
+            *tool_call_updates("web_search", "call-2", output="Two results."),
+            *tool_call_updates("fetch_url", "call-3", output="Page text."),
+        )
+        self.complete(run, session)
+        self.assertEqual((run.status, run.outcome, self.replies().count()), ("succeeded", "scheduled", 1))
+        self.assertEqual(self.step(run).output["text"], "A useful answer.")
+
+    def test_operator_retry_after_an_ungrounded_answer_asks_again_with_the_reason(self):
+        run, session = self.grounded_run("ungrounded-retry")
+        self.complete(run, session)
+        self.assertEqual(run.status, "failed")
+        StepRun.objects.retry_step(self.step(run), actor=self.admin)
+        run_until(run)
+        retried = self.conversation(run)
+        self.assertNotEqual(retried.pk, session.pk)
+        self.assertEqual(AgentSession.system_queryset().get(pk=session.pk).status, "closed")
+        self.fake.during_turn = emitting(
+            *tool_call_updates("web_search", "call-1", output="Two results."),
+            *tool_call_updates("fetch_url", "call-2", output="Page text."),
+        )
+        self.complete(run, retried)
+        self.assertEqual((run.status, run.outcome, self.replies().count()), ("succeeded", "scheduled", 1))
+        prompt = f"Prepare an answer for {self.comment.sqid}."
+        reason = (
+            "The agent answer is ungrounded: search needs a completed web_search call; "
+            "fetch needs a completed fetch_url call. The turn called no tools."
+        )
+        self.assertEqual(self.fake.prompts, [prompt, f"{prompt}\n\n{reason}"])
 
     def test_transcript_flushes_do_not_wake_or_create_attempts(self):
         run, session = self.waiting_run()
@@ -768,9 +893,7 @@ class CommentReplyTests(TransactionTestCase):
         workflow = self.make_workflow("reader-only-workflow", can_reply=False)
         run = start_run(workflow, actor=workflow.user, subject=self.comment)
         run_until(run)
-        session = instance_from_public_id(
-            AgentSession, self.step(run).state["session"], queryset=AgentSession.system_queryset()
-        )
+        session = self.conversation(run)
         self.complete(run, session)
         self.assertEqual(run.status, "failed")
         self.assertFalse(self.replies().exists())

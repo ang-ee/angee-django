@@ -11,7 +11,7 @@ from django.test import override_settings
 from django.test.utils import isolate_apps
 
 from angee.base.apps import BaseConfig
-from angee.base.checks import check_database_routers, check_ownership, check_sealed_permissions
+from angee.base.checks import check_database_routers, check_ownership, check_public_origin, check_sealed_permissions
 from angee.base.fields.implementation import ImplClassField
 from angee.base.fields.state import StateField
 from angee.base.hooks import check_hook, check_hooks
@@ -208,6 +208,30 @@ def test_native_rebac_database_check_and_base_checks_are_registered() -> None:
     assert sum(check is check_settings for check in registry.registered_checks) == 1
     assert checks.Tags.models in check_settings.tags
     assert sum(check is check_database_routers for check in registry.registered_checks) == 1
+
+
+@pytest.mark.parametrize(
+    "origin,debug,valid",
+    [
+        ("", False, True),
+        ("https://app.example.test", False, True),
+        ("https://app.example.test:8443/", False, True),
+        ("http://localhost:5173", True, True),
+        ("http://app.example.test", False, False),
+        ("https://*.example.test", False, False),
+        ("https://user:secret@app.example.test", False, False),
+        ("https://app.example.test/path", False, False),
+        ("https://app.example.test:notaport", False, False),
+        ("https://exa mple.test", False, False),
+    ],
+)
+def test_an_invalid_public_origin_fails_the_system_check(origin: str, debug: bool, valid: bool) -> None:
+    """Only a bare public origin is trusted for CSRF and links; any other set value is reported."""
+
+    assert sum(check is check_public_origin for check in registry.registered_checks) == 1
+    with override_settings(ANGEE_PUBLIC_ORIGIN=origin, DEBUG=debug):
+        errors = check_public_origin()
+    assert [error.id for error in errors] == ([] if valid else ["angee.E051"])
 
 
 def test_a_database_router_is_refused() -> None:

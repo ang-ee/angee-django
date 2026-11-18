@@ -12,6 +12,12 @@ projection locks name and category, so lines may change their tone and order but
 cannot rename, recategorize, delete or create one; provisioning and resource loads
 still own them.
 
+The [`angee.base` stage primitive](../base/models/stages.py) owns stage scope,
+admission, the `stage_entered_at` stamp, the `fold` and `rotting_days` hints and
+default provisioning; work contributes its category vocabulary and reservations
+through `Stage.validate_transition` and the task lifecycle through the
+`project_stage` override.
+
 The queue settings form is one owner, `useQueueFormDeclaration` (and
 `QueueSettingsForm` for a product's own route). Its sections are
 `work.Queue#sections` children: `work.queue-identity` (with the description),
@@ -39,6 +45,29 @@ promoted tasks. Trash owns the removal time, actor and reason, and restore clear
 that state. Owners, inherited queue writers and administrators manage
 the removed task. `removed_tasks(queue, parent)` scopes native trash to the
 reader's restore permission; merge redirects stay in history instead of that list.
+
+A triage review pauses on a hold. `snooze(until=None, *, awaiting=None,
+expected_revision=)` keeps the task in its triage stage, under the same write and
+revision check as accept and decline, and may carry a wake date, an awaited user,
+both or neither. `snoozed_at` marks the hold and says since when; `snoozed_until` is
+only its optional wake date, and the triage inbox hides held tasks by `snoozed_at`.
+`wake(reason=, *, message=)` ends the hold and sends `task_woken`
+([events](events.py)) with the reason: `due` when the date passed (the
+`work.wake_due_snoozes` job), `reply` when the awaited user replied (the message
+rides along), `manual` when a person resumed the review (`wake_task`, for example
+after logging an answer received by phone). One rule decides a reply,
+`TaskWorkQuerySet.wake_replied(message, replier_id=)`: a hold wakes only on its
+awaited user's message, on the task's chatter or on a conversation the caller ties
+to that user. A message from anyone else, the reviewer's own included, wakes
+nothing, and a hold that awaits nobody wakes only at its date or by hand. A hold
+never awaits its holder. Each wake is a per-row save with its history and
+revision, and the event's task carries no instance sudo. A wake run for many rows
+isolates each one: a failing wake or receiver is logged and rolled back alone, the
+row stays held for the next run, and the message that woke it is kept. A removed
+task keeps its hold but is not held, and so not woken, until it is restored.
+Leaving triage (accept, decline, duplicate) ends a hold without a wake. Waiting is
+a fact on the task, never a stage: a "waiting on" badge or saved view reads
+`snoozed_awaiting`, and a queue keeps its one triage stage.
 
 Duplicate triage calls the shared Task merge coordinator. The work model only
 validates and projects the duplicate stage; each reference owner moves its rows.

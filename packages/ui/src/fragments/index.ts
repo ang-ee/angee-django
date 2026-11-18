@@ -13,6 +13,11 @@ export {
   type DetailSurfaceProps,
 } from "./DetailSurface";
 export {
+  DateTile,
+  dateTileVariants,
+  type DateTileProps,
+} from "./DateTile";
+export {
   DefinitionPair,
   definitionFromTuple,
   definitionPairVariants,
@@ -90,6 +95,14 @@ export {
   type SettingsShellProps,
   type SurfacePanelProps,
 } from "./SurfacePanel";
+export {
+  TextDiff,
+  compareText,
+  textDiffVariants,
+  type TextChange,
+  type TextComparison,
+  type TextDiffProps,
+} from "./TextDiff";
 export {
   SurfaceHeader,
   surfaceHeaderVariants,

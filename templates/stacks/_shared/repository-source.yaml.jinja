@@ -1,0 +1,12 @@
+{# One git source and one src slot per entry of `repositories` or `extra_sources`; the loop variable is `repository`. #}
+{# The operator canonicalizes each entry to name, ref, repo and ssh; `slot: true` makes it cut a slot of that name. #}
+  {{ repository.name }}:
+    kind: git
+    repo: "{{ repository.repo }}"
+    default_ref: "{% if repository.ref %}{{ repository.ref }}{% else %}main{% endif %}"
+    cache_path: {% if sources_home %}{{ sources_home }}/{{ repository.name }}{% else %}sources/{{ repository.name }}{% endif %}
+    slot: true
+{% if deploy_keys %}{% if repository.ssh %}    # Its own key, so two private repositories on one host never offer each other's.
+    auth:
+      ssh_key_secret: deploy-key-{{ repository.name }}
+{% endif %}{% endif %}

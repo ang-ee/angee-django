@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 from contextlib import nullcontext
 from dataclasses import replace
-from typing import Any
+from typing import Any, ClassVar
 
 import pytest
 import strawberry
@@ -44,8 +44,11 @@ class ProjectAccessTask(AbstractTask):
     delegate = standalone_relation(AbstractTask, "delegate")
     activity_type = standalone_relation(AbstractTask, "activity_type")
     project = models.ForeignKey(Scope, null=True, blank=True, on_delete=models.SET_NULL)
-    milestone = None
-    milestone_id = None
+    # The task's statement table copies its structure columns; no reverse accessor
+    # beside the production task's.
+    milestone = models.ForeignKey(
+        "projects.Milestone", null=True, blank=True, on_delete=models.SET_NULL, related_name="+"
+    )
     links = None
     file_attachments = None
     thread_attachments = None
@@ -70,7 +73,7 @@ class TaskPromotion(MergeContractMixin):
     Like ``projects.Project.converted_from``, the lineage key stays on a merged task.
     """
 
-    merge_policies = {"converted_from": MergePolicy.KEEP}
+    merge_policies: ClassVar[Mapping[str, Any]] = {"converted_from": MergePolicy.KEEP}
 
     converted_from = models.ForeignKey(ProjectAccessTask, on_delete=models.CASCADE, related_name="promoted_projects")
     current_milestone = models.ForeignKey(Scope, null=True, on_delete=models.SET_NULL)
@@ -114,6 +117,7 @@ def task_create_case(db: None) -> Iterator[tuple[Scope, Any, Any]]:
             permission create = authenticated
             permission read = authenticated
             permission write = authenticated
+            permission write_statements = write
             permission narrow = write
             permission widen = owner
             permission read_promoted_phase = owner

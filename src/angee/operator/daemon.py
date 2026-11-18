@@ -315,6 +315,18 @@ class OperatorDaemon:
         data = self._request("POST", f"{self._base()}/workspaces", payload)
         return str((data or {}).get("name") or "")
 
+    def update_workspace(self, name: str, *, inputs: dict[str, str], overwrite: bool = False) -> None:
+        """Re-render a workspace from its recorded inputs merged with ``inputs`` (``PATCH /workspaces/{name}``).
+
+        The daemon reconciles the template like a Copier update: a file whose render
+        changes but was modified in place is refused as a conflict unless ``overwrite``
+        replaces it.
+        """
+
+        self._request(
+            "PATCH", f"{self._base()}/workspaces/{quote(name, safe='')}", {"inputs": inputs, "overwrite": overwrite}
+        )
+
     def create_service(self, *, template: str, workspace: str, inputs: dict[str, str], start: bool = True) -> str:
         """Render a service into the stack mounting ``workspace``; return the instance name."""
 

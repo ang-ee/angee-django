@@ -320,7 +320,6 @@ class ContactFolderType(AngeeNode):
 
     name: auto
     directory: "DirectoryType | None"
-    source_href: auto
     created_at: auto
     updated_at: auto
 
@@ -577,7 +576,7 @@ class PartiesIdentityMutation:
         party_b = Party.objects.all().from_public_id(str(b_id))
         if party_a is None or party_b is None:
             raise ValueError("party not found")
-        return cast(SameAsStatementType, Party.same_as.for_pair(party_a, party_b).dismiss(aspect="same_as"))
+        return cast(SameAsStatementType, Party.same_as.for_pair(party_a, party_b).dismiss_statement(aspect="same_as"))
 
 
 
@@ -899,8 +898,8 @@ _CONTACT_FOLDER_RESOURCE = hasura_model_resource(
     ContactFolderType,
     model=Folder,
     name="contact_folders",
-    filterable=["id", "directory", "name", "source_href", "updated_at"],
-    sortable=["directory", "name", "source_href", "created_at", "updated_at"],
+    filterable=["id", "directory", "name", "updated_at"],
+    sortable=["directory", "name", "created_at", "updated_at"],
     aggregatable=["id"],
     insert=False,
     update=False,

@@ -2,7 +2,7 @@ import type { PaginationState, RowSelectionState, SortingState, VisibilityState 
 import type { ResourceQuery } from "@angee/metadata";
 import { DEFAULT_CALENDAR_VIEW_MODE, DEFAULT_RESOURCE_VIEW_PAGE_SIZE, type CalendarViewMode, type ResourceViewKind } from "./capabilities";
 import { Filter, type ResourceViewFilter, type ResourceViewGroup, type ResourceViewInitialState } from "./filter";
-import { normaliseGroupStack, todayCalendarAnchor } from "./search";
+import { normaliseGroupStack, normaliseSourceKeys, todayCalendarAnchor } from "./search";
 import { normalisePageSize } from "../page-size";
 
 /** Native table state plus the Angee view facts carried by router search. */
@@ -20,6 +20,8 @@ export interface ResourceViewState {
   view: ResourceViewKind;
   mode: CalendarViewMode;
   anchor: string;
+  /** Calendar source keys hidden from the grid, sorted. */
+  hiddenSources: readonly string[];
 }
 
 /** Decode declarative defaults at the view boundary; live state stays native.
@@ -46,6 +48,7 @@ export function createResourceViewState(initial: ResourceViewInitialState = {}):
     view,
     mode: initial.mode ?? DEFAULT_CALENDAR_VIEW_MODE,
     anchor: initial.anchor ?? todayCalendarAnchor(),
+    hiddenSources: normaliseSourceKeys(initial.hiddenSources ?? []),
   };
 }
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Iterator, Sequence
+from contextvars import ContextVar
 from itertools import batched
 from typing import Any, Self, TypeVar, cast
 
@@ -51,6 +52,42 @@ class ClosedUpdateQuerySet(models.QuerySet[_ModelT]):
         """Reject every batched edit."""
 
         raise self.immutable_error("bulk_update")
+
+
+_owner_deletes: ContextVar[frozenset[type[models.Model]]] = ContextVar("angee_owner_deletes", default=frozenset())
+"""The models whose owner delete is running in this context."""
+
+
+class OwnerDeleteQuerySet(models.QuerySet[_ModelT]):
+    """Refuse Django's raw deletion path except inside the model's own owner delete.
+
+    Django deletes rows that have no delete receivers or dependent relations
+    through ``QuerySet._raw_delete`` instead of its collector. ``owner_delete``
+    admits that path for its own model only, while it deletes rows the owner
+    already validated; a direct call or another model's cascade stays refused.
+    ``owner_delete`` otherwise runs the native ``delete()`` of the querysets
+    composed after this one, so their authorization, receivers and collector
+    cascades all apply. Compose this policy before them.
+    """
+
+    def raw_delete_error(self) -> ValidationError:
+        """Identify the model whose raw deletion is refused."""
+
+        return ValidationError(f"{self.model._meta.label} rows cannot be deleted directly.")
+
+    def owner_delete(self) -> tuple[int, dict[str, int]]:
+        """Protected API: delete owner-validated rows through downstream guards and the collector."""
+
+        token = _owner_deletes.set(_owner_deletes.get() | {self.model})
+        try:
+            return super().delete()
+        finally:
+            _owner_deletes.reset(token)
+
+    def _raw_delete(self, using: str | None) -> int:
+        if self.model not in _owner_deletes.get():
+            raise self.raw_delete_error()
+        return super()._raw_delete(using)
 
 
 def query_batch_size(queryset: models.QuerySet[Any], *, width: int = 1) -> int:

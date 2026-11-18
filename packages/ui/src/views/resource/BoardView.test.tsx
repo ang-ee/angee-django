@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 
-import { act, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen } from "@testing-library/react";
 import { beforeEach, describe, expect, test, vi } from "vitest";
 
 import { BoardView } from "./BoardView";
@@ -116,6 +116,7 @@ interface DemoRow extends Row {
 function lane(rows: readonly DemoRow[]): RowGroup<DemoRow> {
   return {
     key: "data",
+    identity: "data",
     label: "Data",
     path: [],
     depth: 0,
@@ -222,6 +223,70 @@ describe("BoardView", () => {
     });
     expect(screen.getByTestId("custom").textContent).toBe("NOTES");
     expect(screen.getByRole("button", { name: "act Notes" })).toBeTruthy();
+  });
+
+  test("renderCard receives the board context: its surface, lane and drag state", () => {
+    const renderCard = vi.fn((row: DemoRow, _context: unknown) => <span>{row.label}</span>);
+    renderBoard({ renderCard });
+    expect(renderCard).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "1" }),
+      expect.objectContaining({ kind: "board", laneId: "data", dragging: false }),
+    );
+    // A lane is the group's identity, never its renderer key; an ungrouped board's lane has none.
+    renderCard.mockClear();
+    renderBoard({ renderCard, groups: [{ ...lane([{ id: "1", label: "Notes" }]), key: "root", identity: undefined }] });
+    expect(renderCard.mock.calls[0]?.[1]).not.toHaveProperty("laneId");
+  });
+
+  test("builds the card on the shared recipe: an inset frame by default, flush on request", () => {
+    const view = renderBoard({ dragEnabled: true, onCardMove: vi.fn() });
+    const inset = view.container.querySelector("[data-slot='board-card']");
+    expect(inset?.getAttribute("data-frame")).toBe("inset");
+    expect(inset?.firstElementChild?.className).toContain("p-3");
+    expect(inset?.className).toContain("shadow-xs");
+    // The inset handle stays in the card's control column beside the body.
+    expect(screen.getByRole("button", { name: "Move card" }).className).not.toContain("absolute");
+    view.unmount();
+    renderBoard({ dragEnabled: true, onCardMove: vi.fn(), cardFrame: "flush" });
+    const card = document.querySelector("[data-slot='board-card']");
+    expect(card?.getAttribute("data-frame")).toBe("flush");
+    expect(card?.firstElementChild?.className).not.toContain("p-3");
+    expect(card?.className).toContain("overflow-hidden");
+    // A flush card overlays its handle so an art header reaches the edges; touch keeps it visible.
+    const handle = screen.getByRole("button", { name: "Move card" });
+    expect(handle.className).toContain("absolute");
+    expect(handle.className).toContain("pointer-coarse:opacity-100");
+  });
+
+  test("the frame draws the body's focus ring, and a selected card keeps its brand border on hover", () => {
+    const view = renderBoard({ rowHref: () => "/notes/1", cardFrame: "flush", selectedIds: new Set(["1"]) });
+    const card = view.container.querySelector("[data-slot='board-card']");
+    expect(card?.className).toContain("has-[[data-slot=card-body]:focus-visible]:focus-ring");
+    expect(screen.getByRole("link").getAttribute("data-slot")).toBe("card-body");
+    expect(screen.getByRole("link").className).not.toContain("focus-ring");
+    expect(card?.className).toContain("hover:border-brand");
+    expect(card?.className).not.toContain("hover:border-border-strong");
+    view.unmount();
+    renderBoard({ rowHref: () => "/notes/1" });
+    expect(document.querySelector("[data-slot='board-card']")?.className).toContain("hover:border-border-strong");
+  });
+
+  test("without a drag handle an inset card's checkbox overlays its corner and reserves no column", () => {
+    renderBoard({ onToggleSelected: vi.fn() });
+    const selection = document.querySelector("[data-slot='card-selection']");
+    expect(selection?.className).toContain("absolute");
+    expect(selection?.className).toContain("pointer-coarse:opacity-100");
+    expect(selection?.parentElement?.className).toContain("contents");
+  });
+
+  test("a selectable card toggles its row and wears the selected recipe", () => {
+    const onToggleSelected = vi.fn();
+    const renderCard = vi.fn((row: DemoRow) => <span>{row.label}</span>);
+    renderBoard({ onToggleSelected, renderCard, selectedIds: new Set(["1"]) });
+    expect(document.querySelector("[data-slot='board-card']")?.className).toContain("border-brand");
+    expect(renderCard).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ selected: true }));
+    fireEvent.click(screen.getByRole("checkbox", { name: "Select card" }));
+    expect(onToggleSelected).toHaveBeenCalledExactlyOnceWith("1", false, { id: "1", label: "Notes" });
   });
 
   test("wires dnd-kit pointer and keyboard sensors when card moves are enabled", () => {

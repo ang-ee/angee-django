@@ -119,8 +119,9 @@ def test_repeated_record_ingest_collisions_leave_no_loser_rows_objects_or_grants
     drive = overwriting_drive
     original = _proxy_upload(drive, PNG_BYTES)
     with actor_context(drive.alice):
-        original.set_visibility(FileVisibility.RECORD)
+        # Trashed first: once narrowed, a published record file belongs to its records, not its owner.
         original.delete()
+        original.set_visibility(FileVisibility.RECORD)
     other = create_user("colliding-ingest-owner")
     with system_context(reason="test.storage.collision.baseline"):
         count = active_relationship_model().objects.count()

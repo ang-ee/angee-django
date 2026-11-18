@@ -1,5 +1,6 @@
 # Demo tags (demo tier). These are shared vocabulary readable by every
-# authenticated actor through the `authenticated` read permission.
+# authenticated actor through the `authenticated` read permission, each filed
+# under a demo category from 005_tags.tagcategory.yaml.
 # Party assignments are created through the authored `tag` mutation (the polymorphic
 # edge is not an ordinary resource insert), so they are not seeded here.
 # Idempotency is the resource ledger's (source_addon, xref) identity.
@@ -10,15 +11,19 @@ rows:
     fields:
       name: VIP
       color: "#c0392b"
+      category: tags.segment
   - xref: prospect
     fields:
       name: Prospect
       color: "#2980b9"
+      category: tags.relationship
   - xref: wholesale
     fields:
       name: Wholesale
       color: "#27ae60"
+      category: tags.segment
   - xref: partner
     fields:
       name: Partner
       color: "#8e44ad"
+      category: tags.relationship

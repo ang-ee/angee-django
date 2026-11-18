@@ -1,30 +1,44 @@
 import {
-  useCallback,
   useEffect,
   useRef,
   useState,
   type ReactNode,
 } from "react";
-import { useNavigate } from "@tanstack/react-router";
 import { AngeeLogoCube, PRESETS } from "@angee/logo-react";
 import "@angee/logo-react/style.css";
-import { useContainer, useRuntimeBrand, type CoreContainer } from "@angee/ui/runtime";
+import { useContainer, useRuntimeBrand, type CoreContainer, type LoginHeroContent } from "@angee/ui/runtime";
 import { Glyph } from "@angee/ui/chrome/Glyph";
 import { AnimatedThemeLogo, ThemeLogo } from "@angee/ui/theme";
 
 import { useUiT } from "@angee/ui/i18n";
 import { cn } from "@angee/ui/lib/cn";
 import { ContainerOutlet, containerHasContent } from "@angee/ui/lib/container-outlet";
-import { safeRedirectPath } from "./safe-redirect";
+import { useSignInRedirect } from "./sign-in-redirect";
 import { UsernamePasswordForm } from "./UsernamePasswordForm";
 
-/** The login page's containers: sign-in methods and password help.
+/** The login page's containers: sign-in methods, password help and its one hero.
  * @kind contribution
  */
 export const LOGIN_CONTAINERS: readonly CoreContainer[] = [
   { address: "auth.login#method" },
   { address: "auth.login#password-help" },
+  { address: "auth.login#hero", unique: "address" },
 ];
+
+/** Refuse an `auth.login#hero` child whose content `LoginPage` cannot render. */
+export function validateLoginHero(content: unknown, id: string): asserts content is LoginHeroContent {
+  const hero = typeof content === "object" && content !== null ? content as Record<string, unknown> : null;
+  const render = hero?.render;
+  if (!hero || (typeof render !== "function" && (typeof render !== "object" || render === null))) {
+    throw new Error(`Login hero "${id}" needs a render component.`);
+  }
+  if (hero.presentation !== undefined && hero.presentation !== "full-bleed") {
+    throw new Error(`Login hero "${id}" names presentation "${String(hero.presentation)}"; a login hero is "full-bleed" or unset.`);
+  }
+  if (hero.backgroundImageUrl !== undefined && typeof hero.backgroundImageUrl !== "string") {
+    throw new Error(`Login hero "${id}" needs a string backgroundImageUrl.`);
+  }
+}
 
 const HERO_SLIDE_KEYS = ["intent", "agentNative", "composable"] as const;
 const LOGIN_BACKDROP_FADE_MS = 1_000;
@@ -38,13 +52,27 @@ export interface LoginPageProps {
   methods?: ReactNode | null;
   redirectTo?: string;
   footer?: ReactNode;
-  /** Undefined uses the framework hero only on unbranded hosts; null removes it. */
+  /**
+   * Undefined uses the `auth.login#hero` contribution, else the framework hero
+   * on an unbranded host; `null` removes the hero; a node replaces it. A host's
+   * hero shows at every width; the framework's own slides show from `lg` up.
+   */
   hero?: ReactNode | null;
+  /**
+   * How the page's own hero (the `hero` prop) sits: `"full-bleed"` puts a
+   * backdrop behind the whole page with the card floating over it, also with no
+   * hero; unset gives the hero its own column beside the card, stacked above it
+   * on small screens. The framework hero is always full-bleed, and a
+   * contributed hero brings its own presentation.
+   */
+  presentation?: "full-bleed";
   /** `undefined` renders the default card header, `null` leaves only `brand`, a node replaces it. */
   cardHeader?: ReactNode | null;
   /** `undefined` renders the `auth.login#password-help` children, `null` suppresses them, a node replaces them. */
   passwordHelp?: ReactNode | null;
+  /** The framework's grid and glow over a full-bleed backdrop, with its cube beside the framework hero; on by default only with the framework hero. */
   showAtmosphere?: boolean;
+  /** The full-bleed backdrop's image for the page's own hero (the `hero` prop or the framework hero); a contributed hero brings its own. */
   backgroundImageUrl?: string;
 }
 
@@ -57,24 +85,13 @@ export function LoginPage({
   redirectTo = "/",
   footer,
   hero,
+  presentation,
   cardHeader,
   passwordHelp,
   showAtmosphere,
   backgroundImageUrl,
 }: LoginPageProps): ReactNode {
-  const navigate = useNavigate();
-  const onSuccess = useCallback(() => {
-    const next =
-      typeof window === "undefined"
-        ? null
-        : new URLSearchParams(window.location.search).get("next");
-    const target = safeRedirectPath(next) ?? safeRedirectPath(redirectTo) ?? "/";
-    if (typeof window === "undefined") {
-      void navigate({ href: target });
-      return;
-    }
-    window.location.assign(target);
-  }, [navigate, redirectTo]);
+  const onSuccess = useSignInRedirect(redirectTo);
   const t = useUiT();
   const runtimeBrand = useRuntimeBrand();
   const branded = brand != null || runtimeBrand !== null;
@@ -82,6 +99,7 @@ export function LoginPage({
   const identity = brand ?? <LoginIdentity name={name} />;
   const methodChildren = useContainer("auth.login#method");
   const passwordHelpChildren = useContainer("auth.login#password-help");
+  const heroChildren = useContainer<LoginHeroContent>("auth.login#hero");
   const cardFooter = footer ?? null;
   const formPasswordHelp = passwordHelp === null
     ? null
@@ -92,38 +110,50 @@ export function LoginPage({
   const loginMethods = methods === undefined
     ? containerHasContent(methodChildren) ? <ContainerOutlet entries={methodChildren} /> : null
     : methods;
-  const defaultHero = hero === undefined && runtimeBrand === null;
-  const defaultAtmosphere = showAtmosphere ?? true;
-  const resolvedHero =
-    defaultHero ? <LoginBrandPanel brand={brand} /> : hero ?? null;
+  // An explicit hero wins; else the contribution, with its own presentation and image;
+  // else the framework hero, which only an unbranded host shows.
+  const contributed = hero === undefined ? heroChildren[0]?.content : undefined;
+  const frameworkHero = hero === undefined && contributed === undefined && runtimeBrand === null;
+  const ContributedHero = contributed?.render;
+  const resolvedHero = frameworkHero
+    ? <LoginBrandPanel brand={brand} />
+    : ContributedHero ? <ContributedHero /> : hero ?? null;
   const showHero = resolvedHero !== null;
+  const fullBleed = frameworkHero
+    || (contributed ? contributed.presentation : presentation) === "full-bleed";
+  const backdropImageUrl = contributed ? contributed.backgroundImageUrl : backgroundImageUrl;
+  const atmosphere = showAtmosphere ?? frameworkHero;
 
   return (
     <main
       className={cn(
         "relative min-h-screen overflow-hidden text-fg",
-        showHero && defaultHero
-          ? "grid items-center gap-8 px-5 py-8 sm:px-8 lg:grid-cols-[minmax(0,1fr)_minmax(25rem,31rem)] lg:gap-12 lg:px-12 xl:px-16"
+        fullBleed
+          ? showHero
+            ? "grid items-center gap-8 px-5 py-8 sm:px-8 lg:grid-cols-[minmax(0,1fr)_minmax(25rem,31rem)] lg:gap-12 lg:px-12 xl:px-16"
+            : "grid place-items-center px-5 py-8 sm:px-8"
           : showHero
             ? "grid lg:grid-cols-[minmax(0,1fr)_minmax(28rem,34rem)]"
             : "grid place-items-center px-5 py-8",
-        showHero && defaultHero ? "bg-n-950" : "bg-canvas",
+        fullBleed ? "bg-n-950" : "bg-canvas",
       )}
     >
-      {showHero && defaultHero ? (
+      {fullBleed ? (
         <LoginVisualBackdrop
-          imageUrl={backgroundImageUrl}
-          showAtmosphere={defaultAtmosphere}
+          imageUrl={backdropImageUrl}
+          showAtmosphere={atmosphere}
         />
       ) : null}
-      {showHero && defaultHero && defaultAtmosphere ? <WanderingCube /> : null}
+      {frameworkHero && atmosphere ? <WanderingCube /> : null}
       {showHero ? (
         <div
           className={cn(
-            "relative z-10 hidden lg:block",
-            defaultHero ? "min-h-[32rem]" : "min-h-screen",
+            "relative z-10",
+            frameworkHero
+              ? "hidden min-h-[32rem] lg:block"
+              : fullBleed ? "lg:min-h-[32rem]" : "lg:min-h-screen",
           )}
-          aria-hidden={defaultHero ? "true" : undefined}
+          aria-hidden={frameworkHero ? "true" : undefined}
         >
           {resolvedHero}
         </div>
@@ -131,20 +161,21 @@ export function LoginPage({
       <section
         className={cn(
           "relative z-10 flex items-center justify-center",
-          showHero && defaultHero
-            ? "min-h-[calc(100vh-4rem)] lg:justify-end"
+          fullBleed
+            ? showHero
+              // A host's hero stacks above the card on small screens; the framework's shows from lg.
+              ? cn("lg:justify-end", frameworkHero ? "min-h-[calc(100vh-4rem)]" : "lg:min-h-[calc(100vh-4rem)]")
+              : "w-full"
             : showHero
-              ? "min-h-screen border-l border-border-subtle bg-sheet px-5 py-8 sm:px-8"
+              ? "border-t border-border-subtle bg-sheet px-5 py-8 sm:px-8 lg:min-h-screen lg:border-l lg:border-t-0"
               : "min-h-0 w-full max-w-[30rem] rounded-8 border border-border bg-sheet px-5 py-8 shadow-lg sm:px-8",
         )}
       >
         <div
           className={cn(
             "w-full max-w-[26rem]",
-            showHero
-              ? defaultHero
-                ? "rounded-8 border border-n-0/20 bg-sheet/94 p-6 shadow-2xl shadow-n-950/35 backdrop-blur-xl ring-1 ring-n-0/15 sm:p-8"
-                : null
+            fullBleed
+              ? "rounded-8 border border-n-0/20 bg-sheet/94 p-6 shadow-2xl shadow-n-950/35 backdrop-blur-xl ring-1 ring-n-0/15 sm:p-8"
               : null,
           )}
         >
@@ -159,8 +190,10 @@ export function LoginPage({
             <DefaultCardHeader brand={brand} branded={branded} name={name} />
           )}
           {loginMethods ? (
-            <div className="mb-5">
-              {loginMethods}
+            // A contributed method may render nothing (a sign-in provider with no
+            // configured connection), so the divider shows only beside rendered methods.
+            <div className="mb-5 [&:has(>[data-login-methods]:empty)]:hidden">
+              <div data-login-methods="">{loginMethods}</div>
               <div className="mt-5 flex items-center gap-3 text-12 text-fg-muted">
                 <span className="h-px flex-1 bg-border-subtle" aria-hidden />
                 <span>{t("auth.orUsePassword")}</span>

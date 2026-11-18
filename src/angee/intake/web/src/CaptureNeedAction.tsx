@@ -76,15 +76,14 @@ export function CaptureNeedAction({
       submittingLabel={t("capture.submitting")}
       errorFallback={t("capture.error")}
       parseValues={(values) => parseCaptureNeedValues(values, t("capture.importanceRequired"))}
-      onSubmit={async (values) =>
-        actionFormSubmitResult(await capture({
-          target: {
-            model_label: targetModel,
-            record_id: targetId,
-          },
-          ...values,
-        }), "capture_need")
-      }
+      mutation={(values, options) => capture({
+        target: {
+          model_label: targetModel,
+          record_id: targetId,
+        },
+        ...values,
+      }, options)}
+      mutationResult={(data) => actionFormSubmitResult(data, "capture_need")}
     />
   );
 }

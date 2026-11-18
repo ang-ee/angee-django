@@ -42,6 +42,7 @@ vi.mock("@fullcalendar/react", async () => {
 vi.mock("@fullcalendar/daygrid", () => ({ default: { name: "dayGrid" } }));
 vi.mock("@fullcalendar/timegrid", () => ({ default: { name: "timeGrid" } }));
 vi.mock("@fullcalendar/interaction", () => ({ default: { name: "interaction" } }));
+vi.mock("@fullcalendar/list", () => ({ default: { name: "list" } }));
 
 interface FcEvent {
   id: string;
@@ -56,7 +57,7 @@ interface SurfaceProps {
   initialView: string;
   events: FcEvent[];
   datesSet?: (arg: { start: Date; end: Date }) => void;
-  select?: (arg: { start: Date; end: Date }) => void;
+  select?: (arg: { start: Date; end: Date; allDay: boolean }) => void;
   eventDrop?: (arg: EventDropArg) => void;
   eventResize?: (arg: EventDropArg) => void;
   eventClick?: (arg: { event: { extendedProps: { occurrence: Occurrence } } }) => void;
@@ -113,6 +114,13 @@ describe("CalendarView", () => {
     render(<CalendarView view="day" range={RANGE} occurrences={[]} />);
     await screen.findByTestId("fc");
     expect(surface().initialView).toBe("timeGridDay");
+  });
+
+  test("maps list mode to FullCalendar's month list with its plugin loaded", async () => {
+    render(<CalendarView view="list" range={RANGE} occurrences={[EDITABLE]} />);
+    expect(await screen.findByText("Design review")).toBeTruthy();
+    expect(surface().initialView).toBe("listMonth");
+    expect((fcMock.lastProps?.plugins as { name: string }[]).map((plugin) => plugin.name)).toContain("list");
   });
 
   test("switches FullCalendar when the controlled view changes", async () => {
@@ -256,7 +264,11 @@ describe("CalendarView", () => {
     expect(revert).toHaveBeenCalledTimes(1);
   });
 
-  test("a range select fires onSelectRange", async () => {
+  test.each([
+    { allDay: false, start: "2026-06-17T14:00:00.000Z", end: "2026-06-17T15:00:00.000Z" },
+    // A month-view day: whole days, ending at the exclusive midnight after it.
+    { allDay: true, start: "2026-06-17T00:00:00.000Z", end: "2026-06-18T00:00:00.000Z" },
+  ])("a range select fires onSelectRange with FullCalendar's all-day flag ($allDay)", async ({ allDay, ...bounds }) => {
     const onSelectRange = vi.fn();
     render(
       <CalendarView
@@ -268,10 +280,10 @@ describe("CalendarView", () => {
     );
     await screen.findByTestId("fc");
 
-    const start = new Date("2026-06-17T14:00:00.000Z");
-    const end = new Date("2026-06-17T15:00:00.000Z");
-    surface().select?.({ start, end });
-    expect(onSelectRange).toHaveBeenCalledWith(start, end);
+    const start = new Date(bounds.start);
+    const end = new Date(bounds.end);
+    surface().select?.({ start, end, allDay });
+    expect(onSelectRange).toHaveBeenCalledWith(start, end, allDay);
   });
 
   test("an event click fires onEventClick with the occurrence", async () => {

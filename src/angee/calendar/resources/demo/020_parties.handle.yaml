@@ -1,0 +1,15 @@
+# Demo attendee addresses (demo tier). An attendee is a `parties.Handle`, so an
+# invitation names an address and the person behind it is the handle's resolved
+# party; these demo handles stay unlinked. Adopted on (platform, value), so an
+# address another addon already seeds keeps one row.
+_meta:
+  model: parties.Handle
+rows:
+  - xref: alice_email
+    fields: { platform: email, value: alice@example.com, display_name: Alice Morgan }
+  - xref: bob_email
+    fields: { platform: email, value: bob@example.com, display_name: Bob Chen }
+  - xref: ada_email
+    fields: { platform: email, value: ada@example.test, display_name: Ada Lovelace }
+  - xref: grace_email
+    fields: { platform: email, value: grace@example.test, display_name: Grace Hopper }

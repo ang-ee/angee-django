@@ -52,7 +52,7 @@ on:
         description: Release version of the angee CLI the stack lane installs (without the v prefix).
         required: false
         type: string
-        default: "0.27.0"
+        default: "0.28.0"
       consumer-sources:
         description: JSON array of additional addon sources with repository, path (sibling slot), and ref.
         required: false
@@ -88,6 +88,12 @@ on:
 
 permissions:
   contents: read
+
+env:
+  # uv runs its managed CPython, whose bundled SQLite the SQLite lanes need
+  # (docs/checks.md#sqlite-version); a runner image's system Python links the
+  # distribution's older library.
+  UV_PYTHON_PREFERENCE: only-managed
 
 jobs:
   python-quality:
@@ -154,16 +160,17 @@ jobs:
   # (.test_durations_postgres, least_duration): every worker flushes the
   # whole schema between transactional tests, so one job no longer fits.
   # Six groups under the SQLite shards' 60-minute limit keep the margin the
-  # map cannot predict. Pull requests skip it; main and releases run it.
+  # map cannot predict. Main and releases run the whole selection; a pull
+  # request runs one group of the gates it must not regress before merge.
   uv-postgres:
-    name: uv postgres ${{ matrix.group }}/6
-    if: ${{ inputs.uv-enabled && github.event_name != 'pull_request' }}
+    name: uv postgres ${{ matrix.group }}/${{ strategy.job-total }}
+    if: ${{ inputs.uv-enabled }}
     runs-on: ubuntu-latest
     timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
-        group: [1, 2, 3, 4, 5, 6]
+        group: ${{ fromJSON(github.event_name == 'pull_request' && '[1]' || '[1, 2, 3, 4, 5, 6]') }}
     services:
       postgres:
         image: pgvector/pgvector:pg17
@@ -201,12 +208,16 @@ jobs:
         # decision and agent-session selection, in six duration-balanced groups.
         # These source tests register bare concrete Django models, so PostgreSQL
         # must create their tables in one sync-app pass.
+        # A pull request runs the examples profile alone: its member planner-memory
+        # gate budgets what every permission change adds to the console's reads.
         env:
           DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/angee
+          PULL_REQUEST: ${{ github.event_name == 'pull_request' }}
         run: |
-          uv run --locked python -m pytest -q -n 4 --dist loadfile --nomigrations --durations=25 --junitxml=postgresql-contracts.xml \
-            --splits 6 --group ${{ matrix.group }} --splitting-algorithm least_duration \
-            --durations-path .test_durations_postgres \
+          if [ "$PULL_REQUEST" = true ]; then
+            set -- tests/test_composed_examples.py
+          else
+            set -- \
             tests/test_workflows_definition.py tests/test_workflows_concurrency.py \
             tests/test_workflows_runtime.py tests/test_workflows_install.py \
             tests/test_workflows_subject.py tests/test_workflows_publication.py \
@@ -224,7 +235,7 @@ jobs:
             tests/test_workflows_children_concurrency.py tests/test_workflows_children_surface.py \
             tests/test_workflows_retention.py \
             tests/test_workflows_triggers.py tests/test_workflows_triggers_surface.py \
-            tests/test_workflows_triggers_concurrency.py \
+            tests/test_workflows_triggers_concurrency.py tests/test_workflows_schedule_concurrency.py \
             tests/test_workflows_watches.py tests/test_workflows_watch_concurrency.py \
             'tests/test_composed_workflows.py::test_composed_workflows[posts]' \
             'tests/test_composed_workflows.py::test_composed_workflows[messaging]' \
@@ -238,8 +249,15 @@ jobs:
             tests/test_extraction_models.py::test_competing_revision_requests_allocate_exactly_one_successor \
             tests/test_extraction_models.py::test_retention_waits_for_a_held_file_and_refuses_its_committed_change \
             tests/test_decisions_lifecycle.py tests/test_decisions_concurrency.py \
+            tests/test_checklists.py tests/test_calendar_concurrency.py \
+            tests/test_calendar_ics.py::test_two_purges_racing_on_a_shared_credential_retire_it_exactly_once \
+            tests/test_parties_addressbook_upgrade.py::test_the_address_book_template_upgrades_in_one_postgresql_migration \
             tests/test_agent_sessions.py tests/test_agent_sessions_concurrency.py \
             tests/test_integrate_discovery_concurrency.py \
+            tests/test_integrate_jwt_bearer.py::test_concurrent_mints_serialize_across_processes_on_postgresql \
+            tests/test_integrate_oauth_accounts.py::test_concurrent_attaches_bind_one_account_on_postgresql \
+            tests/test_integrate_oauth_accounts.py::test_racing_first_connects_keep_the_refresh_token_on_postgresql \
+            tests/test_integrate_oauth_accounts.py::test_legacy_adoption_racing_an_attach_binds_without_deadlock_on_postgresql \
             tests/test_framework_integration.py \
             tests/test_base_row_lock.py \
             tests/test_connections.py::test_ensure_fresh_serializes_two_processes_on_postgresql \
@@ -260,7 +278,7 @@ jobs:
             tests/test_knowledge_graph_pgvector_postgres.py tests/test_knowledge_graph_pgvector_resolution.py \
             tests/test_knowledge_access_campaign.py::test_record_note_and_binding_keep_locks_replay_and_rollback \
             tests/test_messaging.py tests/test_messaging_concurrency_campaign.py \
-            tests/test_messaging_channel_concurrency.py \
+            tests/test_messaging_channel_concurrency.py tests/test_messaging_reaction_concurrency.py \
             tests/test_messaging_inbox_read.py tests/test_inbox_explorer.py tests/test_inbox_part_reads.py \
             tests/test_group_rows.py \
             tests/test_optimistic_lock.py \
@@ -273,12 +291,17 @@ jobs:
             tests/test_storage_access_campaign.py::test_download_urls_are_window_aligned_and_expire_from_the_window_start \
             tests/test_storage_access_campaign.py::test_download_url_changes_for_new_content_inside_one_window \
             tests/test_system_queryset.py::test_system_queryset_emits_for_update_on_postgresql \
+            tests/test_tags_categories_concurrency.py \
             tests/test_task_locks.py \
             tests/test_transitions.py::test_a_guarded_transition_holds_its_row_lock_until_commit \
             tests/test_task_rank_allocation.py tests/test_projects_record_tasks.py \
             tests/test_projects_access_projections.py tests/test_timeline_concurrency.py \
             tests/test_work_intake_lock_campaign.py tests/test_work_stage_lock_campaign.py \
             tests/test_workflows_integrate_cycle.py tests/test_workflows_integrate_steps.py
+          fi
+          uv run --locked python -m pytest -q -n 4 --dist loadfile --nomigrations --durations=25 --junitxml=postgresql-contracts.xml \
+            --splits ${{ strategy.job-total }} --group ${{ matrix.group }} --splitting-algorithm least_duration \
+            --durations-path .test_durations_postgres "$@"
           uv run --locked python -c 'import xml.etree.ElementTree as ET; root = ET.parse("postgresql-contracts.xml").getroot(); cases = list(root.iter("testcase")); skipped = sum(any(child.tag.rsplit("}", 1)[-1] == "skipped" for child in case) for case in cases); assert cases and skipped == 0, f"expected executed PostgreSQL tests, got tests={len(cases)}, skipped={skipped}"; print(f"PostgreSQL tests={len(cases)}, skipped={skipped}")'
 
   # One verdict under the check name pull requests and callers already know:
@@ -293,7 +316,7 @@ jobs:
           echo "quality=${{ needs.python-quality.result }} shards=${{ needs.uv-shard.result }} postgres=${{ needs.uv-postgres.result }}"
           test "${{ needs.python-quality.result }}" = success
           test "${{ needs.uv-shard.result }}" = success
-          test "${{ needs.uv-postgres.result }}" = "${{ github.event_name == 'pull_request' && 'skipped' || 'success' }}"
+          test "${{ needs.uv-postgres.result }}" = success
 
   pnpm:
     if: ${{ inputs.pnpm-enabled }}
@@ -323,8 +346,9 @@ jobs:
   # fixture), and run the optional bridge source tests.
   # The consolidated checkout supplies packages, src, examples, and
   # templates. Only the optional full-profile bridges remain external.
-  # Consumer collections span independent PostgreSQL hosts; the first group
-  # also checks lint, types and frontend fragments. The stack job keeps one verdict.
+  # A consumer call runs six groups: the first provisions and smokes the host and
+  # checks lint, types and frontend fragments; the other five split the consumer's
+  # Python collection, each on its own PostgreSQL host. The stack job keeps one verdict.
   stack-shard:
     name: stack ${{ matrix.group }}/${{ strategy.job-total }}
     if: ${{ inputs.stack-enabled }}
@@ -477,7 +501,9 @@ jobs:
           uv run --no-sync python manage.py makemigrations --check --dry-run
           uv run --no-sync python manage.py compose --check
           uv run --no-sync python manage.py schema --check
+      # Only the smoke reads the host database; consumer shards test in pytest-django's own.
       - name: Provision the composed stack
+        if: ${{ matrix.group == 1 }}
         working-directory: stack
         run: |
           uv run --no-sync python manage.py provision
@@ -573,13 +599,13 @@ jobs:
           ], cwd=framework, check=True)
           PY
       - name: Size the PostgreSQL lock table for consumer test schemas
-        if: ${{ inputs.consumer-path != '' }}
+        if: ${{ inputs.consumer-path != '' && matrix.group != 1 }}
         run: |
           docker exec ${{ job.services.postgres.id }} psql -U postgres -d angee -c "ALTER SYSTEM SET max_locks_per_transaction = 256"
           docker restart ${{ job.services.postgres.id }}
           until docker exec ${{ job.services.postgres.id }} pg_isready -U postgres -d angee; do sleep 1; done
       - name: Run the consumer's PostgreSQL test shard
-        if: ${{ inputs.consumer-path != '' }}
+        if: ${{ inputs.consumer-path != '' && matrix.group != 1 }}
         working-directory: stack
         env:
           DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/angee
@@ -620,7 +646,9 @@ jobs:
               "-p", "django", "-p", "angee.base.testing.fixtures", "-p", "angee.provenance.testing.fixtures",
               *(arg for plugin in plugins for arg in ("-p", plugin)),
               "-p", "no:randomly", "-n", "4", "--dist", "worksteal", "-q",
-              "--splits", os.environ["CONSUMER_SPLITS"], "--group", os.environ["CONSUMER_GROUP"],
+              # Group 1 carries the composed checks; the other groups split the collection.
+              "--splits", str(int(os.environ["CONSUMER_SPLITS"]) - 1),
+              "--group", str(int(os.environ["CONSUMER_GROUP"]) - 1),
               "--splitting-algorithm", "least_duration", "--durations=25",
               "-o", "faulthandler_timeout=300",
               *(str(slot / path) for path in paths),
@@ -635,6 +663,9 @@ jobs:
           fi
           pnpm install --frozen-lockfile
           pnpm --config.verify-deps-before-run=false --dir web exec angee-web-codegen --runtime ../runtime --web-root .
+      # The framework's packages job checks its packages hermetically, so the
+      # composition checks fragments only. Each Vitest run sizes its worker pool
+      # to the whole runner, so fragments test one package at a time.
       - name: Typecheck and test all fragments against the composition
         if: ${{ matrix.group == 1 }}
         working-directory: stack
@@ -642,12 +673,12 @@ jobs:
           CONSUMER_PATH: ${{ inputs.consumer-path }}
         run: |
           if [ -n "$CONSUMER_PATH" ]; then
-            pnpm -r --fail-if-no-match --filter "./workspaces/src/$CONSUMER_PATH/src/**" typecheck
-            pnpm -r --fail-if-no-match --filter "./workspaces/src/$CONSUMER_PATH/src/**" test
+            fragments="./workspaces/src/$CONSUMER_PATH/src/**"
           else
-            pnpm -r typecheck
-            pnpm -r test
+            fragments="!./workspaces/src/angee/packages/**"
           fi
+          pnpm -r --fail-if-no-match --filter "$fragments" typecheck
+          pnpm -r --fail-if-no-match --workspace-concurrency=1 --filter "$fragments" test
       - name: Pytest the bridge source contracts
         if: ${{ inputs.addons-profile == 'full' && matrix.group == 1 }}
         working-directory: stack

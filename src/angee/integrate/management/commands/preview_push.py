@@ -19,10 +19,11 @@ class Command(BaseCommand):
     current epoch of every partition the integration ever recorded rather than
     asking the adapter to declare them, since declaring discovers the remote and
     records what it finds; the preview sends no request and writes nothing.
-    Streams record no retirement, so a partition the adapter no longer declares (a
-    removed address book) still previews its unsent local edits, which no push
-    writes. Before resuming an integration paused for a mapping change, every
-    stream the adapter still declares should preview no writes.
+    A retired stream (its container, such as an address book, was removed)
+    previews nothing, since no push writes it; a partition the adapter merely
+    stopped declaring still previews its unsent local edits. Before resuming an
+    integration paused for a mapping change, every stream the adapter still
+    declares should preview no writes.
     """
 
     help = "Show what a push would write for each stream of the given integrations, without writing."

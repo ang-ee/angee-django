@@ -221,8 +221,9 @@ class ProjectSurfaceCampaign(WorkCase):
         with system_context(reason="tests.t3.mapping"):
             self.Milestone.objects.create(project=project, name="Mapped", active_stage=self.stages["Final"])
             other = self.Queue.objects.create(name="Other", key="OTHER", owner=self.manager)
-            for field, value in (("rule_owned", False), ("queue", other)):
-                for method in ("clean", "save"):
+            # A mapping keeps its stage rule-owned through clean and save; the queue is write-once at save.
+            for field, value, methods in (("rule_owned", False, ("clean", "save")), ("queue", other, ("save",))):
+                for method in methods:
                     with self.subTest(field=field, method=method):
                         stage = self.Stage._base_manager.get(pk=self.stages["Final"].pk)
                         setattr(stage, field, value)

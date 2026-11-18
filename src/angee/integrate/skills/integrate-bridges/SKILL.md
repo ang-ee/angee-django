@@ -95,9 +95,15 @@ source addon contributes one adapter class, its registry key and its tests. Refe
    ```
 
    `streams()` declares each partition once with its `StreamDefinition` knobs (`kind`, `direction`, `cursor`,
-   `reconcile_interval`, `absence_threshold`, `tombstone_retention`, `snapshot`, `authoritative`, `mapping_version`, `config`;
-   `StreamDefinition` in `src/angee/integrate/states.py`). `extract` returns one page and the cursor that covers it; the
-   driver commits both. If the source is a mutable replica → return `RecordChange` rows and implement
+   `reconcile_interval`, `absence_threshold`, `tombstone_retention`, `snapshot`, `authoritative`, `mapping_version`, `config`,
+   `container`; `StreamDefinition` in `src/angee/integrate/states.py`). If a partition is itself a record of another
+   stream (an address book, a calendar) → declare that parent stream with `holds_containers=True`, create the
+   container row in its `apply_record`,
+   report a complete listing's misses as `StreamPage.absent`, and declare one child per
+   `RecordLink.objects.containers_of(bridge, key)` link with `container=<link>` and `partition=<link external key>`
+   (`DirectoryBackend.streams` in `src/angee/parties/backends.py`); the driver pauses the child of an unavailable
+   container and retires the child of one that stops observing. `extract` returns one page and the cursor that
+   covers it; the driver commits both. If the source is a mutable replica → return `RecordChange` rows and implement
    `enumerate_keys`, `read_keys` (set `supports_identity_reads = True`) and, for two-way, `local_changes` +
    `write_back` (`src/angee/integrate/impl.py`). If the capability base already applies →
    inherit `apply_record`; otherwise apply through the domain's idempotent ingest verb and return
@@ -105,10 +111,17 @@ source addon contributes one adapter class, its registry key and its tests. Refe
    [Integration and worker contracts](../../../../../docs/backend/guidelines.md#integration-and-worker-contracts): the cursor commits with the records it
    covers, the driver alone promotes links, adapters never persist cursors or credentials.
 
-4. **Credentials and OAuth.** Read material through the row: `self.bridge.fresh_credential()`, then
-   `credential.auth_headers()` or the handler's secret (`src/angee/integrate/models.py`); kinds are
-   `CredentialKind` handlers (`src/angee/integrate/credentials.py`). If the vendor needs an OAuth preset →
-   subclass `OAuthProviderType` with a unique `key` and contribute
+4. **Credentials and OAuth.** Read material through the row, and reload the credential per unit of work
+   (`Integration.fresh_credential()`): a credential instance answers from the snapshot it was loaded with, so a
+   revocation or re-entered key reaches only a reloaded instance. Then call
+   `credential.auth_headers()`, the kind's own authorization (`src/angee/integrate/models.py`); a vendor SDK that
+   takes a raw token reads `credential.secret_value()`, which a key-only kind leaves empty. A
+   minting kind (`jwt_bearer`) needs the backend's scopes: `credential.auth_headers(scopes=...)`, called in
+   autocommit. Kinds are `CredentialKind` handlers (`src/angee/integrate/credentials.py`). If the vendor already
+   has a client (Google's `google` row from `src/angee/integrate_google/providers.py`) → set `oauth_client` to its
+   slug and declare the adapter's extra scopes in `oauth_scopes` (`OAuthConnectIntent` in
+   `src/angee/integrate/impl.py`). If the vendor needs an OAuth preset → subclass `OAuthProviderType` with a
+   unique `key` and contribute
    `"ANGEE_OAUTH_PROVIDER_TYPE_CLASSES.<key>"` (`src/angee/integrate/README.md`, `RefiningProvider` and `ContributedProvider` in `tests/integrate_fixtures.py`). If the
    connection must locate a remote resource first → `requires_connection_discovery = True` with
    `discover_connection`/`apply_discovery` (`IntegrationImpl` in `src/angee/integrate/impl.py`, `src/angee/integrate/README.md`).
@@ -150,6 +163,7 @@ source addon contributes one adapter class, its registry key and its tests. Refe
 ## Do not
 
 - A private cursor table, checkpoint column or `last_synced_at` on the bridge: `SyncStream.cursor` and its generation own position ([Integration and worker contracts](../../../../../docs/backend/guidelines.md#integration-and-worker-contracts) "The cursor commits with the records it covers").
+- A container's remote id in a column (`source_href`, `external_ref`) or a container row created in `streams()`: the parent stream's `RecordLink` owns its identity and its apply path creates the row; the child names it as `container` (`BridgeImpl.streams` in `src/angee/integrate/impl.py`, the container paragraph of `src/angee/integrate/README.md`).
 - Persisting the cursor, promoting a link or writing credential material inside an adapter: the driver and credential manager own those (`BridgeImpl.apply_record` in `src/angee/integrate/impl.py`, `src/angee/integrate/README.md`).
 - Choosing a winner on divergent edits or a remote tombstone against a local edit: conflicts await explicit resolution ([Integration and worker contracts](../../../../../docs/backend/guidelines.md#integration-and-worker-contracts) "Compare both mapped sides with their pinned applied base").
 - Running `extract`/`enumerate_keys` inside an enclosing transaction, or network IO inside `prepare_page`/`apply_record`: extraction runs outside the page transaction and may read the row (the IMAP adapter reloads credentials per page through `fresh_credential`, `ImapChannelBackend._load_credentials` in `src/angee/messaging_integrate_imap/backend.py`, `src/angee/integrate/models.py`); the driver refuses extraction in an atomic block (`advance_stream` in `src/angee/integrate/streams.py`) and application does database work only (`src/angee/integrate/impl.py`; [Integration and worker contracts](../../../../../docs/backend/guidelines.md#integration-and-worker-contracts) "The cursor commits with the records it covers").

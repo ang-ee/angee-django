@@ -1,0 +1,11 @@
+{
+  "dynamicI18nKeyFamilies": [
+    {
+      "namespace": "storage-integrate",
+      "owner": "ConnectMountAction i18nPrefix",
+      "prefix": "",
+      "values": ["iphone.mount.connect"],
+      "suffixes": [".button", ".title", ".description", ".namePlaceholder", ".error"]
+    }
+  ]
+}

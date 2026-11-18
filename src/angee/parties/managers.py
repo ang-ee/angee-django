@@ -48,7 +48,7 @@ from angee.base.pagination import clamp_page_size
 from angee.base.permissions import actor_user_id, reader_queryset
 from angee.base.querysets import MergeableQuerySet, by_key
 from angee.base.serialization import canonical_json
-from angee.parties.backends import AvatarReport, ParsedAddress, ParsedAddressbook, ParsedContact, ParsedPhoto
+from angee.parties.backends import AvatarReport, ParsedAddress, ParsedContact, ParsedPhoto
 from angee.parties.domains import GENERIC_EMAIL_DOMAINS
 from angee.provenance.contrib.angee.managers import AngeeHistoryManager
 from angee.provenance.contrib.angee.querysets import AngeeHistoryQuerySet
@@ -68,7 +68,7 @@ if TYPE_CHECKING:
     from angee.integrate.models import RecordLink
     from angee.parties.connections import ParsedConnection
     from angee.parties.mixins import PartyStatementMixin
-    from angee.parties.models import Circle, Directory, Folder, Handle, Party, Person, Relationship
+    from angee.parties.models import Circle, Folder, Handle, Party, Person, Relationship
 
 logger = logging.getLogger(__name__)
 
@@ -445,12 +445,31 @@ class HandleManager[HandleT: Handle](_HandleManagerBase[HandleT]):
         handle shares this rule.
         """
 
+        if not external_id:
+            return self.find_identities([(platform, value)]).get((platform, value))
         handles = self.filter(platform=platform)
         handle = handles.filter(external_id=external_id).first() if external_id else None
         if handle is None or handle.value != value:
             owner = handles.filter(value=value).exclude(pk=(handle.pk if handle is not None else None)).first()
             handle = owner or handle
         return handle.canonical() if handle is not None else None
+
+    def find_identities(self, identities: Iterable[tuple[str, str]]) -> dict[tuple[str, str], Any]:
+        """Return the handle each ``(platform, value)`` lands on, for the identities that have one.
+
+        :meth:`find_identity`'s rule without an external id, for many identities in
+        one read: the row owning ``(platform, value)``, resolved to its merge
+        survivor (``canonical``, a read only for a merged row). Read-only, for a
+        caller that resolves a whole batch (a sync page's attendees) at once.
+        """
+
+        wanted = set(identities)
+        if not wanted:
+            return {}
+        rows = self.filter(value__in=sorted({value for _platform, value in wanted}))
+        return {
+            (row.platform, row.value): row.canonical() for row in rows if (row.platform, row.value) in wanted
+        }
 
     @staticmethod
     def _refresh(handle: Any, fields: dict[str, Any]) -> None:
@@ -1523,7 +1542,8 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
             if left is None or right is None:
                 raise ValidationError({"pair": "Same_as pair references a missing party."})
             if action == "keep_separate":
-                self.model.same_as.for_pair(left.with_actor(actor), right).with_actor(actor).dismiss(aspect="same_as")
+                pair = self.model.same_as.for_pair(left.with_actor(actor), right).with_actor(actor)
+                pair.dismiss_statement(aspect="same_as")
                 return "dismissed"
             into, source = (
                 (left, right) if survivor == "left" else (right, left)
@@ -1534,7 +1554,7 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
             into.merge(records=[source.public_id])
             return "already_merged" if already_merged else "merged"
 
-    def for_user(self, user: Any) -> Any:
+    def for_user(self, user: Any, *, adopt: Any = None) -> Any:
         """Return the :class:`Person` linked to ``user``, get-or-created on the ``user`` O2O.
 
         The single owner of the one-Person-per-user invariant: every identity-link
@@ -1542,25 +1562,49 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
         routes through here, so a user never grows two person rows. Targets the
         ``Person`` model explicitly, runs within the caller's ``system_context``, and
         stamps ``created_by``, so the user also owns their Person.
+
+        ``adopt`` is an existing Person a trusted ingress resolved as this user
+        (an imported contact, carried by IAM's person event): it becomes the user's
+        Person instead of a new row, keeping its identity and statements, and its
+        ownership passes to the account, as a Person created here is owned by its
+        user. A Person already linked to another user, or a user already linked to
+        another Person, refuses rather than moving an identity.
         """
 
         person_model = apps.get_model("parties", "Person")
-        person, _created = person_model.objects.get_or_create(
-            user=user,
-            defaults={"display_name": _user_display_name(user), "created_by_id": user.pk},
-        )
-        return person
+        if adopt is None:
+            person, _created = person_model.objects.get_or_create(
+                user=user,
+                defaults={"display_name": _user_display_name(user), "created_by_id": user.pk},
+            )
+            return person
+        with transaction.atomic():
+            person = person_model._base_manager.filter(pk=adopt.pk).lock_if_supported().get()
+            linked = person_model._base_manager.filter(user=user).exclude(pk=person.pk).exists()
+            if linked or person.user_id not in (None, user.pk):
+                raise ValidationError({"user": "This person and this account already have other identities."})
+            if person.user_id is None:
+                person.user, person.owner = user, user
+                person.save(update_fields=["user", "owner", "updated_at"])
+            return person
 
     def follow_user_name(self, user: Any) -> None:
         """Rename ``user``'s linked :class:`Person` after the account, as :meth:`for_user` names it.
 
         Runs within the caller's ``system_context``; a person already carrying
-        the account's name is left untouched.
+        the account's name is left untouched, and so is one whose name a source
+        states (an adopted contact): the ``identity`` aspect's survivorship owns it.
+        A person's own statement of their name is no source: it follows the account.
         """
 
         name = _user_display_name(user)
         person_model = apps.get_model("parties", "Person")
-        for person in person_model.objects.filter(user=user).exclude(display_name=name):
+        party_model = apps.get_model("parties", "Party")
+        stated = party_model.statements.model._base_manager.filter(
+            aspect="identity", applied=True, superseded__isnull=True
+        ).exclude(source_kind=SourceKind.PERSON)
+        people = person_model.objects.filter(user=user).exclude(display_name=name)
+        for person in people.exclude(pk__in=stated.values("subject_id")):
             person.display_name = name
             person.save(update_fields=["display_name", "updated_at"])
 
@@ -1959,7 +2003,7 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
         self,
         parsed: ParsedContact,
         *,
-        folder: Any,
+        stream: Any,
         created_by_id: Any,
         link: Any,
         target: Person | None = None,
@@ -1967,23 +2011,33 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
         """Assert one link's contact facts; preserve other sources and person preferences.
 
         The link owns stable source identity, transport version and lossless bytes.
-        Addresses are matched by their normalized identity (``AddressManager.identity_key``),
-        repeated equal addresses included, so a respelled card address updates its row
-        and keeps what the card does not carry; removed members withdraw only this
-        source's statements instead of deleting rows.
+        ``stream`` is the link's contacts stream as the page holds it, so its
+        container (the address book, whose folder belongs to the same directory)
+        and integration resolve once per page. Addresses are matched by their
+        normalized identity (``AddressManager.identity_key``), repeated equal
+        addresses included, so a respelled card address updates its row and keeps
+        what the card does not carry; removed members withdraw only this source's
+        statements instead of deleting rows.
         """
         if not parsed.uid:
             return None
-        if folder.directory_id is None or link.stream.integration_id != folder.directory_id:
-            raise ValidationError("Contact ingestion requires its directory's observed link.")
-        if link.stream.partition != folder.source_href or link.external_key != parsed.uid:
+        container = stream.container if stream.container_id is not None else None
+        folder = container.target if container is not None else None
+        folders = apps.get_model("parties", "Folder")
+        if (
+            link.stream_id != stream.pk
+            or not isinstance(folder, folders)
+            or folder.directory_id != stream.integration_id
+        ):
+            raise ValidationError("Contact ingestion requires a link of its directory's address-book stream.")
+        if link.external_key != parsed.uid:
             raise ValidationError("The contact does not match the observed link identity.")
         parsed = self.prepare_contact(parsed)
         people = apps.get_model("parties", "Person").objects
         handles = apps.get_model("parties", "Handle").objects
         addresses = apps.get_model("parties", "Address")
         relationships = apps.get_model("parties", "Relationship")
-        source = folder.directory.integration_ptr
+        source = stream.integration
         with transaction.atomic():
             linked_person = self.contact_person(link)
             target = target or linked_person
@@ -2191,14 +2245,25 @@ class RelationshipManager[RelationshipT: Relationship](StatementSubjectManager[R
 
 
 class FolderManager[FolderT: Folder](AngeeHistoryManager[FolderT]):
-    """Own idempotent address-book folder persistence."""
+    """Own address-book folder ingest and the name its source states."""
 
-    def sync_addressbook(self, directory: Directory, book: ParsedAddressbook) -> FolderT:
-        """Mirror one discovered address book as a folder of ``directory``, owned by its owner."""
+    def ingest_addressbook(self, link: Any, *, name: str) -> FolderT:
+        """State an address book's name on the folder its link targets, creating it first.
 
-        folder, _ = self.update_or_create(
-            directory_id=directory.pk,
-            source_href=book.href,
-            defaults={"name": book.name, "created_by_id": directory.owner_id},
-        )
-        return folder
+        ``link`` is the address book's identity in its directory's ``addressbooks``
+        stream. A new folder belongs to that directory and its owner; the link is
+        bound before the statement so the directory is admitted to state it.
+        Survivorship applies the name, so a person's rename keeps outranking it.
+        A name longer than the folder's is truncated, never refused. Database
+        work only, inside the stream's page transaction.
+        """
+
+        name = name[: self.model._meta.get_field("name").max_length]
+        integration = link.stream.integration
+        folder = link.target if isinstance(link.target, self.model) else None
+        with transaction.atomic():
+            if folder is None:
+                folder = self.create(name=name, directory_id=integration.pk, created_by_id=integration.owner_id)
+                apps.get_model("integrate", "RecordLink").objects.bind_target(link, folder)
+            folder.statements.set(aspect="identity", values={"name": name}, asserted_by=integration, link=link)
+            return folder

@@ -10,6 +10,740 @@ live in code docstrings.
 
 ## Unreleased — shared addon contracts, native embeddings and graph retrieval
 
+- A change to `ANGEE_UI` alone now recomposes. `angee.web` renders it into
+  `runtime/web/manifest.json` but never declared it a compiler input, so
+  `compose --if-stale`, the stack's compose job, found the receipt current and
+  kept the old deployment layer while `compose --check` reported it stale. The
+  web autoconfig appends `ANGEE_UI` to `COMPOSE_FINGERPRINT_SETTINGS`. Like
+  every structural input, `ANGEE_UI` is authored YAML: a deployment that set it
+  through `ANGEE_UI` or `YAMLCONF_ANGEE_UI` in the environment is refused and
+  moves it to its `settings.yaml`. GraphQL had the same gap for the SDL: its
+  autoconfig now appends `STRAWBERRY_DJANGO` and `ANGEE_GRAPHQL_RESOURCE_FILTERS`,
+  so a host override of either alone recomposes, and neither comes from the
+  environment.
+
+- The sign-in card's "or use password" divider shows only beside a sign-in method
+  that renders. A contributed method that renders nothing, such as the OIDC
+  method with no configured connection, no longer leaves an orphan divider above
+  the password form.
+
+- The Django images run as the owner of the mounted project, so a Docker-mode
+  stack works on a Linux host whose stack root does not belong to uid 1000. The
+  entrypoint gives its `angee` user the project's uid and gid before dropping
+  privileges, as the operator image already does; a root-owned project keeps the
+  image's own user. Before, `py-sync` failed with `Permission denied` creating
+  `caches/uv`, and runtime files were left owned by uid 1000.
+
+- A Docker-mode framework stack (`stacks/dev` with `runtime_mode: docker`,
+  `stacks/staging`) installs its JS dependencies with the framework's pnpm. The
+  stack root's `package.json` now declares `packageManager: pnpm@11.1.3`, the
+  framework's own. Without it Corepack in the `deps` container downloaded the
+  latest pnpm, and pnpm 12 refused the framework's patched dependencies
+  (`ERR_PNPM_INVALID_PATCH` on `nuqs-2.10.1.patch`). An existing stack adds the
+  line to its root `package.json`, or re-renders with `stack update --template`.
+
+- A theme or branding fragment owns the sign-in presentation through
+  `auth.login#hero`, a framework container with one child per host. Installing
+  the fragment is enough: `LoginPage` renders the hero on `/login` and
+  `/sign-in-link`, so a host keeps the template's `main.tsx` that mounts
+  `IamLoginPage`, and a rendered host needs no re-render or new answer. The
+  fragment declares:
+
+  ```tsx
+  containers: {
+    "auth.login#hero": {
+      "theme.acme.login-hero": {
+        content: { render: AcmeLoginHero, presentation: "full-bleed", backgroundImageUrl: acmeBackdropUrl },
+      },
+    },
+  },
+  ```
+
+  An explicit `hero` prop still wins. The hero renders at every width, stacked
+  above the card on small screens; it picks its own responsive assets through CSS
+  or media queries, with no viewport hint from the page. `presentation:
+  "full-bleed"` (also a `LoginPage` prop) puts the backdrop and the floating card
+  behind any hero, so a branded host reaches the layout that only the unbranded
+  framework hero had. A host's hero is no longer hidden below `lg`. A contributed
+  hero brings its own `backgroundImageUrl`; the page's prop serves only the
+  page's own hero, so IAM's rotating backdrops stay with the framework hero. Two
+  installed contributors fail at boot; keep one by `remove: true` on the other
+  from the deployment's `ANGEE_UI.containers`.
+
+  **Host upgrade:** a host that hand-edited `main.tsx` to mount its own branded
+  page restores the template's `host-auth` route on `IamLoginPage` (revert the
+  edit, or `stack update --template`), drops the fragment's package from its own
+  `package.json` and relocks at the stack root; the fragment declares the hero
+  as above. A kept hand edit still works, since its explicit `hero` wins.
+
+- The `auth.login` route's declaration is the one spelling of the sign-in URL.
+  `createApp` reads its path for the auth gates, the auth provider and
+  `useLoginPath`, and its `loginPath` input is removed: a host that passed it
+  drops it and declares `auth.login` at that path. `DEFAULT_LOGIN_PATH` remains
+  only for a runtime that composes no `auth.login` route.
+
+- A fresh installation no longer offers "Continue with Google Gemini" on the
+  sign-in page. `iam_integrate_oidc`'s install seed gave Google's public Gemini
+  CLI client `login_enabled: true`, and that client ships with a published client
+  id, so every new database showed it. The seed now contributes the client's OIDC
+  metadata only; signing in through it is an operator's switch on the OAuth
+  client. An installation that already loaded the row keeps its current value:
+  turn it off on the client if it was never chosen.
+
+- A host whose name opens one app still reaches the full console. An
+  `ANGEE_UI.shell.apps` entry without a `rail` shows every root, with its own
+  brand and theme else the shell's, so `apps: {console: {}}` makes
+  `?app=console` the full menu on any host. `ANGEE_UI.shell.app` names the app
+  a page opens when neither `?app=` nor its `hosts` entry selects one, so a
+  product's settings can open its app without knowing the deployment's host
+  names. Both are checked at boot like `hosts`.
+
+- `stacks/staging` renders a remote, public, container host in one command from
+  repositories, with no project repository carried to the machine:
+  `angee init <dir> -t staging --repository <repo> --extra-source <repo>`. It is
+  `stacks/dev`'s Docker mode with production serving fixed, no Storybook or
+  Playwright, a first administrator and a `makemigrations` job that authors the
+  host's own migration history, so its data is disposable. A repository given by
+  SSH URL is fetched with its own deploy key, the required secret
+  `deploy-key-<name>`; `settings_file` names a repository's settings file, loaded
+  as the final `YAMLCONF_CONFFILE` layer. It needs angee 0.28.0 or later.
+  [Templates](templates/README.md#deploy-a-staging-host-in-one-command).
+- Stack templates read three wrapper-set flags instead of the flavor:
+  `bootstrap_admin`, `dev_tools` and `author_history`; `template.active` comes
+  from the wrapper's `stack_template`. `stacks/dev` and `stacks/local` render the
+  same manifests as before, with two exceptions that apply to both. `py-sync`
+  authors a missing `uv.lock` before its locked sync, so a freshly rendered host
+  no longer stops there. A production render behind a public `ingress_domain`
+  sets `YAMLCONF_DEBUG` to false and `YAMLCONF_ALLOWED_HOSTS` to the domain, its
+  aliases and the compose-internal names; it served the project's `DEBUG: true`
+  and wildcard hosts before.
+- `projects/web` takes `repositories` (a requirement and an editable source per
+  repository slot, in a framework workspace only) and `roots` (root apps appended
+  to `INSTALLED_APPS`). The `src` workspace template declares
+  `_angee.source_slot`, so the operator cuts one slot per stack source marked
+  `slot: true`.
+
+- `storage/file#write_granted` holds only the fragments' record arms; `write`
+  derives the drive, folder, inherited-owner, draft-owner and admin arms itself,
+  and `owner_writer` is `inherited_owner + draft_owner + (owner & write_granted)`.
+  Every `read`, `write`, `share`, `delete` and `transfer` decision is unchanged;
+  a file's read statement no longer compiles its folder's write, which `delete`
+  reached through `owner_writer`. Fragments contribute `write_granted` arms as
+  before. `write_granted` and `owner_writer` are composition terms: a caller that
+  checked either directly checks `write`, `delete` or `transfer`. Operators re-sync
+  the permission schema: storage revision 14.
+
+- An `angee.integrate` stream names its container: `StreamDefinition.container`,
+  persisted as `SyncStream.container` (a `PROTECT` key to `integrate.RecordLink`,
+  `related_name="child_streams"`), is the parent stream's link whose record
+  holds the partition; the partition is its external key. The container is
+  immutable on the model; a stream declared before containers existed adopts it
+  once. The parent declares `holds_containers` (`SyncStream.holds_containers`).
+  `SyncStream.partition` widens to 512 characters: a child's partition is its
+  container's external key, so both take `integrate.states.EXTERNAL_KEY_LENGTH`;
+  the driver refuses a longer replica identity once, as a coalesced stream
+  failure, and the page goes on.
+  `RecordLinkQuerySet.observing_rule()` and `live_container_rule()` (observing,
+  bound to a target, no absence counted) are the one rule for joined reads,
+  `observing()`, `live_containers()` and `containers_of(bridge, key)` apply it.
+  A container missing from a complete listing (`StreamPage.absent`) counts
+  against the parent's absence threshold: an unavailable container pauses its
+  child, which is neither declared nor retired; a container that stops observing
+  (tombstoned or withdrawn) retires it. Retirement flips the child to
+  `StreamState.RETIRED` inside the parent's page
+  (`SyncStreamManager.retire_children`); a bounded, resumable pass over
+  `reconcile_state` then tombstones the child's links and closes their open
+  failures (`RecordLinkManager.mark_absent(..., confirmed=True)`) with
+  `on_absent`, nothing is deleted, and the pass pauses while the container
+  observes again (reopening drops it). `mark_absent` now returns the links whose
+  status changed.
+  `bump_generation` reopens a retired generation only while its container is
+  live, and `reset_stream` reports a retired one exhausted. `sync_bridge` drains
+  every declared partition in its first wave, a container-held partition only
+  after the stream holding its container applied its pages and sweep (in holder
+  depth order, or concurrently once that worker finished), runs the holders'
+  retirement passes last, declares again only after a container-holding stream
+  gained a live container, and opens no partition and starts no wave after its
+  deadline. A cyclic or self-held container declaration fails fast. New
+  `RecordLinkQuerySet.observing()` and `SyncStreamQuerySet.latest_generations()`.
+  A page of a superseded generation is refused as a "superseded stream generation".
+  `ImmutableFieldsMixin` checks only the immutable fields a partial save's
+  `update_fields` writes.
+- `angee.parties` address books are records of the directory's `addressbooks`
+  stream: each book's link targets its `Folder` (`FolderManager.ingest_addressbook`,
+  which truncates an over-long name) and holds its contacts stream; both
+  declarations live on `DirectoryBackend` (`addressbooks_stream`,
+  `contacts_stream`). The folder's name is an `identity` statement, so a person's
+  rename outranks a remote one; `Folder` composes statements and history, and
+  `parties/folder#write_statements` admits the directory (parties revision 20).
+  A book missing from one listing pauses its contacts; once its absence is
+  confirmed it is tombstoned, its statements are withdrawn (as a read tombstone
+  withdraws them) and its contacts stream retires. An empty listing confirms
+  nothing. CardDAV discovery raises when the server refuses the principal or
+  home-set request instead of falling back to the server URL.
+  Removed: `Folder.source_href` and `uq_folder_directory_source`,
+  `FolderManager.sync_addressbook`, `Directory.addressbook_stream`, GraphQL
+  `ContactFolderType.source_href`, and the `folder` argument of
+  `PartyManager.ingest_contact`, which now takes the page's `stream` and finds
+  its folder through that stream's container. `StatedRecordMixin` moves from
+  `angee.projects.models` (which still imports it) to `angee.integrate.mixins`,
+  beside `LinkedRecordMixin`, the `record_links` relation `Party` composes;
+  `Folder` composes `StatedRecordMixin`. A source backend implements `discover`,
+  `extract_contacts` and `read_contacts`.
+  Upgrade: a host runs `makemigrations integrate` for the `container` and
+  `holds_containers` columns and the widened `partition`, copies the migration template
+  `src/angee/parties/compose_migrations/parties/addressbook_links.py` into
+  `runtime/parties/migrations/` and pins its placeholder dependencies to its own
+  leaves, then runs `makemigrations` for the folder's history and statement
+  tables, `migrate` and `rebac sync`. Every folder, contact and link is kept and
+  nothing is downloaded again. A folder whose href is longer than a link's
+  external key never synced; the template skips it and logs a warning. The first
+  sync states each listed book's name on its folder, so a folder renamed after
+  the last sync before the upgrade takes the directory's name. A book removed
+  before the upgrade misses its first listing then: its contacts pause in that
+  sync, unopened, and retire on the sync that confirms its absence (the second,
+  at the default threshold of two). The template reverses by restoring each
+  folder's `source_href`. Upgrade cutoff: the template ships through the 3.x
+  releases and is removed in 4.0; a host upgrading from an earlier release
+  applies it through a 3.x release first.
+
+- A resource row naming a `to_field` foreign key by xref stores the named row's
+  target column, not its primary key: `AngeeResource.get_fk_widget` binds the xref
+  widget's native `field` to the relation's `target_field`, so a seed can set
+  `projects.Task.activity_type` (keyed by `ActivityType.key`), which previously
+  failed validation, and export renders the key back. An adoption condition
+  compares a related row by the same column.
+
+- Time-of-day fields can be exposed as resources. Resource metadata accepts the
+  GraphQL `Time` scalar, which it previously refused at schema build, and a Django
+  `TimeField` defaults to the new `time` widget. It filters with Date's operators
+  (`exact`, `ne`, `gt`, `gte`, `lt`, `lte`, `inList`, `notInList`, `isNull`), sorts,
+  and groups by value without calendar extractions. On the web, `Time` is a
+  generated `string` (`HH:MM[:SS]`, no zone); `@angee/ui` registers the `time`
+  widget, which edits through the native time control and reads and lists through
+  `formatTime`. `formatTime` and `formatTimeInput` accept a `Time` value and read
+  it as written, an empty time drafts as `null`, the filter editor offers a `time`
+  field type, and the client row model compares clocks as SQL does (`09:30` equals
+  `09:30:00`).
+
+- Storage mounts read Google Drive: `angee.storage_integrate_google_drive` mounts
+  My Drive, a folder or a shared drive, in place (read-only) or copied into a chosen
+  writable backend, reading with one of the connecting user's Google accounts that
+  granted `drive.readonly`; Google-native documents and shortcuts are skipped and
+  counted. One `connect_mount(backend_class, name, source_root, mode, credential_id,
+  copy_backend_id)` mutation replaces `connect_local_folder` and the per-backend
+  connect mutations, and `mount_backend(backend_class)` tells the dialog what a
+  backend asks for. A mount's root is its backend's source token
+  (`MountBackend.source_root`), `MountEntry.storage_key` keeps a file's row across
+  renames and moves, `Backend.writable` and `ExternalStorageBackend` own read-only
+  serving, and a refused download answers 404, 403 or 502 instead of 500.
+- Integration follow-ups across the OAuth, credential and mount owners:
+  - every token request (the authorization-code and refresh grants, the JSON shim and
+    the JWT bearer assertion grant, now `angee.integrate.oauth.client.jwt_bearer_grant`)
+    maps its failures once and keeps the response's real HTTP status, so a JSON 429 on
+    an OAuth refresh is transient instead of failing the credential; a token endpoint
+    the address policy refuses is the permanent `endpoint_not_allowed` refusal;
+  - `CredentialKindHandler.carry_forward` decides what a new grant keeps of a
+    credential's stored material (the OAuth kind keeps its refresh token);
+  - a code exchange whose response omits `scope` granted the requested scopes
+    (RFC 6749 §5.1), so the credential records them;
+  - `connect_account_start(scopes:)` requests a consumer's scopes, `@angee/integrate`
+    exports `ConnectAccountButton` and `useConnectAccountStart`, and the Drive account
+    picker connects another account with `drive.readonly`;
+  - `Integration.admit_credential` is asked on every attachment; a Mount admits only
+    an account its backend reads with (`Mount.reads_with`);
+  - `angee.integrate.http.retry_after` is the one `Retry-After` parser (delay-seconds
+    or a future HTTP-date, at most a day); posts, Notion and Google Drive compose it,
+    and posts keeps its one-minute fallback;
+  - the Anthropic, work, uom and WhatsApp migration templates carry named placeholder
+    dependencies and no `applies()`; the Anthropic rehome gains its reverse, `restore`.
+- `angee.calendar` is the framework calendar, moved from arpee's `arp.calendar`
+  and reshaped: a `Calendar` belongs to a `parties.Party` and is the access root
+  of its events, an exception to a recurring event is an override row (`series`,
+  `original_start`), attendees are `parties.Handle` rows with the organizer as a
+  role, calendars share as reader, editor or free/busy, and a `refuse` calendar
+  rejects overlapping busy time. The event form offers the calendars the viewer
+  writes, defaults to the only one, and offers a user with none their own personal
+  calendar (`Calendar.objects.ensure_personal`), never creating one unasked. The
+  [calendar README](src/angee/calendar/README.md) lists what it expresses.
+  `angee.projects_calendar` overlays the viewer's due tasks on the calendar page;
+  projects no longer depends on a calendar.
+  `Recurrence.get_last_occurrence` returns where a series ends, `None` when any
+  rule it holds is open-ended. Recurrence is bounded for every consumer: a `COUNT`
+  over `MAX_OCCURRENCES` (10,000) is invalid and an expansion past it
+  raises `ValidationError` instead of running on (`series_too_long`): a read is
+  re-anchored at its window, like libical's, and a save counts a series from its
+  start to a horizon; a rule is one bare `RRULE`, and one with no
+  occurrence within about 30 years of its start is refused (`never_occurs`);
+  `RecurrenceField(finest_frequency=…)` refuses finer rules (a calendar event
+  repeats at most daily). A calendar read skips a row it cannot expand.
+  A `refuse` calendar judges an event's overlap only from now, over two years
+  and no further than the event ends, a series and a single event alike: an event
+  wholly before now is never judged, and nothing is judged against its past. The
+  check fails closed: a save beside another busy event it cannot expand is
+  refused (`unexpandable`, naming that event) where a read skips it; a free one,
+  or the saved event's own series, is skipped. `angee.integrate.sync` gains the
+  sync's deadline seam, `sync_deadline()` and `sync_deadline_context(deadline)`:
+  the bridge sync sets it once per cycle and every stream driver given a
+  `deadline=` enters it, so an adapter's nested parse or identity read stops by
+  it.
+  **Host upgrade:** the `calendar` app label carries the deleted `arp.calendar`'s
+  migration history and no data moves (clean slate). Each host writes a `calendar`
+  migration (`0003`) that purges the old event, attendee and history rows and the
+  `arp.calendar` resource-ledger rows, then applies the generated schema
+  operations; then run `rebac --skip-checks sync --prune-stale --yes` (calendar
+  revision 3, arp revision 7) and `resources load`. Add `angee.calendar` (and
+  `angee.projects_calendar` where projects is composed) to `INSTALLED_APPS` in
+  place of `arp.calendar`.
+- `angee.calendar` mirrors connected calendars. A `CalendarSource` (an
+  `integrate.Integration` child and a `Bridge`, its protocol selected by
+  `backend_class` from `ANGEE_CALENDAR_SOURCE_BACKEND_CLASSES`) mirrors each remote
+  calendar it serves through its `calendars` stream as a `Calendar` on its owner's
+  person, whose `source` names it and whose name, colour and zone the source states
+  (a person's own edit outranks it); each calendar's events sync through an
+  `events` stream partitioned by its key. A backend declares `writable`: a
+  read-only source's calendar refuses local edits on every save path
+  (`Calendar.is_writable`), and `CalendarQuerySet.local_edits_rule()`
+  (`taking_local_edits()`) is the same decision as a query, so the event form's
+  `writable` calendars and `Calendar.objects.ensure_personal` take only calendars
+  that accept local events. Its owner syncs it (`sync_calendar_source`) and
+  unsubscribes it (`unsubscribe_calendar_source`): the source disconnects at once
+  and the `calendar.purge_source` job deletes its events, archives its calendar and
+  retires its credential. How many sources a user keeps, and how fast they add them,
+  are bounded (`ANGEE_CALENDAR_SOURCES_PER_OWNER`, `ANGEE_CALENDAR_SUBSCRIBE_RATE`).
+  The new `angee.calendar_integrate_ics` addon is the read-only `ics` backend: any
+  signed-in user subscribes to a feed (`webcal://` reads as `https://`), whose
+  address is the source credential's material; it is polled with a conditional GET
+  through integrate's bounded download and parsed by python-icalendar (`VEVENT`,
+  `VTIMEZONE`, `RRULE`, `EXDATE`, `RECURRENCE-ID`). It seeds the `ics` vendor in the
+  master tier.
+  **Host upgrade:** add `angee.calendar_integrate_ics` to `INSTALLED_APPS` beside
+  `angee.calendar` and install its distribution (it requires `icalendar`); write the
+  `calendar` migration with `makemigrations calendar` (`CalendarSource`, a calendar's
+  `source` and `is_archived`, calendar statements and their history, and the event
+  recurrence's daily floor; the ICS addon has no tables); then `migrate`,
+  `rebac --skip-checks sync --prune-stale --yes` (calendar revision 4) and
+  `resources load` (the `ics` vendor).
+- One Google OAuth client per deployment serves every Google feature. The new
+  `angee.integrate_google` addon owns the `google` provider preset and seeds the
+  deployment's blank `google` client and Google's public `gemini` client
+  ([Register the deployment's Google client](docs/howto/google-oauth-client.md)).
+  `iam_integrate_oidc` depends on it and no longer ships `GoogleType` or the demo
+  `google` row; it turns sign-in on for a `google` row the load creates, never for
+  an existing one.
+- A resource entry may declare `create_only` fields: they reach a row only when
+  the load creates it (through any of its entries or an owner verb), never an
+  adopted, existing or re-applied row, and they stay out of the row hash like
+  transition-owned state. Adding it to a shipped entry re-applies that entry's
+  existing rows once.
+  `angee.resources.models.move_seed_ledger` moves seed ledger rows to the addon
+  that now ships them in a data migration; the Anthropic and Gemini steps use it.
+- Consumers declare the scopes they need (`IntegrationImpl.oauth_scopes`).
+  Credentials are keyed by (user, OAuth client, external account), so one user
+  connects several accounts through one client, and an integration stays bound to
+  the account it was connected as (`account_switch_refused`). The integration
+  resource's `account` is no longer updatable: the binding follows the credential,
+  and only ownership transfer releases it, detaching the previous owner's
+  credential and disconnecting the integration in the same transaction. When the
+  provider can be asked for consent again (`OAuthProviderType.authorize_params`),
+  a connect whose grant lacks the refresh token a refreshable client needs restarts
+  asking for it (`consent_required`); one whose grant drops a scope an attached
+  integration uses is refused (`scope_not_granted`). Retired provider keys
+  (`OAuthProviderType.retired`) still load but are not offered for new clients.
+- `integrate.OAuthClient` owns `issuer` and `jwks_uri`, and ID-token verification
+  (with `ANGEE_OIDC_JWKS_TTL` and `pyjwt`) moved into `integrate`; the fake
+  OpenID provider moved to `angee.integrate.testing.oidc`.
+- **Upgrade.** Projects author the schema migration: the two credential constraints
+  replace `uniq_integrate_credential_user_oauth_client`, and `issuer`/`jwks_uri`
+  move to the base model (new columns where the login addon was absent). The
+  reverse migration fails once any user holds two accounts at one client. For the
+  data, copy the migration templates into `runtime/<app_label>/migrations/` and
+  replace their placeholder dependencies with the host's own migrations:
+  - `integrate_google/compose_migrations/integrate/align_google_clients.py` fills the
+    preset's endpoints, catalogue and `include_granted_scopes` on existing
+    `google`-type clients (the demo row included), never replacing client ids,
+    secrets or values an operator set;
+  - `integrate_google/compose_migrations/resources/rehome_gemini_seed.py` moves the
+    `oauth_gemini` seed's ledger row from `integrate` to `integrate_google` (its
+    content is unchanged), so the row is not re-applied;
+  - bridges `posts_integrate_youtube/compose_migrations/integrate/move_youtube_client_to_google.py`,
+    before `align_google_clients` (see its README).
+- **Re-applied seed rows.** On the first provision after upgrading, the
+  `oauth_google` seed adopts an existing `google`/`prod` client and sets its
+  provider type, display name and icon; without the ledger step, the `oauth_gemini`
+  row re-applies its released values. No other OAuth seed row changes.
+
+- `MCPServer.authorization_for(agent)` owns the whole `Authorization` value an MCP
+  server receives, for the in-process transport and the provisioned `.mcp.json`
+  alike. Breaking for consumers and provisioned agents:
+  - the container env var is renamed `ANGEE_MCP_BEARER_<sqid>` →
+    `ANGEE_MCP_AUTHORIZATION_<sqid>` and now carries the whole header value
+    (`Bearer …` or `Basic …`); `.mcp.json` renders `"Authorization": "${VAR}"`;
+  - `Agent.mcp_bearer_env` is renamed `Agent.mcp_authorization_env`, and
+    `MCPServer.config_entry(bearer_env=…)` takes `authorization_env=…`;
+  - `MCPServer.bearer_for` mints only an internal server's per-agent bearer and
+    refuses other placements, which receive `authorization_for`;
+  - an external server sends its credential's own header: a basic-auth credential
+    sends `Basic`, and a static token or OAuth sends `Bearer` (refreshed first);
+    before, every kind's secret was sent as `Bearer`;
+  - MCP credential kinds are restricted, and `MCPServer.clean` enforces it at save.
+    External servers take a static token, OAuth or basic auth. An internal server
+    takes only an active static token of at least 32 characters (stripped) that no
+    other server, agent or integration references; an external server may not hold an
+    internal key;
+  - the internal HMAC now binds the server's sqid, an empty or weak key mints and
+    verifies nothing (no `<sqid>.<HMAC("", sqid)>` forgery), and revoking the key cuts
+    every agent bearer off.
+
+  Reprovision every agent with MCP servers. Reprovision now re-renders the
+  workspace's `.mcp.json` (`OperatorDaemon.update_workspace`, `PATCH /workspaces/{name}`)
+  and refuses a locally modified one rather than overwriting it. The demo internal
+  server's key is generated at load by the `agents.mcpserverkey` resource kind; the
+  committed `demo-mcp-bearer-token` credential row is gone (an existing database keeps it
+  orphaned until deleted).
+- `integrate` gains the `jwt_bearer` credential kind: a pasted provider key file (a
+  Google service-account key is one accepted vocabulary) minting per-scope access
+  tokens through the RFC 7523 JWT bearer grant, via `Credential.auth_headers(scopes=…)`
+  or `Credential.scoped_access_token(scopes)`. `CredentialKindHandler` gains `clean`,
+  `probe`, `mint_access_token` and `records_failure`. A `jwt_bearer` credential's
+  `secret_value()` is empty, so its signing key is never revealed or sent as a bearer.
+  `Integration.probe_credential()` refuses any credential that needs reconnecting
+  ("Reconnect this account.") before the kind's probe.
+
+- Notion connections connect through Notion's public-integration OAuth from the
+  saved record's **Connect** action; an internal integration's API token remains an
+  alternative. `angee.knowledge_integrate_notion` installs a `notion` OAuth
+  registration whose `notion` preset seeds Notion's endpoints, per-user `owner`,
+  HTTP Basic client authentication and token-response identity; the deployment
+  supplies the client id and secret. `OAuthClient` gains
+  `token_endpoint_auth_method` (`client_secret_post` or `client_secret_basic`,
+  honoured by both token-request formats) and `token_identity_keys` (the non-secret
+  token-response keys connect reads the account from when userinfo cannot; token
+  material is never among them). Projects author the `integrate` migration that
+  adds both columns. The token-response keys were previously hard-coded as
+  `account`/`organization` for every registration; Anthropic's install rows now
+  declare them, and a resource reload updates existing rows.
+- `connectIntegrationAction()` in `@angee/integrate` is the saved record's OAuth
+  Connect child a vendor addon contributes at its own model's `#actions`; posts
+  composes it, so `FeedConnectAction` and the `ConnectIntegration` re-export are
+  removed.
+- The Notion Markdown converter supports embeds, link previews and meeting notes,
+  labels links that export no text by their kind, and removes the tabs Notion nests
+  a heading's, paragraph's, quote's or container's children by (lists keep theirs;
+  fences and tables keep their opener's). Toggle-heading children are no longer
+  rendered as code, and pages carrying those blocks are no longer quarantined. The
+  Notion mapping version advances, so the next sync re-reads every connection.
+
+- `Message.objects.compose_reply` composes an email reply as a complete envelope:
+  addressed to the parent's `Reply-To` when it carries one, else its sender (RFC
+  5322 §3.6.2; `Message.reply_addresses(actor=)` is the one reader of `Reply-To`:
+  lower-cased addresses with their display names, in header order, read with the
+  caller's access, empty without the header), titled `Re: <thread title>` without stacking prefixes, and
+  identified by a Message-ID (`make_msgid(domain=DNS_NAME)`, as Django mints one) as
+  its external id. The email transport renders the parent's Message-ID as
+  `In-Reply-To` and `References`, so the answer threads onto the same conversation
+  instead of opening a new one. Replying to an email with neither a Reply-To nor a
+  sender is refused; replies of other kinds are unchanged. Header parts named
+  `message-id`, `in-reply-to` or `references` no longer render beside the
+  transport's own. Email replies composed earlier keep their old envelope, which had
+  no recipient and could not be delivered. The unread
+  `ChannelBackend.message_platform` attribute is removed.
+
+- A triage task's hold may carry a wake date, an awaited user, both or neither:
+  `TaskWork.snooze(until=None, *, awaiting=None, expected_revision=None)` takes the
+  write and revision check accept and decline take, reads the persisted stage
+  under the row lock and refuses a hold awaiting its own holder.
+  `TaskWork.wake(reason="manual", *, message=None, expected_revision=None)` ends a
+  hold and sends `angee.work.events.task_woken` (`task`, `reason` of `due`, `reply`
+  or `manual`, `message`); the task carries no instance sudo and keeps the waking
+  actor, and a consumer asks its review again there. New columns `snoozed_at` (set
+  exactly while held; the triage inbox filters by it) and `snoozed_awaiting` (the
+  awaited user); `snoozed_until` is no longer editable. One rule decides a reply,
+  `TaskWorkQuerySet.wake_replied(message, replier_id=)`: a hold wakes only on its
+  awaited user's message, so the reviewer's own comment and any message to a hold
+  awaiting nobody wake nothing; such a hold wakes only at its date or by hand.
+  `wake_from_chatter_thread` is replaced by `wake_on_chatter_reply`. The due job
+  and the reply paths wake row by row through `TaskWorkQuerySet.wake_each`, with
+  history and a revision bump, where they used bulk updates; a failing row is
+  logged and stays held for the next run without failing the others or the
+  message that woke it. `held()` leaves out trashed tasks. Leaving triage ends a
+  hold. GraphQL `snooze_task(task, until, expected_revision)` makes `until`
+  optional; `wake_task(task, expected_revision)` is new, with its MCP tool.
+  Upgrade: a host authors the schema migration for the two columns and the
+  `snoozed_until` option, then a data migration that marks existing holds and
+  clears holds left outside triage, through the historical model and the schema
+  editor's alias:
+
+  ```python
+  def mark_holds(apps, schema_editor):
+      tasks = apps.get_model("projects", "Task")._base_manager.using(schema_editor.connection.alias)
+      # Historical models keep Meta.ordering on ``sqid``, which migration state does not
+      # carry, so a joined update must clear the ordering.
+      held = tasks.filter(snoozed_until__isnull=False).order_by()
+      held.filter(stage__category="triage").update(snoozed_at=models.F("updated_at"))
+      held.exclude(stage__category="triage").update(snoozed_until=None, snoozed_by=None)
+  ```
+
+  `snoozed_at = updated_at` only approximates when each hold began. A migrated hold
+  whose wake date has already passed wakes on the due job's first run, and each
+  wake sends `task_woken`.
+- Intake asks a requester to clarify a request: `Task.clarify(question, *, to=None,
+  reply_by=None, expected_revision=None)` (GraphQL `clarify_task`) locks the task,
+  gives a requester without an account a passwordless one
+  (`Need.provide_requester_account`, the linking the `["*"]` policy uses: no
+  credential, admission or membership), holds the task awaiting that account,
+  posts the question as a task comment, and also emails it as a reply on the
+  request's source message when the requester has no admitted account and the
+  request came as an email with a sender on a channel with an outbound sender (the
+  reviewer needs the channel's `reply`); a requester reachable neither way is
+  refused. `to` names the request to ask about. An inbound email answering a
+  message on a request's conversation (its `In-Reply-To` resolved there), while
+  its task is in triage, from that request's sender or from an address its
+  `Reply-To` named (read through `Message.reply_addresses`), is the request's reply: it files
+  no new request and task, and wakes the hold when it awaits that requester's
+  account. A relayed request's requester is its `Reply-To` address, which their
+  account is created for. A fresh email that only reuses a subject, and any email
+  after accept or decline, is a new request. `intake_requester_domains = ["*"]`
+  gives every claimed webform address a passwordless, unadmitted account on
+  capture; the intake README states its trust model. The intake Task donor
+  `TaskIntakeFilters` is renamed `TaskIntake`.
+
+- Failed or retried tool calls are now recorded as failed. pydantic-ai reports
+  them as a `ToolReturnPart` whose `outcome` is not `success` (`retried` for a
+  tool raising `ModelRetry`, as built-in tools do on every error), which the
+  in-process runtime used to save as `completed`. The chat view shows them as
+  errors; turns saved before keep their `completed` status.
+- A `start_conversation` step may require grounding evidence:
+  `StartConversationConfig(grounding=GroundingPolicy(search=("web_search",), fetch=("fetch_url",)))`
+  names the tools that satisfy each requirement. One completed call to a named
+  tool meets a requirement, read from the completed turn's saved calls. A
+  non-empty answer that leaves one unmet fails the step with the unmet
+  requirements and every call the turn made; an empty answer still routes
+  `no_reply`. Operator Retry posts another turn whose prompt ends with the
+  reason. A completed call proves only that the named function tool returned
+  without raising during the turn, so a grounding tool raises on empty results
+  or HTTP errors; provider-native tools are not saved and cannot meet the
+  policy. `AgentTurn.tool_calls(*names)` folds a turn's saved ACP tool updates
+  into one `acp.schema.ToolCall` per `toolCallId`, ignoring null fields, selected
+  by tool name: a saved tool call's `title` is its tool key (the `SessionRunner`
+  contract). What agents store is unchanged, and a step without `grounding`
+  behaves as before.
+
+- `angee.scheduling` owns due rules: a `DueRule` (`angee.scheduling.due`) names due
+  anchors the subject supplies later and labelled terms measured from them; the
+  [scheduling README](src/angee/scheduling/README.md) lists what a rule expresses.
+  A consumer stores it in a `DueRuleField` beside its own date or instant column;
+  the pure `DueRule.resolve` returns a `Due` whose point and canonical JSON basis
+  the consumer writes, and `Due.get_status` is computed on read and never stored.
+  `projects` tasks and milestones compose it (below).
+- `projects` templates: a project with `is_template` is copied by
+  `Project.objects.create_from_template(template, idempotency_key=, values=, task=,
+  anchors=, role_mapping=)` (idempotent per actor and key; template read and project
+  create, and with `task=` write on the task, whose promoted project is built in one
+  insert under the task's lock). The copy carries its phases through
+  `Milestone.setup_template_values`, its open tasks and subtasks with their audience
+  and relations, the tags (through the new `TagAssignmentManager.copy`) and every due
+  rule; dates, statements, grants, participants, bindings, links and files stay
+  behind. `Task.assignee_role` names a consumer's role, which `role_mapping` maps to
+  a person. `Project.created_from_template` records the provenance. A project with
+  closed tasks or reached phases cannot become a template. Ordinary lists, boards
+  (projects' and work's), My Work, the project picker, attention and overdue phases
+  leave templates out; a Templates page lists them. GraphQL:
+  `create_project_from_template`, the project resource's `is_template` and the task
+  resource's `in_template` filter (a boolean, false for a task about no project).
+  Contributors extend `template_copy_values()` on Project, Milestone and Task and
+  `validate_template()` on Project.
+- `projects` due dates: `Task` and `Milestone` compose `RuleDatedMixin` (`due_rule`,
+  `due_basis`), resolved into `Task.due_date` and the new aware `Task.due_at`, and
+  into `Milestone.target_date`, against the project's due anchors (`created` and the
+  named `Project.due_anchors` that `set_due_anchor` records). A person's edit or a
+  source's stated `schedule` holds the date (`due_basis.held`), even at the rule's
+  value; `reset_due_to_rule` releases it. Closed tasks and reached milestones keep
+  their dates. Rules over counters are refused, and a rule that cannot resolve when
+  anchors move records why (`due_basis.unresolved`). When a save moves a task to
+  done by any path, a repeating rule creates its next task once
+  (`Task.repeated_from`, `Task.repetition_values()`), due from inputs stored on it;
+  a failed repetition is logged and the completion stands. GraphQL:
+  `set_project_due_anchor`, `reset_task_due_to_rule`, `reset_milestone_due_to_rule`,
+  and `due_rule`, `due_basis`, `due_status` on tasks and milestones.
+  `MilestoneTemplate` takes a `due_rule`. The task form edits `due_rule` as raw JSON
+  until scheduling ships a rule editor.
+- `projects.Task.recurrence` is removed: a task's repetition is its due rule's
+  `repeat`. Projects author
+  [`task_recurrence_due_rule`](src/angee/projects/compose_migrations/projects/task_recurrence_due_rule.py)
+  as their next `projects` migration. It adds `due_at`, `due_rule` and `due_basis`
+  to the task table and its history table, moves each recurrence into "the date set
+  by hand, repeating" (a `COUNT` becomes the `UNTIL` of its last point, the task's
+  date counting first), skips and counts blank or malformed rules, and removes the
+  column from both; it is irreversible. Then run `makemigrations` for the release's
+  other columns: `Project.is_template`, `created_from_template`, `due_anchors`;
+  `Milestone.due_rule`, `due_basis`; `Task.assignee_role`, `repeated_from`.
+- `angee.scheduling.fields.TimeZoneField` stores an IANA zone name and
+  `angee.scheduling.zones.ZoneName` is the same rule for Pydantic inputs; a blank
+  zone takes its context's zone and finally the project `TIME_ZONE`, which
+  `get_zone_info` returns. `Recurrence.occurrences` takes a keyword `zone` (blank
+  keeps the project `TIME_ZONE`), and `Recurrence.get_occurrence_after` returns the
+  next occurrence after a moment. `angee-scheduling` now declares `angee-base`,
+  which it reached through `angee-graphql` before. Follow-up: the zone strings in
+  `arp.hr`, `messaging` and `posts` compose the new owner.
+
+- IAM sends sign-in links: a person without a password signs in once through
+  an emailed link. `User.issue_sign_in_link()` is an account verb with its own
+  `auth/user#issue_sign_in_link` permission (admin by default), the usual
+  protected-account refusal, a valid-email check and a per-account cooldown
+  (`ANGEE_IAM_SIGN_IN_LINK_COOLDOWN`). The console mutation is
+  `issue_user_sign_in_link`. The new internal `iam.SignInLink` row keeps a
+  keyed token digest, a digest of the account facts it is bound to (email,
+  password, last sign-in), the issuer, `expires_at`, `sent_at` and `used_at`,
+  never the token. Only an account's newest sent link signs in, and
+  deactivation retires its links. The link goes to `User.email` through
+  Django's `MAILERS["default"]` once the row commits. Redemption is
+  `authenticate()` through `angee.iam.auth.SignInLinkBackend` with
+  `sign_in_credentials(token)`, behind the public `redeem_sign_in_link`
+  mutation and IAM's public `/sign-in-link` route. A request now makes one
+  sign-in attempt: `login` and `redeem_sign_in_link` share
+  `angee.iam.auth.authenticate_once`, and a second attempt in the same request
+  (aliased or batched fields) is refused. IAM now owns the django-axes policy
+  (axes 9 or later): `AXES_COOLOFF_TIME` (one hour; lockouts were permanent;
+  a successful sign-in clears no failures), and username and whitelist
+  callables, so link attempts are recorded under the account public id they
+  name and a genuine spent link is not a failure. `ANGEE_PUBLIC_ORIGIN` is now
+  a base setting, fed by the environment variable of that name or authored,
+  with one rule (`angee.base.origins.public_origin`): only a bare `https`
+  origin (`http` only under `DEBUG`) joins the CSRF trusted origins, so an
+  origin authored in `settings.yaml` is now trusted too, and `angee.E051`
+  reports an invalid one (an `http` origin without `DEBUG` now fails the
+  check). Browser error reports drop URL fragments, frame locations included.
+  `safeRedirectPath` resolves a `next` value as the browser does and accepts
+  only a same-origin result, closing `/%09/host`-style escapes.
+  `useSignInRedirect` (`@angee/app/auth`) is the post-sign-in navigation
+  `LoginPage` uses. Upgrade: compose and author the
+  `iam` migration for the new table, then re-sync the permission schema (iam
+  revision 25). Projects whose `AUTHENTICATION_BACKENDS` replace IAM's list add
+  `angee.iam.auth.SignInLinkBackend`; projects with their own
+  `AXES_WHITELIST_CALLABLE` or `AXES_USERNAME_CALLABLE` keep theirs and lose
+  the link exemptions.
+
+- Tags gain categories. `tags.TagCategory` (name, description, a fractional
+  `position`, an optional `max_per_record`) groups the vocabulary for every
+  taggable type, and `Tag.category` files a tag under at most one of them
+  (nullable; deleting a category un-files its tags). Tag administrators curate
+  categories as they curate tags (`tags/tag_category`; tags revision 8).
+  - **One check:** `TagAssignmentManager.require_category_maximum` refuses a
+    record over a category's maximum, counting archived and unreadable tags.
+  - **Edge inserts:** every insert is judged in `TagAssignment.save`, for its
+    record in its tag's category. That covers the `tag` verb, a record's `tags`
+    input, a changeset revert's restore, a resource load and `objects.create`,
+    under the record's and the tag's row locks.
+  - **Tag saves:** a tag save that changes its category judges the records holding
+    the tag.
+  - **Category saves:** a category save that lowers its maximum judges its records
+    ("records already hold more").
+  - **Merges:** a merge is judged after its moves, through `pre_merge`. Merging a
+    duplicate into a capped tag collapses it, and a merge that would leave a
+    record over a maximum rolls back.
+  - **Category-side locks:** a category-side write locks the category row and its
+    tags' rows, so it and concurrent edge writes judge each other's committed
+    state.
+  - **Bypasses:** edge `bulk_create`, and queryset `update`/`bulk_update` of
+    `category` or `max_per_record`, are not judged.
+  - **Console:** a categories page, and a `category` column, facet and form field
+    on tags. `angee.tags.recordTags` shows a labelled group with one picker per
+    category, each showing its maximum.
+  - **Upgrade:** hosts author a migration for `tags` (`TagCategory`,
+    `Tag.category`) and re-sync the permission schema.
+
+- Decisions answer for a represented record, replace questions atomically and
+  remind once. `Decision.decide(..., on_behalf_of=, evidence=, note=)` takes
+  `EvidenceReference`s (model, public id, pointer) and stores `answered_for`
+  and `answer_evidence` rebuilt from the resolved records, plus `answer_note`;
+  `answered_by` stays the actor, `act` is unchanged, every participant must
+  read each record, and GraphQL shows each reference only to its record's
+  readers. `Decision.objects.supersede(decision, request, *, actor, reason)`
+  asks the replacement and withdraws the old question with its
+  `withdrawal_reason` and a `superseded_by` link in one transaction, in the
+  asking owner's system context (any named system context), and refuses a
+  question a requesting record (a workflow step) retains. Escalation is a
+  supersede of `decision.replacement_request(due_at=, remind_after=,
+  assignees=)`, which derives the request from the stored question and never
+  copies its instants. `withdraw` takes an optional `reason`. Requests carry
+  the asker's `due_at` and `remind_after`; overdue (`Decision.objects.overdue()`,
+  `Decision.is_overdue`, the `is_overdue` field and filter) is false for an
+  undated question. `Decision.remind()` stamps `reminded_at` once, returns
+  whether it sent `decision_reminder_due`, and runs receivers without
+  decisions' elevation; the `decisions.remind_due` beat task runs a bounded,
+  skip-locked sweep with a savepoint per reminder and shows a
+  `decisions.reminder` timeline line. `decisions/decision` gains
+  `read_granted` (assignees, requester, admins) and `read` derives from it:
+  consumers union outside audiences into `read_granted`, and fragments that
+  still add `read` arms (workflows, `tests/extcontrib`, arp) move there next.
+  Upgrade: decisions depends on `angee-jobs`; hosts author the decisions
+  migration (`answered_for`, `answer_evidence`, `answer_note`,
+  `withdrawal_reason`, `superseded_by`, `due_at`, `remind_after`,
+  `reminded_at`, the widened `decisions_verdict_consistent` constraint and the
+  `decisions_reminder_due` index), re-sync the permission schema (decisions
+  revision 8) and restart the whole application.
+
+- A record-visibility file takes its access from its attached records, its
+  direct viewers and admins. Its owner (the uploader, by default) holds it while
+  the upload is a draft, which the record edge needs, and once it is published
+  manages it only while its records let the owner write it, so whoever loses the
+  record loses its record files, the ones they uploaded included. An inherited
+  file keeps its owner's access. `storage/file` gains the `inherited_owner` and
+  `draft_owner` relations and the `owner_writer` permission, which `transfer` and
+  `delete` use. An unattached record file is reachable only by its viewers and
+  admins, so narrowing one leaves its owner without it. Operators re-sync the
+  permission schema: storage revision 13.
+- A record's chatter thread has no owner. `ThreadAttachmentManager.ensure_for_record`
+  no longer makes the record's creator its owner, and releases the owner an
+  existing chatter thread still carries the next time the record attaches it, as
+  it already did for broadcasting hosts. The creator keeps its attribution
+  (`created_by`) and reaches the thread, its messages, parts and their files only
+  through the record (`messaging/thread#chatter_read`). A record type that
+  contributes no `chatter_read` arm (the `ThreadedModelMixin.thread_attachments`
+  contract) now lends its chatter's generic reads (part files, follower
+  identities, colleague pickers) to nobody but admins, where its creator used to
+  reach them as owner. Upgrade: such a record owner contributes the arm, and a
+  host releases the owners existing chatter threads carry with a data migration
+  over its historical models, for example
+  `Thread.objects.filter(attachments__role="chatter").exclude(owner=None).order_by().update(owner=None)`
+  (historical models keep `Meta.ordering` on `sqid`, which migration state does
+  not carry, so a joined update clears the ordering).
+- `ThreadedModelMixin.thread_moderate_access` (default `write`) names the record
+  permission chatter moderation requires: editing and deleting other people's
+  comments, trashing and restoring comments, listing the removed ones and managing
+  another party's follow. `can_moderate` and the record thread's moderation facts
+  (`can_trash`, `can_edit`, `can_delete`, `removed_message_count`) read it, so a
+  record whose `write` reaches people who may move it but not edit it declares a
+  narrower permission. Hosts that declare nothing keep moderation on `write`.
+- `StatementsMixin`'s subject verbs are `confirm_statement(*, aspect, values, **members)`
+  and `dismiss_statement(*, aspect, **members)` (were `confirm` / `dismiss`), so a
+  subject model's own `confirm` verb, such as a lifecycle transition, no longer
+  shadows or is shadowed by the statement verb. `Statement.confirm()` /
+  `dismiss()` (the stance row's verbs) and every GraphQL mutation keep their
+  names; callers of the subject verbs move to the new names.
+- `EditableLineField.readOnlyWhen(row, parentRow)` locks one line cell per row
+  from the row and its owning document, so a document's section and note rows
+  read their commercial cells while their text and row actions stay editable.
+- An adopted Person (`Party.objects.for_user(user, adopt=)`) is owned by its
+  account, like a Person the account's creation makes, so the account reads and
+  edits its own private fields. `follow_user_name` no longer renames a Person
+  whose `identity` aspect a source states: survivorship keeps the source's name.
+- `UserManager.create_person_as_system(..., identity=)` carries an existing
+  identity record on `person_created`, and `Party.objects.for_user(user,
+  adopt=)` links that Person to the new account instead of creating another:
+  an integration that imported a person's contact provisions their account
+  onto it. Adopting a Person another account holds refuses and rolls the
+  account back.
+- A `workflows.workflowextension` row may declare `points` over its own nodes,
+  and a fragment composed after it may splice there with `at`: a dependent
+  addon's phase runs at a declared point inside another addon's fragment, ahead
+  of the nodes that follow that point. Base points splice first, then fragment
+  points in declaration order; a point used before its
+  declaring fragment, or declared twice, refuses the load. Published
+  contributions retain the declared points and the authored routes a splice
+  rewrote, so a narrow reload recomposes the same graph; documents without
+  fragment points keep their published shape and fingerprints.
 - The `composed_tables` test fixture is removed: a database test requests
   pytest-django's `db` or carries a `django_db` mark, and rolls back over the
   session baseline `angee.base.testing.fixtures` records. The
@@ -25,6 +759,55 @@ live in code docstrings.
   `storage/file` `read`, `write` or `share`. Operators re-sync the permission
   schema: storage revision 12, the messaging fragment 7, the projects fragment
   10 and the notes example fragment 4.
+- Systems of record state projects, milestones and tasks. Each composes
+  `StatementsMixin` through `angee.projects.models.StatedRecordMixin` and declares
+  `StatementRecords` (identity, lifecycle and schedule; a task adds priority,
+  assignment and structure), and takes a person's edit as a stance only once a
+  source states the row. A source is admitted by the new `write_statements`
+  permission alone (`write + statement_source`), never through `read` or `write`,
+  so no row inheriting a project's or task's access reaches it. A stated lifecycle
+  applies through the row's own lifecycle verbs, and a row carrying statements
+  refuses deletion. Parties keep `statement_source` out of `read_as_subject` and
+  `write_as_subject`, so a record task about a party lends that party's source
+  nothing. Upgrade: a host project runs native `makemigrations` for the new
+  `ProjectStatement`, `MilestoneStatement` and `TaskStatement` tables and their
+  history tables, then runs `rebac sync` after migrate for projects revision 16
+  and parties revision 19. A composer of the abstract `projects.Task` under its own
+  resource type declares `permission write_statements` in its schema and keeps a
+  concrete `milestone` foreign key: the task's `structure` aspect copies
+  `project`, `milestone` and `parent` into its statement table.
+- Stages: the `angee.base` stage primitive owns every user-named pipeline.
+  `Stage` gains `description`, `fold` (a board's default-collapsed lane, read as
+  `foldField`), `rotting_days`, `for_record` applicability, a
+  `validate_transition(previous, following, *, manual, admitted, adding)` admission
+  hook and idempotent `provision(container, rows, key=...)`. `Stage.resolve_default`
+  becomes `resolve_default(container, *, stages=None)` and
+  `StagedModelMixin.resolve_default_stage` always passes the record's applicable
+  stages, so an override of `resolve_default` accepts the keyword-only `stages`,
+  and `resolve_default_fallback` receives those applicable stages rather than
+  every stage of the container. `StagedModelMixin` gains `stage_entered_at`,
+  `stage_scope_fields`, `stage_container()`, `stage_transition`, `project_stage`,
+  `writes_stage`, the `carry_instance_facts(stored)` and
+  `validate_stored_row(persisted, stored)` hooks and `save(admitted_stage=...)`. A
+  save reads the committed row once under its lock and judges a partial save on
+  the row it stores. Every save and `clean()` requires the stage to belong to the
+  record's container, read from the stage row admission already loads, so a record
+  whose stage moved to another container refuses every write. Applicability is
+  judged only when the write changes the stage, the container or a
+  `stage_scope_fields` input, so a record resting in a stage later narrowed away
+  from it stays editable; a record whose `Stage.for_record` override reads its own
+  fields lists them there. Admission asks `validate_transition` only about a move:
+  a write that keeps the stage is not admitted, so an override drops any
+  same-stage guard. `work` composes it (its private transition read, provisioning
+  loop and same-stage guard are gone; `Stage.validate_transition` takes the new
+  signature), and a work stage's `queue` is write-once (`ImmutableFieldsMixin`),
+  which replaces the narrower check that kept only a phase-mapped stage in its
+  source task's queue.
+  Projects run `makemigrations` for the new columns. Existing staged rows keep a
+  null `stage_entered_at` until their next move; a project that wants dwell time
+  at once authors an optional data migration setting `stage_entered_at` to
+  `updated_at` where `stage` is set (an approximation: the last write, not the
+  last move).
 - Native lists accept `relatedModels: readonly string[]` for columns and filter
   membership derived from related rows. Declared model changes refresh flat,
   client and grouped lists when `related_records` names any record of the list's
@@ -49,6 +832,13 @@ live in code docstrings.
 - The provenance typing plugin preserves its declared protocol when Django
   has no configured storage setting; it does not invent that setting. Bare-host
   fixtures declare the required settings of the capabilities they exercise.
+- The provenance typing plugin types an abstract composed source's history and
+  statement rows as those of the model registered under its label (a `Project`
+  source's `history` yields `HistoricalProject`); only a pure mixin keeps its
+  declaration's row bound. `StatementPair.statements` is typed as its descriptor,
+  so a pair row reads its statements as the class does. Framework `merge_policies`
+  redeclarations take the owner's `ClassVar[Mapping[str, Any]]`, so a consumer
+  donor composing another owner-typed base passes mypy's base-compatibility check.
 - Source retirement: `ChangesetQuerySet.history_written_only_by(record, predicate)`
   shares document history selection with `touching_filter`, requires a creation
   snapshot and refuses unmatched or unattributed writes. The reference owner adds

@@ -1,61 +1,33 @@
-import { useEffect, useState, type ReactElement } from "react";
+import type { ReactElement } from "react";
 import { heicTo } from "heic-to";
 
 import {
-  ErrorBanner,
   ImagePreviewSurface,
-  LoadingPanel,
-  errorMessage,
+  PreviewFileContent,
+  type PreviewFileReadContext,
   type PreviewProviderProps,
 } from "@angee/ui";
 
 import { useStorageT } from "../i18n";
 
 /** Apple HEIC/HEIF photos: only Safari renders them in an `<img>`, so decode the
- * bytes to a JPEG object URL in the browser and show that. The object URL is
- * revoked on unmount / when the file changes. */
+ * bytes to a JPEG object URL in the browser and show that. `PreviewFileContent` owns
+ * the fetch, its abort, the loading and error surfaces, and revoking the URL. */
 export default function HeicPreview({ file }: PreviewProviderProps): ReactElement {
   const t = useStorageT();
-  const [state, setState] = useState<{ url: string | null; error: Error | null }>({
-    url: null,
-    error: null,
-  });
-
-  useEffect(() => {
-    const controller = new AbortController();
-    let objectUrl: string | null = null;
-    setState({ url: null, error: null });
-    fetch(file.url, { signal: controller.signal })
-      .then((response) => {
-        if (!response.ok) throw new Error(t("preview.fetchFailed", { status: String(response.status) }));
-        return response.blob();
-      })
-      .then((blob) => heicTo({ blob, type: "image/jpeg", quality: 0.9 }))
-      .then((jpeg) => {
-        // The decode cannot be aborted mid-flight, so re-check before committing
-        // its result (and before minting an object URL that would then leak).
-        if (controller.signal.aborted) return;
-        objectUrl = URL.createObjectURL(jpeg);
-        setState({ url: objectUrl, error: null });
-      })
-      .catch((error: unknown) => {
-        if (controller.signal.aborted) return;
-        setState({
-          url: null,
-          error: error instanceof Error ? error : new Error(t("preview.decodeFailed")),
-        });
-      });
-    return () => {
-      // Aborts an in-flight fetch (so a StrictMode double-mount does not pay the
-      // WASM decode twice) and frees the object URL when one was minted.
-      controller.abort();
-      if (objectUrl) URL.revokeObjectURL(objectUrl);
-    };
-  }, [file.url, t]);
-
-  if (state.error) {
-    return <ErrorBanner title={t("preview.loadError")} description={errorMessage(state.error, t("preview.loadError"))} />;
-  }
-  if (!state.url) return <LoadingPanel loadingLabel={t("preview.decoding")} />;
-  return <ImagePreviewSurface src={state.url} alt={file.name} />;
+  const decode = async (response: Response, { signal, onCleanup }: PreviewFileReadContext): Promise<string> => {
+    const jpeg = await heicTo({ blob: await response.blob(), type: "image/jpeg", quality: 0.9 }).catch((error: unknown) => {
+      throw error instanceof Error ? error : new Error(t("preview.decodeFailed"));
+    });
+    // The decode cannot be aborted mid-flight, so check before minting an object URL.
+    signal.throwIfAborted();
+    const url = URL.createObjectURL(jpeg);
+    onCleanup(() => URL.revokeObjectURL(url));
+    return url;
+  };
+  return (
+    <PreviewFileContent url={file.url} read={decode} loadingLabel={t("preview.decoding")}>
+      {(src) => <ImagePreviewSurface src={src} alt={file.name} />}
+    </PreviewFileContent>
+  );
 }

@@ -27,6 +27,7 @@ SETTINGS: _Settings = {
     },
     "ANGEE_WORKFLOW_TRIGGER_SOURCE_CLASSES": {
         "record_changed": "angee.workflows.triggers.RecordChanged",
+        "schedule": "angee.workflows.triggers.Schedule",
     },
     "CELERY_BEAT_SCHEDULE:append": {
         "workflows.tick": {

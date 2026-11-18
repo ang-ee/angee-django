@@ -34,6 +34,10 @@
     - user:profile
   authorize_params:
     code: "true"
+  # The inference-only token cannot read the profile; its token response names the account.
+  token_identity_keys:
+    - account
+    - organization
   external_id_claim: account.uuid
   email_claim: account.email_address
   display_name_claim: account.display_name
@@ -68,6 +72,10 @@
     - user:inference
   authorize_params:
     code: "true"
+  # The inference-only token cannot read the profile; its token response names the account.
+  token_identity_keys:
+    - account
+    - organization
   external_id_claim: account.uuid
   email_claim: account.email_address
   display_name_claim: account.display_name

@@ -20,6 +20,7 @@ const RESOURCE_VIEW_SEARCH_SHAPE = {
   view: undefined as string | undefined,
   mode: undefined as string | undefined,
   anchor: undefined as string | undefined,
+  hiddenSources: undefined as string | undefined,
 };
 
 export type ResourceViewSearchKey = keyof typeof RESOURCE_VIEW_SEARCH_SHAPE;
@@ -66,6 +67,8 @@ export function resourceViewStateToSearch(
   if (state.view === "calendar") {
     if (state.mode !== base.mode) search.mode = state.mode;
     if (state.anchor !== base.anchor) search.anchor = state.anchor;
+    const hidden = state.hiddenSources.join(",");
+    if (hidden !== base.hiddenSources.join(",")) search.hiddenSources = hidden;
   }
   return search;
 }
@@ -109,6 +112,8 @@ export function resourceViewSearchToState(
       groupStack,
       mode: parseSearchMode(search.mode) ?? base.mode,
       anchor: parseSearchAnchor(search.anchor) ?? base.anchor,
+      hiddenSources: isClearedSearchValue(search.hiddenSources) ? []
+        : parseSearchSourceKeys(search.hiddenSources) ?? base.hiddenSources,
     };
   } catch (error) {
     return { ...base, queryError: error instanceof Error ? error : new QueryParseError("query", "invalid query state") };
@@ -204,6 +209,29 @@ export function parseSearchAnchor(value: unknown): string | null {
 }
 
 const CALENDAR_ANCHOR_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
+
+/** A calendar source key: letters, digits, `_`, `-` and `.`, so a comma list carries them. */
+const CALENDAR_SOURCE_KEY_PATTERN = /^[A-Za-z0-9_.-]+$/;
+
+/**
+ * Whether a string is a valid calendar source key.
+ * @kind null
+ * @reason Codec and transport infrastructure: translates runtime data and addresses.
+ */
+export function isCalendarSourceKey(value: unknown): value is string {
+  return typeof value === "string" && CALENDAR_SOURCE_KEY_PATTERN.test(value);
+}
+
+/** Valid source keys, de-duplicated and sorted, so equal sets serialize equally. */
+export function normaliseSourceKeys(keys: readonly unknown[]): readonly string[] {
+  return [...new Set(keys.filter(isCalendarSourceKey))].sort();
+}
+
+/** `?hiddenSources=` is a comma list of source keys; an unreadable value keeps the default. */
+export function parseSearchSourceKeys(value: unknown): readonly string[] | null {
+  if (typeof value !== "string" || value === "") return null;
+  return normaliseSourceKeys(value.split(","));
+}
 
 /** Today as a local `yyyy-MM-dd` anchor (the calendar's default reference day).
  * @kind null

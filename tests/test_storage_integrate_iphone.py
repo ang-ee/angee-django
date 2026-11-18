@@ -19,7 +19,6 @@ from rebac import system_context
 from angee.graphql.testing.documents import execute_schema
 from angee.integrate_iphone.backup import SQLITE_HEADER, SQLITE_HEADER_LENGTH, IosBackup
 from angee.storage_integrate.models import MountMode
-from angee.storage_integrate_iphone.connect import create_iphone_backup_mount
 from angee.storage_integrate_iphone.mounts import IphoneBackupMountBackend
 from tests.conftest import Backend, Drive, File, Folder, MimeType, Mount, Vendor, addon_schema
 from tests.test_integrate_iphone import (
@@ -33,9 +32,6 @@ from tests.test_integrate_iphone import (
     build_iphone_backup,
 )
 
-storage_integrate_iphone_schema = importlib.import_module(
-    "angee.storage_integrate_iphone.schema"
-)
 storage_integrate_schema = importlib.import_module("angee.storage_integrate.schema")
 
 
@@ -127,15 +123,15 @@ def _files(drive: Drive) -> list[File]:
 
 
 def _console_schema() -> Any:
-    """Compose the iPhone mutation onto its storage_integrate dependency."""
+    """Return the console schema carrying the generic ``connect_mount``."""
 
-    parts = {
-        key: list(values)
-        for key, values in storage_integrate_schema.schemas["console"].items()
-    }
-    for key, values in storage_integrate_iphone_schema.schemas["console"].items():
-        parts.setdefault(key, []).extend(values)
-    return addon_schema({"console": parts}, "console")
+    return addon_schema(storage_integrate_schema.schemas, "console")
+
+
+def _provision(owner: Any, root: Path, *, name: str, mode: MountMode) -> Mount:
+    """Provision an iPhone-backup Mount as ``connect_mount`` does."""
+
+    return Mount.objects.provision(owner, backend_class="iphone_backup", name=name, root=str(root), mode=mode)
 
 
 def test_browse_marks_only_manifest_roots_mountable(iphone_env: SimpleNamespace) -> None:
@@ -164,12 +160,7 @@ def test_reference_mount_indexes_and_serves_bytes_across_threads(
     """Reference mode serves logical paths without retaining a thread-bound DB."""
 
     root = build_iphone_backup(iphone_env.tmp_path / "reference-device")
-    mount = create_iphone_backup_mount(
-        iphone_env.owner,
-        name="Reference iPhone",
-        path=str(root),
-        mode=MountMode.REFERENCE,
-    )
+    mount = _provision(iphone_env.owner, root, name="Reference iPhone", mode=MountMode.REFERENCE)
 
     assert queued_mounts == [mount]
     assert mount.backend_class == "iphone_backup"
@@ -226,12 +217,7 @@ def test_reference_open_entry_uses_the_iterated_blob_map_without_a_query(
     """The hashing/open pass never resolves a logical path through Manifest.db."""
 
     root = build_iphone_backup(iphone_env.tmp_path / "mapped-device")
-    mount = create_iphone_backup_mount(
-        iphone_env.owner,
-        name="Mapped iPhone",
-        path=str(root),
-        mode=MountMode.REFERENCE,
-    )
+    mount = _provision(iphone_env.owner, root, name="Mapped iPhone", mode=MountMode.REFERENCE)
     del queued_mounts
     backend = cast(IphoneBackupMountBackend, mount.backend)
     entries = list(backend.iter_entries())
@@ -253,12 +239,7 @@ def test_copy_mount_ingests_bytes_with_logical_source_metadata(
     """Copy mode lands managed bytes while retaining each manifest source path."""
 
     root = build_iphone_backup(iphone_env.tmp_path / "copy-device")
-    mount = create_iphone_backup_mount(
-        iphone_env.owner,
-        name="Copied iPhone",
-        path=str(root),
-        mode=MountMode.COPY,
-    )
+    mount = _provision(iphone_env.owner, root, name="Copied iPhone", mode=MountMode.COPY)
 
     assert queued_mounts == [mount]
     assert mount.drive.backend_id == iphone_env.backend.pk
@@ -274,7 +255,7 @@ def test_copy_mount_ingests_bytes_with_logical_source_metadata(
         assert stream.read() == CAMERA_BYTES
 
 
-def test_connect_iphone_backup_graphql_denies_non_admin(
+def test_connect_mount_of_an_iphone_backup_denies_non_admin(
     iphone_env: SimpleNamespace,
     queued_mounts: list[Mount],
 ) -> None:
@@ -288,11 +269,11 @@ def test_connect_iphone_backup_graphql_denies_non_admin(
     result = execute_schema(
         _console_schema(),
         """
-        mutation($path: String!, $mode: MountMode!) {
-          connect_iphone_backup(name: "Denied", path: $path, mode: $mode) { id }
+        mutation($root: String!, $mode: MountMode!) {
+          connect_mount(backend_class: "iphone_backup", name: "Denied", source_root: $root, mode: $mode) { id }
         }
         """,
-        {"path": str(root), "mode": "REFERENCE"},
+        {"root": str(root), "mode": "REFERENCE"},
         user=reader,
     )
 

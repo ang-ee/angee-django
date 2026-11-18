@@ -78,16 +78,17 @@ export function RecordTimelineView({ data, openCount, set = false, drillIn = fal
       actions={runId ? cancelRun(runs.find((run) => run.id === runId)!) : null} />;
   const count = openCount;
   const active = runs.filter((run) => run.can_cancel);
-  const held = (run: TimelineRun) => runSteps(run).filter((step) => step.hold && step.hold !== "decision");
+  // An incident is the run's own hold (`WorkflowRun.hold`): an operator's error or another run.
+  const incident = (run: TimelineRun) => run.hold === "error" || run.hold === "run";
   const retryStep = (step: TimelineStep | MappedStep) => !step.can_retry ? null
     : <RecordActionBar record={step} actions={retryActions} />;
-  const heldRuns = (entry: TimelineData[number]) => entry.runs.filter((run) => held(run).length).map((run) =>
+  const heldRuns = (entry: TimelineData[number]) => entry.runs.filter(incident).map((run) =>
     <div key={run.id} className="flex flex-wrap items-center gap-1.5 rounded-6 border border-border-subtle px-2.5 py-2">
       {link("workflows.WorkflowRun", run.id, run.display_name)}<RunStatus run={run} />
-      {held(run).map((step) => step.can_retry ? <div key={step.id}>{retryStep(step)}</div> : null)}
+      {runSteps(run).map((step) => step.can_retry ? <div key={step.id}>{retryStep(step)}</div> : null)}
     </div>);
   if (set) {
-    const entries = data.filter((entry) => entry.decisions.length || entry.runs.some((run) => held(run).length));
+    const entries = data.filter((entry) => entry.decisions.length || entry.runs.some(incident));
     const questions = new Map<string, Map<string, {
       entries: TimelineData; decision: TimelineData[number]["decisions"][number];
     }>>();
@@ -100,7 +101,7 @@ export function RecordTimelineView({ data, openCount, set = false, drillIn = fal
     }
     return <div className="grid min-w-0 gap-4">
       <header className="grid gap-2"><h2 className={textRoleVariants({ role: "title" })}>{t("runs.title")} <CountBadge tone={count ? "warning" : "neutral"} value={count} /></h2>
-        <p className={textRoleVariants({ role: "meta" })}>{t("timeline.records", { count: data.length })} · {t("timeline.decisions", { count })} · {t("timeline.heldRuns", { count: runs.filter((run) => held(run).length).length })}</p>
+        <p className={textRoleVariants({ role: "meta" })}>{t("timeline.records", { count: data.length })} · {t("timeline.decisions", { count })} · {t("timeline.heldRuns", { count: runs.filter(incident).length })}</p>
         <SegmentedControl<"record" | "question"> aria-label={t("timeline.groupBy")} value={grouping} onValueChange={setGrouping}
           options={[{ value: "record", label: t("timeline.byRecord") }, { value: "question", label: t("timeline.byQuestion") }]} />
         {active.map((run) => <div key={run.id}>{cancelRun(run)}</div>)}
@@ -114,7 +115,7 @@ export function RecordTimelineView({ data, openCount, set = false, drillIn = fal
           <div className="flex flex-wrap gap-1">{entries.map((entry) => <span key={entry.record_id}>{link(entry.record_model, entry.record_id)}</span>)}</div>
           {card(decision, entries[0]!.record_id, true)}
         </div>)}
-      </section>)}{entries.filter((entry) => entry.runs.some((run) => held(run).length)).map((entry) =>
+      </section>)}{entries.filter((entry) => entry.runs.some(incident)).map((entry) =>
         <section key={entry.record_id} className="grid gap-2 border-t border-border-subtle pt-3">
           {link(entry.record_model, entry.record_id)}{heldRuns(entry)}
         </section>)}</>}
@@ -163,17 +164,15 @@ export function RecordTimelineView({ data, openCount, set = false, drillIn = fal
   </div>;
 }
 
-/** The run's state word, derived from its status and the holds its steps carry; the composed
+/** The run's state word, from its status and the run's own hold (`WorkflowRun.hold`); the composed
  * status vocabulary (workflows contributes the run-state words) decides the tone. */
 const UNKNOWN_STATE_TONE = { unknown: "neutral" } as const;
 function RunStatus({ run, compact = false }: { run: TimelineRun; compact?: boolean }) {
   const t = useWorkflowsT();
-  const holds = runSteps(run).flatMap((step) => step.hold ? [step.hold] : []);
   const status = optionToken(run.status);
   const state = status === "canceled" || status === "interrupted" ? "stopped" : status === "failed" ? "error"
     : status === "succeeded" ? "plan_complete" : status === "running" ? "plan_running"
-    : status === "waiting" ? holds.includes("error") ? "error" : holds.includes("run") ? "run"
-      : holds.includes("decision") ? "decision" : "waiting" : "unknown";
+    : status === "waiting" ? run.hold ?? "waiting" : "unknown";
   const badge = <StatusBadge value={state} tone={UNKNOWN_STATE_TONE}>{state === "plan_complete" && run.outcome_label || t(`timeline.status.${state}`)}</StatusBadge>;
   if (compact) return badge;
   return <div className="grid gap-1">{badge}

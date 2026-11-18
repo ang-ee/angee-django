@@ -62,6 +62,11 @@ def map_body_key(key: str) -> str:
     return key + MAP_BODY_SUFFIX
 
 
+def declared_node_key(key: str) -> str:
+    """Name the declared node a step row executes: a map item's map, else the row's own key."""
+    return key.partition(".")[0]
+
+
 def _has_path(value: Any, path: tuple[str | int, ...]) -> bool:
     """Whether a JSON value holds an item at ``path``."""
     for part in path:
@@ -160,7 +165,12 @@ class ExtensionEdge(BaseModel):
 
 
 class WorkflowExtension(BaseModel):
-    """A typed install declaration contributing one connected graph fragment."""
+    """A typed install declaration contributing one connected graph fragment.
+
+    ``at`` names a point of the base definition or one an earlier-composed
+    fragment declares. ``points`` names boundaries over this fragment's own
+    nodes, where a fragment composed later may splice in turn.
+    """
 
     model_config = ConfigDict(extra="forbid")
     extends: str = Field(min_length=1)
@@ -169,10 +179,14 @@ class WorkflowExtension(BaseModel):
     nodes: dict[NodeKey, Node] = Field(min_length=1)
     edges: list[ExtensionEdge] = Field(default_factory=list)
     bindings: dict[NodeKey, InputBinding] = Field(default_factory=dict)
+    points: dict[NodeKey, ExtensionPoint] = Field(default_factory=dict, exclude_if=lambda points: not points)
 
     def fragment(self) -> dict[NodeKey, Node]:
         """Apply the optional flat edge/binding declarations to copied nodes."""
 
+        for name, point in self.points.items():
+            if (point.after or point.before) not in self.nodes:
+                raise ValueError(f"Point {name!r} must name a node this extension contributes.")
         nodes = {key: node.model_copy(deep=True) for key, node in self.nodes.items()}
         for key, binding in self.bindings.items():
             if key not in nodes:
@@ -219,6 +233,11 @@ class PublishedContribution(BaseModel):
     sequence: int
     nodes: tuple[NodeKey, ...]
     fingerprint: str
+    points: dict[NodeKey, ExtensionPoint] = Field(default_factory=dict, exclude_if=lambda points: not points)
+    routes: dict[NodeKey, dict[Outcome, str | list[str]]] = Field(
+        default_factory=dict, exclude_if=lambda routes: not routes,
+    )
+    """Authored routes of this fragment's nodes that a splice at one of its points rewrote."""
 
 
 class ResultBinding(BaseModel):
@@ -393,13 +412,25 @@ class Definition(BaseModel):
                 )
                 for outcome, targets in node.next.items()
             }
-        for point in definition.points.values():
+        for contribution in definition.contributions:
+            contribution.nodes = tuple(keys.get(key, key) for key in contribution.nodes)
+            contribution.routes = {
+                keys.get(key, key): {
+                    outcome: (
+                        [reference(target) for target in targets] if isinstance(targets, list) else reference(targets)
+                    )
+                    for outcome, targets in routes.items()
+                }
+                for key, routes in contribution.routes.items()
+            }
+        for point in (
+            *definition.points.values(),
+            *(point for contribution in definition.contributions for point in contribution.points.values()),
+        ):
             if point.after is not None:
                 point.after = keys.get(point.after, point.after)
             if point.before is not None:
                 point.before = keys.get(point.before, point.before)
-        for contribution in definition.contributions:
-            contribution.nodes = tuple(keys.get(key, key) for key in contribution.nodes)
         for result in definition.results:
             result.source = reference(result.source)
             bindings(result.output)
@@ -483,7 +514,7 @@ class Definition(BaseModel):
         """Freeze reader labels with the validated graph and step outcome contracts."""
         document = self.model_dump(mode="json", by_alias=True)
         for key, node, _ in sorted(self.declarations(), key=lambda item: item[0]):
-            stored = document["nodes"][key.partition(".")[0]]
+            stored = document["nodes"][declared_node_key(key)]
             if key.endswith(MAP_BODY_SUFFIX):
                 stored = stored["body"]
             stored["label"] = self.node_label(key)
@@ -502,7 +533,12 @@ class Definition(BaseModel):
         return document
 
     def with_extensions(self, sourced: Sequence[SourcedWorkflowExtension]) -> Definition:
-        """Return a composed copy, ordered by source addon and then sequence."""
+        """Return a composed copy, ordered by source addon and then sequence.
+
+        A fragment splices at a base point or at one a fragment composed before it
+        declares; base points splice first, by name, then fragment points in
+        declaration order, so each anchor exists when its fragments arrive.
+        """
 
         addon_order: dict[str, int] = {}
         indexed = list(enumerate(sourced))
@@ -520,13 +556,13 @@ class Definition(BaseModel):
             )
         ]
         composed = self.model_copy(deep=True)
+        points = dict(composed.points)
         seen = set(composed.nodes)
         prepared: list[tuple[SourcedWorkflowExtension, dict[NodeKey, Node], NodeKey, NodeKey]] = []
         issues: list[Issue] = []
         for contribution in ordered:
             extension = contribution.extension
-            point = composed.points.get(extension.at)
-            if point is None:
+            if extension.at not in points:
                 issues.append(Issue(
                     path=["points", extension.at],
                     code="extension_point",
@@ -545,7 +581,16 @@ class Definition(BaseModel):
                 )
                 for key in sorted(collisions)
             )
-            if collisions:
+            duplicated = sorted(points.keys() & extension.points.keys())
+            issues.extend(
+                Issue(
+                    path=["points", name],
+                    code="extension_point",
+                    message=f"{contribution.source_addon} declares duplicate point {name!r}.",
+                )
+                for name in duplicated
+            )
+            if collisions or duplicated:
                 continue
             try:
                 fragment = extension.fragment()
@@ -558,6 +603,7 @@ class Definition(BaseModel):
                 ))
                 continue
             seen.update(fragment)
+            points.update(extension.points)
             prepared.append((contribution, fragment, entry, exit_))
         if issues:
             raise DefinitionInvalid(issues)
@@ -565,8 +611,10 @@ class Definition(BaseModel):
         by_point: dict[str, list[tuple[SourcedWorkflowExtension, dict[NodeKey, Node], NodeKey, NodeKey]]] = {}
         for item in prepared:
             by_point.setdefault(item[0].extension.at, []).append(item)
-        for point_name in sorted(by_point):
-            point = composed.points[point_name]
+        authored = [{key: copy.deepcopy(node.next) for key, node in item[1].items()} for item in prepared]
+        splice_order = [*sorted(composed.points), *(name for item in prepared for name in item[0].extension.points)]
+        for point_name in (name for name in splice_order if name in by_point):
+            point = points[point_name]
             contributions = by_point[point_name]
             if point.after is not None:
                 contributions = list(reversed(contributions))
@@ -580,8 +628,14 @@ class Definition(BaseModel):
                 sequence=contribution.extension.sequence,
                 nodes=tuple(contribution.extension.nodes),
                 fingerprint=contribution.fingerprint(),
+                points=contribution.extension.points,
+                routes={
+                    key: routes
+                    for key, routes in routes_by_key.items()
+                    if key != exit_ and composed.nodes[key].next != routes
+                },
             )
-            for contribution, _fragment, _entry, _exit in prepared
+            for (contribution, _fragment, _entry, exit_), routes_by_key in zip(prepared, authored, strict=True)
         )
         return composed
 
@@ -679,7 +733,7 @@ class Definition(BaseModel):
                     targets = [target for target in node.targets(outcome) if target in keys]
                     if targets:
                         next_[outcome] = targets if isinstance(declared, list) else targets[0]
-                node.next = next_
+                node.next = copy.deepcopy(contribution.routes[key]) if key in contribution.routes else next_
                 nodes[key] = node
             retained.append(SourcedWorkflowExtension(
                 contribution.addon,
@@ -688,6 +742,7 @@ class Definition(BaseModel):
                     at=contribution.at,
                     sequence=contribution.sequence,
                     nodes=nodes,
+                    points=contribution.points,
                 ),
                 contribution.fingerprint,
             ))
@@ -830,6 +885,15 @@ class Definition(BaseModel):
     def graph(self) -> dict[str, set[str]]:
         """Return the dependency graph shared by validation and execution."""
         return {key: set(self.predecessors[key]) for key in sorted(self.nodes)}
+
+    @cached_property
+    def successors(self) -> dict[str, set[str]]:
+        """Return the reverse adjacency: each node and the targets its outcomes route to."""
+        following: dict[str, set[str]] = {key: set() for key in self.graph}
+        for target, sources in self.graph.items():
+            for source in sources:
+                following[source].add(target)
+        return following
 
     @cached_property
     def ranks(self) -> dict[str, int]:
@@ -1022,11 +1086,7 @@ class Definition(BaseModel):
         if len(self.entries) != 1:
             issues.append(Issue(code="entry", message="A workflow requires exactly one entry node."))
         if len(self.entries) == 1:
-            outgoing: dict[str, set[str]] = {key: set() for key in self.nodes}
-            for target, sources in self.graph.items():
-                for source in sources:
-                    outgoing[source].add(target)
-            reached = self._walk(outgoing, self.entries)
+            reached = self._walk(self.successors, self.entries)
             issues.extend(
                 Issue(node=key, path=["nodes", key], code="unreachable", message="Node is unreachable.")
                 for key in self.nodes
@@ -1052,7 +1112,7 @@ class Definition(BaseModel):
                     node=key, path=[*path, "input"], code="input", message="Map items require a list schema.",
                 ))
                 continue
-            parent = key.partition(".")[0]
+            parent = declared_node_key(key)
             mapped = key != parent
             if node.input is not None:
                 issues.extend(
@@ -1214,11 +1274,12 @@ class Definition(BaseModel):
                 if source == INPUT_SOURCE:
                     continue
                 try:
-                    schema = (schema_at(self.map_items_schema(node.partition(".")[0]), [0]) or {}) if (
+                    schema = (schema_at(self.map_items_schema(declared_node_key(node)), [0]) or {}) if (
                         source == ITEM_SOURCE and node is not None
                     ) else self.output_schema(
                         source,
-                        self.predecessors[node.partition(".")[0]].get(source) if node else (outcomes or {}).get(source),
+                        self.predecessors[declared_node_key(node)].get(source) if node
+                        else (outcomes or {}).get(source),
                     )
                 except (KeyError, ImproperlyConfigured):
                     messages.append(f"Unknown source {source!r}.")
@@ -1278,6 +1339,38 @@ class Definition(BaseModel):
         """Return control ancestors through the shared cycle-tolerant graph walk."""
         return self._walk(self.graph, self.graph[key])
 
+    def descendants(self, key: str) -> set[str]:
+        """Return ``key`` and every node its routes reach, through the shared graph walk."""
+        return self._walk(self.successors, [key])
+
+    def reprocess_plan[R: StepRow](self, rows: Iterable[R], from_node: str) -> tuple[list[R], list[R]]:
+        """Split a retained run's rows for a reprocess from ``from_node``: what it reuses, and what else reruns.
+
+        The node and every node it reaches run again. Outside that reach a declared
+        node's row is reused when it settled with a routed result (succeeded,
+        skipped, or failed through a declared error route), and a map item only with
+        its reused map. Every other row outside the reach (unsettled, an unrouted
+        failure, an item of a map planned afresh) is returned second: it runs again
+        too, in the new run.
+        """
+        if from_node not in self.nodes:
+            raise ValidationError("A reprocess starts at a declared node.")
+        rows = list(rows)
+        rerun = self.descendants(from_node)
+        settled = {StepRunStatus.SUCCEEDED, StepRunStatus.SKIPPED, StepRunStatus.FAILED}
+        reused_nodes = {
+            row.node_key for row in rows
+            if row.node_key in self.nodes and row.node_key not in rerun
+            and row.status in settled and not self.unrouted_failure([row])
+        }
+        reused: list[R] = []
+        again: list[R] = []
+        for row in rows:
+            node = declared_node_key(row.node_key)
+            if node not in rerun:
+                (reused if node in reused_nodes else again).append(row)
+        return reused, again
+
     def unrouted_failure(self, rows: Iterable[StepRow]) -> bool:
         """Whether a failed node has no declared route for its built-in failure."""
         return any(
@@ -1287,8 +1380,7 @@ class Definition(BaseModel):
 
     def retry_allowed(self, key: str) -> bool:
         """In-place recovery must not replay a failure already routed through error."""
-        parent = key.partition(".")[0]
-        return self.failure_port(key) not in self.nodes[parent].next
+        return self.failure_port(key) not in self.nodes[declared_node_key(key)].next
 
     @staticmethod
     def failure_port(key: str) -> str:

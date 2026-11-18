@@ -11,6 +11,7 @@ import {
   Rocket,
 } from "lucide-react";
 
+import { productForm, initiativeForm, initiativeProjectForm, releaseForm } from "./record-forms";
 import { enPortfolioMessages } from "./i18n";
 import {
   projectPortfolioFormSection,
@@ -68,6 +69,12 @@ const portfolio = defineBaseAddon({
   routes: portfolioRoutes,
   menus: portfolioMenu,
   i18n: { portfolio: enPortfolioMessages },
+  forms: {
+    "portfolio.Product": productForm,
+    "portfolio.Initiative": initiativeForm,
+    "portfolio.InitiativeProject": initiativeProjectForm,
+    "portfolio.Release": releaseForm,
+  },
   containers: {
     [`${PROJECT_MODEL}#sections`]: {
       "portfolio.project-fields": { sequence: 40, content: projectPortfolioFormSection },

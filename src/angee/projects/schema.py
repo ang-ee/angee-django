@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime
 from functools import partial
 from typing import Any, cast
 
@@ -137,6 +137,8 @@ strawberry.enum(TaskVisibility)
 class ProjectMilestoneSetupInput:
     """Typed milestone template; addons contribute native setup choices."""
 
+    due_rule: JSON | None = None
+
 
 @pydantic_input(model=TaskOrder, all_fields=True)
 class TaskOrderInput:
@@ -183,6 +185,14 @@ class ProjectSetupInput:
 
     milestones: list[ProjectMilestoneSetupInput]
     vault_template: PublicID = strawberry.field(metadata={InputReference: InputReference("knowledge.Vault")})
+
+
+@strawberry.input
+class TemplateRoleInput:
+    """The person who takes a template task's ``assignee_role`` in the new project."""
+
+    role: str
+    user: PublicID
 
 
 @strawberry.input
@@ -244,6 +254,13 @@ def overdue_milestone_count_field(model: Any) -> Any:
     })
 
 
+def _due_status(root: Any) -> str | None:
+    """The row's due status now (``angee.scheduling.due.DueStatus``), computed on read and never stored."""
+
+    status = root.due_status()
+    return status.value if status is not None else None
+
+
 @strawberry.type
 class ProjectSetupFields:
     """Project readiness and phase attention, shared by both schema projections."""
@@ -265,6 +282,8 @@ class ProjectType(ProjectSetupFields, AuthoredRefMixin, AngeeNode):
     start_date_resolution: auto
     target_date: auto
     target_date_resolution: auto
+    is_template: auto
+    due_anchors: JSON
     created_at: auto
     updated_at: auto
     revision: auto
@@ -278,6 +297,7 @@ class ProjectType(ProjectSetupFields, AuthoredRefMixin, AngeeNode):
 
     folder: FolderType | None = actor_scoped_to_one("folder")
     converted_from: "TaskType | None" = actor_scoped_to_one("converted_from")
+    created_from_template: "ProjectType | None" = actor_scoped_to_one("created_from_template")
     links: list["ProjectLinkType"] = actor_scoped_to_many("links")
 
     @strawberry_django.field(only=["lead_id"])
@@ -300,6 +320,8 @@ class ConsoleProjectType(ProjectSetupFields, AuthoredRefMixin, TaggedNode, Angee
     start_date_resolution: auto
     target_date: auto
     target_date_resolution: auto
+    is_template: auto
+    due_anchors: JSON
     created_at: auto
     updated_at: auto
     revision: auto
@@ -313,6 +335,7 @@ class ConsoleProjectType(ProjectSetupFields, AuthoredRefMixin, TaggedNode, Angee
 
     folder: FolderType | None = actor_scoped_to_one("folder")
     converted_from: "ConsoleTaskType | None" = actor_scoped_to_one("converted_from")
+    created_from_template: "ConsoleProjectType | None" = actor_scoped_to_one("created_from_template")
     lead: UserType | None = actor_scoped_to_one("lead")
     links: list["ProjectLinkType"] = actor_scoped_to_many("links")
 
@@ -327,6 +350,11 @@ class MilestoneType(AuthoredRefMixin, AngeeNode):
     reached_at: auto
     reached_by: UserType | None = actor_scoped_to_one("reached_by")
     target_date: auto
+    due_rule: auto
+    due_basis: JSON
+    due_status: str | None = strawberry_django.field(
+        resolver=_due_status, only=["target_date", "due_rule", "due_basis"],
+    )
     sort_order: auto
     created_at: auto
     updated_at: auto
@@ -448,8 +476,14 @@ class TaskType(TaskProjectionMixin, AuthoredRefMixin, AngeeNode):
     owner: UserType | None = actor_scoped_to_one("owner")
     dropped_reason: auto
     priority: auto
+    assignee_role: auto
     due_date: auto
-    recurrence: auto
+    due_at: auto
+    due_rule: auto
+    due_basis: JSON
+    due_status: str | None = strawberry_django.field(
+        resolver=_due_status, only=["due_date", "due_at", "due_rule", "due_basis"],
+    )
     sort_order: auto
     sub_sort_order: auto
     done_at: auto
@@ -462,6 +496,7 @@ class TaskType(TaskProjectionMixin, AuthoredRefMixin, AngeeNode):
     project: ProjectType | None = actor_scoped_to_one("project")
     milestone: MilestoneType | None = actor_scoped_to_one("milestone")
     parent: "TaskType | None" = actor_scoped_to_one("parent")
+    repeated_from: "TaskType | None" = actor_scoped_to_one("repeated_from")
 
     @strawberry_django.field(only=["assignee_id"])
     def assignee(self) -> strawberry.ID | None:
@@ -492,8 +527,14 @@ class ConsoleTaskType(TaskProjectionMixin, AuthoredRefMixin, TaggedNode, AngeeNo
     owner: UserType | None = actor_scoped_to_one("owner")
     dropped_reason: auto
     priority: auto
+    assignee_role: auto
     due_date: auto
-    recurrence: auto
+    due_at: auto
+    due_rule: auto
+    due_basis: JSON
+    due_status: str | None = strawberry_django.field(
+        resolver=_due_status, only=["due_date", "due_at", "due_rule", "due_basis"],
+    )
     sort_order: auto
     sub_sort_order: auto
     done_at: auto
@@ -506,6 +547,7 @@ class ConsoleTaskType(TaskProjectionMixin, AuthoredRefMixin, TaggedNode, AngeeNo
     project: ConsoleProjectType | None = actor_scoped_to_one("project")
     milestone: MilestoneType | None = actor_scoped_to_one("milestone")
     parent: "ConsoleTaskType | None" = actor_scoped_to_one("parent")
+    repeated_from: "ConsoleTaskType | None" = actor_scoped_to_one("repeated_from")
     assignee: UserType | None = actor_scoped_to_one("assignee")
     delegate: UserType | None = actor_scoped_to_one("delegate")
 
@@ -710,6 +752,61 @@ class ProjectTaskActionMutation:
             expected_revision=expected_revision,
         )
         return ActionResult(ok=True, message="Project set up.", id=project.sqid)
+
+    @strawberry.mutation
+    @action_guard("Create project from template failed.")
+    def create_project_from_template(
+        self, info: strawberry.Info, id: PublicID, idempotency_key: str, title: str | None = None,
+        task: PublicID | None = None, roles: list[TemplateRoleInput] | None = None,
+    ) -> ActionResult:
+        """Create a project from a readable template; with ``task``, the task's promoted project."""
+
+        template = authorized_permission_target(info, Project, id, "read")
+        source_task = authorized_action_target(info, Task, task, "write") if task is not None else None
+        role_mapping = {
+            entry.role: authorized_permission_target(info, User, entry.user, "read") for entry in roles or ()
+        }
+        project = Project.objects.create_from_template(
+            template, idempotency_key=idempotency_key, values={"title": title} if title else None, task=source_task,
+            role_mapping=role_mapping,
+        )
+        return ActionResult(ok=True, message="Project created from template.", id=project.sqid)
+
+    @strawberry.mutation
+    @action_guard("Set due anchor failed.")
+    def set_project_due_anchor(
+        self, info: strawberry.Info, id: PublicID, name: str, at: datetime | None = None, on: date | None = None,
+        zone: str = "", expected_revision: int | None = None,
+    ) -> ActionResult:
+        """Set one named due anchor (an instant ``at`` or a day ``on``), or clear it with neither."""
+
+        target = authorized_action_target(info, Project, id, "write")
+        moment = {"at": at} if at is not None else {"on": on} if on is not None else None
+        target.set_due_anchor(name, None if moment is None else {**moment, "zone": zone},
+                              expected_revision=expected_revision)
+        return ActionResult(ok=True, message="Due anchor set.", id=target.sqid)
+
+    @strawberry.mutation
+    @action_guard("Reset task due date failed.")
+    def reset_task_due_to_rule(
+        self, info: strawberry.Info, id: PublicID, expected_revision: int | None = None,
+    ) -> ActionResult:
+        """Hand a task's due date back to its due rule."""
+
+        target = authorized_action_target(info, Task, id, "write")
+        target.reset_due_to_rule(expected_revision=expected_revision)
+        return ActionResult(ok=True, message="Task due date follows its rule.", id=target.sqid)
+
+    @strawberry.mutation
+    @action_guard("Reset milestone target date failed.")
+    def reset_milestone_due_to_rule(
+        self, info: strawberry.Info, id: PublicID, expected_revision: int | None = None,
+    ) -> ActionResult:
+        """Hand a milestone's target date back to its due rule."""
+
+        target = authorized_action_target(info, Milestone, id, "write")
+        target.reset_due_to_rule(expected_revision=expected_revision)
+        return ActionResult(ok=True, message="Milestone target date follows its rule.", id=target.sqid)
 
     @strawberry.mutation
     @action_guard("Pause project failed.")
@@ -948,6 +1045,8 @@ def _project_resource(node_type: type) -> Any:
             "target_date_resolution",
             "folder",
             "converted_from",
+            "is_template",
+            "created_from_template",
             "created_at",
             "updated_at",
             *_PROJECT_EXTENSION_FILTER_FIELDS,
@@ -982,6 +1081,7 @@ def _project_resource(node_type: type) -> Any:
             "target_date",
             "target_date_resolution",
             "folder",
+            "is_template",
             *_PROJECT_EXTENSION_INSERT_FIELDS,
         ],
         updatable=[
@@ -994,6 +1094,7 @@ def _project_resource(node_type: type) -> Any:
             "target_date",
             "target_date_resolution",
             "folder",
+            "is_template",
             *_PROJECT_EXTENSION_UPDATE_FIELDS,
         ],
         write_backend=AngeeHasuraWriteBackend(
@@ -1041,6 +1142,7 @@ _MILESTONE_RESOURCE = hasura_model_resource(
         "description",
         "start_date",
         "target_date",
+        "due_rule",
         "sort_order",
         *_MILESTONE_EXTENSION_INSERT_FIELDS,
     ],
@@ -1050,6 +1152,7 @@ _MILESTONE_RESOURCE = hasura_model_resource(
         "description",
         "start_date",
         "target_date",
+        "due_rule",
         "sort_order",
         *_MILESTONE_EXTENSION_UPDATE_FIELDS,
     ],
@@ -1079,16 +1182,19 @@ def _task_resource(node_type: type) -> Any:
             "visibility",
             "dropped_reason",
             "assignee",
+            "assignee_role",
             "delegate",
             "priority",
             "due_date",
-            "recurrence",
+            "due_at",
+            "in_template",
             "done_at",
             "dropped_at",
             "created_at",
             "updated_at",
             *_TASK_EXTENSION_FILTER_FIELDS,
         ],
+        filter_expressions={"in_template": lambda rows: cast(Any, rows).in_template_expression()},
         sortable=[
             "project",
             "milestone",
@@ -1101,6 +1207,7 @@ def _task_resource(node_type: type) -> Any:
             "priority",
             "priority_rank",
             "due_date",
+            "due_at",
             "done_at",
             "dropped_at",
             "created_at",
@@ -1142,10 +1249,11 @@ def _task_resource(node_type: type) -> Any:
                     "visibility",
                     "dropped_reason",
                     "assignee",
+                    "assignee_role",
                     "delegate",
                     "priority",
                     "due_date",
-                    "recurrence",
+                    "due_rule",
                     "sort_order",
                     "sub_sort_order",
                 )
@@ -1160,10 +1268,11 @@ def _task_resource(node_type: type) -> Any:
             "title",
             "note",
             "assignee",
+            "assignee_role",
             "delegate",
             "priority",
             "due_date",
-            "recurrence",
+            "due_rule",
             "sort_order",
             "sub_sort_order",
             *_TASK_EXTENSION_UPDATE_FIELDS,

@@ -74,6 +74,27 @@ def test_ask_then_decide_updates_the_line_and_live_attention(people) -> None:
     assert len(timeline_entries(subject, reviewer)) == 1
 
 
+def test_ask_reminder_supersede_and_answer_each_read_on_the_record(people) -> None:
+    requester, reviewer, bystander, subject = people
+    question = ask(people)
+    assert question.remind()
+    (reminder,) = timeline_entries(subject, reviewer, kind="decisions.reminder")
+    assert (reminder.target_id, reminder.title, reminder.detail) == (public_id_of(question), "Note review", "Reminder")
+    assert not reminder.needs_me
+    with system_context(reason="test.timeline.supersede"):
+        replacement = Decision.objects.supersede(question, DecisionRequest(
+            kind="note_review", records=(subject,), assignees=(bystander,), requester=requester,
+            proposal=DecisionProposal.model_validate(question.proposal),
+        ), actor=requester, reason="Escalated")
+    replacement.decide(actor=bystander, chosen=["complete"])
+    lines = {(line.target_id, line.kind): line.detail for line in timeline_entries(subject, requester)}
+    assert lines == {
+        (public_id_of(question), "decisions.decision"): "Superseded",
+        (public_id_of(question), "decisions.reminder"): "Reminder",
+        (public_id_of(replacement), "decisions.decision"): "Complete",
+    }
+
+
 def test_record_reader_without_decision_read_sees_no_line_identity_or_count(people) -> None:
     _, reviewer, bystander, subject = people
     ask(people)
@@ -215,7 +236,7 @@ def test_union_uses_one_global_order_and_cursor_across_kinds(people, settings, a
     assert identities == expected
     assert all(page["kinds"] == pages[0]["kinds"] and page["needs_me"] == 5 for page in pages)
     assert {kind["id"]: kind["count"] for kind in pages[0]["kinds"]} == {
-        "decisions.decision": 3, "projects.task": 3,
+        "decisions.decision": 3, "decisions.reminder": 0, "projects.task": 3,
     }
     selected = read_timeline(subject, reviewer, kinds=["projects.task"], needsMe=True)["timeline"]
     assert [line["target_id"] for line in selected["entries"]] == [public_id_of(row) for row in reversed(tasks[:2])]

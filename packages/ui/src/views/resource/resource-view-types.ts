@@ -11,6 +11,9 @@ import type {
   ResourceViewKind,
 } from "./resource-view-model";
 import type { ButtonVariant } from "../../ui/button";
+import { cardFrameVariants, type CardFrame } from "../../ui/card";
+import { recipeAxes } from "../../lib/variants";
+import type { ResourceCardContent } from "../../runtime/containers";
 
 import type {
   FilterClauseField,
@@ -57,8 +60,8 @@ export interface CalendarViewSpec {
     start: Date,
     end: Date | null,
   ) => void | Promise<unknown>;
-  /** Quick-create seam: a range select seeds and opens the create form. */
-  onSelectRange?: (start: Date, end: Date) => void;
+  /** Quick-create seam: a range select (whole days when `allDay`) seeds and opens the create form. */
+  onSelectRange?: (start: Date, end: Date, allDay: boolean) => void;
 }
 
 export interface BoardLaneSource {
@@ -133,9 +136,61 @@ export interface BoardCardSpec {
   fields?: readonly string[];
 }
 
+/** Declared default gallery card: an image, a title and a secondary line, each a readable field. */
+export interface GalleryCardSpec<TRow extends Row = Row> {
+  image?: keyof TRow & string;
+  title?: keyof TRow & string;
+  subtitle?: keyof TRow & string;
+}
+
 export interface CardActionContext {
   /** Re-pull the collection backing the board/list surface. */
   refresh: () => void;
+}
+
+/**
+ * What a card renderer knows about the card it draws, discriminated by the
+ * surface: narrow on `kind` before reading a board-only fact.
+ * One renderer serves both surfaces.
+ */
+export type CardRenderContext =
+  | {
+      kind: "gallery";
+      /** The collection has this card selected. */
+      selected: boolean;
+    }
+  | {
+      kind: "board";
+      selected: boolean;
+      /** The card is being dragged. */
+      dragging: boolean;
+      /** The lane's group value (`RowGroup.identity`): the related record's id or the
+       * grouped value, `null` for the records with no value; absent on an ungrouped board. */
+      laneId?: string | null;
+    };
+
+/**
+ * Draw one card's body; the surface keeps the frame, link, selection and actions.
+ * The surface calls it as a plain function while it renders, so it must not call
+ * hooks: return elements, and put hooks in a component it returns
+ * (`(row, context) => <EventCard row={row} context={context} />`). The body is
+ * inside the card's link or button, so it holds no interactive element.
+ */
+export type CardRenderer<TRow extends Row = Row> = (row: TRow, context: CardRenderContext) => ReactNode;
+
+/**
+ * Check a registered card's content (`<app.Model>#card`) as app creation does:
+ * `render` is a function and `frame`, when set, a card frame.
+ * @kind null
+ * @reason Schema infrastructure: validates serialized runtime contracts.
+ */
+export function validateResourceCard(content: unknown, id: string): asserts content is ResourceCardContent {
+  const card = typeof content === "object" && content !== null ? content as Record<string, unknown> : null;
+  if (!card || typeof card.render !== "function") throw new Error(`Card "${id}" needs a render function.`);
+  const frames: readonly string[] = recipeAxes(cardFrameVariants).frame;
+  if (card.frame !== undefined && !frames.includes(String(card.frame))) {
+    throw new Error(`Card "${id}" names frame "${String(card.frame)}"; a card frame is ${frames.map((frame) => `"${frame}"`).join(" or ")}.`);
+  }
 }
 
 export interface ListEmptyAction {
@@ -277,6 +332,9 @@ export interface ListViewProps<TRow extends Row = Row> {
   laneSource?: BoardLaneSource;
   /** Card content without replacing the board's shared frame and actions. */
   boardCard?: BoardCardSpec;
+  /** The gallery kind's default card fields (image, title, subtitle). Without it
+   * the gallery draws the board's column card; `renderCard` overrides both. */
+  gallery?: GalleryCardSpec<TRow>;
   /** Default grouping stack; a single group declares one level. */
   defaultGroup?: ResourceViewGroup | readonly ResourceViewGroup[] | null;
   /** Per-view group defaults seeded by the resource list. */
@@ -322,10 +380,15 @@ export interface ListViewProps<TRow extends Row = Row> {
   ) => ReactNode;
   /** Optional action content rendered in each board card footer. */
   cardActions?: (row: TRow, context: CardActionContext) => ReactNode;
-  /** Optional board card body override — a rich card (description, chips, badges)
-   * instead of the default title + key/value rows. Board view only; the lane
-   * grouping, frame link/click, and the `cardActions` footer are unchanged. */
-  renderCard?: (row: TRow) => ReactNode;
+  /** Card body override for the board and the gallery — a rich card (art,
+   * description, chips, badges) instead of the default title + key/value rows.
+   * The context names the surface, lane and selection; the lane grouping, frame
+   * link/click, selection and the `cardActions` footer are unchanged. */
+  renderCard?: CardRenderer<TRow>;
+  /** How a card's content meets its frame on both surfaces: `inset` pads it,
+   * `flush` lets an art header reach the card's edges with the controls overlaid.
+   * Defaults to each surface's own (board `inset`, gallery `flush`). */
+  cardFrame?: CardFrame;
   /** Empty-state content shown when the list has no rows. */
   emptyContent?: ListEmptyContent;
   /** Class name applied to the collection renderer root. */

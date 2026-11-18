@@ -221,6 +221,15 @@ class ThreadedModelMixin(models.Model):
     thread_post_access: ClassVar[str] = "write"
     """Record permission required to post a chatter message."""
 
+    thread_moderate_access: ClassVar[str] = "write"
+    """Record permission required to moderate chatter (:meth:`can_moderate`).
+
+    A moderator edits and deletes other people's comments, trashes and restores
+    comments, lists the removed ones and manages another party's follow. A record
+    whose ``write`` reaches people who must not moderate (an assignment that may
+    move the record but not edit it) names a narrower permission.
+    """
+
     thread_broadcasts_changes: ClassVar[bool] = False
     """Whether this host streams its record-attached chatter over ``changes(Thread)``.
 
@@ -419,7 +428,7 @@ class ThreadedModelMixin(models.Model):
             raise PermissionDenied(f"{verb} comments on {self._meta.label} requires moderator access to the record.")
 
     def message_update_content(self, message: Message, *, body: str) -> Message:
-        """Update an authored comment or moderate one as a record writer."""
+        """Update an authored comment or moderate one as a record moderator."""
 
         self._require_thread_message(message)
         if error := message.content_edit_error():
@@ -429,7 +438,7 @@ class ThreadedModelMixin(models.Model):
         )
 
     def message_unlink(self, message: Message) -> Message:
-        """Delete an authored comment or moderate one as a record writer."""
+        """Delete an authored comment or moderate one as a record moderator."""
 
         attachment = self._require_thread_message(message)
         if error := message.delete_error():
@@ -439,7 +448,7 @@ class ThreadedModelMixin(models.Model):
     def message_trash(self, message: Message, *, reason: str = "") -> Message:
         """Move a comment to the trash as a record moderator, recording an optional reason.
 
-        Moderation is the record's write authority (:meth:`can_moderate`); an
+        Moderation is the record's :attr:`thread_moderate_access` (:meth:`can_moderate`); an
         author without it never trashes, even their own comment. The trashed
         comment leaves every chatter read except :meth:`message_removed`.
         """
@@ -848,11 +857,11 @@ class ThreadedModelMixin(models.Model):
         return self._message_post_allowed()
 
     def can_moderate(self, user: AbstractBaseUser | AnonymousUser | None = None) -> bool:
-        """Return whether the actor may moderate comments as a record writer."""
+        """Return whether the actor may moderate comments through the declared permission."""
 
         if user is not None and not user.is_authenticated:
             return False
-        return self.has_access("write") if isinstance(self, RebacMixin) else True
+        return self.has_access(self.thread_moderate_access) if isinstance(self, RebacMixin) else True
 
     def _message_post_allowed(self) -> bool:
         """Return whether the ambient actor can post to this row."""

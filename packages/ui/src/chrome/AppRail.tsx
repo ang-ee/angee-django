@@ -32,7 +32,7 @@ import {
 } from "./app-rail-model";
 import { useAppRailPreferences } from "./app-rail-preferences";
 import { RailDefaultMark, RailSortable, useRailSortableItem, type RailSorting } from "./RailSortable";
-import { readRuntimeRouteShortcuts, useAppRuntime, useRuntimeBrand, useRuntimeUserPreferences } from "../runtime";
+import { readRuntimeRouteShortcuts, useAppRuntime, useDeclaredBrand, useRuntimeBrand, useRuntimeUserPreferences } from "../runtime";
 
 export interface AppRailProps {
   className?: string;
@@ -88,6 +88,8 @@ function AppRailBody({
   const rail = useDeveloperRail();
   const { tree, pathname, match, railPlace: activePlace } = useChromePlace();
   const brand = useRuntimeBrand();
+  // Over several apps only a declared brand names the rail; a root's stand-in does not.
+  const caption = useDeclaredBrand()?.name ?? t("chrome.apps");
   const { rail: selectedRail, railExpanded } = useAppRuntime();
   const { railPreferences, setRailPreferences } = useAppRailPreferences();
   const runtimePreferences = useRuntimeUserPreferences();
@@ -209,9 +211,9 @@ function AppRailBody({
         ) : <AppChooser menuItems={tree} className="shrink-0 text-on-rail-hi" anchor={railRef}
           onOpen={expandable && !expanded ? toggleExpanded : undefined} />}
         {expanded && !singleApp ? (
-          <span className="min-w-0 flex-1 truncate text-13 font-semibold text-on-rail-hi">
-            {t("chrome.apps")}
-          </span>
+          <Tooltip label={caption} side="right">
+            <span className="min-w-0 flex-1 truncate text-13 font-semibold text-on-rail-hi">{caption}</span>
+          </Tooltip>
         ) : null}
         {expanded && expandable ? (
           <RailExpansionToggle controls={navId} expanded={expanded} onToggle={toggleAndFocusFooter} className="ml-auto" />

@@ -60,6 +60,8 @@ export function ResourceListBody<TRow extends Row = Row>({
   calendar,
   laneSource,
   boardCard,
+  gallery,
+  renderCard,
   fields,
   relatedModels,
   list: ListRenderer = ListView as ListComponent<TRow>,
@@ -75,6 +77,7 @@ export function ResourceListBody<TRow extends Row = Row>({
   defaultRecordTab,
   toolbarActions,
   cardActions,
+  cardFrame,
   emptyContent,
   draggableRow,
   className,
@@ -126,10 +129,13 @@ export function ResourceListBody<TRow extends Row = Row>({
     rowHref: resolvedRowHref,
     toolbarActions,
     cardActions,
+    cardFrame,
     draggableRow,
     emptyContent,
     laneSource: resolvedLaneSource,
     boardCard,
+    gallery,
+    renderCard,
     ...(declarations.list
       ? listElementRenderProps(declarations.list.props)
       : {}),
@@ -200,8 +206,8 @@ export function ResourceListBody<TRow extends Row = Row>({
     handleSelectRecord?.(null);
   }, [handleSelectRecord]);
   const handleCalendarSelectRange = React.useCallback(
-    (start: Date, end: Date) => {
-      setQuickCreateDefaults(calendar?.createDefaults?.(start, end));
+    (start: Date, end: Date, allDay: boolean) => {
+      setQuickCreateDefaults(calendar?.createDefaults?.(start, end, allDay));
       handleSelectRecord?.(null);
     },
     [calendar, handleSelectRecord],
@@ -332,7 +338,7 @@ export function ResourceListBody<TRow extends Row = Row>({
       toolbarStart={formRenderProps.toolbarStart}
       toolbar={composeNodes(formRenderProps.toolbar, recordHeaderActions)}
       deleteAction={recordDeleteAction}
-      publishBreadcrumbLabel={routed && !resolvedCreating}
+      publishBreadcrumbLabel={routed}
     />
   ) : null;
   const recordContent = renderRecord && !resolvedCreating

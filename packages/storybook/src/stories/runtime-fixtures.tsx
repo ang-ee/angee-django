@@ -26,6 +26,7 @@ import {
   type AppRuntime,
 } from "@angee/ui";
 import {
+  ActiveDataProviderNameProvider,
   createAngeeHasuraDataProviders,
   OperationDocumentsProvider,
   Refine,
@@ -36,7 +37,7 @@ import {
 import type { IResourceItem } from "@refinedev/core";
 import { graphqlWireFetch, type GraphQLWireOperation, type GraphQLWireRequest } from "@angee/refine/testing/wire";
 import { composeAddons } from "@angee/app";
-import { parseFlatSearch, stringifyFlatSearch } from "@angee/app/create-app";
+import { createApp, parseFlatSearch, stringifyFlatSearch, type CreateAppInput } from "@angee/app/create-app";
 import { NuqsTestingAdapter } from "nuqs/adapters/testing";
 import { NuqsAdapter } from "nuqs/adapters/tanstack-router";
 import { previewThemes, previewThemeId } from "../theme-global";
@@ -51,6 +52,26 @@ import {
 
 export { testDataResource, testQueryAxis, testQueryField, testResourceQuery } from "@angee/metadata/testing";
 export { GraphQLError, type GraphQLWireOperation, type GraphQLWireRequest } from "@angee/refine/testing/wire";
+export { resourceSnapshotOperations } from "../resource-snapshots";
+
+/** Full product pages use the production composition root and native memory history.
+ * The caller owns stable fixture input, including every schema's isolated transport.
+ * Set angeeOwnRuntime so the global decorator does not mount a second provider stack.
+ */
+export function ComposedRuntimeFixture({ input, initialEntry }: {
+  input: CreateAppInput;
+  initialEntry: string;
+}) {
+  const app = useMemo(() => {
+    for (const [name, schema] of Object.entries(input.schemas)) {
+      if (!schema.fetch || schema.live !== false) {
+        throw new Error(`Story schema ${name} needs a fixture fetch and live subscriptions disabled.`);
+      }
+    }
+    return createApp({ ...input, history: createMemoryHistory({ initialEntries: [initialEntry] }) });
+  }, [input, initialEntry]);
+  return <RouterProvider router={app.router} />;
+}
 
 /**
  * The one Storybook environment, shared by the global preview decorator and
@@ -125,8 +146,8 @@ export interface RuntimeFixtureProps {
 
 /**
  * Wrap a data-bound view in the modal host, refine data providers over `schemas`,
- * active schema metadata, and the composed runtime — the stack every fetching
- * view needs to render in isolation.
+ * the active schema's name and metadata, and the composed runtime — the stack every
+ * fetching view needs to render in isolation.
  */
 export function RuntimeFixture({
   activeSchema = "public",
@@ -177,14 +198,17 @@ export function RuntimeFixture({
           liveProvider={liveProvider}
           resources={resources ?? [...refineResourcesFromAngeeSchemaMetadata(normalized[activeSchema]?.metadata)]}
           routerProvider={routed ? tanStackRouterProvider : undefined}
-          options={{ syncWithLocation, ...(queryClient ? { reactQuery: { clientConfig: queryClient } } : {}) }}
+          options={{ syncWithLocation, disableTelemetry: true, ...(queryClient ? { reactQuery: { clientConfig: queryClient } } : {}) }}
         >
           <OperationDocumentsProvider documents={operationDocuments}>
-            <ModelMetadataProvider metadata={fieldMetadata}>
-              <QueryStateAdapter>
-                <ToastProvider><ModalsHost>{children}</ModalsHost></ToastProvider>
-              </QueryStateAdapter>
-            </ModelMetadataProvider>
+            {/* As the app's layout route does: hooks outside a resource surface resolve the active schema. */}
+            <ActiveDataProviderNameProvider name={activeSchema}>
+              <ModelMetadataProvider metadata={fieldMetadata}>
+                <QueryStateAdapter>
+                  <ToastProvider><ModalsHost>{children}</ModalsHost></ToastProvider>
+                </QueryStateAdapter>
+              </ModelMetadataProvider>
+            </ActiveDataProviderNameProvider>
           </OperationDocumentsProvider>
         </Refine>
       </AppearanceProvider>

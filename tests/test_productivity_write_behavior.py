@@ -305,9 +305,9 @@ def test_deferred_stage_default_and_validation_call_hooks(
     original_stages = RoutingPipelineStage.for_container
     seen = []
 
-    def legacy_default(cls: Any, container: Any) -> Any:
+    def legacy_default(cls: Any, container: Any, **kwargs: Any) -> Any:
         seen.append(("default", container._state.db))
-        return original_default(container)
+        return original_default(container, **kwargs)
 
     def legacy_stages(cls: Any, container: Any) -> Any:
         seen.append(("stages", container._state.db))
@@ -317,7 +317,8 @@ def test_deferred_stage_default_and_validation_call_hooks(
     monkeypatch.setattr(RoutingPipelineStage, "for_container", classmethod(legacy_stages))
     assert record.resolve_default_stage().pk == stage.pk
     record.validate_stage_scope()
-    assert seen == [("default", "default"), ("stages", "default"), ("stages", "default")]
+    # The applicable stages are read once for the default and once for the scope check.
+    assert seen == [("stages", "default"), ("default", "default"), ("stages", "default")]
 
 
 @pytest.mark.django_db(transaction=True)
@@ -331,7 +332,7 @@ def test_stage_scope_rejects_foreign_container(productivity_tables: None) -> Non
 
 
 @pytest.mark.django_db
-def test_bulk_snooze_wake_clears_only_the_selected_snoozes() -> None:
+def test_due_wake_clears_only_the_selected_holds() -> None:
     """The work queryset wakes the rows its caller selected, through the composed task."""
 
     now = timezone.now()
@@ -339,13 +340,13 @@ def test_bulk_snooze_wake_clears_only_the_selected_snoozes() -> None:
         owner = create_user("productivity-wake-owner")
         rows = []
         for title in ("Selected", "Other"):
-            row = Task(title=title, snoozed_until=now, snoozed_by=owner)
+            row = Task(title=title, snoozed_at=now, snoozed_until=now, snoozed_by=owner)
             row.sudo(reason="tests.productivity.wake.create").save(ownerless=True)
             rows.append(row)
         assert Task.work.filter(pk=rows[0].pk).wake_due_snoozes(now=now) == 1
     selected, other = (Task._base_manager.get(pk=row.pk) for row in rows)
-    assert (selected.snoozed_until, selected.snoozed_by_id) == (None, None)
-    assert (other.snoozed_until, other.snoozed_by_id) == (now, owner.pk)
+    assert (selected.snoozed_at, selected.snoozed_until, selected.snoozed_by_id) == (None, None, None)
+    assert (other.snoozed_at, other.snoozed_until, other.snoozed_by_id) == (now, now, owner.pk)
 
 
 @pytest.mark.parametrize("status", ["open", "done", "dropped"])

@@ -37,7 +37,7 @@ test("an app condition narrows the app's routes and their record children, never
         { name: "desk.home", path: "/desk", component: ToolsPage },
         { name: "desk.record", path: "/desk/$id", parent: "desk.home", component: ToolsPage },
         { name: "desk.public", path: "/open", layout: "public", component: ToolsPage },
-        { name: "desk.signin", path: "/signin", component: ToolsPage },
+        { name: "auth.login", path: "/signin", component: ToolsPage },
       ],
       menus: {
         "desk": { route: "desk.home" },
@@ -58,7 +58,6 @@ test("an app condition narrows the app's routes and their record children, never
     schemas: TEST_SCHEMAS,
     defaultSchema: "console",
     location: { search: "?app=desk" },
-    loginPath: "/signin",
   });
   const host = document.createElement("div"); document.body.append(host);
   const root = app.mount(host);

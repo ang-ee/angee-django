@@ -40,4 +40,6 @@ export interface ResourceViewInitialState {
   view?: ResourceViewKind;
   mode?: CalendarViewMode;
   anchor?: string;
+  /** Calendar source keys whose occurrences the calendar kind hides. */
+  hiddenSources?: readonly string[];
 }

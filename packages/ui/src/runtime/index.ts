@@ -32,6 +32,8 @@ export {
   type CoreContainer,
   type ResolveContainerOptions,
   type ResourceViewKindContent,
+  type ResourceCardContent,
+  type LoginHeroContent,
   type DockedDrawerContent,
 } from "./containers";
 export {
@@ -55,6 +57,7 @@ export {
   useLoginPath,
   useRuntimeAuth,
   useRuntimeBrand,
+  useDeclaredBrand,
   useRuntimeViewAs,
   useRuntimeLogoutAction,
   useRuntimeUserPreferences,
@@ -82,6 +85,7 @@ export {
   type RuntimeRouteShortcut,
 } from "./runtime";
 export {
+  REFINE_CREATE_ID,
   RECORD_NAVIGATION_SEARCH_KEY,
   RECORD_TAB_SEARCH_KEY,
   CHATTER_TAB_SEARCH_KEY,

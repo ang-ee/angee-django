@@ -14,49 +14,59 @@ import { testDataResource } from "@angee/metadata/testing";
 import type { CalendarWindow, Occurrence } from "./CalendarView";
 import {
   calendarWindowBounds,
+  calendarWindowSource,
   useCalendarWindow,
-  type CalendarWindowSource,
+  type AnyCalendarWindowSource,
 } from "./use-calendar-window";
 
-// The transport owner is `@angee/refine`'s authored-query hook; the window
-// adapter only composes it. Stub it to record the variables it receives (so the
-// refetch contract is observable) and to return a fixture result to map.
-const authored = vi.hoisted(() => ({
-  calls: [] as Array<{ variables: unknown; options: unknown }>,
-  data: undefined as unknown,
+// The transport owner is `@angee/refine`'s batch read; the window adapter only
+// composes it. Stub it to record the scopes and options it receives (so the
+// refetch and source-set contracts are observable) and to answer each scope.
+interface Scope {
+  key: string;
+  variables: unknown;
+  models?: readonly string[];
+}
+const batch = vi.hoisted(() => ({
+  calls: [] as Array<{ scopes: Scope[]; options: { enabled?: boolean } }>,
+  data: {} as Record<string, unknown>,
+  refetched: [] as string[],
 }));
 
 vi.mock("@angee/refine", () => ({
-  useAuthoredQuery: (
-    _document: unknown,
-    variables: unknown,
-    options: unknown,
-  ) => {
-    authored.calls.push({ variables, options });
-    return { data: authored.data, isFetching: false, error: null, refetch: () => {} };
+  useAuthoredQueryBatch: (scopes: Scope[], options: { enabled?: boolean }) => {
+    batch.calls.push({ scopes, options });
+    return new Map(scopes.map((scope) => [scope.key, {
+      data: batch.data[scope.key],
+      isFetching: false,
+      error: null,
+      refetch: () => batch.refetched.push(scope.key),
+    }]));
   },
 }));
 
 interface OccurrencesResult {
   event_occurrences: Occurrence[];
 }
-// The document's variables are a codegen-style mapped type (implicit index
-// signature), the shape a generated `TypedDocumentNode` carries.
 type WindowVariables = { window_start: string; window_end: string };
 const DOCUMENT = {} as TypedDocumentNode<OccurrencesResult, WindowVariables>;
 
-const SOURCE: CalendarWindowSource<typeof DOCUMENT> = {
-  document: DOCUMENT,
-  variables: (window) => calendarWindowBounds(window),
-  select: (data) => data?.event_occurrences,
-  models: ["Event"],
-};
+function source(key: string | undefined, extra: Partial<AnyCalendarWindowSource> = {}): AnyCalendarWindowSource {
+  return {
+    ...calendarWindowSource({
+      key,
+      document: DOCUMENT,
+      variables: (window) => calendarWindowBounds(window),
+      select: (data) => data?.event_occurrences,
+      models: ["Event"],
+    }),
+    ...extra,
+  };
+}
 
 function Metadata({ children }: { children: ReactNode }): ReactNode {
   return createElement(ModelMetadataProvider, {
-    metadata: schemaFieldMetadataFromDataResources([
-      testDataResource("calendar.Event"),
-    ]),
+    metadata: schemaFieldMetadataFromDataResources([testDataResource("calendar.Event")]),
     children,
   });
 }
@@ -81,53 +91,85 @@ const OCC: Occurrence = {
 };
 
 beforeEach(() => {
-  authored.calls = [];
-  authored.data = undefined;
+  batch.calls = [];
+  batch.data = {};
+  batch.refetched = [];
 });
 
 describe("useCalendarWindow", () => {
-  test("maps the occurrence rows out of the authored result", () => {
-    authored.data = { event_occurrences: [OCC] };
-    const { result } = renderHook(() => useCalendarWindow(SOURCE, JUNE), {
-      wrapper: Metadata,
-    });
+  test("merges every source's occurrences from one batch read", () => {
+    batch.data = {
+      events: { event_occurrences: [OCC] },
+      tasks: { event_occurrences: [{ ...OCC, occurrence_id: "task_1" }] },
+    };
+    const sources = [source("events"), source("tasks")];
+    const { result } = renderHook(() => useCalendarWindow(sources, JUNE), { wrapper: Metadata });
 
-    expect(result.current.occurrences).toEqual([OCC]);
-    expect(result.current.fetching).toBe(false);
-    // The window rides the query variables (start inclusive, end exclusive).
-    expect(authored.calls.at(-1)?.variables).toEqual({
+    expect(result.current.occurrences.map((occurrence) => occurrence.occurrence_id)).toEqual(["cev_a", "task_1"]);
+    expect(batch.calls.at(-1)?.scopes.map((scope) => scope.key)).toEqual(["events", "tasks"]);
+    // The window rides each source's variables (start inclusive, end exclusive).
+    expect(batch.calls.at(-1)?.scopes[0]?.variables).toEqual({
       window_start: "2026-06-01T00:00:00.000Z",
       window_end: "2026-07-06T00:00:00.000Z",
     });
   });
 
-  test("returns an empty array when the result has no occurrences yet", () => {
-    authored.data = undefined;
-    const { result } = renderHook(() => useCalendarWindow(SOURCE, JUNE), {
-      wrapper: Metadata,
-    });
+  test("returns an empty array while no source has answered", () => {
+    const { result } = renderHook(() => useCalendarWindow([source(undefined)], JUNE), { wrapper: Metadata });
     expect(result.current.occurrences).toEqual([]);
   });
 
+  test("keeps one occurrence array while the results are unchanged", () => {
+    batch.data = { events: { event_occurrences: [OCC] } };
+    const sources = [source("events")];
+    const { result, rerender } = renderHook(() => useCalendarWindow(sources, JUNE), { wrapper: Metadata });
+    const first = result.current.occurrences;
+
+    rerender();
+
+    expect(result.current.occurrences).toBe(first);
+  });
+
   test("refetches with the new bounds when the window changes", () => {
+    const sources = [source("events")];
     const { rerender } = renderHook(
-      ({ window }: { window: CalendarWindow }) => useCalendarWindow(SOURCE, window),
+      ({ window }: { window: CalendarWindow }) => useCalendarWindow(sources, window),
       { initialProps: { window: JUNE }, wrapper: Metadata },
     );
-    const first = authored.calls.at(-1)?.variables;
-
     rerender({ window: JULY });
-    const second = authored.calls.at(-1)?.variables;
 
-    expect(second).not.toEqual(first);
-    expect(second).toEqual({
+    expect(batch.calls.at(-1)?.scopes[0]?.variables).toEqual({
       window_start: "2026-07-01T00:00:00.000Z",
       window_end: "2026-08-03T00:00:00.000Z",
     });
   });
 
-  test("passes the source's invalidation models through to the query owner", () => {
-    renderHook(() => useCalendarWindow(SOURCE, JUNE), { wrapper: Metadata });
-    expect(authored.calls.at(-1)?.options).toMatchObject({ models: ["calendar.Event"] });
+  test("a hidden or opted-out source leaves the batch; the batch waits while disabled", () => {
+    const sources = [source("events"), source("tasks"), source("lone", { enabled: false })];
+    renderHook(() => useCalendarWindow(sources, JUNE, { hidden: new Set(["tasks"]), enabled: false }), {
+      wrapper: Metadata,
+    });
+
+    expect(batch.calls.at(-1)?.scopes.map((scope) => scope.key)).toEqual(["events"]);
+    expect(batch.calls.at(-1)?.options.enabled).toBe(false);
+  });
+
+  test("passes each source's canonical invalidation models and refetches every shown source", () => {
+    const sources = [source("events"), source(undefined)];
+    const { result } = renderHook(() => useCalendarWindow(sources, JUNE), { wrapper: Metadata });
+
+    expect(batch.calls.at(-1)?.scopes.map((scope) => [scope.key, scope.models])).toEqual([
+      ["events", ["calendar.Event"]],
+      ["#1", ["calendar.Event"]],
+    ]);
+    result.current.refetch();
+    expect(batch.refetched).toEqual(["events", "#1"]);
+  });
+
+  test("refuses sources that name different data providers", () => {
+    const sources = [source("events"), source("tasks", { dataProviderName: "other" })];
+    expect(() => renderHook(() => useCalendarWindow(sources, JUNE), { wrapper: Metadata })).toThrow(
+      /share one data provider/,
+    );
   });
 });
