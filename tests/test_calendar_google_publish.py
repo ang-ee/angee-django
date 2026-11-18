@@ -86,6 +86,8 @@ class FakeCalendar:
     """A stamp lookup also finds each found series' first instance, which carries its master's stamp."""
     before_insert: Callable[[], None] | None = None
     """Run once, as the first insert lands: work that races a push already writing."""
+    before_patch: Callable[[], None] | None = None
+    """Run once, as the first patch lands."""
     scopes: list[str] = field(default_factory=list)
     requests: list[httpx2.Request] = field(default_factory=list)
 
@@ -154,6 +156,9 @@ class FakeCalendar:
         if patched.get("summary") in self.refused:
             return _refusal(400, "invalid")
         stored = self._store(events, patched)
+        if self.before_patch is not None:
+            run, self.before_patch = self.before_patch, None
+            run()
         if self.lost_patches:
             self.lost_patches -= 1
             raise httpx2.ReadTimeout("The answer was lost.", request=request)
@@ -825,6 +830,58 @@ def test_a_moved_series_carries_its_pushed_override_to_its_new_instance(publishe
     assert (links[before].status, links[after].target_object_id) == (LinkStatus.TOMBSTONE, str(moved.pk))
     assert published.remote()[f"{master}_{_basic(_berlin(5, 11, 10))}"]["summary"] == "Standup (moved)"
     assert published.open_failures(after) == []
+
+
+@pytest.mark.parametrize("written", ["inserted", "patched"])
+def test_an_event_deleted_while_its_push_writes_it_is_removed_from_google_by_the_next_push(
+    published: Published, written: str
+) -> None:
+    published.publish()
+    workshop = published.event(start=_berlin(5, 4, 10), end=_berlin(5, 4, 12))
+    key = event_id(workshop.sqid)
+    if written == "patched":
+        published.poll()
+        published.edit(workshop, location="Hall")
+        published.google.before_patch = lambda: published.delete(workshop)
+    else:
+        published.google.before_insert = lambda: published.delete(workshop)
+
+    # The write lands as the event goes: its link binds no deleted row.
+    published.poll()
+    assert (published.links()[key].target_object_id, published.remote()[key]["status"]) == (None, "confirmed")
+
+    published.poll()
+    assert published.remote()[key]["status"] == "cancelled"
+    assert published.links()[key].status == LinkStatus.TOMBSTONE
+
+
+def test_a_series_moved_while_its_override_is_pushed_leaves_no_duplicate_instance(published: Published) -> None:
+    published.publish()
+    standup = published.event(
+        title="Standup", start=_berlin(5, 4, 9), end=_berlin(5, 4, 9, 30), recurrence="FREQ=WEEKLY;COUNT=4"
+    )
+    moved = published.event(
+        title="Standup (moved)", series=standup, original_start=_berlin(5, 11, 9),
+        start=_berlin(5, 11, 10), end=_berlin(5, 11, 10, 45),
+    )
+    published.poll()
+    master = event_id(standup.sqid)
+    before, after = (f"{master}#{_basic(_berlin(5, 11, hour))}" for hour in (9, 10))
+    published.edit(moved, location="Hall")
+    # The override's patch lands as its series moves an hour later, carrying it to another instance.
+    published.google.before_patch = lambda: published.edit(standup, start=_berlin(5, 4, 10), end=_berlin(5, 4, 10, 30))
+
+    published.poll()
+    assert published.links()[before].target_object_id is None
+    published.poll()
+
+    links = published.links()
+    assert [key for key, link in links.items() if link.target_object_id == str(moved.pk)] == [after]
+    assert links[before].status == LinkStatus.TOMBSTONE
+    remote = published.remote()
+    # The old instance is the series' own again; the override lives only at its new instance.
+    assert remote[f"{master}_{_basic(_berlin(5, 11, 9))}"]["summary"] == "Standup"
+    assert remote[f"{master}_{_basic(_berlin(5, 11, 10))}"]["location"] == "Hall"
 
 
 def test_an_event_switched_from_all_day_to_timed_clears_its_date(published: Published) -> None:

@@ -39,7 +39,7 @@ from django.contrib.contenttypes.models import ContentType
 from django.core import checks
 from django.core.exceptions import ImproperlyConfigured, ValidationError
 from django.db import connection, models, transaction
-from django.db.models import BooleanField, ExpressionWrapper, OuterRef, Prefetch, ProtectedError, Q, Subquery
+from django.db.models import OuterRef, Prefetch, Q, Subquery
 from django.db.models.functions import JSONObject
 from django.utils import timezone
 from django.utils.text import capfirst
@@ -5456,26 +5456,20 @@ class RecordLinkManager[RecordLinkT: RecordLink](_RecordLinkManagerBase[RecordLi
     def release_pushes(self, target: models.Model) -> int:
         """Let ``target`` go from the push links naming it, so each push writes its removal; return how many.
 
-        A row only push links name is the local side of what they publish. Once it is
+        A row a push link names is the local side of what it publishes. Once it is
         deleted (:meth:`RecordLink.teardown_for_target`), or no longer the record a
-        link names, its links release it, and ``push_stream`` yields each released
-        link's removal. A link that holds the row (:meth:`RecordLink.live_reference_filter`)
-        refuses with ``ProtectedError``, the policy of every other record edge.
+        link names, its push links release it, and ``push_stream`` yields each
+        released link's removal. A link that holds the row
+        (:meth:`RecordLink.live_reference_filter`) stays bound; this never refuses.
+        The row is locked before its links, the order a push reflecting its write
+        takes them (``push_stream``), so neither waits on the other's second lock.
         """
 
         content_type, object_id = generic_pointer_target(target)
-        live = ExpressionWrapper(self.model.live_reference_filter(principal=None), output_field=BooleanField())
-        # One unscoped read, the cost of every record delete: the base manager is the unscoped one.
-        pointing = list(
-            self.model._base_manager.filter(target_content_type=content_type, target_object_id=object_id)
-            .annotate(live=live)
-            .only("pk")
-        )
-        if held := {link for link in pointing if link.live}:
-            raise ProtectedError(f"{self.model._meta.label} rows still refer to {target}.", held)
-        if not pointing:
-            return 0
-        return self.release_targets(self.model._base_manager.filter(pk__in=[link.pk for link in pointing]))
+        pushed = self.model._base_manager.filter(target_content_type=content_type, target_object_id=object_id)
+        with transaction.atomic():
+            type(target)._base_manager.select_for_update().filter(pk=target.pk).exists()
+            return self.release_targets(pushed.exclude(self.model.live_reference_filter(principal=None)))
 
     def release_targets(self, links: models.QuerySet[Any]) -> int:
         """Let every row ``links`` binds go at once, as :meth:`release_target` lets one go; return how many.
@@ -5756,14 +5750,14 @@ class RecordLink(
 
     @classmethod
     def blocks_target_delete(cls, target: type[models.Model]) -> bool:
-        """A link the live filter keeps blocks its target's deletion: :meth:`teardown_for_target` refuses it."""
+        """A link the live filter keeps blocks its target's deletion, before :meth:`teardown_for_target` runs."""
 
         del target
         return True
 
     @classmethod
     def teardown_for_target(cls, target: models.Model) -> None:
-        """Refuse deleting a row a live link holds, else release the push links naming it (``release_pushes``)."""
+        """Release the push links naming a deleted row (``release_pushes``); this never refuses."""
 
         cls.objects.release_pushes(target)
 

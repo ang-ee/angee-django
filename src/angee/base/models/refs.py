@@ -22,6 +22,7 @@ from django.contrib.contenttypes.models import ContentType
 from django.core import checks
 from django.core.exceptions import ImproperlyConfigured, ValidationError
 from django.db import models
+from django.db.models import BooleanField, ExpressionWrapper
 from django.db.models.deletion import ProtectedError
 from django.utils.text import capfirst
 from rebac import system_context
@@ -42,6 +43,10 @@ from angee.base.refs import RecordRef, generic_pointer_model, generic_pointer_ta
 
 class _TargetTeardown(Protocol):
     def __call__(self, target: models.Model) -> None: ...
+
+
+_HOLDS_TARGET = "_angee_holds_deleted_target"
+"""The annotation marking a blocking edge's row live while its target is deleted."""
 
 
 class _RecordTargets(InstancePrefetch):
@@ -112,10 +117,11 @@ class RecordRefMixin(RecordRefMergeContract):
     It runs before each collected target instance is deleted, whether the target
     names the edge through a reverse ``GenericRelation`` or the edge's schema
     declares the target's type. An MTI child's deletion collects its canonical
-    parent too, so a teardown is idempotent. An edge with a teardown does not block
-    its target's deletion, unless its owner declares that some of its rows do
-    (``blocks_target_delete``, narrowed by ``live_reference_filter``) and its
-    teardown refuses while one of them names the target.
+    parent too, so a teardown is idempotent. A teardown never blocks its target's
+    deletion: an edge whose owner declares rows that do (``blocks_target_delete``,
+    narrowed by ``live_reference_filter``) has them refuse first
+    (:func:`delete_record_refs`), and then runs its teardown only while a row of it
+    names the target.
     """
 
     class Meta:
@@ -448,37 +454,42 @@ def record_ref_cleanup_edges_for_target(
 
 
 def delete_record_refs(instance: models.Model, using: str, **kwargs: Any) -> None:
-    """Apply each edge owner's declared policy before a collected target instance is deleted.
+    """Refuse a collected target its edges' live rows hold, then apply each edge's teardown or policy.
 
-    An edge declaring ``teardown_for_target`` runs it instead of its
-    ``on_target_delete`` policy, once per collected instance, whether the target
-    names it through a reverse relation or the edge's schema declares the target.
+    Every edge controlling the target, named by its retained reverse relations
+    or declaring its type in the edge's schema, is judged once per collected
+    instance. An edge that ``blocks_target_delete`` reads the rows naming the
+    target first: one its ``live_reference_filter`` selects refuses the deletion
+    with ``ProtectedError``, the rule creation undo applies
+    (``has_live_references``), and none at all leaves the edge nothing to do.
+    The edge's ``teardown_for_target`` then runs instead of its
+    ``on_target_delete`` policy; a teardown never blocks.
     """
 
     del kwargs
     cleanup_edges = record_ref_cleanup_edges_for_target(type(instance))
-    for edge in cleanup_edges:
-        teardown = edge.teardown_for_target
-        assert teardown is not None
-        teardown(instance)
     target = canonical_model(type(instance))
     declared = record_edges_by_target().get(target, ()) if target is not None else ()
     content_type, object_id = generic_pointer_target(instance)
-    for edge in declared:
-        if edge in cleanup_edges:
-            continue
-        if edge.teardown_for_target is not None:
-            edge.teardown_for_target(instance)
-            continue
+    for edge in (*cleanup_edges, *(edge for edge in declared if edge not in cleanup_edges)):
         pointer = edge.record_ref_field()
         rows = edge._base_manager.using(using).filter(
             **{pointer.ct_field: content_type, pointer.fk_field: object_id}
         )
+        if edge.blocks_target_delete(type(instance)):
+            live = ExpressionWrapper(edge.live_reference_filter(principal=None), output_field=BooleanField())
+            # One read per blocking edge, as a PROTECT edge always cost: every row naming the target, marked live.
+            naming = list(rows.annotate(**{_HOLDS_TARGET: live}))
+            if held := {row for row in naming if getattr(row, _HOLDS_TARGET)}:
+                raise ProtectedError(f"{edge._meta.label} rows still refer to {instance}.", held)
+            if not naming:
+                continue
+        if edge.teardown_for_target is not None:
+            edge.teardown_for_target(instance)
+            continue
         policy = edge.on_target_delete
         if policy is models.PROTECT:
-            protected: set[models.Model] = set(rows)
-            if protected:
-                raise ProtectedError(f"{edge._meta.label} rows still refer to {instance}.", protected)
+            # Its live rows refused above; any other row is evidence its owner keeps.
             continue
         with system_context(reason="record_ref.target_delete"):
             if policy is models.CASCADE:

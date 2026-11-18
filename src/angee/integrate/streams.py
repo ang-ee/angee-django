@@ -421,6 +421,27 @@ def _withdraw_absent(stream: Any, adapter: BridgeImpl, links: Sequence[Any]) -> 
         )
 
 
+def _lock_written(links: Any, link: Any, record: RecordChange, *, bound: bool) -> tuple[Any, RecordChange]:
+    """Lock a written candidate's row, then its link; return the link, and ``record`` binding no row once it went.
+
+    A push reads its candidates before it writes them. Meanwhile the row may be
+    deleted, or its owner may release a link the batch read ``bound`` (the record
+    its key named is no longer that row: a moved override). Binding the row read
+    would bind a deleted row, or a moved row's old key again; binding none leaves
+    the link released, so the next push writes its removal over this write's
+    version. The row is locked before its link, the order a deletion and
+    ``RecordLinkManager.release_pushes`` take them, so a deletion still running
+    finishes first, or waits and then releases the link this write binds.
+    """
+
+    target = record.target
+    present = target is None or type(target)._base_manager.select_for_update().filter(pk=target.pk).exists()
+    locked = links.lock_if_supported().get(pk=link.pk)
+    if target is not None and (not present or (bound and locked.target_object_id is None)):
+        record = replace(record, target=None)
+    return locked, record
+
+
 def _reflect_write(stream: Any, link: Any, record: RecordChange, result: WriteBackResult) -> None:
     if not isinstance(result, WriteBackResult):
         raise AdapterContractError("write_back must return WriteBackResult.")
@@ -782,6 +803,8 @@ def push_stream(
             if (limit := sync_deadline()) is not None and monotonic() >= limit:
                 return PageResult(stream, count, failure_ids=tuple(failures))
             candidates.add(candidate.external_key)
+            # The link as the batch read it, before any release that races this write.
+            bound = link is not None and link.target_object_id is not None
             if link is None:
                 link, revision = links.observe(stream, candidate.external_key), None
             else:
@@ -809,7 +832,7 @@ def push_stream(
             with changeset(fresh=True, activity="push", origin=stream), transaction.atomic():
                 current_changeset(record=True)
                 locked_stream = type(stream).objects.lock_current(stream, fenced_to=stream)
-                locked = links.lock_if_supported().get(pk=link.pk)
+                locked, record = _lock_written(links, link, record, bound=bound)
                 _check_write_precondition(locked, bases)
                 _reflect_write(locked_stream, locked, record, result)
                 # The write the remote once refused has now landed.

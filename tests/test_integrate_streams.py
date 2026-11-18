@@ -25,6 +25,7 @@ from hypothesis import example, given, settings
 from hypothesis import strategies as st
 from rebac import system_context
 
+from angee.base.models.merge_references import has_live_references
 from angee.base.serialization import canonical_json
 from angee.integrate import streams as stream_driver
 from angee.integrate.errors import IntegrationError
@@ -2612,8 +2613,8 @@ def test_only_push_links_let_their_row_go_and_the_push_writes_its_removal(
     link = RecordLink.objects.observe(stream, "ada", target=person)
     RecordLink.objects.promote(link, source_payload={}, source_hash="v1", mapped_payload={"n": 1}, remote_version="v1")
     if direction != StreamDirection.PUSH:
-        # A pulled or two-way record is the source's: its link keeps it.
-        with pytest.raises(models.ProtectedError):
+        # A pulled or two-way record is the source's: its link keeps it, refused as every protecting edge refuses.
+        with pytest.raises(models.ProtectedError, match=f"{RecordLink._meta.label} rows still refer to "):
             Person.objects.get(pk=person.pk).delete()
         assert RecordLink.objects.get(pk=link.pk).target_object_id == str(person.pk)
         return
@@ -2632,6 +2633,84 @@ def test_only_push_links_let_their_row_go_and_the_push_writes_its_removal(
     assert adapter.written == [("ada", None, "v1")]
     assert RecordLink.objects.get(pk=link.pk).status == LinkStatus.TOMBSTONE
     assert push_stream(stream, adapter).count == 0
+
+
+@pytest.mark.parametrize("direction", [StreamDirection.PUSH, StreamDirection.PULL])
+def test_creation_undo_and_deletion_judge_a_link_by_one_live_filter(
+    stream_bridge: Channel, direction: StreamDirection
+) -> None:
+    """Creation undo's structural check (``has_live_references``) and the delete receiver agree on push links."""
+
+    from angee.messaging.testing.models import Person
+
+    stream = current_stream(stream_bridge, "people", kind=StreamKind.RECORD_REPLICA, direction=direction)
+    person = Person.objects.create(display_name="Ada")
+    link = RecordLink.objects.observe(stream, "ada", target=person)
+    RecordLink.objects.promote(link, source_payload={}, source_hash="v1", mapped_payload={"n": 1}, remote_version="v1")
+
+    held = direction != StreamDirection.PUSH
+    assert has_live_references(Person.objects.get(pk=person.pk)) is held
+    if held:
+        with pytest.raises(models.ProtectedError):
+            Person.objects.get(pk=person.pk).delete()
+    else:
+        Person.objects.get(pk=person.pk).delete()
+    assert Person.objects.filter(pk=person.pk).exists() is held
+
+
+def test_a_record_link_teardown_releases_push_links_only_and_never_raises(stream_bridge: Channel) -> None:
+    """The receiver refuses on live links first; the teardown itself lets push links go and leaves the rest."""
+
+    from angee.messaging.testing.models import Person
+
+    person = Person.objects.create(display_name="Ada")
+    pulled, pushed = (
+        RecordLink.objects.observe(
+            current_stream(stream_bridge, key, kind=StreamKind.RECORD_REPLICA, direction=direction), "ada",
+            target=person,
+        )
+        for key, direction in (("pulled", StreamDirection.PULL), ("pushed", StreamDirection.PUSH))
+    )
+
+    RecordLink.teardown_for_target(person)
+
+    assert RecordLink.objects.get(pk=pulled.pk).target_object_id == str(person.pk)
+    assert RecordLink.objects.get(pk=pushed.pk).target_object_id is None
+
+
+@pytest.mark.parametrize("bound", [True, False], ids=["written-before", "new"])
+def test_a_row_deleted_during_its_push_is_bound_by_nothing_and_its_removal_is_the_next_write(
+    stream_bridge: Channel, bound: bool
+) -> None:
+    from angee.messaging.testing.models import Person
+
+    stream = current_stream(stream_bridge, "people", kind=StreamKind.RECORD_REPLICA, direction=StreamDirection.PUSH)
+    SyncStream.objects.advance(stream, {}, exhausted=True)
+    person = Person.objects.create(display_name="Ada")
+    if bound:
+        link = RecordLink.objects.observe(stream, "ada", target=person)
+        RecordLink.objects.promote(
+            link, source_payload={}, source_hash="v1", mapped_payload={"n": 1}, remote_version="v1"
+        )
+
+    class DeletingAdapter(MemoryAdapter):
+        def write_back(self, link: Any, projection: Any, *, expected_version: str) -> WriteBackResult:
+            result = super().write_back(link, projection, expected_version=expected_version)
+            if projection is not None:
+                # The row goes while its write is in flight, after the push read it.
+                Person.objects.get(pk=person.pk).delete()
+            return replace(result, remote_version=f"v{len(self.written) + 1}", tombstone=projection is None)
+
+    adapter = DeletingAdapter(candidates=(LocalChange("ada", {"n": 2}, target=person),))
+    assert push_stream(stream, adapter).count == 1
+    link = RecordLink.objects.get(stream=stream, external_key="ada")
+    assert (link.target_object_id, link.remote_version) == (None, "v2")
+
+    adapter.candidates = ()
+    assert push_stream(stream, adapter).count == 1
+    # The removal is written over the version the raced write left.
+    assert adapter.written[-1] == ("ada", None, "v2")
+    assert RecordLink.objects.get(pk=link.pk).status == LinkStatus.TOMBSTONE
 
 
 def test_keeping_the_remote_of_a_push_stream_accepts_its_version_until_the_next_local_change(
