@@ -524,7 +524,7 @@ function isEmptyFieldValue(value: unknown): boolean {
 
 function isNullableScalarWidget(field: FieldDescriptor): boolean {
   const id = fieldWidgetId(field);
-  return id === "date" || id === "datetime";
+  return id === "date" || id === "datetime" || id === "time";
 }
 
 function isNumericField(field: FieldDescriptor): boolean {

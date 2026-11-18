@@ -9,7 +9,7 @@ import { jsonValueFromUnknown } from "../widgets/json-value";
 import { datetimeWidget } from "../widgets/datetime";
 import { filterOperatorLabel } from "../views/resource/utils/labels";
 
-export type FilterClauseFieldType = "text" | "number" | "date" | "datetime" | "selection" | "boolean";
+export type FilterClauseFieldType = "text" | "number" | "date" | "datetime" | "time" | "selection" | "boolean";
 export type FilterClauseOperator = FilterOperator | "isNotNull";
 export interface FilterClauseChoice {
   value: string;
@@ -217,7 +217,7 @@ function structuredOperand(operator: FilterClauseOperator, scalar?: string): boo
     || scalar === "JSON" && ["exact", "ne", "gt", "gte", "lt", "lte"].includes(operator);
 }
 function inputType(field: FilterClauseField): string {
-  return field.type === "number" || field.type === "date" ? field.type : "text";
+  return field.type === "number" || field.type === "date" || field.type === "time" ? field.type : "text";
 }
 function coerceValue(field: FilterClauseField, value: string, operator: FilterClauseOperator): FilterValue | undefined {
   const selected = declaredSelection(field, value, operator);

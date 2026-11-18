@@ -10,6 +10,18 @@ live in code docstrings.
 
 ## Unreleased — shared addon contracts, native embeddings and graph retrieval
 
+- Time-of-day fields can be exposed as resources. Resource metadata accepts the
+  GraphQL `Time` scalar, which it previously refused at schema build, and a Django
+  `TimeField` defaults to the new `time` widget. It filters with Date's operators
+  (`exact`, `ne`, `gt`, `gte`, `lt`, `lte`, `inList`, `notInList`, `isNull`), sorts,
+  and groups by value without calendar extractions. On the web, `Time` is a
+  generated `string` (`HH:MM[:SS]`, no zone); `@angee/ui` registers the `time`
+  widget, which edits through the native time control and reads and lists through
+  `formatTime`. `formatTime` and `formatTimeInput` accept a `Time` value and read
+  it as written, an empty time drafts as `null`, the filter editor offers a `time`
+  field type, and the client row model compares clocks as SQL does (`09:30` equals
+  `09:30:00`).
+
 - Notion connections connect through Notion's public-integration OAuth from the
   saved record's **Connect** action; an internal integration's API token remains an
   alternative. `angee.knowledge_integrate_notion` installs a `notion` OAuth

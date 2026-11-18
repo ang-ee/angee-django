@@ -39,6 +39,17 @@ test("submits typed values from the keyboard and preserves zero", async () => {
   expect((screen.getByLabelText("Filter value") as HTMLInputElement).value).toBe("");
 });
 
+test("a time field edits through the native time control and submits its clock", () => {
+  const onSubmit = vi.fn();
+  render(<FilterClauseEditor fields={[{ id: "starts", label: "Starts", type: "time", scalar: "Time", operators: ["exact", "gte"] }]}
+    onSubmit={onSubmit} />, { wrapper: Provider });
+  const input = screen.getByLabelText<HTMLInputElement>("Filter value");
+  expect(input.type).toBe("time");
+  fireEvent.change(input, { target: { value: "09:30" } });
+  fireEvent.click(screen.getByRole("button", { name: "Add" }));
+  expect(onSubmit).toHaveBeenCalledWith({ field: "starts", operator: "exact", value: "09:30", type: "time" });
+});
+
 test("submits a declared empty selection as an exact blank filter", async () => {
   const onSubmit = vi.fn();
   render(<FilterClauseEditor fields={[{ id: "country", label: "Country", type: "selection", operators: ["exact", "isNull"],

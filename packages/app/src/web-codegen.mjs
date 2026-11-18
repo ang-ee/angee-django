@@ -47,6 +47,7 @@ const DELETE_PREVIEW_SELECTION =
 const SCALARS = {
   DateTime: "string",
   Date: "string",
+  Time: "string",
   BigInt: "string",
   Decimal: "string",
   JSON: "@angee/ui#JsonValue",
