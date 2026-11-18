@@ -143,7 +143,8 @@ live in code docstrings.
   (`IntegrationManager.build`, which `create_capability`, `CalendarSourceManager.subscribe`
   and `MountManager.build` compose). The `ConnectWithAccount` GraphQL interface
   (`oauth_client`, `oauth_scopes`, `accounts`) is implemented by `MountBackendType`
-  and the new `calendar_source_backend(backend_class)` query's type.
+  and the new `calendar_source_backend(backend_class)` query's type; integrate's
+  console `types` bucket registers it, so a host composing neither still has it.
   `@angee/integrate` exports `ConnectWithAccountAction` and
   `useConnectWithAccountField` and owns the `ConnectWithAccountFields` fragment
   their consumers spread. The action takes the consumer's authored connect

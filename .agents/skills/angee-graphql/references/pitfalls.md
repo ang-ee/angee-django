@@ -31,3 +31,11 @@ Moved from the backend guide. The contracts stayed there:
 - **Intersect write-only fields out of the read/return selection** — a field
   absent from the SDL read type (e.g. `password`) makes the detail query invalid
   and the form loads blank if it is selected.
+- **A type the addon's own documents name rides its own `types` bucket.** Strawberry
+  emits only the types the roots and the `types` buckets reach, so an interface
+  whose implementers other addons contribute (integrate's `ConnectWithAccount`)
+  is absent from a host composing none of them, and host codegen fails on the
+  addon's fragment with `Unknown type`. In a lane,
+  `test_authored_documents_validate_against_the_root_closure` in
+  `tests/test_compose.py` validates every installed web addon's documents against
+  its own closure's schemas, as host codegen does.
