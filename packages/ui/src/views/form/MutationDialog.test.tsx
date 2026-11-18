@@ -529,7 +529,7 @@ describe("MutationDialog", () => {
     fireEvent.click(screen.getByRole("button", { name: "Create" }));
 
     await waitFor(() =>
-      expect(onSubmit).toHaveBeenCalledWith({ name: "Ada", note: null }),
+      expect(onSubmit).toHaveBeenCalledWith({ name: "Ada", note: null }, { errorNotification: false }),
     );
   });
 
@@ -648,6 +648,23 @@ test("a refusal bound to a field is reported once: under the field, with no bann
   expect(screen.queryByText("Could not subscribe to the calendar feed.")).toBeNull();
   // The dialog runs the call with refine's generic error notification off: no toast repeats it.
   expect(mutation).toHaveBeenCalledExactlyOnceWith({ url: "webcal://127.0.0.1/feed.ics" }, { errorNotification: false });
+});
+
+test("validate and onSubmit get the call options that keep refine from toasting what the dialog renders", async () => {
+  const transport = new Error("The daemon is unreachable.");
+  const validate = vi.fn().mockResolvedValue(null);
+  const onSubmit = vi.fn().mockRejectedValue(transport);
+  render(<AppRuntimeProvider runtime={{ widgets: defaultWidgets }}>
+    <MutationDialog open onOpenChange={() => undefined} title="Create workspace" fields={[]} submitLabel="Create"
+      errorFallback="Could not create the workspace." parseValues={parseRawValues}
+      validate={validate} onSubmit={onSubmit} />
+  </AppRuntimeProvider>);
+  fireEvent.click(screen.getByRole("button", { name: "Create" }));
+
+  // The dialog renders the failure; each call it makes for its caller runs quiet, so no toast repeats it.
+  expect(await screen.findAllByText("The daemon is unreachable.")).toHaveLength(1);
+  expect(validate).toHaveBeenCalledExactlyOnceWith({}, { errorNotification: false });
+  expect(onSubmit).toHaveBeenCalledExactlyOnceWith({}, { errorNotification: false });
 });
 
 test("a mutation's data acknowledges the dialog; missing data fails with the dialog's fallback", async () => {

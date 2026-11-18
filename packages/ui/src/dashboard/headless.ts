@@ -1,5 +1,6 @@
 import type { ComponentType, ReactNode } from "react";
 import type { DataResourceQuery, QueryFilter } from "@angee/metadata";
+import type { AuthoredMutateOptions } from "@angee/refine";
 import type { ResourceListSnapshot } from "../views/resource/resource-view-surface";
 import * as v from "valibot";
 
@@ -301,12 +302,19 @@ export interface DashboardSummary {
   capabilities: DashboardCapabilities;
 }
 
+/**
+ * A dashboard's store operations. A write takes the caller's `AuthoredMutateOptions` for its
+ * authored call, so a surface that renders the failure itself (`MutationDialog`) raises no toast besides.
+ */
 export interface DashboardStoreBinding {
   state: DashboardLoadState;
   reload: () => Promise<void>;
-  save: (command: DashboardSaveCommand) => Promise<DashboardSaveResult>;
+  save: (command: DashboardSaveCommand, options?: AuthoredMutateOptions) => Promise<DashboardSaveResult>;
   reset: (target: DashboardTarget, persistedId: string, expectedRevision: number) => Promise<void>;
-  createPersonal: (input: { name: string; description?: string; idempotencyKey: string }) => Promise<DashboardSaveResult>;
+  createPersonal: (
+    input: { name: string; description?: string; idempotencyKey: string },
+    options?: AuthoredMutateOptions,
+  ) => Promise<DashboardSaveResult>;
   duplicate: (target: DashboardTarget, input: { name: string; idempotencyKey: string; snapshot: DashboardSnapshot }) => Promise<DashboardSaveResult>;
 }
 
@@ -315,7 +323,7 @@ export interface DashboardCatalogueBinding {
   loading: boolean;
   error: Error | null;
   refresh: () => void;
-  createPersonal: (input: { name: string; description?: string; idempotencyKey: string }) => Promise<DashboardSaveResult>;
+  createPersonal: DashboardStoreBinding["createPersonal"];
 }
 
 export interface DashboardStore {

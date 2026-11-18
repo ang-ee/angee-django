@@ -141,18 +141,16 @@ function StoredDashboardPage({ target, registry, store }: {
                   name: mutationDialogValueCodecs.requiredString(values.name, "name"),
                   description: mutationDialogValueCodecs.string(values.description) ?? "",
                 })}
-                onSubmit={async ({ name, description }) => {
-                  await binding.save({
-                    target,
-                    persistedId: state.persistedId,
-                    expectedRevision: state.revision,
-                    declarationRevision: state.declarationRevision,
-                    name,
-                    description,
-                    snapshot: state.snapshot,
-                  });
-                  return { status: "ok", data: undefined, message: t("details.saved") };
-                }}
+                mutation={({ name, description }, options) => binding.save({
+                  target,
+                  persistedId: state.persistedId,
+                  expectedRevision: state.revision,
+                  declarationRevision: state.declarationRevision,
+                  name,
+                  description,
+                  snapshot: state.snapshot,
+                }, options)}
+                mutationResult={(saved) => ({ status: "ok", data: saved, message: t("details.saved") })}
               />
             ) : null}
             end={state.status === "ready" ? (

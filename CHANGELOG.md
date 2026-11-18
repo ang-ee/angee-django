@@ -10,6 +10,15 @@ live in code docstrings.
 
 ## Unreleased — shared addon contracts, native embeddings and graph retrieval
 
+- `@angee/ui`: every call `MutationDialog` makes for its caller (`validate`,
+  `onSubmit`, `mutation`) gets the `AuthoredMutateOptions` that turn refine's
+  generic error notification off, so a failure is reported once, in the dialog.
+  `@angee/refine`'s `ActionMutate` takes them as a third argument; the dashboard
+  store's `save` and `createPersonal`, the operator's `OperatorActionHook.run` and
+  `useDaemonMutationRun` take them per call. The dashboard, portfolio-update and
+  add-source dialogs run their owner's call as `mutation` (deleting their
+  `onSubmit` result wrappers); the operator's workspace-create and secret dialogs
+  pass the options on from `validate` and `onSubmit`.
 - `angee.integrate`: `Integration.credential_blocker(credential)` is a
   capability's one admission rule, a public-safe refusal or `None`;
   `admit_credential` raises it on every attachment and the connect picker shows

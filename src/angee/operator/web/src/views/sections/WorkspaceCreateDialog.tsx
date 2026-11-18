@@ -5,6 +5,7 @@ import {
   type MutationDialogValues,
   useRouteHref,
 } from "@angee/ui";
+import type { AuthoredMutateOptions } from "@angee/refine";
 import { useNavigate } from "@tanstack/react-router";
 import * as React from "react";
 
@@ -83,10 +84,12 @@ export function WorkspaceCreateDialog({
     })),
   ], [inputNames, t, templates]);
 
+  // The dialog renders every failure; each daemon call runs with its options, so none also toasts.
   const validate = React.useCallback(async (
     object: WorkspaceCreateInput,
+    options?: AuthoredMutateOptions,
   ): Promise<ValidationErrors | null> => {
-    const checked = (await preflight.run({ input: object }))?.workspaceCreatePreflight;
+    const checked = (await preflight.run({ input: object }, options))?.workspaceCreatePreflight;
     if (!checked) throw new Error(t("workspaces.create.failed"));
     if (checked.ok) return null;
     return {
@@ -95,8 +98,8 @@ export function WorkspaceCreateDialog({
     };
   }, [preflight, t]);
 
-  const submit = React.useCallback(async (object: WorkspaceCreateInput) => {
-    const workspace = (await create.run({ object }))?.insert_workspaces_one;
+  const submit = React.useCallback(async (object: WorkspaceCreateInput, options?: AuthoredMutateOptions) => {
+    const workspace = (await create.run({ object }, options))?.insert_workspaces_one;
     if (!workspace) throw new Error(t("workspaces.create.failed"));
     // Pull the snapshot before navigating: detail resolves by name from the
     // workspaces pane and would otherwise bounce back to the list.
