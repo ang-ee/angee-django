@@ -4,6 +4,7 @@ import type { ActionFieldName } from "@angee/gql/console/actions";
 import { useActionMutation, useAuthoredQuery } from "@angee/refine";
 import {
   ResourceList,
+  calendarDay,
   calendarWindowBounds,
   calendarWindowSource,
   dateFromValue,
@@ -94,7 +95,10 @@ export function CalendarPage(): React.ReactElement {
     const named = new Set(listed.map((calendar) => calendar.id));
     // Busy time shows as "Busy" and opens nothing; an event opens its row. An all-day occurrence is
     // the days its bounds fall on in its event's own zone, so every viewer sees it on those days.
-    const day = (instant: string, zone: string) => formatDateStorage(dateFromValue(instant), zone) ?? instant;
+    const day = (instant: string, zone: string) => {
+      const date = dateFromValue(instant);
+      return date ? calendarDay(date, zone) : instant;
+    };
     const project = (row: OccurrenceRow): Occurrence => ({
       ...row,
       ...(row.all_day

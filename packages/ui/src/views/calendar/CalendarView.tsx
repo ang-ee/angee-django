@@ -26,7 +26,7 @@ export interface Occurrence {
   /**
    * An ISO-8601 instant, shown in the viewer's zone; an all-day occurrence's is its first day
    * (`yyyy-MM-dd`), which shows on that day in every browser zone. A source reads a stored
-   * all-day bound's day in the zone that owns its dates (`formatDateStorage(date, timeZone)`).
+   * all-day bound's day in the zone that owns its dates (`calendarDay(date, timeZone)`).
    */
   start: string;
   /** The exclusive end, in the same form as `start`: an all-day occurrence's is the day after its last. */

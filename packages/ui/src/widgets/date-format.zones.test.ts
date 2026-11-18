@@ -1,6 +1,6 @@
 import { describe, expect, test } from "vitest";
 
-import { formatDateStorage, formatDateTimeStorage } from "./date-format";
+import { calendarDay, formatDateTimeStorage } from "./date-format";
 
 // A zone suite: it runs in the runner's zone and again under each zone the shared Vitest defaults pin
 // (Asia/Tokyo, America/Los_Angeles), and every assertion holds in each.
@@ -19,9 +19,8 @@ describe("date storage across browser zones", () => {
     // Chicago's midnight on Nov 20: still Nov 19 in Los Angeles, and Nov 20 in Tokyo.
     const midnight = new Date("2026-11-20T06:00:00Z");
 
-    expect(formatDateStorage(midnight, "America/Chicago")).toBe("2026-11-20");
-    expect(formatDateStorage(midnight, "America/Los_Angeles")).toBe("2026-11-19");
-    expect(formatDateStorage(midnight, "Asia/Tokyo")).toBe("2026-11-20");
-    expect(formatDateStorage(null, "Asia/Tokyo")).toBeNull();
+    expect(calendarDay(midnight, "America/Chicago")).toBe("2026-11-20");
+    expect(calendarDay(midnight, "America/Los_Angeles")).toBe("2026-11-19");
+    expect(calendarDay(midnight, "Asia/Tokyo")).toBe("2026-11-20");
   });
 });

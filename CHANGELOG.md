@@ -65,7 +65,7 @@ live in code docstrings.
   with its UTC offset (`yyyy-MM-dd'T'HH:mm:ssxxx`), so every `datetime` widget
   (record forms, filters, structured form specs, action dialogs) sends the
   instant meant, never a naive time the server reads in its own zone, and
-  `mutationDialogValueCodecs.datetime` composes it. `formatDateStorage(date,
+  `mutationDialogValueCodecs.datetime` composes it. `calendarDay(date,
   timeZone)` reads the day an instant falls on in a zone. A backend asks a parsed
   event's zone of the same chain (`angee.calendar.backends.effective_timezone`):
   Google Calendar reads and publishes every zone through it and the two

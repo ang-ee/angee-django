@@ -225,7 +225,9 @@ export function formatDateParts(value: DateFormatValue, options: HumanDateOption
   };
 }
 
-/** The calendar day of an instant in a zone, as a sortable key and a `<time datetime>` value ("2026-09-30").
+/** The calendar day of an instant in a zone (the viewer's without one), as `yyyy-MM-dd` ("2026-09-30"): a sortable
+ * key, a `<time datetime>` value, or a stored all-day bound's day in the zone that owns its dates, which every
+ * browser then shows as that day.
  * @kind null
  * @reason Format utility: converts data to display or storage text.
  */
@@ -296,14 +298,13 @@ export function formatTimeInput(value: DateFormatValue): string {
   return date ? format(date, TIME_INPUT_FORMAT) : "";
 }
 
-/** Format a calendar day for storage: a selected local day, or with `timeZone` the day an instant falls on there
- * (a stored all-day bound read in the zone that owns its dates, whichever zone the browser is in).
+/** Format a selected local calendar day for storage ({@link DATE_STORAGE_FORMAT}); the day an instant falls on in
+ * another zone is {@link calendarDay}'s.
  * @kind null
  * @reason Format utility: converts data to display or storage text.
  */
-export function formatDateStorage(value: Date | null, timeZone?: string): string | null {
-  if (!value) return null;
-  return timeZone ? calendarDay(value, timeZone) : format(value, DATE_STORAGE_FORMAT);
+export function formatDateStorage(value: Date | null): string | null {
+  return value ? format(value, DATE_STORAGE_FORMAT) : null;
 }
 
 /** Format a selected date-time for storage: its local wall time with the browser's offset

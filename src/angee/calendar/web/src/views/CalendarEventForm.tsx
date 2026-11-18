@@ -1,5 +1,5 @@
 import * as React from "react";
-import { Field, Form, Group, dateFromValue, formatDateStorage, registerForm, type RegisteredFormProps } from "@angee/ui";
+import { Field, Form, Group, calendarDay, dateFromValue, formatDateStorage, registerForm, type RegisteredFormProps } from "@angee/ui";
 
 import { useCalendarT } from "../i18n";
 import { EVENT_MODEL } from "../resources";
@@ -18,7 +18,8 @@ const DAY = /^\d{4}-\d{2}-\d{2}$/;
  */
 export function allDayBoundDay(value: unknown, zone: unknown): unknown {
   if (typeof value !== "string" || DAY.test(value)) return value;
-  return formatDateStorage(dateFromValue(value), typeof zone === "string" && zone ? zone : undefined);
+  const date = dateFromValue(value);
+  return date ? calendarDay(date, typeof zone === "string" && zone ? zone : undefined) : null;
 }
 
 // An all-day event's bounds are days: the form shows each as the day it names and sends a picked day
