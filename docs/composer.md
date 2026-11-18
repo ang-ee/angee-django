@@ -178,10 +178,12 @@ published results and never imports an addon build adapter.
 
 An integration's output may depend only on inputs the snapshot holds: the
 selected apps, their fingerprinted files (`COMPOSE_FINGERPRINT_GLOBS`) and
-fingerprinted settings. A setting an integration renders into its output is
-declared beside the integration, `"COMPOSE_FINGERPRINT_SETTINGS:append"` in the
-addon's autoconfig, as [`angee.web`](../src/angee/web/autoconfig.py) does for
-`ANGEE_UI`. `compose --if-stale` and serving startup verify only the receipt's
+fingerprinted settings. A setting that shapes an integration's output, read
+directly or through the library it renders, is declared beside the integration,
+`"COMPOSE_FINGERPRINT_SETTINGS:append"` in the addon's autoconfig, as
+[`angee.web`](../src/angee/web/autoconfig.py) does for `ANGEE_UI` and
+[`angee.graphql`](../src/angee/graphql/autoconfig.py) for `STRAWBERRY_DJANGO`
+and `ANGEE_GRAPHQL_RESOURCE_FILTERS`. `compose --if-stale` and serving startup verify only the receipt's
 snapshot digest and owned-file bytes, never a re-render: output that follows an
 undeclared input goes stale under `compose --check` while `--if-stale` skips.
 A fingerprinted setting is structural: it is authored configuration and refused

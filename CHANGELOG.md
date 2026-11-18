@@ -17,7 +17,10 @@ live in code docstrings.
   web autoconfig appends `ANGEE_UI` to `COMPOSE_FINGERPRINT_SETTINGS`. Like
   every structural input, `ANGEE_UI` is authored YAML: a deployment that set it
   through `ANGEE_UI` or `YAMLCONF_ANGEE_UI` in the environment is refused and
-  moves it to its `settings.yaml`.
+  moves it to its `settings.yaml`. GraphQL had the same gap for the SDL: its
+  autoconfig now appends `STRAWBERRY_DJANGO` and `ANGEE_GRAPHQL_RESOURCE_FILTERS`,
+  so a host override of either alone recomposes, and neither comes from the
+  environment.
 
 - A fresh installation no longer offers "Continue with Google Gemini" on the
   sign-in page. `iam_integrate_oidc`'s install seed gave Google's public Gemini
