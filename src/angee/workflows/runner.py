@@ -18,7 +18,7 @@ from django.core.exceptions import PermissionDenied, ValidationError
 from django.db import OperationalError, connection, transaction
 from django.db.models.functions import Now
 from django.utils import timezone
-from rebac import actor_context, generic_target, system_context
+from rebac import actor_context, current_evaluator, evaluator_scope, generic_target, system_context
 from rebac.actors import is_sudo
 
 from angee.base.exceptions import exception_text
@@ -158,12 +158,18 @@ class Runner:
         )
 
     def _run_body(self, ctx: StepContext) -> AttemptRecord:
-        """Validate once with the body, rolling back DATABASE writes on failure."""
+        """Validate once with the body, rolling back DATABASE writes on failure.
+
+        A body is one unit of work: its permission reads share one evaluator scope,
+        as a request's do. A scope the caller already holds is kept.
+        """
         database = ctx.step.mode == StepMode.DATABASE
         try:
             with (
                 database_timeout(ctx.step.timeout) if database else nullcontext()
-            ), (transaction.atomic() if database else nullcontext()), actor_context(ctx.actor), changeset(
+            ), (transaction.atomic() if database else nullcontext()), actor_context(ctx.actor), (
+                evaluator_scope() if current_evaluator() is None else nullcontext()
+            ), changeset(
                 fresh=True, activity="run", origin=ctx.run,
             ) as failed:
                 if is_sudo():
