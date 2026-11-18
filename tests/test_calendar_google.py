@@ -9,6 +9,7 @@ token answers ``410 Gone``. Nothing patches the backend.
 from __future__ import annotations
 
 from collections.abc import Iterator
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, tzinfo
 from typing import Any
@@ -19,22 +20,23 @@ import httpx2
 import pytest
 from django.core.cache import caches
 from django.core.exceptions import ValidationError
+from django.db import connection, transaction
 from django.db.models import Q
 from rebac import actor_context, system_context
 
 from angee.calendar.backends import ParsedAttendee, organizer_first
 from angee.calendar.models import AttendeeResponse, AttendeeRole
-from angee.calendar.models import CalendarSource as CalendarSourceContract
 from angee.calendar.tasks import purge_unsubscribed_sources
 from angee.calendar.testing.models import CalendarEvent, CalendarSource, EventAttendee
 from angee.calendar_integrate_google.backend import CALENDAR_READONLY
 from angee.calendar_integrate_google.connect import connect_google_calendar
 from angee.integrate.states import LinkStatus, StreamState
-from angee.integrate.streams import sync_bridge
+from angee.integrate.streams import advance_stream, sync_bridge
 from angee.integrate.testing.http import mock_transport
 from angee.integrate.testing.models import RecordLink, SyncStream
 from angee.jobs.celery import app as celery_app
 from tests.conftest import Credential, ExternalAccount, OAuthClient, Vendor, create_user
+from tests.lock_waits import submit, wait_for_lock
 
 pytestmark = pytest.mark.django_db(transaction=True)
 
@@ -64,6 +66,8 @@ class FakeGoogle:
     accounts: dict[str, Account] = field(default_factory=dict)
     version: int = 0
     expired: set[str] = field(default_factory=set)
+    refused_pages: set[str] = field(default_factory=set)
+    """Page tokens Google answers once with ``400 invalid``, as it does a page token it no longer accepts."""
     requests: list[httpx2.Request] = field(default_factory=list)
 
     def put(self, token: str, calendar_id: str, event: dict[str, Any]) -> None:
@@ -98,6 +102,9 @@ class FakeGoogle:
 
     def _list(self, events: dict[str, dict[str, Any]], params: dict[str, str]) -> httpx2.Response:
         token = params.get("syncToken", "")
+        if params.get("pageToken") in self.refused_pages:
+            self.refused_pages.discard(params["pageToken"])
+            return httpx2.Response(400, json={"error": {"code": 400, "errors": [{"reason": "invalid"}]}})
         if token in self.expired:
             return httpx2.Response(410, json={"error": {"code": 410, "errors": [{"reason": "fullSyncRequired"}]}})
         since = int(token) if token else 0
@@ -199,6 +206,10 @@ class Connected:
         rows = {str(row.pk): row for row in CalendarEvent.system_queryset()}
         return {link.external_key: rows[link.target_object_id] for link in links if link.target_object_id in rows}
 
+    def source(self, token: str = "work-token") -> Any:
+        with system_context(reason="tests.google"):
+            return CalendarSource.objects.get(pk=self.sources[token].pk)
+
     def listings(self) -> list[dict[str, str]]:
         """Return the query of every ``events.list`` request so far."""
 
@@ -292,7 +303,6 @@ def test_two_accounts_are_two_sources_each_discovering_its_calendars(connected: 
             (key, link.pk) for key, link in links.items()
         }
         assert connected.stream("calendars").holds_containers
-    assert not hasattr(CalendarSourceContract, "calendar_for_partition")
     # The first sync declared each calendar's events stream in the same run, after its calendar.
     assert {"Standup", "Berlin sync", "Holiday"} <= {event.title for event in connected.events().values()}
 
@@ -499,3 +509,185 @@ def test_a_page_with_more_records_than_the_bound_pages_locally(connected: Connec
 
     assert {"standup", "standup#20260316T130000Z", "standup#20260309T130000Z", "holiday"} <= set(connected.events())
     assert connected.stream().cursor == {"sync_token": str(connected.google.version)}
+
+
+def _work_listings(google: FakeGoogle) -> list[dict[str, str]]:
+    """Return the query of every ``events.list`` request of the work calendar."""
+
+    return [
+        {key: values[0] for key, values in parse_qs(urlsplit(str(request.url)).query).items()}
+        for request in google.requests
+        if urlsplit(str(request.url)).path == f"{API}calendars/work%40example.test/events"
+    ]
+
+
+SERIES_WITH_TWO_EXDATES = {
+    "id": "aaa-retro",
+    "status": "confirmed",
+    "summary": "Retro",
+    "start": {"dateTime": "2026-04-06T15:00:00Z", "timeZone": "UTC"},
+    "end": {"dateTime": "2026-04-06T16:00:00Z", "timeZone": "UTC"},
+    "recurrence": ["RRULE:FREQ=WEEKLY;COUNT=4", "EXDATE:20260413T150000Z,20260420T150000Z"],
+}
+
+
+def test_a_redelivered_delta_changes_nothing(connected: Connected) -> None:
+    connected.poll()
+    applied = connected.stream().cursor
+    connected.google.put("work-token", "work@example.test", {**HOLIDAY, "summary": "Holiday (moved)"})
+    connected.poll()
+    before = {key: (event.pk, event.title, event.updated_at) for key, event in connected.events().items()}
+
+    # The stream reads from the token before that change again: Google re-delivers it.
+    SyncStream.objects.sudo(reason="tests.google").filter(pk=connected.stream().pk).update(cursor=applied)
+    seen = len(_work_listings(connected.google))
+    connected.poll()
+
+    assert [query.get("syncToken") for query in _work_listings(connected.google)[seen:]] == [applied["sync_token"]]
+    assert {key: (event.pk, event.title, event.updated_at) for key, event in connected.events().items()} == before
+
+
+def test_the_first_google_page_is_listed_once_while_it_pages_locally(connected: Connected) -> None:
+    connected.google.put("work-token", "work@example.test", SERIES_WITH_TWO_EXDATES)
+    with system_context(reason="tests.google"):
+        CalendarSource.objects.filter(pk=connected.sources["work-token"].pk).update(config={"sync_page_bound": 1})
+    connected.poll()
+
+    first = [query for query in _work_listings(connected.google) if query["maxResults"] == "1"][:2]
+    # The first page maps to three records, paged one at a time from the page the adapter holds.
+    assert [query.get("pageToken") for query in first] == [None, "1"]
+    assert {"aaa-retro", "aaa-retro#20260413T150000Z", "aaa-retro#20260420T150000Z"} <= set(connected.events())
+
+
+def test_a_fresh_adapter_between_local_pages_reads_the_page_again_from_its_first_key(connected: Connected) -> None:
+    connected.poll()
+    token = connected.stream().cursor["sync_token"]
+    connected.google.put("work-token", "work@example.test", SERIES_WITH_TWO_EXDATES)
+
+    result = advance_stream(connected.stream(), connected.source().backend, page_bound=1)
+    assert (result.count, result.exhausted, result.stream.cursor["from"]) == (1, False, {"sync_token": token})
+    fresh = connected.source().backend
+    while not result.exhausted:
+        result = advance_stream(result.stream, fresh, page_bound=1)
+
+    assert [query.get("syncToken") for query in _work_listings(connected.google)[-2:]] == [token, token]
+    assert {"aaa-retro", "aaa-retro#20260413T150000Z", "aaa-retro#20260420T150000Z"} <= set(connected.events())
+
+
+def test_a_page_token_google_refuses_lists_again_from_the_sync_token(connected: Connected) -> None:
+    connected.poll()
+    token = connected.stream().cursor["sync_token"]
+    with system_context(reason="tests.google"):
+        CalendarSource.objects.filter(pk=connected.sources["work-token"].pk).update(config={"sync_page_bound": 1})
+    connected.google.put("work-token", "work@example.test", {**HOLIDAY, "summary": "Holiday (moved)"})
+    connected.google.put("work-token", "work@example.test", {**BERLIN_WEEKLY, "summary": "Berlin sync (moved)"})
+    connected.google.refused_pages.add("1")
+    seen = len(_work_listings(connected.google))
+
+    for _poll in range(2):
+        connected.poll()
+
+    restarts = [query for query in _work_listings(connected.google)[seen:] if "pageToken" not in query]
+    assert [query.get("syncToken") for query in restarts][:2] == [token, token]
+    assert (connected.events()["holiday"].title, connected.events()["berlin"].title) == (
+        "Holiday (moved)", "Berlin sync (moved)"
+    )
+
+
+def test_an_exception_on_an_earlier_page_than_its_master_lands_on_its_series(connected: Connected) -> None:
+    master = {
+        "id": "zz-review",
+        "status": "confirmed",
+        "summary": "Review",
+        "start": {"dateTime": "2026-04-07T15:00:00Z", "timeZone": "UTC"},
+        "end": {"dateTime": "2026-04-07T16:00:00Z", "timeZone": "UTC"},
+        "recurrence": ["RRULE:FREQ=WEEKLY;COUNT=3"],
+    }
+    moved = {
+        "id": "aa-review-moved",
+        "status": "confirmed",
+        "recurringEventId": "zz-review",
+        "originalStartTime": {"dateTime": "2026-04-14T15:00:00Z", "timeZone": "UTC"},
+        "summary": "Review (moved)",
+        "start": {"dateTime": "2026-04-14T17:00:00Z", "timeZone": "UTC"},
+        "end": {"dateTime": "2026-04-14T18:00:00Z", "timeZone": "UTC"},
+    }
+    for event in (master, moved):
+        connected.google.put("work-token", "work@example.test", event)
+    with system_context(reason="tests.google"):
+        CalendarSource.objects.filter(pk=connected.sources["work-token"].pk).update(config={"sync_page_bound": 1})
+    for _poll in range(2):
+        connected.poll()
+
+    events = connected.events()
+    override = events["zz-review#20260414T150000Z"]
+    assert (override.series_id, override.title) == (events["zz-review"].pk, "Review (moved)")
+    with system_context(reason="tests.google"):
+        failures = RecordLink.objects.filter(stream__integration_id=connected.sources["work-token"].pk)
+        assert not [row.code for link in failures for row in link.failures(open_only=True)]
+
+
+def test_an_all_day_exception_reads_its_original_day_in_its_series_zone(connected: Connected) -> None:
+    offsite = {
+        "id": "offsite",
+        "status": "confirmed",
+        "summary": "Offsite",
+        "start": {"date": "2026-04-06", "timeZone": "Asia/Tokyo"},
+        "end": {"date": "2026-04-07", "timeZone": "Asia/Tokyo"},
+        "recurrence": ["RRULE:FREQ=WEEKLY;COUNT=3"],
+    }
+    moved = {
+        "id": "offsite_20260413",
+        "status": "confirmed",
+        "recurringEventId": "offsite",
+        "originalStartTime": {"date": "2026-04-13"},
+        "summary": "Offsite (moved)",
+        "start": {"date": "2026-04-14"},
+        "end": {"date": "2026-04-15"},
+    }
+    for event in (offsite, moved):
+        connected.google.put("work-token", "work@example.test", event)
+    connected.poll()
+
+    events = connected.events()
+    tokyo = ZoneInfo("Asia/Tokyo")
+    # The work calendar is New York's; the series expands at Tokyo midnight, and so is its exception keyed.
+    override = events["offsite#20260412T150000Z"]
+    assert (override.series_id, override.original_start) == (events["offsite"].pk, _utc(2026, 4, 13, zone=tokyo))
+
+
+def test_a_cancelled_master_with_linked_exceptions_withdraws_the_series(connected: Connected) -> None:
+    connected.poll()
+    connected.google.put("work-token", "work@example.test", {"id": "standup", "status": "cancelled"})
+    connected.poll()
+
+    events = connected.events()
+    assert events["standup"].status == "cancelled"
+    with system_context(reason="tests.google"):
+        shown = CalendarEvent.objects.filter(Q(pk=events["standup"].pk) | Q(series=events["standup"]))
+        titles = {o.title for o in shown.occurrences(_utc(2026, 3, 1), _utc(2026, 4, 1))}
+        failures = RecordLink.objects.filter(stream__integration_id=connected.sources["work-token"].pk)
+        assert not [row.code for link in failures for row in link.failures(open_only=True)]
+    assert "Standup" not in titles
+
+
+@pytest.mark.skipif(connection.vendor != "postgresql", reason="Real PostgreSQL row locks are required.")
+def test_two_racing_connects_of_one_account_make_one_source(connected: Connected) -> None:
+    third = _account(connected.client, connected.user, "third", "third-token")
+    connected.google.accounts["third-token"] = Account()
+
+    def contend() -> Any:
+        return _connect(connected.user, third)
+
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        with transaction.atomic():
+            # The first connect holds the user's and the credential's rows until this block commits.
+            _connect(connected.user, third)
+            contender, pid = submit(pool, contend)
+            wait_for_lock(pid, contender)
+        with pytest.raises(ValidationError, match="already connected"):
+            contender.result(timeout=10)
+
+    with system_context(reason="tests.google"):
+        assert CalendarSource.objects.filter(credential=third).count() == 1
+

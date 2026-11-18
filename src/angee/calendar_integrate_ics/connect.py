@@ -10,29 +10,27 @@ from django.db import transaction
 from rebac import system_context
 
 from angee.calendar_integrate_ics.backend import feed_label, feed_url
-from angee.integrate.models import IntegrationLifecycle
 
 
 def subscribe_calendar(user: Any, *, name: str, url: str) -> Any:
     """Subscribe ``user`` to a feed: admit it, keep its address as a credential, and queue the first sync.
 
     Nothing is fetched in the request. The address's shape is checked
-    (:func:`feed_url`), the calendar owner admits one more source for the user
-    (:meth:`CalendarSource.admit_subscription`: the create gate, a quota and a
-    rate), and the first sync reports a feed it cannot read. The address is a
+    (:func:`feed_url`), the calendar owner connects one more source for the user
+    (``CalendarSourceManager.subscribe``: the create gate, a quota and a rate,
+    then integrate's attachment), and the first sync reports a feed it cannot read. The address is a
     secret, a private feed's token rides in it: it is a static-token credential's
     material, and the source's ``config`` keeps only its label. The first sync
     mirrors the feed's calendar on the user's person, then its events.
     """
 
-    source_model = apps.get_model("calendar", "CalendarSource")
     credential_model = apps.get_model("integrate", "Credential")
     vendor_model = apps.get_model("integrate", "Vendor")
     feed = feed_url(url)
     label = feed_label(feed)
-    source_model.admit_subscription(user)
     with system_context(reason="calendar_integrate_ics.subscribe"), transaction.atomic():
-        vendor, _created = vendor_model.objects.get_or_create(slug="ics", defaults={"display_name": "ICS feed"})
+        # The backend's defaults name this vendor; it has no seed row of its own.
+        vendor_model.objects.get_or_create(slug="ics", defaults={"display_name": "ICS feed"})
         credential = credential_model.objects.create_local_credential(
             user,
             kind="static_token",
@@ -40,16 +38,6 @@ def subscribe_calendar(user: Any, *, name: str, url: str) -> Any:
             name=f"Calendar feed {hashlib.sha256(feed.encode()).hexdigest()[:12]}",
             material={"api_key": feed},
         )
-        source = source_model.objects.create(
-            vendor=vendor,
-            credential=credential,
-            owner=user,
-            backend_class="ics",
-            display_name=name.strip() or label,
-            config={"feed": label},
-            lifecycle=IntegrationLifecycle.CONNECTED,
-            created_by_id=user.pk,
+        return apps.get_model("calendar", "CalendarSource").objects.subscribe(
+            user, credential, backend_class="ics", display_name=name.strip() or label, config={"feed": label}
         )
-        # A bridge enters the poll loop once its first sync records a result.
-        source.request_sync()
-    return source

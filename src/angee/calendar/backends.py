@@ -519,7 +519,7 @@ class CalendarBackend(BridgeImpl, HttpClientMixin):
 
         calendar = self._container_calendar(stream)
         if calendar is None:
-            raise IntegrationError("The source's calendar is not mirrored yet.", transient=True)
+            raise IntegrationError("This events stream's calendar link no longer targets a calendar (released).")
         return calendar
 
     def _container_calendar(self, stream: Any) -> Any | None:
@@ -534,25 +534,32 @@ class CalendarBackend(BridgeImpl, HttpClientMixin):
     def page(
         self,
         stream: Any,
-        payloads: Mapping[str, Mapping[str, Any]],
+        payloads: Mapping[str, Mapping[str, Any] | None],
         page_bound: int,
         *,
         after: str | None,
         cursor: dict[str, Any],
+        resume: Mapping[str, Any] | None = None,
+        last: bool = True,
     ) -> StreamPage:
         """Return the next bounded page of ``payloads`` in key order after ``after``.
 
-        The cursor carries only the last key while pages remain, and ``cursor``
-        commits with the last page. Keys sort, so a series' master precedes its
-        instances. Every served record is paged: the driver leaves an unchanged one
-        unapplied.
+        While pages remain the cursor carries the last key (``after``), the cursor
+        to commit after them (``next``) and, for a source that reads ``payloads``
+        with a request, that request (``from``: ``resume``); ``cursor`` commits
+        with the last page, which is the stream's last when ``last``. Keys sort, so
+        a series' master precedes its instances. Every served record is paged: the
+        driver leaves an unchanged one unapplied.
         """
 
         keys = sorted(key for key in payloads if after is None or key > after)
         batch = keys[: max(1, page_bound)]
         more = len(keys) > len(batch)
         records = self.record_changes(stream, {key: payloads[key] for key in batch})
-        return StreamPage(records, {"after": batch[-1], "next": cursor} if more else cursor, exhausted=not more)
+        if not more:
+            return StreamPage(records, cursor, exhausted=last)
+        following = {"after": batch[-1], "next": cursor, **({"from": dict(resume)} if resume is not None else {})}
+        return StreamPage(records, following, exhausted=False)
 
     def observe(self, event: ParsedEvent) -> dict[str, Any]:
         """Return the retained source payload of one parsed event, in the form the calendar stores.

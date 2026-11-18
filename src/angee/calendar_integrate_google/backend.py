@@ -36,13 +36,16 @@ The calendars are synced, not locally writable: the backend is read-only
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, time, timedelta
 from time import monotonic
 from typing import Any, ClassVar
 
+from django.apps import apps
 from django.core.exceptions import ValidationError
+from django.db import transaction
+from django.db.models import Q
 from django.utils import timezone
 from icalendar import Component, Event
 from rebac import system_context
@@ -61,9 +64,10 @@ from angee.calendar.backends import (
     series_rule,
 )
 from angee.calendar.choices import AttendeeResponse, AttendeeRole, EventStatus, EventTransparency, EventVisibility
-from angee.calendar_integrate_google.client import MAX_PAGE_SIZE, GoogleCalendarClient, SyncTokenExpired
+from angee.calendar_integrate_google.client import GoogleCalendarClient, PageTokenInvalid, SyncTokenExpired
 from angee.integrate.credentials import CredentialKind
 from angee.integrate.errors import IntegrationError
+from angee.integrate.models import IntegrationLifecycle
 from angee.integrate.streams import CursorInvalid, StreamPage
 from angee.scheduling.zones import get_zone_info, get_zone_names
 
@@ -110,25 +114,40 @@ class GoogleCalendarBackend(CalendarBackend):
     oauth_scopes: ClassVar[tuple[str, ...]] = (CALENDAR_READONLY,)
 
     _calendars: list[ParsedCalendar] | None = None
+    _calendar_client: GoogleCalendarClient | None = None
     _held: _GooglePage | None = None
     _listing: tuple[tuple[Any, ...], dict[str, dict[str, Any] | None]] | None = None
     """The current sweep's full listing of one calendar: its sweep identity, then its payloads by key."""
 
     def admit_credential(self, credential: Any) -> None:
-        """Admit only an OAuth credential of the ``google`` client whose grant covers :attr:`oauth_scopes`."""
+        """Admit only a ``google`` OAuth account that granted :attr:`oauth_scopes` and no other source syncs.
 
-        if credential.kind == CredentialKind.OAUTH:
-            with system_context(reason="calendar_integrate_google.admit_credential"):
-                client = credential.oauth_client
-            if (
-                client is not None
-                and client.slug == self.oauth_client
-                and set(self.oauth_scopes) <= set(credential.granted_scopes or ())
-            ):
-                return
-        raise ValidationError(
-            {"credential": "This account cannot read Google calendars; connect it with Calendar access."}
-        )
+        Integrate asks on every attachment (a connect, the console's credential
+        patch, a reconnect), so one account is one source on every path. The check
+        runs under the credential's row lock, held to the caller's commit, so two
+        racing attachments of one account serialize and the second is refused.
+        """
+
+        refused = "This account cannot read Google calendars; connect it with Calendar access."
+        if credential.kind != CredentialKind.OAUTH:
+            raise ValidationError({"credential": refused})
+        with system_context(reason="calendar_integrate_google.admit_credential"), transaction.atomic():
+            apps.get_model("integrate", "Credential").objects.lock_if_supported().get(pk=credential.pk)
+            client = credential.oauth_client
+            if client is None or client.slug != self.oauth_client:
+                raise ValidationError({"credential": refused})
+            if not set(self.oauth_scopes) <= set(credential.granted_scopes or ()):
+                raise ValidationError({"credential": refused})
+            same = Q(credential_id=credential.pk)
+            if credential.external_account_id is not None:
+                same |= Q(account_id=credential.external_account_id)
+            synced = (
+                type(self.bridge).system_queryset()
+                .filter(same, backend_class=self.key)
+                .exclude(lifecycle=IntegrationLifecycle.DISCONNECTED)
+            )
+            if synced.exclude(pk=self.bridge.pk).exists():
+                raise ValidationError({"credential": "This Google account's calendars are already connected."})
 
     # --- calendars ---
 
@@ -136,7 +155,6 @@ class GoogleCalendarBackend(CalendarBackend):
         """Return the account's calendars from its calendar list, read once per adapter."""
 
         if self._calendars is None:
-            names = get_zone_names()
             calendars = []
             for entry in self._client().calendar_list():
                 self._require_time()
@@ -145,7 +163,7 @@ class GoogleCalendarBackend(CalendarBackend):
                         ParsedCalendar(
                             key=str(entry["id"]),
                             name=str(entry.get("summaryOverride") or entry.get("summary") or ""),
-                            timezone=_known_zone(entry.get("timeZone"), names),
+                            timezone=_known_zone(entry.get("timeZone")),
                             color=str(entry.get("backgroundColor") or ""),
                         )
                     )
@@ -158,25 +176,33 @@ class GoogleCalendarBackend(CalendarBackend):
         """Page one ``events.list`` page in key order; the token that follows it commits with its last record.
 
         A Google page may map to more records than ``page_bound`` (a master's
-        ``EXDATE``s): while records remain the cursor names the Google request
-        (``from``) and the last key paged (``after``), and an adapter that no longer
-        holds that page asks Google for it again. A removed event that was never
-        linked is left out.
+        ``EXDATE``s): the base pager's cursor then names the Google request
+        (``from``) and the last key paged. An adapter that no longer holds that
+        page asks Google for it again and pages it from its first key, since what
+        Google answers now may hold keys before the last one paged; the driver
+        leaves an unchanged record unapplied. A removed event that was never linked
+        is left out.
         """
 
         cursor = dict(stream.cursor or {})
-        request = dict(cursor.get("from") or cursor)
+        request = dict(cursor["from"]) if "from" in cursor else cursor
         after = cursor.get("after")
         held = self._held
-        if held is None or (held.partition, held.request) != (stream.partition, request):
-            # One adapter may drain several calendars of the source: a held page is one calendar's.
+        if held is None or (held.partition, held.generation, held.request) != (
+            stream.partition, stream.generation, request
+        ):
+            # One adapter drains several calendars, and a reset starts a generation: a held page is one of each.
             held = self._held = self._fetch(stream, request, page_bound)
-        keys = sorted(key for key in held.payloads if after is None or key > after)
-        batch = keys[: max(1, page_bound)]
-        records = self.record_changes(stream, {key: held.payloads[key] for key in batch})
-        if len(keys) > len(batch):
-            return StreamPage(records, {"from": request, "after": batch[-1]}, exhausted=False)
-        return StreamPage(records, held.following, exhausted="page_token" not in held.following)
+            after = None
+        return self.page(
+            stream,
+            held.payloads,
+            page_bound,
+            after=after,
+            cursor=held.following,
+            resume=request,
+            last="page_token" not in held.following,
+        )
 
     def read_events(self, stream: Any, keys: Sequence[str]) -> dict[str, dict[str, Any] | None]:
         """Re-read each requested key; a key Google no longer serves is ``None``.
@@ -209,7 +235,7 @@ class GoogleCalendarBackend(CalendarBackend):
             item = client.instance(stream.partition, master_id, _original_start(master, moment, zone))
             observed = dict(self._observe_item(master, zone))
             if item is not None:
-                observed.update(self._observe_item(item, zone))
+                observed.update(self._observe_item(item, zone, series_zones={master_id: _series_zone(master)}))
             found[key] = observed.get(key)
         return found
 
@@ -230,8 +256,10 @@ class GoogleCalendarBackend(CalendarBackend):
             while True:
                 self._require_time()
                 page = client.events_page(stream.partition, page_token=token, max_results=_SWEEP_PAGE)
-                for item in page.get("items") or ():
-                    payloads.update(self._observe_item(item, zone))
+                items = list(page.get("items") or ())
+                series_zones = self._series_zones(stream, items)
+                for item in items:
+                    payloads.update(self._observe_item(item, zone, series_zones=series_zones))
                 token = str(page.get("nextPageToken") or "")
                 if not token:
                     break
@@ -257,14 +285,19 @@ class GoogleCalendarBackend(CalendarBackend):
                 stream.partition,
                 sync_token=sync_token,
                 page_token=str(request.get("page_token") or ""),
-                max_results=min(page_bound, MAX_PAGE_SIZE),
+                max_results=page_bound,
             )
         except SyncTokenExpired:
             raise CursorInvalid() from None
+        except PageTokenInvalid:
+            # The listing starts again from the sync token the page continued, else as a new baseline.
+            raise CursorInvalid(cursor={"sync_token": sync_token} if sync_token else None) from None
         zone = self.get_calendar(stream).timezone
+        items = list(page.get("items") or ())
+        series_zones = self._series_zones(stream, items)
         payloads: dict[str, dict[str, Any] | None] = {}
-        for item in page.get("items") or ():
-            payloads.update(self._observe_item(item, zone))
+        for item in items:
+            payloads.update(self._observe_item(item, zone, series_zones=series_zones))
         removed = [key for key, payload in payloads.items() if payload is None]
         if removed:
             linked = set(stream.links.filter(external_key__in=removed).values_list("external_key", flat=True))
@@ -274,20 +307,43 @@ class GoogleCalendarBackend(CalendarBackend):
             if page.get("nextPageToken")
             else {"sync_token": str(page.get("nextSyncToken") or "")}
         )
-        return _GooglePage(stream.partition, dict(request), payloads, following)
+        return _GooglePage(stream.partition, stream.generation, dict(request), payloads, following)
 
-    def _observe_item(self, item: Mapping[str, Any], zone: str) -> list[tuple[str, dict[str, Any] | None]]:
+    def _series_zones(self, stream: Any, items: Sequence[Mapping[str, Any]]) -> dict[str, str]:
+        """Return the zone each series an exception on ``items`` belongs to expands in, by master id.
+
+        A master on the same page states its own; another's is its stored master's
+        (an exception may arrive on an earlier page than its master). A series not
+        known yet expands in the calendar's zone.
+        """
+
+        zones = {str(item["id"]): _series_zone(item) for item in items if item.get("id") and item.get("recurrence")}
+        missing = {str(item["recurringEventId"]) for item in items if item.get("recurringEventId")} - set(zones)
+        if missing:
+            links = stream.links.filter(external_key__in=[series_key(master) for master in missing])
+            targets = dict(links.exclude(target_object_id=None).values_list("target_object_id", "external_key"))
+            rows = apps.get_model("calendar", "CalendarEvent").system_queryset().filter(pk__in=list(targets))
+            for pk, own in rows.values_list("pk", "timezone"):
+                zones[targets[str(pk)]] = own
+        return {master: own for master, own in zones.items() if own}
+
+    def _observe_item(
+        self, item: Mapping[str, Any], zone: str, *, series_zones: Mapping[str, str] | None = None
+    ) -> list[tuple[str, dict[str, Any] | None]]:
         """Map one Google event to its keyed payload, then a master's ``EXDATE`` instances.
 
-        A removed master or single event is ``None``; an event the calendar cannot
-        take is a quarantine payload under its own key.
+        ``series_zones`` names the zone a series expands in, by master id
+        (:meth:`_series_zones`): an exception's all-day original start is read
+        there. A removed master or single event is ``None``; an event the calendar
+        cannot take is a quarantine payload under its own key.
         """
 
         event_id = str(item.get("id") or "")
         if not event_id:
             return []
+        series_zone = (series_zones or {}).get(str(item.get("recurringEventId") or "")) or zone
         try:
-            key, event = _event(item, zone)
+            key, event = _event(item, zone, series_zone)
             if event is None:
                 return [(key, None)]
             observed: list[tuple[str, ParsedEvent]] = [(key, event)]
@@ -296,30 +352,41 @@ class GoogleCalendarBackend(CalendarBackend):
                 exdates = [_instant(value, tzid, local) for value, tzid in excluded_dates(_recurrence(item))]
                 observed.extend(cancelled_instances(event, event_id, exdates, calendar_zone=zone))
         except Exception:  # noqa: BLE001 — the driver quarantines semantic input per record.
-            return [(_own_key(item, zone), {"error": "invalid_event"})]
+            return [(_own_key(item, series_zone), {"error": "invalid_event"})]
         return [(key, self.observe(event)) for key, event in observed]
 
     def _client(self) -> GoogleCalendarClient:
-        """Return a client reading with the source's credential, reloaded for this unit of work."""
+        """Return this adapter's client, built once over the source's credential as loaded for this sync.
 
-        credential = self.bridge.fresh_credential()
-        if credential is None:
-            raise IntegrationError("This Google calendar source has no connected account.")
-        return GoogleCalendarClient(credential, self.oauth_scopes)
+        One client per adapter: its transport renews a rejected token once per sync,
+        not once per page.
+        """
+
+        if self._calendar_client is None:
+            credential = self.bridge.fresh_credential()
+            if credential is None:
+                raise IntegrationError("This Google calendar source has no connected account.")
+            self._calendar_client = GoogleCalendarClient(credential, self.oauth_scopes)
+        return self._calendar_client
 
 
 @dataclass(frozen=True)
 class _GooglePage:
-    """One mapped ``events.list`` page: the calendar and request that read it, its payloads, and the cursor after it."""
+    """One mapped ``events.list`` page: the stream (calendar, generation) and request that read it, and its answer."""
 
     partition: str
+    generation: int
     request: dict[str, Any]
     payloads: dict[str, dict[str, Any] | None]
     following: dict[str, Any]
 
 
-def _event(item: Mapping[str, Any], zone: str) -> tuple[str, ParsedEvent | None]:
-    """Map one Google event onto its key and neutral event; ``None`` for a removed master or single event."""
+def _event(item: Mapping[str, Any], zone: str, series_zone: str) -> tuple[str, ParsedEvent | None]:
+    """Map one Google event onto its key and neutral event; ``None`` for a removed master or single event.
+
+    ``zone`` is the calendar's; ``series_zone`` the zone an exception's series
+    expands in, where its all-day original start is read.
+    """
 
     event_id = str(item["id"])
     master_id = str(item.get("recurringEventId") or "")
@@ -330,13 +397,14 @@ def _event(item: Mapping[str, Any], zone: str) -> tuple[str, ParsedEvent | None]
             return key, None
         original = None
     else:
-        original = _moment(item["originalStartTime"], zone)
+        original = _moment(item["originalStartTime"], series_zone)
         key = instance_key(master_id, original)
     if cancelled and "start" not in item:
         # Google sends a cancelled exception as its identity alone: it keeps its original place.
         assert original is not None  # A removed master or single event returned above.
         all_day = "date" in item["originalStartTime"]
-        end = _moment({"date": _local_day(original, zone) + timedelta(days=1)}, zone) if all_day else original
+        local = _known_zone(item["originalStartTime"].get("timeZone")) or series_zone
+        end = _moment({"date": _local_day(original, local) + timedelta(days=1)}, local) if all_day else original
         return key, ParsedEvent(
             title="",
             start=original,
@@ -349,7 +417,7 @@ def _event(item: Mapping[str, Any], zone: str) -> tuple[str, ParsedEvent | None]
             original_start=original,
         )
     start_prop, end_prop = item["start"], item.get("end") or item["start"]
-    event_zone = _known_zone(start_prop.get("timeZone"), get_zone_names())
+    event_zone = _known_zone(start_prop.get("timeZone"))
     local = event_zone or zone
     start = _moment(start_prop, local)
     end = _moment(end_prop, local)
@@ -376,7 +444,10 @@ def _event(item: Mapping[str, Any], zone: str) -> tuple[str, ParsedEvent | None]
 
 
 def _own_key(item: Mapping[str, Any], zone: str) -> str:
-    """Return the key an unmappable event is quarantined under: its own instance key when it is one."""
+    """Return the key an unmappable event is quarantined under: its own instance key when it is one.
+
+    ``zone`` is the zone its series expands in.
+    """
 
     master_id = str(item.get("recurringEventId") or "")
     try:
@@ -388,19 +459,21 @@ def _own_key(item: Mapping[str, Any], zone: str) -> str:
 
 
 def _moment(value: Mapping[str, Any], zone: str) -> datetime:
-    """Return a Google ``date`` (local midnight in ``zone``) or ``dateTime`` (its instant) as aware UTC.
+    """Return a Google ``date`` (local midnight) or ``dateTime`` (its instant) as aware UTC.
 
-    A ``dateTime`` without an offset is read in its own ``timeZone``, else ``zone``.
+    A ``date``, and a ``dateTime`` without an offset, read in the value's own
+    ``timeZone``, else ``zone``: for an original start, the zone its series
+    expands in (the master's, else the calendar's).
     """
 
+    local = _known_zone(value.get("timeZone")) or zone
     if "dateTime" not in value:
         day = value["date"]
         day = day if isinstance(day, date) else date.fromisoformat(str(day))
-        return timezone.make_aware(datetime.combine(day, time.min), get_zone_info(zone)).astimezone(UTC)
+        return timezone.make_aware(datetime.combine(day, time.min), get_zone_info(local)).astimezone(UTC)
     moment = datetime.fromisoformat(str(value["dateTime"]).replace("Z", "+00:00"))
     if moment.tzinfo is None:
-        own = _known_zone(value.get("timeZone"), get_zone_names()) or zone
-        moment = timezone.make_aware(moment, get_zone_info(own))
+        moment = timezone.make_aware(moment, get_zone_info(local))
     return moment.astimezone(UTC)
 
 
@@ -414,16 +487,21 @@ def _original_start(master: Mapping[str, Any], moment: datetime, zone: str) -> s
     """Return the ``originalStart`` Google reads one instance of ``master`` by: a date for an all-day series."""
 
     if "date" in (master.get("start") or {}):
-        own = _known_zone((master.get("start") or {}).get("timeZone"), get_zone_names()) or zone
-        return _local_day(moment, own).isoformat()
+        return _local_day(moment, _series_zone(master) or zone).isoformat()
     return moment.strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-def _known_zone(name: Any, names: Iterable[str]) -> str:
+def _known_zone(name: Any) -> str:
     """Return ``name`` when it is a zone the project knows, else ``""`` (the calendar's)."""
 
     text = str(name or "")
-    return text if text and text in names else ""
+    return text if text and text in get_zone_names() else ""
+
+
+def _series_zone(master: Mapping[str, Any]) -> str:
+    """Return the zone a Google series expands in: its master's ``start.timeZone``, else ``""`` (the calendar's)."""
+
+    return _known_zone((master.get("start") or {}).get("timeZone"))
 
 
 def _recurrence(item: Mapping[str, Any]) -> Component:
@@ -445,7 +523,7 @@ def _instant(value: date | datetime, tzid: str, zone: str) -> datetime:
         return _moment({"date": value}, zone)
     if not tzid and value.tzinfo is not None:
         return value.astimezone(UTC)
-    local = _known_zone(tzid, get_zone_names()) or zone
+    local = _known_zone(tzid) or zone
     return timezone.make_aware(value.replace(tzinfo=None), get_zone_info(local)).astimezone(UTC)
 
 

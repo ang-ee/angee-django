@@ -52,6 +52,7 @@ from typing import Any, ClassVar, Self, cast
 from celery.exceptions import SoftTimeLimitExceeded
 from django.apps import apps
 from django.conf import settings
+from django.contrib.auth import get_user_model
 from django.core.cache import caches
 from django.core.exceptions import ValidationError
 from django.core.validators import URLValidator
@@ -93,7 +94,13 @@ from angee.calendar.choices import (
     EventVisibility,
     OverlapPolicy,
 )
-from angee.integrate.models import Bridge, IntegrationCreateMode, IntegrationLifecycle, IntegrationRuntimeStatus
+from angee.integrate.models import (
+    Bridge,
+    IntegrationCreateMode,
+    IntegrationLifecycle,
+    IntegrationManager,
+    IntegrationRuntimeStatus,
+)
 from angee.integrate.states import StreamDefinition, StreamDirection, StreamKind
 from angee.jobs.enqueue import enqueue_task
 from angee.messaging.models import ThreadedModelMixin
@@ -1512,6 +1519,49 @@ _RESPONSE_RANK = (
 """Attendee answers, weakest first."""
 
 
+class CalendarSourceManager[SourceT: "CalendarSource"](IntegrationManager[SourceT]):
+    """Connect calendar sources: the one sequence every connect verb runs."""
+
+    def subscribe(
+        self,
+        owner: Any,
+        credential: Any,
+        *,
+        backend_class: str,
+        display_name: str,
+        config: Mapping[str, Any] | None = None,
+    ) -> SourceT:
+        """Connect ``credential`` as a new source of ``owner``'s and queue its first sync; nothing is fetched.
+
+        One transaction, as system work. ``owner``'s row is locked first, so their
+        racing connects count one quota; then the credential's, so racing
+        attachments of one account or address serialize. The calendar owner admits
+        one more source (:meth:`CalendarSource.admit_subscription`: the create gate,
+        the quota and the rate). The source is built from ``backend_class`` (whose
+        defaults name its vendor), its credential attached through integrate, which
+        asks the backend to admit it (``CalendarBackend.admit_credential``), then saved
+        and its first sync requested: a bridge enters the poll loop once its first
+        sync records a result.
+        """
+
+        with system_context(reason="calendar.source.subscribe"), transaction.atomic():
+            get_user_model().system_queryset().lock_if_supported(no_key=True).get(pk=owner.pk)
+            apps.get_model("integrate", "Credential").objects.lock_if_supported().get(pk=credential.pk)
+            self.model.admit_subscription(owner)
+            source = self.model(
+                owner=owner,
+                backend_class=backend_class,
+                display_name=display_name,
+                config=dict(config or {}),
+                lifecycle=IntegrationLifecycle.CONNECTED,
+                created_by_id=owner.pk,
+            )
+            source.attach_connection(credential)
+            source.save()
+            source.request_sync()
+        return source
+
+
 class CalendarSource(Bridge, inherits="integrate.Integration"):
     """A connected calendar account or feed that mirrors its remote calendar and syncs its events.
 
@@ -1534,6 +1584,8 @@ class CalendarSource(Bridge, inherits="integrate.Integration"):
     (:meth:`events_stream`); the calendar managers own every event write. Whether a calendar takes local
     edits is its backend's ``writable`` declaration (:meth:`is_backend_writable`).
     """
+
+    objects = CalendarSourceManager()
 
     integration_create_mode: ClassVar[IntegrationCreateMode | None] = IntegrationCreateMode.CONNECT
 
@@ -1565,16 +1617,6 @@ class CalendarSource(Bridge, inherits="integrate.Integration"):
         """Whether a calendar whose source has backend ``key`` takes local edits; no source (``None``) does."""
 
         return key is None or cls._meta.get_field("backend_class").resolve_class(key).writable
-
-    def admit_credential(self, credential: Any) -> None:
-        """Admit only a credential this source's backend uses (``CalendarBackend.admit_credential``).
-
-        Integrate asks on every attachment, so neither a connect, the console's
-        credential patch nor a re-attachment points a source at a credential its
-        backend would send to another vendor.
-        """
-
-        self.backend.admit_credential(credential)
 
     def admit_credential(self, credential: Any) -> None:
         """Admit only a credential this source's backend uses (``CalendarBackend.admit_credential``).
@@ -1747,8 +1789,13 @@ class CalendarSource(Bridge, inherits="integrate.Integration"):
 
         return self._replica(EVENTS_STREAM, partition=calendar_link.external_key, container=calendar_link)
 
-    def _replica(self, key: str, **declared: Any) -> StreamDefinition:
-        """A pull-only record replica whose removals integrate's absence sweep finds; ``declared`` adds its knobs.
+    def _replica(
+        self, key: str, *, partition: str = "", container: Any = None, holds_containers: bool = False
+    ) -> StreamDefinition:
+        """A pull-only record replica whose removals integrate's absence sweep finds.
+
+        ``partition`` and ``container`` name an events stream's calendar (its link);
+        ``holds_containers`` marks the calendars stream.
 
         The sweep runs at most once per poll interval: a record the source stops
         serving is unavailable after one sweep and tombstoned after the stream's
@@ -1760,5 +1807,7 @@ class CalendarSource(Bridge, inherits="integrate.Integration"):
             kind=StreamKind.RECORD_REPLICA,
             direction=StreamDirection.PULL,
             reconcile_interval=timedelta(seconds=self.poll_interval),
-            **declared,
+            partition=partition,
+            container=container,
+            holds_containers=holds_containers,
         )

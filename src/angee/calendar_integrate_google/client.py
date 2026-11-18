@@ -7,7 +7,9 @@ credential's authorization for the backend's scopes, one renew of a rejected
 token, Google's error envelope). No Google client library is involved.
 
 A sync token Google no longer honours (``410 Gone``) is :class:`SyncTokenExpired`,
-which the backend turns into a new baseline. An event or instance Google no longer
+which the backend turns into a new baseline; a page token it refuses (``400``,
+reason ``invalid``) is :class:`PageTokenInvalid`, which lists again from the sync
+token the page continued. An event or instance Google no longer
 has reads as ``None``. Every other refusal is a :class:`GoogleCalendarError`, as
 the transport names it (``GoogleApi.refusal``).
 """
@@ -18,7 +20,7 @@ from collections.abc import Collection, Iterator, Mapping
 from typing import Any
 from urllib.parse import quote, urlencode
 
-from angee.integrate_google.api import GoogleApi, GoogleApiError
+from angee.integrate_google.api import GoogleApi, GoogleApiError, error_reason
 
 CALENDAR_API = "https://www.googleapis.com/calendar/v3"
 MAX_PAGE_SIZE = 2500
@@ -35,6 +37,10 @@ class GoogleCalendarError(GoogleApiError):
 
 class SyncTokenExpired(Exception):
     """Google no longer honours a sync token (``410 Gone``): the calendar must be listed again in full."""
+
+
+class PageTokenInvalid(Exception):
+    """Google refused a continued listing's page token (``400``, reason ``invalid``): list from its start again."""
 
 
 class GoogleCalendarClient:
@@ -81,6 +87,8 @@ class GoogleCalendarClient:
         response = self.api.send("GET", _url(f"calendars/{_segment(calendar_id)}/events", params))
         if response.status_code == 410:
             raise SyncTokenExpired()
+        if response.status_code == 400 and page_token and error_reason(response.content) == "invalid":
+            raise PageTokenInvalid()
         self._raise_for_status(response)
         return self.api.json(response)
 

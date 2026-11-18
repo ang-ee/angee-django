@@ -10,6 +10,29 @@ live in code docstrings.
 
 ## Unreleased — shared addon contracts, native embeddings and graph retrieval
 
+- `angee.calendar_integrate_google` syncs a connected Google account's calendars
+  (the `google` client, `calendar.readonly`) with sync tokens;
+  `connectGoogleCalendar(credentialId)` connects one of the user's accounts as
+  one source, and `GoogleCalendarBackend.admit_credential` refuses an account
+  another source already syncs, on every attachment. Every calendar connect verb
+  runs `CalendarSourceManager.subscribe` (quota and rate under the owner's row
+  lock, integrate's attachment under the credential's). A source's events stream
+  is held by its calendar's link (`SyncStream.container`);
+  `CalendarSource.calendar_for_partition` is removed and `events_stream` takes the
+  calendar's link. A calendar the source stops listing retires its events stream
+  and withdraws its events; when it is listed again they re-apply. Each sweep
+  lists a calendar once, in pages of 250, and an empty calendar list confirms no
+  absence. `CalendarSource.admit_credential` delegates to
+  `CalendarBackend.admit_credential`.
+- `angee.integrate`: `BridgeImpl.on_absent` may return each withdrawal's
+  `ApplyResult` by link; the driver records it as the link's applied base, as a
+  page tombstone, so a record that returns applies. A CardDAV address book that
+  returns restates its folder's name.
+- `angee.calendar.backends` owns the source-neutral readers both calendar
+  backends compose: `series_rule` (a VEVENT's first `RRULE`) and `excluded_dates`
+  (through icalendar, now an `angee-calendar` dependency), `cancelled_instances`
+  (each `EXDATE` judged by `CalendarEvent.is_instance`), `organizer_first` and
+  `parse_key`.
 - An `angee.integrate` stream names its container: `StreamDefinition.container`,
   persisted as `SyncStream.container` (a `PROTECT` key to `integrate.RecordLink`,
   `related_name="child_streams"`), is the parent stream's link whose record

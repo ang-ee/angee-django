@@ -28,7 +28,13 @@ class GoogleCalendarMutation:
         """
 
         user = session_user(info)
-        credential = resolve_action_target(Credential, credential_id, reason="calendar_integrate_google.connect")
+        # One lookup among the user's own accounts: an unknown id and another user's fail alike.
+        credential = resolve_action_target(
+            Credential,
+            credential_id,
+            reason="calendar_integrate_google.connect",
+            queryset=Credential.objects.connected_for(user),
+        )
         return cast(CalendarSourceType, connect_google_calendar(user, credential))
 
 
