@@ -14,6 +14,8 @@ export const enIntegrateMessages: Record<string, string> = {
   "connectWithAccount.account": "Account",
   "connectWithAccount.use": "Use this account",
   "connectWithAccount.empty": "No connected account can read this source yet.",
+  "connectWithAccount.unconfigured": "This connection isn't configured yet. An administrator must set up its OAuth client.",
+  "connectWithAccount.configure": "Set up OAuth providers",
   "connectWithAccount.connect": "Connect another account",
   "connectWithAccount.submit": "Connect",
   "connectWithAccount.submitting": "Connecting…",

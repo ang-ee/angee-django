@@ -148,7 +148,10 @@ live in code docstrings.
   `useConnectWithAccountField` and owns the `ConnectWithAccountFields` fragment
   their consumers spread. The action takes the consumer's authored connect
   mutation (`connect`, over `{ credentialId }`) and its dialog runs it as
-  `MutationDialog`'s `mutation`, so a refusal is reported once. `ConnectMountAction` composes the field
+  `MutationDialog`'s `mutation`, so a refusal is reported once. While the
+  capability has no ready OAuth client and the user no account it reads with, the
+  account field says the connection is not configured and links an administrator
+  to the OAuth providers page, instead of an empty list and a disabled Connect. `ConnectMountAction` composes the field
   (`MountAccountPicker` is deleted; its `mount.account.*` copy moves to the
   `integrate` namespace), and `@angee/calendar-integrate-google` adds "Connect
   Google Calendar" to the sources toolbar over `connect_google_calendar(credential_id)`.

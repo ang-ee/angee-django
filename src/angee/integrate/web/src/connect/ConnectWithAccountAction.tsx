@@ -8,12 +8,15 @@ import {
 } from "@angee/refine";
 import {
   ActionTrigger,
+  Alert,
   InlineEmpty,
   MutationDialog,
+  NavLink,
   PaneRow,
   PaneRows,
   mutationDialogValueCodecs,
   useRouteHref,
+  useRuntimeAuth,
   type DescriptorField,
   type DescriptorFieldControlProps,
   type MutationDialogValues,
@@ -32,6 +35,12 @@ export const CONNECT_WITH_ACCOUNT_FIELD = "credentialId";
 
 /** The model whose rows a connect-with-account query lists: the session user's credentials. */
 const CREDENTIAL_MODEL = "integrate.Credential";
+
+/** The page an administrator sets up OAuth clients on. */
+const OAUTH_PROVIDERS_ROUTE = "integrate.providers";
+
+/** The role that may set up an OAuth client (`integrate/oauth_client`'s `admin`); the server still decides. */
+const OAUTH_CLIENT_ADMIN_ROLE = "angee/role:admin";
 
 /** A consumer's connect-facts query: its data, and the reload once another account connected in place. */
 export interface ConnectWithAccountQuery<TDocument extends AuthoredDocument> {
@@ -158,7 +167,12 @@ function parseConnectWithAccountValues(values: MutationDialogValues): ConnectWit
 
 type AccountPickerProps = DescriptorFieldControlProps & ConnectWithAccountFieldOptions;
 
-/** The bare dialog control listing the accounts to choose from, and connecting another one. */
+/**
+ * The bare dialog control listing the accounts to choose from, and connecting another one.
+ * While the capability has no ready OAuth client and the user holds no account it
+ * reads with, nothing can be chosen or connected: the control says the connection
+ * is not configured, and offers an administrator the OAuth providers page.
+ */
 function AccountPicker({
   facts,
   returnRoute,
@@ -172,9 +186,14 @@ function AccountPicker({
 }: AccountPickerProps): React.ReactElement {
   const t = useIntegrateT();
   const routeHref = useRouteHref();
+  const auth = useRuntimeAuth();
   const selected = mutationDialogValueCodecs.string(value) ?? "";
   const accounts = facts?.accounts ?? [];
   const oauthClientId = facts?.oauth_client ?? null;
+  const unconfigured = facts != null && oauthClientId === null && accounts.length === 0;
+  const providersHref = unconfigured && auth.hasRole(OAUTH_CLIENT_ADMIN_ROLE)
+    ? routeHref.maybe(OAUTH_PROVIDERS_ROUTE)
+    : undefined;
 
   return (
     <div
@@ -184,7 +203,12 @@ function AccountPicker({
       aria-invalid={invalid || undefined}
       className="grid gap-3"
     >
-      {accounts.length === 0 ? (
+      {unconfigured ? (
+        <Alert tone="warning" title={t("connectWithAccount.unconfigured")}
+          actions={providersHref ? (
+            <NavLink href={providersHref} variant="inline">{t("connectWithAccount.configure")}</NavLink>
+          ) : undefined} />
+      ) : accounts.length === 0 ? (
         <InlineEmpty icon="user" label={t("connectWithAccount.empty")} />
       ) : (
         <PaneRows>

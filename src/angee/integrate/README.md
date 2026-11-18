@@ -173,6 +173,9 @@ mutation over `{ credentialId }`, which its `MutationDialog` runs), or
 `useConnectWithAccountField` among its other fields
 ([`ConnectWithAccountAction.tsx`](web/src/connect/ConnectWithAccountAction.tsx)):
 the account choice and "Connect another account" with the capability's scopes.
+While the capability has no ready OAuth client (`oauth_client` is null) and the
+user holds no account it reads with, the field says the connection is not
+configured instead, and links an administrator to the OAuth providers page.
 
 Connection adapters declare `IntegrationImpl.requires_connection_discovery = True`
 to opt into asynchronous `discover_connection`/`apply_discovery`. Manual and

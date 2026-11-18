@@ -9,6 +9,7 @@ const mocks = vi.hoisted(() => ({
   dialogProps: null as Record<string, unknown> | null,
   query: vi.fn(),
   refetch: vi.fn(),
+  roles: [] as string[],
 }));
 
 vi.mock("@angee/refine", async (original) => ({
@@ -31,7 +32,10 @@ vi.mock("@angee/ui", async (importOriginal) => {
   const { createMutationDialogTestDouble } = await import("@angee/ui/testing");
   return {
     ...original,
-    useRouteHref: () => (name: string) => `/routes/${name}`,
+    useRouteHref: () => Object.assign((name: string) => `/routes/${name}`, {
+      maybe: (name: string) => `/routes/${name}`,
+    }),
+    useRuntimeAuth: () => ({ hasRole: (role: string) => mocks.roles.includes(role) }),
     MutationDialog: createMutationDialogTestDouble({
       capture: (props) => {
         mocks.dialogProps = props;
@@ -92,6 +96,7 @@ describe("ConnectWithAccountAction", () => {
   beforeEach(() => {
     mocks.connectAnother.mockClear();
     mocks.dialogProps = null;
+    mocks.roles = [];
   });
 
   test("asks only for the account and connects with the chosen credential", async () => {
@@ -135,12 +140,35 @@ describe("ConnectWithAccountAction", () => {
     expect(mocks.connectAnother).toHaveBeenCalledWith(expect.objectContaining({ disabled: true }));
   });
 
-  test("without readable accounts or a ready client it says so and offers no connect", () => {
-    renderAction({ oauth_client: null, oauth_scopes: [SCOPE], accounts: [] });
+  test("with a ready client and no readable account it says so and offers to connect another", () => {
+    renderAction({ oauth_client: "ocl_google", oauth_scopes: [SCOPE], accounts: [] });
     render(accountField().control!(controlProps()));
 
     expect(screen.getByText("No connected account can read this source yet.")).toBeTruthy();
+    expect(screen.queryByText(/isn't configured yet/)).toBeNull();
+    expect(mocks.connectAnother).toHaveBeenCalledWith(expect.objectContaining({ oauthClientId: "ocl_google" }));
+  });
+
+  test("without a ready client or a readable account it says the connection is not configured", () => {
+    renderAction({ oauth_client: null, oauth_scopes: [SCOPE], accounts: [] });
+    render(accountField().control!(controlProps()));
+
+    expect(screen.getByText(
+      "This connection isn't configured yet. An administrator must set up its OAuth client.",
+    )).toBeTruthy();
+    expect(screen.queryByText("No connected account can read this source yet.")).toBeNull();
+    // Only an administrator may set up an OAuth client: nobody else is sent to the providers page.
+    expect(screen.queryByRole("link", { name: "Set up OAuth providers" })).toBeNull();
     expect(mocks.connectAnother).not.toHaveBeenCalled();
+  });
+
+  test("an administrator is linked to the OAuth providers page from the unconfigured state", () => {
+    mocks.roles = ["angee/role:admin"];
+    renderAction({ oauth_client: null, oauth_scopes: [SCOPE], accounts: [] });
+    render(accountField().control!(controlProps()));
+
+    expect(screen.getByRole("link", { name: "Set up OAuth providers" }).getAttribute("href"))
+      .toBe("/routes/integrate.providers");
   });
 });
 
