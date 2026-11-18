@@ -25,6 +25,24 @@ def test_runtime_image_prepares_bind_mount_outputs_before_dropping_privileges() 
     assert 'exec gosu angee "$@"' in entrypoint
 
 
+def test_runtime_image_runs_as_the_owner_of_the_mounted_project() -> None:
+    """A Linux bind mount keeps numeric ids: the image's angee user takes the project owner's uid and gid.
+
+    The stack root belongs to whoever rendered it, whatever its uid, as the operator
+    image already assumes; a root-owned project keeps the image's own user.
+    """
+
+    entrypoint = ENTRYPOINT.read_text(encoding="utf-8")
+    assert 'uid=$(stat -c %u "$project_dir")' in entrypoint
+    assert 'gid=$(stat -c %g "$project_dir")' in entrypoint
+    assert 'if [ "$uid" != "0" ] && [ "$uid" != "$(id -u angee)" ]; then' in entrypoint
+    assert 'groupmod -o -g "$gid" angee' in entrypoint
+    assert 'usermod -o -u "$uid" angee' in entrypoint
+    owned_by_project = entrypoint.index('usermod -o -u "$uid" angee')
+    assert owned_by_project < entrypoint.index('chown -R angee:angee "$project_dir/runtime"')
+    assert ".angee" not in entrypoint
+
+
 def test_baked_image_installs_native_distributions_without_path_injection() -> None:
     """The baked image installs workspace packages and their locked public dependencies."""
 
