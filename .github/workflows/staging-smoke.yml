@@ -86,7 +86,8 @@ jobs:
           angee --root "$STAGING_ROOT" up
           test "$(git -C "$STAGING_ROOT/workspaces/src/angee" rev-parse HEAD)" = "$(git rev-parse HEAD)"
       # `up` returns once the services start, not once they are healthy. Caddy serves
-      # the SPA on ui_port and proxies /auth and /admin to Django.
+      # the SPA on ui_port and proxies /auth/csrf and /graphql to Django; the
+      # administrator signs in through the public schema's login, as the SPA does.
       - name: Serve the app and sign the administrator in
         run: |
           base="http://127.0.0.1:$UI_PORT"
@@ -100,12 +101,14 @@ jobs:
           password=$(angee --root "$STAGING_ROOT" secret reveal admin-password)
           echo "::add-mask::$password"
           jar=$(mktemp)
-          curl -fsS -c "$jar" -o /dev/null "$base/admin/login/"
-          token=$(awk '$6 == "csrftoken" { print $7 }' "$jar")
-          location=$(curl -sS -b "$jar" -c "$jar" -o /dev/null -w '%{redirect_url}' \
-            --data-urlencode "csrfmiddlewaretoken=$token" --data-urlencode username=admin \
-            --data-urlencode "password=$password" --data-urlencode next=/admin/ "$base/admin/login/")
-          [ "$location" = "$base/admin/" ] || { echo "Admin sign-in redirected to '$location', not $base/admin/."; exit 1; }
+          token=$(curl -fsS -c "$jar" "$base/auth/csrf/" | jq -r .token)
+          body=$(jq -n --arg password "$password" '{
+            query: "mutation SignIn($username: String!, $password: String!) { login(username: $username, password: $password) { ok } }",
+            variables: {username: "admin", password: $password}
+          }')
+          answer=$(curl -fsS -b "$jar" -c "$jar" -H "Content-Type: application/json" -H "X-CSRFToken: $token" \
+            --data "$body" "$base/graphql/public/")
+          [ "$(jq -r .data.login.ok <<<"$answer")" = true ] || { echo "The administrator's sign-in was refused: $answer"; exit 1; }
       - name: Show the stack's containers and their logs
         if: ${{ failure() }}
         run: |
