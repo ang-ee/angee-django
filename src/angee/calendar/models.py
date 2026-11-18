@@ -2045,23 +2045,37 @@ class CalendarSource(Bridge, inherits="integrate.Integration"):
         calendar's key and naming its link as its container, so integrate drains it
         after the calendar is mirrored and pauses or retires it with that link. It
         syncs the backend's way (:meth:`_replica`): a publishing backend pushes the
-        calendar's events out through it.
+        calendar's events out through it. Its mapping version is the backend's
+        (``CalendarBackend.events_mapping_version``).
         """
 
-        return self._replica(EVENTS_STREAM, partition=calendar_link.external_key, container=calendar_link)
+        return self._replica(
+            EVENTS_STREAM,
+            partition=calendar_link.external_key,
+            container=calendar_link,
+            mapping_version=self.get_backend_class_impl().events_mapping_version,
+        )
 
     def _replica(
-        self, key: str, *, partition: str = "", container: Any = None, holds_containers: bool = False
+        self,
+        key: str,
+        *,
+        partition: str = "",
+        container: Any = None,
+        holds_containers: bool = False,
+        mapping_version: int = 1,
     ) -> StreamDefinition:
         """A record replica in the backend class's ``direction``, whose pulled removals integrate's absence sweep finds.
 
         ``partition`` and ``container`` name an events stream's calendar (its link);
         ``holds_containers`` marks the calendars stream.
 
-        A pulled stream sweeps at most once per poll interval: a record the source
-        stops serving is unavailable after one sweep and tombstoned after the
-        stream's absence threshold (:meth:`CalendarBackend.on_absent` applies it).
-        Integrate never sweeps a push stream (``SyncStream.accepts_rescan``).
+        A stream sweeps at most once per poll interval. A pulled one's sweep finds
+        removals: a record the source stops serving is unavailable after one sweep
+        and tombstoned after the stream's absence threshold
+        (:meth:`CalendarBackend.on_absent` applies it). A push stream's is its push
+        comparing every event, even one no version shows changed
+        (``SyncStream.sweep_due``).
         """
 
         return StreamDefinition(
@@ -2072,4 +2086,5 @@ class CalendarSource(Bridge, inherits="integrate.Integration"):
             partition=partition,
             container=container,
             holds_containers=holds_containers,
+            mapping_version=mapping_version,
         )

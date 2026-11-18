@@ -54,11 +54,18 @@ version it read beside the base it wrote (`RecordLink.local_version`). A full
 read may then skip every row a link already holds at its current version
 (`RecordLinkManager.changed_since_base`). A projection that reads only the row's
 own tracked columns, plus a container setting, takes the row's history version
-(`RecordLinkManager.with_local_versions`). Versions are compared for equality,
+(`RecordLinkManager.with_local_versions`, the setting folded into a digest so a
+version stays within `LOCAL_VERSION_LENGTH`). Versions are compared for equality,
 never by time: a timestamp is stamped before commit, so a base could postdate an
 uncommitted edit. A push also records the newer version of a row touched without
-a change to its projection (`RecordLinkManager.settle`), and a mapping change
-reads every row again.
+a change to its projection, and baselines a row read without one (its history
+predates capture or was pruned) so the next push settles it
+(`RecordLinkManager.settle`). A mapping change reads every row again: raise the
+stream's `mapping_version` with any change to the projection. What no version
+names (such a change left unraised, or a write that skipped history capture)
+converges at the stream's sweep: while `SyncStream.sweep_due`, once per
+`reconcile_interval`, the read skips nothing, and a push stream's push completes
+that sweep.
 
 Each applied record retains the observe row and the application-evidence row;
 a record delivered again unchanged retains only its observe row. Pinning `applied_base` creates no pointer-only history row. History retention is unbounded: deployments budget both full snapshots and

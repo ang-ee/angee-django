@@ -366,7 +366,9 @@ class ModelHistory(HistoricalRecords):
         row an id no earlier state of it had. Compare versions for equality, never by
         order: equal means the row's tracked columns are as they were. A model whose
         columns tracked MTI descendants carry (:meth:`carriers`) joins each table's
-        latest id. While capture is off nothing is versioned, and this is ``NULL``.
+        latest id. While capture is off nothing is versioned, and this is ``NULL``;
+        a reader that needs a version of a row without one gives it its baseline
+        (:meth:`record_missing_baselines`).
         """
 
         if not self.capture_enabled:
@@ -398,7 +400,9 @@ class ModelHistory(HistoricalRecords):
         is refused for want of a predecessor, so no revert removes a row that
         predates its history. A queryset update finds these rows on its own key
         read (:meth:`recorded`); an instance save, which reads nothing first,
-        probes its one row. There is no backfill.
+        probes its one row (:meth:`record_missing_baselines`). There is no
+        backfill: only a write, or a reader that versions the rows it read
+        (:meth:`current_version`), baselines a row.
         """
 
         if not keys:
@@ -409,16 +413,26 @@ class ModelHistory(HistoricalRecords):
             # The baseline is not the native capture the following write still owes.
             group.seen.intersection_update(pending)
 
+    def record_missing_baselines(self, model: type[models.Model], keys: Sequence[Any]) -> None:
+        """Record the baseline of each of ``keys`` no version carries yet; nothing while capture is off.
+
+        One probe (:meth:`recorded`) selects them; :meth:`record_baselines` owns
+        the snapshot. Afterwards each has a :meth:`current_version`.
+        """
+
+        if not keys or not self.capture_enabled:
+            return
+        missing = model._base_manager.filter(pk__in=keys).exclude(self.recorded(model))
+        self.record_baselines(model, list(missing.order_by("pk").values_list("pk", flat=True)))
+
     def record_baseline(self, instance: models.Model) -> None:
         """Record the stored state of ``instance`` before a tracked touch when no version carries it yet.
 
         An instance reads nothing before it is touched, so this probes its one
-        row (:meth:`recorded`); :meth:`record_baselines` owns the snapshot.
+        row (:meth:`record_missing_baselines`).
         """
 
-        model = type(instance)._meta.concrete_model or type(instance)
-        if not model._base_manager.filter(self.recorded(model), pk=instance.pk).exists():
-            self.record_baselines(model, [instance.pk])
+        self.record_missing_baselines(type(instance)._meta.concrete_model or type(instance), [instance.pk])
 
     def create_historical_record(self, instance: models.Model, history_type: str, using: str | None = None) -> None:
         """Keep native signals and M2M capture on the same stored-snapshot writer."""

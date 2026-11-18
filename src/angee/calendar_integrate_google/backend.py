@@ -501,6 +501,14 @@ class GooglePublishingCalendarBackend(_GoogleBackend, PublishingCalendarBackend)
     icon = "google"
     defaults: ClassVar[dict[str, Any]] = {"vendor": "google", "poll_interval": 300}
     oauth_client: ClassVar[str] = ""
+    events_mapping_version: ClassVar[int] = 1
+    """The version of :func:`_published`, what a push writes of an event; a test pins its output to it.
+
+    A push reads only the events changed since their push (:meth:`local_changes`),
+    so raise it with any change to that output for an unchanged event: its columns
+    (``event_columns``), its rule's form (``canonical_rule``, icalendar's output) or
+    its zone. Until then only the stream's sweep compares every event again.
+    """
 
     def admit_credential(self, credential: Any) -> None:
         """Admit only a service-account key (``jwt_bearer``) acting as itself: the source never writes as a person.
@@ -530,10 +538,11 @@ class GooglePublishingCalendarBackend(_GoogleBackend, PublishingCalendarBackend)
         (``RecordLinkManager.with_local_versions``): a changed zone changes every
         event's version without touching one. Without ``keys``, only the events
         their link does not hold at that version are read
-        (``RecordLinkManager.changed_since_base``); given ``keys``, the events those
-        keys name, changed or not. Integrate writes only the events whose
-        projection differs from their link's base. The calendars stream pushes
-        nothing: its links are :meth:`CalendarSource.publish`'s.
+        (``RecordLinkManager.changed_since_base``; every event while the stream's
+        sweep is due, and after a raised :attr:`events_mapping_version`); given
+        ``keys``, the events those keys name, changed or not. Integrate writes only
+        the events whose projection differs from their link's base. The calendars
+        stream pushes nothing: its links are :meth:`CalendarSource.publish`'s.
         """
 
         if stream.key != EVENTS_STREAM:
@@ -563,7 +572,7 @@ class GooglePublishingCalendarBackend(_GoogleBackend, PublishingCalendarBackend)
             if keys is None or key in keys:
                 stamp = row.sqid if row.series_id is None else ""
                 projection = _published(row, zone, stamp=stamp)
-                yield LocalChange(key, projection, target=row, local_version=row.local_version or "")
+                yield LocalChange(key, projection, target=row, local_version=row.local_version)
 
     def _named(self, stream: Any, keys: frozenset[str]) -> Q:
         """Select the events ``keys`` may name: bound by a link, new by their id, or a new override by its start.

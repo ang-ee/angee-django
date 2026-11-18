@@ -39,7 +39,18 @@ from django.contrib.contenttypes.models import ContentType
 from django.core import checks
 from django.core.exceptions import ImproperlyConfigured, ValidationError
 from django.db import connection, models, transaction
-from django.db.models import BooleanField, Exists, ExpressionWrapper, OuterRef, Prefetch, Q, Subquery, Value
+from django.db.models import (
+    BooleanField,
+    Case,
+    Exists,
+    ExpressionWrapper,
+    OuterRef,
+    Prefetch,
+    Q,
+    Subquery,
+    Value,
+    When,
+)
 from django.db.models.functions import Cast, Concat, JSONObject, NullIf
 from django.utils import timezone
 from django.utils.text import capfirst
@@ -73,7 +84,7 @@ from angee.base.models.transitions import StateTransitions, save_state, transiti
 from angee.base.permissions import actor_user_id, instance_actor
 from angee.base.querysets import row_lock_queryset
 from angee.base.refs import generic_pointer_model, generic_pointer_target
-from angee.base.serialization import canonical_json
+from angee.base.serialization import canonical_json, canonical_json_sha256
 from angee.graphql.capabilities import held_permissions
 from angee.graphql.mixins import ImplementationChoicesMixin
 from angee.integrate.constants import DISCOVERY_ATTEMPT_LIMIT, DISCOVERY_TASK, DISCOVERY_TASK_EXPIRES
@@ -5188,6 +5199,21 @@ class SyncStream(ImmutableFieldsMixin, SyncStateMixin, AuditMixin, AngeeDataMode
             and self.kind == StreamKind.RECORD_REPLICA
         )
 
+    def sweep_due(self) -> bool:
+        """Whether this generation's periodic sweep is due: ``reconcile_interval`` passed since the last one completed.
+
+        Never without an interval. The sweep compares everything: a pull's absence
+        pass (:func:`~angee.integrate.streams.reconcile_stream`) lists every remote
+        record, and a push compares every local row
+        (:meth:`RecordLinkManager.changed_since_base` narrows nothing while it is
+        due). A push stream, which no absence pass sweeps, completes its sweep with
+        that push (:func:`~angee.integrate.streams.push_stream`).
+        """
+
+        return self.reconcile_interval is not None and (
+            self.last_reconciled_at is None or self.last_reconciled_at + self.reconcile_interval <= timezone.now()
+        )
+
     @property
     def writes_back(self) -> bool:
         """Whether this stream writes local changes to its remote: a replica that is not pull-only."""
@@ -5426,7 +5452,7 @@ class RecordLinkQuerySet[RecordLinkT: RecordLink](AngeeHistoryQuerySet[RecordLin
 _RecordLinkManagerBase = AngeeHistoryManager.from_queryset(RecordLinkQuerySet)
 
 
-def _held_version(mapping_version: int, version: str) -> str:
+def _held_version(mapping_version: int, version: str | None) -> str:
     """Return the stored form of a local version, framed by the mapping version that projected it; ``""`` for none."""
 
     return f"{mapping_version}:{version}" if version else ""
@@ -5583,15 +5609,18 @@ class RecordLinkManager[RecordLinkT: RecordLink](_RecordLinkManagerBase[RecordLi
         The version of a projection that reads only the row's own tracked columns
         and ``context`` (what else it reads, such as its container's zone): every
         tracked write of the row gives it a new one (``ModelHistory.current_version``),
-        and a changed ``context`` changes every row's. A projection that reads
-        other rows needs a version of its own. Yield each row's with its
-        projection (``LocalChange.local_version``), read in the same statement.
+        and a changed ``context`` changes every row's. ``context`` enters as its
+        digest, so a version stays within ``LOCAL_VERSION_LENGTH`` whatever it is.
+        A projection that reads other rows needs a version of its own. Yield each
+        row's with its projection (``LocalChange.local_version``), read in the same
+        statement; ``NULL`` (``None``) is a row without a version yet, which a push
+        baselines (:meth:`settle`).
         """
 
         history = model_history(rows.model)
         if history is None:
             return rows.annotate(local_version=Value(None, output_field=models.CharField()))
-        prefix = Value(f"{context}@")
+        prefix = Value(f"{canonical_json_sha256(context)}@")
         version = Concat(prefix, history.current_version(rows.model), output_field=models.CharField())
         # Without a version the concatenation is the bare prefix, which names no state: NULL.
         return rows.annotate(local_version=NullIf(version, prefix))
@@ -5606,8 +5635,15 @@ class RecordLinkManager[RecordLinkT: RecordLink](_RecordLinkManagerBase[RecordLi
         mapping version, is unchanged since that link's base and is left out; a
         new row, a row without a version, and every row after a mapping change
         stay. One ``NOT EXISTS`` per row, on the link's target index.
+
+        While the stream's sweep is due (``SyncStream.sweep_due``) every row stays:
+        the push compares them all, so what no version names (a projection change
+        without a mapping version bump, a write that skipped history capture) still
+        converges once per ``reconcile_interval``.
         """
 
+        if stream.sweep_due():
+            return rows
         held = self.model._base_manager.filter(
             stream=stream,
             target_content_type=ContentType.objects.get_for_model(generic_pointer_model(rows.model)),
@@ -5619,22 +5655,37 @@ class RecordLinkManager[RecordLinkT: RecordLink](_RecordLinkManagerBase[RecordLi
         )
         return rows.exclude(Exists(held))
 
-    def settle(self, stream: Any, unchanged: Iterable[tuple[Any, str]]) -> int:
-        """Advance each link's local version to a newer one that still projects its base; return how many moved.
+    def settle(self, stream: Any, unchanged: Iterable[tuple[Any, Any]]) -> int:
+        """Record what a push learned of local changes equal to their link's base; return how many links moved.
 
-        ``unchanged`` pairs a link, read with its base, with the local version of a
-        projection found equal to that base (``push_candidates``). The write is
-        conditional on that base: a link whose base moved since keeps its version.
+        ``unchanged`` pairs a link, read with its base, with a ``LocalChange`` whose
+        projection equals that base (``push_candidates``). A change read at a newer
+        local version advances its link's (``RecordLink.local_version``), in one
+        statement conditional on each link's base: a link whose base moved since
+        keeps its version. A row read without a version (``None``: written before
+        its history, or its history pruned) gets its baseline
+        (``ModelHistory.record_missing_baselines``), so the next push reads it once
+        more at that version and settles it.
         """
 
-        moved = 0
+        moves: dict[Any, tuple[Any, str]] = {}
+        unversioned: dict[type[models.Model], list[Any]] = {}
+        for link, change in unchanged:
+            held = _held_version(stream.mapping_version, change.local_version)
+            if held and held != link.local_version:
+                moves[link.pk] = (link.applied_base_id, held)
+            elif change.local_version is None and change.target is not None:
+                model = type(change.target)._meta.concrete_model or type(change.target)
+                unversioned.setdefault(model, []).append(change.target.pk)
         with system_context(reason="integrate.record.settle"):
-            for link, version in unchanged:
-                held = _held_version(stream.mapping_version, version)
-                if link.local_version != held:
-                    rows = self.filter(pk=link.pk, applied_base_id=link.applied_base_id)
-                    moved += rows.update(local_version=held)
-        return moved
+            for model, keys in unversioned.items():
+                if (history := model_history(model)) is not None:
+                    history.record_missing_baselines(model, keys)
+            if not moves:
+                return 0
+            bases = Q(*(Q(pk=pk, applied_base_id=base) for pk, (base, _held) in moves.items()), _connector=Q.OR)
+            versions = [When(pk=pk, then=Value(held)) for pk, (_base, held) in moves.items()]
+            return self.filter(bases).update(local_version=Case(*versions, output_field=models.CharField()))
 
     def promote(
         self,
@@ -5649,7 +5700,7 @@ class RecordLinkManager[RecordLinkT: RecordLink](_RecordLinkManagerBase[RecordLi
         remote_version: str = "",
         origin: str = "remote",
         tombstone: bool = False,
-        local_version: str = "",
+        local_version: str | None = "",
     ) -> Any:
         """Append applied evidence and pin its base; the driver owns promotion.
 
@@ -5819,6 +5870,10 @@ class RecordLink(
     ``applied_base`` pins this link's own historical application snapshot; an
     observation never advances it. Its protected FK keeps the active comparison
     base out of native history pruning. ``pinned`` withholds automatic updates.
+    :meth:`RecordLinkManager.promote` is the only writer of ``applied_base``, and
+    the held ``local_version`` relies on it: every promotion sets or clears that
+    version with the base, and :meth:`RecordLinkManager.settle` advances it only
+    while the base it compared is still the applied one.
 
     ``inbound`` retains a list of failures, including closed evidence. Each entry
     carries kind, code, source_hash, mapping_version, details, status, attempts,
@@ -5884,8 +5939,9 @@ class RecordLink(
     A push records the version it read with what it wrote; any other promotion
     clears it; :meth:`RecordLinkManager.settle` advances it when a newer version
     still projects the base. Stored framed by the mapping version that projected
-    it, so a mapping change reads every row again. It advances without a new
-    base, so the link's history leaves it out.
+    it, so a mapping change reads every row again; a version is at most
+    ``LOCAL_VERSION_LENGTH`` long, so its framed form fits. It advances without a
+    new base, so the link's history leaves it out.
     """
     origin = models.CharField(max_length=16, blank=True)
     last_seen_at = models.DateTimeField(null=True, blank=True)

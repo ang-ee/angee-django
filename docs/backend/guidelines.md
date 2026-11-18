@@ -2171,7 +2171,8 @@ bridge advisory lock as polling and delivery settlement.
   that does not replace the remote transport version fence. A push may skip a row
   only by the exact local version read with its projection, compared for equality
   (`RecordLinkManager.changed_since_base`), never by a timestamp: one is stamped
-  before its commit.
+  before its commit. Its stream's sweep (`SyncStream.sweep_due`) still compares
+  every row, so what no version names converges.
 - **Applied evidence has one promoter.** Adapters return the actual mapped
   payload and dependency digest in `ApplyResult`; the driver takes the declared
   mapping version from the stream, promotes the primary link and pins the history

@@ -217,6 +217,33 @@ def test_a_rows_current_version_changes_with_every_tracked_write_and_none_exists
         assert version(OwnedRow, row.pk) is None
 
 
+@pytest.mark.django_db
+def test_missing_baselines_version_only_the_rows_without_one_and_nothing_without_capture(settings):
+    """A reader's baseline gives a row written before capture its first version; a versioned row keeps its own."""
+
+    from rebac import system_context
+
+    from angee.provenance.history import BASELINE_REASON
+    from angee.provenance.querysets import model_history
+
+    history = model_history(OwnedRow)
+    with system_context(reason="tests.history.missing_baselines"):
+        settings.SIMPLE_HISTORY_ENABLED = False
+        legacy, later = OwnedRow.objects.create(title="legacy"), OwnedRow.objects.create(title="later")
+        history.record_missing_baselines(OwnedRow, [later.pk])
+        assert not OwnedRow.history.filter(id=later.pk).exists()
+
+        settings.SIMPLE_HISTORY_ENABLED = True
+        tracked = OwnedRow.objects.create(title="tracked")
+        versions = list(OwnedRow.history.filter(id=tracked.pk).values_list("history_id", flat=True))
+        history.record_missing_baselines(OwnedRow, [legacy.pk, tracked.pk])
+        [baseline] = OwnedRow.history.filter(id=legacy.pk)
+        assert (baseline.history_type, baseline.history_change_reason, baseline.title) == (
+            "~", BASELINE_REASON, "legacy"
+        )
+        assert list(OwnedRow.history.filter(id=tracked.pk).values_list("history_id", flat=True)) == versions
+
+
 @pytest.mark.entrypoint_boundaries
 @pytest.mark.django_db
 def test_native_bulk_capture_can_be_unattributed_when_storage_policy_allows(settings):

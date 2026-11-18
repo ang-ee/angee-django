@@ -219,7 +219,10 @@ class BridgeImpl(IntegrationImpl):
         An adapter whose projection reads only what one exact version names yields
         it as ``LocalChange.local_version``, read with the projection; without
         ``keys`` it may then read only the rows changed since their link's base
-        (``RecordLinkManager.changed_since_base``).
+        (``RecordLinkManager.changed_since_base``), which reads every row while the
+        stream's sweep is due, so its stream declares a ``reconcile_interval``. Its
+        stream's ``mapping_version`` names the projection: raise it with any change
+        to what the projection returns for an unchanged row.
         """
 
         raise AdapterContractError("Push adapters must project local changes.")
