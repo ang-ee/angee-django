@@ -29,13 +29,13 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import replace
 from datetime import datetime
-from functools import partial
 from typing import Any, cast
 
 import strawberry
 import strawberry_django
 from django.apps import apps
 from django.db import transaction
+from django.db.models import BooleanField, Case, Expression, QuerySet, Value, When
 from rebac import ObjectRef
 from rebac.field_visibility import check_field_access
 from rebac.resources import resource_id_attr
@@ -44,7 +44,7 @@ from strawberry import auto
 from angee.calendar.backends import EVENT_FIELDS
 from angee.calendar.models import Calendar as CalendarModel
 from angee.calendar.models import CalendarEvent as CalendarEventModel
-from angee.calendar.models import EventOccurrence, EventTransparency
+from angee.calendar.models import CalendarQuerySet, EventOccurrence, EventTransparency
 from angee.graphql.access import ChangeReadGate
 from angee.graphql.actions import ActionResult, action_guard, authorized_action_target, session_user
 from angee.graphql.capabilities import permission_expression, permissions_field
@@ -228,13 +228,23 @@ class CalendarEventWriteBackend(AngeeHasuraWriteBackend):
 # ---------------------------------------------------------------------------
 
 
+def _writable_expression(queryset: QuerySet[Any]) -> Expression:
+    """The calendars the actor may add events to: their ``write``, on a calendar that takes local edits."""
+
+    return Case(
+        When(CalendarQuerySet.local_edits_rule(), then=permission_expression(queryset, "write")),
+        default=Value(False),
+        output_field=BooleanField(),
+    )
+
+
 _CALENDAR_RESOURCE = hasura_model_resource(
     CalendarType,
     model=Calendar,
     name="calendars",
     # `writable`: the calendars the actor may add events to, as the event form's picker offers them.
     filterable=["id", "party", "name", "overlap_policy", "writable"],
-    filter_expressions={"writable": partial(permission_expression, name="write")},
+    filter_expressions={"writable": _writable_expression},
     sortable=["name", "created_at", "updated_at"],
     aggregatable=["id"],
     groupable=["party", "overlap_policy"],

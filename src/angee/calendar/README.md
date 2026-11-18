@@ -19,10 +19,13 @@ consumer that wants a default calendar per record of its own creates it in its o
 addon.
 
 **A personal calendar on request.** `Calendar.objects.ensure_personal(user)` (the
-`ensure_personal_calendar` verb) returns the user's own calendar, on their person
-and owned by them, creating it the first time under their own create gate. It locks
-the person first, so it is idempotent. The event form offers it to a user who has
-no calendar to write to; nothing calls it for them.
+`ensure_personal_calendar` verb) returns the user's own calendar, on their person,
+owned by them and taking local edits, creating it the first time under their own
+create gate. It locks the person first, so it is idempotent. The event form offers
+it to a user who has no calendar to add events to; nothing calls it for them. Both
+read the one local-edits rule (below, *Replicas*): the form's `writable` calendars
+are those the viewer writes that take local edits, so a read-only subscription is
+never offered and never taken as the user's own.
 
 ## Events
 
@@ -147,7 +150,9 @@ A source's calendar is mirrored before its events land: a sync that finds it
 missing retries on the next cycle.
 
 - **Replicas.** A backend declares whether it takes writes. A local calendar
-  always takes edits; a source's calendar only when its backend writes. On a
+  always takes edits; a source's calendar only when its backend writes
+  (`Calendar.is_writable` per row, `CalendarQuerySet.local_edits_rule()` as a
+  query; `CalendarSource.is_backend_writable` is the one decision both read). On a
   read-only subscription the events and attendees are the source's replicas: a
   person creating, editing, rescheduling or deleting one is refused ("This
   calendar is a read-only subscription") on every save path, and its occurrences

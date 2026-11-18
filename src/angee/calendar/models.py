@@ -255,6 +255,23 @@ def _intervals_meet(left: Sequence[tuple[datetime, datetime]], right: Sequence[t
 class CalendarQuerySet[CalendarT: Calendar](ArchiveQuerySet[CalendarT], AngeeHistoryQuerySet[CalendarT]):
     """Calendar rows, with the archived scope an unsubscribed calendar enters."""
 
+    @staticmethod
+    def local_edits_rule() -> Q:
+        """The rule for a calendar that takes local edits, as :attr:`Calendar.is_writable` decides one row.
+
+        A local calendar (no ``source``) always does; a source's calendar does when its
+        backend writes (:meth:`CalendarSource.is_backend_writable`, the one per-backend decision).
+        """
+
+        field = cast(ImplClassField, CalendarSource._meta.get_field("backend_class"))
+        writable = [key for key in field.registered_keys() if CalendarSource.is_backend_writable(key)]
+        return Q(source__isnull=True) | Q(source__backend_class__in=writable)
+
+    def taking_local_edits(self) -> Self:
+        """Calendars that take local edits: the ones an event form may offer, and a user's own may be."""
+
+        return self.filter(self.local_edits_rule())
+
 
 _CalendarManagerBase = AngeeHistoryManager.from_queryset(CalendarQuerySet)
 
@@ -265,8 +282,10 @@ class CalendarManager[CalendarT: Calendar](_CalendarManagerBase[CalendarT]):
     def ensure_personal(self, user: Any) -> CalendarT:
         """Return ``user``'s own personal calendar, creating it once when there is none.
 
-        A personal calendar belongs to the user's person and is owned by the user. The
-        person comes from :meth:`~angee.parties.managers.PartyManager.for_user`, the
+        A personal calendar belongs to the user's person, is owned by the user and
+        takes local edits (:meth:`CalendarQuerySet.taking_local_edits`): a read-only
+        subscription the user holds is not theirs to add events to. The person comes
+        from :meth:`~angee.parties.managers.PartyManager.for_user`, the
         one-person-per-user owner, and its row is locked before the lookup, so two
         concurrent calls converge on one calendar. The calendar is created under the
         user's own create gate (their person's ``write``), never as system work: a user
@@ -279,7 +298,7 @@ class CalendarManager[CalendarT: Calendar](_CalendarManagerBase[CalendarT]):
                 person = person_model.objects.for_user(user)
             person_model.system_queryset(lock=("self",)).get(pk=person.pk)
             scoped = self.with_actor(user)
-            existing = scoped.filter(party_id=person.pk, owner=user).order_by("pk").first()
+            existing = scoped.taking_local_edits().filter(party_id=person.pk, owner=user).order_by("pk").first()
             if existing is not None:
                 return existing
             return scoped.create(party_id=person.pk, name=person.display_name or user.get_username())
@@ -449,7 +468,10 @@ class Calendar(OwnerMixin, ArchiveMixin, StatementsMixin, HistoryMixin, AngeeDat
 
     @property
     def is_writable(self) -> bool:
-        """Whether this calendar takes local edits: a local calendar always, a source's when its backend writes."""
+        """Whether this calendar takes local edits: a local calendar always, a source's when its backend writes.
+
+        :meth:`CalendarQuerySet.local_edits_rule` is the same decision as a query.
+        """
 
         source = self.source
         return source is None or CalendarSource.is_backend_writable(source.backend_class)

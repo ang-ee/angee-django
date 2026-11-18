@@ -23,6 +23,7 @@ import httpx2
 import icalendar
 import pytest
 from django.apps import apps
+from django.contrib.auth import get_user_model
 from django.core.cache import caches
 from django.core.exceptions import ValidationError
 from django.db import connection, transaction
@@ -31,6 +32,7 @@ from django.utils import timezone
 from rebac import actor_context, system_context
 
 from angee.calendar import models as calendar_models
+from angee.calendar import schema as calendar_schema
 from angee.calendar.backends import ParsedCalendar
 from angee.calendar.models import (
     PURGE_SOURCE_TASK,
@@ -44,6 +46,7 @@ from angee.calendar.testing.models import Calendar, CalendarEvent, CalendarSourc
 from angee.calendar_integrate_ics import backend as ics_backend
 from angee.calendar_integrate_ics.backend import FEED_KEY, IcsCalendarBackend, IcsError
 from angee.calendar_integrate_ics.connect import subscribe_calendar
+from angee.graphql.testing.documents import execute_schema, result_data
 from angee.integrate.errors import IntegrationError
 from angee.integrate.states import LinkStatus
 from angee.integrate.streams import BridgeSyncError, advance_stream, read_stream_keys, sync_bridge
@@ -54,7 +57,7 @@ from angee.jobs.celery import app as celery_app
 from angee.messaging.testing.models import Handle, Person
 from angee.resources.testing.models import Resource
 from angee.scheduling.zones import get_zone_info
-from tests.conftest import Credential, ExternalAccount, OAuthClient, Vendor, create_user
+from tests.conftest import Credential, ExternalAccount, OAuthClient, Vendor, addon_schema, create_user
 from tests.lock_waits import submit, wait_for_lock
 
 pytestmark = pytest.mark.django_db(transaction=True)
@@ -1768,6 +1771,45 @@ def test_a_replica_refuses_every_local_write_and_a_local_calendar_takes_them(
     launch.refresh_from_db()
     assert launch.title == "Launch"
     assert Calendar.system_queryset().filter(pk=subscription.calendar.pk).exists()
+
+
+_WRITABLE_CALENDARS = "query { calendars(where: {writable: {_eq: true}}) { id } }"
+_ENSURE_PERSONAL = "mutation { ensure_personal_calendar { ok id } }"
+
+
+def test_a_read_only_subscription_is_never_offered_for_new_events_nor_taken_as_personal(
+    subscription: Subscription,
+) -> None:
+    """The event form's ``writable`` calendars and a user's own calendar both take local edits.
+
+    The subscriber holds ``write`` on the feed's calendar, yet it refuses local events,
+    so the form offers nothing until the user starts their own: a new local calendar.
+    The query rule and :attr:`Calendar.is_writable` agree on every row.
+    """
+
+    subscription.poll()
+    feed_calendar = subscription.calendar
+    with system_context(reason="tests.ics"):
+        user = get_user_model().objects.get(pk=subscription.source.owner_id)
+    console = addon_schema(calendar_schema.schemas, "console")
+
+    def writable() -> list[str]:
+        rows = result_data(execute_schema(console, _WRITABLE_CALENDARS, {}, user=user))["calendars"]
+        return [row["id"] for row in rows]
+
+    assert Calendar.objects.with_actor(user).with_action("write").filter(pk=feed_calendar.pk).exists()
+    assert feed_calendar.is_writable is False
+    assert writable() == []
+
+    own = result_data(execute_schema(console, _ENSURE_PERSONAL, {}, user=user))["ensure_personal_calendar"]
+
+    assert own["ok"] is True and own["id"] != feed_calendar.sqid
+    assert writable() == [own["id"]]
+    with system_context(reason="tests.ics"):
+        rows = list(Calendar.objects.all())
+        taking = set(Calendar.objects.taking_local_edits().values_list("pk", flat=True))
+    assert {row.pk for row in rows if row.is_writable} == taking
+    assert len(rows) == 2 and feed_calendar.pk not in taking
 
 
 def test_a_handle_merge_folds_two_attendees_of_one_replica(subscription: Subscription) -> None:
