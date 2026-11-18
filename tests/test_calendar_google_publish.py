@@ -17,7 +17,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from time import monotonic
-from typing import Any
+from typing import Any, cast
 from urllib.parse import parse_qs, unquote, urlsplit
 from zoneinfo import ZoneInfo
 
@@ -41,20 +41,23 @@ from angee.calendar_integrate_google.backend import (
     CALENDAR_READONLY,
     STAMP,
     GooglePublishingCalendarBackend,
+    _published,
     event_id,
 )
 from angee.calendar_integrate_google.connect import connect_google_calendar_publishing
 from angee.graphql.deletion import DeletePreview
 from angee.graphql.testing.documents import execute_schema, result_data
 from angee.integrate.errors import IntegrationError
+from angee.integrate.impl import AdapterContractError
 from angee.integrate.models import CredentialStatus
-from angee.integrate.states import ConflictKeep, LinkStatus, StreamDirection, SyncFailureKind
-from angee.integrate.streams import BridgeSyncError, push_stream, sync_bridge
+from angee.integrate.states import LOCAL_VERSION_LENGTH, ConflictKeep, LinkStatus, StreamDirection, SyncFailureKind
+from angee.integrate.streams import BridgeSyncError, LocalChange, push_candidates, push_stream, sync_bridge
 from angee.integrate.sync import sync_deadline_context
 from angee.integrate.testing.http import mock_transport, request_fields
 from angee.integrate.testing.models import RecordLink, SyncStream
 from angee.jobs.celery import app as celery_app
 from angee.messaging.testing.models import Person
+from angee.provenance.history import BASELINE_REASON
 from tests.conftest import Credential, ExternalAccount, OAuthClient, Vendor, addon_schema, create_user
 from tests.lock_waits import submit, wait_for_lock
 from tests.test_integrate_jwt_bearer import TOKEN_ENDPOINT, create_jwt_bearer, google_key_file, signing_key
@@ -302,6 +305,35 @@ class Published:
         with system_context(reason="tests.google.publish.resolve"):
             [conflict] = RecordLink.objects.get(pk=self.links()[key].pk).failures(open_only=True)
             conflict.resolve_conflict(keep=keep)
+
+    def events_stream(self) -> Any:
+        with system_context(reason="tests.google.publish.stream"):
+            return SyncStream.objects.filter(integration_id=self.source.pk, key="events").latest("generation")
+
+    def push(self) -> int:
+        """Push the events stream on this thread's connection, as one partition of a poll does."""
+
+        stream = self.events_stream()
+        with system_context(reason="tests.google.publish.push"):
+            adapter = CalendarSource.objects.get(pk=self.source.pk).capability_impl
+        return push_stream(stream, adapter).count
+
+    def rewind_sweep(self) -> None:
+        """Make the events stream's sweep due, as its reconcile interval passing does."""
+
+        stream = self.events_stream()
+        with system_context(reason="tests.google.publish.sweep"):
+            SyncStream.objects.filter(pk=stream.pk).update(
+                last_reconciled_at=stream.last_reconciled_at - stream.reconcile_interval
+            )
+
+    def changed(self) -> list[str]:
+        """The keys a full read of the published events projects: the events changed since their push."""
+
+        stream = self.events_stream()
+        with system_context(reason="tests.google.publish.changed"):
+            backend = CalendarSource.objects.get(pk=self.source.pk).backend
+            return sorted(change.external_key for change in backend.local_changes(stream))
 
     def links(self, key: str = "events") -> dict[str, Any]:
         rows = RecordLink.objects.sudo(reason="tests.google.publish").filter(
@@ -784,12 +816,239 @@ def test_local_changes_given_keys_read_only_the_events_they_name(published: Publ
             for key in (override, late_key, retro_key)
         }
 
+    # A full read leaves out the events pushed and unchanged since; a new override still keys under its pushed series.
+    assert not {master, override, *(event_id(row.sqid) for row in others)} & every.keys()
     assert every == {
-        master: standup.pk, override: moved.pk, event_id(fresh.sqid): fresh.pk, late_key: late.pk,
-        event_id(retro.sqid): retro.pk, retro_key: retro_moved.pk, **{event_id(row.sqid): row.pk for row in others},
+        event_id(fresh.sqid): fresh.pk, late_key: late.pk, event_id(retro.sqid): retro.pk, retro_key: retro_moved.pk,
     }
+    # Given keys, the named events are read changed or not: the pushed override among them.
     assert named == {override: moved.pk, event_id(fresh.sqid): fresh.pk, late_key: late.pk, retro_key: retro_moved.pk}
     assert selected == {override: {moved}, late_key: {late}, retro_key: {retro_moved}}
+
+
+def _written(published: Published, seen: int) -> list[tuple[str, str]]:
+    """Return the writes Google received after the first ``seen`` requests, as (method, event id)."""
+
+    return [(request.method, unquote(urlsplit(str(request.url)).path).rsplit("/", 1)[-1])
+            for request in published.google.writes()[seen:]]
+
+
+def test_a_poll_projects_only_the_events_changed_since_their_push(published: Published) -> None:
+    published.publish()
+    rows = [published.event(title=f"Workshop {day}", start=_berlin(5, day, 10), end=_berlin(5, day, 12))
+            for day in (4, 5, 6)]
+    keys = [event_id(row.sqid) for row in rows]
+    published.poll()
+    assert sorted(published.remote()) == sorted(keys)
+
+    # Each event is held at the version its push read: a full read projects none of them.
+    assert published.changed() == []
+    published.edit(rows[1], location="Hall")
+    assert published.changed() == [keys[1]]
+    seen = len(published.google.writes())
+    published.poll()
+    assert _written(published, seen) == [("PATCH", keys[1])]
+    assert published.remote()[keys[1]]["location"] == "Hall"
+    assert published.changed() == []
+
+
+def test_a_calendar_zone_change_reads_every_event_again_and_pushes_those_keeping_its_zone(
+    published: Published,
+) -> None:
+    """The zone is part of each event's version: changing it reads every event again without touching one."""
+
+    published.publish()
+    floating = published.event(title="Floating", start=_berlin(5, 4, 10), end=_berlin(5, 4, 12))
+    zoned = published.event(title="Tokyo call", start=_berlin(5, 5, 10), end=_berlin(5, 5, 11), timezone="Asia/Tokyo")
+    published.poll()
+    assert published.changed() == []
+
+    with system_context(reason="tests.google.publish.zone"):
+        calendar = Calendar.objects.get(pk=published.calendar.pk)
+        calendar.timezone = "America/New_York"
+        calendar.save()
+    floating_key, zoned_key = event_id(floating.sqid), event_id(zoned.sqid)
+    assert published.changed() == sorted([floating_key, zoned_key])
+    seen = len(published.google.writes())
+    published.poll()
+
+    # Only the event keeping the calendar's zone projects differently; the other is settled at its new version.
+    assert _written(published, seen) == [("PATCH", floating_key)]
+    assert published.remote()[floating_key]["start"]["timeZone"] == "America/New_York"
+    assert published.remote()[zoned_key]["start"]["timeZone"] == "Asia/Tokyo"
+    assert published.changed() == []
+
+
+def test_events_touched_without_a_published_change_are_read_once_then_settled_in_one_statement(
+    published: Published,
+) -> None:
+    published.publish()
+    rows = [published.event(title=f"Workshop {day}", start=_berlin(5, day, 10), end=_berlin(5, day, 12))
+            for day in (4, 5)]
+    keys = sorted(event_id(row.sqid) for row in rows)
+    published.poll()
+    for row in rows:
+        published.edit(row, conference_url="https://meet.example.com/workshop")
+    assert published.changed() == keys
+    seen = len(published.google.writes())
+    with CaptureQueriesContext(connection) as queries:
+        assert published.push() == 0
+    assert _written(published, seen) == []
+    # The batch's links advance together, each conditionally on its base.
+    assert len([query for query in queries.captured_queries if 'SET "local_version"' in query["sql"]]) == 1
+    assert published.changed() == []
+
+    # A settle is conditional on the base it compared: a link whose base moved since keeps its version.
+    workshop, key = rows[0], event_id(rows[0].sqid)
+    stale = published.links()[key]
+    published.edit(workshop, location="Hall")
+    published.poll()
+    held = published.links()[key].local_version
+    with system_context(reason="tests.google.publish.settle"):
+        change = LocalChange(key, {}, target=workshop, local_version="stale")
+        assert RecordLink.objects.settle(published.events_stream(), [(stale, change)]) == 0
+    assert published.links()[key].local_version == held != stale.local_version
+
+
+def test_an_edit_committed_after_the_push_read_its_event_is_the_next_push(published: Published) -> None:
+    """The push holds the version it read, not the row's version when it binds: a later edit is still pushed."""
+
+    published.publish()
+    workshop = published.event(start=_berlin(5, 4, 10), end=_berlin(5, 4, 12))
+    key = event_id(workshop.sqid)
+    published.poll()
+    published.edit(workshop, location="Hall")
+    # The patch lands as a later edit commits: after the push read the event, before it binds it.
+    published.google.before_patch = lambda: published.edit(workshop, title="Workshop (renamed)")
+
+    published.poll()
+    assert (published.remote()[key]["summary"], published.remote()[key]["location"]) == ("Workshop", "Hall")
+    assert published.changed() == [key]
+    published.poll()
+    assert (published.remote()[key]["summary"], published.remote()[key]["location"]) == ("Workshop (renamed)", "Hall")
+
+
+def test_without_history_capture_every_event_is_read(published: Published, settings: Any) -> None:
+    """No version is exact while capture is off: a full read projects every event, as before versions."""
+
+    published.publish()
+    rows = [published.event(title=title, start=_berlin(5, 4, 10), end=_berlin(5, 4, 12)) for title in ("One", "Two")]
+    published.poll()
+    assert published.changed() == []
+    settings.SIMPLE_HISTORY_ENABLED = False
+    assert published.changed() == sorted(event_id(row.sqid) for row in rows)
+
+
+def test_a_write_that_skipped_history_capture_is_pushed_by_the_streams_sweep(
+    published: Published, settings: Any
+) -> None:
+    """No version names a write that skipped capture: polls skip it until the stream's sweep compares every event."""
+
+    published.publish()
+    workshop = published.event(start=_berlin(5, 4, 10), end=_berlin(5, 4, 12))
+    key = event_id(workshop.sqid)
+    published.poll()
+    settings.SIMPLE_HISTORY_ENABLED = False
+    published.edit(workshop, location="Hall")
+    settings.SIMPLE_HISTORY_ENABLED = True
+    seen = len(published.google.writes())
+    published.poll()
+    assert _written(published, seen) == []
+
+    published.rewind_sweep()
+    assert published.changed() == [key]
+    published.poll()
+    assert _written(published, seen) == [("PATCH", key)]
+    assert published.remote()[key]["location"] == "Hall"
+    # The push ran through every event, which completes the push stream's sweep.
+    assert not published.events_stream().sweep_due()
+    assert published.changed() == []
+
+
+def test_an_event_written_before_its_history_is_baselined_then_settled(published: Published, settings: Any) -> None:
+    """A row without a version is read until a push baselines it; read once more at that version, it settles."""
+
+    published.publish()
+    settings.SIMPLE_HISTORY_ENABLED = False
+    workshop = published.event(start=_berlin(5, 4, 10), end=_berlin(5, 4, 12))
+    settings.SIMPLE_HISTORY_ENABLED = True
+    key = event_id(workshop.sqid)
+    published.poll()
+    assert key in published.remote()
+    assert published.changed() == [key]
+
+    seen = len(published.google.writes())
+    published.poll()
+    with system_context(reason="tests.google.publish.baseline"):
+        [baseline] = CalendarEvent.history.filter(id=workshop.pk)
+    assert (baseline.history_type, baseline.history_change_reason) == ("~", BASELINE_REASON)
+    assert published.changed() == [key]
+    published.poll()
+    assert _written(published, seen) == []
+    assert published.changed() == []
+
+
+def test_a_local_version_stays_within_its_column_and_a_longer_one_is_refused_before_any_write(
+    published: Published,
+) -> None:
+    published.publish()
+    workshop = published.event(start=_berlin(5, 4, 10), end=_berlin(5, 4, 12))
+    published.poll()
+    with system_context(reason="tests.google.publish.version"):
+        events = CalendarEvent.system_queryset().filter(pk=workshop.pk)
+        [version] = RecordLink.objects.with_local_versions(events, context="Zone/" * 200).values_list(
+            "local_version", flat=True
+        )
+    assert version is not None and len(version) <= LOCAL_VERSION_LENGTH
+
+    class Overlong:
+        """An adapter yielding a version no link can hold."""
+
+        def local_changes(self, stream: Any, *, keys: frozenset[str] | None = None) -> Iterator[LocalChange]:
+            yield LocalChange("overlong", {}, local_version="v" * (LOCAL_VERSION_LENGTH + 1))
+
+    seen = len(published.google.writes())
+    with system_context(reason="tests.google.publish.version"), pytest.raises(AdapterContractError):
+        list(push_candidates(published.events_stream(), cast(Any, Overlong()), None))
+    assert _written(published, seen) == []
+
+
+def test_the_published_projection_is_pinned_to_the_events_mapping_version(published: Published) -> None:
+    """A push reads only the events changed since their push: a change to this output raises the version with it."""
+
+    published.publish()
+    series = published.event(
+        title="Standup", description="Daily", location="Room 1", start=_berlin(5, 4, 9), end=_berlin(5, 4, 9, 30),
+        recurrence="BYDAY=MO,WE;FREQ=WEEKLY;COUNT=10", timezone="Asia/Tokyo",
+    )
+    day = published.event(
+        title="Offsite", start=_berlin(5, 6, 0), end=_berlin(5, 7, 0), all_day=True, transparency="free",
+        visibility="private",
+    )
+    published.poll()
+    version = GooglePublishingCalendarBackend.events_mapping_version
+    assert published.events_stream().mapping_version == version
+    with system_context(reason="tests.google.publish.pinned"):
+        stored = {row.pk: row for row in CalendarEvent.system_queryset().filter(pk__in=[series.pk, day.pk])}
+    projected = [
+        _published(stored[series.pk], "Europe/Berlin", stamp="evt_series"),
+        _published(stored[day.pk], "Europe/Berlin"),
+    ]
+
+    assert (version, projected) == (1, [
+        {
+            "title": "Standup", "description": "Daily", "location": "Room 1",
+            "start": "2026-05-04T07:00:00+00:00", "end": "2026-05-04T07:30:00+00:00", "all_day": False,
+            "status": "confirmed", "transparency": "busy", "visibility": "default",
+            "recurrence": "FREQ=WEEKLY;COUNT=10;BYDAY=MO,WE", "timezone": "Asia/Tokyo", "stamp": "evt_series",
+        },
+        {
+            "title": "Offsite", "description": "", "location": "",
+            "start": "2026-05-05T22:00:00+00:00", "end": "2026-05-06T22:00:00+00:00", "all_day": True,
+            "status": "confirmed", "transparency": "free", "visibility": "private",
+            "recurrence": "", "timezone": "Europe/Berlin", "stamp": "",
+        },
+    ])
 
 
 def test_keeping_angees_side_restores_an_event_cancelled_in_google(published: Published) -> None:
@@ -1283,3 +1542,28 @@ def test_a_publish_holding_its_vendor_lets_another_source_of_that_vendor_connect
         assert CalendarSource.objects.get(pk=connected.pk).vendor_id == CalendarSource.objects.get(
             pk=published.source.pk
         ).vendor_id
+
+
+@pytest.mark.skipif(connection.vendor != "postgresql", reason="Real PostgreSQL row locks are required.")
+def test_an_edit_the_push_waits_on_to_bind_its_event_is_the_next_push(published: Published) -> None:
+    """An edit holding the event's row while the push writes it commits first; the push holds the version it read."""
+
+    published.publish()
+    workshop = published.event(start=_berlin(5, 4, 10), end=_berlin(5, 4, 12))
+    key = event_id(workshop.sqid)
+    published.poll()
+    published.edit(workshop, location="Hall")
+
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        with transaction.atomic():
+            # A later edit holds the event's row: the push reads "Hall" committed, writes it, then waits to bind it.
+            published.edit(workshop, title="Workshop (renamed)")
+            contender, pid = submit(pool, published.push)
+            wait_for_lock(pid, contender)
+            assert (published.remote()[key]["summary"], published.remote()[key]["location"]) == ("Workshop", "Hall")
+        assert contender.result(timeout=10) == 1
+
+    # The edit committed after the push read the event: its version is not the one held, so the next push writes it.
+    assert published.changed() == [key]
+    published.poll()
+    assert (published.remote()[key]["summary"], published.remote()[key]["location"]) == ("Workshop (renamed)", "Hall")

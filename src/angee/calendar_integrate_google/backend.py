@@ -507,6 +507,14 @@ class GooglePublishingCalendarBackend(_GoogleBackend, PublishingCalendarBackend)
     icon = "google"
     defaults: ClassVar[dict[str, Any]] = {"vendor": "google", "poll_interval": 300}
     oauth_client: ClassVar[str] = ""
+    events_mapping_version: ClassVar[int] = 1
+    """The version of :func:`_published`, what a push writes of an event; a test pins its output to it.
+
+    A push reads only the events changed since their push (:meth:`local_changes`),
+    so raise it with any change to that output for an unchanged event: its columns
+    (``event_columns``), its rule's form (``canonical_rule``, icalendar's output) or
+    its zone. Until then only the stream's sweep compares every event again.
+    """
 
     def credential_blocker(self, credential: Any) -> str | None:
         """Refuse all but a service-account key (``jwt_bearer``) acting as itself: the source never writes as a person.
@@ -524,23 +532,34 @@ class GooglePublishingCalendarBackend(_GoogleBackend, PublishingCalendarBackend)
         return (CALENDAR_EVENTS,)
 
     def local_changes(self, stream: Any, *, keys: frozenset[str] | None = None) -> Iterator[LocalChange]:
-        """Project each event of the published calendar under its key, in key order.
+        """Project each event of the published calendar changed since its push under its key, in key order.
 
         An event keeps the key of the link that names it. A new master or single
         event is keyed :func:`event_id`, the Google id it is created under; a new
-        override, by its series' key and original start (``instance_key``). Given
-        ``keys``, only the events those keys name are read. Integrate writes only the
-        events whose projection differs from their link's base. The calendars stream
-        pushes nothing: its links are :meth:`CalendarSource.publish`'s.
+        override, by its series' key and original start (``instance_key``).
+        :func:`_published` reads only the event's own columns and the calendar's
+        zone, so each event carries its version under that zone, read with it
+        (``RecordLinkManager.with_local_versions``): a changed zone changes every
+        event's version without touching one. Without ``keys``, only the events
+        their link does not hold at that version are read
+        (``RecordLinkManager.changed_since_base``; every event while the stream's
+        sweep is due, and after a raised :attr:`events_mapping_version`); given
+        ``keys``, the events those keys name, changed or not. Integrate writes only
+        the events whose projection differs from their link's base. The calendars
+        stream pushes nothing: its links are :meth:`CalendarSource.publish`'s.
         """
 
         if stream.key != EVENTS_STREAM:
             return
         calendar = self.get_calendar(stream)
         zone = _published_zone(calendar)
+        links = stream.links.model.objects
         events = apps.get_model("calendar", "CalendarEvent").system_queryset().filter(calendar=calendar)
+        events = links.with_local_versions(events, context=zone)
         if keys is not None:
             events = events.filter(self._named(stream, keys))
+        else:
+            events = links.changed_since_base(stream, events)
         rows = list(events.select_related("series").order_by("pk"))
         pks = {str(row.pk) for row in rows} | {str(row.series_id) for row in rows if row.series_id is not None}
         linked = dict(stream.links.filter(target_object_id__in=pks).values_list("target_object_id", "external_key"))
@@ -556,7 +575,8 @@ class GooglePublishingCalendarBackend(_GoogleBackend, PublishingCalendarBackend)
         for key, row in sorted(((key_of(row), row) for row in rows), key=lambda pair: pair[0]):
             if keys is None or key in keys:
                 stamp = row.sqid if row.series_id is None else ""
-                yield LocalChange(key, _published(row, zone, stamp=stamp), target=row)
+                projection = _published(row, zone, stamp=stamp)
+                yield LocalChange(key, projection, target=row, local_version=row.local_version)
 
     def _named(self, stream: Any, keys: frozenset[str]) -> Q:
         """Select the events ``keys`` may name: bound by a link, new by their id, or a new override by its start.

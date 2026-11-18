@@ -127,6 +127,34 @@ live in code docstrings.
   base-manager row lock (each row it reads and its MTI tables): `lock_subject`,
   `lock_target`, storage's and knowledge's target locks and messaging's thread
   teardown compose it.
+- A published calendar's poll projects only the events changed since their push.
+  - **Provenance:** `ModelHistory.current_version(model)` is the outer row's latest
+    history version id. It is exact and committed with the write, and `NULL` before
+    the row's first version or while capture is off.
+  - **Local versions:** `LocalChange.local_version` (and `RecordChange`'s) carries the
+    version a push adapter read with its projection. The push records it beside the
+    base it writes: `RecordLink.local_version`, a new column the link's history
+    excludes, framed by the mapping version. Every other promotion clears it.
+  - **Narrowing:** `RecordLinkManager.with_local_versions(rows, context=…)` annotates a
+    row's history version under a container setting, folded into a digest; a version
+    is at most `LOCAL_VERSION_LENGTH`, and the push refuses a longer one before it
+    writes. `RecordLinkManager.changed_since_base(stream, rows)` leaves out each row
+    a link holds at that version.
+  - **Sweep:** while `SyncStream.sweep_due` (once per `reconcile_interval`) the read
+    narrows nothing, so a projection change without a mapping version bump, or a
+    write that skipped history capture, still converges. A push stream's push
+    completes its sweep (`last_reconciled_at`).
+  - **Settling:** `push_candidates(settle=True)` (the push) records the newer versions
+    of rows whose projection still equals their base in one statement, conditionally
+    on each base, and baselines a row read without a version
+    (`RecordLinkManager.settle`, `ModelHistory.record_missing_baselines`).
+  - **Google:** `local_changes` versions each event under the calendar's zone, so a
+    zone change re-reads every event without touching one. An edit committing
+    after the push read its row is the next push's. The publishing backend declares
+    its events stream's mapping version (`CalendarBackend.events_mapping_version`),
+    and a test pins what a push writes to it.
+  - Hosts add the `RecordLink.local_version` column (`makemigrations`). Existing
+    links start unknown, so the first poll reads every published event once.
 - **Breaking (`delete_blocker` overrides):** `AngeeModel.delete_blocker(*,
   cascaded=False)` says where the row sits in the delete: `DeletePreview` judges
   its target as the start and every collected row as cascaded, and a model's

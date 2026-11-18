@@ -471,6 +471,13 @@ class CalendarBackend(BridgeImpl, HttpClientMixin):
     supports_identity_reads: ClassVar[bool] = True
     """Both stream kinds re-read identities (:meth:`read_keys`), so a retried or held record reads its source."""
 
+    events_mapping_version: ClassVar[int] = 1
+    """The events stream's mapping version (``StreamDefinition.mapping_version``), declared by the backend that maps.
+
+    Raise it when what the backend maps an event to changes: a pulled stream then
+    takes a new baseline, and a push stream compares every event again.
+    """
+
     _page: _EventsPage | None = None
 
 

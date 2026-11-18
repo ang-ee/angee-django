@@ -215,6 +215,14 @@ class BridgeImpl(IntegrationImpl):
         while this keyed read, under the row's lock, still yields it under the key it
         was written to (``streams._lock_written``). A row it no longer yields there
         (deleted, or moved to another key) binds nothing, and its removal follows.
+
+        An adapter whose projection reads only what one exact version names yields
+        it as ``LocalChange.local_version``, read with the projection; without
+        ``keys`` it may then read only the rows changed since their link's base
+        (``RecordLinkManager.changed_since_base``), which reads every row while the
+        stream's sweep is due, so its stream declares a ``reconcile_interval``. Its
+        stream's ``mapping_version`` names the projection: raise it with any change
+        to what the projection returns for an unchanged row.
         """
 
         raise AdapterContractError("Push adapters must project local changes.")
