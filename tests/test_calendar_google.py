@@ -317,7 +317,7 @@ def test_two_accounts_are_two_sources_each_discovering_its_calendars(connected: 
 def test_an_account_already_synced_is_refused_and_only_calendar_grants_attach(connected: Connected) -> None:
     with system_context(reason="tests.google"):
         work = connected.sources["work-token"].credential
-    with pytest.raises(ValidationError, match="already connected"):
+    with pytest.raises(ValidationError, match="Already connected"):
         _connect(connected.user, work)
 
     narrow = _account(connected.client, connected.user, "narrow", "narrow-token", scopes="profile")
@@ -375,6 +375,41 @@ def test_a_source_offers_only_the_users_own_google_grants_with_calendar_access(c
     assert {account["id"] for account in listed["accounts"]} == {str(credential.public_id) for credential in own}
     theirs = result_data(execute_schema(schema, query, user=stranger))["calendar_source_backend"]
     assert theirs["accounts"] == [{"id": str(foreign.public_id)}]
+
+
+def test_the_connect_picker_lists_an_account_already_synced_as_refused_by_the_admission_rule(
+    connected: Connected, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Each offered account carries why connecting it is refused, from the rule that refuses it.
+
+    The user's two synced accounts are listed as already connected
+    (``GoogleCalendarBackend.credential_blocker``, the rule ``admit_credential``
+    raises), a spare account is offered, and once its source is unsubscribed an
+    account is offered again.
+    """
+
+    monkeypatch.setattr(celery_app, "send_task", lambda name, **options: None)
+
+    spare = _account(connected.client, connected.user, "spare", "spare-token")
+    schema = addon_schema(calendar_schema.schemas, "console")
+    query = 'query { calendar_source_backend(backend_class: "google") { accounts { id blocked_reason } } }'
+
+    def listed() -> dict[str, str | None]:
+        facts = result_data(execute_schema(schema, query, user=connected.user))["calendar_source_backend"]
+        return {account["id"]: account["blocked_reason"] for account in facts["accounts"]}
+
+    with system_context(reason="tests.google"):
+        work, home = (connected.source(token).credential for token in ("work-token", "home-token"))
+        source = CalendarSource.objects.build(backend_class="google")
+        assert source.credential_blocker(work) == "Already connected"
+        assert source.credential_blocker(spare) is None
+    assert listed() == {
+        str(work.public_id): "Already connected",
+        str(home.public_id): "Already connected",
+        str(spare.public_id): None,
+    }
+    connected.source("home-token").unsubscribe()
+    assert listed()[str(home.public_id)] is None
 
 
 def test_a_sync_token_replay_changes_nothing_and_a_410_resyncs_once(connected: Connected) -> None:
@@ -847,7 +882,7 @@ def test_two_racing_connects_of_one_account_make_one_source(connected: Connected
             _connect(connected.user, third)
             contender, pid = submit(pool, contend)
             wait_for_lock(pid, contender)
-        with pytest.raises(ValidationError, match="already connected"):
+        with pytest.raises(ValidationError, match="Already connected"):
             contender.result(timeout=10)
 
     with system_context(reason="tests.google"):

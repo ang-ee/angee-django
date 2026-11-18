@@ -120,7 +120,8 @@ function AddSourceDialog({
       submittingLabel={t("apps.adding")}
       errorFallback={t("apps.actionFailed")}
       parseValues={parseAddonSourceValues}
-      onSubmit={async (values) => actionOutcomeSubmitResult(await addSource("", values))}
+      mutation={(values, options) => addSource("", values, options)}
+      mutationResult={actionOutcomeSubmitResult}
     />
   );
 }

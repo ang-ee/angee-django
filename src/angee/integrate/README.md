@@ -152,8 +152,9 @@ and scopes once (`OAuthConnectIntent` in [`impl.py`](impl.py)). The owners of th
 connect rules are `OAuthClient.requested_scopes` (scopes),
 `CredentialManager.upsert_for_user` (one credential per external account and the
 grant checks), `Integration.attach_connection` (the account binding),
-`Integration.admit_credential` (which credentials a capability accepts, asked on
-every attachment), `Integration.reads_with` (an OAuth grant of the capability's
+`Integration.credential_blocker` (which credentials a capability accepts: the
+refusal `admit_credential` raises on every attachment and the connect picker
+shows), `Integration.reads_with` (an OAuth grant of the capability's
 client covering its scopes), `Integration.connectable_credentials` (the user's
 accounts it reads with, offered from an unsaved row before the capability
 exists), `OAuthProviderType.authorize_params` (the prompt),
@@ -173,6 +174,8 @@ mutation over `{ credentialId }`, which its `MutationDialog` runs), or
 `useConnectWithAccountField` among its other fields
 ([`ConnectWithAccountAction.tsx`](web/src/connect/ConnectWithAccountAction.tsx)):
 the account choice and "Connect another account" with the capability's scopes.
+An account the capability refuses (its `blocked_reason`, the capability's
+`credential_blocker`) is listed with that reason and cannot be chosen.
 While the capability has no ready OAuth client (`oauth_client` is null) and the
 user holds no account it reads with, the field says the connection is not
 configured instead, and links an administrator to the OAuth providers page.

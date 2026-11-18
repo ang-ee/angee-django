@@ -169,6 +169,8 @@ type AccountPickerProps = DescriptorFieldControlProps & ConnectWithAccountFieldO
 
 /**
  * The bare dialog control listing the accounts to choose from, and connecting another one.
+ * An account the capability refuses (its `blocked_reason`, from `Integration.credential_blocker`)
+ * is listed with that reason and cannot be chosen.
  * While the capability has no ready OAuth client and the user holds no account it
  * reads with, nothing can be chosen or connected: the control says the connection
  * is not configured, and offers an administrator the OAuth providers page.
@@ -212,13 +214,19 @@ function AccountPicker({
         <InlineEmpty icon="user" label={t("connectWithAccount.empty")} />
       ) : (
         <PaneRows>
-          {accounts.map((account) => (
-            <li key={account.id}>
-              <PaneRow icon="user" title={account.display_name} selected={account.id === selected}
-                label={t("connectWithAccount.use")} verb={t("connectWithAccount.use")}
-                onOpen={readOnly ? undefined : () => onChange(account.id)} />
-            </li>
-          ))}
+          {accounts.map((account) => {
+            // The capability refuses this account by its admission rule: listed with why, never offered.
+            const blocked = account.blocked_reason != null;
+            return (
+              <li key={account.id}>
+                <PaneRow icon="user" title={account.display_name} detail={account.blocked_reason ?? undefined}
+                  selected={account.id === selected}
+                  label={blocked ? undefined : t("connectWithAccount.use")}
+                  verb={blocked ? undefined : t("connectWithAccount.use")}
+                  onOpen={readOnly || blocked ? undefined : () => onChange(account.id)} />
+              </li>
+            );
+          })}
         </PaneRows>
       )}
       {oauthClientId ? (

@@ -199,16 +199,17 @@ class IcsCalendarBackend(CalendarBackend):
 
     _snapshot: _Snapshot | None = None
 
-    def admit_credential(self, credential: Any) -> None:
-        """Admit only a static token: the feed address a subscription keeps as its secret.
+    def credential_blocker(self, credential: Any) -> str | None:
+        """Refuse anything but a static token: the feed address a subscription keeps as its secret.
 
         The backend reads the feed address from that token alone, so any other kind
         (an OAuth grant, a key pair) would send another credential's material to a
         feed server.
         """
 
-        if credential.kind != CredentialKind.STATIC_TOKEN:
-            raise ValidationError({"credential": "An ICS feed subscription keeps its feed address as a static token."})
+        if credential.kind == CredentialKind.STATIC_TOKEN:
+            return None
+        return "An ICS feed subscription keeps its feed address as a static token."
 
     def discover(self) -> list[ParsedCalendar]:
         """Return the feed, the source's one remote calendar, named as subscribed."""

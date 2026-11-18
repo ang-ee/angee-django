@@ -272,6 +272,28 @@ describe("FormView", () => {
     expect(await screen.findByRole("menuitem", { name: "Archive" })).toBeTruthy();
   });
 
+  test("an editable record keeps its command band's row before its first edit; a read-only record's collapses", async () => {
+    const collapse = "not-has-[>div>:not([hidden]):not(:empty)]:hidden";
+    const commandBand = () => [...document.querySelectorAll<HTMLElement>("[role=toolbar]")]
+      .find((toolbar) => toolbar.classList.contains("overflow-y-hidden"));
+    const renderNote = () => renderWithProviders(<FormView resource="notes.Note" id="note-1">
+      <Field name="title" label="Title" title />
+    </FormView>);
+
+    sdkMocks.record = { ...sdkMocks.record, permissions: ["read"] };
+    renderNote();
+    await screen.findByRole("heading", { name: "First" });
+    expect(commandBand()?.className).toContain(collapse);
+
+    cleanup();
+    sdkMocks.record = { ...sdkMocks.record, permissions: ["read", "write"] };
+    renderNote();
+    await screen.findByDisplayValue("First");
+    // Save and Discard arrive with the first edit into the row already kept for them.
+    expect(commandBand()).toBeDefined();
+    expect(commandBand()?.className).not.toContain(collapse);
+  });
+
   test("hides the record delete action when its predicate does not match", async () => {
     const deleteAction = {
       canDelete: true,

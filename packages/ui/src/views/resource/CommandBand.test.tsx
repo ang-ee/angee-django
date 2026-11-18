@@ -24,12 +24,14 @@ function bandItems(band: Element): Element[] {
     !child.hasAttribute("hidden") && [...child.childNodes].some((node) => node.nodeType !== Node.COMMENT_NODE));
 }
 
-function renderBand(verbs: React.ReactNode): HTMLElement {
+function renderBand(verbs: React.ReactNode, editable?: boolean): HTMLElement {
   const { container } = render(<Provider><ModalsHost><ToastProvider>
-    <CommandBand verbs={verbs} />
+    <CommandBand verbs={verbs} editable={editable} />
   </ToastProvider></ModalsHost></Provider>);
   return container.querySelector<HTMLElement>("[role=toolbar]")!;
 }
+
+const COLLAPSE = "not-has-[>div>:not([hidden]):not(:empty)]:hidden";
 
 // As a record with no verbs: a contribution that offers nothing, a clean form, an empty toolbar host.
 const nothing = <>
@@ -43,7 +45,16 @@ const nothing = <>
 test("a band none of whose items renders takes no row", () => {
   const band = renderBand(nothing);
   expect(bandItems(band)).toEqual([]);
-  expect(band.className).toContain("not-has-[>div>:not([hidden]):not(:empty)]:hidden");
+  expect(band.className).toContain(COLLAPSE);
+});
+
+test("an editable record's band keeps its row with nothing in it, so its first edit shifts nothing", () => {
+  const editable = renderBand(nothing, true);
+  expect(bandItems(editable)).toEqual([]);
+  expect(editable.className).not.toContain(COLLAPSE);
+  cleanup();
+  // A record that takes no edits and has no verbs still collapses.
+  expect(renderBand(nothing, false).className).toContain(COLLAPSE);
 });
 
 test("the band returns with its first item: an edit's Save and Discard, a verb", () => {

@@ -980,9 +980,11 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
   [command band](../../packages/storybook/src/stories/CommandBand.stories.tsx) (story id `page-commandband--default`).
   A read-only inspector with only secondary actions composes `ActionMenu` and
   `RecordChrome` in `RecordHeader.actions`; it does not reserve an empty command
-  band. The command band itself takes no row while none of its items renders
-  (a contribution that offers nothing renders `null`), and returns with the
-  first one, an edit's Save and Discard included. Collection and transcript controls remain in their owning pane toolbar.
+  band. The band of a record that takes no edits takes no row while none of its
+  items renders (a contribution that offers nothing renders `null`), and returns
+  with the first one. An editable record's band (`CommandBand.editable`, which
+  `FormView` sets) keeps its row, so the Save and Discard its first edit brings
+  move nothing. Collection and transcript controls remain in their owning pane toolbar.
 - **Trash composes the shared owner.** A resource whose metadata marks a field
   `trashable` gets Trash and Restore from [the trash module](../../packages/ui/src/views/resource/trash.tsx):
   `useTrashActions` for record forms, `useTrashRowActions` for lists, and
@@ -1063,10 +1065,15 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
   Declare `DescriptorField`s; the shared [DescriptorFieldList](../../packages/ui/src/views/form/DescriptorFieldList.tsx)
   owns controls and requires a native RHF `FormProvider`. Decode raw controls with
   `parseValues` and `mutationDialogValueCodecs`; required/verbatim codecs express
-  authored field contracts. An authored mutation is the dialog's `mutation` (with
-  `mutationResult` to read its data), never an `onSubmit` wrapping it: the dialog runs
-  the call with the generic error notification off and reports a refusal once, under
-  the field it names, else in the dialog. `onSubmit` is for any other submission. Record actions declare `args` + `submit` on `<Action>`;
+  authored field contracts. An authored mutation, or an owner's call returning its
+  data (an action's outcome, a store binding's result), is the dialog's `mutation`
+  (with `mutationResult` to read its data), never an `onSubmit` wrapping it. The
+  dialog reports a failure once, under the field it names, else in the dialog: every
+  call it makes for its caller (`validate`, `onSubmit`, `mutation`) gets the
+  `AuthoredMutateOptions` that turn refine's generic error notification off, and the
+  caller passes them on to the authored call it makes; an owner that wraps an
+  authored mutation (`ActionMutate`, a store binding, the operator's `run`) takes
+  them per call. `onSubmit` is for any other submission. Record actions declare `args` + `submit` on `<Action>`;
   `RecordActionBar` composes `ActionFormDialog` for their inputs. Record-specific
   schemas compose `jsonSchemaActionArgs` in the action's `args` callback; the
   shared form owns branching, validation and draft retention across record refreshes.

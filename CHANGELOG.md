@@ -10,6 +10,29 @@ live in code docstrings.
 
 ## Unreleased — shared addon contracts, native embeddings and graph retrieval
 
+- `@angee/ui`: `CommandBand.editable` keeps an editable record's command band
+  row while nothing in it renders, so the Save and Discard its first edit brings
+  shift nothing; `FormView` sets it from the form's own read-only fact. A record
+  that takes no edits and has no verbs still collapses the band.
+- `@angee/ui`: every call `MutationDialog` makes for its caller (`validate`,
+  `onSubmit`, `mutation`) gets the `AuthoredMutateOptions` that turn refine's
+  generic error notification off, so a failure is reported once, in the dialog.
+  `@angee/refine`'s `ActionMutate` takes them as a third argument; the dashboard
+  store's `save` and `createPersonal`, the operator's `OperatorActionHook.run` and
+  `useDaemonMutationRun` take them per call. The dashboard, portfolio-update and
+  add-source dialogs run their owner's call as `mutation` (deleting their
+  `onSubmit` result wrappers); the operator's workspace-create and secret dialogs
+  pass the options on from `validate` and `onSubmit`.
+- `angee.integrate`: `Integration.credential_blocker(credential)` is a
+  capability's one admission rule, a public-safe refusal or `None`;
+  `admit_credential` raises it on every attachment and the connect picker shows
+  it. `ConnectWithAccount.accounts` lists `ConnectWithAccountChoice` entries (`id`,
+  `display_name`, `blocked_reason`), so the connect-with-account field lists an
+  account the capability refuses with its reason ("Already connected" for a Google
+  account another calendar source syncs) and never offers it, instead of refusing
+  it once picked. `Mount`, `CalendarSource` and the calendar backends move their
+  rules onto `credential_blocker`; `GoogleCalendarBackend.admit_credential` only
+  holds the credential's row lock around it.
 - A calendar source can publish local calendars out. `CalendarBackend.direction`
   (`PULL` by default) declares which way a source's streams sync; a `PUSH`
   backend's calendars and events streams are push streams, never swept.

@@ -2488,7 +2488,7 @@ class Integration(StatementSourceMixin, ImplDefaultsMixin, OwnerMixin, AngeeData
         never sent to another's API, and only when its grant covers
         :attr:`connection_oauth_scopes`. A capability without an OAuth client
         reads with none. A capability whose reads need such a grant composes this
-        rule in its :meth:`admit_credential`; :meth:`connectable_credentials`
+        rule in its :meth:`credential_blocker`; :meth:`connectable_credentials`
         offers the accounts it holds for.
         """
 
@@ -3164,16 +3164,31 @@ class Integration(StatementSourceMixin, ImplDefaultsMixin, OwnerMixin, AngeeData
             apps.get_model("integrate", "Credential").objects.delete_unattached_derived(derived_pk)
         self.refresh_from_db()
 
+    def credential_blocker(self, credential: Any) -> str | None:
+        """Return a public-safe refusal to attach ``credential`` to this capability, or ``None`` when admitted.
+
+        The capability's one admission rule: :meth:`admit_credential` raises it on
+        every attachment, and the connect picker shows it beside each account the
+        user could choose (``ConnectWithAccount``), so an account the capability
+        refuses is listed as refused rather than refused only once picked. The base
+        admits any credential; a capability whose reads need its OAuth client's
+        grant refuses one it does not :meth:`reads_with`.
+        """
+
+        del credential
+        return None
+
     def admit_credential(self, credential: Any) -> None:
         """Refuse ``credential`` before it attaches to this capability, raising ``ValidationError`` on ``credential``.
 
         :meth:`attach_connection` asks the capability row on every attachment, so
         no path (connect, the console's credential patch, a reconnect) skips it.
-        The base admits any credential; a capability whose reads need its OAuth
-        client's grant overrides it with :meth:`reads_with`.
+        It raises :meth:`credential_blocker`, the rule; a capability overrides this
+        only to hold a lock around that rule.
         """
 
-        del credential
+        if (refusal := self.credential_blocker(credential)) is not None:
+            raise ValidationError({"credential": refusal})
 
     @transition(
         lifecycle,

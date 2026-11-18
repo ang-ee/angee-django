@@ -3,7 +3,8 @@
 import * as React from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
-import type { DashboardStoreBinding } from "@angee/ui/dashboard/headless";
+import type { MutationDialogProps } from "@angee/ui";
+import type { DashboardSaveResult, DashboardStoreBinding } from "@angee/ui/dashboard/headless";
 import type { RuntimeUserPreferencesState } from "@angee/ui/runtime";
 
 const mocks = vi.hoisted(() => ({
@@ -13,6 +14,7 @@ const mocks = vi.hoisted(() => ({
   trash: vi.fn<(id: string, name?: string) => Promise<boolean>>(),
   navigate: vi.fn<(options: { to: string }) => Promise<void>>(),
   settle: vi.fn(),
+  dialog: null as MutationDialogProps<{ name: string; description: string }> | null,
 }));
 
 vi.mock("@tanstack/react-router", async (importOriginal) => ({
@@ -29,7 +31,10 @@ vi.mock("@angee/ui", async (importOriginal) => ({
   PageToolbar: ({ start, end }: { start: React.ReactNode; end: React.ReactNode }) => <>{start}{end}</>,
   DashboardSurface: ({ toolbar }: { toolbar: React.ReactNode }) => toolbar,
   RecordChrome: () => null,
-  MutationDialog: () => null,
+  MutationDialog: (props: MutationDialogProps<{ name: string; description: string }>) => {
+    mocks.dialog = props;
+    return null;
+  },
   useBreadcrumbLeafLabel: () => {},
   useDashboardRegistry: () => ({ store: { useDashboard: () => mocks.binding } }),
   useRouteParam: () => "dashboard-1",
@@ -49,6 +54,7 @@ let host: HTMLDivElement;
 beforeEach(() => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   vi.clearAllMocks();
+  mocks.dialog = null;
   mocks.trash.mockReset().mockResolvedValue(true);
   mocks.patchPreferences.mockReset().mockResolvedValue(undefined);
   mocks.navigate.mockReset().mockResolvedValue(undefined);
@@ -100,6 +106,27 @@ async function trashDashboard(): Promise<HTMLButtonElement> {
   await React.act(async () => trash.click());
   return menu;
 }
+
+describe("dashboard details dialog", () => {
+  test("saves through the binding with refine's toast off, and acknowledges with the saved message", async () => {
+    const saved: DashboardSaveResult = {
+      persistedId: "dashboard-1", revision: 2, snapshot: { schemaVersion: 1, columns: 12, widgets: [] },
+      capabilities: { canEdit: true, canReset: true, canTrash: true },
+    };
+    vi.mocked(mocks.binding!.save).mockResolvedValue(saved);
+    await React.act(async () => root.render(<ToastProvider><PersonalDashboardPage /></ToastProvider>));
+    const dialog = mocks.dialog!;
+
+    // The dialog renders a refused save itself, so the binding's call runs quiet.
+    expect(dialog.onSubmit).toBeUndefined();
+    const data = await dialog.mutation!({ name: "Renamed", description: "" }, { errorNotification: false });
+    expect(mocks.binding!.save).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ persistedId: "dashboard-1", expectedRevision: 1, name: "Renamed", description: "" }),
+      { errorNotification: false },
+    );
+    expect(dialog.mutationResult!(data)).toEqual({ status: "ok", data: saved, message: "Details saved" });
+  });
+});
 
 describe("dashboard trash follow-ups", () => {
   test("cleans preferences and leaves feedback to the shared trash verb", async () => {

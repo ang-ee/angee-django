@@ -108,10 +108,22 @@ export const mutationDialogValueCodecs = {
   },
 } as const;
 
-/** The one submission of a {@link MutationDialog}: any `onSubmit`, or an authored `mutation` the dialog runs. */
+/**
+ * The one submission of a {@link MutationDialog}: any `onSubmit`, or an authored `mutation` the dialog runs.
+ * Either is called with the {@link AuthoredMutateOptions} that turn refine's generic error
+ * notification off, to pass on to the authored call it makes: the dialog renders the failure.
+ */
 export type MutationDialogSubmission<TValues, TResult, TData = TResult> =
   | {
-      onSubmit: (values: TValues) => FormSubmitResult<TResult> | Promise<FormSubmitResult<TResult>>;
+      /**
+       * Submit the parsed values through any owner (a store binding, an action
+       * mutation), passing `options` on to the authored call it makes so the
+       * failure the dialog renders raises no toast besides.
+       */
+      onSubmit: (
+        values: TValues,
+        options?: AuthoredMutateOptions,
+      ) => FormSubmitResult<TResult> | Promise<FormSubmitResult<TResult>>;
       mutation?: never;
       mutationResult?: never;
     }
@@ -154,9 +166,13 @@ interface MutationDialogBaseProps<
   errorFallback?: string;
   /** Decode raw control state before it crosses the authored-mutation boundary. */
   parseValues: MutationDialogParseValues<TValues>;
-  /** Optional authoritative validation step that can bind errors to declared fields. */
+  /**
+   * Optional authoritative validation step that can bind errors to declared fields.
+   * It gets the submission's {@link AuthoredMutateOptions} for an authored call it makes.
+   */
   validate?: (
     values: TValues,
+    options?: AuthoredMutateOptions,
   ) => ValidationErrors | null | undefined | Promise<ValidationErrors | null | undefined>;
   onSubmitted?: (result: TResult, values: TValues) => void;
   closeOnSubmit?: boolean;
@@ -171,7 +187,8 @@ interface MutationDialogBaseProps<
  * copied dialog ceremony: reset-on-close, value state, required gating,
  * submit busy/error state, and rendering descriptor fields through the shared
  * widget registry. It reports a failure once: under the field a refusal names,
- * else in the dialog; an authored `mutation` it runs raises no toast besides.
+ * else in the dialog. Every call it makes for its caller (`validate`, `onSubmit`,
+ * `mutation`) gets the `AuthoredMutateOptions` that keep refine from toasting it besides.
  * @kind surface
  */
 export function MutationDialog<
@@ -191,7 +208,7 @@ export function MutationDialog<
 }
 
 /**
- * Run a dialog's one submission: its `onSubmit`, or its authored `mutation` with the
+ * Run a dialog's one submission, its `onSubmit` or its authored `mutation`, with the
  * generic error notification off (the dialog renders the refusal). A mutation that
  * returns no data does not acknowledge the dialog: it fails with `fallback`.
  * @kind null
@@ -202,7 +219,7 @@ export function submitMutationDialog<TValues, TResult, TData>(
   values: TValues,
   fallback: string,
 ): FormSubmitResult<TResult> | Promise<FormSubmitResult<TResult>> {
-  if (!submission.mutation) return submission.onSubmit(values);
+  if (!submission.mutation) return submission.onSubmit(values, DIALOG_RENDERS_FAILURE);
   const { mutation, mutationResult } = submission;
   return mutation(values, DIALOG_RENDERS_FAILURE).then((data) => data == null
     ? savedFormSubmitResult<TResult>(null, fallback)
@@ -316,7 +333,7 @@ function MutationDialogInstance<TValues extends Record<string, unknown>, TResult
     let accepted: { result: Extract<FormSubmitResult<TResult>, { status: "ok" }>; values: TValues } | undefined;
     try {
       const submittedValues = parseValues(collected);
-      const validation = await validate?.(submittedValues);
+      const validation = await validate?.(submittedValues, DIALOG_RENDERS_FAILURE);
       if (!mounted.current || session.current !== submittedSession) return;
       if (validation) {
         applyFormErrors(form, invalidFormSubmit(validation), errorOptions);
