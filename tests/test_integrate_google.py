@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Collection
+from datetime import timedelta
 from types import ModuleType
 
 import httpx2
@@ -19,6 +21,7 @@ from angee.integrate.oauth.client import OAuthClientProtocol
 from angee.integrate.oauth.errors import OAuthFlowError
 from angee.integrate.testing.http import mock_transport
 from angee.integrate.testing.oidc import OidcProvider
+from angee.integrate_google.api import GoogleApi, GoogleApiError
 from angee.integrate_google.compose_migrations.integrate import align_google_clients as align_template
 from angee.integrate_google.compose_migrations.resources import rehome_gemini_seed as rehome_template
 from angee.integrate_google.providers import GoogleType
@@ -223,3 +226,51 @@ def test_login_through_the_google_preset_links_the_verified_email() -> None:
     assert {str(request.url) for request in requests} >= {
         "https://oauth2.googleapis.com/token", "https://www.googleapis.com/oauth2/v3/certs",
     }
+
+
+class _MintingKey:
+    """A credential that mints per scope set and cannot refresh, as a ``jwt_bearer`` key behaves."""
+
+    refreshable = False
+
+    def __init__(self) -> None:
+        self.scopes: tuple[str, ...] = ()
+
+    def ensure_fresh(self) -> None:
+        return None
+
+    def auth_headers(self, *, scopes: Collection[str] = ()) -> dict[str, str]:
+        self.scopes = tuple(scopes)
+        return {"Authorization": "Bearer minted"}
+
+
+def test_the_google_transport_names_account_refusals_and_asks_for_the_clients_scopes() -> None:
+    answers = iter(
+        [
+            httpx2.Response(
+                403, json={"error": {"errors": [{"reason": "rateLimitExceeded"}]}}, headers={"Retry-After": "30"}
+            ),
+            httpx2.Response(403, json={"error": {"status": "ACCESS_TOKEN_SCOPE_INSUFFICIENT"}}),
+            httpx2.Response(503),
+            httpx2.Response(401),
+            httpx2.Response(400, json={"error": {"errors": [{"reason": "badRequest"}]}}),
+        ]
+    )
+    key = _MintingKey()
+    with mock_transport(lambda request: next(answers)) as requests:
+        api = GoogleApi(key, service="Google Calendar", grant="Calendar", scopes=("calendar.events",))
+        url = "https://www.googleapis.com/calendar/v3/users/me/calendarList"
+        refusals = [api.refusal(api.send("GET", url)) for _answer in range(4)]
+        own = api.send("GET", url)
+
+    rate, grant, outage, rejected = refusals
+    assert key.scopes == ("calendar.events",)
+    assert all(request.headers["authorization"] == "Bearer minted" for request in requests)
+    assert isinstance(rate, GoogleApiError) and rate.transient and rate.retry_after == timedelta(seconds=30)
+    assert grant is not None and "has not granted Calendar access" in str(grant) and not grant.transient
+    assert outage is not None and outage.transient
+    # A key that cannot refresh is not retried: the 401 asks for a reconnect at once.
+    assert rejected is not None and "reconnect the Google account" in str(rejected) and len(requests) == 5
+    assert api.refusal(own) is None
+    with pytest.raises(GoogleApiError, match="Google Calendar refused the request"):
+        api.raise_for_status(own)

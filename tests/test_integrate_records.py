@@ -31,6 +31,7 @@ from angee.messaging.testing.models import Channel
 from tests.conftest import current_stream, make_integration
 from tests.mtidemo.models import MtiChild, MtiParent
 from tests.stream_adapters import applied_history, failure_state
+from tests.test_system_queryset import GuardedSystemQueryThing, system_query_tables  # noqa: F401
 
 
 @pytest.fixture
@@ -326,6 +327,17 @@ def test_release_target_keeps_the_identity_current_until_its_row_is_rebuilt(repl
     RecordLink.objects.observe(replica, link.external_key, target=replica)
     link.refresh_from_db()
     assert (link.target_object_id, link.status) == (str(replica.pk), LinkStatus.CURRENT)
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.usefixtures("system_query_tables")
+def test_lock_target_finds_a_row_its_default_manager_hides() -> None:
+    """A push judges whether its written row is still there through the base manager: a hidden row is not gone."""
+
+    hidden = GuardedSystemQueryThing._base_manager.create(name="hidden", selected=False)
+    with transaction.atomic(), system_context(reason="tests.integrate.lock_target"):
+        assert RecordLink.objects.lock_target(hidden)
+        assert not RecordLink.objects.lock_target(GuardedSystemQueryThing(pk=hidden.pk + 1))
 
 
 def test_child_absence_requires_parent_absence_evidence(replica: Any) -> None:

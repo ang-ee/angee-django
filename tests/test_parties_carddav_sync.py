@@ -2657,6 +2657,33 @@ def test_a_removed_address_book_pauses_its_contacts_then_retires_them_once_its_a
     assert Person.objects.filter(pk=person.pk).exists() and Folder.objects.filter(pk=folder.pk).exists()
 
 
+def test_a_removed_address_book_that_returns_comes_back_with_its_contacts_and_statements(replica: Replica) -> None:
+    person, link = replica.baseline()
+    folder = Folder.objects.get(directory=replica.directory)
+    book = RecordLink.objects.get(stream=replica.addressbooks, external_key=_BOOK)
+    work = f"{_BASE}books/work/"
+    replica.server.books[work] = "Work"
+    sync_bridge(replica.directory)
+    name = replica.server.books.pop(_BOOK)
+    for _cycle in range(2):
+        sync_bridge(replica.directory)
+    book.refresh_from_db()
+    assert book.status == LinkStatus.TOMBSTONE
+
+    # The book is listed again: integrate's absence base makes it a remote change, so it applies.
+    replica.server.books[_BOOK] = name
+    for _cycle in range(2):
+        sync_bridge(replica.directory)
+    for row in (book, link):
+        row.refresh_from_db()
+    stream = SyncStream.objects.filter(integration_id=replica.directory.pk, partition=_BOOK).latest("generation")
+    asserted = Folder.statements.model.StatementStatus.ASSERTED
+    assert (book.status, book.tombstoned_at, stream.state) == (LinkStatus.CURRENT, None, StreamState.OPEN)
+    assert Folder.statements.filter(subject=folder, link=book, status=asserted).current().exists()
+    assert (link.status, link.target_object_id) == (LinkStatus.CURRENT, str(person.pk))
+    assert not [failure.code for row in (book, link) for failure in row.failures(open_only=True)]
+
+
 def test_a_listed_href_longer_than_a_link_key_is_refused_while_the_directory_syncs(replica: Replica) -> None:
     replica.baseline()
     long_book = f"{_BASE}books/{'x' * 600}/"

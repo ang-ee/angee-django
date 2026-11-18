@@ -1176,9 +1176,10 @@ class Round(
             super().save(*args, **kwargs)
 
 
-    def delete_blocker(self) -> str | None:
-        """Return why this Round's own lifecycle prevents deletion."""
+    def delete_blocker(self, *, cascaded: bool = False) -> str | None:
+        """Return why this Round's own lifecycle prevents deletion, wherever the delete started."""
 
+        del cascaded
         if self.status != RoundStatus.COLLECTING or self.outcome is not None:
             return "Only a collecting round can be deleted."
         return None
@@ -2046,9 +2047,10 @@ class Proposal(HistoryMixin, OptimisticLockMixin, ImmutableFieldsMixin, AuditMix
         apps.get_model("proposals", "Round").system_queryset(lock=("self",)).filter(pk=self.round_id).first()
         return super().lock_for_delete(queryset=queryset)
 
-    def delete_blocker(self) -> str | None:
-        """Return why this Proposal is no longer an untouched draft."""
+    def delete_blocker(self, *, cascaded: bool = False) -> str | None:
+        """Return why this Proposal is no longer an untouched draft, wherever the delete started."""
 
+        del cascaded
         if self.state != ProposalState.DRAFT or any(
             value is not None for value in (self.submitted_at, self.decided_at, self.retired_at, self.disclosed_at)
         ):

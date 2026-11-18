@@ -25,7 +25,7 @@ import pytest
 from django.apps import apps
 from django.contrib.auth import get_user_model
 from django.core.cache import caches
-from django.core.exceptions import ValidationError
+from django.core.exceptions import ImproperlyConfigured, ValidationError
 from django.db import connection, transaction
 from django.db.models import ProtectedError
 from django.utils import timezone
@@ -33,11 +33,10 @@ from rebac import actor_context, system_context
 
 from angee.calendar import models as calendar_models
 from angee.calendar import schema as calendar_schema
-from angee.calendar.backends import ParsedCalendar
+from angee.calendar.backends import CalendarBackend
 from angee.calendar.models import (
     PURGE_SOURCE_TASK,
     READ_ONLY_CALENDAR,
-    SOURCE_CALENDAR_DELETE,
     AttendeeResponse,
     AttendeeRole,
 )
@@ -47,6 +46,7 @@ from angee.calendar_integrate_ics import backend as ics_backend
 from angee.calendar_integrate_ics import schema as ics_schema
 from angee.calendar_integrate_ics.backend import FEED_KEY, IcsCalendarBackend, IcsError
 from angee.calendar_integrate_ics.connect import subscribe_calendar
+from angee.graphql.deletion import DeletePreview
 from angee.graphql.testing.documents import execute_schema, result_data
 from angee.integrate.errors import IntegrationError
 from angee.integrate.states import LinkStatus
@@ -318,6 +318,18 @@ def test_the_ics_vendor_is_seeded_before_any_feed_and_adopted_by_slug() -> None:
         assert list(Vendor.objects.filter(slug="ics").values_list("display_name", flat=True)) == ["ICS feed"]
 
 
+def test_subscribing_before_the_vendor_is_seeded_says_to_load_resources() -> None:
+    """The backend's defaults name the vendor; its impl-defaults owner gives the load guidance, and nothing is kept."""
+
+    user = create_user("unseeded-subscriber")
+    with system_context(reason="tests.ics"):
+        Vendor.objects.filter(slug="ics").delete()
+    with pytest.raises(ImproperlyConfigured, match=r"Vendor slug 'ics'.*Run `manage\.py resources load`"):
+        subscribe_calendar(user, name="Team", url=FEED_URL)
+    with system_context(reason="tests.ics"):
+        assert (CalendarSource.objects.count(), Credential.objects.filter(user=user).count()) == (0, 0)
+
+
 def test_subscribing_fetches_nothing_and_the_first_sync_mirrors_the_calendar(subscription: Subscription) -> None:
     source, feed = subscription.source, subscription.feed
 
@@ -510,7 +522,9 @@ def test_a_drain_in_flight_after_unsubscribing_ends_quietly_and_writes_nothing(s
     source = subscription.source
     subscription.feed.etags = False
     backend = IcsCalendarBackend(CalendarSource.objects.sudo(reason="tests.ics").get(pk=source.pk))
-    events = SyncStream.objects.current(backend.bridge, backend.bridge.events_stream(ParsedCalendar(FEED_KEY, "Team")))
+    links = RecordLink.objects.sudo(reason="tests.ics")
+    feed = links.get(stream=subscription.stream("calendars"), external_key=FEED_KEY)
+    events = SyncStream.objects.current(backend.bridge, backend.bridge.events_stream(feed))
     with system_context(reason="tests.ics"):
         # A drain already running holds the feed it fetched before the unsubscribe.
         backend.read_keys(events, ["launch@example.test"])
@@ -625,13 +639,16 @@ def test_the_absence_sweep_tombstones_a_dropped_uid_and_a_dropped_instance_resto
 
 def test_pages_carry_only_the_last_key_and_commit_the_validators_last(subscription: Subscription) -> None:
     backend = IcsCalendarBackend(CalendarSource.objects.sudo(reason="tests.ics").get(pk=subscription.source.pk))
-    calendars, events = list(backend.streams())
-    assert (calendars.key, calendars.partition, events.key, events.partition) == ("calendars", "", "events", FEED_KEY)
-    assert events.reconcile_interval == timedelta(hours=1)
     with system_context(reason="tests.ics"):
+        # Only the calendars stream until the feed's calendar is mirrored: its link holds the events stream.
+        [calendars] = backend.streams()
+        assert (calendars.key, calendars.partition, calendars.holds_containers) == ("calendars", "", True)
         mirrored = advance_stream(SyncStream.objects.current(backend.bridge, calendars), backend)
+        _calendars, events = backend.streams()
         stream = SyncStream.objects.current(backend.bridge, events)
     assert (mirrored.count, mirrored.stream.cursor) == (1, {"listed": True})
+    assert (events.key, events.partition, events.container.external_key) == ("events", FEED_KEY, FEED_KEY)
+    assert events.reconcile_interval == timedelta(hours=1)
 
     first = advance_stream(stream, backend, page_bound=4)
     assert not first.exhausted
@@ -670,6 +687,31 @@ def test_identity_reads_reread_the_feed_and_a_dropped_key_is_a_tombstone(subscri
 
 
 # --- mapping -----------------------------------------------------------------
+
+
+def test_a_series_set_aside_keeps_its_cancelled_instances_through_absence_sweeps(subscription: Subscription) -> None:
+    """A master the feed serves unmappable yields no ``EXDATE`` keys; its linked instances are set aside with it."""
+
+    subscription.poll()
+    excluded = subscription.events()["standup@example.test#20260316T130000Z"]
+    subscription.feed.body = _feed(
+        STANDUP.replace("RRULE:FREQ=WEEKLY;BYDAY=MO;COUNT=4", "RRULE:FREQ=SOMETIMES"), MOVED, HOLIDAY, BERLIN_EVENT,
+        LAUNCH,
+    )
+
+    for _sweep in range(3):
+        subscription.sweep()
+
+    with system_context(reason="tests.ics"):
+        excluded.refresh_from_db()
+    assert excluded.status == "cancelled"
+    assert subscription.failures() == {
+        "standup@example.test": ["invalid_event"], "standup@example.test#20260316T130000Z": ["invalid_event"]
+    }
+    subscription.feed.body = _feed(STANDUP, MOVED, HOLIDAY, BERLIN_EVENT, LAUNCH)
+    subscription.sweep()
+    assert subscription.failures() == {}
+    assert subscription.events()["standup@example.test#20260316T130000Z"].pk == excluded.pk
 
 
 def test_recurrence_id_and_exdate_become_overrides_that_expand_across_dst(subscription: Subscription) -> None:
@@ -789,6 +831,33 @@ def test_attendees_become_handles_with_one_organizer(subscription: Subscription)
         "alice@example.test": (AttendeeRole.ORGANIZER, AttendeeResponse.ACCEPTED, "Alice"),
         "bob@example.test": (AttendeeRole.REQUIRED, AttendeeResponse.ACCEPTED, "Bob"),
         "carol@example.test": (AttendeeRole.OPTIONAL, AttendeeResponse.TENTATIVE, ""),
+    }
+
+
+def test_an_unlisted_organizer_leads_and_a_twice_listed_attendee_keeps_its_stronger_role(
+    subscription: Subscription,
+) -> None:
+    review = """BEGIN:VEVENT
+UID:review@example.test
+DTSTART:20260402T150000Z
+DTEND:20260402T160000Z
+SUMMARY:Review
+ORGANIZER;CN=Dana:mailto:dana@example.test
+ATTENDEE;ROLE=OPT-PARTICIPANT;PARTSTAT=NEEDS-ACTION:mailto:erin@example.test
+ATTENDEE;ROLE=REQ-PARTICIPANT;PARTSTAT=TENTATIVE;CN=Erin:mailto:Erin@example.test
+END:VEVENT"""
+    subscription.feed.body = _feed(review)
+    subscription.poll()
+
+    with system_context(reason="tests.ics"):
+        event = subscription.events()["review@example.test"]
+        rows = {
+            row.handle.normalized_value: (row.role, row.response)
+            for row in EventAttendee.objects.filter(event=event).select_related("handle")
+        }
+    assert rows == {
+        "dana@example.test": (AttendeeRole.ORGANIZER, AttendeeResponse.ACCEPTED),
+        "erin@example.test": (AttendeeRole.REQUIRED, AttendeeResponse.TENTATIVE),
     }
 
 
@@ -1605,8 +1674,7 @@ def test_an_exdate_list_stops_at_the_sync_deadline() -> None:
     with pytest.raises(IcsError, match="took too long"):
         ics_backend._events(
             standup, uid="standup@example.test", zones=zones, zone="America/New_York", feed_zone="America/New_York",
-            calendar_zone="UTC", master=standup, exdate_cap=IcsCalendarBackend.events_per_feed,
-            deadline=monotonic() - 1,
+            calendar_zone="UTC", master=standup, deadline=monotonic() - 1,
         )
 
 
@@ -1797,7 +1865,7 @@ def test_a_replica_refuses_every_local_write_and_a_local_calendar_takes_them(
         with pytest.raises(ValidationError, match=READ_ONLY_CALENDAR):
             EventAttendee.objects.get(pk=organizer.pk).delete()
         # The source's calendars-stream link retains its calendar; the calendar names the refusal in the preview.
-        assert subscription.calendar.delete_blocker() == SOURCE_CALENDAR_DELETE
+        assert subscription.calendar.delete_blocker() == CalendarBackend.calendar_delete_refusal
         with pytest.raises(ProtectedError):
             subscription.calendar.delete()
         occurrences = CalendarEvent.objects.filter(pk=launch.pk).occurrences(_utc(2026, 4, 1), _utc(2026, 4, 2))
@@ -1950,6 +2018,22 @@ def test_a_zone_change_on_a_subscribed_calendar_resyncs_instead_of_moving_replic
     subscription.poll()
     assert subscription.stream().generation == generation + 1
     assert subscription.failures() == {}
+
+
+def test_a_sources_delete_preview_shows_no_refusal_for_the_mirrored_calendar_its_removal_cascades_to(
+    subscription: Subscription,
+) -> None:
+    """A mirrored calendar refuses a delete started at it, not the cascade its source's removal reaches it by."""
+
+    subscription.poll()
+    with system_context(reason="tests.ics"):
+        calendar = subscription.calendar
+        assert DeletePreview.from_instance(calendar).refusals == [CalendarBackend.calendar_delete_refusal]
+        preview = DeletePreview.from_instance(CalendarSource.objects.get(pk=subscription.source.pk))
+    assert {"calendars", "calendar events"} <= {group.label for group in preview.deleted}
+    # Only the source's streams hold it (their links' history): the cascade itself refuses nothing.
+    assert (preview.refusals, preview.has_blockers) == ([], True)
+    assert preview.blocked
 
 
 def test_a_local_calendar_edit_states_nothing_and_the_calendar_stays_deletable() -> None:
