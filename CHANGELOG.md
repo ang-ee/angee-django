@@ -66,6 +66,31 @@ live in code docstrings.
   product's settings can open its app without knowing the deployment's host
   names. Both are checked at boot like `hosts`.
 
+- `stacks/staging` renders a remote, public, container host in one command from
+  repositories, with no project repository carried to the machine:
+  `angee init <dir> -t staging --repository <repo> --extra-source <repo>`. It is
+  `stacks/dev`'s Docker mode with production serving fixed, no Storybook or
+  Playwright, a first administrator and a `makemigrations` job that authors the
+  host's own migration history, so its data is disposable. A repository given by
+  SSH URL is fetched with its own deploy key, the required secret
+  `deploy-key-<name>`; `settings_file` names a repository's settings file, loaded
+  as the final `YAMLCONF_CONFFILE` layer. It needs angee 0.28.0 or later.
+  [Templates](templates/README.md#deploy-a-staging-host-in-one-command).
+- Stack templates read three wrapper-set flags instead of the flavor:
+  `bootstrap_admin`, `dev_tools` and `author_history`; `template.active` comes
+  from the wrapper's `stack_template`. `stacks/dev` and `stacks/local` render the
+  same manifests as before, with two exceptions that apply to both. `py-sync`
+  authors a missing `uv.lock` before its locked sync, so a freshly rendered host
+  no longer stops there. A production render behind a public `ingress_domain`
+  sets `YAMLCONF_DEBUG` to false and `YAMLCONF_ALLOWED_HOSTS` to the domain, its
+  aliases and the compose-internal names; it served the project's `DEBUG: true`
+  and wildcard hosts before.
+- `projects/web` takes `repositories` (a requirement and an editable source per
+  repository slot, in a framework workspace only) and `roots` (root apps appended
+  to `INSTALLED_APPS`). The `src` workspace template declares
+  `_angee.source_slot`, so the operator cuts one slot per stack source marked
+  `slot: true`.
+
 - `storage/file#write_granted` holds only the fragments' record arms; `write`
   derives the drive, folder, inherited-owner, draft-owner and admin arms itself,
   and `owner_writer` is `inherited_owner + draft_owner + (owner & write_granted)`.

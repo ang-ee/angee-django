@@ -95,6 +95,23 @@ include_arp:
   default: false
   help: Install the angee-arp collection from its workspace source override; root app activation remains explicit.
 
+# Addon repositories the stack checks out beside the framework slot, as the
+# operator canonicalizes them from `angee init --repository` (a JSON list of
+# `{name, ref, repo, ssh}`). Each becomes a requirement on the distribution named
+# after the repository, resolved from its workspaces/src/<name> slot; the roster
+# still decides which of its addons run.
+repositories:
+  type: json
+  default: "[]"
+  help: Addon repositories installed from their workspaces/src/<name> slots; the stack passes its own list.
+
+# Root apps to enable beside the profile's roster, comma-separated. A stack whose
+# host is rendered once and never hand-edited names its product's roots here.
+roots:
+  type: str
+  default: ""
+  help: Comma-separated root apps appended to INSTALLED_APPS (e.g. "shop.catalog,shop.checkout").
+
 # Whether the host sits at the root of a stack that materializes the consolidated
 # framework source as workspaces/src/angee. When true, native uv sources select
 # that workspace and, per profile, the optional external bridge distributions.
