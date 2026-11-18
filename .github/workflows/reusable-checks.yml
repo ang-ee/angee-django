@@ -244,9 +244,13 @@ jobs:
             tests/test_extraction_models.py::test_competing_revision_requests_allocate_exactly_one_successor \
             tests/test_extraction_models.py::test_retention_waits_for_a_held_file_and_refuses_its_committed_change \
             tests/test_decisions_lifecycle.py tests/test_decisions_concurrency.py \
-            tests/test_checklists.py \
+            tests/test_checklists.py tests/test_calendar_concurrency.py \
             tests/test_agent_sessions.py tests/test_agent_sessions_concurrency.py \
             tests/test_integrate_discovery_concurrency.py \
+            tests/test_integrate_jwt_bearer.py::test_concurrent_mints_serialize_across_processes_on_postgresql \
+            tests/test_integrate_oauth_accounts.py::test_concurrent_attaches_bind_one_account_on_postgresql \
+            tests/test_integrate_oauth_accounts.py::test_racing_first_connects_keep_the_refresh_token_on_postgresql \
+            tests/test_integrate_oauth_accounts.py::test_legacy_adoption_racing_an_attach_binds_without_deadlock_on_postgresql \
             tests/test_framework_integration.py \
             tests/test_base_row_lock.py \
             tests/test_connections.py::test_ensure_fresh_serializes_two_processes_on_postgresql \
@@ -267,7 +271,7 @@ jobs:
             tests/test_knowledge_graph_pgvector_postgres.py tests/test_knowledge_graph_pgvector_resolution.py \
             tests/test_knowledge_access_campaign.py::test_record_note_and_binding_keep_locks_replay_and_rollback \
             tests/test_messaging.py tests/test_messaging_concurrency_campaign.py \
-            tests/test_messaging_channel_concurrency.py \
+            tests/test_messaging_channel_concurrency.py tests/test_messaging_reaction_concurrency.py \
             tests/test_messaging_inbox_read.py tests/test_inbox_explorer.py tests/test_inbox_part_reads.py \
             tests/test_group_rows.py \
             tests/test_optimistic_lock.py \
