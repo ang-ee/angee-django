@@ -43,7 +43,7 @@ reminds once per session on the first source edit; it is advisory.
 | Coercion on fields, predicates on querysets, factories on managers, invariants as `Meta` constraints, refusals via `delete_blocker` + `pre_delete` | `angee-models` steps 3, 5, 6, 7 with their owner rules | `manage.py check`; `test_layering.py::test_blank_state_fields_use_null`; `makemigrations --check` | `django-reviewer` | — |
 | No triggers, functions or `RunSQL` guards | `angee-models` *Do not* | — | `django-reviewer` | no static check for `RunSQL` or trigger DDL |
 | Native Strawberry, Hasura emitters, thin resolvers | `angee-graphql` steps and resolver budget | `schema --check`; codegen | `django-reviewer` | — |
-| Settings through yamlconf and environ, one owner | `angee-addon` step 4; `angee-project` | composer refusal of duplicate integrations | — | — |
+| Settings through yamlconf and environ, one owner | `angee-addon` step 4 and *Do not*; `angee-project` | composer refusal of duplicate integrations; `test_layering.py::test_settings_merge_leaves_django_settings_unconfigured` (no `apps`/`autoconfig` module scope configures Django's settings) | — | — |
 | Dependency placed with its owner, stack row and lock together | `angee-framework` step 6 | `tests/test_stack.py` | — | — |
 | Deliberate in-repo owners (transitions, hierarchy, impl registries, hooks) not swapped on a whim | owner index rows link the recorded reasons | — | architect ruling (`angee-design` step 7) | — |
 
