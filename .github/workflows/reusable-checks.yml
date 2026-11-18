@@ -251,6 +251,11 @@ jobs:
             tests/test_decisions_lifecycle.py tests/test_decisions_concurrency.py \
             tests/test_checklists.py tests/test_calendar_concurrency.py \
             tests/test_calendar_ics.py::test_two_purges_racing_on_a_shared_credential_retire_it_exactly_once \
+            tests/test_calendar_google.py::test_two_racing_connects_of_one_account_make_one_source \
+            tests/test_calendar_google_publish.py::test_two_racing_publishes_of_one_calendar_bind_it_once \
+            tests/test_calendar_google_publish.py::test_two_sources_racing_to_publish_to_one_remote_calendar_bind_it_once \
+            tests/test_calendar_google_publish.py::test_a_publish_holding_its_vendor_lets_another_source_of_that_vendor_connect \
+            tests/test_calendar_google_publish.py::test_moving_a_series_waits_on_an_override_a_push_is_binding_then_releases_its_link \
             tests/test_parties_addressbook_upgrade.py::test_the_address_book_template_upgrades_in_one_postgresql_migration \
             tests/test_agent_sessions.py tests/test_agent_sessions_concurrency.py \
             tests/test_integrate_discovery_concurrency.py \
