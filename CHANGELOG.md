@@ -10,6 +10,12 @@ live in code docstrings.
 
 ## Unreleased — shared addon contracts, native embeddings and graph retrieval
 
+- Addons require django-compose 0.1.0.dev13, whose snapshot digest covers each
+  addon's resolved path. A host that changes its sync from `--no-editable` to
+  editable, or moves a source checkout, now recomposes on `compose --if-stale`;
+  before, the receipt stayed current while the web manifest's roots named the old
+  location, and the frontend build failed on a missing addon entry.
+
 - Permission statements are compiled for the stored grants their actor can hold
   (django-zed-rebac 0.35.1, actor grant profiles). Inside an evaluator scope one small
   statement reads which stored relations name the actor, directly, by wildcard or
