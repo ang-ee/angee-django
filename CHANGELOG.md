@@ -302,6 +302,12 @@ live in code docstrings.
   folder's `source_href`. Upgrade cutoff: the template ships through the 3.x
   releases and is removed in 4.0; a host upgrading from an earlier release
   applies it through a 3.x release first.
+  The parties web fragment lists the folders on a read-only Folders page
+  (`parties.folders`, `/parties/directories/folders`). Its record shows the name
+  and directory; field provenance, the Links tab's Sources and History compose
+  onto it from their owners. The `parties.directories` menu node becomes a
+  route-less Settings category holding `parties.directories.list` (the
+  directories) and `parties.folders`.
 
 - A resource row naming a `to_field` foreign key by xref stores the named row's
   target column, not its primary key: `AngeeResource.get_fk_widget` binds the xref
