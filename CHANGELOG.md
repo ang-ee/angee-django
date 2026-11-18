@@ -172,6 +172,35 @@ live in code docstrings.
   revision 3, arp revision 7) and `resources load`. Add `angee.calendar` (and
   `angee.projects_calendar` where projects is composed) to `INSTALLED_APPS` in
   place of `arp.calendar`.
+- `angee.calendar` mirrors connected calendars. A `CalendarSource` (an
+  `integrate.Integration` child and a `Bridge`, its protocol selected by
+  `backend_class` from `ANGEE_CALENDAR_SOURCE_BACKEND_CLASSES`) mirrors each remote
+  calendar it serves through its `calendars` stream as a `Calendar` on its owner's
+  person, whose `source` names it and whose name, colour and zone the source states
+  (a person's own edit outranks it); each calendar's events sync through an
+  `events` stream partitioned by its key. A backend declares `writable`: a
+  read-only source's calendar refuses local edits on every save path
+  (`Calendar.is_writable`), and `CalendarQuerySet.local_edits_rule()`
+  (`taking_local_edits()`) is the same decision as a query, so the event form's
+  `writable` calendars and `Calendar.objects.ensure_personal` take only calendars
+  that accept local events. Its owner syncs it (`sync_calendar_source`) and
+  unsubscribes it (`unsubscribe_calendar_source`): the source disconnects at once
+  and the `calendar.purge_source` job deletes its events, archives its calendar and
+  retires its credential. How many sources a user keeps, and how fast they add them,
+  are bounded (`ANGEE_CALENDAR_SOURCES_PER_OWNER`, `ANGEE_CALENDAR_SUBSCRIBE_RATE`).
+  The new `angee.calendar_integrate_ics` addon is the read-only `ics` backend: any
+  signed-in user subscribes to a feed (`webcal://` reads as `https://`), whose
+  address is the source credential's material; it is polled with a conditional GET
+  through integrate's bounded download and parsed by python-icalendar (`VEVENT`,
+  `VTIMEZONE`, `RRULE`, `EXDATE`, `RECURRENCE-ID`). It seeds the `ics` vendor in the
+  master tier.
+  **Host upgrade:** add `angee.calendar_integrate_ics` to `INSTALLED_APPS` beside
+  `angee.calendar` and install its distribution (it requires `icalendar`); write the
+  `calendar` migration with `makemigrations calendar` (`CalendarSource`, a calendar's
+  `source` and `is_archived`, calendar statements and their history, and the event
+  recurrence's daily floor; the ICS addon has no tables); then `migrate`,
+  `rebac --skip-checks sync --prune-stale --yes` (calendar revision 4) and
+  `resources load` (the `ics` vendor).
 - One Google OAuth client per deployment serves every Google feature. The new
   `angee.integrate_google` addon owns the `google` provider preset and seeds the
   deployment's blank `google` client and Google's public `gemini` client
