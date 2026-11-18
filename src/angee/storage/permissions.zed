@@ -1,7 +1,7 @@
 // Authorization schema for the storage addon.
 // @rebac_package: storage
 // @rebac_package_version: 0.1.0
-// @rebac_schema_revision: 13
+// @rebac_schema_revision: 14
 
 // Roles-as-namespace anchor, mirroring operator/role: `includes` lets one
 // storage role imply another, and resources gate on `effective_member` so
@@ -92,7 +92,11 @@ definition storage/folder {
 // Fragments union their arms into `read_granted`, `write_granted` and
 // `share_granted`; `read`, `write` and `share` are derived here alone and sealed
 // (`storage.E001`). A trashed file is withheld from everyone who cannot delete
-// it; deleters keep all three to list, restore and manage it.
+// it; deleters keep all three to list, restore and manage it. `write_granted` is
+// the fragments' record arms alone and `write` adds every other arm itself, so
+// `owner_writer`, which each read reaches through `delete`, compiles the records'
+// write and nothing else. `write_granted` and `owner_writer` are composition
+// terms: check `write`, `delete` or `transfer`, never these.
 definition storage/file {
     relation drive:  storage/drive // rebac:field=drive
     relation folder: storage/folder // rebac:field=folder
@@ -110,14 +114,14 @@ definition storage/file {
     permission conceal = authenticated
     permission withheld = trashed->conceal
     permission read_granted = inherited_drive->read + inherited_folder->read + inherited_owner + draft_owner + viewer + admin->member
-    permission write_granted = inherited_drive->write + inherited_folder->write + inherited_owner + draft_owner + admin->member
+    permission write_granted = nil
     permission share_granted = inherited_drive->share + inherited_owner + admin->member
     permission read   = (read_granted - withheld) + delete
-    permission write  = (write_granted - withheld) + delete
+    permission write  = ((inherited_drive->write + inherited_folder->write + inherited_owner + draft_owner + admin->member + write_granted) - withheld) + delete
     permission share  = (share_granted - withheld) + delete
     // The owner while it may write the file: always for an inherited file, and
-    // for a record file only through its records' write.
-    permission owner_writer = owner & write_granted
+    // for a record file while it is a draft or through its records' write.
+    permission owner_writer = inherited_owner + draft_owner + (owner & write_granted)
     permission transfer = owner_writer + admin->member
     permission write__owner = transfer
     permission delete = owner_writer + inherited_drive->write + admin->member
