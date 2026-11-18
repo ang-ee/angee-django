@@ -28,6 +28,8 @@ const resources = [
       { ...field, name: "start", kind: "scalar", scalar: "DateTime", creatable: true, updatable: true },
       { ...field, name: "end", kind: "scalar", scalar: "DateTime", creatable: true, updatable: true },
       { ...field, name: "all_day", kind: "scalar", scalar: "Boolean", creatable: true, updatable: true },
+      // The event's own zone, blank for its calendar's.
+      { ...field, name: "timezone", kind: "scalar", scalar: "String", creatable: true, updatable: true },
       // The zone whose days an all-day event spans: read, never written.
       { ...field, name: "effective_timezone", kind: "scalar", scalar: "String", creatable: false, updatable: false },
     ],
@@ -49,6 +51,7 @@ const SAVED = {
   start: new Date(2026, 10, 20, 10).toISOString(),
   end: new Date(2026, 10, 20, 11).toISOString(),
   all_day: false,
+  timezone: "",
   effective_timezone: "America/Chicago",
 };
 
@@ -73,11 +76,22 @@ function selected(row: Record<string, unknown>, fields: Selection): Record<strin
     : Object.entries(entry).map(([name, nested]) => [name, selected(row[name] as Record<string, unknown>, nested)])));
 }
 
-function renderSavedEvent(saved: Record<string, unknown> = SAVED) {
+/**
+ * Render the form over a saved event. `answer` is the row the server keeps after an update (by default the
+ * saved row with the sent values), which later reads return too.
+ */
+function renderSavedEvent(
+  saved: Record<string, unknown> = SAVED,
+  answer: (sent: Record<string, unknown>) => Record<string, unknown> = (sent) => ({ ...saved, ...sent }),
+) {
+  let row = saved;
   const getOne = vi.fn(async ({ meta }: { meta?: { fields?: unknown } }) => ({
-    data: selected(saved, (meta?.fields ?? ["id"]) as Selection),
+    data: selected(row, (meta?.fields ?? ["id"]) as Selection),
   }));
-  const update = vi.fn(async ({ variables }: { variables?: Record<string, unknown> }) => ({ data: { ...saved, ...variables } }));
+  const update = vi.fn(async ({ variables }: { variables?: Record<string, unknown> }) => {
+    row = answer(variables ?? {});
+    return { data: row };
+  });
   // The picker's own read: the calendars the viewer may add events to.
   const custom = vi.fn(async () => ({ data: { calendars: [{ id: "cal_1" }, { id: "cal_2" }] } }));
   const router = createRouter({ routeTree: createRootRoute(), history: createMemoryHistory({ initialEntries: ["/"] }) });
@@ -156,6 +170,26 @@ describe("CalendarEventForm", () => {
     expect(screen.getByRole("button", { name: "End" }).textContent).toContain(viewerDay(SAVED_ALL_DAY.end));
     expect(warn).toHaveBeenCalledWith(expect.stringContaining("Mars/Olympus_Mons"));
     warn.mockRestore();
+  });
+
+  // CAL-F5: the event keeps an all-day event's days when its own zone changes, so the form sends the zone
+  // alone; resending the stored bounds (midnights in the old zone) would be refused by the event.
+  test("changing a saved all-day event's own zone sends the zone alone, and its days stay", async () => {
+    // The server's answer: the same days, now at Tokyo's midnights.
+    const { update } = renderSavedEvent(SAVED_ALL_DAY, (sent) => ({
+      ...SAVED_ALL_DAY, ...sent, effective_timezone: "Asia/Tokyo",
+      start: "2026-11-19T15:00:00+00:00", end: "2026-11-20T15:00:00+00:00",
+    }));
+    await waitFor(async () => expect((await calendarControl()).textContent).toContain("Personal"));
+
+    fireEvent.change(screen.getByRole("textbox", { name: "Timezone" }), { target: { value: "Asia/Tokyo" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+
+    await waitFor(() => expect(update).toHaveBeenCalledOnce());
+    const [[saved]] = update.mock.calls as unknown as [[{ variables: Record<string, unknown> }]];
+    expect(saved.variables).toEqual({ timezone: "Asia/Tokyo" });
+    await waitFor(() => expect(screen.getByRole("button", { name: "Start" }).textContent).toContain("Nov 20, 2026"));
+    expect(screen.getByRole("button", { name: "End" }).textContent).toContain("Nov 21, 2026");
   });
 
   test("turning a saved all-day event's all day off gives the viewer's own midnights on its days", async () => {
