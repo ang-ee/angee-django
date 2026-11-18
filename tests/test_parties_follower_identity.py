@@ -245,7 +245,11 @@ def test_follower_scopes_compile_without_enumeration_and_fetch_fifty_rows_at_fix
                     counts.append(len(captured))
                     # 0.31 compiles the scope inline (Tie 4, read 26, read_private 3 -> 2): the revision
                     # witness and the one row SELECT; memberships and arrow sources are its predicates.
-                    assert len(captured) == 2, captured.captured_queries
+                    # 0.35 (2 -> 3): the evaluator scope opened around this read reads the reader's
+                    # grant profile once. It returns the stored relation kinds that name the reader,
+                    # never resource ids, and its size does not grow with the page.
+                    assert len(captured) == 3, captured.captured_queries
+                    assert sum("rebac_profile" in query["sql"] for query in captured.captured_queries) == 1
                     assert (
                         sum(
                             statement_startswith(query["sql"], f'SELECT "{model._meta.db_table}".')
