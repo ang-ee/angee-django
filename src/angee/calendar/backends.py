@@ -36,7 +36,7 @@ from __future__ import annotations
 import hashlib
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from typing import Any, ClassVar
 
 from django.apps import apps
@@ -493,6 +493,17 @@ class CalendarBackend(BridgeImpl, HttpClientMixin):
 
     Raise it when what the backend maps an event to changes: a pulled stream then
     takes a new baseline, and a push stream compares every event again.
+    """
+
+    reconcile_interval: ClassVar[timedelta | None] = None
+    """How often each stream of this backend sweeps (``StreamDefinition.reconcile_interval``).
+
+    ``None`` sweeps once per its source's poll interval. A pulled stream's sweep
+    finds the records its source stopped serving, so it keeps that interval
+    (``CalendarSource._replica``). A push stream's sweep is a push comparing
+    every event again (``SyncStream.sweep_due``), which
+    :class:`PublishingCalendarBackend` runs hourly: the polls between read only
+    the events changed since their push.
     """
 
     _page: _EventsPage | None = None
@@ -981,6 +992,8 @@ class PublishingCalendarBackend(CalendarBackend):
     """
 
     direction: ClassVar[StreamDirection] = StreamDirection.PUSH
+
+    reconcile_interval: ClassVar[timedelta | None] = timedelta(hours=1)
 
     unsubscribed: ClassVar[str] = "Unpublished; its calendars are local again."
 

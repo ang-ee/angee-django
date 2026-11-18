@@ -15,7 +15,7 @@ import json
 from collections.abc import Callable, Iterator
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from time import monotonic
 from typing import Any, cast
 from urllib.parse import parse_qs, unquote, urlsplit
@@ -318,13 +318,13 @@ class Published:
             adapter = CalendarSource.objects.get(pk=self.source.pk).capability_impl
         return push_stream(stream, adapter).count
 
-    def rewind_sweep(self) -> None:
-        """Make the events stream's sweep due, as its reconcile interval passing does."""
+    def rewind_sweep(self, by: timedelta | None = None) -> None:
+        """Move the events stream's last sweep ``by`` into the past; by its reconcile interval, the sweep is due."""
 
         stream = self.events_stream()
         with system_context(reason="tests.google.publish.sweep"):
             SyncStream.objects.filter(pk=stream.pk).update(
-                last_reconciled_at=stream.last_reconciled_at - stream.reconcile_interval
+                last_reconciled_at=stream.last_reconciled_at - (by or stream.reconcile_interval)
             )
 
     def changed(self) -> list[str]:
@@ -963,6 +963,39 @@ def test_a_write_that_skipped_history_capture_is_pushed_by_the_streams_sweep(
     # The push ran through every event, which completes the push stream's sweep.
     assert not published.events_stream().sweep_due()
     assert published.changed() == []
+
+
+def test_a_publishing_stream_sweeps_hourly_and_its_polls_within_the_hour_are_narrowed(
+    published: Published, settings: Any
+) -> None:
+    """The sweep's full compare runs hourly; each poll before it reads only the events changed since their push."""
+
+    published.publish()
+    workshop = published.event(start=_berlin(5, 4, 10), end=_berlin(5, 4, 12))
+    key = event_id(workshop.sqid)
+    published.poll()
+    with system_context(reason="tests.google.publish.sweep"):
+        streams = SyncStream.objects.filter(integration_id=published.source.pk)
+        intervals = {row.key: row.reconcile_interval for row in streams}
+    assert (intervals, published.source.poll_interval) == (
+        {"calendars": timedelta(hours=1), "events": timedelta(hours=1)}, 300
+    )
+    # A write no version names: only the sweep's full compare reads it.
+    settings.SIMPLE_HISTORY_ENABLED = False
+    published.edit(workshop, location="Hall")
+    settings.SIMPLE_HISTORY_ENABLED = True
+    seen = len(published.google.writes())
+
+    published.rewind_sweep(by=timedelta(minutes=55))  # Eleven poll intervals after the sweep, within its hour.
+    assert published.changed() == []
+    published.poll()
+    assert _written(published, seen) == []
+
+    published.rewind_sweep(by=timedelta(minutes=6))  # Past the hour: the next push compares every event.
+    assert published.changed() == [key]
+    published.poll()
+    assert _written(published, seen) == [("PATCH", key)]
+    assert not published.events_stream().sweep_due()
 
 
 def test_an_event_written_before_its_history_is_baselined_then_settled(published: Published, settings: Any) -> None:

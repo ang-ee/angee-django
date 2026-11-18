@@ -2157,19 +2157,20 @@ class CalendarSource(Bridge, inherits="integrate.Integration"):
         ``partition`` and ``container`` name an events stream's calendar (its link);
         ``holds_containers`` marks the calendars stream.
 
-        A stream sweeps at most once per poll interval. A pulled one's sweep finds
-        removals: a record the source stops serving is unavailable after one sweep
-        and tombstoned after the stream's absence threshold
-        (:meth:`CalendarBackend.on_absent` applies it). A push stream's is its push
-        comparing every event, even one no version shows changed
-        (``SyncStream.sweep_due``).
+        A stream sweeps at most once per its backend's ``reconcile_interval``, else
+        once per poll interval. A pulled one's sweep finds removals: a record the
+        source stops serving is unavailable after one sweep and tombstoned after
+        the stream's absence threshold (:meth:`CalendarBackend.on_absent` applies
+        it). A push stream's is its push comparing every event, even one no version
+        shows changed (``SyncStream.sweep_due``): hourly for a publishing backend.
         """
 
+        backend = self.get_backend_class_impl()
         return StreamDefinition(
             key,
             kind=StreamKind.RECORD_REPLICA,
-            direction=self.get_backend_class_impl().direction,
-            reconcile_interval=timedelta(seconds=self.poll_interval),
+            direction=backend.direction,
+            reconcile_interval=backend.reconcile_interval or timedelta(seconds=self.poll_interval),
             partition=partition,
             container=container,
             holds_containers=holds_containers,

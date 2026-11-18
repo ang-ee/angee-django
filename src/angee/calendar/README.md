@@ -201,7 +201,9 @@ calendar's events stream in the same sync.
   id targets the calendar, and the calendar's `source` names the source. The
   calendar stays writable, and its events push through the events stream that link
   holds; nothing is read back, so a remote edit surfaces as a held conflict the
-  next time Angee writes that event. Keeping Google's side of that conflict
+  next time Angee writes that event. A poll pushes only the events changed since
+  their push; once an hour (`PublishingCalendarBackend.reconcile_interval`) the
+  push compares every event again. Keeping Google's side of that conflict
   accepts its version (an event Google cancelled included), and the next local
   edit writes over it. Deleting an event deletes it remotely, and deleting an
   override restores its instance; keeping Google's side of a delete that

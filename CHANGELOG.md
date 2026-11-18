@@ -147,7 +147,11 @@ live in code docstrings.
   - **Sweep:** while `SyncStream.sweep_due` (once per `reconcile_interval`) the read
     narrows nothing, so a projection change without a mapping version bump, or a
     write that skipped history capture, still converges. A push stream's push
-    completes its sweep (`last_reconciled_at`).
+    completes its sweep (`last_reconciled_at`). A publishing calendar backend
+    declares an hourly one (`CalendarBackend.reconcile_interval`), so the polls
+    between stay narrowed. A stream keeps the interval it was first opened with
+    (`SyncStreamManager.current` seeds policy once), so streams opened before keep
+    the poll interval.
   - **Settling:** `push_candidates(settle=True)` (the push) records the newer versions
     of rows whose projection still equals their base in one statement, conditionally
     on each base, and baselines a row read without a version
@@ -205,8 +209,9 @@ live in code docstrings.
   calendars. `CalendarSource.unsubscribe` returns the backend's `unsubscribed`
   message, and `Calendar.delete_blocker` its `calendar_delete_refusal` (the
   `SOURCE_CALENDAR_DELETE` and `PUBLISHED_CALENDAR_DELETE` constants are
-  deleted). A purge locks every stream of the source. Push streams declare the
-  poll interval like pulled ones; integrate never sweeps them. The Google
+  deleted). A purge locks every stream of the source. A publishing backend's
+  streams sweep hourly (`CalendarBackend.reconcile_interval`; a pulled one's,
+  once per poll interval), and integrate's absence pass never sweeps them. The Google
   publishing backend is `google_publishing` (`GooglePublishingCalendarBackend`,
   `connect_google_calendar_publishing(credential_id)`; formerly
   `google_resource`). A publishing source holds no `statement_source` on the
