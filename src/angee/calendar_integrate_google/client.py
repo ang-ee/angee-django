@@ -24,7 +24,9 @@ CALENDAR_API = "https://www.googleapis.com/calendar/v3"
 MAX_PAGE_SIZE = 2500
 """Google's largest ``maxResults`` for ``events.list``."""
 
-_CALENDAR_FIELDS = "nextPageToken,items(id,summary,summaryOverride,backgroundColor,timeZone,deleted)"
+_CALENDAR_FIELDS = "nextPageToken,items(id,summary,summaryOverride,backgroundColor,timeZone)"
+_CALENDAR_LIST = {"fields": _CALENDAR_FIELDS, "showHidden": "true", "minAccessRole": "reader"}
+"""Every calendar the account reads, hidden ones included; deleted entries are not listed (no ``showDeleted``)."""
 
 
 class GoogleCalendarError(GoogleApiError):
@@ -54,7 +56,7 @@ class GoogleCalendarClient:
 
         token = ""
         while True:
-            page = self._get("users/me/calendarList", {"fields": _CALENDAR_FIELDS, **_page(token)})
+            page = self._get("users/me/calendarList", {**_CALENDAR_LIST, **_page(token)})
             yield from page.get("items") or ()
             token = str(page.get("nextPageToken") or "")
             if not token:

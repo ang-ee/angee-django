@@ -38,6 +38,7 @@ from __future__ import annotations
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, time, timedelta
+from time import monotonic
 from typing import Any, ClassVar
 
 from django.core.exceptions import ValidationError
@@ -49,8 +50,10 @@ from angee.calendar.backends import (
     ParsedAttendee,
     ParsedCalendar,
     ParsedEvent,
+    cancelled_instances,
     instance_key,
-    series_instances,
+    organizer_first,
+    parse_key,
     series_key,
 )
 from angee.calendar.choices import AttendeeResponse, AttendeeRole, EventStatus, EventTransparency, EventVisibility
@@ -63,7 +66,17 @@ from angee.scheduling.zones import get_zone_info, get_zone_names
 CALENDAR_READONLY = "https://www.googleapis.com/auth/calendar.readonly"
 """The OAuth scope sync-in reads every calendar of the account with."""
 
+_SWEEP_PAGE = 250
+"""Events per page of a sweep's full listing: well under the transport's 8 MiB answer cap."""
+
 _STATUSES = {"confirmed": EventStatus.CONFIRMED, "tentative": EventStatus.TENTATIVE}
+
+
+def _sweep(stream: Any) -> tuple[Any, ...]:
+    """Return the identity of the absence sweep running on ``stream``: its calendar, generation and start."""
+
+    started = (stream.reconcile_state or {}).get("started_at")
+    return (stream.partition, stream.generation, started) if started else ()
 _VISIBILITIES = {
     "public": EventVisibility.PUBLIC,
     "private": EventVisibility.PRIVATE,
@@ -94,7 +107,8 @@ class GoogleCalendarBackend(CalendarBackend):
 
     _calendars: list[ParsedCalendar] | None = None
     _held: _GooglePage | None = None
-    _listing: tuple[str, dict[str, dict[str, Any] | None]] | None = None
+    _listing: tuple[tuple[Any, ...], dict[str, dict[str, Any] | None]] | None = None
+    """The current sweep's full listing of one calendar: its sweep identity, then its payloads by key."""
 
     def admit_credential(self, credential: Any) -> None:
         """Admit only an OAuth credential of the ``google`` client whose grant covers :attr:`oauth_scopes`."""
@@ -119,16 +133,19 @@ class GoogleCalendarBackend(CalendarBackend):
 
         if self._calendars is None:
             names = get_zone_names()
-            self._calendars = [
-                ParsedCalendar(
-                    key=str(entry["id"]),
-                    name=str(entry.get("summaryOverride") or entry.get("summary") or ""),
-                    timezone=_known_zone(entry.get("timeZone"), names),
-                    color=str(entry.get("backgroundColor") or ""),
-                )
-                for entry in self._client().calendar_list()
-                if entry.get("id") and not entry.get("deleted")
-            ]
+            calendars = []
+            for entry in self._client().calendar_list():
+                self._require_time()
+                if entry.get("id"):
+                    calendars.append(
+                        ParsedCalendar(
+                            key=str(entry["id"]),
+                            name=str(entry.get("summaryOverride") or entry.get("summary") or ""),
+                            timezone=_known_zone(entry.get("timeZone"), names),
+                            color=str(entry.get("backgroundColor") or ""),
+                        )
+                    )
+            self._calendars = calendars
         return self._calendars
 
     # --- events ---
@@ -166,26 +183,25 @@ class GoogleCalendarBackend(CalendarBackend):
         or as its master's ``EXDATE``.
         """
 
-        listing = self._listing
-        if listing is not None and listing[0] == stream.partition:
+        listing, sweep = self._listing, _sweep(stream)
+        if listing is not None and sweep and listing[0] == sweep:
             return {key: listing[1].get(key) for key in keys}
         client = self._client()
         zone = self.get_calendar(stream).timezone
         found: dict[str, dict[str, Any] | None] = {}
         masters: dict[str, dict[str, Any] | None] = {}
         for key in keys:
-            master_id, _hash, instant = key.partition("#")
-            if master_id.startswith("sha256:"):
+            master_id, moment = parse_key(key)
+            if master_id is None:
                 # A digest names no Google id: quarantine the record rather than read it as removed.
                 found[key] = {"error": "unreadable_identity"}
                 continue
             if master_id not in masters:
                 masters[master_id] = client.event(stream.partition, master_id)
             master = masters[master_id]
-            if not instant or master is None:
+            if moment is None or master is None:
                 found[key] = dict(self._observe_item(master, zone)).get(key) if master is not None else None
                 continue
-            moment = datetime.strptime(instant, "%Y%m%dT%H%M%SZ").replace(tzinfo=UTC)
             item = client.instance(stream.partition, master_id, _original_start(master, moment, zone))
             observed = dict(self._observe_item(master, zone))
             if item is not None:
@@ -194,25 +210,37 @@ class GoogleCalendarBackend(CalendarBackend):
         return found
 
     def event_keys(self, stream: Any) -> list[str]:
-        """Return every key the calendar serves now, removals left out, from one full listing it keeps.
+        """Return every key the calendar serves now, removals left out, from one full listing per sweep.
 
-        The adapter keeps the listing's payloads for the identity reads of the same
-        sweep (:meth:`read_events`).
+        A sweep enumerates in bounded pulses; the adapter lists the calendar once for
+        the sweep (keyed by its partition, generation and start) and serves the
+        sweep's later pulses and its identity reads (:meth:`read_events`) from it.
         """
 
-        zone = self.get_calendar(stream).timezone
-        client = self._client()
-        payloads: dict[str, dict[str, Any] | None] = {}
-        token = ""
-        while True:
-            page = client.events_page(stream.partition, page_token=token)
-            for item in page.get("items") or ():
-                payloads.update(self._observe_item(item, zone))
-            token = str(page.get("nextPageToken") or "")
-            if not token:
-                break
-        self._listing = (stream.partition, payloads)
-        return sorted(key for key, payload in payloads.items() if payload is not None)
+        sweep = _sweep(stream)
+        if self._listing is None or self._listing[0] != sweep:
+            zone = self.get_calendar(stream).timezone
+            client = self._client()
+            payloads: dict[str, dict[str, Any] | None] = {}
+            token = ""
+            while True:
+                self._require_time()
+                page = client.events_page(stream.partition, page_token=token, max_results=_SWEEP_PAGE)
+                for item in page.get("items") or ():
+                    payloads.update(self._observe_item(item, zone))
+                token = str(page.get("nextPageToken") or "")
+                if not token:
+                    break
+            self._listing = (sweep, payloads)
+        return sorted(key for key, payload in self._listing[1].items() if payload is not None)
+
+    def _require_time(self) -> None:
+        """Stop a listing that reaches the cycle's deadline: the next sync lists again."""
+
+        if self.deadline is not None and monotonic() > self.deadline:
+            raise IntegrationError(
+                "Listing Google Calendar took too long; the next sync lists it again.", transient=True
+            )
 
     # --- mapping ---
 
@@ -261,7 +289,7 @@ class GoogleCalendarBackend(CalendarBackend):
             observed: list[tuple[str, ParsedEvent]] = [(key, event)]
             if event.recurrence:
                 exdates = _exdates(item.get("recurrence") or (), event.timezone or zone)
-                observed.extend(series_instances(event, event_id, exdates, calendar_zone=zone))
+                observed.extend(cancelled_instances(event, event_id, exdates, calendar_zone=zone))
         except Exception:  # noqa: BLE001 — the driver quarantines semantic input per record.
             return [(_own_key(item, zone), {"error": "invalid_event"})]
         return [(key, self.observe(event)) for key, event in observed]
@@ -448,37 +476,24 @@ def _conference_url(item: Mapping[str, Any]) -> str:
 
 
 def _attendees(item: Mapping[str, Any]) -> tuple[ParsedAttendee, ...]:
-    """Return the attendees, the event's organizer first as its one ``organizer`` attendee.
+    """Return the people invited, the event's ``organizer`` first (``organizer_first``); rooms are not people.
 
-    Google flags the organizer's own attendee entry; the event's ``organizer`` is
-    the one organizer, and any other entry is invited as required, or optional.
+    An entry Google marks ``resource`` (a room or equipment) is no attendee; any
+    other is invited as required, or optional.
     """
 
-    listed: dict[str, ParsedAttendee] = {}
-    for attendee in item.get("attendees") or ():
-        address = str(attendee.get("email") or "").strip()
-        if address:
-            listed.setdefault(
-                address.lower(),
-                ParsedAttendee(
-                    address=address,
-                    role=AttendeeRole.OPTIONAL if attendee.get("optional") else AttendeeRole.REQUIRED,
-                    response=_RESPONSES.get(str(attendee.get("responseStatus")), AttendeeResponse.NEEDS_ACTION),
-                    display_name=str(attendee.get("displayName") or ""),
-                ),
-            )
-    organizer = item.get("organizer") or {}
-    address = str(organizer.get("email") or "").strip()
-    if not address:
-        return tuple(listed.values())
-    listed_as = listed.pop(address.lower(), None)
-    return (
+    listed = [
         ParsedAttendee(
-            address=address,
-            role=AttendeeRole.ORGANIZER,
-            response=listed_as.response if listed_as is not None else AttendeeResponse.ACCEPTED,
-            display_name=str(organizer.get("displayName") or "") or (listed_as.display_name if listed_as else ""),
-        ),
-        *listed.values(),
+            address=str(attendee.get("email") or "").strip(),
+            role=AttendeeRole.OPTIONAL if attendee.get("optional") else AttendeeRole.REQUIRED,
+            response=_RESPONSES.get(str(attendee.get("responseStatus")), AttendeeResponse.NEEDS_ACTION),
+            display_name=str(attendee.get("displayName") or ""),
+        )
+        for attendee in item.get("attendees") or ()
+        if not attendee.get("resource")
+    ]
+    organizer = item.get("organizer") or {}
+    return organizer_first(
+        listed, str(organizer.get("email") or "").strip(), name=str(organizer.get("displayName") or "")
     )
 

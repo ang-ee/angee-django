@@ -9,7 +9,7 @@ token answers ``410 Gone``. Nothing patches the backend.
 from __future__ import annotations
 
 from collections.abc import Iterator
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, tzinfo
 from typing import Any
 from urllib.parse import parse_qs, unquote, urlsplit
@@ -22,6 +22,7 @@ from django.core.exceptions import ValidationError
 from django.db.models import Q
 from rebac import actor_context, system_context
 
+from angee.calendar.backends import ParsedAttendee, organizer_first
 from angee.calendar.models import AttendeeResponse, AttendeeRole
 from angee.calendar.models import CalendarSource as CalendarSourceContract
 from angee.calendar.testing.models import CalendarEvent, CalendarSource, EventAttendee
@@ -131,6 +132,7 @@ STANDUP = {
         {"email": "alice@example.test", "organizer": True, "responseStatus": "accepted"},
         {"email": "bob@example.test", "displayName": "Bob", "responseStatus": "accepted"},
         {"email": "Carol@Example.test", "optional": True, "responseStatus": "tentative"},
+        {"email": "room@resource.example.test", "resource": True, "responseStatus": "accepted"},
     ],
     "conferenceData": {"entryPoints": [{"entryPointType": "video", "uri": "https://meet.example.test/standup"}]},
     "visibility": "private",
@@ -316,8 +318,10 @@ def test_a_sync_token_replay_changes_nothing_and_a_410_resyncs_once(connected: C
     before = {key: (event.pk, event.updated_at) for key, event in connected.events().items()}
     baseline = connected.listings()
     assert all("syncToken" not in query for query in baseline)
-    # The absence sweep reads what its own listing served: no event is fetched one by one.
+    # The absence sweep reads what its own listing served: no event is fetched one by one,
+    # and each calendar is listed once for the sweep, in pages of 250.
     assert not [request for request in connected.google.requests if "/events/" in urlsplit(str(request.url)).path]
+    assert len([query for query in baseline if query["maxResults"] == "250"]) == 2
 
     connected.poll()
     replay = connected.listings()[len(baseline):]
@@ -417,10 +421,10 @@ def test_a_removed_event_is_cancelled_and_read_back_by_identity(connected: Conne
     assert payloads["standup#20260309T130000Z"]["event"]["title"] == "Standup (moved)"
 
 
-def test_a_calendar_dropped_from_the_list_retires_its_events(connected: Connected) -> None:
+def test_a_hidden_calendar_retires_its_events_and_they_come_back_when_it_returns(connected: Connected) -> None:
     connected.poll()
     standup = connected.events()["standup"]
-    del connected.google.accounts["work-token"].calendars["work@example.test"]
+    work = connected.google.accounts["work-token"].calendars.pop("work@example.test")
 
     for _sweep in range(2):
         SyncStream.objects.sudo(reason="tests.google").filter(
@@ -434,6 +438,33 @@ def test_a_calendar_dropped_from_the_list_retires_its_events(connected: Connecte
         assert connected.stream().state == StreamState.RETIRED
         standup.refresh_from_db()
     assert standup.status == "cancelled"
+
+    # The calendar is listed again: its link revives, its events stream reopens and its events re-apply.
+    connected.google.accounts["work-token"].calendars["work@example.test"] = work
+    connected.poll()
+    with system_context(reason="tests.google"):
+        link.refresh_from_db()
+        assert (link.status, link.tombstoned_at) == (LinkStatus.CURRENT, None)
+        assert connected.stream().state == StreamState.OPEN
+        standup.refresh_from_db()
+        failures = RecordLink.objects.filter(stream__integration_id=connected.sources["work-token"].pk)
+        assert not [row.code for link_row in failures for row in link_row.failures(open_only=True)]
+    assert standup.status == "confirmed"
+    assert connected.events()["standup"].pk == standup.pk
+
+
+def test_the_organizer_carries_its_listed_answer_or_accepts() -> None:
+    bob = ParsedAttendee("bob@example.test", AttendeeRole.REQUIRED, AttendeeResponse.TENTATIVE, "Bob")
+    unlisted = organizer_first([bob], "alice@example.test", name="Alice")
+    alice = replace(bob, address="Alice@Example.test")
+    listed = organizer_first([bob, alice], "alice@example.test")
+
+    assert unlisted == (
+        ParsedAttendee("alice@example.test", AttendeeRole.ORGANIZER, AttendeeResponse.ACCEPTED, "Alice"),
+        bob,
+    )
+    assert listed[0] == ParsedAttendee("alice@example.test", AttendeeRole.ORGANIZER, AttendeeResponse.TENTATIVE, "Bob")
+    assert listed[1:] == (bob,)
 
 
 def test_a_page_with_more_records_than_the_bound_pages_locally(connected: Connected) -> None:

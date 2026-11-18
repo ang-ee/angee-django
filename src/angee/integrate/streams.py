@@ -390,6 +390,32 @@ def _promote(stream: Any, link: Any, record: RecordChange, outcome: ApplyResult,
     )
 
 
+def _withdraw_absent(stream: Any, adapter: BridgeImpl, links: Sequence[Any]) -> None:
+    """Apply the adapter's absence verdicts, then record each withdrawal it reports as its link's applied base.
+
+    A tombstone found by absence is recorded as a page tombstone is (:func:`_promote`
+    with ``tombstone=True``): the withdrawn local projection becomes the base, so a
+    record that returns compares as a remote change and applies.
+    """
+
+    withdrawn = adapter.on_absent(stream, links) or {}
+    for link in links:
+        outcome = withdrawn.get(link.pk)
+        if outcome is None or link.status != LinkStatus.TOMBSTONE:
+            continue
+        type(link).objects.promote(
+            link,
+            source_payload={},
+            source_hash="",
+            mapped_payload=outcome.mapped_payload,
+            mapping_version=stream.mapping_version,
+            dependency_digest=outcome.dependency_digest,
+            target=outcome.target,
+            origin="remote",
+            tombstone=True,
+        )
+
+
 def _reflect_write(stream: Any, link: Any, record: RecordChange, result: WriteBackResult) -> None:
     if not isinstance(result, WriteBackResult):
         raise AdapterContractError("write_back must return WriteBackResult.")
@@ -691,7 +717,7 @@ def _apply_page(
                 raise AdapterContractError("Only replica pages report absent keys.")
             absent = links.mark_absent(locked, page.absent)
             if absent:
-                adapter.on_absent(locked, absent)
+                _withdraw_absent(locked, adapter, absent)
             ended = ended or any(link.status == LinkStatus.TOMBSTONE for link in absent)
         if ended:
             type(locked).objects.retire_children(locked)
@@ -976,7 +1002,7 @@ def reconcile_stream(stream: Any, adapter: BridgeImpl, *, page_bound: int = 100,
                     locked, [link.external_key for link in batch], confirmed=locked.state == StreamState.RETIRED
                 )
                 if transitions:
-                    adapter.on_absent(locked, transitions)
+                    _withdraw_absent(locked, adapter, transitions)
                 if any(link.status == LinkStatus.TOMBSTONE for link in transitions):
                     manager.retire_children(locked)
                 if batch:

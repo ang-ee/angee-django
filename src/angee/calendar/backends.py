@@ -34,7 +34,7 @@ from typing import Any, ClassVar
 from django.apps import apps
 
 from angee.base.serialization import canonical_json_sha256
-from angee.calendar.choices import EventStatus
+from angee.calendar.choices import AttendeeResponse, AttendeeRole, EventStatus
 from angee.integrate.errors import IntegrationError
 from angee.integrate.http import HttpClientMixin
 from angee.integrate.impl import BridgeImpl
@@ -167,6 +167,50 @@ def instance_key(uid: str, original_start: datetime) -> str:
     return f"{series_key(uid)}#{basic_instant(original_start)}"
 
 
+def parse_key(key: str) -> tuple[str | None, datetime | None]:
+    """Return what an event key names: its series UID and, for an instance, its original start (aware UTC).
+
+    The inverse of :func:`series_key` and :func:`instance_key`. A digest key names no
+    UID (``None``): the UID it was made from cannot be read back.
+    """
+
+    series, _hash, instant = key.rpartition("#")
+    try:
+        moment = datetime.strptime(instant, "%Y%m%dT%H%M%SZ").replace(tzinfo=UTC) if series else None
+    except ValueError:
+        moment = None
+    uid = series if moment is not None else key
+    return (None if uid.startswith("sha256:") else uid), moment
+
+
+def organizer_first(
+    attendees: Iterable[ParsedAttendee], organizer: str, *, name: str = ""
+) -> tuple[ParsedAttendee, ...]:
+    """Return a source's attendees with ``organizer`` first, as the event's one ``organizer`` attendee.
+
+    A source gives its organizer's address (and ``name``) beside its raw attendee
+    list. The organizer carries the response it is listed with, else accepted, and
+    its listed name when ``name`` is blank; its listed entries fold into it. Other
+    entries stay as given: ``CalendarEventManager.prepare`` collapses addresses that
+    normalize alike (``EventAttendee.collapse``, the stronger role and answer).
+    """
+
+    listed = [attendee for attendee in attendees if attendee.address]
+    if not organizer:
+        return tuple(listed)
+    own = [attendee for attendee in listed if attendee.address.lower() == organizer.lower()]
+    first = own[0] if own else None
+    return (
+        ParsedAttendee(
+            address=organizer,
+            role=AttendeeRole.ORGANIZER,
+            response=first.response if first is not None else AttendeeResponse.ACCEPTED,
+            display_name=name or (first.display_name if first is not None else ""),
+        ),
+        *(attendee for attendee in listed if attendee.address.lower() != organizer.lower()),
+    )
+
+
 def normalized_address(address: str) -> str:
     """Return the ``parties.Handle`` owner's normalized form of an attendee address, ``""`` for none."""
 
@@ -256,7 +300,7 @@ def event_from_payload(payload: Mapping[str, Any]) -> ParsedEvent:
     )
 
 
-def series_instances(
+def cancelled_instances(
     event: ParsedEvent, uid: str, excluded: Iterable[datetime], *, calendar_zone: str
 ) -> list[tuple[str, ParsedEvent]]:
     """Validate a parsed master's rule, then return its cancelled instances at ``excluded`` (its ``EXDATE``s).
@@ -387,7 +431,7 @@ class CalendarBackend(BridgeImpl, HttpClientMixin):
         """Re-read the requested identities, each once, a missing one as a tombstone (integrate's identity reads)."""
 
         if stream.key == CALENDARS_STREAM:
-            remotes = {remote.key: remote.payload() for remote in self.discover()}
+            remotes = {remote.key: remote.payload() for remote in self._listed_calendars(stream)}
             payloads: Mapping[str, Any] = {key: remotes.get(key) for key in keys}
         else:
             payloads = self.read_events(stream, keys)
@@ -397,10 +441,23 @@ class CalendarBackend(BridgeImpl, HttpClientMixin):
         """Return the keys the source serves now, in key order after ``after``: integrate's absence sweep reads them."""
 
         if stream.key == CALENDARS_STREAM:
-            keys: Iterable[str] = (remote.key for remote in self.discover())
+            keys: Iterable[str] = (remote.key for remote in self._listed_calendars(stream))
         else:
             keys = self.event_keys(stream)
         return sorted(key for key in set(keys) if after is None or key > after)
+
+    def _listed_calendars(self, stream: Any) -> list[ParsedCalendar]:
+        """Return the calendars the source lists for a sweep; an empty list while calendars are linked confirms nothing.
+
+        A listing that comes back empty is not evidence that every calendar went (an
+        outage, a revoked grant): the sweep stops, transiently, rather than count them
+        all absent.
+        """
+
+        remotes = self.discover()
+        if not remotes and stream.links.observing().exists():
+            raise IntegrationError("The calendar list came back empty; the next sync reads it again.", transient=True)
+        return remotes
 
     def admit_credential(self, credential: Any) -> None:
         """Refuse a credential this backend cannot use, raising ``ValidationError`` on ``credential``.
@@ -682,32 +739,38 @@ class CalendarBackend(BridgeImpl, HttpClientMixin):
         )
         return ApplyResult(target=event, mapped_payload=self._projection(event))
 
-    def on_absent(self, stream: Any, links: Sequence[Any]) -> None:
+    def on_absent(self, stream: Any, links: Sequence[Any]) -> dict[Any, ApplyResult] | None:
         """Apply integrate's absence verdicts: a tombstoned record is gone from the source.
 
         An unavailable record keeps its row until the stream's absence threshold
         tombstones it. A tombstoned calendar withdraws the identity its source stated;
         a tombstoned event is withdrawn as a removed record is (:meth:`apply_record`),
         under the calendar's lock first. The events of a retired stream (its calendar
-        stopped observing) arrive here too.
+        stopped observing) arrive here too. Each withdrawal is returned as its link's
+        evidence, so integrate records it as the base and a record that comes back
+        applies again.
         """
 
         gone = [link for link in links if link.status == LinkStatus.TOMBSTONE]
         if stream.key == CALENDARS_STREAM:
             for link in gone:
                 link.withdraw_statements()
-            return
+            # The source no longer states the calendar's identity; its row stays.
+            return {link.pk: ApplyResult(mapped_payload=None) for link in gone}
         calendar = self._container_calendar(stream)
         if not gone or calendar is None:
-            return
+            return None
         calendar.lock_subject()
         self._require_subscribed()
         rows = apps.get_model("calendar", "CalendarEvent").objects.linked(
             stream, [link.external_key for link in gone], lock=True
         )
+        withdrawn: dict[Any, ApplyResult] = {}
         for link in gone:
             if (event := rows.get(link.external_key)) is not None:
-                event.withdraw(link)
+                kept = event.withdraw(link)
+                withdrawn[link.pk] = ApplyResult(target=kept, mapped_payload=self._projection(kept))
+        return withdrawn
 
     def _subscribed(self) -> bool:
         """Whether this source is still subscribed, read fresh from its row."""

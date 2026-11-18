@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Iterator, Sequence
+from collections.abc import Iterable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from typing import TYPE_CHECKING, Any, ClassVar, Literal
 
@@ -179,8 +179,17 @@ class BridgeImpl(IntegrationImpl):
     def on_revalidated(self, stream: Any, links: Sequence[Any]) -> None:
         """Restore native projection visibility after unchanged-row revalidation."""
 
-    def on_absent(self, stream: Any, links: Sequence[Any]) -> None:
-        """Withdraw native projection visibility when absence changes link status."""
+    def on_absent(self, stream: Any, links: Sequence[Any]) -> Mapping[Any, ApplyResult] | None:
+        """Withdraw native projection visibility when absence changes link status.
+
+        Return the applied evidence of each tombstoned link whose local projection
+        the withdrawal changed, by link primary key: the driver records it as that
+        link's applied base with the tombstone, as it records a page tombstone's
+        ``ApplyResult``, so a record that returns reads as a remote change, never as a
+        local one. ``None`` (the default) records nothing.
+        """
+
+        return None
 
     def finish_page(self, stream: Any, page: StreamPage, outcomes: Sequence[ApplyResult]) -> None:
         """Finish domain batch relationships before the page cursor commits.
