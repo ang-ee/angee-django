@@ -110,7 +110,12 @@ class RecordRefField(fields.Field):
 
 
 class XrefForeignKeyWidget(XrefWidgetMixin, widgets.ForeignKeyWidget):
-    """Resolve ``<addon>.<xref>`` foreign keys through the ledger."""
+    """Resolve ``<addon>.<xref>`` foreign keys through the ledger.
+
+    The native ``field`` names the related model's column the foreign key
+    stores (``AngeeResource.get_fk_widget`` binds the relation's
+    ``target_field``): the primary key, or a ``to_field`` column.
+    """
 
     def clean(
         self,
@@ -118,13 +123,13 @@ class XrefForeignKeyWidget(XrefWidgetMixin, widgets.ForeignKeyWidget):
         row: Mapping[str, Any] | None = None,
         **kwargs: Any,
     ) -> Any:
-        """Return the target object or primary key for one xref value."""
+        """Return the target object, or the column its foreign key stores for the ``_id`` attribute."""
 
         del row, kwargs
         if value in (None, ""):
             return None
         target = self.resolve_field_target(value)
-        return target.pk if self.key_is_id else target
+        return getattr(target, self.field) if self.key_is_id else target
 
 
 class XrefManyToManyWidget(XrefWidgetMixin, widgets.ManyToManyWidget):

@@ -117,11 +117,16 @@ class AngeeResource(resources.ModelResource):
 
     @classmethod
     def get_fk_widget(cls, field: Any) -> functools.partial[Any]:
-        """Return the foreign-key widget factory: model labels for content types, xrefs otherwise."""
+        """Return the foreign-key widget factory: model labels for content types, xrefs otherwise.
+
+        An xref widget is bound to the column the relation targets, so a
+        ``to_field`` foreign key stores and exports that column, not the primary key.
+        """
 
         model = get_related_model(field)
-        widget = ContentTypeForeignKeyWidget if model is ContentType else XrefForeignKeyWidget
-        return functools.partial(widget, model=model)
+        if model is ContentType:
+            return functools.partial(ContentTypeForeignKeyWidget, model=model)
+        return functools.partial(XrefForeignKeyWidget, model=model, field=field.target_field.attname)
 
     @classmethod
     def get_m2m_widget(cls, field: Any) -> functools.partial[Any]:
@@ -636,7 +641,7 @@ class AngeeResource(resources.ModelResource):
         """Return one condition value normalized for model-field comparison."""
 
         if isinstance(field, models.ForeignKey) and isinstance(value, models.Model):
-            value = value.pk
+            value = getattr(value, field.target_field.attname)
         return field.get_prep_value(value)
 
     def _unique_adoption_field(
