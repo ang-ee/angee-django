@@ -75,7 +75,7 @@ jobs:
       - name: Seed the framework source with this commit
         run: |
           cache="$STAGING_ROOT/sources/angee"
-          git clone --quiet "$GITHUB_WORKSPACE" "$cache"
+          git -c advice.detachedHead=false clone --quiet "$GITHUB_WORKSPACE" "$cache"
           git -C "$cache" fetch --quiet "$GITHUB_WORKSPACE" HEAD
           git -C "$cache" checkout --quiet -B main FETCH_HEAD
           git -C "$cache" remote set-url origin https://github.com/ang-ee/angee-django.git
