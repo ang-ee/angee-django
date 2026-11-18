@@ -264,7 +264,11 @@ read.assert_ceiling(statements=10)
 ```
 
 A ceiling is the measured statement count; generated SQL text has no size budget,
-and its shape is asserted with the classifiers above. A change that lowers a cost
+and its shape is asserted with the classifiers above. `read.repeated` counts the
+statements beyond the first of each statement text, bound values apart, and
+`assert_ceiling(statements=..., repeated=...)` pins it: a lookup issued once per row
+and a read asked twice both repeat a text, which a statement count cannot tell from
+a new read. A change that lowers a cost
 lowers its ceiling in the same change; a rise is a regression to fix, never a reason
 to raise the ceiling. Assert the rows a read returns beside its ceiling, so a read
 that loses rows cannot pass. The

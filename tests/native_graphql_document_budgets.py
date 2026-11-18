@@ -363,6 +363,19 @@ BUDGETS = {
 }
 
 
+# document: statements beyond the first of each statement text, for either actor. Every
+# other read issues each text once. A repeat is a lookup issued per row or a read asked twice.
+REPEATED = {
+    # The senders and the reply parents' senders each read the same parties, their field
+    # gates and their avatar handles.
+    "transcript": 3,
+    # Two bypass audit rows, the user read twice and one field-gate probe twice.
+    "person": 3,
+    # The MIME type is read twice.
+    "related": 1,
+}
+
+
 # SELECT count and total planner allocation rounded up to MiB, measured on PostgreSQL 17,
 # the CI server, with REBAC 0.33.1: person allocates 496,957 KiB across 19 SELECTs (ceil =
 # 486 MiB; its two audit INSERTs keep the 21-statement document ceiling), projects 150,705
@@ -567,7 +580,7 @@ class ConsoleDocumentBudgetTests(TransactionTestCase):
                     measure_graphql_document(schema, document, variables, actor=actor)
                     read = measure_graphql_document(schema, document, variables, actor=actor)
                     self.assertEqual(ROWS[name](read.data), rows)
-                    read.assert_ceiling(statements=statements)
+                    read.assert_ceiling(statements=statements, repeated=REPEATED.get(name, 0))
 
     def test_member_reads_planner_memory(self):
         """Budget every SELECT planned by the member's person, projects and inbox selection documents."""
