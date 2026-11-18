@@ -661,6 +661,9 @@ jobs:
           fi
           pnpm install --frozen-lockfile
           pnpm --config.verify-deps-before-run=false --dir web exec angee-web-codegen --runtime ../runtime --web-root .
+      # The framework's packages job checks its packages hermetically, so the
+      # composition checks fragments only. Each Vitest run sizes its worker pool
+      # to the whole runner, so fragments test one package at a time.
       - name: Typecheck and test all fragments against the composition
         if: ${{ matrix.group == 1 }}
         working-directory: stack
@@ -668,12 +671,12 @@ jobs:
           CONSUMER_PATH: ${{ inputs.consumer-path }}
         run: |
           if [ -n "$CONSUMER_PATH" ]; then
-            pnpm -r --fail-if-no-match --filter "./workspaces/src/$CONSUMER_PATH/src/**" typecheck
-            pnpm -r --fail-if-no-match --filter "./workspaces/src/$CONSUMER_PATH/src/**" test
+            fragments="./workspaces/src/$CONSUMER_PATH/src/**"
           else
-            pnpm -r typecheck
-            pnpm -r test
+            fragments="!./workspaces/src/angee/packages/**"
           fi
+          pnpm -r --fail-if-no-match --filter "$fragments" typecheck
+          pnpm -r --fail-if-no-match --workspace-concurrency=1 --filter "$fragments" test
       - name: Pytest the bridge source contracts
         if: ${{ inputs.addons-profile == 'full' && matrix.group == 1 }}
         working-directory: stack
