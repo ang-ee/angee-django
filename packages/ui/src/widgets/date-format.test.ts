@@ -13,6 +13,7 @@ import {
   formatRelativeTime,
   formatTime,
   formatTimeInput,
+  isStorageDate,
   setHumanDateLocale,
   valueLabel,
 } from "./date-format";
@@ -134,6 +135,13 @@ describe("date formatting", () => {
     expect(formatDateStorage(date)).toBe("2026-06-18");
     expect(formatDateStorage(null)).toBeNull();
     expect(formatTimeInput(date)).toBe("09:07");
+  });
+
+  test("a storage date is a bare calendar day, never an instant", () => {
+    expect(isStorageDate("2026-11-20")).toBe(true);
+    for (const value of ["2026-11-20T00:00:00Z", "2026-11-20T00:00", "2026-1-2", "20261120", "", null, 20261120]) {
+      expect(isStorageDate(value)).toBe(false);
+    }
   });
 
   test("a GraphQL time of day round-trips through the native time control", () => {

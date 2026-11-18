@@ -20,6 +20,8 @@ export type DateFormatValue = DateWidgetValue | number | undefined;
  * @reason Format utility: converts data to display or storage text.
  */
 export const DATE_STORAGE_FORMAT = "yyyy-MM-dd";
+/** A calendar day as storage, a date picker and a calendar anchor write it ({@link DATE_STORAGE_FORMAT}). */
+const STORAGE_DATE = /^\d{4}-\d{2}-\d{2}$/;
 /**
  * A picked wall time with the browser's UTC offset ("2026-11-20T10:00:00+09:00"):
  * an instant, which a server in any zone reads as the moment the viewer meant.
@@ -51,12 +53,22 @@ export function dateFromValue(value: DateFormatValue): Date | null {
 /**
  * Parse any row/display value to a valid `Date`, or null for non-date values.
  * String values use ISO-8601 by design.
+ * @kind null
+ * @reason Format utility: converts data to display or storage text.
  */
 export function dateFromUnknown(value: unknown): Date | null {
   if (isDate(value) || typeof value === "number" || typeof value === "string") {
     return dateFromValue(value);
   }
   return null;
+}
+
+/** Whether a value is a calendar day in its storage form ("2026-11-20"), with no time and no offset.
+ * @kind null
+ * @reason Format utility: converts data to display or storage text.
+ */
+export function isStorageDate(value: unknown): value is string {
+  return typeof value === "string" && STORAGE_DATE.test(value);
 }
 
 /** The raw value as a stable title/string (the ISO form for a `Date`).

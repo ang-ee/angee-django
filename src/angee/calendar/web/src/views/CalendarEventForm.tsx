@@ -1,5 +1,7 @@
 import * as React from "react";
-import { Field, Form, Group, calendarDay, dateFromValue, formatDateStorage, registerForm, type RegisteredFormProps } from "@angee/ui";
+import {
+  Field, Form, Group, calendarDay, dateFromUnknown, formatDateStorage, isStorageDate, registerForm, type RegisteredFormProps,
+} from "@angee/ui";
 
 import { useCalendarT } from "../i18n";
 import { EVENT_MODEL } from "../resources";
@@ -8,17 +10,14 @@ import { CALENDAR_PICKER_WIDGET, calendarPickerSelection, useWritableCalendarIds
 // The picker renders the calendar itself, so the field names what it reads; `isReplica` reads `is_writable`.
 const CALENDAR_SELECTION = [...calendarPickerSelection("calendar"), "calendar.is_writable"];
 
-/** A day as a date picker writes it, with no time and no offset. */
-const DAY = /^\d{4}-\d{2}-\d{2}$/;
-
 /**
  * The day an all-day bound names. A picked day is itself; a stored bound is the instant of a midnight
  * in the event's effective zone (`effective_timezone`: its own, its calendar's or the project's), read
  * as its date there, so every viewer sees the event's own days whichever zone the browser is in.
  */
 export function allDayBoundDay(value: unknown, zone: unknown): unknown {
-  if (typeof value !== "string" || DAY.test(value)) return value;
-  const date = dateFromValue(value);
+  if (typeof value !== "string" || isStorageDate(value)) return value;
+  const date = dateFromUnknown(value);
   return date ? calendarDay(date, typeof zone === "string" && zone ? zone : undefined) : null;
 }
 
@@ -45,9 +44,7 @@ const endAsDay = asDay("end");
  */
 export function allDayBounds(allDay: unknown, values: Readonly<Record<string, unknown>>): Record<string, unknown> | null {
   // Off, a bound is still the day it names; on, it is the instant the viewer sees.
-  const read = (value: unknown) => dateFromValue(
-    (allDay === true ? value : allDayBoundDay(value, values.effective_timezone)) as string | null | undefined,
-  );
+  const read = (value: unknown) => dateFromUnknown(allDay === true ? value : allDayBoundDay(value, values.effective_timezone));
   const start = read(values.start);
   const end = read(values.end);
   if (!start || !end) return null;
