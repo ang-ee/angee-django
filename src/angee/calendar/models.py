@@ -1066,16 +1066,17 @@ class CalendarEvent(
         return min(moment_after(since, self.overlap_horizon) or _LATEST, _LATEST)
 
     def _refuse_unreadable_series(self) -> None:
-        """Refuse an open-ended series a read would already refuse: save and read agree (R-R2).
+        """Refuse an open-ended series past the save-time cap (R-R1).
 
-        A read walks the series from its start; past the recurrence owner's cap
-        before now plus :attr:`overlap_horizon`, every read of it is refused, so
-        saving it is refused too.
+        Counted from the series' start to now plus :attr:`overlap_horizon` against
+        the recurrence owner's cap (``Recurrence.validate(through=…)``). A read is
+        re-anchored at its window (R-R3), so it never refuses for the series' age;
+        this cap is the series' own length, held at save.
         """
 
         horizon = self.horizon_end(max(timezone.now(), self.start))
         try:
-            Recurrence(self.recurrence).occurrences(self.start, horizon, horizon, zone=self.expansion_zone)
+            Recurrence(self.recurrence).validate(dtstart=self.start, zone=self.expansion_zone, through=horizon)
         except ValidationError as error:
             raise ValidationError({"recurrence": error.error_list}) from None
 
@@ -1562,6 +1563,16 @@ class CalendarSource(Bridge, inherits="integrate.Integration"):
             )
             .first()
         )
+
+    def admit_credential(self, credential: Any) -> None:
+        """Admit only a credential this source's backend uses (``CalendarBackend.admit_credential``).
+
+        Integrate asks on every attachment, so neither a connect, the console's
+        credential patch nor a re-attachment points a source at a credential its
+        backend would send to another vendor.
+        """
+
+        self.backend.admit_credential(credential)
 
     @classmethod
     def admit_subscription(cls, owner: Any) -> None:

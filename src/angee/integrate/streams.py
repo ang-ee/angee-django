@@ -792,9 +792,16 @@ def _push_candidates(
                 yield candidate, link
 
 
-def read_stream_keys(adapter: BridgeImpl, stream: Any, keys: Sequence[str]) -> tuple[RecordChange, ...]:
-    """Read a bounded identity set and enforce the declared adapter contract."""
-    records = tuple(islice(adapter.read_keys(stream, keys), len(keys) + 1))
+def read_stream_keys(
+    adapter: BridgeImpl, stream: Any, keys: Sequence[str], *, deadline: float | None = None
+) -> tuple[RecordChange, ...]:
+    """Read a bounded identity set and enforce the declared adapter contract.
+
+    ``deadline`` is the sync's, when the driver holds one: the adapter reads it as
+    :attr:`BridgeImpl.deadline` for this read only.
+    """
+    with adapter.until(deadline):
+        records = tuple(islice(adapter.read_keys(stream, keys), len(keys) + 1))
     if (
         any(not isinstance(record, RecordChange) for record in records)
         or len(records) != len(keys)
@@ -861,7 +868,8 @@ def reconcile_stream(stream: Any, adapter: BridgeImpl, *, page_bound: int = 100,
                 reconcile_state=state,
             ).stream
         elif state["phase"] == "enumerate":
-            keys = tuple(islice(adapter.enumerate_keys(locked, after=state["after"]), page_bound))
+            with adapter.until(deadline):
+                keys = tuple(islice(adapter.enumerate_keys(locked, after=state["after"]), page_bound))
             if any(not isinstance(key, str) or not key for key in keys) or len(keys) != len(set(keys)):
                 raise AdapterContractError("enumerate_keys must yield unique nonempty external keys.")
             if state["after"] in keys:
@@ -870,7 +878,9 @@ def reconcile_stream(stream: Any, adapter: BridgeImpl, *, page_bound: int = 100,
             if not keys:
                 next_state["phase"] = "roots"
             if identity_reads and keys:
-                page = StreamPage(read_stream_keys(adapter, locked, keys), original_cursor, exhausted=False)
+                page = StreamPage(
+                    read_stream_keys(adapter, locked, keys, deadline=deadline), original_cursor, exhausted=False
+                )
                 locked = _apply_page(
                     locked,
                     adapter,
@@ -928,8 +938,12 @@ def begin_stream_cycle(
     *,
     page_bound: int = 100,
     force_apply: frozenset[str] = frozenset(),
+    deadline: float | None = None,
 ) -> Any:
     """Re-read due replica identities, or request a logged baseline fallback.
+
+    ``deadline`` is the sync's, when the driver holds one; the identity read runs
+    against it (:func:`read_stream_keys`).
 
     Call once per cycle before advance_stream, outside any transaction. Adapters
     declaring supports_identity_reads return RecordChange observations through
@@ -988,7 +1002,7 @@ def begin_stream_cycle(
             if not keys:
                 return stream
             original_cursor = _validated_cursor(stream.cursor)
-        records = read_stream_keys(adapter, stream, tuple(sorted(keys)))
+        records = read_stream_keys(adapter, stream, tuple(sorted(keys)), deadline=deadline)
         return _apply_page(
             stream,
             adapter,
@@ -1053,7 +1067,7 @@ def _drain(bridge: Any, adapter: BridgeImpl, definition: StreamDefinition, deadl
             deadline=deadline,
         )
         stage = "rescan"
-        stream = begin_stream_cycle(stream, adapter)
+        stream = begin_stream_cycle(stream, adapter, deadline=deadline)
         landed, resets = 0, 0
         page_bound = max(1, int(bridge.config.get("sync_page_bound", 100)))
         exhausted = False

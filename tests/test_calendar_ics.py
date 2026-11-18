@@ -44,13 +44,13 @@ from angee.calendar_integrate_ics.backend import FEED_KEY, IcsCalendarBackend, I
 from angee.calendar_integrate_ics.connect import subscribe_calendar
 from angee.integrate.errors import IntegrationError
 from angee.integrate.states import LinkStatus
-from angee.integrate.streams import BridgeSyncError, advance_stream, sync_bridge
+from angee.integrate.streams import BridgeSyncError, advance_stream, read_stream_keys, sync_bridge
 from angee.integrate.testing.http import mock_transport
 from angee.integrate.testing.models import RecordLink, SyncStream
 from angee.jobs.celery import app as celery_app
 from angee.messaging.testing.models import Handle, Person
 from angee.scheduling.zones import get_zone_info
-from tests.conftest import Credential, create_user
+from tests.conftest import Credential, ExternalAccount, OAuthClient, create_user
 from tests.lock_waits import submit, wait_for_lock
 
 pytestmark = pytest.mark.django_db(transaction=True)
@@ -999,7 +999,7 @@ END:VEVENT"""
     assert perf_counter() - began < 30
 
 
-def test_a_far_recurrence_id_on_an_open_daily_series_is_refused_instead_of_walked(subscription: Subscription) -> None:
+def test_a_far_recurrence_id_on_an_open_daily_series_is_judged_by_its_own_window(subscription: Subscription) -> None:
     daily = """BEGIN:VEVENT
 UID:daily@example.test
 DTSTART:20260401T080000Z
@@ -1018,9 +1018,9 @@ END:VEVENT"""
 
     subscription.poll()
 
-    # The instance check walks at most the owner's cap from the series' start, then refuses.
-    assert subscription.failures() == {"daily@example.test#22000401T080000Z": ["invalid_record"]}
-    assert "daily@example.test" in subscription.events()
+    # R-R3: the instance check reads the period before the instance, not 174 years of history.
+    assert subscription.failures() == {}
+    assert subscription.events()["daily@example.test#22000401T080000Z"].title == "Far instance"
 
 
 @pytest.mark.parametrize(
@@ -1149,9 +1149,10 @@ def _make_unexpandable(event: Any, **columns: Any) -> None:
     ("columns", "window"),
     [
         pytest.param(
-            {"start": datetime(1995, 1, 1, 9, tzinfo=UTC), "end": datetime(1995, 1, 1, 10, tzinfo=UTC),
-             "recurrence": "FREQ=DAILY"},
-            (datetime(2026, 3, 1, tzinfo=UTC), datetime(2026, 4, 2, tzinfo=UTC)),
+            # A COUNT series is read from its start (its count is the cap's); this one passes it.
+            {"start": datetime(2000, 1, 1, 9, tzinfo=UTC), "end": datetime(2000, 1, 1, 10, tzinfo=UTC),
+             "recurrence": "FREQ=DAILY;COUNT=20000"},
+            (datetime(2050, 3, 1, tzinfo=UTC), datetime(2050, 4, 2, tzinfo=UTC)),
             id="series-too-long",
         ),
         pytest.param(
@@ -1179,8 +1180,8 @@ def test_a_row_the_calendar_cannot_expand_never_fails_a_read_or_another_save(
     # The read returns the other rows; the skipped one is noted once, at debug level.
     assert all(occurrence.title != "Berlin sync" for occurrence in shown)
     assert len([record for record in caplog.records if "cannot be expanded" in record.getMessage()]) == 1
-    if window[0].year == 2026:
-        assert {occurrence.title for occurrence in shown} >= {"Standup", "Launch"}
+    if window[0].year == 2050:
+        assert all(occurrence.title != "Berlin sync" for occurrence in shown)
     # A new event saved to the refusing calendar is judged against every other row.
     late = LAUNCH.replace("launch@example.test", "late@example.test").replace(
         "DTSTART:20260401T120000Z", "DTSTART:20260402T120000Z"
@@ -1193,7 +1194,7 @@ def test_a_row_the_calendar_cannot_expand_never_fails_a_read_or_another_save(
     assert subscription.failures() == {"clash@example.test": ["invalid_record"]}
 
 
-def test_saving_an_open_series_a_read_would_refuse_is_refused(subscription: Subscription) -> None:
+def test_saving_an_open_series_past_the_save_time_cap_is_refused(subscription: Subscription) -> None:
     old = """BEGIN:VEVENT
 UID:old@example.test
 DTSTART:19950101T090000Z
@@ -1386,12 +1387,12 @@ def test_each_parse_path_stops_at_the_sync_deadline(subscription: Subscription) 
     feed = ics_backend._read(_custom_zone_feed("-0500", "-0400").encode())
     with pytest.raises(IcsError, match="took too long"):
         ics_backend._Zones(feed, deadline=past).resolve("Custom Zone")
-    # An identity read keeps the deadline its cycle's streams() received.
+    # An identity read gets the deadline integrate holds, for that read only.
     reader = IcsCalendarBackend(CalendarSource.objects.sudo(reason="tests.ics").get(pk=subscription.source.pk))
     with system_context(reason="tests.ics"):
-        list(reader.streams(deadline=past))
         with pytest.raises(IcsError, match="took too long"):
-            reader.read_keys(subscription.stream(), ["launch@example.test"])
+            read_stream_keys(reader, subscription.stream(), ["launch@example.test"], deadline=past)
+    assert reader.deadline is None
 
 
 @pytest.mark.skipif(connection.vendor != "postgresql", reason="Real PostgreSQL row locks are required.")
@@ -1423,6 +1424,60 @@ def test_two_purges_racing_on_a_shared_credential_retire_it_exactly_once(
     # The second purge waited, saw both detaches, and retired it.
     with system_context(reason="tests.ics"):
         assert not Credential.objects.filter(pk=credential_id).exists()
+
+
+def test_an_old_open_series_is_read_by_its_window_not_its_history(subscription: Subscription) -> None:
+    subscription.poll()
+    with system_context(reason="tests.ics"):
+        # Stored before the save-time cap held it, as a legacy row would be.
+        _make_unexpandable(
+            subscription.events()["berlin@example.test"],
+            start=datetime(1995, 1, 1, 9, tzinfo=UTC),
+            end=datetime(1995, 1, 1, 10, tzinfo=UTC),
+            recurrence="FREQ=DAILY",
+        )
+        shown = CalendarEvent.objects.filter(calendar=subscription.calendar).occurrences(
+            _utc(2026, 3, 1), _utc(2026, 3, 8)
+        )
+
+    # R-R3: thirty years of history cost nothing; the week shows its seven days.
+    assert len([occurrence for occurrence in shown if occurrence.title == "Berlin sync"]) == 7
+
+
+def test_the_ics_backend_admits_only_a_static_token(subscription: Subscription) -> None:
+    owner = subscription.source.owner
+    with system_context(reason="tests.ics"):
+        source = CalendarSource.objects.get(pk=subscription.source.pk)
+        grant = Credential.objects.create_local_credential(
+            owner, kind="basic_auth", name="Not a feed", material={"username": "a", "password": "b"}
+        )
+        with pytest.raises(ValidationError, match="static token"):
+            source.admit_credential(grant)
+        source.admit_credential(source.credential)
+
+
+def test_a_credential_an_account_holds_survives_the_last_detach(
+    subscription: Subscription, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    subscription.poll()
+    monkeypatch.setattr(celery_app, "send_task", lambda name, **options: None)
+    with system_context(reason="tests.ics"):
+        credential = CalendarSource.objects.get(pk=subscription.source.pk).credential
+        provider = OAuthClient.objects.create(
+            slug="borrowed", display_name="Borrowed", client_id="borrowed-cid",
+            authorize_endpoint="https://provider.example/auth", token_endpoint="https://provider.example/token",
+        )
+        ExternalAccount.objects.create(
+            oauth_client=provider, owner=subscription.source.owner, external_id="borrowed", credential=credential
+        )
+        CalendarSource.objects.get(pk=subscription.source.pk).unsubscribe()
+
+    assert purge_unsubscribed_sources() == 6
+
+    # Only the account's own disconnect retires it; the purge only detached it.
+    with system_context(reason="tests.ics"):
+        assert Credential.objects.filter(pk=credential.pk).exists()
+        assert CalendarSource.objects.get(pk=subscription.source.pk).credential_id is None
 
 
 # --- poison input --------------------------------------------------------------

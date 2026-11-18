@@ -1012,15 +1012,30 @@ class CredentialManager[CredentialT: Credential](_CredentialManagerBase[Credenti
         transaction.on_commit(copy(credential).revoke_remote, robust=True)
 
     def unattached(self) -> models.QuerySet[Any]:
-        """Return the credentials no integration attaches, directly or as its discovery grant."""
+        """Return the credentials nothing holds: no integration attaches them, and no account is bound to them.
 
-        return self.filter(integrations__isnull=True, discovered_integrations__isnull=True)
+        An integration attaches a credential directly or as its discovery grant. An
+        account binds one either way round (``Credential.external_account``, or
+        ``ExternalAccount.credential``): only the account's own disconnect
+        (:meth:`disconnect_account`) retires such a credential, so an integration
+        that borrowed it (a calendar source on the user's connected account) never
+        retires it when it lets go.
+        """
+
+        bound = apps.get_model("integrate", "ExternalAccount")._base_manager.filter(credential__isnull=False)
+        return self.filter(
+            integrations__isnull=True,
+            discovered_integrations__isnull=True,
+            external_account__isnull=True,
+        ).exclude(pk__in=bound.values("credential_id"))
 
     def retire_unattached(self, credential: Any) -> bool:
         """Retire ``credential`` once nothing attaches it (:meth:`retire`); return whether it went.
 
         A credential shared by several integrations (two subscriptions to one feed
-        keep one) stays while any of them still attaches it. The credential row is
+        keep one) stays while any of them still attaches it, and one an account is
+        bound to stays for the account's own disconnect (:meth:`unattached`). The
+        credential row is
         locked first, inside the caller's transaction, so two callers that each
         detach one sharer serialize here: the second waits, sees both detaches, and
         retires it. An attach takes the same row's key-share lock, so it serializes
