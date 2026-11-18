@@ -140,6 +140,9 @@ export default function CalendarSurface({
         height="auto"
         dayMaxEvents={4}
         editable={Boolean(onEventDrop)}
+        // A drop keeps the occurrence's kind: `onEventDrop` hands over new bounds, never a switch
+        // between all day and timed, so FullCalendar withholds a drop across the all-day row.
+        eventAllow={(span, moving) => span.allDay === moving?.allDay}
         selectable={Boolean(onSelectRange)}
         selectMirror
         events={events}

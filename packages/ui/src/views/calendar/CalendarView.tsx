@@ -61,7 +61,9 @@ export interface CalendarViewProps {
   /**
    * Fires when an editable occurrence is rescheduled to new bounds — by drag or
    * by resize. It can never fire for a non-editable occurrence: the View
-   * withholds drag/resize for one. Return a promise to gate the change: the View
+   * withholds drag/resize for one. A drop keeps the occurrence's kind: the View
+   * withholds a drop that would turn an all-day occurrence timed or a timed one
+   * all day, which new bounds cannot carry. Return a promise to gate the change: the View
    * awaits it and reverts FullCalendar's optimistic move/resize if it rejects,
    * so a rejected server write never leaves the grid showing an unpersisted slot.
    */

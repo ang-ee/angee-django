@@ -56,6 +56,7 @@ interface EventDropArg {
 interface SurfaceProps {
   initialView: string;
   events: FcEvent[];
+  eventAllow?: (span: { allDay: boolean }, moving: { allDay: boolean } | null) => boolean;
   datesSet?: (arg: { start: Date; end: Date }) => void;
   select?: (arg: { start: Date; end: Date; allDay: boolean }) => void;
   eventDrop?: (arg: EventDropArg) => void;
@@ -179,6 +180,18 @@ describe("CalendarView", () => {
 
     expect(onEventDrop).toHaveBeenCalledWith(EDITABLE, start, end);
     expect(revert).not.toHaveBeenCalled();
+  });
+
+  test("a drop keeps the occurrence's kind: never between the all-day row and the time grid", async () => {
+    render(<CalendarView view="week" range={RANGE} occurrences={[EDITABLE]} onEventDrop={vi.fn()} />);
+    await screen.findByTestId("fc");
+    const allow = surface().eventAllow!;
+
+    expect(allow({ allDay: false }, { allDay: false })).toBe(true);
+    expect(allow({ allDay: true }, { allDay: true })).toBe(true);
+    // The reschedule seam carries bounds only, so a switch of kind is withheld at the grid.
+    expect(allow({ allDay: true }, { allDay: false })).toBe(false);
+    expect(allow({ allDay: false }, { allDay: true })).toBe(false);
   });
 
   test("reverts the optimistic change when the reschedule handler rejects", async () => {
