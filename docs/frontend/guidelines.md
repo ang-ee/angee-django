@@ -337,6 +337,11 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
   }}
   ```
 
+  `ANGEE_UI` is authored in the host's or the deployment's `settings.yaml`,
+  never the environment. It is a compiler input, so a change to it alone
+  recomposes on the stack's `compose --if-stale`
+  ([integration inputs](../composer.md#runtime-build-and-import)).
+
   [`selectApp`](../../packages/app/src/boot-app.tsx) takes `?app=<root id |
   apps name>`, else the hostname's `hosts` entry, else `shell.app`, else
   nothing; no choice is stored. A root id is the one-root app with the root's home, brand, theme and rail default.
@@ -381,7 +386,9 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
   Addon manifest tests call
   `expectValidBaseAddon(manifest)` from `@angee/app/testing` and keep only
   genuinely addon-specific assertions.
-- Route declarations are the only place a URL path is spelled. Menus name their
+- Route declarations are the only place a URL path is spelled. The sign-in URL is
+  the `auth.login` route's path: `createApp` reads it for its auth gates, the auth
+  provider and `useLoginPath`, and takes no separate login path. Menus name their
   target with `route:`; components resolve addon-local routes with
   `useRouteHref`, and resource-backed links use the runtime resource lookup.
   Cross-addon render/event links use the non-throwing route probe and disappear
@@ -1715,6 +1722,7 @@ the toolbar through `RecordChromeContext.toolbarHost`
 | `shell#drawers-right`, `shell#drawers-bottom` | non-modal drawers docked on that edge | `DockedDrawerContent` |
 | `auth.login#method` | sign-in methods on the login page | `ReactNode` |
 | `auth.login#password-help` | password help on the login page | `ReactNode` |
+| `auth.login#hero` | the login page's one hero, from a branding fragment; see [Login hero](#login-hero) | `LoginHeroContent` |
 
 The `form`, `resource` and `record` containers also take model addresses. The
 declarations are `FORM_CONTAINERS`, `RESOURCE_CONTAINERS`, `CHATTER_CONTAINERS`
@@ -1722,6 +1730,57 @@ and `SHELL_CONTAINERS` in `@angee/ui` and `LOGIN_CONTAINERS` in `@angee/app`.
 Addons own theirs, such as `messaging.channels#toolbar`,
 `parties.overview#items`, `appearance.settings#tools`, `decisions#origin`
 and `iam#access-visibility`.
+
+### Login hero
+
+A theme or branding fragment owns the sign-in presentation by declaring the one
+child of `auth.login#hero`; installing the fragment is enough, and a host's
+`main.tsx` keeps mounting `IamLoginPage` on `auth.login`:
+
+```tsx
+export default defineBaseAddon({
+  id: "theme.acme",
+  themes: [defineThemeContribution({ definition: themes[0] })],
+  containers: {
+    "auth.login#hero": {
+      "theme.acme.login-hero": {
+        content: { render: AcmeLoginHero, presentation: "full-bleed", backgroundImageUrl: acmeBackdropUrl },
+      },
+    },
+  },
+});
+```
+
+[`LoginPage`](../../packages/app/src/auth/LoginPage.tsx) renders it on every
+page composing it (`/login`, `/sign-in-link`), on branded and unbranded hosts. An
+explicit `hero` prop wins: a node replaces the contribution and `null` removes
+it; with neither, an unbranded host shows the framework hero. `presentation:
+"full-bleed"` puts a backdrop behind the whole page with the card floating over
+it; unset, the hero takes its own column beside the card. A contribution brings
+its own presentation and `backgroundImageUrl`. The page's `presentation` and
+`backgroundImageUrl` props serve only the page's own hero (the `hero` prop or the
+framework's), so IAM's rotating backdrops never show behind a contributed hero.
+
+The hero renders at every width: beside the card from `lg` up, stacked above it
+on small screens. `LoginPage` passes it no props and no viewport hint; the hero
+picks its own responsive assets (a lighter image or video on phones) through
+ordinary CSS or media queries. Below `lg` the hero's wrapper has no height of its
+own, so a hero built to fill the `lg` column (`absolute inset-0`) collapses there:
+the hero gives itself a small-screen height, for example
+`relative h-[34svh] lg:absolute lg:inset-0 lg:h-auto`. The backdrop image is one
+URL that covers the page at every width.
+
+The container is unique per address, as a model's card is: two installed
+contributors fail at boot ("… are both its one child"). Keep one by removing the
+other from a layer that depends on both, usually the deployment's
+`ANGEE_UI.containers`:
+
+```yaml
+ANGEE_UI:
+  containers:
+    "auth.login#hero":
+      "theme.other.login-hero": { remove: true }
+```
 
 ### Context aside
 

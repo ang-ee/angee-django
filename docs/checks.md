@@ -367,6 +367,7 @@ Management checks use `--no-sync` so invoking one cannot install or rebuild firs
 |---|---|---|
 | Install for development | `uv sync --locked` | Installs native editable distributions on a stopped/new host; does not compose |
 | Compose models and artifacts | `uv run --no-sync python manage.py compose` | Fresh build-mode process through the native launcher; no database provisioning |
+| Compose only when stale | `uv run --no-sync python manage.py compose --if-stale` | The stack's compose job; skips when the receipt matches the snapshot digest and owned-file bytes, without re-rendering, so it sees only [declared integration inputs](composer.md#runtime-build-and-import) |
 | Install for production | `uv sync --locked --no-editable` | New/stopped host; installs distributions, does not compose |
 | Build distribution wheels | `uv build --wheel --all-packages` | Native workspace builds; composition is a separate job |
 | Provision database state | `uv run --no-sync python manage.py provision` | Compiler-owned native history checks, migrations, hooks and readiness record |

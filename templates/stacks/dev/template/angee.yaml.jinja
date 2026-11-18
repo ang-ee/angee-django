@@ -2,6 +2,9 @@
 {# variables, then include the one shared manifest body. The include path resolves #}
 {# from the template root that holds copier.yml, as Copier resolves includes. #}
 {% set stack_flavor = "framework" %}
+{% set stack_template = "stacks/dev" %}
+{# Storybook and the Playwright services belong to framework development. #}
+{% set dev_tools = "true" %}
 {% set container_project_dir = "/app" %}
 {% set ingress_domain_value = ingress_domain %}
 {# The OPERATOR owns path-input translation (copierx.ResolvePathInputs): every render #}

@@ -10,6 +10,104 @@ live in code docstrings.
 
 ## Unreleased — shared addon contracts, native embeddings and graph retrieval
 
+- Addons require django-compose 0.1.0.dev13, whose snapshot digest covers each
+  addon's resolved path. A host that changes its sync from `--no-editable` to
+  editable, or moves a source checkout, now recomposes on `compose --if-stale`;
+  before, the receipt stayed current while the web manifest's roots named the old
+  location, and the frontend build failed on a missing addon entry.
+
+- A Docker-mode framework stack serving production on `localhost` comes up: the
+  Caddy `frontend` script no longer opens with a blank line, which the operator
+  re-saved as an unparsable `|4-` block once it had cut the `src` workspace
+  (`Stack prepare: yaml: … did not find expected '-' indicator`).
+
+- The shared Celery worker runs a bounded prefork pool: `celery_concurrency`
+  (default 2) in `stacks/dev`, `stacks/local` and `stacks/staging`. It ran
+  Celery's default of one child per CPU, each loading the whole application,
+  which held 10 GiB on a 32-core staging host. The queue worker keeps its own
+  thread pool.
+
+- A framework stack serving production (`stacks/dev` with `serve_mode:
+  production`, `stacks/staging`) installs its slots editable, so
+  `frontend-build` reads each fragment from its slot. A non-editable install
+  copied the addons into site-packages, where the fragments' `tsconfig.json`
+  chain (`../../tsconfig.base.json`) and their pnpm dependencies do not exist,
+  and the build failed with `Tsconfig not found`. `stacks/local` still installs
+  non-editable; its frontend builds from the baked web image. An existing stack
+  drops `--no-editable` from its `py-sync` command and reruns the chain.
+
+- A change to `ANGEE_UI` alone now recomposes. `angee.web` renders it into
+  `runtime/web/manifest.json` but never declared it a compiler input, so
+  `compose --if-stale`, the stack's compose job, found the receipt current and
+  kept the old deployment layer while `compose --check` reported it stale. The
+  web autoconfig appends `ANGEE_UI` to `COMPOSE_FINGERPRINT_SETTINGS`. Like
+  every structural input, `ANGEE_UI` is authored YAML: a deployment that set it
+  through `ANGEE_UI` or `YAMLCONF_ANGEE_UI` in the environment is refused and
+  moves it to its `settings.yaml`. GraphQL had the same gap for the SDL: its
+  autoconfig now appends `STRAWBERRY_DJANGO` and `ANGEE_GRAPHQL_RESOURCE_FILTERS`,
+  so a host override of either alone recomposes, and neither comes from the
+  environment.
+
+- The sign-in card's "or use password" divider shows only beside a sign-in method
+  that renders. A contributed method that renders nothing, such as the OIDC
+  method with no configured connection, no longer leaves an orphan divider above
+  the password form.
+
+- The Django images run as the owner of the mounted project, so a Docker-mode
+  stack works on a Linux host whose stack root does not belong to uid 1000. The
+  entrypoint gives its `angee` user the project's uid and gid before dropping
+  privileges, as the operator image already does; a root-owned project keeps the
+  image's own user. Before, `py-sync` failed with `Permission denied` creating
+  `caches/uv`, and runtime files were left owned by uid 1000.
+
+- A Docker-mode framework stack (`stacks/dev` with `runtime_mode: docker`,
+  `stacks/staging`) installs its JS dependencies with the framework's pnpm. The
+  stack root's `package.json` now declares `packageManager: pnpm@11.1.3`, the
+  framework's own. Without it Corepack in the `deps` container downloaded the
+  latest pnpm, and pnpm 12 refused the framework's patched dependencies
+  (`ERR_PNPM_INVALID_PATCH` on `nuqs-2.10.1.patch`). An existing stack adds the
+  line to its root `package.json`, or re-renders with `stack update --template`.
+
+- A theme or branding fragment owns the sign-in presentation through
+  `auth.login#hero`, a framework container with one child per host. Installing
+  the fragment is enough: `LoginPage` renders the hero on `/login` and
+  `/sign-in-link`, so a host keeps the template's `main.tsx` that mounts
+  `IamLoginPage`, and a rendered host needs no re-render or new answer. The
+  fragment declares:
+
+  ```tsx
+  containers: {
+    "auth.login#hero": {
+      "theme.acme.login-hero": {
+        content: { render: AcmeLoginHero, presentation: "full-bleed", backgroundImageUrl: acmeBackdropUrl },
+      },
+    },
+  },
+  ```
+
+  An explicit `hero` prop still wins. The hero renders at every width, stacked
+  above the card on small screens; it picks its own responsive assets through CSS
+  or media queries, with no viewport hint from the page. `presentation:
+  "full-bleed"` (also a `LoginPage` prop) puts the backdrop and the floating card
+  behind any hero, so a branded host reaches the layout that only the unbranded
+  framework hero had. A host's hero is no longer hidden below `lg`. A contributed
+  hero brings its own `backgroundImageUrl`; the page's prop serves only the
+  page's own hero, so IAM's rotating backdrops stay with the framework hero. Two
+  installed contributors fail at boot; keep one by `remove: true` on the other
+  from the deployment's `ANGEE_UI.containers`.
+
+  **Host upgrade:** a host that hand-edited `main.tsx` to mount its own branded
+  page restores the template's `host-auth` route on `IamLoginPage` (revert the
+  edit, or `stack update --template`), drops the fragment's package from its own
+  `package.json` and relocks at the stack root; the fragment declares the hero
+  as above. A kept hand edit still works, since its explicit `hero` wins.
+
+- The `auth.login` route's declaration is the one spelling of the sign-in URL.
+  `createApp` reads its path for the auth gates, the auth provider and
+  `useLoginPath`, and its `loginPath` input is removed: a host that passed it
+  drops it and declares `auth.login` at that path. `DEFAULT_LOGIN_PATH` remains
+  only for a runtime that composes no `auth.login` route.
+
 - A calendar source can publish local calendars out. `CalendarBackend.direction`
   (`PULL` by default) declares which way a source's streams sync; a `PUSH`
   backend's calendars and events streams are push streams, never swept.
@@ -195,6 +293,31 @@ live in code docstrings.
   a page opens when neither `?app=` nor its `hosts` entry selects one, so a
   product's settings can open its app without knowing the deployment's host
   names. Both are checked at boot like `hosts`.
+
+- `stacks/staging` renders a remote, public, container host in one command from
+  repositories, with no project repository carried to the machine:
+  `angee init <dir> -t staging --repository <repo> --extra-source <repo>`. It is
+  `stacks/dev`'s Docker mode with production serving fixed, no Storybook or
+  Playwright, a first administrator and a `makemigrations` job that authors the
+  host's own migration history, so its data is disposable. A repository given by
+  SSH URL is fetched with its own deploy key, the required secret
+  `deploy-key-<name>`; `settings_file` names a repository's settings file, loaded
+  as the final `YAMLCONF_CONFFILE` layer. It needs angee 0.28.0 or later.
+  [Templates](templates/README.md#deploy-a-staging-host-in-one-command).
+- Stack templates read three wrapper-set flags instead of the flavor:
+  `bootstrap_admin`, `dev_tools` and `author_history`; `template.active` comes
+  from the wrapper's `stack_template`. `stacks/dev` and `stacks/local` render the
+  same manifests as before, with two exceptions that apply to both. `py-sync`
+  authors a missing `uv.lock` before its locked sync, so a freshly rendered host
+  no longer stops there. A production render behind a public `ingress_domain`
+  sets `YAMLCONF_DEBUG` to false and `YAMLCONF_ALLOWED_HOSTS` to the domain, its
+  aliases and the compose-internal names; it served the project's `DEBUG: true`
+  and wildcard hosts before.
+- `projects/web` takes `repositories` (a requirement and an editable source per
+  repository slot, in a framework workspace only) and `roots` (root apps appended
+  to `INSTALLED_APPS`). The `src` workspace template declares
+  `_angee.source_slot`, so the operator cuts one slot per stack source marked
+  `slot: true`.
 
 - `storage/file#write_granted` holds only the fragments' record arms; `write`
   derives the drive, folder, inherited-owner, draft-owner and admin arms itself,
