@@ -138,7 +138,11 @@ outside the current year. Date and datetime list cells use `density: "list"`
 with the full value on hover; record reads retain full labels.
 `formatTime` also reads a GraphQL `Time` value (`HH:MM[:SS]`, no zone) as
 written; the `time` widget edits it through the native time control, whose
-`HH:MM` value is the wire input.
+`HH:MM` value is the wire input. The `datetime` widget edits a moment on the
+viewer's clock and stores it with the viewer's UTC offset
+(`formatDateTimeStorage`), so a server in any zone reads the instant meant;
+`formatDateStorage(date, timeZone)` reads the day an instant falls on in a
+zone, such as an all-day bound's day in the zone that owns its dates.
 `formatDateRange`, `formatRelativeTime`, and
 `formatDuration` cover ranges, activity labels, and compact or full units.
 The app runtime i18n provider sets the shared formatter language. Pure calls
