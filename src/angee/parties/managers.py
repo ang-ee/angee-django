@@ -445,12 +445,31 @@ class HandleManager[HandleT: Handle](_HandleManagerBase[HandleT]):
         handle shares this rule.
         """
 
+        if not external_id:
+            return self.find_identities([(platform, value)]).get((platform, value))
         handles = self.filter(platform=platform)
         handle = handles.filter(external_id=external_id).first() if external_id else None
         if handle is None or handle.value != value:
             owner = handles.filter(value=value).exclude(pk=(handle.pk if handle is not None else None)).first()
             handle = owner or handle
         return handle.canonical() if handle is not None else None
+
+    def find_identities(self, identities: Iterable[tuple[str, str]]) -> dict[tuple[str, str], Any]:
+        """Return the handle each ``(platform, value)`` lands on, for the identities that have one.
+
+        :meth:`find_identity`'s rule without an external id, for many identities in
+        one read: the row owning ``(platform, value)``, resolved to its merge
+        survivor (``canonical``, a read only for a merged row). Read-only, for a
+        caller that resolves a whole batch (a sync page's attendees) at once.
+        """
+
+        wanted = set(identities)
+        if not wanted:
+            return {}
+        rows = self.filter(value__in=sorted({value for _platform, value in wanted}))
+        return {
+            (row.platform, row.value): row.canonical() for row in rows if (row.platform, row.value) in wanted
+        }
 
     @staticmethod
     def _refresh(handle: Any, fields: dict[str, Any]) -> None:

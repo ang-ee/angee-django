@@ -15,8 +15,10 @@ from django.apps import apps
 from django.core.exceptions import ValidationError
 from django.db import IntegrityError, transaction
 from django.db.models import Q
+from django.utils import timezone
 from rebac import actor_context, system_context
 
+from angee.calendar.models import UNEXPANDABLE_MESSAGE
 from angee.calendar.testing.models import Calendar, CalendarEvent, EventAttendee
 from angee.integrate.models import IntegrationLifecycle
 from angee.integrate.states import StreamDirection, StreamKind
@@ -351,6 +353,15 @@ def test_an_event_stays_on_its_calendar_series_and_instance(dst_series: tuple[An
 # --- overlap -----------------------------------------------------------------
 
 
+@pytest.fixture
+def july(monkeypatch: pytest.MonkeyPatch) -> datetime:
+    """Pin now to 1 July 2026, before these tests' series, so the overlap horizon starts at each series' start."""
+
+    now = _utc(2026, 7, 1)
+    monkeypatch.setattr(timezone, "now", lambda: now)
+    return now
+
+
 def _place(calendar: Any, start: datetime, end: datetime, **fields: Any) -> None:
     """Validate and save a candidate event as the write path does, then roll it back."""
 
@@ -413,8 +424,8 @@ def test_an_override_does_not_conflict_with_the_instance_it_replaces(db: None) -
             override.reschedule(_utc(2026, 7, 20, 9, 15), _utc(2026, 7, 20, 9, 45))
 
 
-def test_a_new_series_is_checked_instance_by_instance_up_to_the_horizon(db: None) -> None:
-    del db
+def test_a_new_series_is_checked_instance_by_instance_up_to_the_horizon(db: None, july: datetime) -> None:
+    del db, july
     calendar = _calendar(overlap_policy="refuse")
     _event(calendar, title="One-off", start=_utc(2026, 7, 20, 9), end=_utc(2026, 7, 20, 10))
     _event(calendar, title="Far off", start=_utc(2029, 7, 2, 9), end=_utc(2029, 7, 2, 10))
@@ -451,12 +462,13 @@ def test_an_event_zone_keeps_its_wall_clock_on_a_calendar_in_another_zone(db: No
     assert [o.start for o in after] == [o.start for o in occurrences]
 
 
-def test_an_event_rule_repeats_at_most_hourly_on_every_save_path(db: None) -> None:
+def test_an_event_rule_repeats_at_most_daily_on_every_save_path(db: None) -> None:
     calendar = _calendar()
 
-    with pytest.raises(ValidationError) as raised:
-        _place(calendar, _utc(2026, 7, 6, 9), _utc(2026, 7, 6, 10), recurrence="FREQ=SECONDLY")
-    assert "recurrence" in raised.value.message_dict
+    for rule in ("FREQ=HOURLY", "FREQ=SECONDLY"):
+        with pytest.raises(ValidationError) as raised:
+            _place(calendar, _utc(2026, 7, 6, 9), _utc(2026, 7, 6, 10), recurrence=rule)
+        assert "recurrence" in raised.value.message_dict
     # A sync's plain ORM save is refused too.
     with system_context(reason="tests.calendar.sync"), pytest.raises(ValidationError), transaction.atomic():
         CalendarEvent.objects.create(
@@ -465,20 +477,107 @@ def test_an_event_rule_repeats_at_most_hourly_on_every_save_path(db: None) -> No
         )
 
 
-def test_a_bounded_series_is_checked_to_its_end_past_the_horizon(db: None) -> None:
-    del db
+def test_a_long_bounded_series_is_checked_to_the_horizon_not_to_its_end(db: None, july: datetime) -> None:
+    del db, july
     calendar = _calendar(zone="UTC", overlap_policy="refuse")
-    # The 140th week of a 150-week series falls beyond the two-year horizon.
+    # The 140th week of a 150-week series falls beyond the two-year horizon; the 100th within it.
     _event(calendar, title="Late one-off", start=_utc(2029, 3, 5, 9), end=_utc(2029, 3, 5, 10))
 
+    _place(calendar, _utc(2026, 7, 6, 9), _utc(2026, 7, 6, 10), recurrence="FREQ=WEEKLY;COUNT=150")
+    _event(calendar, title="Nearer one-off", start=_utc(2028, 5, 29, 9), end=_utc(2028, 5, 29, 10))
     with pytest.raises(ValidationError):
         _place(calendar, _utc(2026, 7, 6, 9), _utc(2026, 7, 6, 10), recurrence="FREQ=WEEKLY;COUNT=150")
 
 
-def test_moving_a_master_is_judged_after_its_overrides_rebase(db: None) -> None:
+def test_editing_an_old_series_is_checked_from_now(db: None, july: datetime) -> None:
+    del db, july
+    calendar = _calendar(zone="UTC")
+    weekly = _event(calendar, start=_utc(2020, 7, 6, 9), end=_utc(2020, 7, 6, 10), recurrence="FREQ=WEEKLY")
+    _event(calendar, title="One-off", start=_utc(2026, 7, 13, 9), end=_utc(2026, 7, 13, 10))
+    _save(calendar, overlap_policy="refuse")
+
+    # Six years on, its first two years are long past: the clash this month is what counts.
+    with pytest.raises(ValidationError) as refused:
+        _save(weekly, title="Weekly sync")
+    assert refused.value.message_dict == {"start": ["This calendar is already busy at this time."]}
+
+
+def test_a_series_until_a_far_year_is_checked_over_one_horizon(db: None, july: datetime) -> None:
+    del db, july
+    calendar = _calendar(zone="UTC", overlap_policy="refuse")
+    # A daily neighbour at another hour: reading it until 2200 would hold more than the cap.
+    _event(calendar, title="Daily", start=_utc(2026, 7, 1, 14), end=_utc(2026, 7, 1, 15), recurrence="FREQ=DAILY")
+    _event(calendar, title="Far one-off", start=_utc(2100, 7, 5, 9), end=_utc(2100, 7, 5, 10))
+
+    series = _event(
+        calendar, start=_utc(2026, 7, 6, 9), end=_utc(2026, 7, 6, 10), recurrence="FREQ=WEEKLY;UNTIL=22000101T000000Z"
+    )
+
+    # It saved, its end read back from UNTIL; the 2100 clash lies past the horizon and is not judged.
+    assert series.series_end == _utc(2199, 12, 30, 10)
+
+
+def test_an_unreadable_neighbour_refuses_a_save_on_a_refusing_calendar(db: None) -> None:
+    del db
+    calendar = _calendar(zone="UTC", overlap_policy="refuse")
+    legacy = _event(calendar, title="Legacy", start=_utc(2026, 7, 1, 7), end=_utc(2026, 7, 1, 8))
+    with system_context(reason="tests.calendar.legacy"):
+        # Stored before the save-time cap held it: past 10,000 days by 2050, its count read from its start.
+        CalendarEvent.system_queryset().filter(pk=legacy.pk).update(
+            start=_utc(2000, 1, 1, 7), end=_utc(2000, 1, 1, 8), recurrence="FREQ=DAILY;COUNT=20000"
+        )
+
+    # A read skips it; the overlap check cannot, since it might be the clash.
+    assert _occurrences(calendar, _utc(2050, 3, 1), _utc(2050, 3, 2)) == []
+    with pytest.raises(ValidationError) as refused:
+        _place(calendar, _utc(2050, 3, 1, 9), _utc(2050, 3, 1, 10))
+    assert refused.value.message_dict == {"start": [UNEXPANDABLE_MESSAGE % {"title": "Legacy"}]}
+
+
+def test_a_master_with_overrides_decades_apart_can_be_rescheduled(db: None) -> None:
+    del db
+    calendar = _calendar(zone="UTC")
+    master = _event(calendar, start=_utc(2026, 7, 6, 9), end=_utc(2026, 7, 6, 10), recurrence="FREQ=DAILY")
+    near = _event(
+        calendar, series=master, original_start=_utc(2026, 7, 13, 9), title="Near",
+        start=_utc(2026, 7, 13, 11), end=_utc(2026, 7, 13, 12),
+    )
+    far = _event(
+        calendar, series=master, original_start=_utc(2060, 7, 6, 9), title="Far",
+        start=_utc(2060, 7, 6, 11), end=_utc(2060, 7, 6, 12),
+    )
+
+    _save(master, start=_utc(2026, 7, 6, 10), end=_utc(2026, 7, 6, 11))
+    _refreshed(near, far)
+
+    # Each override is judged in its own window, so 34 years between them cost nothing.
+    assert (near.series_id, near.original_start) == (master.pk, _utc(2026, 7, 13, 10))
+    assert (far.series_id, far.original_start) == (master.pk, _utc(2060, 7, 6, 10))
+
+
+@pytest.mark.parametrize(
+    ("rule", "series_end"),
+    [
+        pytest.param("FREQ=DAILY;UNTIL=20991231T000000Z", _utc(2099, 12, 30, 10), id="daily-to-2099"),
+        pytest.param("FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR;UNTIL=20661231", _utc(2066, 12, 30, 10), id="weekdays-to-2066"),
+    ],
+)
+def test_a_long_bounded_series_saves_and_ends_where_its_until_does(
+    db: None, rule: str, series_end: datetime
+) -> None:
+    del db
+    calendar = _calendar(zone="UTC")
+
+    # More than 10,000 occurrences in all, but only a horizon's worth ahead of the save.
+    series = _event(calendar, start=_utc(2026, 7, 6, 9), end=_utc(2026, 7, 6, 10), recurrence=rule)
+
+    assert series.series_end == series_end
+
+
+def test_moving_a_master_is_judged_after_its_overrides_rebase(db: None, july: datetime) -> None:
     """An instance moved elsewhere is not the master's any more once the move rebases it."""
 
-    del db
+    del db, july
     calendar = _calendar(overlap_policy="refuse")
     master = _event(calendar, start=_utc(2026, 7, 6, 9), end=_utc(2026, 7, 6, 10), recurrence="FREQ=WEEKLY")
     _event(
@@ -783,3 +882,40 @@ def test_a_user_gives_their_own_person_a_calendar_and_holds_it(db: None) -> None
         calendar = Calendar.objects.create(party=person, name="Mine")
 
     assert list(Calendar.objects.with_actor(user).filter(pk=calendar.pk)) == [calendar]
+
+
+@pytest.mark.parametrize("year", [9998, 9999])
+def test_an_open_series_near_the_last_date_saves_or_is_refused_never_overflows(db: None, year: int) -> None:
+    for policy in ("accept", "refuse"):
+        calendar = _calendar(zone="UTC", overlap_policy=policy)
+        try:
+            _event(calendar, start=datetime(year, 1, 1, 9, tzinfo=UTC), end=datetime(year, 1, 1, 10, tzinfo=UTC),
+                   recurrence="FREQ=DAILY")
+        except ValidationError:
+            pass
+
+
+def test_a_bounded_series_lasting_days_saves_on_a_refusing_calendar(db: None) -> None:
+    calendar = _calendar(zone="UTC", overlap_policy="refuse")
+
+    # Its last occurrence ends past its reach: a bounded series read across its own end is never refused.
+    event = _event(calendar, start=_utc(2026, 1, 1, 9), end=_utc(2026, 1, 3, 9), recurrence="FREQ=DAILY;COUNT=10000")
+
+    assert event.series_end == datetime(2053, 5, 20, 9, tzinfo=UTC)
+
+
+def test_clearing_a_masters_rule_detaches_the_override_of_its_first_instance(db: None) -> None:
+    calendar = _calendar(zone="UTC")
+    master = _event(calendar, start=_utc(2026, 7, 6, 9), end=_utc(2026, 7, 6, 10), recurrence="FREQ=WEEKLY;COUNT=3")
+    first = _event(
+        calendar, start=_utc(2026, 7, 6, 11), end=_utc(2026, 7, 6, 12), series=master,
+        original_start=master.start, title="Moved first",
+    )
+
+    with system_context(reason="tests.calendar.clear"):
+        master.recurrence = ""
+        master.save()
+        first.refresh_from_db()
+
+    # A single row has no instances: its own start is no longer one the override may name.
+    assert (first.series_id, first.original_start, first.title) == (None, None, "Moved first")

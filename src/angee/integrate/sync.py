@@ -1,4 +1,4 @@
-"""Bridge sync dispatch and the bridge that receives nested progress reports."""
+"""Bridge sync dispatch, and the context nested sync code reads: its progress bridge and its deadline."""
 
 from __future__ import annotations
 
@@ -38,8 +38,38 @@ def current_progress_bridge() -> Bridge | None:
     return _progress_bridge.get()
 
 
+_sync_deadline: ContextVar[float | None] = ContextVar("angee_sync_deadline", default=None)
+
+
+@contextmanager
+def sync_deadline_context(deadline: float | None) -> Iterator[float | None]:
+    """Make ``deadline`` (a ``time.monotonic()`` instant) the one the sync running here must stop by.
+
+    The bridge sync sets it once for its cycle; a partition drained on a pool
+    worker inherits it through the copied context.
+    """
+
+    token = _sync_deadline.set(deadline)
+    try:
+        yield deadline
+    finally:
+        _sync_deadline.reset(token)
+
+
+def sync_deadline() -> float | None:
+    """Return the ``time.monotonic()`` instant the sync running here must stop by, or ``None`` outside one.
+
+    An adapter that parses or fetches where the driver passes no deadline (an
+    identity read, the absence sweep's enumeration) stops there.
+    """
+
+    return _sync_deadline.get()
+
+
 __all__ = [
     "SyncDispatch",
     "progress_bridge_context",
     "current_progress_bridge",
+    "sync_deadline_context",
+    "sync_deadline",
 ]

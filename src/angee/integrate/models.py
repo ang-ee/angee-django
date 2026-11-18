@@ -1039,9 +1039,9 @@ class CredentialManager[CredentialT: Credential](_CredentialManagerBase[Credenti
     def disconnect_account(self, user: Any, external_account_sqid: str) -> bool:
         """Release this user's account and delete its credential in one admitted transaction.
 
-        prepare_disconnect owns vetoes, derived releases and after-commit remote
-        revocation; native owner release and selected credential deletion retain
-        their own persistence contracts. An absent user/account link is false.
+        :meth:`retire` owns vetoes, derived releases, after-commit remote
+        revocation and the delete; the account's native owner release runs between
+        them. An absent user/account link is false.
         """
 
         candidates = self.select_related("oauth_client", "external_account").select_for_update(of=("self",))
@@ -1055,9 +1055,38 @@ class CredentialManager[CredentialT: Credential](_CredentialManagerBase[Credenti
                 return False
             account = credential.external_account
             assert account is not None
+            return self.retire(
+                credential,
+                rows=self.with_action("delete"),
+                before_delete=lambda: type(account).objects.filter(pk=account.pk).release(user),
+            )
+
+    def retire(
+        self,
+        credential: Any,
+        *,
+        rows: models.QuerySet[Any] | None = None,
+        before_delete: Callable[[], object] | None = None,
+    ) -> bool:
+        """Retire one credential: prepare its disconnect, then delete it; return whether a row went.
+
+        The verb a credential's owner retires it through (an account disconnect, a
+        calendar subscription's purge). :meth:`prepare_disconnect` owns vetoes,
+        derived releases and after-commit remote revocation; ``before_delete`` runs
+        the caller's own release between the two (an account's), and ``rows`` scopes
+        the delete (an actor's ``with_action("delete")``). A credential an
+        integration still attaches directly keeps its ``PROTECT``: detach it first,
+        or use :meth:`retire_unattached`. Two other paths delete a credential
+        without it: the admin delete preview (``delete_credential``), which runs
+        :meth:`prepare_disconnect` itself, and :meth:`delete_unattached_derived`,
+        which drops discovery-created material without a remote revocation.
+        """
+
+        with system_context(reason="integrate.credential.retire"), transaction.atomic():
             self.prepare_disconnect(credential)
-            type(account).objects.filter(pk=account.pk).release(user)
-            deleted, _details = self.filter(pk=credential.pk).with_action("delete").delete()
+            if before_delete is not None:
+                before_delete()
+            deleted, _details = (rows if rows is not None else self.all()).filter(pk=credential.pk).delete()
         return deleted > 0
 
     def prepare_disconnect(self, credential: Any) -> None:
@@ -1084,15 +1113,51 @@ class CredentialManager[CredentialT: Credential](_CredentialManagerBase[Credenti
             target.attach_credential(None)
         transaction.on_commit(copy(credential).revoke_remote, robust=True)
 
+    def unattached(self) -> models.QuerySet[Any]:
+        """Return the credentials nothing holds: no integration attaches them, and no account is bound to them.
+
+        An integration attaches a credential directly or as its discovery grant. An
+        account binds one either way round (``Credential.external_account``, or
+        ``ExternalAccount.credential``): only the account's own disconnect
+        (:meth:`disconnect_account`) retires such a credential, so an integration
+        that borrowed it (a calendar source on the user's connected account) never
+        retires it when it lets go.
+        """
+
+        bound = apps.get_model("integrate", "ExternalAccount")._base_manager.filter(credential__isnull=False)
+        return self.filter(
+            integrations__isnull=True,
+            discovered_integrations__isnull=True,
+            external_account__isnull=True,
+        ).exclude(pk__in=bound.values("credential_id"))
+
+    def retire_unattached(self, credential: Any) -> bool:
+        """Retire ``credential`` once nothing attaches it (:meth:`retire`); return whether it went.
+
+        A credential shared by several integrations (two subscriptions to one feed
+        keep one) stays while any of them still attaches it, and one an account is
+        bound to stays for the account's own disconnect (:meth:`unattached`). The
+        credential row is
+        locked first, inside the caller's transaction, so two callers that each
+        detach one sharer serialize here: the second waits, sees both detaches, and
+        retires it. An attach takes the same row's key-share lock, so it serializes
+        with this check too.
+        """
+
+        if not connection.in_atomic_block:
+            raise RuntimeError("Retiring an unattached credential requires the caller's transaction.")
+        with system_context(reason="integrate.credential.retire_unattached"):
+            if self.filter(pk=credential.pk).lock_if_supported().first() is None:
+                return False
+            if not self.unattached().filter(pk=credential.pk).exists():
+                return False
+        return self.retire(credential)
+
     def delete_unattached_derived(self, credential_pk: int | None) -> None:
         """Dispose of discovery-created material after its last attachment releases it."""
 
         if credential_pk is not None:
-            self.filter(
-                pk=credential_pk,
-                integrations__isnull=True,
-                discovered_integrations__isnull=True,
-            ).delete()
+            self.unattached().filter(pk=credential_pk).delete()
 
     def live_oauth_for_user(
         self, user: Any, oauth_client: Any, *, external_account: Any, oauth_scopes: Iterable[str] = (),
@@ -5316,12 +5381,25 @@ class RecordLinkManager[RecordLinkT: RecordLink](_RecordLinkManagerBase[RecordLi
         this is not a withdrawal, the identity is still current.
         """
 
-        with system_context(reason="integrate.record.release_target"), transaction.atomic():
-            locked = self.filter(pk=link.pk).lock_if_supported().get()
-            self._set_target(locked, None)
-            locked.save(update_fields=["target_content_type_id", "target_object_id", "updated_at"])
-            link.target_content_type_id = link.target_object_id = None
-            return locked
+        self.release_targets(self.filter(pk=link.pk))
+        link.target_content_type_id = link.target_object_id = None
+        link.target = None
+        return link
+
+    def release_targets(self, links: models.QuerySet[Any]) -> int:
+        """Let every row ``links`` binds go at once, as :meth:`release_target` lets one go; return how many.
+
+        For a domain owner that purges a whole replica (an unsubscribed source's
+        records): one tracked update, the rows locked in primary-key order first.
+        Status, evidence and history stay.
+        """
+
+        with system_context(reason="integrate.record.release_targets"), transaction.atomic():
+            bound = self.filter(pk__in=links.values("pk")).exclude(target_object_id=None).order_by("pk")
+            ids = list(bound.lock_if_supported().values_list("pk", flat=True))
+            return self.filter(pk__in=ids).update(
+                target_content_type=None, target_object_id=None, updated_at=timezone.now()
+            )
 
     def promote(
         self,

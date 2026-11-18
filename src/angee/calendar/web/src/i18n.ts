@@ -7,6 +7,11 @@ export const enCalendarMessages: Record<string, string> = {
   "occurrence.busy": "Busy",
   "source.calendar": "{calendar} · {party}",
   "reschedule.failed": "Could not reschedule the event.",
+  "connection.name": "Name",
+  "connection.connect.menu": "Add a calendar",
+  "connection.action.sync": "Sync now",
+  "connection.action.unsubscribe": "Unsubscribe",
+  "connection.group.lastSync": "Last sync",
   "picker.startOwn": "Create my calendar",
 };
 

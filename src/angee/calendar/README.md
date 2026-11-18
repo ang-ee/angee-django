@@ -78,9 +78,16 @@ expanded server-side in each calendar's zone.
   write. `reschedule_event` drags it.
 - **Bounds:** each series stores where it ends (`series_end`, when every rule it
   holds carries `UNTIL` or `COUNT`), so reads skip series that ended before their
-  window. An event's rule repeats at most hourly, and one expansion yields at most
-  `MAX_OCCURRENCES` (10,000, scheduling's one cap) occurrences: past it the save or
-  read is refused, never truncated.
+  window. An event's rule repeats at most daily and occurs within about 30 years
+  of its start. A read costs its window, not the series' age: a rule without
+  `COUNT` is read from the period before the window (scheduling's re-anchoring),
+  and a bounded one's end is read back from its `UNTIL`. At save, every series is
+  counted from its start to now plus the overlap horizon (or its end, when
+  sooner) against `MAX_OCCURRENCES` (10,000, scheduling's one cap), and a `COUNT`
+  series is read from its start; past the cap the save is refused, never
+  truncated. An event's moments, and every occurrence's end, stay within the
+  dates the calendar can reach; a row a read still cannot expand is skipped, never
+  failing the read.
 - **Live updates:** `changes(CalendarEvent)` sends readers the change as usual, and
   sends free/busy viewers only that an event's busy time changed, so they refetch
   the redacted occurrences. A free event reaches them only through a partial save
@@ -90,10 +97,11 @@ expanded server-side in each calendar's zone.
 
 A calendar whose overlap policy is `refuse` rejects a busy event any of whose
 instances meets another busy occurrence on it. A single event is checked over its
-`[start, end)`. A series is checked instance by instance, up to its stored
-`series_end` for a bounded rule, or two years from its start for an open-ended
-one (`CalendarEvent.overlap_horizon`). Free and cancelled events never conflict,
-and neither do a cancelled master's moved instances.
+`[start, end)`. A series is checked instance by instance over two years
+(`CalendarEvent.overlap_horizon`) from now, or from its start when that is later,
+and no further than its stored `series_end`; a series that ended before now is
+checked over its last two years. Free and cancelled events never conflict, and
+neither do a cancelled master's moved instances.
 
 - **Where it runs:** `CalendarEvent.save`. A save that can change an event's time
   locks the calendar row (on any policy), then the event, then writes, rebases a
@@ -101,9 +109,67 @@ and neither do a cancelled master's moved instances.
   whole save back and reaches a form, a drag or a sync as a field error. Every save
   path is covered, and two concurrent saves cannot take the same time. Queryset
   `update()` and `bulk_create` skip `save` and are not checked.
-- **What it reveals:** the refusal names no other event. It runs only after the
+- **What it reveals:** a clash names no other event. It runs only after the
   REBAC save gates admitted the write, so a save the actor may not make is refused
   for its permission before any other event is read.
+- **It fails closed:** another event on the calendar that it cannot expand (a
+  legacy row past the cap) refuses the save, naming that event, which the
+  calendar's writers read, instead of passing as no clash.
+
+## Sources
+
+A `CalendarSource` is a connected calendar account or a subscribed feed: an
+`integrate.Integration` child, selected by `backend_class` from
+`ANGEE_CALENDAR_SOURCE_BACKEND_CLASSES`. It syncs through integrate's pull
+streams:
+
+- **`calendars`:** one record per remote calendar. Its `RecordLink` names the
+  mirrored calendar (on the owner's person, `source` naming the source), and the
+  source states that calendar's name, colour and zone. A person's own rename
+  outranks the source's by statement precedence, so it survives a remote rename.
+- **`events`:** one stream per remote calendar, partitioned by its key. Remote
+  event ids live only in its `RecordLink` rows: a master's key is its UID, an
+  instance's its UID and `RECURRENCE-ID`. A removed master or single event is
+  cancelled; a removed instance is deleted, which restores the master's occurrence.
+
+Both streams use integrate's absence sweep, at most once per poll interval. A
+record the source stops serving is unavailable after one sweep and tombstoned
+after the stream's absence threshold (two sweeps); a tombstoned calendar
+withdraws the identity its source stated. A source's event takes the event
+owner's stored form: an untitled event is "(No title)", and at most 500
+attendees are kept, the organizer first. An attendee lands on a handle by the
+address the source gave, and a source never renames a handle that already exists.
+
+A source's calendar is mirrored before its events land: a sync that finds it
+missing retries on the next cycle.
+
+- **Replicas.** A backend declares whether it takes writes. A local calendar
+  always takes edits; a source's calendar only when its backend writes. On a
+  read-only subscription the events and attendees are the source's replicas: a
+  person creating, editing, rescheduling or deleting one is refused ("This
+  calendar is a read-only subscription") on every save path, and its occurrences
+  cannot be dragged. Only the source's own work writes them, and a handle merge
+  still folds their attendees. The source owns its series: a moved series is never
+  rebased locally, the source re-sends each instance under its own key, and a
+  changed calendar zone re-reads the source's events instead of moving them.
+- **Lifecycle.** The source's owner syncs it now and unsubscribes it. Unsubscribing
+  disconnects the source at once; a job then removes its events, archives its
+  calendar and retires its credential, and an hourly reconciler retries a purge
+  that failed. A sync already running ends quietly at its next page instead of
+  bringing events back. A source's calendar is never deleted on
+  its own. How many sources one user keeps, and how
+  fast they add them, are bounded (`ANGEE_CALENDAR_SOURCES_PER_OWNER`,
+  `ANGEE_CALENDAR_SUBSCRIBE_RATE`).
+- **ICS.** `calendar_integrate_ics` lets any signed-in user subscribe to a public
+  feed (`webcal://` reads as `https://`); nothing is fetched until the first
+  sync, which reports a feed it cannot read. The feed address is a secret, kept as
+  the source's credential; the source shows only its host. The feed
+  is the source's one remote calendar, polled hourly with a conditional GET; each
+  event keeps its own `DTSTART` zone. Each fetched feed is a full snapshot; its
+  module docstring lists the properties it maps.
+
+The sources page lists them with their sync status. Source addons add their
+subscribe or connect verb to its `calendar.sources#toolbar` container.
 
 ## Access
 

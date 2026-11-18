@@ -42,7 +42,7 @@ from angee.integrate.states import (
     StreamState,
     SyncFailureKind,
 )
-from angee.integrate.sync import current_progress_bridge, progress_bridge_context
+from angee.integrate.sync import current_progress_bridge, progress_bridge_context, sync_deadline_context
 from angee.jobs.timeouts import task_time_budget
 from angee.provenance.context import changeset, current_changeset
 
@@ -1346,7 +1346,9 @@ def sync_bridge(bridge: Any) -> int:
     deadline = monotonic() + max(0.0, min(worker_budget, float(config.get("sync_time_budget", worker_budget))))
     adapter = bridge.capability_impl
     try:
-        with system_context(reason="integrate.bridge.streams"):
+        # The cycle's deadline is set once: _drain's identity reads and sweep read it, and each
+        # pool worker inherits it through its copied context.
+        with system_context(reason="integrate.bridge.streams"), sync_deadline_context(deadline):
             parallelism = max(1, int(config.get("sync_parallelism", 4)))
             if adapter.sync_parallelism is not None:
                 parallelism = min(parallelism, adapter.sync_parallelism)
