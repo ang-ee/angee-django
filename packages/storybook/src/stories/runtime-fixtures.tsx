@@ -198,7 +198,7 @@ export function RuntimeFixture({
           liveProvider={liveProvider}
           resources={resources ?? [...refineResourcesFromAngeeSchemaMetadata(normalized[activeSchema]?.metadata)]}
           routerProvider={routed ? tanStackRouterProvider : undefined}
-          options={{ syncWithLocation, ...(queryClient ? { reactQuery: { clientConfig: queryClient } } : {}) }}
+          options={{ syncWithLocation, disableTelemetry: true, ...(queryClient ? { reactQuery: { clientConfig: queryClient } } : {}) }}
         >
           <OperationDocumentsProvider documents={operationDocuments}>
             {/* As the app's layout route does: hooks outside a resource surface resolve the active schema. */}

@@ -646,6 +646,8 @@ export function createApp(input: CreateAppInput): AngeeApp {
           liveMode: refineLiveProvider ? "auto" : "off",
           syncWithLocation: false,
           reactQuery: { clientConfig: queryClient },
+          // Refine otherwise beacons every page load to telemetry.refine.dev.
+          disableTelemetry: true,
         }}
       >
         <AppFrame

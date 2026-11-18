@@ -402,6 +402,21 @@ describe("React architecture guardrails", () => {
     expect(routing).toContain("recordSearchKeys");
   });
 
+  test("every Refine root keeps Refine's telemetry beacon off", () => {
+    const files = repositoryPackageRoots()
+      .flatMap((pkg) => sourceFiles(join(pkg.root, "src")))
+      .filter((file) => file.endsWith(".tsx") && !isTestFile(file));
+    expect(files.flatMap((file) => refineTelemetryViolations(file, readFileSync(file, "utf8")))).toEqual([]);
+  });
+
+  test("the Refine telemetry guard reports a root whose options leave it on", () => {
+    expect(refineTelemetryViolations("seed.tsx", "<Refine options={{ syncWithLocation }}>{children}</Refine>"))
+      .toHaveLength(1);
+    expect(refineTelemetryViolations("seed.tsx", "<Refine dataProvider={provider} />")).toHaveLength(1);
+    expect(refineTelemetryViolations("seed.tsx", "<Refine options={{ ...options, disableTelemetry: true }} />"))
+      .toEqual([]);
+  });
+
   test("framework-owned dynamic i18n families contain only UI vocabulary", () => {
     expect([...new Set(UI_DYNAMIC_I18N_KEY_FAMILIES.map((family) => family.namespace))])
       .toEqual(["ui"]);
@@ -1533,6 +1548,30 @@ function isTestFile(file: string): boolean {
 
 function isStoryFile(file: string): boolean {
   return /\.stories\.[^.]+$/.test(file);
+}
+
+/** `<Refine>` elements whose `options` literal does not set `disableTelemetry: true`, as `file:line`. */
+function refineTelemetryViolations(file: string, text: string): string[] {
+  const source = ts.createSourceFile(file, text, ts.ScriptTarget.Latest, true);
+  const violations: string[] = [];
+  const visit = (node: ts.Node): void => {
+    if ((ts.isJsxOpeningElement(node) || ts.isJsxSelfClosingElement(node)) && node.tagName.getText(source) === "Refine") {
+      const options = node.attributes.properties.find((attribute): attribute is ts.JsxAttribute =>
+        ts.isJsxAttribute(attribute) && attribute.name.getText(source) === "options");
+      const value = options?.initializer && ts.isJsxExpression(options.initializer)
+        ? options.initializer.expression
+        : undefined;
+      const off = value !== undefined && ts.isObjectLiteralExpression(value) && value.properties.some((property) =>
+        ts.isPropertyAssignment(property) && property.name.getText(source) === "disableTelemetry"
+        && property.initializer.kind === ts.SyntaxKind.TrueKeyword);
+      if (!off) {
+        violations.push(`${workspaceRelative(file)}:${source.getLineAndCharacterOfPosition(node.getStart(source)).line + 1}`);
+      }
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(source);
+  return violations;
 }
 
 function workspaceRelative(file: string): string {
