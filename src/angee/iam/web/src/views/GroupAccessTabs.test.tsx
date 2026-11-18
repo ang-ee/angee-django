@@ -2,7 +2,7 @@
 
 import { render } from "@testing-library/react";
 import type { ReactNode } from "react";
-import type { FormSubmitResult, RecordPanelContext } from "@angee/ui";
+import type { RecordPanelContext } from "@angee/ui";
 import { beforeEach, describe, expect, test, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
@@ -80,26 +80,17 @@ describe("group access tabs", () => {
     });
   });
 
-  test("adds the selected canonical subject with an explicit empty caveat", async () => {
+  test("adds the selected canonical subject with an explicit empty caveat, through the dialog's own call", async () => {
     mocks.add.mockResolvedValue({ add_group_member: true });
     render(<GroupMembersTab {...recordPanelContext("igr_1")} />);
-    const submit = mocks.mutationProps?.onSubmit as (values: { subject: string }) => Promise<FormSubmitResult<unknown>>;
-    await expect(submit({ subject: "auth/user:9" })).resolves.toEqual({
-      status: "ok", data: { add_group_member: true },
-    });
+    const mutation = mocks.mutationProps?.mutation as (values: { subject: string }, options: { errorNotification: false }) => Promise<unknown>;
+    await expect(mutation({ subject: "auth/user:9" }, { errorNotification: false })).resolves.toEqual({ add_group_member: true });
+    // The dialog runs the call and reports a refusal itself (a missing result as this fallback); no toast repeats it.
     expect(mocks.add).toHaveBeenCalledWith({
       group_id: "igr_1",
       subject: "auth/user:9",
       caveat_name: "",
-    });
-  });
-
-  test("keeps a refused member addition available as form validation", async () => {
-    mocks.add.mockResolvedValue({ add_group_member: false });
-    render(<GroupMembersTab {...recordPanelContext("igr_1")} />);
-    const submit = mocks.mutationProps?.onSubmit as (values: { subject: string }) => Promise<FormSubmitResult<unknown>>;
-    await expect(submit({ subject: "auth/user:9" })).resolves.toEqual({
-      status: "invalid", issues: { fieldErrors: {}, formErrors: ["Could not add member."] },
-    });
+    }, { errorNotification: false });
+    expect(mocks.mutationProps?.errorFallback).toBe("Could not add member.");
   });
 });

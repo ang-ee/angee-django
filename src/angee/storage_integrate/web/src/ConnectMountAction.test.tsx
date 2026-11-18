@@ -107,7 +107,7 @@ describe("ConnectMountAction", () => {
         root: "folder-1",
         mode: "COPY",
         copyBackendId: "bkd_2",
-      } satisfies MountConnectVariables),
+      } satisfies MountConnectVariables, { errorNotification: false }),
     );
   });
 

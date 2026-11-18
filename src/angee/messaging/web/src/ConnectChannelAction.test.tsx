@@ -101,7 +101,7 @@ describe("ConnectChannelAction", () => {
 
     fireEvent.submit(screen.getByRole("form", { name: "channel.demo.title" }));
     await waitFor(() =>
-      expect(actionMocks.authoredConnect).toHaveBeenCalledWith({ name: "Ada" }),
+      expect(actionMocks.authoredConnect).toHaveBeenCalledWith({ name: "Ada" }, { errorNotification: false }),
     );
   });
 
@@ -126,6 +126,7 @@ describe("ConnectChannelAction", () => {
       expect(actionMocks.pairingConnect).toHaveBeenCalledWith(
         { name: "Ada" },
         expect.any(Function),
+        { errorNotification: false },
       ),
     );
     expect(nextStep).toHaveBeenCalledWith({ name: "Ada" }, expect.any(Function));

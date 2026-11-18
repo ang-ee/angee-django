@@ -1,6 +1,7 @@
 import {
   useAuthoredMutation,
   type AuthoredDocument,
+  type AuthoredMutateOptions,
   type AuthoredVariables,
   type DocumentData,
 } from "@angee/refine";
@@ -8,7 +9,6 @@ import {
   ActionTrigger,
   MutationDialog,
   optionalTranslation,
-  type FormSubmitResult,
   type DescriptorField,
   type MutationDialogParseValues,
   type MutationDialogValues,
@@ -109,10 +109,7 @@ function MutationConnectChannelAction<
   return (
     <ConnectChannelDialog
       {...props}
-      onSubmit={async (values) => ({
-        status: "ok",
-        data: await connect(props.variables ? props.variables(values) : values),
-      })}
+      mutation={(values, options) => connect(props.variables ? props.variables(values) : values, options)}
     />
   );
 }
@@ -138,13 +135,11 @@ function PairingConnectChannelAction<
     <>
       <ConnectChannelDialog
         {...props}
-        onSubmit={async (values) => ({
-          status: "ok",
-          data: await connect(
-            variables ? variables(values) : values,
-            nextStep ? () => nextStep(values, t) : undefined,
-          ),
-        })}
+        mutation={(values, options) => connect(
+          variables ? variables(values) : values,
+          nextStep ? () => nextStep(values, t) : undefined,
+          options,
+        )}
       />
       {pairingDialog}
     </>
@@ -155,9 +150,8 @@ interface ConnectChannelDialogProps<
   TDocument extends AuthoredDocument,
   TValues extends AuthoredVariables<TDocument>,
 > extends ConnectChannelActionBaseProps<TDocument, TValues> {
-  onSubmit: (
-    values: TValues,
-  ) => FormSubmitResult<unknown> | Promise<FormSubmitResult<unknown>>;
+  /** The channel-create mutation the dialog runs; the dialog shows its refusal. */
+  mutation: (values: TValues, options: AuthoredMutateOptions) => Promise<unknown>;
 }
 
 function ConnectChannelDialog<
@@ -168,7 +162,7 @@ function ConnectChannelDialog<
   i18nPrefix,
   initialValues,
   parseValues,
-  onSubmit,
+  mutation,
 }: ConnectChannelDialogProps<TDocument, TValues>): React.ReactElement {
   const t = useMessagingT();
   const dialogFields = React.useMemo(() => fields(t), [fields, t]);
@@ -191,7 +185,7 @@ function ConnectChannelDialog<
       submittingLabel={t("channel.connect.submitting")}
       errorFallback={errorFallback}
       parseValues={typedParseValues}
-      onSubmit={onSubmit}
+      mutation={mutation}
     />
   );
 }

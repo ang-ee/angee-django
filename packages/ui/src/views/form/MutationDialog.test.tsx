@@ -628,3 +628,40 @@ test("the dialog submission owner displays the successful result's message once"
   expect(await screen.findAllByText("Request accepted")).toHaveLength(1);
   expect(onSubmitted).toHaveBeenCalledExactlyOnceWith("accepted", {});
 });
+
+test("a refusal bound to a field is reported once: under the field, with no banner and no toast", async () => {
+  const refusal = { graphQLErrors: [{ message: "The calendar feed address is not allowed.", extensions: {
+    code: "VALIDATION", validationErrors: { url: ["The calendar feed address is not allowed."] },
+  } }] };
+  const mutation = vi.fn().mockRejectedValue(refusal);
+  render(<AppRuntimeProvider runtime={{ widgets: defaultWidgets }}>
+    <MutationDialog open onOpenChange={() => undefined} title="Subscribe" fields={[{ name: "url", label: "Feed address", required: true }]}
+      initialValues={{ url: "webcal://127.0.0.1/feed.ics" }} submitLabel="Subscribe" errorFallback="Could not subscribe to the calendar feed."
+      parseValues={parseRawValues} mutation={mutation} />
+  </AppRuntimeProvider>);
+  const button = () => screen.getByRole("button", { name: "Subscribe" }) as HTMLButtonElement;
+  await waitFor(() => expect(button().disabled).toBe(false));
+  fireEvent.click(button());
+
+  expect(await screen.findAllByText("The calendar feed address is not allowed.")).toHaveLength(1);
+  expect(screen.getByRole("textbox", { name: /Feed address/ }).getAttribute("aria-invalid")).toBe("true");
+  expect(screen.queryByText("Could not subscribe to the calendar feed.")).toBeNull();
+  // The dialog runs the call with refine's generic error notification off: no toast repeats it.
+  expect(mutation).toHaveBeenCalledExactlyOnceWith({ url: "webcal://127.0.0.1/feed.ics" }, { errorNotification: false });
+});
+
+test("a mutation's data acknowledges the dialog; missing data fails with the dialog's fallback", async () => {
+  const onSubmitted = vi.fn();
+  const mutation = vi.fn().mockResolvedValueOnce(undefined).mockResolvedValueOnce({ subscribe: { id: "src_1" } });
+  render(<AppRuntimeProvider runtime={{ widgets: defaultWidgets }}>
+    <MutationDialog open onOpenChange={() => undefined} title="Subscribe" fields={[]} submitLabel="Subscribe"
+      errorFallback="Could not subscribe." parseValues={parseRawValues} closeOnSubmit={false}
+      mutation={mutation} mutationResult={(data: { subscribe: { id: string } }) => ({ status: "ok", data: data.subscribe.id })}
+      onSubmitted={onSubmitted} />
+  </AppRuntimeProvider>);
+  fireEvent.click(screen.getByRole("button", { name: "Subscribe" }));
+  expect(await screen.findByText("Could not subscribe.")).toBeTruthy();
+  await waitFor(() => expect((screen.getByRole("button", { name: "Subscribe" }) as HTMLButtonElement).disabled).toBe(false));
+  fireEvent.click(screen.getByRole("button", { name: "Subscribe" }));
+  await waitFor(() => expect(onSubmitted).toHaveBeenCalledExactlyOnceWith("src_1", {}));
+});

@@ -144,7 +144,7 @@ export function ConnectMountAction({
         submittingLabel={t("mount.connect.submitting")}
         errorFallback={errorFallback}
         parseValues={parseValues}
-        onSubmit={async (values) => ({ status: "ok", data: await connect(values) })}
+        mutation={connect}
         size="lg"
     />
   );

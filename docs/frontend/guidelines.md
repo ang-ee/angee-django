@@ -1056,7 +1056,10 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
   Declare `DescriptorField`s; the shared [DescriptorFieldList](../../packages/ui/src/views/form/DescriptorFieldList.tsx)
   owns controls and requires a native RHF `FormProvider`. Decode raw controls with
   `parseValues` and `mutationDialogValueCodecs`; required/verbatim codecs express
-  authored field contracts. Record actions declare `args` + `submit` on `<Action>`;
+  authored field contracts. An authored mutation is the dialog's `mutation` (with
+  `mutationResult` to read its data), never an `onSubmit` wrapping it: the dialog runs
+  the call with the generic error notification off and reports a refusal once, under
+  the field it names, else in the dialog. `onSubmit` is for any other submission. Record actions declare `args` + `submit` on `<Action>`;
   `RecordActionBar` composes `ActionFormDialog` for their inputs. Record-specific
   schemas compose `jsonSchemaActionArgs` in the action's `args` callback; the
   shared form owns branching, validation and draft retention across record refreshes.

@@ -53,7 +53,7 @@ export function ConnectCardDavAction(): React.ReactElement {
       submittingLabel={t("directory.connect.submitting")}
       errorFallback={t("directory.connect.error")}
       parseValues={parseDirectoryValues}
-      onSubmit={async (values) => ({ status: "ok", data: await connect(values) })}
+      mutation={connect}
     />
   );
 }

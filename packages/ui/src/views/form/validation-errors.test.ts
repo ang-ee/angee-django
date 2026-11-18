@@ -298,6 +298,22 @@ describe("shared form submission errors", () => {
     });
     expect(result.current.getFieldState("root.server").error?.message).toBe("Review the form rowsExtra: Unknown field");
   });
+
+  test("a refusal bound to a rendered field is shown there once, not again as the fallback", () => {
+    const { result } = renderHook(() => useForm<Record<string, unknown>>());
+    act(() => {
+      applyFormErrors(result.current, invalidFormSubmit({ fieldErrors: { url: ["The address is not allowed."] }, formErrors: [] }),
+        { fieldNames: ["url"], fallback: "Could not subscribe." });
+    });
+    expect(result.current.getFieldState("url").error?.message).toBe("The address is not allowed.");
+    expect(result.current.getFieldState("root.server").error).toBeUndefined();
+    act(() => {
+      result.current.clearErrors();
+      applyFormErrors(result.current, invalidFormSubmit({ fieldErrors: {}, formErrors: [] }),
+        { fieldNames: ["url"], fallback: "Could not subscribe." });
+    });
+    expect(result.current.getFieldState("root.server").error?.message).toBe("Could not subscribe.");
+  });
 });
 
 test("normalized action outcomes retain their transport-owned validation map", () => {
