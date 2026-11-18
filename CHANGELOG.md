@@ -10,6 +10,15 @@ live in code docstrings.
 
 ## Unreleased — shared addon contracts, native embeddings and graph retrieval
 
+- A framework stack serving production (`stacks/dev` with `serve_mode:
+  production`, `stacks/staging`) installs its slots editable, so
+  `frontend-build` reads each fragment from its slot. A non-editable install
+  copied the addons into site-packages, where the fragments' `tsconfig.json`
+  chain (`../../tsconfig.base.json`) and their pnpm dependencies do not exist,
+  and the build failed with `Tsconfig not found`. `stacks/local` still installs
+  non-editable; its frontend builds from the baked web image. An existing stack
+  drops `--no-editable` from its `py-sync` command and reruns the chain.
+
 - A change to `ANGEE_UI` alone now recomposes. `angee.web` renders it into
   `runtime/web/manifest.json` but never declared it a compiler input, so
   `compose --if-stale`, the stack's compose job, found the receipt current and

@@ -279,6 +279,10 @@ jobs:
         exec pnpm install --frozen-lockfile
 {% endif %}{% endif %}
 
+  # A framework stack installs its slots editable even when it serves production:
+  # its web build reads each fragment from the slot, where the fragment's tsconfig
+  # chain and pnpm dependencies live; a site-packages copy has neither. An instance
+  # builds its frontend from the baked web image and installs non-editable.
   py-sync:
 {% include "../_shared/python-runtime.yaml.jinja" with pool_for_django="" %}
       ANGEE_DEPENDENCY_ACTION: "${inputs.action | default('sync')}"
@@ -289,8 +293,8 @@ jobs:
       - >-
         if [ "{{ job_dollar }}ANGEE_DEPENDENCY_ACTION" = sync ]; then
         if [ ! -f uv.lock ]; then uv lock || exit; fi;
-        exec uv sync --locked{% if effective_serve_mode == "production" %} --no-editable{% endif %}; fi;
-        exec "{{ job_dollar }}UV_PROJECT_ENVIRONMENT/bin/python" -m angee.platform_integrate_operator.preflight{% if effective_serve_mode == "production" %} --no-editable{% endif %}
+        exec uv sync --locked{% if effective_serve_mode == "production" and stack_flavor == "instance" %} --no-editable{% endif %}; fi;
+        exec "{{ job_dollar }}UV_PROJECT_ENVIRONMENT/bin/python" -m angee.platform_integrate_operator.preflight{% if effective_serve_mode == "production" and stack_flavor == "instance" %} --no-editable{% endif %}
         -- "{{ job_dollar }}ANGEE_DEPENDENCY_ACTION" "{{ job_dollar }}ANGEE_DEPENDENCY_REQUIREMENT"
     holds: &python-consumers [django{% if enable_celery %}, celery-worker{% if celery_queues %}, celery-queues{% endif %}{% endif %}]
 {% if stack_flavor == "framework" %}    depends_on: [deps]
