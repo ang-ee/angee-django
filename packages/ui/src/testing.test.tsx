@@ -1,9 +1,10 @@
 // @vitest-environment happy-dom
 
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
-import { describe, expect, test } from "vitest";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { describe, expect, test, vi } from "vitest";
 
 import {
+  createMutationDialogTestDouble,
   createUiRouteTestDoubles,
   createUiTestModule,
   createUiTestProviders,
@@ -20,6 +21,28 @@ describe("shared UI mock contracts", () => {
 
     expect((module as unknown as { untouched: string }).untouched).toBe("owner");
     expect(module.useRouteSearch()).toEqual({ decision: "decision-1" });
+  });
+});
+
+describe("MutationDialog test double", () => {
+  test("validates before it submits, with the dialog's quiet call options, and submits nothing refused", async () => {
+    const Dialog = createMutationDialogTestDouble({ values: { name: "Ada" } });
+    const validate = vi.fn()
+      .mockResolvedValueOnce({ fieldErrors: { name: ["Taken"] }, formErrors: [] })
+      .mockResolvedValueOnce(null);
+    const onSubmit = vi.fn(async () => ({ status: "ok" as const, data: "saved" }));
+    const onSubmitted = vi.fn();
+    render(<Dialog open title="Create" fields={[]} submitLabel="Create" parseValues={(values) => values}
+      validate={validate} onSubmit={onSubmit} onSubmitted={onSubmitted} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Submit mutation dialog" }));
+    await waitFor(() => expect(validate).toHaveBeenCalledExactlyOnceWith({ name: "Ada" }, { errorNotification: false }));
+    expect(onSubmit).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole("button", { name: "Submit mutation dialog" }));
+    await waitFor(() => expect(onSubmitted).toHaveBeenCalledExactlyOnceWith("saved", { name: "Ada" }));
+    expect(onSubmit).toHaveBeenCalledExactlyOnceWith({ name: "Ada" }, { errorNotification: false });
+    cleanup();
   });
 });
 
