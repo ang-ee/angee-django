@@ -20,8 +20,9 @@ export interface RuntimeBrand {
 export type RuntimeSelectionField = "app" | "rail" | "brand" | "theme" | "themeLocked" | "home" | "railExpanded";
 
 /**
- * The app the deployment selected, by `?app=` or by hostname: the roots its rail
- * shows, its brand, its default theme and its home. Nothing selected shows every root.
+ * The app the deployment selected, by `?app=`, by hostname or by default: the
+ * roots its rail shows, its brand, its default theme and its home. Nothing
+ * selected, or a named app without a rail, shows every root.
  */
 export interface RuntimeSelection {
   /** The selected menu root id or `ANGEE_UI.shell.apps` name; null when nothing is selected. */

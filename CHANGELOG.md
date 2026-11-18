@@ -18,6 +18,14 @@ live in code docstrings.
   client. An installation that already loaded the row keeps its current value:
   turn it off on the client if it was never chosen.
 
+- A host whose name opens one app still reaches the full console. An
+  `ANGEE_UI.shell.apps` entry without a `rail` shows every root, with its own
+  brand and theme else the shell's, so `apps: {console: {}}` makes
+  `?app=console` the full menu on any host. `ANGEE_UI.shell.app` names the app
+  a page opens when neither `?app=` nor its `hosts` entry selects one, so a
+  product's settings can open its app without knowing the deployment's host
+  names. Both are checked at boot like `hosts`.
+
 - `storage/file#write_granted` holds only the fragments' record arms; `write`
   derives the drive, folder, inherited-owner, draft-owner and admin arms itself,
   and `owner_writer` is `inherited_owner + draft_owner + (owner & write_granted)`.
