@@ -192,6 +192,33 @@ def test_part_ties_cycles_and_orphan_components_have_deterministic_order(
     assert Part.objects.descendants_for_message(message, alone.pk) == []
 
 
+@pytest.mark.parametrize("prefetched", [False, True])
+def test_loaded_tree_answers_each_parent_inside_the_message_without_a_statement(
+    part_tree: tuple[Message, dict[str, Part]], prefetched: bool
+) -> None:
+    """A loaded tree links each part to its parent row; a foreign parent stays unlinked."""
+
+    message, parts = part_tree
+    with system_context(reason="messaging part parent setup"), mute_changes():
+        other = Message.objects.create(platform="email")
+        foreign = Part.objects.create(message=other, type="text/plain")
+        Part.objects.filter(pk=parts["delivery"].pk).update(parent_id=foreign.pk)
+        if prefetched:
+            message = Message._base_manager.prefetch_related(
+                Prefetch("parts", queryset=Part._base_manager.select_related("fragment"))
+            ).get(pk=message.pk)
+    ordered = Part.objects.reading_order_for_message(message)
+    by_id = {part.pk: part for part in ordered}
+    parent_field = Part._meta.get_field("parent")
+    with CaptureQueriesContext(connection) as queries:
+        for part in ordered:
+            if part.parent_id in by_id:
+                assert part.parent is by_id[part.parent_id]
+    assert len(queries) == 0
+    assert by_id[parts["header"].pk].parent is by_id[parts["delivery"].pk]
+    assert not parent_field.is_cached(by_id[parts["delivery"].pk])
+
+
 def test_empty_message_and_missing_parent_in_native_prefetch(db: None) -> None:
     """Empty forests and incomplete native prefetches do not invent ancestors."""
 

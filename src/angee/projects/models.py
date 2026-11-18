@@ -381,6 +381,8 @@ class RuleDatedMixin(models.Model):
         update_fields = kwargs.get("update_fields")
         watched = {"due_rule", *self._due_point_fields(), *self.due_subject_fields}
         if self._state.adding or update_fields is None or watched.intersection(update_fields):
+            # The field normalizes the rule when the row is written; the decisions below read it first.
+            self.due_rule = type(self)._meta.get_field("due_rule").to_python(self.due_rule)
             self.validate_due_rule()
             hold = True if self._written_by_hand(update_fields) else None
             changed = self.apply_due_rule(hold=hold, record_failure=self._due_rule_write)

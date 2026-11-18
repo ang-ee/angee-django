@@ -10,6 +10,16 @@ live in code docstrings.
 
 ## Unreleased — shared addon contracts, native embeddings and graph retrieval
 
+- `storage/file#write_granted` holds only the fragments' record arms; `write`
+  derives the drive, folder, inherited-owner, draft-owner and admin arms itself,
+  and `owner_writer` is `inherited_owner + draft_owner + (owner & write_granted)`.
+  Every `read`, `write`, `share`, `delete` and `transfer` decision is unchanged;
+  a file's read statement no longer compiles its folder's write, which `delete`
+  reached through `owner_writer`. Fragments contribute `write_granted` arms as
+  before. `write_granted` and `owner_writer` are composition terms: a caller that
+  checked either directly checks `write`, `delete` or `transfer`. Operators re-sync
+  the permission schema: storage revision 14.
+
 - An `angee.integrate` stream names its container: `StreamDefinition.container`,
   persisted as `SyncStream.container` (a `PROTECT` key to `integrate.RecordLink`,
   `related_name="child_streams"`), is the parent stream's link whose record

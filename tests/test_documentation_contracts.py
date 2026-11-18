@@ -66,6 +66,7 @@ def test_documented_pnpm_recipes_use_existing_scripts_and_safe_slot_invocation()
         json.loads(path.read_text())["name"]: json.loads(path.read_text())
         for path in [*(ROOT / "packages").glob("*/package.json"), ROOT / "examples/e2e/package.json"]
     }
+    fragments = [json.loads(path.read_text()) for path in (ROOT / "src/angee").glob("*/web/package.json")]
     web = ROOT / "templates/projects/web/template/{{ web_path }}/package.json.jinja"
     # The script object is literal JSON; Jinja owns other parts of this template.
     host_scripts, _ = json.JSONDecoder().raw_decode(web.read_text().split('"scripts":', 1)[1].lstrip())
@@ -97,6 +98,8 @@ def test_documented_pnpm_recipes_use_existing_scripts_and_safe_slot_invocation()
             selected = [packages[name] for name in filters if name in packages]
             if "./packages/**" in filters:
                 selected = [record for name, record in packages.items() if name.startswith("@angee/")]
+            if all(name.startswith("!") for name in filters):
+                selected = fragments  # A stack-root exclusion selects the composed fragments.
             selected = [record for record in selected if "!" + record["name"] not in filters]
             assert selected, snippet
             assert any(script in record.get("scripts", {}) for record in selected), snippet
