@@ -42,7 +42,13 @@ class StateFlow(StrEnum):
 
 @dataclass(frozen=True, slots=True)
 class StateRecord:
-    """Cached data needed to complete one OAuth/OIDC redirect."""
+    """Cached data needed to complete one OAuth/OIDC redirect.
+
+    ``scopes`` are the scopes the authorization request asks for, of which
+    ``oauth_scopes`` are the consumer's own, the ones its grant must cover; ``login_hint``
+    names the account a connect expects, when its consumer knows it; ``consent``
+    marks a connect restarted to ask the provider for consent again.
+    """
 
     oauth_client_id: str
     redirect_uri: str
@@ -53,6 +59,10 @@ class StateRecord:
     next_path: str = ""
     flow: StateFlow = StateFlow.LOGIN
     integration_id: str = ""
+    scopes: tuple[str, ...] = ()
+    oauth_scopes: tuple[str, ...] = ()
+    login_hint: str = ""
+    consent: bool = False
 
 
 def issue(
@@ -63,6 +73,10 @@ def issue(
     next_path: str = "",
     flow: StateFlow = StateFlow.LOGIN,
     integration_id: str = "",
+    scopes: tuple[str, ...] = (),
+    oauth_scopes: tuple[str, ...] = (),
+    login_hint: str = "",
+    consent: bool = False,
 ) -> tuple[str, StateRecord]:
     """Create and cache one single-use redirect state record."""
 
@@ -78,6 +92,10 @@ def issue(
         next_path=next_path,
         flow=flow,
         integration_id=integration_id,
+        scopes=scopes,
+        oauth_scopes=oauth_scopes,
+        login_hint=login_hint,
+        consent=consent,
     )
     cache.set(_cache_key(state_token), record, timeout=_state_ttl_seconds())
     return state_token, record

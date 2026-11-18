@@ -5,18 +5,76 @@ from __future__ import annotations
 from typing import cast
 
 import strawberry
+import strawberry_django
 from django.db import models
+from strawberry import auto
 
 from angee.base.fields.state import StateField
 from angee.base.fields.text import ColorField
-from angee.graphql.data.contracts import DataResourceRoots, DataResourceTypeNames
+from angee.base.models.base import AngeeDataModel
+from angee.graphql.data.contracts import DataQueryOrder, DataResourceRoots, DataResourceTypeNames
+from angee.graphql.data.hasura import hasura_model_resource
 from angee.graphql.data.metadata import _finalize_data_resource
 from angee.graphql.data.resource_fields import RESOURCE_FIELD_SCALARS, resource_field_widget
 from angee.graphql.introspection import is_to_one_relation
+from angee.graphql.node import AngeeNode
+from tests.conftest import addon_schema
+
+
+class ClassifiedTimeSlot(AngeeDataModel):
+    """A model resource carrying a native time-of-day column."""
+
+    sqid_prefix = "cts_"
+
+    starts = models.TimeField()
+
+    class Meta:
+        """Django model options for the test model."""
+
+        app_label = "tests"
+        rebac_resource_type = "tests/classified_time_slot"
 
 
 def test_uuid_is_a_supported_resource_scalar() -> None:
     assert "UUID" in RESOURCE_FIELD_SCALARS
+
+
+def test_time_field_projects_the_time_scalar_widget_filters_and_sort() -> None:
+    """A Django TimeField reads, writes, filters and sorts as GraphQL ``Time`` with Date's operators."""
+
+    @strawberry_django.type(ClassifiedTimeSlot)
+    class ClassifiedTimeSlotType(AngeeNode):
+        starts: auto
+
+    resource = hasura_model_resource(
+        ClassifiedTimeSlotType,
+        model=ClassifiedTimeSlot,
+        name="time_slots",
+        filterable=["id", "starts"],
+        sortable=["starts"],
+        aggregatable=["id"],
+        groupable=["starts"],
+        get_queryset=lambda info: ClassifiedTimeSlot.objects.all(),
+    )
+    schema = addon_schema(
+        {"public": {"query": [resource.query], "mutation": [resource.mutation],
+                    "types": [ClassifiedTimeSlotType, *resource.types]}},
+        "public",
+    )
+    [metadata] = schema.angee_resources
+    starts = next(field for field in metadata.fields if field.name == "starts")
+    query = metadata.query.fields["starts"]
+
+    assert (starts.kind, starts.scalar, starts.widget) == ("scalar", "Time", "time")
+    assert starts.creatable and starts.updatable and starts.required_on_create
+    assert query.scalar == "Time"
+    assert query.filter is not None
+    assert query.filter.scalar == "Time"
+    assert query.filter.operators == ("exact", "ne", "gt", "gte", "lt", "lte", "inList", "notInList", "isNull")
+    assert query.sort == DataQueryOrder("starts")
+    # A time of day groups by value; calendar extractions belong to Date and DateTime.
+    assert metadata.query.axes["starts"].kind == "column"
+    assert metadata.query.axes["starts"].extractions == ()
 
 
 def test_generic_relation_without_one_fixed_model_is_not_a_to_one_axis() -> None:

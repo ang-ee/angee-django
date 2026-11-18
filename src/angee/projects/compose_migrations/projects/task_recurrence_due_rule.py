@@ -1,9 +1,13 @@
-"""Move each task's ``recurrence`` into a due rule that repeats, then retire the column.
+"""Migration template: move each task's ``recurrence`` into a due rule that repeats, then retire the column.
+
+Copy this module into the host's ``runtime/projects/migrations/`` under the host's next
+migration name, then replace the placeholder dependency below with the host's own
+explicit migration (never ``__latest__``); a host may instead subclass ``Migration``
+here and declare its own ``dependencies``.
 
 Before this release ``projects.Task.recurrence`` held an RFC-5545 RRULE that
 nothing acted on; a task's repetition is now its due rule's ``repeat``
-(``angee.scheduling.due``). Author this upgrade as the host's next ``projects``
-migration (fill ``dependencies``): it adds ``due_at``, ``due_rule`` and
+(``angee.scheduling.due``). The migration adds ``due_at``, ``due_rule`` and
 ``due_basis`` to the task table and its history table, moves the values, and
 removes ``recurrence`` from both, which the drop guard refuses to remove by
 autodetection while the column holds rules. Run ``makemigrations`` afterwards for
@@ -20,12 +24,16 @@ date, and its ``COUNT`` counts from its creation day. A blank or malformed rule
 is skipped and counted in the log; the task keeps no rule.
 """
 
+from __future__ import annotations
+
 import logging
 from datetime import UTC, date, datetime, time
 from typing import Any
 
+from django.apps.registry import Apps
 from django.core.exceptions import ValidationError
 from django.db import migrations, models
+from django.db.backends.base.schema import BaseDatabaseSchemaEditor
 from django.utils import timezone
 
 from angee.scheduling.due import DueRule, Repeat, Term
@@ -42,13 +50,11 @@ _DUE_COLUMNS = (
 )
 
 
-def applies(state):
-    task = state.models.get(("projects", "task"))
-    return task is not None and "recurrence" in task.fields
-
-
 def calendar_rule(rule: str, start: date) -> str | None:
-    """Return ``rule`` with a ``COUNT`` made the ``UNTIL`` of its last point, ``start`` the first; ``None``: no repeat."""
+    """Return ``rule`` with a ``COUNT`` made the ``UNTIL`` of its last point, ``start`` the first.
+
+    ``None`` means no repeat.
+    """
 
     parts = [part for part in rule.strip().split(";") if part]
     count = [part for part in parts if part.upper().startswith("COUNT=")]
@@ -86,8 +92,12 @@ def task_due_rule(
     return rule.as_json(), rule.resolve(anchors={"set": due_date}).as_json()
 
 
-def task_recurrence_due_rule(apps, schema_editor):
-    tasks = apps.get_model("projects", "Task")._base_manager.using(schema_editor.connection.alias)
+def task_recurrence_due_rule(apps: Apps, schema_editor: BaseDatabaseSchemaEditor) -> None:
+    """Give each task with a recurrence the due rule replacing it; blank or malformed rules are skipped and logged."""
+
+    # The historical task still has ``recurrence``, which the current model class does not.
+    task_model: Any = apps.get_model("projects", "Task")
+    tasks = task_model._base_manager.using(schema_editor.connection.alias)
     skipped = 0
     for task in tasks.exclude(recurrence="").order_by("pk").iterator():
         if not task.recurrence.strip():
@@ -106,7 +116,8 @@ def task_recurrence_due_rule(apps, schema_editor):
 
 
 class Migration(migrations.Migration):
-    dependencies = []
+    # Placeholder: the host's latest ``projects`` migration, whose task still has ``recurrence``.
+    dependencies = [("projects", "HOST_MIGRATION_WITH_THE_TASK_RECURRENCE_COLUMN")]
     operations = [
         *(
             migrations.AddField(table, name, field())

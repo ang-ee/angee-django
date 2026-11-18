@@ -251,7 +251,7 @@ def toolsets_for_session(session: Any) -> list[Any]:
         tools = selected.get(server.pk, {})
         if not tools:
             continue
-        transport = _transport_for(server)
+        transport = _transport_for(server, agent)
         toolset: Any = MCPToolset(transport, id=str(server.sqid))
         toolset = FilteredToolset(toolset, filter_func=_tool_filter(frozenset(tools)))
         toolset = ToolGrantToolset(toolset, access, str(server.sqid))
@@ -325,20 +325,20 @@ def _bounded_tool_result(value: Any) -> Any:
     return f"{serialized[:preview_length]}{TOOL_RESULT_TRUNCATED}"
 
 
-def _transport_for(server: Any) -> Any:
-    """Return the owner-native HTTP transport for one external MCP server row."""
+def _transport_for(server: Any, agent: Any) -> Any:
+    """Return the owner-native HTTP transport ``agent`` uses for one MCP server row.
+
+    The server owns the ``Authorization`` it receives, freshness included
+    (``MCPServer.authorization_for``), the same value the provisioned ``.mcp.json`` sends.
+    """
 
     url = str(server.resolved_url or "").strip()
     if not url:
         raise ValueError(f"MCP server {server.name!r} has no addressable URL.")
-    headers: dict[str, str] = {}
+    headers: dict[str, str] | None = None
     if server.credential_id:
-        server.credential.ensure_fresh()
-        bearer = str(server.credential.secret_value() or "")
-        if not bearer:
-            raise ValueError(f"MCP server {server.name!r} has an empty credential.")
-        headers["Authorization"] = f"Bearer {bearer}"
-    return StreamableHttpTransport(url, headers=headers or None)
+        headers = {"Authorization": server.authorization_for(agent)}
+    return StreamableHttpTransport(url, headers=headers)
 
 
 def _tool_filter(names: frozenset[str]) -> Callable[[Any, Any], bool]:

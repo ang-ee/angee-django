@@ -1120,7 +1120,7 @@ class Message(
     resolve ``sender`` through the handle's merge redirect.
     """
 
-    merge_policies = {"sender": MergePolicy.KEEP}
+    merge_policies: ClassVar[Mapping[str, Any]] = {"sender": MergePolicy.KEEP}
 
     _inbox_attachment: ThreadAttachment | None = None
     """Authorized notification context set by the notification read owner."""
@@ -2161,7 +2161,7 @@ class Participant(AuditMixin, AngeeDataModel, concrete=True):
     resolve ``handle`` through the handle's merge redirect.
     """
 
-    merge_policies = {"handle": MergePolicy.KEEP}
+    merge_policies: ClassVar[Mapping[str, Any]] = {"handle": MergePolicy.KEEP}
 
     class ParticipantRole(models.TextChoices):
         """The RFC-5322 envelope role of a participant."""

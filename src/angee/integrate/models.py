@@ -7,11 +7,12 @@ that sit the third-party ``Vendor`` catalogue, the first-class ``Integration``
 an integration runs over, addon-owned concrete child integration kinds, and
 outbound ``WebhookSubscription``.
 
-This addon is pure OAuth: it connects *out* to external systems and never
-authenticates a session. OIDC login fields and ID-token verification live one
-level up in ``iam_integrate_oidc``, which extends this OAuth base and composes the
-``iam`` user. Concrete capabilities and their implementation selectors live in
-their owning addons; this addon never imports them.
+This addon connects *out* to external systems and never authenticates a
+session. It owns OIDC metadata (issuer, JWKS) and ID-token verification, which
+identify a connected account; OIDC login policy lives one level up in
+``iam_integrate_oidc``, which extends this OAuth base and composes the ``iam``
+user. Concrete capabilities and their implementation selectors live in their
+owning addons; this addon never imports them.
 """
 
 from __future__ import annotations
@@ -19,7 +20,7 @@ from __future__ import annotations
 import json
 import logging
 import secrets
-from collections.abc import Collection, Iterable, Iterator, Mapping
+from collections.abc import Callable, Collection, Iterable, Iterator, Mapping
 from contextlib import contextmanager
 from copy import copy, deepcopy
 from dataclasses import replace
@@ -71,6 +72,7 @@ from angee.base.permissions import actor_user_id, instance_actor
 from angee.base.refs import generic_pointer_target
 from angee.base.serialization import canonical_json
 from angee.graphql.capabilities import held_permissions
+from angee.graphql.mixins import ImplementationChoicesMixin
 from angee.integrate.constants import DISCOVERY_ATTEMPT_LIMIT, DISCOVERY_TASK, DISCOVERY_TASK_EXPIRES
 from angee.integrate.credentials import CredentialKind, CredentialKindHandler
 from angee.integrate.discovery import ConnectionDiscovery
@@ -83,14 +85,25 @@ from angee.integrate.errors import (
     transient_retry_delay,
 )
 from angee.integrate.events import EventKind
-from angee.integrate.impl import BridgeImpl, IntegrationImpl, LiveBridgeImpl
+from angee.integrate.impl import BridgeImpl, IntegrationImpl, LiveBridgeImpl, OAuthConnectIntent
 from angee.integrate.live import PairingProjection, PairingState, armed_material_key
 from angee.integrate.mixins import SyncStateMixin
 from angee.integrate.net import validate_public_url
 from angee.integrate.oauth.client import OAuthClientProtocol
 from angee.integrate.oauth.discovery import discovery_document as oidc_metadata_document
-from angee.integrate.oauth.errors import CLIENT_NOT_CONFIGURED, INVALID_STATE, OAuthFlowError
+from angee.integrate.oauth.errors import (
+    ACCOUNT_ALREADY_LINKED,
+    ACCOUNT_SWITCH_REFUSED,
+    CLIENT_NOT_CONFIGURED,
+    CONSENT_REQUIRED,
+    INVALID_STATE,
+    OAUTH_CLIENT_NOT_CONNECTABLE,
+    SCOPE_NOT_GRANTED,
+    SCOPE_NOT_IN_CATALOGUE,
+    OAuthFlowError,
+)
 from angee.integrate.oauth.providers import OAuthProviderType
+from angee.integrate.oauth.state import StateFlow
 from angee.integrate.registry import models_with
 from angee.integrate.signals import discovery_finished
 from angee.integrate.states import (
@@ -132,9 +145,17 @@ from angee.resources.mixins import ResourceLoadMixin
 
 logger = logging.getLogger(__name__)
 
-# Renew an OAuth access token this far ahead of its expiry, so a consumer about to
-# use it (e.g. provisioning) gets a token with life left rather than one about to lapse.
-_OAUTH_REFRESH_MARGIN = timedelta(minutes=5)
+# Renew an access token this far ahead of its expiry, so a consumer about to use it
+# (e.g. provisioning) gets a token with life left rather than one about to lapse. A
+# minted token renews at the earlier of this margin and half its lifetime.
+_TOKEN_RENEWAL_MARGIN = timedelta(minutes=5)
+# A minted token whose response omits ``expires_in`` is assumed to live five minutes:
+# short enough that, renewed at half its lifetime, it is replaced after 150 seconds,
+# well inside the shortest lifetimes token endpoints issue, so an unknown expiry is
+# never outlived; long enough that a steady consumer still mints only every few minutes.
+_DEFAULT_TOKEN_LIFETIME = timedelta(minutes=5)
+# The material key under which a kind that mints per scope set caches its tokens.
+_SCOPED_TOKENS = "scoped_tokens"
 _UNSET = object()
 _INTEGRATION_FAILURE_MESSAGE = INTEGRATION_FAILURE_MESSAGE
 _WEBHOOK_FAILURE_MESSAGE = "Webhook delivery failed."
@@ -217,9 +238,9 @@ _OAuthClientManagerBase = AngeeHistoryManager.from_queryset(OAuthClientQuerySet)
 class OAuthClientManager[OAuthClientT: OAuthClient](_OAuthClientManagerBase[OAuthClientT]):
     """Manager for settings-sourced OAuth client registration.
 
-    OAuth only: settings entries carry the OAuth base fields. The OIDC refinement
-    (issuer/JWKS/discovery + login policy) is owned by the ``iam_integrate_oidc``
-    addon and seeded there, never from here.
+    Settings entries carry the OAuth base fields, OIDC metadata included. Login
+    policy is owned by the ``iam_integrate_oidc`` addon and seeded there, never
+    from here.
     """
 
     seed_fields = frozenset(
@@ -229,6 +250,8 @@ class OAuthClientManager[OAuthClientT: OAuthClient](_OAuthClientManagerBase[OAut
             "icon",
             "client_id",
             "discovery_url",
+            "issuer",
+            "jwks_uri",
             "authorize_endpoint",
             "token_endpoint",
             "revoke_endpoint",
@@ -315,14 +338,14 @@ class OAuthClientManager[OAuthClientT: OAuthClient](_OAuthClientManagerBase[OAut
             raise ValueError(f"ANGEE_INTEGRATE_OAUTH_CLIENTS entry {index} is missing required field(s): {names}")
 
 
-class OAuthClient(ImplDefaultsMixin, AuditMixin, AngeeDataModel, concrete=True):
+class OAuthClient(ImplementationChoicesMixin, ImplDefaultsMixin, AuditMixin, AngeeDataModel, concrete=True):
     """OAuth2 client registration for connecting an external account.
 
     The base of the connection substrate: enough to run the authorization-code and
-    refresh flows and act against a provider's API (Gemini, Grok, Anthropic). It
-    carries no identity or login policy itself — a provider that also
-    authenticates a *login* gains direct fields from the ``iam_integrate_oidc``
-    extension when that addon is installed.
+    refresh flows, act against a provider's API (Gemini, Grok, Anthropic) and
+    verify the ID token that identifies the connected account. It carries no login
+    policy itself — a provider that also authenticates a *login* gains direct
+    fields from the ``iam_integrate_oidc`` extension when that addon is installed.
 
     Self-describing: ``slug`` is its own connect-client key and ``icon``/
     ``display_name`` its own button branding. The third-party catalogue is
@@ -344,6 +367,10 @@ class OAuthClient(ImplDefaultsMixin, AuditMixin, AngeeDataModel, concrete=True):
     client_id = models.CharField(max_length=255, blank=True)
     client_secret = EncryptedField(blank=True)
     discovery_url = models.URLField(blank=True)
+    issuer = models.URLField(blank=True)
+    """OIDC issuer an ID token must name; blank is filled from discovery."""
+    jwks_uri = models.URLField(blank=True)
+    """JWK set that signs this provider's ID tokens; blank is filled from discovery."""
     authorize_endpoint = models.URLField(blank=True)
     token_endpoint = models.URLField(blank=True)
     revoke_endpoint = models.URLField(blank=True)
@@ -404,6 +431,14 @@ class OAuthClient(ImplDefaultsMixin, AuditMixin, AngeeDataModel, concrete=True):
                 name="uniq_integrate_oauth_client_slug_environment",
             ),
         )
+
+    @classmethod
+    def include_impl_choice(cls, field_name: str, implementation: type[object]) -> bool:
+        """Keep retired provider keys out of the provider picker."""
+
+        if field_name == "provider_type" and issubclass(implementation, OAuthProviderType):
+            return not implementation.retired
+        return super().include_impl_choice(field_name, implementation)
 
     def __str__(self) -> str:
         """Return the configured OAuth client display name or slug environment."""
@@ -479,11 +514,38 @@ class OAuthClient(ImplDefaultsMixin, AuditMixin, AngeeDataModel, concrete=True):
 
         return self._string_list(self.scopes_catalogue)
 
+    def requested_scopes(self, oauth_scopes: Iterable[str] = (), *, granted: Iterable[str] = ()) -> list[str]:
+        """Return this client's default scopes followed by a consumer's ``oauth_scopes``.
+
+        One registration serves every consumer of a provider (``OAuthConnectIntent``).
+        A consumer may ask only for scopes the registration offers in
+        ``scopes_catalogue``; anything else is refused before the provider redirect.
+        ``granted`` are the scopes the account's current grant holds; the offered
+        ones are asked for again, so one consumer never narrows another's grant.
+        """
+
+        defaults = self.default_scope_values
+        requested = list(dict.fromkeys([*defaults, *oauth_scopes]))
+        offered = {*defaults, *self.scopes_catalogue_values}
+        if missing := [scope for scope in requested if scope not in offered]:
+            raise OAuthFlowError(
+                SCOPE_NOT_IN_CATALOGUE, 400, f"{self.slug} does not offer scope(s): {', '.join(missing)}",
+            )
+        return list(dict.fromkeys([*requested, *(scope for scope in granted if scope in offered)]))
+
     @property
     def authorize_param_values(self) -> dict[str, str]:
         """Return configured provider-specific authorize parameters."""
 
         return self._string_mapping(self.authorize_params)
+
+    def asks_consent_again(self, flow: StateFlow) -> bool:
+        """Whether this provider can be asked for consent again on ``flow``, so restarting with consent helps."""
+
+        configured = self.authorize_param_values
+        return self.provider.authorize_params(flow, configured, consent=True) != self.provider.authorize_params(
+            flow, configured, consent=False,
+        )
 
     @property
     def token_param_values(self) -> dict[str, Any]:
@@ -592,14 +654,16 @@ class OAuthClient(ImplDefaultsMixin, AuditMixin, AngeeDataModel, concrete=True):
             return ""
         return str(value)
 
-    # OIDC discovery key -> the blank endpoint field this client fills from it. The
-    # OAuth base owns its own transport/userinfo endpoints; discovery fills only
-    # blanks, so explicit configuration is never overwritten.
+    # OIDC discovery key -> the blank field this client fills from it: transport and
+    # userinfo endpoints, and the issuer and JWKS URI that verify an ID token.
+    # Discovery fills only blanks, so explicit configuration is never overwritten.
     DISCOVERY_ENDPOINT_FIELDS = {
         "authorize_endpoint": "authorization_endpoint",
         "token_endpoint": "token_endpoint",
         "revoke_endpoint": "revocation_endpoint",
         "userinfo_endpoint": "userinfo_endpoint",
+        "issuer": "issuer",
+        "jwks_uri": "jwks_uri",
     }
 
     def fill_endpoints_from_discovery(self, discovery: Mapping[str, Any]) -> bool:
@@ -610,13 +674,8 @@ class OAuthClient(ImplDefaultsMixin, AuditMixin, AngeeDataModel, concrete=True):
         set them by name.
         """
 
-        return self.fill_discovery_fields(discovery, self.DISCOVERY_ENDPOINT_FIELDS)
-
-    def fill_discovery_fields(self, discovery: Mapping[str, Any], fields: Mapping[str, str]) -> bool:
-        """Fill declared blank fields without replacing explicit configuration."""
-
         changed = False
-        for field, key in fields.items():
+        for field, key in self.DISCOVERY_ENDPOINT_FIELDS.items():
             if getattr(self, field, ""):
                 continue
             value = discovery.get(key)
@@ -625,14 +684,8 @@ class OAuthClient(ImplDefaultsMixin, AuditMixin, AngeeDataModel, concrete=True):
                 changed = True
         return changed
 
-    def fill_extension_fields_from_discovery(self, discovery: Mapping[str, Any]) -> bool:
-        """Hook for composed extensions to project discovery onto their own fields."""
-
-        del discovery
-        return False
-
     def discover_endpoints(self, *, persist: bool = False) -> Mapping[str, Any]:
-        """Fetch OIDC metadata and fill blank OAuth/extension endpoints on this row.
+        """Fetch OIDC metadata and fill blank endpoints, issuer and JWKS URI on this row.
 
         A protocol fills the row in memory for its current request and treats a
         row without a discovery URL as explicitly configured. ``persist`` is the
@@ -646,7 +699,6 @@ class OAuthClient(ImplDefaultsMixin, AuditMixin, AngeeDataModel, concrete=True):
             return {}
         discovery = oidc_metadata_document(self.discovery_url)
         self.fill_endpoints_from_discovery(discovery)
-        self.fill_extension_fields_from_discovery(discovery)
         if persist:
             self.save()
         return discovery
@@ -693,13 +745,17 @@ class ExternalAccountManager[ExternalAccountT: ExternalAccount](_ExternalAccount
         tokens: dict[str, Any],
         claims: dict[str, Any],
         reason: str = "integrate.oauth.connect",
+        require_refresh_token: bool = False,
+        required_scopes: Iterable[str] = (),
     ) -> ExternalAccountT:
         """Link ``user``'s verified provider identity and store its OAuth credential in one transaction.
 
         The account is labelled from the provider claims; its credential is the
-        ``(user, provider)`` upsert, so a reconnect replaces the grant in place.
-        Raises ``ValidationError`` (``account_already_linked``) when another user
-        owns the identity.
+        ``(user, provider, account)`` upsert, so a reconnect replaces that account's
+        grant in place and never touches another account's. Raises
+        ``ValidationError`` (``account_already_linked``) when another user owns the
+        identity. ``require_refresh_token`` and ``required_scopes`` are the
+        upsert's grant checks; a refusal links nothing.
         """
 
         email = oauth_client.email_from_claims(claims) or ""
@@ -719,6 +775,8 @@ class ExternalAccountManager[ExternalAccountT: ExternalAccount](_ExternalAccount
                 CredentialKind.OAUTH,
                 tokens,
                 external_account=account,
+                require_refresh_token=require_refresh_token,
+                required_scopes=required_scopes,
             )
             account.save(update_fields=["credential", "updated_at"])
         return account
@@ -764,7 +822,7 @@ class ExternalAccountManager[ExternalAccountT: ExternalAccount](_ExternalAccount
             )
             if owner is not None and instance.owner_id not in (None, owner.pk):
                 raise ValidationError(
-                    "This external account is already linked to another user.", code="account_already_linked",
+                    "This external account is already linked to another user.", code=ACCOUNT_ALREADY_LINKED,
                 )
             if not created:
                 for name, value in update_values.items():
@@ -855,6 +913,18 @@ class ExternalAccount(OwnerMixin, AngeeDataModel, concrete=True):
         return self.email or self.display_name or self.external_id
 
     @property
+    def provider_identity(self) -> tuple[str, str]:
+        """Identify the person behind this account: the client's OIDC issuer, or the client, and the subject.
+
+        Two clients of one issuer share the identity of one subject, so a
+        connection may move between them; without an issuer, subjects compare
+        within one client only.
+        """
+
+        issuer = self.oauth_client.issuer
+        return (issuer or f"oauth_client:{self.oauth_client_id}", self.external_id)
+
+    @property
     def provider_slug(self) -> str:
         """Return the originating OAuth client's slug."""
 
@@ -889,6 +959,12 @@ class ExternalAccount(OwnerMixin, AngeeDataModel, concrete=True):
         return email
 
 
+def _records_permanent_refusal(error: Exception) -> bool:
+    """Return whether a renewal refusal marks the credential failed: any refusal that is not transient."""
+
+    return not is_transient_failure(error)
+
+
 class CredentialQuerySet[CredentialT: Credential](AngeeHistoryQuerySet[CredentialT]):
     """REBAC-scoped reads for credential health and connected accounts."""
 
@@ -906,6 +982,7 @@ class CredentialQuerySet[CredentialT: Credential](AngeeHistoryQuerySet[Credentia
                 "status",
                 "expires_at",
                 "last_refresh_status",
+                "granted_scopes",
                 "kind",
                 "oauth_client__supports_refresh",
             )
@@ -1015,12 +1092,21 @@ class CredentialManager[CredentialT: Credential](_CredentialManagerBase[Credenti
                 discovered_integrations__isnull=True,
             ).delete()
 
-    def live_oauth_for_user(self, user: Any, oauth_client: Any) -> Any | None:
-        """Reuse a credential whenever its owner does not require fresh consent."""
+    def live_oauth_for_user(
+        self, user: Any, oauth_client: Any, *, external_account: Any, oauth_scopes: Iterable[str] = (),
+    ) -> Any | None:
+        """Return the account's OAuth credential when it needs no fresh consent and holds ``oauth_scopes``.
+
+        The consumer's scopes are checked against the scopes the provider reported granting.
+        """
 
         with system_context(reason="integrate.connections.credential.live"):
-            row = self.filter(user=user, oauth_client=oauth_client, kind=CredentialKind.OAUTH).first()
-            return row if row is not None and not row.is_reconnect_required else None
+            row = self.filter(
+                user=user, oauth_client=oauth_client, external_account=external_account, kind=CredentialKind.OAUTH,
+            ).first()
+        if row is None or row.is_reconnect_required:
+            return None
+        return row if set(oauth_scopes) <= set(row.granted_scopes or ()) else None
 
     def upsert_for_user(
         self,
@@ -1032,77 +1118,122 @@ class CredentialManager[CredentialT: Credential](_CredentialManagerBase[Credenti
         *,
         external_account: Any | None = None,
         reconnect: bool = True,
+        require_refresh_token: bool = False,
+        required_scopes: Iterable[str] = (),
         **fields: Any,
     ) -> Any:
-        """Create or update one ``(user, oauth_client)`` OAuth credential (connect/login flow)."""
+        """Create or update one ``(user, oauth_client, external_account)`` credential (connect/login flow).
+
+        Each account a user connects at a provider has its own credential, so a
+        second account never replaces the first. A row stored without an account
+        (before credentials were per account) is adopted by the first account that
+        connects, never orphaned beside a new one. The row is updated under its own
+        lock with what the kind carries forward over its stored material
+        (:meth:`CredentialKindHandler.carry_forward`: an OAuth grant without a
+        refresh token keeps the stored one). ``require_refresh_token`` refuses
+        (``consent_required``) a grant that would leave a refreshable client's
+        credential without one. A grant that reports its scopes must cover
+        ``required_scopes`` and those of every integration the credential serves
+        (``scope_not_granted``). A refusal writes nothing. A reconnect re-attaches
+        the integrations whose discovered material derives from the replaced grant.
+        """
 
         handler = CredentialKind(kind).handler
-        operation_values, update_values = self._assemble_values(handler, material, fields)
-        if external_account is not None:
-            update_values["external_account_id"] = external_account.pk
+        material, update_values = self._assemble_values(handler, material, fields)
+        account_id = None if external_account is None else external_account.pk
         create_values = {
-            "external_account_id": external_account.pk if external_account is not None else None,
+            "external_account_id": account_id,
             **self._blank_create_values(),
-            **operation_values,
+            "kind": handler.kind,
+            # A callable default is encoded only when the row is created; an existing
+            # row stores what the kind carries forward over its own material.
+            "material": lambda: self.model.encode_material(material),
             **update_values,
         }
         # Give the credential a human label on create (OAuth rows carry no name of their
         # own). Create-only so an admin rename, and token refreshes, are preserved.
         if not str(create_values.get("name") or ""):
             create_values["name"] = self._oauth_credential_name(oauth_client, external_account)
+        identity = {"user_id": user.pk, "oauth_client_id": oauth_client.pk, "external_account_id": account_id}
+        integration_model = apps.get_model("integrate", "Integration")
+
+        def served(credential_pk: int) -> Any:
+            return integration_model.objects.filter(
+                Q(credential_id=credential_pk) | Q(discovery_credential_id=credential_pk),
+            ).order_by("pk")
+
         with system_context(reason=self._REASON), transaction.atomic():
-            existing = self.filter(user_id=user.pk, oauth_client_id=oauth_client.pk).only("pk").first()
+            if account_id is not None and not self.filter(**identity).exists():
+                self._adopt_unlinked(user, oauth_client, external_account, served)
+            existing = self.filter(**identity).only("pk").first()
             integrations = []
-            attached = False
-            if existing is not None:
-                affected = (
-                    apps.get_model("integrate", "Integration")
-                    .objects.filter(
-                        Q(credential_id=existing.pk) | Q(discovery_credential_id=existing.pk),
-                    )
-                    .order_by("pk")
-                )
-                if reconnect:
-                    # Match Retry/Resume: concrete integration and ancestors,
-                    # then the source credential. Refresh-only writes never
-                    # touch integrations and may already hold the credential lock.
-                    integrations = [integration.lock_capability() for integration in affected]
-                existing = self.lock_if_supported().get(pk=existing.pk)
+            if existing is not None and reconnect:
+                # Match Retry/Resume: concrete integration and ancestors, then the
+                # source credential. Refresh-only writes never touch integrations
+                # and may already hold the credential lock.
+                integrations = [integration.lock_capability() for integration in served(existing.pk)]
+            instance, created = self.lock_if_supported().get_or_create(**identity, defaults=create_values)
+            stored = material
+            if not created:
                 # An attachment cannot commit while the credential is locked (its
                 # foreign-key check needs the row), so this read is final. A late
-                # arrival attached between the two reads; it is locked after the
-                # credential, as its re-attachment below would lock it anyway.
+                # arrival is locked after the credential, as its re-attachment below
+                # would lock it anyway.
                 if reconnect:
                     locked = {integration.pk for integration in integrations}
                     integrations += [
-                        integration.lock_capability() for integration in affected if integration.pk not in locked
+                        integration.lock_capability()
+                        for integration in served(instance.pk)
+                        if integration.pk not in locked
                     ]
-                    attached = bool(integrations)
-                else:
-                    attached = affected.exists()
-            if (
-                existing is not None
-                and external_account is not None
-                and existing.external_account_id not in (None, external_account.pk)
-                and attached
-            ):
-                raise OAuthFlowError("account_switch_refused", 409)
-            instance, _created = self.update_or_create(
-                user_id=user.pk,
-                oauth_client_id=oauth_client.pk,
-                defaults={**operation_values, **update_values},
-                create_defaults=create_values,
-            )
-            if reconnect and existing is not None:
+                stored = handler.carry_forward(material, instance.reveal())
+                values = {"kind": handler.kind, "material": self.model.encode_material(stored), **update_values}
+                for name, value in values.items():
+                    setattr(instance, name, value)
+                instance.save(update_fields=[*values, "updated_at"])
+            refreshable_client = handler.kind == CredentialKind.OAUTH and oauth_client.supports_refresh
+            if require_refresh_token and refreshable_client and not stored.get("refresh_token"):
+                raise OAuthFlowError(CONSENT_REQUIRED, 409)
+            if "granted_scopes" in update_values:
+                needed = set(required_scopes).union(
+                    *(integration.connection_oauth_scopes for integration in integrations),
+                )
+                if missing := sorted(needed - set(update_values["granted_scopes"])):
+                    raise OAuthFlowError(SCOPE_NOT_GRANTED, 409, f"Scope(s) not granted: {', '.join(missing)}")
+            if reconnect and not created:
                 for integration in integrations:
-                    if (
-                        existing.external_account_id == instance.external_account_id
-                        and integration.credential_id == instance.pk
-                    ):
+                    if integration.credential_id == instance.pk:
                         continue
                     # Re-consent invalidates resource tokens derived from the old grant.
                     integration.attach_connection(instance, connect_disconnected=False)
         return instance
+
+    def _adopt_unlinked(self, user: Any, oauth_client: Any, external_account: Any, served: Any) -> None:
+        """Give the user's account-less credential at this client to its first connected account.
+
+        Such a row predates per-account credentials; the integrations it serves
+        without a binding bind to that account too. Integrations lock before the
+        credential, the order every attachment takes; saves keep their history.
+        """
+
+        legacy = self.filter(user_id=user.pk, oauth_client_id=oauth_client.pk, external_account__isnull=True).first()
+        if legacy is None:
+            return
+        integrations = [integration.lock_capability() for integration in served(legacy.pk)]
+        legacy = self.lock_if_supported().get(pk=legacy.pk)
+        if legacy.external_account_id is not None:
+            return
+        # As in a reconnect, an integration that attached it meanwhile is locked after the credential.
+        locked = {integration.pk for integration in integrations}
+        integrations += [
+            integration.lock_capability() for integration in served(legacy.pk) if integration.pk not in locked
+        ]
+        legacy.external_account = external_account
+        legacy.save(update_fields=["external_account", "updated_at"])
+        for integration in integrations:
+            if integration.credential_id == legacy.pk and integration.account_id is None:
+                integration.account = external_account
+                integration.save(update_fields=["account", "updated_at"])
 
     @staticmethod
     def _oauth_credential_name(oauth_client: OAuthClient, external_account: ExternalAccount | None) -> str:
@@ -1196,7 +1327,8 @@ class CredentialManager[CredentialT: Credential](_CredentialManagerBase[Credenti
             raise ValueError("OAuth credentials are minted by the connect/login flow, not create_local_credential().")
         if not name:
             raise ValidationError({"name": "This field is required."})
-        return self._assemble_values(handler, material, fields)
+        material, update_values = self._assemble_values(handler, material, fields)
+        return {"kind": handler.kind, "material": self.model.encode_material(material)}, update_values
 
     def _assemble_values(
         self,
@@ -1204,18 +1336,16 @@ class CredentialManager[CredentialT: Credential](_CredentialManagerBase[Credenti
         material: dict[str, Any],
         fields: dict[str, Any],
     ) -> tuple[dict[str, Any], dict[str, Any]]:
-        """Return ``(operation_values, update_values)`` for both create paths."""
+        """Return the handler's cleaned material and the update values both create paths store beside it."""
 
-        handler.validate(material)
+        material = handler.clean(material)
         if owned := self.operation_fields & fields.keys():
             names = ", ".join(sorted(owned))
             raise ValueError(f"Credential field(s) are owned by the manager: {names}")
         update_values = handler.upsert_fields(material)
         update_values.update(_validated_manager_values(self.model, fields, allowed=self.caller_fields))
         update_values["status"] = CredentialStatus.ACTIVE
-        material_value = self.model.encode_material(material)
-        operation_values = {"kind": handler.kind, "material": material_value}
-        return operation_values, update_values
+        return material, update_values
 
     @staticmethod
     def _blank_create_values() -> dict[str, Any]:
@@ -1298,7 +1428,8 @@ class Credential(AuditMixin, AngeeDataModel, concrete=True):
 
     @property
     def is_reconnect_required(self) -> bool:
-        """Require consent only for inactive, failed-refresh or unrenewable expired grants."""
+        """Require new consent or key material only for an inactive credential, a failed refresh or
+        mint (``last_refresh_status="failed"``), or an unrenewable expired grant."""
 
         return (
             self.status != CredentialStatus.ACTIVE
@@ -1315,12 +1446,19 @@ class Credential(AuditMixin, AngeeDataModel, concrete=True):
         ordering = ("-updated_at",)
         rebac_resource_type = "integrate/credential"
         constraints = (
-            # OAuth identity: one credential per (user, provider). NULLs are
-            # distinct in SQL unique, so provider-less kinds need their own arm.
+            # Provider identity: one credential per (user, provider, external
+            # account), so one user connects several accounts through one client.
+            # NULLs are distinct in SQL unique, so a provider row without an
+            # account and provider-less kinds need their own arms.
+            models.UniqueConstraint(
+                fields=("user", "oauth_client", "external_account"),
+                condition=Q(oauth_client__isnull=False, external_account__isnull=False),
+                name="uniq_integrate_credential_user_oauth_client_account",
+            ),
             models.UniqueConstraint(
                 fields=("user", "oauth_client"),
-                condition=Q(oauth_client__isnull=False),
-                name="uniq_integrate_credential_user_oauth_client",
+                condition=Q(oauth_client__isnull=False, external_account__isnull=True),
+                name="uniq_integrate_credential_user_oauth_client_unlinked",
             ),
             # Provider-less identity: one named credential per user (named local
             # credentials; provider-bearing rows use the arm above).
@@ -1372,6 +1510,13 @@ class Credential(AuditMixin, AngeeDataModel, concrete=True):
         extra keys remain permitted here.
         """
 
+        self._merge_material(changes)
+
+    def _merge_material(self, changes: Mapping[str, Any], fields: Mapping[str, Any] | None = None) -> None:
+        """Merge ``changes`` into the material and set ``fields`` on the row in one locked save."""
+
+        assigned = dict(fields or {})
+        updated = ["material", *assigned, "updated_at"]
         with system_context(reason="integrate.credential.material"):
             with transaction.atomic():
                 row: Credential = type(self).objects.lock_if_supported().get(pk=self.pk)
@@ -1383,27 +1528,134 @@ class Credential(AuditMixin, AngeeDataModel, concrete=True):
                         material[key] = value
                 # EncryptedField's descriptor is not modeled by django-stubs.
                 row.material = self.encode_material(material)
-                row.save(update_fields=["material", "updated_at"])
-            self.refresh_from_db(fields=["material", "updated_at"])
+                for name, value in assigned.items():
+                    setattr(row, name, value)
+                row.save(update_fields=updated)
+            self.refresh_from_db(fields=updated)
 
     def replace_material(self, material: Mapping[str, Any]) -> None:
         """Re-enter this credential's secret(s) under the kind handler's validation.
 
         The operator's "the password changed" path: ``material`` carries the
-        kind's own input fields (the handler names them), is validated exactly
-        as at creation, then lands through :meth:`update_material` under the row
-        lock — the row, its kind, and its owner stay as they are, so every
-        integration attached to it keeps working without re-attachment.
+        kind's own input fields (the handler names them), is cleaned exactly
+        as at creation, then merges under the row lock with the fields the handler
+        derives from it (:meth:`CredentialKindHandler.upsert_fields`) in the same
+        save — the row, its kind, and its owner stay as they are, so every
+        integration attached to it keeps working without re-attachment. Tokens
+        minted from the replaced material are dropped with it.
         """
 
-        replacement = dict(material)
-        self.handler.validate(replacement)
-        self.update_material(**replacement)
+        handler = self.handler
+        replacement = handler.clean(material)
+        self._merge_material({**replacement, _SCOPED_TOKENS: None}, fields=handler.upsert_fields(replacement))
 
-    def auth_headers(self) -> dict[str, str]:
-        """Return authorization headers through the kind handler."""
+    def auth_headers(self, *, scopes: Collection[str] = ()) -> dict[str, str]:
+        """Return authorization headers through the kind handler.
 
-        return self.handler.auth_headers(self)
+        ``scopes`` names the access a consumer needs from a kind that mints one
+        token per scope set (:meth:`scoped_access_token`); a kind whose token was
+        fixed when it was granted ignores it.
+        """
+
+        return self.handler.auth_headers(self, scopes=scopes)
+
+    def scoped_access_token(self, scopes: Collection[str]) -> str:
+        """Return a live access token for ``scopes`` from a kind that mints one per scope set.
+
+        ``scopes`` is a collection of scope names; each element is split on
+        whitespace (RFC 6749 §3.3), order and repeats do not matter, and one bare
+        string is refused. Tokens are cached in the encrypted material, one per
+        scope set, and renewed at the earlier of ``_TOKEN_RENEWAL_MARGIN`` and half
+        their lifetime before expiry. The call needs autocommit, cached or not,
+        because a miss mints over the network; a kind that does not mint is refused
+        before any request. An inactive credential fails closed: it serves no token,
+        cached or minted (:meth:`require_active`), judged on this instance, on the
+        row re-read under the lock, and again after a mint.
+        Concurrent consumers serialize in :meth:`_renew_locked`: one mints and the
+        others adopt its persisted token. A refusal the kind handler attributes to
+        the key or identity (:meth:`CredentialKindHandler.records_failure`) records
+        ``last_refresh_status="failed"``, so :attr:`is_reconnect_required` asks
+        for a new key; every refusal is raised, and an empty token is never returned.
+        """
+
+        if isinstance(scopes, str):
+            raise TypeError("Pass the scopes as a collection of scope names, not one string.")
+        handler = self.handler
+        if not handler.mints_per_scope:
+            raise ValueError(f"{self.kind} credentials do not mint access tokens per scope set.")
+        if connection.in_atomic_block:
+            raise RuntimeError("A scoped access token requires autocommit.")
+        scope = " ".join(sorted({part for item in scopes for part in str(item).split()}))
+        if not scope:
+            raise ValueError("A scoped access token needs at least one scope.")
+        self.require_active()
+        if token := self._scoped_token(scope):
+            return token
+        live = ""
+
+        def due(current: Self) -> bool:
+            nonlocal live
+            current.require_active()
+            live = current._scoped_token(scope)
+            return not live
+
+        minted = self._renew_locked(
+            due=due,
+            exchange=lambda current: handler.mint_access_token(current, scope),
+            apply=lambda locked, response: locked._store_scoped_token(scope, response),
+            records_failure=handler.records_failure,
+        )
+        if minted is None:
+            return live
+        # A key edit, reconnect or deactivation during the exchange keeps the minted
+        # token out of the cache; the caller still receives it while the row is active.
+        self.require_active()
+        return str(minted["access_token"])
+
+    def require_active(self) -> None:
+        """Refuse a credential that is not active: no scoped token, cached or minted, and no internal MCP key."""
+
+        if self.status != CredentialStatus.ACTIVE:
+            raise ValueError("This credential is not active, so it serves no tokens.")
+
+    def _scoped_token(self, scope: str) -> str:
+        """Return the cached token for ``scope`` until its renewal time, else ``""``."""
+
+        entry = self.reveal().get(_SCOPED_TOKENS, {}).get(scope)
+        if entry is None or entry["renew_at"] <= timezone.now().timestamp():
+            return ""
+        return str(entry["access_token"])
+
+    def _store_scoped_token(self, scope: str, response: Mapping[str, Any]) -> None:
+        """Cache one minted token on this locked row, pruning expired scope sets, and record success.
+
+        The renewal time is the earlier of ``_TOKEN_RENEWAL_MARGIN`` and half the
+        token's lifetime before expiry; a response without a positive ``expires_in``
+        is given ``_DEFAULT_TOKEN_LIFETIME``.
+        """
+
+        now = timezone.now()
+        issued = now.timestamp()
+        expires_in = response["expires_in"]
+        positive = expires_in is not None and expires_in > 0
+        lifetime = float(expires_in) if positive else _DEFAULT_TOKEN_LIFETIME.total_seconds()
+        margin = min(_TOKEN_RENEWAL_MARGIN.total_seconds(), lifetime / 2)
+        material = self.reveal()
+        cached = {key: entry for key, entry in material.get(_SCOPED_TOKENS, {}).items() if entry["expires_at"] > issued}
+        material[_SCOPED_TOKENS] = {
+            **cached,
+            scope: {
+                "access_token": response["access_token"],
+                "scope": response["scope"],
+                "expires_at": int(issued + lifetime),
+                "renew_at": int(issued + lifetime - margin),
+            },
+        }
+        self.material = self.encode_material(material)
+        self.last_refresh_at = now
+        self.last_refresh_status = "ok"
+        with system_context(reason="integrate.credential.mint"):
+            self.save(update_fields=["material", "last_refresh_at", "last_refresh_status", "updated_at"])
 
     def secret_value(self) -> str:
         """Return the primary secret value through the kind handler."""
@@ -1452,7 +1704,7 @@ class Credential(AuditMixin, AngeeDataModel, concrete=True):
         provider exchange is network I/O, so call it in autocommit.
         """
 
-        if self.expires_at is None or self.expires_at > timezone.now() + _OAUTH_REFRESH_MARGIN:
+        if self.expires_at is None or self.expires_at > timezone.now() + _TOKEN_RENEWAL_MARGIN:
             return
         if not self.refreshable:
             return
@@ -1504,63 +1756,93 @@ class Credential(AuditMixin, AngeeDataModel, concrete=True):
         )
 
     def _refresh_locked(self, *, force: bool = False) -> None:
-        """Exchange the refresh grant outside any transaction, then persist it under a fence.
+        """Exchange the refresh grant through :meth:`_renew_locked`, so a rotated refresh token is never replayed.
 
-        A blocking advisory lock serializes exchanges across workers: a second
-        consumer waits for the holder, re-reads the row and adopts the token it
-        persisted, so a rotated refresh token is never replayed. ``force`` renews
-        regardless of expiry for an explicit refresh, and raises ``ValueError`` when
-        the row it reads is inactive or cannot refresh; the lazy path leaves an
-        inactive row's token alone. The provider call holds no
-        transaction; a short row lock then applies the result, or records a
-        permanent refusal, only while :attr:`refresh_fence` still names the grant
-        that was exchanged, so a reconnect, revocation or material edit during the
-        exchange wins. The instance reloads the persisted row either way.
+        ``force`` renews regardless of expiry for an explicit refresh, and raises
+        ``ValueError`` when the row it reads is inactive or cannot refresh; the lazy
+        path leaves an inactive row's token alone.
+        """
+
+        def due(current: Self) -> bool:
+            stale = current.expires_at is not None and current.expires_at <= timezone.now() + _TOKEN_RENEWAL_MARGIN
+            active = current.status == CredentialStatus.ACTIVE
+            if not (force or (active and stale)):
+                return False
+            if not (active and current.refreshable):
+                raise ValueError("This credential cannot be refreshed; reconnect the account.")
+            return True
+
+        def exchange(current: Self) -> dict[str, Any]:
+            refresh_value = str(current.reveal().get("refresh_token") or "")
+            oauth_client = current.oauth_client
+            assert oauth_client is not None  # ``refreshable`` requires the OAuth client.
+            tokens = OAuthClientProtocol(oauth_client).refresh_token(refresh_token=refresh_value)
+            # The response fully describes the new token; the upsert keeps the stored
+            # refresh token when a provider does not rotate it.
+            return dict(tokens)
+
+        def apply(locked: Self, renewed: dict[str, Any]) -> None:
+            type(self).objects.upsert_for_user(
+                locked.user,
+                locked.oauth_client,
+                CredentialKind.OAUTH,
+                renewed,
+                external_account=locked.external_account,
+                reconnect=False,
+            )
+
+        self._renew_locked(due=due, exchange=exchange, apply=apply)
+
+    def _renew_locked[T](
+        self,
+        *,
+        due: Callable[[Self], bool],
+        exchange: Callable[[Self], T],
+        apply: Callable[[Self, T], None],
+        records_failure: Callable[[Exception], bool] = _records_permanent_refusal,
+    ) -> T | None:
+        """Run one grant exchange outside any transaction, then persist it under a fence.
+
+        The shared renewal skeleton of the OAuth refresh and the scoped mint. A
+        blocking advisory lock serializes exchanges across workers: a second
+        consumer waits for the holder, re-reads the row and adopts what it
+        persisted, so no grant is exchanged twice. ``due`` decides on that re-read
+        row and may raise to refuse. The ``exchange`` holds no transaction; a short
+        row lock then runs ``apply``, or records a refusal ``records_failure``
+        admits (by default every refusal that is not transient) as
+        ``last_refresh_status="failed"``, only while :attr:`refresh_fence` still
+        names the material that was exchanged, so a reconnect, revocation or
+        material edit during the exchange wins. Every refusal propagates. The
+        instance reloads the persisted row either way. Returns the exchange
+        result, or ``None`` when the re-read row was no longer due.
         """
 
         if connection.in_atomic_block:
-            raise RuntimeError("Credential refresh requires autocommit.")
-        rows = type(self).objects.sudo(reason="integrate.credential.refresh")
+            raise RuntimeError("Credential renewal requires autocommit.")
+        rows = type(self).objects.sudo(reason="integrate.credential.renewal")
         with task_lock(record_lock_key(self._meta.label_lower, self.pk, "refresh"), blocking=True):
             current = rows.select_related("oauth_client").get(pk=self.pk)
-            stale = current.expires_at is not None and current.expires_at <= timezone.now() + _OAUTH_REFRESH_MARGIN
-            active = current.status == CredentialStatus.ACTIVE
-            if not (force or (active and stale)):
+            if not due(current):
                 self.refresh_from_db()
-                return
-            if not (active and current.refreshable):
-                raise ValueError("This credential cannot be refreshed; reconnect the account.")
-            refresh_value = str(current.reveal().get("refresh_token") or "")
+                return None
             fence = current.refresh_fence
-            oauth_client = current.oauth_client
-            assert oauth_client is not None  # ``refreshable`` requires the OAuth client.
             try:
-                tokens = OAuthClientProtocol(oauth_client).refresh_token(refresh_token=refresh_value)
+                result = exchange(current)
             except (IntegrationError, ValueError) as error:
-                if not (isinstance(error, IntegrationError) and error.transient):
-                    with system_context(reason="integrate.credential.refresh.failed"), transaction.atomic():
+                if records_failure(error):
+                    with system_context(reason="integrate.credential.renewal.failed"), transaction.atomic():
                         locked = rows.lock_if_supported().get(pk=self.pk)
                         if locked.refresh_fence == fence:
                             locked.last_refresh_status = "failed"
                             locked.save(update_fields=["last_refresh_status", "updated_at"])
                 self.refresh_from_db()
                 raise
-            # The response fully describes the new token; a provider that does not
-            # rotate keeps the stored refresh token, so a one-time token is not dropped.
-            renewed = dict(tokens)
-            renewed.setdefault("refresh_token", refresh_value)
             with transaction.atomic():
                 locked = rows.lock_if_supported().get(pk=self.pk)
                 if locked.refresh_fence == fence:
-                    type(self).objects.upsert_for_user(
-                        locked.user,
-                        locked.oauth_client,
-                        CredentialKind.OAUTH,
-                        renewed,
-                        external_account=locked.external_account,
-                        reconnect=False,
-                    )
+                    apply(locked, result)
         self.refresh_from_db()
+        return result
 
 
 def _validated_manager_values(
@@ -1800,7 +2082,11 @@ class IntegrationManager[IntegrationT: Integration](_IntegrationManagerBase[Inte
     def attach_completed_connect(
         self, integration_sqid: str, user: Any, credential: Any, *, exposed_model_labels: set[str],
     ) -> None:
-        """Attach completed OAuth state only to its one owned, exposed concrete capability."""
+        """Attach completed OAuth state only to its one owned, exposed concrete capability.
+
+        ``attach_connection`` refuses another account than the one the target is
+        bound to; the new account's credential stays connected for the user.
+        """
 
         if not integration_sqid:
             return
@@ -1997,19 +2283,23 @@ class Integration(StatementSourceMixin, ImplDefaultsMixin, OwnerMixin, AngeeData
         raise ImproperlyConfigured(f"{cls._meta.label} has no capability implementation field.")
 
     @property
-    def capability_impl_class(self) -> type[Any]:
-        """Resolve the selected implementation without opening its transport."""
+    def capability_impl_class(self) -> type[OAuthConnectIntent]:
+        """Resolve the selected implementation without opening its transport.
+
+        Every capability implementation base composes ``OAuthConnectIntent``.
+        """
 
         model = self.declared_concrete_model() or type(self)
         field = model.capability_impl_field()
         key = self.__dict__.get("_connection_impl_key")
-        return field.resolve_class(key) if key is not None else field.resolve_for(self.concrete_capability())
+        impl = field.resolve_class(key) if key is not None else field.resolve_for(self.concrete_capability())
+        return cast("type[OAuthConnectIntent]", impl)
 
     @property
     def capability_impl(self) -> Any:
         """Construct the runtime selected by this concrete capability."""
 
-        return self.capability_impl_class(self)
+        return cast(Any, self.capability_impl_class)(self)
 
     @property
     def oauth_client_hint(self) -> str:
@@ -2017,13 +2307,42 @@ class Integration(StatementSourceMixin, ImplDefaultsMixin, OwnerMixin, AngeeData
 
         return self.capability_impl_class.oauth_client
 
+    @property
+    def connection_oauth_scopes(self) -> tuple[str, ...]:
+        """Return the scopes this capability needs beyond its OAuth client's defaults; none without one."""
+
+        if (self.declared_concrete_model() or type(self)) is apps.get_model("integrate", "Integration"):
+            return ()
+        return tuple(self.capability_impl_class.oauth_scopes)
+
+    @property
+    def lacks_oauth_scopes(self) -> bool:
+        """Whether the attached grant misses scopes this capability needs, so Connect can add them."""
+
+        scopes = self.connection_oauth_scopes
+        credential = self._credential_health() if scopes else None
+        return credential is not None and not set(scopes) <= set(credential.granted_scopes or ())
+
+    def bound_account(self, oauth_client_pk: int) -> ExternalAccount | None:
+        """Return the external account this integration is connected as at one OAuth client."""
+
+        if self.account_id is None:
+            return None
+        with system_context(reason="integrate.integration.bound_account"):
+            return cast(
+                "ExternalAccount | None",
+                apps.get_model("integrate", "ExternalAccount")
+                .objects.filter(pk=self.account_id, oauth_client_id=oauth_client_pk)
+                .first(),
+            )
+
     def connection_oauth_slug(self, owner_label: str = "") -> str:
         """Expand this capability's declared OAuth registration hint with its vendor slug."""
 
         hint = str(self.oauth_client_hint or "").strip()
         if not hint:
             raise OAuthFlowError(
-                "oauth_client_not_connectable",
+                OAUTH_CLIENT_NOT_CONNECTABLE,
                 400,
                 f"{owner_label or self._meta.label} has no OAuth client.",
             )
@@ -2036,7 +2355,7 @@ class Integration(StatementSourceMixin, ImplDefaultsMixin, OwnerMixin, AngeeData
         with system_context(reason="integrate.integration.connect_oauth_client"):
             oauth_client = apps.get_model("integrate", "OAuthClient").objects.enabled_for_slug(slug)
         if oauth_client is None:
-            raise OAuthFlowError("oauth_client_not_connectable", 400, f"{owner_label} has no enabled OAuth client.")
+            raise OAuthFlowError(OAUTH_CLIENT_NOT_CONNECTABLE, 400, f"{owner_label} has no enabled OAuth client.")
         return oauth_client
 
     @classmethod
@@ -2052,7 +2371,7 @@ class Integration(StatementSourceMixin, ImplDefaultsMixin, OwnerMixin, AngeeData
         )
         return {
             f"_connection_{name}": Subquery(credential.values(name)[:1])
-            for name in ("status", "expires_at", "last_refresh_status")
+            for name in ("status", "expires_at", "last_refresh_status", "granted_scopes")
         }
 
     @classmethod
@@ -2140,17 +2459,19 @@ class Integration(StatementSourceMixin, ImplDefaultsMixin, OwnerMixin, AngeeData
         write_access: bool | None = None,
         ready_slugs: Collection[str] | None = None,
     ) -> bool:
-        """OAuth Connect requires ownership, write, registration and consent need.
+        """OAuth Connect requires ownership, write, registration and a consent need.
 
-        A healthy grant with failed discovery is repaired by Retry, so that row
-        never offers both Retry and Connect.
+        Consent is needed without a credential, when the grant needs renewed
+        consent, or when it lacks scopes the capability now declares. A healthy
+        grant with failed discovery is repaired by Retry, so that row never offers
+        both Retry and Connect.
         """
 
         subject = to_subject_ref(actor) if actor is not None else instance_actor(self)
         return (
             self.owner_id == actor_user_id(subject)
             and (check_permission("write", self, actor=actor).allowed if write_access is None else write_access)
-            and (self.credential_id is None or self.is_reconnect_required)
+            and (self.credential_id is None or self.is_reconnect_required or self.lacks_oauth_scopes)
             and self.is_oauth_connectable(ready_slugs=ready_slugs)
         )
 
@@ -2160,6 +2481,31 @@ class Integration(StatementSourceMixin, ImplDefaultsMixin, OwnerMixin, AngeeData
         self.require_access("write", actor)
         if not self.can_connect(actor):
             raise PermissionDenied("Integration OAuth Connect is unavailable to the current user.")
+
+    def transfer_ownership(self, user: Any) -> Self:
+        """Transfer ownership and release the previous owner's connection, so the new owner connects their own.
+
+        In the same transaction an integration running on the previous owner's
+        credential is detached from it and disconnected, and the account binding
+        is released, so that account no longer constrains Connect nor hints it.
+        """
+
+        previous_owner_id = self.owner_id
+        with transaction.atomic():
+            super().transfer_ownership(user)
+            if self.owner_id != previous_owner_id:
+                with system_context(reason="integrate.integration.transfer.release_connection"):
+                    target = self.concrete_capability()
+                    credential = target.load_connection_credential()
+                    if credential is not None and credential.user_id == previous_owner_id:
+                        target.attach_connection(None)
+                        target.set_lifecycle(IntegrationLifecycle.DISCONNECTED)
+                    row = target.lock_capability()
+                    if row.account_id is not None:
+                        row.account = None
+                        row.save(update_fields=["account", "updated_at"])
+                self.refresh_from_db()
+        return self
 
     def can_pause(self) -> bool:
         """Whether the guarded Pause verb is eligible for this row."""
@@ -2275,7 +2621,7 @@ class Integration(StatementSourceMixin, ImplDefaultsMixin, OwnerMixin, AngeeData
         model = apps.get_model("integrate", "Credential")
         if "_connection_credential" in self.__dict__:
             return cast(Credential | None, self.__dict__["_connection_credential"])
-        fields = ("status", "expires_at", "last_refresh_status")
+        fields = ("status", "expires_at", "last_refresh_status", "granted_scopes")
         if all(f"_connection_{field}" in self.__dict__ for field in fields):
             values = {field: self.__dict__[f"_connection_{field}"] for field in fields}
             if values["status"] is None:
@@ -2343,15 +2689,20 @@ class Integration(StatementSourceMixin, ImplDefaultsMixin, OwnerMixin, AngeeData
     def probe_credential(self) -> str:
         """Prove the attached credential is usable; raise :class:`IntegrationError` when not.
 
-        The credential-only connection test: no vendor round-trip, just the kind
-        handler producing authorization material. Returns the operator message.
+        The credential-only connection test: no vendor round-trip. It fails closed for
+        every kind: a credential that needs reconnecting
+        (:attr:`Credential.is_reconnect_required`) is refused before the kind handler's
+        :meth:`~CredentialKindHandler.probe` proves its material. Returns the operator
+        message.
         """
 
         credential = self.credential
         if credential is None:
             raise IntegrationError("No credential is attached.")
+        if credential.is_reconnect_required:
+            raise IntegrationError("Reconnect this account.")
         try:
-            credential.auth_headers()
+            credential.handler.probe(credential)
         except Exception as error:  # noqa: BLE001 — handler diagnostics stay outside the operator message.
             raise IntegrationError("Credential is not usable.") from error
         return "Credential is usable."
@@ -2498,16 +2849,21 @@ class Integration(StatementSourceMixin, ImplDefaultsMixin, OwnerMixin, AngeeData
 
         fields = dict(fields)
         credential_id = fields.pop("credential_id", _UNSET)
-        if credential_id is not _UNSET:
+        account_id = fields.pop("account_id", None)
+        if credential_id is not _UNSET or account_id is not None:
+            # The account binding follows the credential; only ``attach_connection``
+            # changes it, and a null account keeps it (``transfer_ownership`` releases it).
             actor = instance_actor(self)
             credentials = apps.get_model("integrate", "Credential").objects.for_write()
             accounts = apps.get_model("integrate", "ExternalAccount").objects.for_write()
             if actor is not None:
                 credentials = credentials.with_actor(actor)
                 accounts = accounts.with_actor(actor)
-            credential = None if credential_id is None else credentials.get(pk=credential_id)
-            account_id = fields.pop("account_id", _UNSET)
-            account = account_id if account_id is _UNSET or account_id is None else accounts.get(pk=account_id)
+            if credential_id is _UNSET:
+                credential = self.load_connection_credential()
+            else:
+                credential = None if credential_id is None else credentials.get(pk=credential_id)
+            account = _UNSET if account_id is None else accounts.get(pk=account_id)
             self.concrete_capability().attach_connection(credential, account=account)
             self.refresh_from_db()
         if "lifecycle" in fields:
@@ -2602,14 +2958,22 @@ class Integration(StatementSourceMixin, ImplDefaultsMixin, OwnerMixin, AngeeData
     ) -> None:
         """Own every credential attachment, including a fenced derived credential.
 
+        The row stays bound to the provider identity it was connected as: under
+        the row lock, a credential or ``account`` of another identity (issuer, or
+        client without one, plus subject) is refused with ``account_switch_refused``.
+        Detaching, attaching a credential that names no account, or an explicit
+        ``account=None`` keeps the binding; only ownership transfer releases it.
         ``discovery_generation`` is reserved for the apply step already holding
-        this row's lock. Ordinary callers always enter connection discovery.
+        this row's lock. Ordinary callers always enter connection discovery. The
+        capability admits every credential first (:meth:`admit_credential`).
         """
 
-        resolved_account = (
-            (None if credential is None else credential.external_account) if account is _UNSET else account
-        )
+        resolved_account: Any = _UNSET if account is None else account
+        if resolved_account is _UNSET and credential is not None and credential.external_account_id is not None:
+            resolved_account = credential.external_account
         if self.pk is None:
+            if credential is not None:
+                self.admit_credential(credential)
             self._set_connection_fields(credential=credential, account=resolved_account)
             if credential is not None and connect_disconnected and self.lifecycle == IntegrationLifecycle.DISCONNECTED:
                 self.lifecycle_transitions.force_state(
@@ -2620,6 +2984,11 @@ class Integration(StatementSourceMixin, ImplDefaultsMixin, OwnerMixin, AngeeData
             return
         with system_context(reason="integrate.connection.attach"), transaction.atomic():
             row = self.lock_capability()
+            if credential is not None:
+                row.admit_credential(credential)
+            if resolved_account is not _UNSET and row.account is not None and row.account_id != resolved_account.pk:
+                if row.account.provider_identity != resolved_account.provider_identity:
+                    raise OAuthFlowError(ACCOUNT_SWITCH_REFUSED, 409)
             derived_pk = row.credential_id if row.discovery_credential_id not in (None, row.credential_id) else None
             if discovery_generation is not None:
                 if row.discovery_generation != discovery_generation or not row.discovery_pending:
@@ -2636,6 +3005,17 @@ class Integration(StatementSourceMixin, ImplDefaultsMixin, OwnerMixin, AngeeData
                 row.await_discovery()
             apps.get_model("integrate", "Credential").objects.delete_unattached_derived(derived_pk)
         self.refresh_from_db()
+
+    def admit_credential(self, credential: Any) -> None:
+        """Refuse ``credential`` before it attaches to this capability, raising ``ValidationError`` on ``credential``.
+
+        :meth:`attach_connection` asks the capability row on every attachment, so
+        no path (connect, the console's credential patch, a reconnect) skips it.
+        The base admits any credential; a capability whose reads need a particular
+        registration or grant overrides it.
+        """
+
+        del credential
 
     @transition(
         lifecycle,
@@ -3721,7 +4101,8 @@ class Bridge(Composable, metaclass=RebacModelBase, demands="integrate.Integratio
 
         if not any(isinstance(field, ImplClassField) for field in self._meta.fields):
             return False
-        return self.capability_impl_class.requires_connection_discovery
+        impl = self.capability_impl_class
+        return issubclass(impl, IntegrationImpl) and impl.requires_connection_discovery
 
     def discover_connection(self, credential: Credential) -> ConnectionDiscovery:
         """Invoke the adapter's read-only remote hook outside a transaction."""

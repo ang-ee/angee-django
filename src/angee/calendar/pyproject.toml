@@ -1,0 +1,44 @@
+build-system = { requires = ["hatch-angee>=1.1,<2"], build-backend = "hatch_angee" }
+
+[project]
+name = "angee-calendar"
+version = "3.0.0"
+description = "Calendars owned by parties: events with recurrence and overrides, attendees, sharing and free/busy."
+keywords = ["calendar", "events", "attendees", "recurrence", "free/busy", "scheduling"]
+dependencies = ["angee-base>=3,<4", "angee-graphql>=3,<4", "angee-iam>=3,<4", "angee-messaging>=3,<4", "angee-parties>=3,<4", "angee-provenance>=3,<4", "angee-resources>=3,<4", "angee-scheduling>=3,<4", "angee-tags>=3,<4", "angee-web>=3,<4"]
+dynamic = ["entry-points"]
+
+[tool.angee]
+
+[[tool.angee.resources.demo]]
+path = "demo/010_parties.person.yaml"
+depends_on = "iam:demo/010_iam.user.yaml"
+adopt = "user"
+
+[[tool.angee.resources.demo]]
+path = "demo/020_parties.handle.yaml"
+adopt = ["platform", "value"]
+
+[[tool.angee.resources.demo]]
+path = "demo/030_calendar.calendar.yaml"
+depends_on = "demo/010_parties.person.yaml"
+
+[[tool.angee.resources.demo]]
+path = "demo/040_calendar.calendarevent.yaml"
+depends_on = "demo/030_calendar.calendar.yaml"
+
+[[tool.angee.resources.demo]]
+path = "demo/041_calendar.calendarevent.yaml"
+depends_on = "demo/040_calendar.calendarevent.yaml"
+
+[[tool.angee.resources.demo]]
+path = "demo/050_calendar.eventattendee.yaml"
+depends_on = ["demo/020_parties.handle.yaml", "demo/041_calendar.calendarevent.yaml"]
+
+[[tool.angee.resources.demo]]
+path = "demo/grants/060_calendar.grants.yaml"
+kind = "grants"
+depends_on = "demo/030_calendar.calendar.yaml"
+
+[tool.angee.platform]
+category = "Productivity"

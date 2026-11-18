@@ -311,6 +311,7 @@ export class ResourceQuery {
     const value = this.filterInputValue(declaration, selected);
     const scalar = declaration.filter?.scalar ?? declaration.scalar;
     if (value != null && (scalar === "Date" || scalar === "DateTime")) return temporalValue(value, scalar);
+    if (value != null && scalar === "Time") return clockValue(value);
     return value;
   }
 
@@ -681,6 +682,7 @@ function matchesComparison(value: unknown, operator: FilterOperator, operand: Fi
     if (value == null) return value === right;
     if (scalar === "JSON") return JSON.stringify(jsonValue(value, path)) === JSON.stringify(jsonValue(right, path));
     if (scalar === "Date" || scalar === "DateTime") return temporalValue(value, scalar) === temporalValue(right, scalar);
+    if (scalar === "Time") return clockValue(value) === clockValue(right);
     if (scalar === "Decimal") return compareDecimal(value, right, path) === 0;
     return value === right;
   };
@@ -761,6 +763,13 @@ function validTime(value: string): boolean {
     && Number(match[5] ?? 0) < 24 && Number(match[6] ?? 0) < 60 && Number(match[7] ?? 0) < 60;
 }
 
+/** A comparable clock, as SQL compares `time`: "09:30" equals "09:30:00", fractions at nanosecond width. */
+function clockValue(value: unknown): string {
+  if (typeof value !== "string" || !validTime(value)) return fail("time", "invalid time value");
+  const [, hours, minutes, seconds = "00", fraction = "", offset] = /^(\d{2}):(\d{2})(?::(\d{2})(?:[.,](\d+))?)?(.*)$/.exec(value)!;
+  return `${hours}:${minutes}:${seconds}.${fraction.slice(0, 9).padEnd(9, "0")}${offset}`;
+}
+
 function validCalendarDate(value: string, scalar: string): boolean {
   const match = /^(\d{4})-(\d{2})-(\d{2})(.*)$/.exec(value);
   if (!match || match[0] !== value || (scalar === "Date" ? match[4] !== "" : match[4] !== "" && !match[4]!.startsWith("T"))) return false;
@@ -771,7 +780,8 @@ function validCalendarDate(value: string, scalar: string): boolean {
 }
 function compareValues(left: unknown, right: unknown, scalar: string, path: string): number {
   if (scalar === "Decimal") return compareDecimal(left, right, path);
-  const comparable = (value: unknown): string | number => scalar === "Date" || scalar === "DateTime" ? temporalValue(value, scalar) : typeof value === "number" ? value : String(value);
+  const comparable = (value: unknown): string | number => scalar === "Date" || scalar === "DateTime" ? temporalValue(value, scalar)
+    : scalar === "Time" ? clockValue(value) : typeof value === "number" ? value : String(value);
   const a = comparable(left), b = comparable(right);
   return a < b ? -1 : a > b ? 1 : 0;
 }

@@ -45,6 +45,7 @@ from angee.resources.kinds import ResourceEntryKind, ResourceKindDeclarations
 from angee.resources.loader import (
     DryRunRollback,
     build_resource,
+    load_scope,
 )
 from angee.resources.mixins import ResourceLoadMixin
 from angee.resources.signals import pre_load
@@ -430,6 +431,7 @@ class ResourceManager[LedgerT: Resource](_ResourceManagerBase[LedgerT]):
                 ExitStack() as contexts,
                 transaction.atomic(),
             ):
+                contexts.enter_context(load_scope())
                 pre_load.send(sender=self.model, contexts=contexts)
                 resource_classes = {
                     group.model.resource_class

@@ -87,7 +87,7 @@ class Feed(Composable, metaclass=RebacModelBase, inherits="messaging.Channel"):
 
     integration_create_mode: ClassVar[IntegrationCreateMode | None] = IntegrationCreateMode.FORM
     live_impl_field = None
-    merge_policies = {"handle": MergePolicy.KEEP}
+    merge_policies: ClassVar[Mapping[str, Any]] = {"handle": MergePolicy.KEEP}
 
     feed_backend_class = ImplClassField(
         FeedBackend,

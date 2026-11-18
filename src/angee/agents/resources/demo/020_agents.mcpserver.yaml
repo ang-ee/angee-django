@@ -3,9 +3,12 @@
 # (`config.builtin = angee`); `agents.MCPServer` resolves the concrete container-
 # reachable URL from the composed stack setting `ANGEE_BUILTIN_MCP_URL`. Because this
 # server is `internal`, each provisioned agent gets its own bearer derived from the
-# `credential` below by `MCPServer.bearer_for()`, and the verifier resolves that bearer
-# back to the owning agent; at provision time `mcp_secrets()` syncs each agent's bearer to
-# the operator store and the agent's `.mcp.json` carries it as the `Authorization` header.
+# server's key by `MCPServer.bearer_for()`, and the verifier resolves that bearer back to
+# the owning agent; at provision time `mcp_secrets()` syncs each agent's `Authorization`
+# value to the operator store and the agent's `.mcp.json` reads it from the container env.
+# No key is committed: `credential` is declared empty and `030_agents.mcpserverkey.yaml`
+# attaches a generated one after the load. The loader skips this row while it is
+# unchanged, so a reload keeps the generated key; editing the row re-keys the server.
 # `url` is explicitly blank so reloads clear older demo
 # rows that baked in a dev port. Demo agents depend on this row so their M2M can resolve it.
 - xref: mcp_angee
@@ -16,4 +19,4 @@
   url: ""
   config:
     builtin: angee
-  credential: agents.cred_mcp_angee
+  credential: null

@@ -16,6 +16,7 @@ from __future__ import annotations
 import gzip
 import socket
 from collections.abc import Iterator
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import httpcore2
@@ -32,6 +33,7 @@ from angee.integrate.http import (
     ResponseTooLargeError,
     _PinnedBackend,
     _request_headers,
+    retry_after,
 )
 from angee.integrate.net import AddressNotAllowedError, AddressResolutionError, resolved_addresses
 from angee.integrate.testing.http import mock_transport
@@ -633,3 +635,23 @@ def test_json_get_uses_shared_headers_and_preserves_http_and_decode_errors(answe
             with pytest.raises(outcome):
                 HttpClient().get_json(URL)
     assert requests[0].headers["Accept"] == "application/json"
+
+
+@pytest.mark.parametrize(
+    ("header", "delay"),
+    [
+        pytest.param("120", timedelta(seconds=120), id="delay-seconds"),
+        pytest.param("Sat, 10 Oct 2026 12:02:00 GMT", timedelta(minutes=2), id="http-date"),
+        pytest.param(None, None, id="absent"),
+        pytest.param("0", None, id="zero"),
+        pytest.param("Sat, 10 Oct 2026 11:59:00 GMT", None, id="past-date"),
+        pytest.param("soon", None, id="malformed"),
+        pytest.param("1.5", None, id="fractional-seconds-are-not-delay-seconds"),
+        pytest.param("86401", None, id="past-the-limit"),
+    ],
+)
+def test_retry_after_reads_delay_seconds_or_a_future_http_date(header: str | None, delay: timedelta | None) -> None:
+    """RFC 9110 §10.2.3: one parser for every backend's Retry-After hint."""
+
+    response = httpx2.Response(429, headers={} if header is None else {"Retry-After": header})
+    assert retry_after(response, now=datetime(2026, 10, 10, 12, 0, tzinfo=UTC)) == delay

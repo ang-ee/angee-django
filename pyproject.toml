@@ -18,6 +18,7 @@ dependencies = [
     "angee-appearance==3.0.0",
     "angee-appearance-integrate==3.0.0",
     "angee-base==3.0.0",
+    "angee-calendar==3.0.0",
     "angee-checklists==3.0.0",
     "angee-dashboards==3.0.0",
     "angee-decisions==3.0.0",
@@ -28,6 +29,7 @@ dependencies = [
     "angee-intake==3.0.0",
     "angee-integrate==3.0.0",
     "angee-integrate-github==3.0.0",
+    "angee-integrate-google==3.0.0",
     "angee-integrate-iphone==3.0.0",
     "angee-integrate-vcs==3.0.0",
     "angee-jobs==3.0.0",
@@ -50,6 +52,7 @@ dependencies = [
     "angee-portfolio==3.0.0",
     "angee-posts==3.0.0",
     "angee-projects==3.0.0",
+    "angee-projects-calendar==3.0.0",
     "angee-proposals==3.0.0",
     "angee-proposals-work==3.0.0",
     "angee-provenance==3.0.0",
@@ -60,6 +63,7 @@ dependencies = [
     "angee-spaces==3.0.0",
     "angee-storage==3.0.0",
     "angee-storage-integrate==3.0.0",
+    "angee-storage-integrate-google-drive==3.0.0",
     "angee-storage-integrate-iphone==3.0.0",
     "angee-tags==3.0.0",
     "angee-theme-angee==3.0.0",
@@ -132,6 +136,7 @@ angee-agents-runtime-pydantic = {workspace = true}
 angee-appearance = {workspace = true}
 angee-appearance-integrate = {workspace = true}
 angee-base = {workspace = true}
+angee-calendar = {workspace = true}
 angee-checklists = {workspace = true}
 angee-dashboards = {workspace = true}
 angee-decisions = {workspace = true}
@@ -142,6 +147,7 @@ angee-iam-integrate-oidc = {workspace = true}
 angee-intake = {workspace = true}
 angee-integrate = {workspace = true}
 angee-integrate-github = {workspace = true}
+angee-integrate-google = {workspace = true}
 angee-integrate-iphone = {workspace = true}
 angee-integrate-vcs = {workspace = true}
 angee-jobs = {workspace = true}
@@ -164,6 +170,7 @@ angee-pm = {workspace = true}
 angee-portfolio = {workspace = true}
 angee-posts = {workspace = true}
 angee-projects = {workspace = true}
+angee-projects-calendar = {workspace = true}
 angee-proposals = {workspace = true}
 angee-proposals-work = {workspace = true}
 angee-provenance = {workspace = true}
@@ -174,6 +181,7 @@ angee-server = {workspace = true}
 angee-spaces = {workspace = true}
 angee-storage = {workspace = true}
 angee-storage-integrate = {workspace = true}
+angee-storage-integrate-google-drive = {workspace = true}
 angee-storage-integrate-iphone = {workspace = true}
 angee-tags = {workspace = true}
 angee-theme-angee = {workspace = true}
@@ -292,6 +300,12 @@ forbidden_modules = [
   "angee.workflows", "angee.workflows_agents", "angee.workflows_extraction", "angee.workflows_integrate",
   "angee.workflows_messaging", "angee.workflows_parties", "angee.workflows_posts",
 ]
+
+[[tool.importlinter.contracts]]
+name = "OAuth and its vendor presets do not import the login addon"
+type = "forbidden"
+source_modules = ["angee.integrate", "angee.integrate_google"]
+forbidden_modules = ["angee.iam_integrate_oidc"]
 
 [[tool.importlinter.contracts]]
 name = "Serving modules never import build owners"

@@ -4,12 +4,12 @@ import type { ReactElement } from "react";
 
 import { useOidcT } from "../i18n";
 
-// This addon owns the OIDC provider-type impls (GenericOidc, Google). Their tab
-// shows only when the OAuth client's provider_type is one of them — keeping
-// the predicate here, with the addon that owns the impls, leaves integrate's OAuth
-// form OIDC-agnostic (and a project without this addon composes with no OIDC tab).
-// Reads tolerate both the lowercase create value and the UPPERCASE read casing of
-// the ImplClassField enum.
+// The login tab shows only for the provider types this addon signs users in with:
+// its own GenericOidc and integrate_google's Google preset, which this addon
+// depends on. Keeping the predicate here, with the login policy, leaves
+// integrate's OAuth form login-agnostic (and a project without this addon composes
+// with no login tab). Reads tolerate both the lowercase create value and the
+// UPPERCASE read casing of the ImplClassField enum.
 const OIDC_PROVIDER_TYPES = ["google", "generic_oidc"];
 
 function isOidcProvider(values: Row): boolean {
@@ -30,8 +30,6 @@ function OidcSectionLabel(): ReactElement {
 export const oidcLoginSection = (
   <Group label={<OidcSectionLabel />} columns={2}>
     <Field name="login_enabled" widget="booleanBadge" showWhen={isOidcProvider} />
-    <Field name="issuer" showWhen={isOidcProvider} />
-    <Field name="jwks_uri" showWhen={isOidcProvider} />
     <Field name="link_on_email_match" showWhen={isOidcProvider} />
     <Field name="create_on_login" showWhen={isOidcProvider} />
     <Field

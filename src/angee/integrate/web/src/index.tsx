@@ -160,10 +160,17 @@ export {
   CONNECT_RECORD_FIELDS,
   ConnectOAuthButton,
   type ConnectOAuthButtonProps,
+  type ConnectStartPayload,
   connectIntegrationAction,
   parseManualCode,
   type OAuthConnectPayload,
 } from "./connect/ConnectOAuthButton";
+export {
+  ConnectAccountButton,
+  type ConnectAccountButtonProps,
+  type ConnectAccountStartInput,
+  useConnectAccountStart,
+} from "./connect/ConnectAccountButton";
 export {
   useOAuthAuthorization,
   type OAuthAuthorization,

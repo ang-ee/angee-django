@@ -293,7 +293,12 @@ def _replace(agent: Any, daemon: OperatorDaemon) -> str:
 
 
 def _reprovision(agent: Any, daemon: OperatorDaemon) -> str:
-    """Destroy the agent's service and render it again over the recorded workspace."""
+    """Destroy the agent's service and render it again over the recorded workspace.
+
+    The workspace keeps its files, but its ``.mcp.json`` is re-rendered from the agent's
+    current MCP servers first, so the header references match the env the new service
+    sets. A workspace file the agent modified in place is refused rather than overwritten.
+    """
 
     with system_context(reason="agents.graphql.reprovision_agent"):
         if agent.user_id is None:
@@ -310,6 +315,7 @@ def _reprovision(agent: Any, daemon: OperatorDaemon) -> str:
         with system_context(reason="agents.graphql.reprovision_agent.plan"):
             plan = _render_plan(agent)
         _sync_secrets(daemon, plan)
+        daemon.update_workspace(workspace, inputs={"mcp_json": plan.workspace_inputs["mcp_json"]})
         if service:
             daemon.destroy_service(service)
             # Forget the old service now: the new one usually takes the same name.

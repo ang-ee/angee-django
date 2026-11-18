@@ -14,6 +14,7 @@ _Settings = TypedDict(
         "ANGEE_OPENCODE_OAUTH_ENABLED": bool,
         "ANGEE_MCP_ACTOR_VERIFIER": str,
         "ANGEE_AGENT_CHAT_TOKEN_TTL": str,
+        "ANGEE_RESOURCE_ENTRY_KIND_CLASSES:append": dict[str, str],
     },
 )
 
@@ -49,5 +50,10 @@ SETTINGS: _Settings = {
     # daemon caps it at 24h). The TTL policy lives here, not as a literal in the
     # resolver; mirrors ``ANGEE_OPERATOR_TOKEN_TTL`` for the GraphQL token.
     "ANGEE_AGENT_CHAT_TOKEN_TTL": "2h",
+    # An internal MCP server's key is generated at load, never committed
+    # (``angee.agents.resources.MCPServerKeyResourceKind``).
+    "ANGEE_RESOURCE_ENTRY_KIND_CLASSES:append": {
+        "agents.mcpserverkey": "angee.agents.resources.MCPServerKeyResourceKind",
+    },
 }
 """Django settings contributed when the agents addon is installed."""

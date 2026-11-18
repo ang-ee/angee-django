@@ -683,6 +683,7 @@ export const enUiMessages: Record<string, string> = {
   "datetime.select": "Select date and time",
   "datetime.label": "Date and time",
   "datetime.time": "Time",
+  "time.label": "Time",
   "color.label": "Colour",
   "color.none": "No colour",
   "color.picker": "{label} picker",

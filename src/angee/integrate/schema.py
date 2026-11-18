@@ -70,7 +70,7 @@ from angee.integrate.errors import IntegrationError
 from angee.integrate.mixins import SyncStateMixin
 from angee.integrate.models import Bridge, IntegrationCreateMode, IntegrationManager
 from angee.integrate.oauth import flow, state
-from angee.integrate.oauth.errors import PROVIDER_UNAVAILABLE, OAuthFlowError
+from angee.integrate.oauth.errors import PROVIDER_UNAVAILABLE, ConsentRequired, OAuthFlowError
 from angee.integrate.oauth.registrations import OAuthRegistrationExtension, operation_registration_slugs
 from angee.integrate.states import ConflictKeep, StreamState, SyncFailure, SyncFailureKind, SyncFailureStatus
 
@@ -312,6 +312,8 @@ class OAuthClientType(AngeeNode):
     environment: auto
     client_id: auto
     discovery_url: auto
+    issuer: auto
+    jwks_uri: auto
     authorize_endpoint: auto
     token_endpoint: auto
     revoke_endpoint: auto
@@ -388,8 +390,8 @@ class CredentialInput:
 
     ``kind`` discriminates the material: ``static_token`` reads ``api_key``,
     ``ssh_key`` reads ``private_key``, ``basic_auth`` reads ``username`` +
-    ``password``, ``app_keys`` reads ``app_id`` + ``app_secret``. ``user``
-    defaults to the calling admin.
+    ``password``, ``app_keys`` reads ``app_id`` + ``app_secret``, ``jwt_bearer``
+    reads the provider's JSON ``key_file``. ``user`` defaults to the calling admin.
     """
 
     name: str
@@ -401,6 +403,7 @@ class CredentialInput:
     password: str = ""
     app_id: str = ""
     app_secret: str = ""
+    key_file: str = ""
 
 
 @strawberry.type
@@ -474,6 +477,8 @@ class ConnectAccountResult:
     claims: JSON | None = None
     error: str | None = None
     error_code: str | None = None
+    restart: OAuthStartPayload | None = None
+    """With ``consent_required``: the same connect started again asking for consent; follow it."""
 
 
 @strawberry.type
@@ -588,6 +593,8 @@ _OAUTH_CLIENT_RESOURCE = hasura_model_resource(
         "client_secret",
         "environment",
         "discovery_url",
+        "issuer",
+        "jwks_uri",
         "authorize_endpoint",
         "token_endpoint",
         "revoke_endpoint",
@@ -621,6 +628,8 @@ _OAUTH_CLIENT_RESOURCE = hasura_model_resource(
         "client_secret",
         "environment",
         "discovery_url",
+        "issuer",
+        "jwks_uri",
         "authorize_endpoint",
         "token_endpoint",
         "revoke_endpoint",
@@ -790,8 +799,14 @@ class ConnectionMutation:
         id: PublicID,
         redirect_uri: str,
         next: str = "/",
+        scopes: list[str] | None = None,
     ) -> OAuthStartPayload:
-        """Start an authenticated OAuth account-connect flow."""
+        """Start an authenticated OAuth account-connect flow.
+
+        ``scopes`` are the scopes the consumer the account is connected for reads
+        with (its ``oauth_scopes``): the client's catalogue must offer them
+        (``OAuthClient.requested_scopes``) and the grant must cover them.
+        """
 
         user = _session_user(info)
         request = get_request(info)
@@ -804,6 +819,7 @@ class ConnectionMutation:
                 user_id=str(user.pk),
                 next_path=flow.coerce_next_path(next, request),
                 flow=state.StateFlow.CONNECT,
+                oauth_scopes=tuple(scopes or ()),
             )
         except OAuthFlowError as error:
             return OAuthStartPayload(error=error.public_message, error_code=error.code)
@@ -813,8 +829,8 @@ class ConnectionMutation:
     def discover_oauth_endpoints(self, id: PublicID) -> ActionResult:
         """Fetch OIDC metadata and fill this client's blank endpoints.
 
-        The resolved authorize/token/userinfo endpoints (and any composed extension
-        endpoints, e.g. OIDC issuer/JWKS) are persisted on the OAuth client row, so
+        The resolved authorize/token/userinfo endpoints, OIDC issuer and JWKS URI
+        are persisted on the OAuth client row, so
         the operator never types them by hand. Requires a discovery URL on the row.
         """
 
@@ -853,6 +869,14 @@ class ConnectionMutation:
             Integration.objects.attach_completed_connect(
                 result.integration_id, result.user, result.credential,
                 exposed_model_labels=_exposed_model_labels(info),
+            )
+        except ConsentRequired as refused:
+            try:
+                restart = flow.restart_with_consent(request, oauth_client, refused.record)
+            except OAuthFlowError as error:
+                return ConnectAccountResult(error=error.public_message, error_code=error.code)
+            return ConnectAccountResult(
+                error=refused.public_message, error_code=refused.code, restart=OAuthStartPayload.from_start(restart),
             )
         except OAuthFlowError as error:
             if error.transient:
@@ -1123,7 +1147,7 @@ class IntegrationConnectionMixin:
         extensions=[PermissionsExtension(("write",))],
         annotate={
             f"_connection_{name}": partial(_credential_projection, name)
-            for name in ("status", "expires_at", "last_refresh_status")
+            for name in ("status", "expires_at", "last_refresh_status", "granted_scopes")
         },
     )
     def credential_status(self) -> str | None:
@@ -1727,17 +1751,17 @@ _INTEGRATION_RESOURCE = hasura_model_resource(
         "lifecycle",
         "runtime_status",
     ],
-    updatable=["vendor", "credential", "account"],
+    # The account binding follows the credential (``Integration.attach_connection``).
+    updatable=["vendor", "credential"],
     insert=False,
     field_id_decode={
         "vendor": public_pk_decoder(Vendor),
         "credential": public_pk_decoder(Credential),
-        "account": public_pk_decoder(ExternalAccount),
     },
     get_queryset=partial(IntegrationType.get_queryset, Integration.objects),
     write_backend=IntegrationWriteBackend(
         Integration,
-        public_id_fields=("vendor", "credential", "account"),
+        public_id_fields=("vendor", "credential"),
     ),
 )
 _WEBHOOK_SUBSCRIPTION_RESOURCE = hasura_model_resource(

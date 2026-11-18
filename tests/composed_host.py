@@ -214,7 +214,7 @@ def resource_values() -> dict[str, Any]:
     from django_compose.components import installed_components
 
     from angee.base.addons import is_angee_addon
-    from angee.resources.entries import GRANT_KIND, ResourceEntry, resource_manifest_for
+    from angee.resources.entries import ROW_KIND, ResourceEntry, resource_manifest_for
 
     failures: list[str] = []
     checked_values = 0
@@ -225,7 +225,8 @@ def resource_values() -> dict[str, Any]:
         for tier, declarations in sorted(resource_manifest_for(addon, index=index).items()):
             for declaration in declarations:
                 entry = ResourceEntry.from_declaration(addon, tier, declaration)
-                if entry.kind == GRANT_KIND:
+                # Only row entries carry model values; grants and owner-defined kinds parse their own rows.
+                if entry.kind != ROW_KIND:
                     continue
                 for group in entry.read_groups():
                     try:
