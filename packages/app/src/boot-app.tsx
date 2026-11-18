@@ -8,7 +8,7 @@ import type { ReactNode } from "react";
 import { createRoot } from "react-dom/client";
 
 import type { AngeeApp } from "./create-app";
-import type { ShellSettings } from "./define-addon";
+import type { AppDeclaration, ShellSettings } from "./define-addon";
 import { type ErrorReportingInput, startErrorReporting } from "./error-reporting";
 export { assertShellSettings } from "./shell-settings.mjs";
 
@@ -25,10 +25,11 @@ export interface SelectAppInput {
 
 /**
  * Select the app the page shows: `?app=<root id | apps name>`, else the
- * hostname's `ANGEE_UI.shell.hosts` entry, else nothing, which shows every root
- * with the shell's brand and theme. No choice is stored. A root id is the
- * one-root app; a named app takes its own brand, theme and home, else its first
- * rail root's. An unknown `?app=` is reported and falls back.
+ * hostname's `ANGEE_UI.shell.hosts` entry, else `ANGEE_UI.shell.app`, else
+ * nothing, which shows every root with the shell's brand and theme. No choice
+ * is stored. A root id is the one-root app; a named app takes its own brand,
+ * theme and home, else its first rail root's; a named app without a rail shows
+ * every root. An unknown `?app=` is reported and falls back.
  * @kind null
  * @reason Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.
  */
@@ -44,25 +45,45 @@ export function selectApp({ search, hostname, shell = {}, roots }: SelectAppInpu
   const mapped = host !== undefined ? own(shell.hosts, host) : undefined;
   const hosted = mapped !== undefined ? appSelection(mapped, shell, roots, `ANGEE_UI.shell.hosts["${host}"]`) : undefined;
   if (hosted) return { ...hosted, diagnostics };
+  const fallback = shell.app !== undefined ? appSelection(shell.app, shell, roots, "ANGEE_UI.shell.app") : undefined;
+  if (fallback) return { ...fallback, diagnostics };
+  return { ...everyRoot(shell), diagnostics };
+}
+
+/**
+ * Every root, with the named app's own brand, theme and rail default when one
+ * is selected, else the shell's brand and theme. A theme lock needs the app's
+ * own theme beside it; the shell's theme never locks.
+ */
+function everyRoot(shell: ShellSettings, selected?: { key: string; app: AppDeclaration; by: string }): RuntimeSelection {
+  const app = selected?.app ?? {};
+  const declared = selected ? `ANGEE_UI.shell.apps.${selected.key}` : "";
+  const brand = app.brand ?? shell.brand;
+  const theme = app.theme ?? shell.theme;
+  const sources: Partial<Record<RuntimeSelectionField, string>> = selected ? { app: selected.by } : {};
+  if (brand) sources.brand = app.brand ? declared : "ANGEE_UI.shell.brand";
+  if (theme !== undefined) sources.theme = app.theme !== undefined ? declared : "ANGEE_UI.shell.theme";
+  if (app.themeLocked) sources.themeLocked = declared;
+  if (app.railExpanded !== undefined) sources.railExpanded = declared;
   return {
-    app: null,
+    app: selected?.key ?? null,
     rail: null,
-    brand: shell.brand ?? null,
-    ...(shell.theme !== undefined ? { theme: shell.theme } : {}),
-    sources: {
-      ...(shell.brand ? { brand: "ANGEE_UI.shell.brand" } : {}),
-      ...(shell.theme !== undefined ? { theme: "ANGEE_UI.shell.theme" } : {}),
-    },
-    diagnostics,
+    brand: brand ?? null,
+    ...(theme !== undefined ? { theme } : {}),
+    ...(app.themeLocked ? { themeLocked: true } : {}),
+    ...(app.railExpanded !== undefined ? { railExpanded: app.railExpanded } : {}),
+    sources,
+    diagnostics: [],
   };
 }
 
 /**
  * The app `key` names, selected `by` a selector: a menu root id is the one-root
- * app, an `ANGEE_UI.shell.apps` name its declared rail. Unset facts come from
- * the first rail root, whose brand defaults to its label and icon; an unset
- * theme falls back to the shell's. A theme lock travels with the theme it is
- * declared beside. Undefined when `key` names neither.
+ * app, an `ANGEE_UI.shell.apps` name its declared rail, or every root when it
+ * declares none. Unset facts come from the first rail root, whose brand
+ * defaults to its label and icon; an unset theme falls back to the shell's. A
+ * theme lock travels with the theme it is declared beside. Undefined when `key`
+ * names neither.
  * @kind null
  * @reason Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.
  */
@@ -75,6 +96,7 @@ export function appSelection(
   const rootOf = (id: string) => roots.find((root) => root.id === id);
   const app = own(shell.apps, key);
   if (app && rootOf(key)) throw new Error(`ANGEE_UI.shell.apps names "${key}", a menu root id; name the app apart from the roots.`);
+  if (app && app.rail === undefined) return everyRoot(shell, { key, app, by });
   const declared = app ? `ANGEE_UI.shell.apps.${key}` : `menu root "${key}"`;
   const rail = app ? app.rail : rootOf(key) ? [key] : undefined;
   if (!rail) return undefined;

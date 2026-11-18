@@ -494,7 +494,8 @@ database, and these commands do not create one.
 [CI](../.github/workflows/ci.yml) calls
 [reusable checks](../.github/workflows/reusable-checks.yml) on pull requests and
 pushes to `main`. A pull request's merge gate is the static tier, the SQLite tests
-its changed paths reach, the packages and the composed stack with its smoke.
+its changed paths reach, the examples profile's PostgreSQL planner gate, the
+packages and the composed stack with its smoke.
 Pushes to `main` and releases run the whole SQLite suite and the PostgreSQL lane,
 so whole suites report after a merge instead of gating it. A new push to a pull
 request cancels the run it supersedes; every push to `main` runs to completion.
@@ -532,9 +533,11 @@ The current tiers are:
   not skip tests. Its PostgreSQL 17 service includes pgvector and enables `vector`
   in `template1` before any test database is created. Its server runs with
   `max_locks_per_transaction = 256`, since
-  each worker creates every table in one transaction. The `uv` job passes only
-  when the static tier and every SQLite shard pass and, outside pull requests,
-  every PostgreSQL group passes, so callers keep one check name.
+  each worker creates every table in one transaction. A pull request runs the same
+  job as one group over [`test_composed_examples.py`](../tests/test_composed_examples.py)
+  alone, so the member planner-memory gate catches a permission change's planning
+  cost before merge. The `uv` job passes only when the static tier, every SQLite
+  shard and every PostgreSQL group pass, so callers keep one check name.
 - **Packages:** framework package typecheck/test/build and export/distribution
   checks.
 - **Composed stack:** compose the host, check generated documents

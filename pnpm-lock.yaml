@@ -693,6 +693,9 @@ importers:
       '@angee/app':
         specifier: workspace:*
         version: link:../../../../packages/app
+      '@angee/integrate':
+        specifier: workspace:*
+        version: link:../../integrate/web
       '@angee/refine':
         specifier: workspace:*
         version: link:../../../../packages/refine
@@ -733,6 +736,43 @@ importers:
       vitest:
         specifier: ^4.1.9
         version: 4.1.12(@types/node@26.6.6)(happy-dom@20.14.6)(vite@8.3.6(@types/node@26.6.6)(esbuild@0.28.2)(jiti@2.7.0)(yaml@2.9.1))
+
+  src/angee/calendar_integrate_ics/web:
+    dependencies:
+      '@angee/app':
+        specifier: workspace:*
+        version: link:../../../../packages/app
+      '@angee/calendar':
+        specifier: workspace:*
+        version: link:../../calendar/web
+      '@angee/refine':
+        specifier: workspace:*
+        version: link:../../../../packages/refine
+      '@angee/ui':
+        specifier: workspace:*
+        version: link:../../../../packages/ui
+    devDependencies:
+      '@angee/metadata':
+        specifier: workspace:*
+        version: link:../../../../packages/metadata
+      '@tanstack/react-router':
+        specifier: ^1.170.41
+        version: 1.170.46(react-dom@19.3.1(react@19.3.1))(react@19.3.1)
+      '@types/react':
+        specifier: ^19.2.17
+        version: 19.3.0
+      '@types/react-dom':
+        specifier: ^19.2.3
+        version: 19.3.0(@types/react@19.3.0)
+      react:
+        specifier: ^19.2.7
+        version: 19.3.1
+      react-dom:
+        specifier: ^19.2.7
+        version: 19.3.1(react@19.3.1)
+      typescript:
+        specifier: ^6.0.3
+        version: 6.0.3
 
   src/angee/checklists/web:
     dependencies:
