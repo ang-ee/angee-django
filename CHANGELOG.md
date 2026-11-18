@@ -10,6 +10,192 @@ live in code docstrings.
 
 ## Unreleased — shared addon contracts, native embeddings and graph retrieval
 
+- A calendar source can publish local calendars out. `CalendarBackend.direction`
+  (`PULL` by default) declares which way a source's streams sync; a `PUSH`
+  backend's calendars and events streams are push streams, never swept.
+  `CalendarSource.publish(calendar, remote_id)` and the `publish_calendar`
+  mutation (`write` on the source, `delete` on the calendar) bind an existing
+  local calendar to a remote one through the source's `calendars` link, refusing
+  a calendar another source mirrors or publishes; `ANGEE_CALENDAR_PUBLISH_TARGETS`
+  (`None`: any) bounds the remote calendars a deployment publishes to, checked
+  again before every remote call. A publishing source's purge unbinds its
+  calendars and keeps their events and its key. `angee.calendar_integrate_google`
+  adds the `google_publishing` backend, which publishes to any Google calendar
+  shared with its key: a `jwt_bearer` key minted for `calendar.events` (no
+  delegation) and `connect_google_calendar_publishing(credential_id)`.
+  It creates each master or single event once under an id derived from its
+  public id, stamped `extendedProperties.private.angee_event` and looked up by
+  that stamp before any insert (a `409` adopts the event when the stamp and the
+  sent fields match), maps a series to its `RRULE` and each override to its
+  instance (a cancelled override cancels it), and writes every later change under
+  `If-Match`: Google's `412` is a held conflict, never an overwrite.
+  `GoogleCalendarClient` gains `stamped`, `insert`, `patch` and `delete`.
+- Push streams propagate deletes and accept a kept remote. A push link holds
+  nothing (`RecordLink.live_reference_filter`): a row only push links name is
+  deletable, its deletion releases them (`RecordLink.teardown_for_target`,
+  `RecordLinkManager.release_pushes`), and `push_stream` writes the removal of
+  each released, written link as `write_back(link, None)` before tombstoning it;
+  a link still naming a row a delete that locked nothing removed counts as
+  released (`RecordLinkQuerySet.released`, one anti-join per target type).
+  A row a pull or two-way link names stays protected, and a published calendar
+  is refused deletion until it is unpublished. Keeping the remote of a push
+  stream's conflict (`RecordLink.resolve_conflict`) records the remote's current
+  version as the link's base over the local projection, copies nothing, and
+  pushes again only after the next local change. `push_stream` reads the cycle's
+  deadline (`sync_deadline()`) between candidates. `push_candidates` is public.
+- Base's target-delete receiver filters, then tears down: an edge that
+  `blocks_target_delete` has the rows naming the target read once, those its
+  `live_reference_filter` selects refuse with `ProtectedError` (the rule creation
+  undo applies), and its teardown or policy runs only while a row names the
+  target; a teardown never blocks. Its read of an edge's rows loads only their
+  keys. `RecordLink`'s teardown only releases push links
+  (`RecordLinkManager.release_pushes` no longer refuses; its caller holds the
+  row's lock inside the deleting or moving transaction, and it locks the row
+  again before its links). `RecordLinkManager.lock_target` locks a linked row in
+  its model's delete order (`AngeeModel.lock_for_delete`), read through its base
+  manager. `push_stream` skips a link released since its batch read it, and binds
+  a written candidate's row only when, under the row's lock, the adapter's keyed
+  `local_changes` still yields it under that key on a push stream (a push
+  adapter's keyed read yields each selected row, changed or not:
+  `BridgeImpl.local_changes`); a row deleted or moved off its key
+  meanwhile (a moved override, new or written before) binds nothing, so the next
+  push writes the removal. `CalendarEvent.rebase_overrides` locks the overrides
+  before moving or deleting any. `SyncStreamQuerySet.in_lock_order` is
+  integrate's stream lock order (roots before contained streams), composed by
+  `retire_children` and the calendar purge; a contained stream cannot hold
+  containers (`SyncStreamManager.current`). A missing seeded row an
+  implementation default names raises `ImproperlyConfigured` with the
+  `manage.py resources load` guidance (was `ValueError`).
+  `angee.base.querysets.row_lock_queryset(model, *, no_key=False)` is the one
+  base-manager row lock (each row it reads and its MTI tables): `lock_subject`,
+  `lock_target`, storage's and knowledge's target locks and messaging's thread
+  teardown compose it.
+- **Breaking (`delete_blocker` overrides):** `AngeeModel.delete_blocker(*,
+  cascaded=False)` says where the row sits in the delete: `DeletePreview` judges
+  its target as the start and every collected row as cascaded, and a model's
+  `pre_delete` receiver enforces the hook's rule for where each row sits,
+  passing `cascaded=not starts_delete(instance, origin)`
+  (`angee.base.signals.starts_delete`, which the preview composes too). Every
+  override accepts `cascaded` (pass it to `super()`). A mirrored calendar
+  refuses only a delete started at it, so its source's delete preview no longer
+  shows that refusal; a published calendar refuses wherever it sits; an event or
+  attendee a delete only cascades to goes with the row it started from. Judging a
+  calendar reads only its source's backend key (`Calendar.source_backend_key`,
+  `CalendarSource.backend_class_for`). `publish` takes a no-key lock on the
+  vendor. Google's `require_calendar` probes with `events.list` (one event, the
+  `kind` field), which the publishing key's `calendar.events` scope allows. A
+  removal whose `412` finds a master or single event cancelled or gone, or an
+  override's instance gone or holding exactly the restore, is done; an instance
+  Google cancelled meanwhile is a held conflict. Every mapping error of one
+  synced event, its `observe` included, is that event's quarantine, and a
+  master Angee cannot map keeps its linked instances listed under its refusal
+  (`CalendarBackend.quarantine_series_instances`, one read of the stream's
+  instance keys), so no absence sweep or identity read withdraws its cancelled
+  instances; an instance Google serves on its own keeps its own payload in both.
+- A publishing calendar backend implements `write_event` and `read_written`;
+  `PublishingCalendarBackend.write_back` and `read_keys` run them after `admit_push`, which
+  refuses an unsubscribed source and a remote calendar
+  `ANGEE_CALENDAR_PUBLISH_TARGETS` does not list, once per push as the stream's
+  failure. The setting is matched whole and checked at startup (`calendar.E001`).
+  A publishing purge moves the source's streams to a new generation before
+  unbinding, so a push already writing binds nothing. `publish` reads the
+  lifecycle on the locked source, locks the vendor, the stream, then the
+  calendar, and refuses a remote calendar another source publishes to. An
+  override only pushed is rebased with its series, and its push restores the old
+  instance. `Credential.delegated` names a `jwt_bearer` key with a `subject`;
+  the Google publishing backend refuses one. Google's refusal of one event
+  (`400`, or a `403` naming the event) is `EventRefused`, that event's own
+  `RemoteRejected("event_refused")`; a `404` reads as a gone event only once the
+  calendar is known to be served, else it is the calendar's failure.
+- Calendar sources dispatch on their backend. `CalendarBackend.direction` is the
+  one fact of whether a source's calendars take local edits (`writable` is
+  deleted; `CalendarSource.is_backend_writable` reads `direction != PULL`); a
+  publishing backend extends `PublishingCalendarBackend`, which owns
+  `admit_push`, `write_back`, `read_keys` and its purge (`release`: unbind),
+  while `CalendarBackend.release` deletes a mirror's events and archives its
+  calendars. `CalendarSource.unsubscribe` returns the backend's `unsubscribed`
+  message, and `Calendar.delete_blocker` its `calendar_delete_refusal` (the
+  `SOURCE_CALENDAR_DELETE` and `PUBLISHED_CALENDAR_DELETE` constants are
+  deleted). A purge locks every stream of the source. Push streams declare the
+  poll interval like pulled ones; integrate never sweeps them. The Google
+  publishing backend is `google_publishing` (`GooglePublishingCalendarBackend`,
+  `connect_google_calendar_publishing(credential_id)`; formerly
+  `google_resource`). A publishing source holds no `statement_source` on the
+  calendars it publishes (calendar REBAC revision 5). `event_columns(event,
+  fields)` is calendar's public column projection, which Google's push
+  projection composes with `canonical_rule`; `CalendarEvent.span_end` gives an
+  occurrence's end without a row; `GoogleCalendarClient.instance` takes the
+  original start as a moment and owns its wire form. Given keys, Google's
+  `local_changes` reads only the events they name, and no projection reads
+  attendees.
+- `angee.integrate`: `IntegrationManager.build(**fields)` returns the unsaved
+  capability row `create_capability` saves; `Credential.grants(scopes)`,
+  `CredentialQuerySet.owned_by(user)` and `Integration.ready_oauth_client()` are
+  the one rule each (`ConnectWithAccount.of` is a pure projection). A Mount's
+  vendor is its backend's `defaults` (`MountBackend.vendor_slug` is deleted).
+  `@angee/integrate` adds `useConnectWithAccountQuery`, which Mount's and
+  Google Calendar's connect actions compose.
+- One connect-with-account surface in `angee.integrate`: `Integration.reads_with`
+  (an OAuth grant of the capability's client covering its `oauth_scopes`) and
+  `Integration.connectable_credentials(user)` replace `Mount.reads_with`'s rule,
+  `MountManager.connectable_credentials` and `MountManager.connect_oauth_client`;
+  a capability offers accounts before it exists from an unsaved row
+  (`IntegrationManager.build`, which `create_capability`, `CalendarSourceManager.subscribe`
+  and `MountManager.build` compose). The `ConnectWithAccount` GraphQL interface
+  (`oauth_client`, `oauth_scopes`, `accounts`) is implemented by `MountBackendType`
+  and the new `calendar_source_backend(backend_class)` query's type.
+  `@angee/integrate` exports `ConnectWithAccountAction` and
+  `useConnectWithAccountField` and owns the `ConnectWithAccountFields` fragment
+  their consumers spread. The action takes the consumer's authored connect
+  mutation (`connect`, over `{ credentialId }`) and its dialog runs it as
+  `MutationDialog`'s `mutation`, so a refusal is reported once. While the
+  capability has no ready OAuth client and the user no account it reads with, the
+  account field says the connection is not configured and links an administrator
+  to the OAuth providers page, instead of an empty list and a disabled Connect. `ConnectMountAction` composes the field
+  (`MountAccountPicker` is deleted; its `mount.account.*` copy moves to the
+  `integrate` namespace), and `@angee/calendar-integrate-google` adds "Connect
+  Google Calendar" to the sources toolbar over `connect_google_calendar(credential_id)`.
+  `GoogleCalendarBackend.admit_credential` composes `reads_with` and keeps only
+  one source per account.
+- `angee.calendar_integrate_google` syncs a connected Google account's calendars
+  (the `google` client, `calendar.readonly`) with sync tokens;
+  `connect_google_calendar(credential_id)` connects one of the user's accounts as
+  one source, and `GoogleCalendarBackend.admit_credential` refuses an account
+  another source already syncs, on every attachment. Every calendar connect verb
+  runs `CalendarSourceManager.subscribe` (quota and rate under the owner's row
+  lock, integrate's attachment under the credential's). A source's events stream
+  is held by its calendar's link (`SyncStream.container`);
+  `CalendarSource.calendar_for_partition` is removed and `events_stream` takes the
+  calendar's link. A calendar the source stops listing retires its events stream
+  and withdraws its events; when it is listed again they re-apply. Each sweep
+  lists a calendar once, in pages of 250, and an empty calendar list confirms no
+  absence. `CalendarSource.admit_credential` delegates to
+  `CalendarBackend.admit_credential`.
+- `angee.integrate`: `BridgeImpl.on_absent` may return each withdrawal's
+  `ApplyResult` by link; the driver records it as the link's applied base, as a
+  page tombstone, so a record that returns applies. A CardDAV address book that
+  returns restates its folder's name.
+- `angee.calendar.backends` owns the source-neutral readers both calendar
+  backends compose: `series_rule` (a VEVENT's first `RRULE`) and `excluded_dates`
+  (through icalendar, now an `angee-calendar` dependency), `cancelled_instances`
+  (each `EXDATE` judged by `CalendarEvent.is_instance`), `organizer_first` and
+  `parse_key`.
+- A fresh installation no longer offers "Continue with Google Gemini" on the
+  sign-in page. `iam_integrate_oidc`'s install seed gave Google's public Gemini
+  CLI client `login_enabled: true`, and that client ships with a published client
+  id, so every new database showed it. The seed now contributes the client's OIDC
+  metadata only; signing in through it is an operator's switch on the OAuth
+  client. An installation that already loaded the row keeps its current value:
+  turn it off on the client if it was never chosen.
+
+- A host whose name opens one app still reaches the full console. An
+  `ANGEE_UI.shell.apps` entry without a `rail` shows every root, with its own
+  brand and theme else the shell's, so `apps: {console: {}}` makes
+  `?app=console` the full menu on any host. `ANGEE_UI.shell.app` names the app
+  a page opens when neither `?app=` nor its `hosts` entry selects one, so a
+  product's settings can open its app without knowing the deployment's host
+  names. Both are checked at boot like `hosts`.
+
 - `storage/file#write_granted` holds only the fragments' record arms; `write`
   derives the drive, folder, inherited-owner, draft-owner and admin arms itself,
   and `owner_writer` is `inherited_owner + draft_owner + (owner & write_granted)`.

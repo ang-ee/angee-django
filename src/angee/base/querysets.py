@@ -125,6 +125,19 @@ def row_lock_paths(model: type[models.Model], of: tuple[str, ...] = ("self",)) -
     ))
 
 
+def row_lock_queryset(model: type[_ModelT], *, no_key: bool = False) -> models.QuerySet[_ModelT]:
+    """Return ``model``'s base-manager rows, locking each row it reads and its MTI tables.
+
+    The one row lock that ignores the default manager's policy: a row the default
+    manager hides is still found and locked. Select the row as the caller needs:
+    ``.get(pk=...)`` locks and reloads it, ``.filter(pk=...).exists()`` locks it
+    and says whether it is still there. ``no_key`` takes PostgreSQL's
+    ``FOR NO KEY UPDATE``.
+    """
+
+    return model._base_manager.select_for_update(of=row_lock_paths(model), no_key=no_key)
+
+
 def _parent_link_paths(model: type[models.Model], prefix: str = "") -> tuple[str, ...]:
     """Return ``of`` paths reaching each concrete multi-table ancestor of ``model``."""
 

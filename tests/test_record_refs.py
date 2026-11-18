@@ -366,6 +366,43 @@ def test_target_delete_protects_declared_record_edges(
     assert RecordRefSubjectEdge.objects.filter(pk=edge.pk).exists()
 
 
+def test_a_blocking_teardown_edge_refuses_on_its_live_rows_first_and_its_teardown_never_blocks(
+    record_ref_tables: None,
+    record_ref_delete_receiver: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Live rows refuse before the teardown runs; other rows are torn down; a target none names runs no teardown."""
+
+    del record_ref_tables, record_ref_delete_receiver
+    torn: list[Any] = []
+    live: list[Any] = []
+    monkeypatch.setattr(
+        RecordRefTargetEdge, "teardown_for_target", classmethod(lambda cls, target: torn.append(target.pk))
+    )
+    monkeypatch.setattr(RecordRefTargetEdge, "blocks_target_delete", classmethod(lambda cls, target: True))
+    monkeypatch.setattr(
+        RecordRefTargetEdge, "live_reference_filter", classmethod(lambda cls, *, principal: models.Q(pk__in=live))
+    )
+    with system_context(reason="record-ref live teardown"):
+        held = RecordRefTypedTarget.objects.create(name="held")
+        held_pk = held.pk
+        kept = RecordRefTargetEdge.objects.create(target=held)
+        RecordRefTargetEdge.objects.create(target=held)
+        live.append(kept.pk)
+        with pytest.raises(ProtectedError, match=f"{RecordRefTargetEdge._meta.label} rows still refer to ") as refused:
+            held.delete()
+        assert (set(refused.value.protected_objects), torn) == ({kept}, [])
+
+        live.clear()
+        held.delete()
+        unnamed = RecordRefTypedTarget.objects.create(name="unnamed")
+        unnamed.delete()
+
+    # The receiver runs per collected instance and per connected receiver; a teardown is idempotent.
+    assert set(torn) == {held_pk}
+    assert not RecordRefTypedTarget._base_manager.filter(name__in=["held", "unnamed"]).exists()
+
+
 def test_target_delete_nulls_declared_record_edges_from_a_queryset(
     record_ref_tables: None,
     record_ref_delete_receiver: None,

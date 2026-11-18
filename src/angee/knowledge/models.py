@@ -54,7 +54,7 @@ from angee.base.models.ownership import OwnerMixin
 from angee.base.models.refs import RecordRefMixin
 from angee.base.models.trash import TrashMixin, TrashQuerySet
 from angee.base.permissions import actor_user_id, scoped_relation_read
-from angee.base.querysets import row_lock_paths
+from angee.base.querysets import row_lock_queryset
 from angee.base.signals import send_created_batch
 from angee.knowledge.retrieval import MAX_SEARCH_PAGE_SIZE, RetrievalBackend, RetrievalHit, RetrievalResult
 from angee.messaging.models import ThreadedModelMixin
@@ -724,18 +724,12 @@ class RecordBindingManager[BindingT: RecordBinding](_RecordBindingManagerBase[Bi
                 canonical = reference.content_type.model_class()
                 if canonical is None:
                     raise ValueError("Knowledge binding target model is unavailable.")
-                canonical._base_manager.select_for_update(of=row_lock_paths(canonical), no_key=True).get(
-                    pk=reference.object_id
-                )
+                row_lock_queryset(canonical, no_key=True).get(pk=reference.object_id)
             owner = page
             if owner is not None:
                 # Serialize binding admission with page trash.
                 with system_context(reason="knowledge.record_binding.page_lock"):
-                    owner = (
-                        type(owner)
-                        ._base_manager.select_for_update(of=row_lock_paths(type(owner)), no_key=True)
-                        .get(pk=owner.pk)
-                    )
+                    owner = row_lock_queryset(type(owner), no_key=True).get(pk=owner.pk)
                     assert isinstance(owner, TrashMixin)
                     if owner.is_trashed:
                         raise ValidationError("Cannot bind a page in the trash.")

@@ -1,13 +1,17 @@
-# OIDC login policy for OAuth clients seeded by integrate and its vendor addons.
-# This file updates the existing rows by (slug, environment) only when the OIDC
-# addon is composed, because these fields are contributed by the addon extension.
-# The rows keep their released content so existing installations are not
-# re-applied. The deployment's `google` client is in 020, whose fields are create-only.
+# OIDC metadata and login policy for OAuth clients seeded by integrate and its
+# vendor addons. This file updates the existing rows by (slug, environment) only
+# when the OIDC addon is composed, because these fields are contributed by the
+# addon extension. The deployment's `google` client is in 020, whose fields are
+# create-only.
+#
+# Gemini gets its OIDC metadata but no login policy: it is Google's public Gemini
+# CLI client, there to connect an account for API access, so signing in through it
+# is an operator's choice (`login_enabled` on the client) and never a default. An
+# installation that already loaded this row keeps the value it has.
 - xref: oauth_gemini_oidc
   slug: gemini
   environment: prod
   provider_type: google
-  login_enabled: true
   issuer: https://accounts.google.com
   jwks_uri: https://www.googleapis.com/oauth2/v3/certs
   discovery_url: https://accounts.google.com/.well-known/openid-configuration

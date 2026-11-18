@@ -24,7 +24,7 @@ from uuid import UUID, uuid4
 
 from django.apps import AppConfig, apps
 from django.db import connections, router
-from django.db.models import Model
+from django.db.models import Model, QuerySet
 from django.db.models.signals import class_prepared, post_delete, post_save
 from django.dispatch import Signal
 
@@ -143,6 +143,25 @@ def connect_for_models(
     class_prepared.connect(
         lambda sender, **_kwargs: bind(sender), dispatch_uid=f"{dispatch_uid}.class_prepared", weak=False,
     )
+
+
+def starts_delete(instance: Model, origin: Model | QuerySet[Any] | None) -> bool:
+    """Return whether a delete starts at ``instance``, from the ``origin`` Django's collector names.
+
+    Where a row sits in its delete, as ``AngeeModel.delete_blocker(cascaded=)``
+    takes it: a ``pre_delete`` receiver passes ``cascaded=not starts_delete(instance,
+    origin)``. An instance delete starts at its own row (the origin's concrete model
+    and key; its multi-table parents are cascaded). The collector does not say which
+    rows a queryset selected, so for a queryset origin every row of its model counts
+    as a start, one only a cascade reaches (a self-referencing key) included. A delete
+    without an origin (a hand-built ``Collector``) starts at every row.
+    """
+
+    if origin is None:
+        return True
+    if isinstance(origin, QuerySet):
+        return isinstance(instance, origin.model)
+    return instance._meta.concrete_model is origin._meta.concrete_model and instance.pk == origin.pk
 
 
 @dataclass(frozen=True, slots=True)

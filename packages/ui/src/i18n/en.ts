@@ -564,6 +564,7 @@ export const enUiMessages: Record<string, string> = {
   "developer.app": "App",
   "developer.selection": "Selected app",
   "developer.selectionValue": "{app} (rail {rail})",
+  "developer.selectionEveryRoot": "{app} (every root)",
   "developer.home": "Home",
   "developer.none": "none",
   "developer.noComposition": "This app was composed without layering facts.",

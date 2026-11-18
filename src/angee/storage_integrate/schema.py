@@ -16,7 +16,7 @@ from angee.graphql.ids import PublicID, public_id_field
 from angee.graphql.node import AngeeNode
 from angee.graphql.subscriptions import changes
 from angee.iam.permissions import ADMIN_PERMISSION_CLASSES
-from angee.integrate.schema import BridgeTypeMixin, ConnectedCredentialType
+from angee.integrate.schema import BridgeTypeMixin, ConnectWithAccount
 from angee.storage_integrate.models import MountMode
 from angee.storage_integrate.mounts import MountBrowseResult
 
@@ -55,16 +55,12 @@ class MountBrowseResultType:
 
 
 @strawberry.type
-class MountBackendType:
-    """What connecting a mount of one backend asks for: its account, if any, and the session user's choices."""
+class MountBackendType(ConnectWithAccount):
+    """What connecting a mount of one backend asks for: whether it reads with an account, and the user's choices."""
 
     key: str
     label: str
     requires_credential: bool
-    oauth_client: strawberry.ID | None
-    oauth_scopes: list[str]
-    """The scopes an account must grant for the backend to read with it; connecting one requests them."""
-    accounts: list[ConnectedCredentialType]
 
 
 @strawberry_django.type(Mount)
@@ -138,15 +134,12 @@ class StorageIntegrateQuery:
         """Describe connecting a mount of one backend for the session user."""
 
         impl = Mount.objects.backend_impl(backend_class)
-        registration = Mount.objects.connect_oauth_client(backend_class)
-        accounts = Mount.objects.connectable_credentials(session_user(info), backend_class).order_by("pk")
-        return MountBackendType(
+        return MountBackendType.of(
+            Mount.objects.build(backend_class=backend_class),
+            session_user(info),
             key=impl.key,
             label=str(impl.label),
             requires_credential=impl.requires_credential,
-            oauth_client=strawberry.ID(registration.public_id) if registration is not None else None,
-            oauth_scopes=list(impl.oauth_scopes),
-            accounts=cast(list[ConnectedCredentialType], list(accounts)),
         )
 
 

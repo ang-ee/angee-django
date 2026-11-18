@@ -959,8 +959,9 @@ def test_project_template_addon_profiles_and_workspace_dirs() -> None:
         "angee.proposals",
         "angee.proposals_work",
         "angee.portfolio",
-        # A top-level web fragment: CI typechecks it against the full profile's documents.
+        # Top-level web fragments: CI typechecks them against the full profile's documents.
         "angee.calendar_integrate_ics",
+        "angee.calendar_integrate_google",
         "angee.messaging_integrate_whatsapp",
         "angee.messaging_integrate_telegram",
         "angee.messaging_integrate_discord",

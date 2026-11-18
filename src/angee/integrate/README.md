@@ -108,6 +108,12 @@ conflicts await an explicit remote/local choice (`RecordLink.resolve_conflict`).
 identity through `BridgeImpl.read_keys`; unsupported identity reads fall back to
 a baseline with the reason retained in failure details. Refused writes retry
 through the outbox. A due refusal with no remaining local candidate closes.
+A push stream never applies its remote: keeping the remote of its conflict
+records the remote's current version as the link's base over the local
+projection, and the next local change writes over it. A push link holds no row
+(`RecordLink.live_reference_filter`): deleting the row releases the link
+(`RecordLinkManager.release_pushes`), and the push writes its removal as
+`write_back(link, None)`.
 `RecordLink.pin()` withholds automatic application and push; `unpin()` resumes
 them. Admin actions dispatch to those owners.
 
@@ -147,12 +153,29 @@ connect rules are `OAuthClient.requested_scopes` (scopes),
 `CredentialManager.upsert_for_user` (one credential per external account and the
 grant checks), `Integration.attach_connection` (the account binding),
 `Integration.admit_credential` (which credentials a capability accepts, asked on
-every attachment), `OAuthProviderType.authorize_params` (the prompt),
+every attachment), `Integration.reads_with` (an OAuth grant of the capability's
+client covering its scopes), `Integration.connectable_credentials` (the user's
+accounts it reads with, offered from an unsaved row before the capability
+exists), `OAuthProviderType.authorize_params` (the prompt),
 [`connect.complete_account_connect`](connect.py) (account identity: userinfo, the
 `token_identity_keys`, then the verified ID token) and
 `connect.complete_external_account_link` (the consent restart). A credential stored
 without an account, before credentials were per account, and the integrations it
 serves without a binding bind to the first account that connects.
+
+A capability connected with one of the user's accounts projects its connect facts
+through the `ConnectWithAccount` GraphQL interface ([`schema.py`](schema.py)),
+built with `ConnectWithAccount.of` from an unsaved row (`IntegrationManager.build`).
+Its query spreads the `ConnectWithAccountFields` fragment and is read through
+`useConnectWithAccountQuery`, which reloads it as the user's accounts change; its
+dialog composes `ConnectWithAccountAction` (given the capability's authored connect
+mutation over `{ credentialId }`, which its `MutationDialog` runs), or
+`useConnectWithAccountField` among its other fields
+([`ConnectWithAccountAction.tsx`](web/src/connect/ConnectWithAccountAction.tsx)):
+the account choice and "Connect another account" with the capability's scopes.
+While the capability has no ready OAuth client (`oauth_client` is null) and the
+user holds no account it reads with, the field says the connection is not
+configured instead, and links an administrator to the OAuth providers page.
 
 Connection adapters declare `IntegrationImpl.requires_connection_discovery = True`
 to opt into asynchronous `discover_connection`/`apply_discovery`. Manual and

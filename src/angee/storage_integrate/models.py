@@ -17,7 +17,6 @@ from rebac import system_context
 from angee.base.fields.implementation import ImplClassField
 from angee.base.fields.state import StateField
 from angee.base.implementations import resolve_impl_class
-from angee.integrate.credentials import CredentialKind
 from angee.integrate.errors import IntegrationError
 from angee.integrate.models import (
     Bridge,
@@ -26,7 +25,6 @@ from angee.integrate.models import (
     IntegrationManager,
     IntegrationQuerySet,
 )
-from angee.integrate.oauth.errors import OAuthFlowError
 from angee.integrate.sync import current_progress_bridge
 from angee.storage import exceptions
 from angee.storage_integrate.mounts import MountBackend, MountBrowseResult, MountEntry, MountLocation
@@ -34,7 +32,7 @@ from angee.storage_integrate.mounts import MountBackend, MountBrowseResult, Moun
 if TYPE_CHECKING:
     from django.contrib.auth.base_user import AbstractBaseUser
 
-    from angee.integrate.models import Credential, OAuthClient
+    from angee.integrate.models import Credential
     from angee.storage.models import Backend
 
 _PROGRESS_BATCH_SIZE = 200
@@ -84,43 +82,15 @@ class MountManager[MountT: Mount](_MountManagerBase[MountT]):
         except ImproperlyConfigured as error:
             raise ValidationError({"backend_class": str(error)}) from error
 
-    def build(self, backend_class: str, **fields: Any) -> MountT:
-        """Return an unsaved Mount of ``backend_class`` pointing at its backend's vendor.
+    def build(self, **fields: Any) -> MountT:
+        """Return an unsaved Mount (``IntegrationManager.build``), refusing an unknown ``backend_class``.
 
-        It answers what a saved row would before anything is created: its
-        backend, its OAuth registration (``connection_oauth_slug``,
-        ``connect_oauth_client``) and its source's canonical root.
+        Its backend's defaults name its vendor. It also answers its source's
+        canonical root before anything is created.
         """
 
-        impl = self.backend_impl(backend_class)
-        with system_context(reason="storage_integrate.mount.vendor"):
-            vendor = apps.get_model("integrate", "Vendor").objects.seeded(impl.vendor_slug)
-        return self.model(backend_class=backend_class, vendor_id=vendor.pk, **fields)
-
-    def connect_oauth_client(self, backend_class: str) -> OAuthClient | None:
-        """Return the enabled OAuth client a credential backend's accounts connect through, if one is ready."""
-
-        impl = self.backend_impl(backend_class)
-        if not impl.requires_credential:
-            return None
-        try:
-            with system_context(reason="storage_integrate.mount.oauth_client"):
-                return cast("OAuthClient", self.build(backend_class).connect_oauth_client(impl.label))
-        except OAuthFlowError:
-            return None
-
-    def connectable_credentials(self, user: AbstractBaseUser, backend_class: str) -> models.QuerySet[Credential]:
-        """Return ``user``'s connected credentials a backend may read its source with (``Mount.reads_with``)."""
-
-        impl = self.backend_impl(backend_class)
-        credential_model = apps.get_model("integrate", "Credential")
-        if not impl.requires_credential:
-            return cast("models.QuerySet[Credential]", credential_model.objects.none())
-        mount = self.build(backend_class)
-        accounts = credential_model.objects.connected_for(user).filter(kind=CredentialKind.OAUTH)
-        # The grant's scopes are JSON, whose containment is not portable to SQLite; a user's accounts are few.
-        readable = [account.pk for account in accounts.select_related("oauth_client") if mount.reads_with(account)]
-        return cast("models.QuerySet[Credential]", accounts.filter(pk__in=readable))
+        self.backend_impl(str(fields.get("backend_class") or ""))
+        return super().build(**fields)
 
     def browse_source(
         self,
@@ -169,12 +139,13 @@ class MountManager[MountT: Mount](_MountManagerBase[MountT]):
         on the unsaved row and returns its canonical root, which the
         already-mounted check and the Mount use, so a refusal is keyed to
         ``root`` before anything is created. A backend that requires a
-        credential reads with ``credential``, one of ``user``'s
-        :meth:`connectable_credentials`, attached through the integration's own
-        attach verb; the Mount points at the backend's vendor. A reference mount
-        gets its own storage backend serving the source in place; a copy mount
-        stores under a key prefix of ``copy_backend``, a writable backend
-        ``user`` may read, or else of the configured default drive's backend.
+        credential reads with ``credential``, one of ``user``'s accounts the
+        Mount reads with (``Integration.connectable_credentials``), attached
+        through the integration's own attach verb; the Mount points at the
+        backend's vendor. A reference mount gets its own storage backend serving
+        the source in place; a copy mount stores under a key prefix of
+        ``copy_backend``, a writable backend ``user`` may read, or else of the
+        configured default drive's backend.
         """
 
         display_name = str(name).strip()
@@ -185,7 +156,7 @@ class MountManager[MountT: Mount](_MountManagerBase[MountT]):
         drive_model = apps.get_model("storage", "Drive")
         self._check_connection(user, backend_class, impl=impl, credential=credential)
         self._check_copy_backend(user, mode=mode, copy_backend=copy_backend, backend_model=backend_model)
-        source = self.build(backend_class, config={"root": str(root)}, credential=credential, mode=mode)
+        source = self.build(backend_class=backend_class, config={"root": str(root)}, credential=credential, mode=mode)
         storage_backend_spec: tuple[str, dict[str, Any]] | None = None
         try:
             with contextlib.closing(source.backend) as backend:
@@ -272,7 +243,8 @@ class MountManager[MountT: Mount](_MountManagerBase[MountT]):
         if credential is None:
             raise ValidationError({"credential": f"Choose the account to read this {impl.label} with."})
         with system_context(reason="storage_integrate.mount.connectable_credential"):
-            usable = self.connectable_credentials(user, backend_class).filter(pk=credential.pk).exists()
+            readable = self.build(backend_class=backend_class).connectable_credentials(user)
+            usable = readable.filter(pk=credential.pk).exists()
         if not usable:
             raise ValidationError({"credential": f"This account cannot read a {impl.label} for you."})
 
@@ -364,25 +336,10 @@ class Mount(Bridge, inherits="integrate.Integration"):
             raise ValidationError({"credential": f"This account cannot read a {label}."})
 
     def reads_with(self, credential: Any) -> bool:
-        """Whether the backend may read with ``credential``.
+        """Whether the backend reads with ``credential``: only a backend that requires one, by integrate's rule."""
 
-        Only a backend that requires a credential reads with one, and only with an
-        OAuth credential of the registration this Mount connects through, so one
-        vendor's token is never sent to another's API, whose grant covers the
-        backend's ``oauth_scopes``.
-        """
-
-        impl = type(self).objects.backend_impl(self.backend_class)
-        if not impl.requires_credential or credential.kind != CredentialKind.OAUTH:
-            return False
-        with system_context(reason="storage_integrate.mount.oauth_slug"):
-            oauth_slug = self.connection_oauth_slug(impl.label)
-            client = credential.oauth_client
-        return (
-            client is not None
-            and client.slug == oauth_slug
-            and set(impl.oauth_scopes) <= set(credential.granted_scopes or ())
-        )
+        requires = type(self).objects.backend_impl(self.backend_class).requires_credential
+        return requires and super().reads_with(credential)
 
     def _next_sync_at(self, *, now: Any) -> Any:
         """Keep manual mounts unscheduled unless polling is explicitly enabled."""

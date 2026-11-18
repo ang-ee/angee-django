@@ -106,17 +106,19 @@ export interface LayoutProviderContribution {
 /**
  * A named app the deployment declares: a rail of top-level menu roots, with the
  * brand, theme and home it shows when selected. Each unset one comes from its
- * first rail root.
+ * first rail root. Without a rail it shows every root, with its own brand and
+ * theme else the shell's: the full console a host that selects another app
+ * still reaches by `?app=<name>`.
  */
 export interface AppDeclaration {
-  /** Top-level menu root ids, in rail order. */
-  rail: readonly string[];
+  /** Top-level menu root ids, in rail order; unset shows every root. */
+  rail?: readonly string[];
   brand?: RuntimeBrand;
   /** An installed theme id. */
   theme?: string;
   /** This app's `theme` wins over the person's own theme choice while it is selected; needs `theme` beside it. */
   themeLocked?: boolean;
-  /** A route name inside the rail. */
+  /** A route name inside the rail; an app without a rail lands where nothing selected does. */
   home?: string;
   /** Desktop rail expansion until the person chooses otherwise; inherits the first root's default. */
   railExpanded?: boolean;
@@ -124,8 +126,8 @@ export interface AppDeclaration {
 
 /**
  * The deployment's `ANGEE_UI.shell`. `?app=` or the hostname's `hosts` entry
- * selects an app (a menu root id or an `apps` name); with nothing selected the
- * rail shows every root, with this `brand` and `theme`.
+ * selects an app (a menu root id or an `apps` name), else `app`; with nothing
+ * selected the rail shows every root, with this `brand` and `theme`.
  */
 export interface ShellSettings {
   brand?: RuntimeBrand;
@@ -135,6 +137,8 @@ export interface ShellSettings {
   apps?: Readonly<Record<string, AppDeclaration>>;
   /** Lower-case hostname to the app it selects: a menu root id or an `apps` name. */
   hosts?: Readonly<Record<string, string>>;
+  /** The app selected when neither `?app=` nor the hostname's `hosts` entry names one: a menu root id or an `apps` name. */
+  app?: string;
 }
 
 /** One addon's self-describing manifest. */
