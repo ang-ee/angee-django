@@ -117,7 +117,10 @@ export interface ResourceCardContent {
  * The hero renders at every width: beside the card from `lg` up, stacked above
  * it on small screens. It is responsible for its own small-screen form: it picks
  * responsive assets (a lighter image or video on phones) through ordinary CSS
- * or media queries. `LoginPage` passes it no props and no viewport hint.
+ * or media queries, and its own small-screen height: below `lg` its wrapper has
+ * none, so a hero that fills the `lg` column with `absolute inset-0` sets one
+ * (`relative h-[34svh] lg:absolute lg:inset-0 lg:h-auto`). `LoginPage` passes it
+ * no props and no viewport hint.
  */
 export interface LoginHeroContent {
   /** The hero, rendered with no props: beside the sign-in card, or on the backdrop under `"full-bleed"`. */

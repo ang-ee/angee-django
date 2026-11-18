@@ -190,8 +190,10 @@ export function LoginPage({
             <DefaultCardHeader brand={brand} branded={branded} name={name} />
           )}
           {loginMethods ? (
-            <div className="mb-5">
-              {loginMethods}
+            // A contributed method may render nothing (a sign-in provider with no
+            // configured connection), so the divider shows only beside rendered methods.
+            <div className="mb-5 [&:has(>[data-login-methods]:empty)]:hidden">
+              <div data-login-methods="">{loginMethods}</div>
               <div className="mt-5 flex items-center gap-3 text-12 text-fg-muted">
                 <span className="h-px flex-1 bg-border-subtle" aria-hidden />
                 <span>{t("auth.orUsePassword")}</span>

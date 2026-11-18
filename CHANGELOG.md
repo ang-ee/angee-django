@@ -10,6 +10,11 @@ live in code docstrings.
 
 ## Unreleased — shared addon contracts, native embeddings and graph retrieval
 
+- The sign-in card's "or use password" divider shows only beside a sign-in method
+  that renders. A contributed method that renders nothing, such as the OIDC
+  method with no configured connection, no longer leaves an orphan divider above
+  the password form.
+
 - The Django images run as the owner of the mounted project, so a Docker-mode
   stack works on a Linux host whose stack root does not belong to uid 1000. The
   entrypoint gives its `angee` user the project's uid and gid before dropping
