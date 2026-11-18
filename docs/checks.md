@@ -429,7 +429,7 @@ measurements.
 | Package/exports architecture and the UX component ontology guard (addons compose `@angee/ui` owners: no raw elements, lucide renders, deleted classes or owners, locale bypasses, local recipes or tone maps; covers `../angee-arp` and `../angee-phrogg` when materialized) | Framework source root | `pnpm --config.verify-deps-before-run=false --fail-if-no-match --filter @angee/app exec vitest run src/architecture-guardrails.test.ts` |
 | Design-system catalog and token-name drift | Stack root | `pnpm --config.verify-deps-before-run=false --filter @angee/storybook --fail-if-no-match run catalog:check` |
 | All composed fragment types | Stack root, after SDL/codegen | `pnpm --config.verify-deps-before-run=false --dir web run typecheck` |
-| All composed fragment tests | Stack root, after SDL/codegen | `pnpm --config.verify-deps-before-run=false -r run test` |
+| All composed fragment tests, one package at a time since each Vitest run sizes its workers to the machine | Stack root, after SDL/codegen | `pnpm --config.verify-deps-before-run=false --fail-if-no-match -r --workspace-concurrency=1 --filter '!./workspaces/src/angee/packages/**' run test` |
 
 After changing export annotations, story owners or token CSS, regenerate with
 `pnpm --config.verify-deps-before-run=false --filter @angee/storybook --fail-if-no-match run catalog:generate`
@@ -526,7 +526,8 @@ The current tiers are:
 - **Packages:** framework package typecheck/test/build and export/distribution
   checks.
 - **Composed stack:** compose the host, check generated documents
-  and addon fragments, smoke the composed models, and run the bridges repository's
+  and addon fragments (framework packages stay with the packages job; fragments
+  test one package at a time), smoke the composed models, and run the bridges repository's
   pytest suite with its
   native source-test settings and collection policy. Bridge tests use the
   composed stack's runtime dependencies plus the framework's locked check tools,
