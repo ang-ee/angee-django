@@ -250,6 +250,8 @@ jobs:
             tests/test_extraction_models.py::test_retention_waits_for_a_held_file_and_refuses_its_committed_change \
             tests/test_decisions_lifecycle.py tests/test_decisions_concurrency.py \
             tests/test_checklists.py tests/test_calendar_concurrency.py \
+            tests/test_calendar_ics.py::test_two_purges_racing_on_a_shared_credential_retire_it_exactly_once \
+            tests/test_parties_addressbook_upgrade.py::test_the_address_book_template_upgrades_in_one_postgresql_migration \
             tests/test_agent_sessions.py tests/test_agent_sessions_concurrency.py \
             tests/test_integrate_discovery_concurrency.py \
             tests/test_integrate_jwt_bearer.py::test_concurrent_mints_serialize_across_processes_on_postgresql \
