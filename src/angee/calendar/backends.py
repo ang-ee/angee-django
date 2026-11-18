@@ -41,6 +41,7 @@ from typing import Any, ClassVar
 
 from django.apps import apps
 from django.core.exceptions import ValidationError
+from django.db.models import Q
 from icalendar import Component, vRecur
 
 from angee.base.serialization import canonical_json_sha256
@@ -642,6 +643,38 @@ class CalendarBackend(BridgeImpl, HttpClientMixin):
         """
 
         return event_payload(apps.get_model("calendar", "CalendarEvent").objects.prepare(event))
+
+    def quarantine_series_instances[P: Mapping[str, Any] | None](
+        self, stream: Any, payloads: Mapping[str, P]
+    ) -> dict[str, P]:
+        """Return a listing's ``payloads`` with the linked instances of each series it quarantines, quarantined too.
+
+        A master the backend cannot map (a payload carrying ``error`` under its
+        series key) yields none of its ``EXDATE`` instances. A listing without
+        their keys reads them as gone, and the absence sweep withdraws them; so each
+        instance key a live link of ``stream`` still names and the listing lacks
+        takes its master's refusal, until the master maps again. An instance the
+        source lists on its own keeps its own payload.
+        """
+
+        refused = {
+            key: payload
+            for key, payload in payloads.items()
+            if payload is not None and "error" in payload and parse_key(key)[1] is None
+        }
+        if not refused:
+            return dict(payloads)
+        named = Q()
+        for key in refused:
+            named |= Q(external_key__startswith=f"{key}#")
+        held = {
+            key: refused[key.rpartition("#")[0]]
+            for key in stream.links.filter(named).exclude(status=LinkStatus.TOMBSTONE).values_list(
+                "external_key", flat=True
+            )
+            if key not in payloads and key.rpartition("#")[0] in refused and parse_key(key)[1] is not None
+        }
+        return {**payloads, **held}
 
     def record_changes(
         self,

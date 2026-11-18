@@ -1379,11 +1379,15 @@ exception closes the rows as failed. Tests inherit a boundary from the root
   `concrete_kinds` ([projection](../../src/angee/graphql/data/metadata.py))
   instead of re-deriving inheritance.
 - **Deletion refusals have one model owner.** Override
-  [`AngeeModel.delete_blocker()`](../../src/angee/base/models/base.py) with a public-safe
-  message. [`DeletePreview`](../../src/angee/graphql/deletion.py) reports each
-  distinct refusal before deleting, without row counts or hidden identities.
-  A model overriding the hook must bind a `pre_delete` receiver enforcing that
-  same rule on every deletion path; an instance override cannot protect cascades.
+  [`AngeeModel.delete_blocker(cascaded=)`](../../src/angee/base/models/base.py) with a
+  public-safe message; `cascaded` says whether the delete started at the row or only
+  cascades to it, and the override decides for both.
+  [`DeletePreview`](../../src/angee/graphql/deletion.py) reports each distinct refusal
+  before deleting, judging its target as the start and every collected row as
+  cascaded, without row counts or hidden identities. A model overriding the hook must
+  bind a `pre_delete` receiver enforcing the hook's rule for where each row sits in the
+  delete (the start of an instance or queryset delete, else a cascade) on every
+  deletion path; an instance override cannot protect cascades.
   Receivers remain authoritative when state changes after preview and ensure
   Django collects those models rather than fast-deleting them.
   When deleting a model needs locks in a domain order (a parent before the row),

@@ -34,7 +34,7 @@ from angee.calendar_integrate_google.connect import connect_google_calendar
 from angee.graphql.testing.documents import execute_schema, result_data
 from angee.integrate.credentials import CredentialKind
 from angee.integrate.states import LinkStatus, StreamState
-from angee.integrate.streams import advance_stream, sync_bridge
+from angee.integrate.streams import advance_stream, read_stream_keys, sync_bridge
 from angee.integrate.testing.http import mock_transport
 from angee.integrate.testing.models import RecordLink, SyncStream
 from angee.jobs.celery import app as celery_app
@@ -510,6 +510,44 @@ def test_a_malformed_google_event_is_set_aside_and_the_rest_of_its_page_syncs(co
         failures = {link.external_key: [row.code for row in link.failures(open_only=True)] for link in links}
     assert failures == {row["id"]: ["invalid_event"] for row in MALFORMED}
     assert {"standup", "holiday"} <= set(connected.events())
+
+
+def test_a_series_set_aside_keeps_its_cancelled_instances_through_absence_sweeps(connected: Connected) -> None:
+    """A master Angee cannot map yields no ``EXDATE`` keys; its linked instances are set aside with it, not swept."""
+
+    connected.poll()
+    excluded = connected.events()["standup#20260316T130000Z"]
+    connected.google.put("work-token", "work@example.test", {**STANDUP, "recurrence": ["RRULE:FREQ=SOMETIMES"]})
+
+    for _sweep in range(3):
+        SyncStream.objects.sudo(reason="tests.google").filter(
+            integration_id=connected.sources["work-token"].pk
+        ).update(last_reconciled_at=None)
+        connected.poll()
+
+    with system_context(reason="tests.google"):
+        links = RecordLink.objects.filter(stream=connected.stream(), external_key__startswith="standup")
+        held = {link.external_key: (link.status, [row.code for row in link.failures(open_only=True)]) for link in links}
+        excluded.refresh_from_db()
+    assert held["standup"][1] == ["invalid_event"]
+    assert held["standup#20260316T130000Z"] == (LinkStatus.FAILED, ["invalid_event"])
+    assert excluded.status == "cancelled"
+    assert connected.events()["standup#20260316T130000Z"].pk == excluded.pk
+    # Read by its identity outside a sweep (a retry), the instance is set aside with its master too.
+    with system_context(reason="tests.google"):
+        adapter = connected.source().capability_impl
+        [record] = read_stream_keys(adapter, connected.stream(), ["standup#20260316T130000Z"])
+    assert (record.tombstone, record.failure.code if record.failure else None) == (False, "invalid_event")
+
+    # The master maps again: its instances are its own again and nothing stays set aside.
+    connected.google.put("work-token", "work@example.test", STANDUP)
+    SyncStream.objects.sudo(reason="tests.google").filter(
+        integration_id=connected.sources["work-token"].pk
+    ).update(last_reconciled_at=None)
+    connected.poll()
+    with system_context(reason="tests.google"):
+        links = RecordLink.objects.filter(stream=connected.stream(), external_key__startswith="standup")
+        assert not [row.code for link in links for row in link.failures(open_only=True)]
 
 
 def test_a_hidden_calendar_retires_its_events_and_they_come_back_when_it_returns(connected: Connected) -> None:

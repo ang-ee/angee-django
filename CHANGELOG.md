@@ -45,24 +45,42 @@ live in code docstrings.
   `blocks_target_delete` has the rows naming the target read once, those its
   `live_reference_filter` selects refuse with `ProtectedError` (the rule creation
   undo applies), and its teardown or policy runs only while a row names the
-  target; a teardown never blocks. `RecordLink`'s teardown only releases push
-  links (`RecordLinkManager.release_pushes` no longer refuses; it locks the row
-  before its links). `push_stream` locks a written candidate's row before its
-  link and binds no row once the row was deleted, or its link released, during
-  the write (a moved override), so the next push writes the removal.
-  `SyncStreamQuerySet.in_lock_order` is integrate's stream lock order (roots
-  before contained streams), composed by `retire_children` and the calendar
-  purge. A missing seeded row an implementation default names raises
-  `ImproperlyConfigured` with the `manage.py resources load` guidance (was
-  `ValueError`). A delete another row cascades to a published calendar is
-  refused too (`Calendar.delete_blocker(cascaded=True)`), and judging a calendar
-  reads only its source's backend key (`Calendar.source_backend_key`,
+  target; a teardown never blocks. Its read of an edge's rows loads only their
+  keys. `RecordLink`'s teardown only releases push links
+  (`RecordLinkManager.release_pushes` no longer refuses; its caller holds the
+  row's lock inside the deleting or moving transaction, and it locks the row
+  again before its links). `RecordLinkManager.lock_target` locks a linked row in
+  its model's delete order (`AngeeModel.lock_for_delete`). `push_stream` skips a
+  link released since its batch read it, and binds a written candidate's row
+  only when, under the row's lock, the adapter's keyed `local_changes` still
+  yields it under that key on a push stream; a row deleted or moved off its key
+  meanwhile (a moved override, new or written before) binds nothing, so the next
+  push writes the removal. `CalendarEvent.rebase_overrides` locks the overrides
+  before moving or deleting any. `SyncStreamQuerySet.in_lock_order` is
+  integrate's stream lock order (roots before contained streams), composed by
+  `retire_children` and the calendar purge; a contained stream cannot hold
+  containers (`SyncStreamManager.current`). A missing seeded row an
+  implementation default names raises `ImproperlyConfigured` with the
+  `manage.py resources load` guidance (was `ValueError`).
+- **Breaking (`delete_blocker` overrides):** `AngeeModel.delete_blocker(*,
+  cascaded=False)` says where the row sits in the delete: `DeletePreview` judges
+  its target as the start and every collected row as cascaded, and a model's
+  `pre_delete` receiver enforces the hook's rule for where each row sits. Every
+  override accepts `cascaded` (pass it to `super()`). A mirrored calendar
+  refuses only a delete started at it, so its source's delete preview no longer
+  shows that refusal; a published calendar refuses wherever it sits; an event or
+  attendee a delete only cascades to goes with the row it started from. Judging a
+  calendar reads only its source's backend key (`Calendar.source_backend_key`,
   `CalendarSource.backend_class_for`). `publish` takes a no-key lock on the
   vendor. Google's `require_calendar` probes with `events.list` (one event, the
-  `kind` field), which the publishing key's `calendar.events` scope allows; a
-  removal whose `412` finds the event already cancelled, gone or restored is
-  done, and every mapping error of one synced event, its `observe` included, is
-  that event's quarantine.
+  `kind` field), which the publishing key's `calendar.events` scope allows. A
+  removal whose `412` finds a master or single event cancelled or gone, or an
+  override's instance gone or holding exactly the restore, is done; an instance
+  Google cancelled meanwhile is a held conflict. Every mapping error of one
+  synced event, its `observe` included, is that event's quarantine, and a
+  master Angee cannot map keeps its linked instances listed under its refusal
+  (`CalendarBackend.quarantine_series_instances`), so no absence sweep or
+  identity read withdraws its cancelled instances.
 - A publishing calendar backend implements `write_event` and `read_written`;
   `PublishingCalendarBackend.write_back` and `read_keys` run them after `admit_push`, which
   refuses an unsubscribed source and a remote calendar

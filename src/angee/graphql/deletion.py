@@ -192,16 +192,16 @@ class DeletePreview:
         )
         refusals = list(dict.fromkeys(
             message
-            for row in chain(
-                [instance],
+            for row, cascaded in chain(
+                [(instance, False)],
                 (
-                    row
+                    (row, True)
                     for model, rows in sorted(collector.data.items(), key=lambda item: item[0]._meta.label_lower)
                     for row in sorted(rows, key=lambda row: row.pk)
                     if not _is_root(instance, row)
                 ),
             )
-            if isinstance(row, AngeeModel) and (message := row.delete_blocker())
+            if isinstance(row, AngeeModel) and (message := row.delete_blocker(cascaded=cascaded))
         ))
         groups = _PreviewRows.by_model(
             instance,

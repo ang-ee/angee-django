@@ -198,14 +198,20 @@ class RecordRefMixin(RecordRefMergeContract):
 
     @classmethod
     def blocks_target_delete(cls, target: type[models.Model]) -> bool:
-        """Use the same owned edge policy for ordinary deletion and creation undo."""
+        """Use the same owned edge policy for ordinary deletion and creation undo.
+
+        An edge controlling ``target`` (its schema declares the type, or the target
+        names it through a retained reverse relation and it has a teardown) blocks
+        only as a PROTECT edge without a teardown; any other edge blocks. The
+        declared edges are an index lookup, and the target's reverse relations are
+        read only for an edge with a teardown its schema does not declare.
+        """
 
         canonical = canonical_model(target)
         declared = record_edges_by_target().get(canonical, ()) if canonical is not None else ()
-        controlled = {*declared, *record_ref_cleanup_edges_for_target(target)}
-        if cls not in controlled:
-            return True
-        return cls.teardown_for_target is None and cls.on_target_delete is models.PROTECT
+        if cls.teardown_for_target is None:
+            return cls.on_target_delete is models.PROTECT or cls not in declared
+        return cls not in declared and cls not in record_ref_cleanup_edges_for_target(target)
 
     @classmethod
     def record_ref_field(cls) -> GenericForeignKey:
@@ -478,8 +484,9 @@ def delete_record_refs(instance: models.Model, using: str, **kwargs: Any) -> Non
         )
         if edge.blocks_target_delete(type(instance)):
             live = ExpressionWrapper(edge.live_reference_filter(principal=None), output_field=BooleanField())
-            # One read per blocking edge, as a PROTECT edge always cost: every row naming the target, marked live.
-            naming = list(rows.annotate(**{_HOLDS_TARGET: live}))
+            # One narrow read per blocking edge, as a PROTECT edge always cost: every row naming the target,
+            # marked live. A refusal's rows load the rest of their fields only if a preview names them.
+            naming = list(rows.only("pk").annotate(**{_HOLDS_TARGET: live}))
             if held := {row for row in naming if getattr(row, _HOLDS_TARGET)}:
                 raise ProtectedError(f"{edge._meta.label} rows still refer to {instance}.", held)
             if not naming:

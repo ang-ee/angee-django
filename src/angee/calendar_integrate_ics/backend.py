@@ -280,9 +280,11 @@ class IcsCalendarBackend(CalendarBackend):
         deadline = sync_deadline()
         if deadline is None:
             deadline = monotonic() + _PARSE_SECONDS
+        payloads = self._observe_feed(_read(result.content), zone=self.get_calendar(stream).timezone, deadline=deadline)
         return _Snapshot(
             {"etag": result.headers.get("etag", ""), "last_modified": result.headers.get("last-modified", "")},
-            self._observe_feed(_read(result.content), zone=self.get_calendar(stream).timezone, deadline=deadline),
+            # A master the feed serves unmappable keeps its linked instances, set aside with it.
+            self.quarantine_series_instances(stream, payloads),
         )
 
     # --- transport ---

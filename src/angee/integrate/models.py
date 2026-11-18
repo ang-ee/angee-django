@@ -63,7 +63,7 @@ from angee.base.fields.text import DiagnosticTextField
 from angee.base.lineage import concrete_child, concrete_child_accessor, concrete_child_models
 from angee.base.locks import LockKey, record_lock_key, task_lock, task_lock_is_held, task_locks_are_cross_process
 from angee.base.models.audit import AuditMixin
-from angee.base.models.base import AngeeDataModel, record_display_label
+from angee.base.models.base import AngeeDataModel, AngeeModel, record_display_label
 from angee.base.models.implementations import ImplDefaultsMixin
 from angee.base.models.locks import ImmutableFieldsMixin
 from angee.base.models.merge_references import MergePolicy, references
@@ -71,6 +71,7 @@ from angee.base.models.ownership import OwnerMixin, OwnerQuerySet
 from angee.base.models.refs import RecordRefMixin
 from angee.base.models.transitions import StateTransitions, save_state, transition
 from angee.base.permissions import actor_user_id, instance_actor
+from angee.base.querysets import row_lock_paths
 from angee.base.refs import generic_pointer_target
 from angee.base.serialization import canonical_json
 from angee.graphql.capabilities import held_permissions
@@ -4761,7 +4762,9 @@ class SyncStreamQuerySet[SyncStreamT: SyncStream](AngeeHistoryQuerySet[SyncStrea
         A page or push locks its stream, then the child streams it retires
         (:meth:`SyncStreamManager.retire_children`). A caller locking several streams
         of a bridge at once (a purge) takes them in this order, so it never waits on
-        such a page holding them the other way round.
+        such a page holding them the other way round. A contained stream holds no
+        containers (:meth:`SyncStreamManager.current`), so this is parents before
+        their children at every depth.
         """
 
         contained = ExpressionWrapper(Q(container__isnull=False), output_field=BooleanField())
@@ -4834,15 +4837,19 @@ class SyncStreamManager[SyncStreamT: SyncStream](_SyncStreamManagerBase[SyncStre
         flips it from inside a page.
         A child stream's ``container`` is a live container link
         (:meth:`RecordLinkQuerySet.live_containers`) of a stream of the same bridge,
-        whose external key is the partition. A stream declared before containers
-        existed adopts it once; otherwise it never changes. A retired generation is
-        reopened by :meth:`bump_generation`.
+        whose external key is the partition, and holds no containers of its own. A
+        stream declared before containers existed adopts it once; otherwise it never
+        changes. A retired generation is reopened by :meth:`bump_generation`.
         """
 
         if definition.absence_threshold < 1:
             raise ValidationError("A stream absence threshold must be positive.")
         if definition.mapping_version < 1:
             raise ValidationError("A stream mapping version must be positive.")
+        if definition.container is not None and definition.holds_containers:
+            # Containers nest one level (a source's address books or calendars, then their records):
+            # ``SyncStreamQuerySet.in_lock_order``'s roots-then-contained order is then a depth order.
+            raise ValidationError("A contained stream cannot hold containers of its own.")
         integration_model = self.model.integration.field.related_model
         if bridge._meta.proxy or integration_model not in bridge._meta.get_parent_list():
             raise ValidationError("A stream bridge must be a concrete Integration child.")
@@ -5473,15 +5480,33 @@ class RecordLinkManager[RecordLinkT: RecordLink](_RecordLinkManagerBase[RecordLi
         link names, its push links release it, and ``push_stream`` yields each
         released link's removal. A link that holds the row
         (:meth:`RecordLink.live_reference_filter`) stays bound; this never refuses.
-        The row is locked before its links, the order a push reflecting its write
-        takes them (``push_stream``), so neither waits on the other's second lock.
+        Call inside the transaction that deletes or moves the row, holding the
+        row's lock (its deletion's ``lock_for_delete``, or the lock a move took
+        before changing the row): a push reflecting its write locks the row before
+        binding its link (:meth:`lock_target`), so it either binds first and is
+        released here, or waits and then finds the row gone or moved. The row is
+        locked again here (a plain ``Model.delete()`` took no lock), then its
+        links, the order that push takes them.
         """
 
         content_type, object_id = generic_pointer_target(target)
         pushed = self.model._base_manager.filter(target_content_type=content_type, target_object_id=object_id)
-        with transaction.atomic():
-            type(target)._base_manager.select_for_update().filter(pk=target.pk).exists()
-            return self.release_targets(pushed.exclude(self.model.live_reference_filter(principal=None)))
+        self.lock_target(target)
+        return self.release_targets(pushed.exclude(self.model.live_reference_filter(principal=None)))
+
+    def lock_target(self, target: models.Model) -> bool:
+        """Lock a row links name, in its model's delete order; return whether the row is still there.
+
+        An Angee model is locked through its ``lock_for_delete`` hook (its domain
+        locks, then the row), the order its deletion takes before the teardown
+        releases its push links (:meth:`release_pushes`); any other model, its row
+        and multi-table parents. Lock the row before its links.
+        """
+
+        if isinstance(target, AngeeModel):
+            return target.lock_for_delete() is not None
+        model = type(target)
+        return model._base_manager.select_for_update(of=row_lock_paths(model)).filter(pk=target.pk).exists()
 
     def release_targets(self, links: models.QuerySet[Any]) -> int:
         """Let every row ``links`` binds go at once, as :meth:`release_target` lets one go; return how many.
@@ -5769,7 +5794,11 @@ class RecordLink(
 
     @classmethod
     def teardown_for_target(cls, target: models.Model) -> None:
-        """Release the push links naming a deleted row (``release_pushes``); this never refuses."""
+        """Release the push links naming a deleted row (``release_pushes``); this never refuses.
+
+        Base runs it inside the deleting transaction; the deleter holds the row's
+        lock (``lock_for_delete``), else ``release_pushes`` takes it.
+        """
 
         cls.objects.release_pushes(target)
 

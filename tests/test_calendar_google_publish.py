@@ -44,6 +44,7 @@ from angee.calendar_integrate_google.backend import (
     event_id,
 )
 from angee.calendar_integrate_google.connect import connect_google_calendar_publishing
+from angee.graphql.deletion import DeletePreview
 from angee.graphql.testing.documents import execute_schema, result_data
 from angee.integrate.errors import IntegrationError
 from angee.integrate.models import CredentialStatus
@@ -688,6 +689,17 @@ def test_a_delete_its_owner_cascades_to_a_published_calendar_is_refused(publishe
         assert CalendarEvent.objects.filter(calendar_id=calendar.pk).count() == 1
 
 
+def test_a_publishing_sources_delete_preview_refuses_the_published_calendar_its_removal_cascades_to(
+    published: Published,
+) -> None:
+    """A published calendar refuses wherever it sits in the delete; the preview judges it as the cascade it is."""
+
+    published.publish()
+    with system_context(reason="tests.google.publish"):
+        preview = DeletePreview.from_instance(CalendarSource.objects.get(pk=published.source.pk))
+    assert PublishingCalendarBackend.calendar_delete_refusal in preview.refusals
+
+
 def test_judging_a_calendars_deletion_reads_its_sources_backend_key_not_its_source(published: Published) -> None:
     published.publish()
     with system_context(reason="tests.google.publish"):
@@ -942,19 +954,28 @@ def test_an_event_deleted_while_its_push_writes_it_is_removed_from_google_by_the
     assert published.links()[key].status == LinkStatus.TOMBSTONE
 
 
-def test_a_series_moved_while_its_override_is_pushed_leaves_no_duplicate_instance(published: Published) -> None:
+@pytest.mark.parametrize("override", ["new", "written"])
+def test_a_series_moved_while_its_override_is_pushed_leaves_no_duplicate_instance(
+    published: Published, override: str
+) -> None:
+    """The override's link binds only the key the override still has under its row's lock, written before or not."""
+
     published.publish()
     standup = published.event(
         title="Standup", start=_berlin(5, 4, 9), end=_berlin(5, 4, 9, 30), recurrence="FREQ=WEEKLY;COUNT=4"
     )
+    if override == "new":
+        # The series is in Google; its override is not, and its first push observes an unbound link.
+        published.poll()
     moved = published.event(
         title="Standup (moved)", series=standup, original_start=_berlin(5, 11, 9),
-        start=_berlin(5, 11, 10), end=_berlin(5, 11, 10, 45),
+        start=_berlin(5, 11, 10), end=_berlin(5, 11, 10, 45), location="Hall" if override == "new" else "",
     )
-    published.poll()
+    if override == "written":
+        published.poll()
+        published.edit(moved, location="Hall")
     master = event_id(standup.sqid)
     before, after = (f"{master}#{_basic(_berlin(5, 11, hour))}" for hour in (9, 10))
-    published.edit(moved, location="Hall")
     # The override's patch lands as its series moves an hour later, carrying it to another instance.
     published.google.before_patch = lambda: published.edit(standup, start=_berlin(5, 4, 10), end=_berlin(5, 4, 10, 30))
 
@@ -969,6 +990,54 @@ def test_a_series_moved_while_its_override_is_pushed_leaves_no_duplicate_instanc
     # The old instance is the series' own again; the override lives only at its new instance.
     assert remote[f"{master}_{_basic(_berlin(5, 11, 9))}"]["summary"] == "Standup"
     assert remote[f"{master}_{_basic(_berlin(5, 11, 10))}"]["location"] == "Hall"
+
+
+def test_a_row_released_after_its_push_read_it_is_not_written_and_its_removal_follows(published: Published) -> None:
+    """A push re-reads each link before writing it: one released since its batch read it writes nothing stale."""
+
+    published.publish()
+    rows = [published.event(title=title, start=_berlin(5, 4, 10), end=_berlin(5, 4, 12)) for title in ("One", "Two")]
+    published.poll()
+    (earlier_key, earlier), (later_key, later) = sorted((event_id(row.sqid), row) for row in rows)
+    for row in (earlier, later):
+        published.edit(row, location="Hall")
+    # The first write lands as the second row is deleted, after the push read both.
+    published.google.before_patch = lambda: published.delete(later)
+    seen = len(published.google.writes())
+
+    published.poll()
+
+    written = [(request.method, unquote(urlsplit(str(request.url)).path).rsplit("/", 1)[-1])
+               for request in published.google.writes()[seen:]]
+    assert written == [("PATCH", earlier_key)]
+    assert published.links()[later_key].target_object_id is None
+    published.poll()
+    assert published.remote()[later_key]["status"] == "cancelled"
+    assert published.links()[later_key].status == LinkStatus.TOMBSTONE
+
+
+def test_restoring_an_instance_google_cancelled_meanwhile_is_a_held_conflict(published: Published) -> None:
+    """A restore adopts only a gone instance or one holding the series' own; a cancelled one is a remote edit."""
+
+    published.publish()
+    standup = published.event(
+        title="Standup", start=_berlin(5, 4, 9), end=_berlin(5, 4, 9, 30), recurrence="FREQ=WEEKLY;COUNT=4"
+    )
+    moved = published.event(
+        title="Standup (moved)", series=standup, original_start=_berlin(5, 11, 9),
+        start=_berlin(5, 11, 10), end=_berlin(5, 11, 10, 45),
+    )
+    published.poll()
+    master = event_id(standup.sqid)
+    key, written = f"{master}#{_basic(_berlin(5, 11, 9))}", f"{master}_{_basic(_berlin(5, 11, 9))}"
+    published.google.edit(ROOM, written, status="cancelled")
+    published.delete(moved)
+
+    published.poll()
+
+    assert published.open_failures(key) == [(SyncFailureKind.CONFLICT, "remote_version_changed")]
+    assert published.links()[key].status != LinkStatus.TOMBSTONE
+    assert published.remote()[written]["status"] == "cancelled"
 
 
 @pytest.mark.parametrize("case", ["lost-delete", "lost-restore", "edited-in-google"])
@@ -1086,6 +1155,40 @@ def test_a_push_stops_between_events_at_the_sync_deadline(published: Published) 
         assert push_stream(stream, adapter).count == 0
     assert published.google.requests == []
     assert event_id(workshop.sqid) not in published.links()
+
+
+@pytest.mark.skipif(connection.vendor != "postgresql", reason="Real PostgreSQL row locks are required.")
+def test_moving_a_series_waits_on_an_override_a_push_is_binding_then_releases_its_link(published: Published) -> None:
+    """A push binds an override's link under the override's row lock; the series move waits, then lets the link go."""
+
+    published.publish()
+    standup = published.event(
+        title="Standup", start=_berlin(5, 4, 9), end=_berlin(5, 4, 9, 30), recurrence="FREQ=WEEKLY;COUNT=4"
+    )
+    published.poll()
+    moved = published.event(
+        title="Standup (moved)", series=standup, original_start=_berlin(5, 11, 9),
+        start=_berlin(5, 11, 10), end=_berlin(5, 11, 10, 45),
+    )
+    before = f"{event_id(standup.sqid)}#{_basic(_berlin(5, 11, 9))}"
+
+    def move() -> None:
+        published.edit(standup, start=_berlin(5, 4, 10), end=_berlin(5, 4, 10, 30))
+
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        with system_context(reason="tests.google.publish"), transaction.atomic():
+            stream = SyncStream.objects.get(integration_id=published.source.pk, key="events")
+            link = RecordLink.objects.observe(stream, before)
+            # As the push reflecting the override's first write: its row, then its link.
+            assert RecordLink.objects.lock_target(CalendarEvent.objects.get(pk=moved.pk))
+            RecordLink.objects.bind_target(link, CalendarEvent.objects.get(pk=moved.pk))
+            contender, pid = submit(pool, move)
+            wait_for_lock(pid, contender)
+        contender.result(timeout=10)
+
+    with system_context(reason="tests.google.publish"):
+        assert RecordLink.objects.get(pk=link.pk).target_object_id is None
+        assert CalendarEvent.objects.get(pk=moved.pk).original_start == _berlin(5, 11, 10)
 
 
 @pytest.mark.skipif(connection.vendor != "postgresql", reason="Real PostgreSQL row locks are required.")

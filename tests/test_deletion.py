@@ -131,9 +131,10 @@ def test_deletion_preview_reports_model_blockers_and_refuses_confirm(
 
             app_label = "auth"
 
-        def delete_blocker(self) -> str | None:
+        def delete_blocker(self, *, cascaded: bool = False) -> str | None:
             """Return the target's public-safe deletion refusal."""
 
+            del cascaded
             return "Release the parent first." if self.blocked else None
 
     class PolicyChild(AngeeModel):
@@ -147,9 +148,10 @@ def test_deletion_preview_reports_model_blockers_and_refuses_confirm(
 
             app_label = "auth"
 
-        def delete_blocker(self) -> str | None:
-            """Return the child's public-safe deletion refusal."""
+        def delete_blocker(self, *, cascaded: bool = False) -> str | None:
+            """Return the child's public-safe deletion refusal, wherever the delete started."""
 
+            del cascaded
             return "Release the children first." if self.blocked else None
 
     def refuse_delete(sender: Any, instance: AngeeModel, **kwargs: Any) -> None:
@@ -185,6 +187,43 @@ def test_deletion_preview_reports_model_blockers_and_refuses_confirm(
 
 @pytest.mark.django_db(transaction=True)
 @isolate_apps("django.contrib.auth")
+def test_deletion_preview_judges_its_target_as_the_start_and_every_collected_row_as_cascaded() -> None:
+    """A refusal for deletes started at a row is not one a cascade to it shows (``delete_blocker(cascaded=)``)."""
+
+    class StartedParent(AngeeModel):
+        """Deletion target without a refusal of its own."""
+
+        class Meta:
+            """Register the isolated target."""
+
+            app_label = "auth"
+
+    class StartedChild(AngeeModel):
+        """A row refusing only deletes started at it, as a mirrored calendar does."""
+
+        parent = models.ForeignKey(StartedParent, on_delete=models.CASCADE)
+
+        class Meta:
+            """Register the isolated child."""
+
+            app_label = "auth"
+
+        def delete_blocker(self, *, cascaded: bool = False) -> str | None:
+            """Refuse a delete started here; go with the row a cascade started from."""
+
+            return None if cascaded else "Delete the parent instead."
+
+    with model_tables((StartedParent, StartedChild)), system_context(reason="tests.deletion.started"):
+        parent = StartedParent.objects.create()
+        child = StartedChild.objects.create(parent=parent)
+
+        assert DeletePreview.from_instance(child).refusals == ["Delete the parent instead."]
+        cascade = DeletePreview.from_instance(parent)
+        assert (cascade.refusals, cascade.has_blockers, cascade.total_deleted_count) == ([], False, 2)
+
+
+@pytest.mark.django_db(transaction=True)
+@isolate_apps("django.contrib.auth")
 def test_deletion_preview_error_includes_model_refusals_and_fk_blockers() -> None:
     """Neither a model refusal nor a protected relation hides the other in errors."""
 
@@ -196,9 +235,10 @@ def test_deletion_preview_error_includes_model_refusals_and_fk_blockers() -> Non
 
             app_label = "auth"
 
-        def delete_blocker(self) -> str | None:
+        def delete_blocker(self, *, cascaded: bool = False) -> str | None:
             """Return the model's readable refusal."""
 
+            del cascaded
             return "Release the parent first."
 
     class PolicyChild(models.Model):
@@ -775,9 +815,10 @@ def test_delete_preview_from_counts_reports_target_refusal_with_or_without_fk_bl
 
             app_label = "auth"
 
-        def delete_blocker(self) -> str | None:
+        def delete_blocker(self, *, cascaded: bool = False) -> str | None:
             """Expose the purge root's public-safe refusal."""
 
+            del cascaded
             return "Disconnect the target first."
 
     def refuse_delete(sender: Any, instance: PurgeTarget, **kwargs: Any) -> None:

@@ -316,7 +316,8 @@ class GoogleCalendarBackend(_GoogleBackend):
         The absence sweep reads what its listing just served (:meth:`event_keys`), so
         it asks Google nothing more. Otherwise a master or single event is read by its
         id, and an instance through its series' ``instances`` at its original start,
-        or as its master's ``EXDATE``.
+        or as its master's ``EXDATE``; an instance of a master Angee cannot map takes
+        its master's refusal (``CalendarBackend.quarantine_series_instances``).
         """
 
         listing, sweep = self._listing, _sweep(stream)
@@ -338,9 +339,14 @@ class GoogleCalendarBackend(_GoogleBackend):
             if moment is None or master is None:
                 found[key] = dict(self._observe_item(master, zone)).get(key) if master is not None else None
                 continue
+            observed = dict(self._observe_item(master, zone))
+            refusal = observed.get(series_key(master_id))
+            if refusal is not None and "error" in refusal:
+                # A master Angee cannot map yields no instances: each stays set aside with it.
+                found[key] = refusal
+                continue
             day_zone = (_series_zone(master) or zone) if "date" in (master.get("start") or {}) else None
             item = client.instance(stream.partition, master_id, moment, all_day_zone=day_zone)
-            observed = dict(self._observe_item(master, zone))
             if item is not None:
                 observed.update(self._observe_item(item, zone, series_zones={master_id: _series_zone(master)}))
             found[key] = observed.get(key)
@@ -351,7 +357,9 @@ class GoogleCalendarBackend(_GoogleBackend):
 
         A sweep enumerates in bounded pulses; the adapter lists the calendar once for
         the sweep (keyed by its partition, generation and start) and serves the
-        sweep's later pulses and its identity reads (:meth:`read_events`) from it.
+        sweep's later pulses and its identity reads (:meth:`read_events`) from it. A
+        master Angee cannot map keeps its linked instances listed, set aside with it
+        (``CalendarBackend.quarantine_series_instances``).
         """
 
         sweep = _sweep(stream)
@@ -370,7 +378,7 @@ class GoogleCalendarBackend(_GoogleBackend):
                 token = str(page.get("nextPageToken") or "")
                 if not token:
                     break
-            self._listing = (sweep, payloads)
+            self._listing = (sweep, self.quarantine_series_instances(stream, payloads))
         return sorted(key for key, payload in self._listing[1].items() if payload is not None)
 
     def _require_time(self) -> None:
@@ -636,10 +644,12 @@ class GooglePublishingCalendarBackend(_GoogleBackend, PublishingCalendarBackend)
         A master or single event is deleted, and an override's instance restored to
         the series as last written, both under ``If-Match``. An event, series or
         instance Google no longer has (``404`` on a served calendar, ``410``) is
-        already gone. On ``412`` the event is read: one Google has cancelled or no
-        longer has, or an instance already holding what the restore writes, is a
-        removal that landed before its answer was lost (as :meth:`_write_instance`
-        adopts a landed write); anything else is a remote edit, a held conflict.
+        already gone. On ``412`` the event is read, and a removal that landed before
+        its answer was lost is done (as :meth:`_write_instance` adopts a landed
+        write): a master or single event Google has cancelled or no longer has, or
+        an instance that is gone or holds exactly what the restore writes. Anything
+        else is a remote edit, a held conflict: an instance cancelled in Google is
+        not the series' own again.
         """
 
         if not expected_version:
@@ -656,10 +666,11 @@ class GooglePublishingCalendarBackend(_GoogleBackend, PublishingCalendarBackend)
                 client.patch(stream.partition, written, body, etag=expected_version)
         except PreconditionFailed:
             item = client.event(stream.partition, written)
-            removed = item is None or item.get("status") == "cancelled" or (
-                restored is not None and _remote_published(item, self._zone(stream), stamped=False) == restored
-            )
-            if not removed:
+            if item is not None and (
+                _remote_published(item, self._zone(stream), stamped=False) != restored
+                if original is not None
+                else item.get("status") != "cancelled"
+            ):
                 raise
         return WriteBackResult("", "", {"id": written}, tombstone=True)
 

@@ -421,23 +421,38 @@ def _withdraw_absent(stream: Any, adapter: BridgeImpl, links: Sequence[Any]) -> 
         )
 
 
-def _lock_written(links: Any, link: Any, record: RecordChange, *, bound: bool) -> tuple[Any, RecordChange]:
-    """Lock a written candidate's row, then its link; return the link, and ``record`` binding no row once it went.
+def _lock_written(
+    stream: Any, adapter: BridgeImpl, links: Any, link: Any, record: RecordChange
+) -> tuple[Any, RecordChange]:
+    """Lock a written candidate's row, then its link; return the link, and ``record`` binding no row its key lost.
 
     A push reads its candidates before it writes them. Meanwhile the row may be
-    deleted, or its owner may release a link the batch read ``bound`` (the record
-    its key named is no longer that row: a moved override). Binding the row read
-    would bind a deleted row, or a moved row's old key again; binding none leaves
-    the link released, so the next push writes its removal over this write's
-    version. The row is locked before its link, the order a deletion and
-    ``RecordLinkManager.release_pushes`` take them, so a deletion still running
-    finishes first, or waits and then releases the link this write binds.
+    deleted, or, on a push stream, leave the key it was written under (a moved
+    override), whether or not its link was bound yet. The row is locked first
+    (``RecordLinkManager.lock_target``, the order a deletion and
+    ``RecordLinkManager.release_pushes`` take), so a deletion or move still running
+    finishes first. Then a row that is gone, or that the adapter's keyed projection
+    (``local_changes(stream, keys={key})``) no longer yields under this key, binds
+    nothing: binding it would bind a deleted row, or a moved row's old key, which
+    no release names again. The link stays released, and the next push writes its
+    removal over this write's version. A link on any other stream holds its row
+    (``RecordLink.live_reference_filter``), so its row cannot leave its key.
     """
 
     target = record.target
-    present = target is None or type(target)._base_manager.select_for_update().filter(pk=target.pk).exists()
+    named = (
+        target is not None
+        and links.lock_target(target)
+        and (
+            stream.direction != StreamDirection.PUSH
+            or any(
+                change.target == target
+                for change in adapter.local_changes(stream, keys=frozenset({record.external_key}))
+            )
+        )
+    )
     locked = links.lock_if_supported().get(pk=link.pk)
-    if target is not None and (not present or (bound and locked.target_object_id is None)):
+    if target is not None and not named:
         record = replace(record, target=None)
     return locked, record
 
@@ -803,17 +818,22 @@ def push_stream(
             if (limit := sync_deadline()) is not None and monotonic() >= limit:
                 return PageResult(stream, count, failure_ids=tuple(failures))
             candidates.add(candidate.external_key)
-            # The link as the batch read it, before any release that races this write.
-            bound = link is not None and link.target_object_id is not None
             if link is None:
                 link, revision = links.observe(stream, candidate.external_key), None
             else:
                 # The batch loaded its links before the writes ahead of this one; a
-                # concurrent push or conflict resolution may have moved this link since.
-                link = links.filter(pk=link.pk).with_sync_evidence().get()
-                if link.pinned or link.write_holds or not link.local_changed(candidate.projection):
+                # concurrent push, conflict resolution or release may have moved this link since.
+                current = links.filter(pk=link.pk).with_sync_evidence().get()
+                if (
+                    current.pinned
+                    or current.write_holds
+                    or not current.local_changed(candidate.projection)
+                    # Released since the batch read it (its row deleted, or moved off this
+                    # key): the projection read is no longer the key's, and its removal is the next push's.
+                    or (link.target_object_id is not None and current.target_object_id is None)
+                ):
                     continue
-                revision = link.applied_base
+                link, revision = current, current.applied_base
             record = RecordChange(
                 candidate.external_key,
                 None,
@@ -832,7 +852,7 @@ def push_stream(
             with changeset(fresh=True, activity="push", origin=stream), transaction.atomic():
                 current_changeset(record=True)
                 locked_stream = type(stream).objects.lock_current(stream, fenced_to=stream)
-                locked, record = _lock_written(links, link, record, bound=bound)
+                locked, record = _lock_written(locked_stream, adapter, links, link, record)
                 _check_write_precondition(locked, bases)
                 _reflect_write(locked_stream, locked, record, result)
                 # The write the remote once refused has now landed.

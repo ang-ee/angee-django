@@ -30,37 +30,29 @@ def connect() -> None:
 
 
 def refuse_source_owned_delete(sender: Any, instance: Any, *, origin: Any, **kwargs: Any) -> None:
-    """Judge the row a delete starts from, so removing a subscription cascades and editing it does not.
+    """Refuse a calendar, event or attendee delete its ``delete_blocker`` refuses, for where the row sits in it.
 
-    A delete that starts at a calendar, event or attendee is refused when that row's
-    ``delete_blocker`` refuses it (a source's calendar on its own, or a read-only
-    calendar's event or attendee outside its source's own work). A cascade from
-    removing the source proceeds. A queryset delete judges each row it starts from,
-    reading each calendar's writability once (a source's purge reads it once per
-    calendar, not per row); a row it only cascades to (an event's attendees) goes
-    with the row it started from. A calendar is judged at its own deletion too,
-    whatever the delete started from: one another row cascades to (its owner's
-    removal) is refused while it is published (``Calendar.delete_blocker(cascaded=True)``).
+    A row the delete started from (an instance delete's own row, a queryset
+    delete's rows, every row of a delete without an origin) is judged as the
+    start; any other is ``cascaded``. So removing a subscription cascades to its
+    calendars and events, editing them does not, and a cascade to a published
+    calendar is refused (``Calendar.delete_blocker``,
+    ``CalendarEvent.delete_blocker``). A queryset delete reads each calendar's
+    writability once for the events it starts from (a source's purge reads it
+    once per calendar, not per row).
     """
 
-    if isinstance(origin, models.Model):
-        root = origin
-    elif isinstance(origin, models.QuerySet) and not isinstance(instance, origin.model):
-        root = None
+    if isinstance(origin, models.QuerySet):
+        started = isinstance(instance, origin.model)
     else:
-        root = instance
-    if root is not instance and isinstance(instance, Calendar):
-        if blocker := instance.delete_blocker(cascaded=True):
-            raise ValidationError(blocker)
-        return
-    if not isinstance(root, _OWNED):
-        return
-    if isinstance(root, CalendarEvent) and isinstance(origin, models.QuerySet):
+        # A delete without an origin judges every row as its own start.
+        started = origin is None or origin is instance
+    if started and isinstance(instance, CalendarEvent) and isinstance(origin, models.QuerySet):
         writable = _WRITABLE.setdefault(origin, {})
-        if root.calendar_id not in writable:
-            writable[root.calendar_id] = root.calendar.takes_write()
-        blocker = root.delete_blocker(takes_write=writable[root.calendar_id])
+        if instance.calendar_id not in writable:
+            writable[instance.calendar_id] = instance.calendar.takes_write()
+        blocker = instance.delete_blocker(takes_write=writable[instance.calendar_id])
     else:
-        blocker = root.delete_blocker()
+        blocker = instance.delete_blocker(cascaded=not started)
     if blocker:
         raise ValidationError(blocker)

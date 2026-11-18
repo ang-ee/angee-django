@@ -43,6 +43,7 @@ from angee.calendar.testing.models import Calendar, CalendarEvent, CalendarSourc
 from angee.calendar_integrate_ics import backend as ics_backend
 from angee.calendar_integrate_ics.backend import FEED_KEY, IcsCalendarBackend, IcsError
 from angee.calendar_integrate_ics.connect import subscribe_calendar
+from angee.graphql.deletion import DeletePreview
 from angee.integrate.errors import IntegrationError
 from angee.integrate.states import LinkStatus
 from angee.integrate.streams import BridgeSyncError, advance_stream, read_stream_keys, sync_bridge
@@ -643,6 +644,31 @@ def test_identity_reads_reread_the_feed_and_a_dropped_key_is_a_tombstone(subscri
 
 
 # --- mapping -----------------------------------------------------------------
+
+
+def test_a_series_set_aside_keeps_its_cancelled_instances_through_absence_sweeps(subscription: Subscription) -> None:
+    """A master the feed serves unmappable yields no ``EXDATE`` keys; its linked instances are set aside with it."""
+
+    subscription.poll()
+    excluded = subscription.events()["standup@example.test#20260316T130000Z"]
+    subscription.feed.body = _feed(
+        STANDUP.replace("RRULE:FREQ=WEEKLY;BYDAY=MO;COUNT=4", "RRULE:FREQ=SOMETIMES"), MOVED, HOLIDAY, BERLIN_EVENT,
+        LAUNCH,
+    )
+
+    for _sweep in range(3):
+        subscription.sweep()
+
+    with system_context(reason="tests.ics"):
+        excluded.refresh_from_db()
+    assert excluded.status == "cancelled"
+    assert subscription.failures() == {
+        "standup@example.test": ["invalid_event"], "standup@example.test#20260316T130000Z": ["invalid_event"]
+    }
+    subscription.feed.body = _feed(STANDUP, MOVED, HOLIDAY, BERLIN_EVENT, LAUNCH)
+    subscription.sweep()
+    assert subscription.failures() == {}
+    assert subscription.events()["standup@example.test#20260316T130000Z"].pk == excluded.pk
 
 
 def test_recurrence_id_and_exdate_become_overrides_that_expand_across_dst(subscription: Subscription) -> None:
@@ -1906,6 +1932,22 @@ def test_a_zone_change_on_a_subscribed_calendar_resyncs_instead_of_moving_replic
     subscription.poll()
     assert subscription.stream().generation == generation + 1
     assert subscription.failures() == {}
+
+
+def test_a_sources_delete_preview_shows_no_refusal_for_the_mirrored_calendar_its_removal_cascades_to(
+    subscription: Subscription,
+) -> None:
+    """A mirrored calendar refuses a delete started at it, not the cascade its source's removal reaches it by."""
+
+    subscription.poll()
+    with system_context(reason="tests.ics"):
+        calendar = subscription.calendar
+        assert DeletePreview.from_instance(calendar).refusals == [CalendarBackend.calendar_delete_refusal]
+        preview = DeletePreview.from_instance(CalendarSource.objects.get(pk=subscription.source.pk))
+    assert {"calendars", "calendar events"} <= {group.label for group in preview.deleted}
+    # Only the source's streams hold it (their links' history): the cascade itself refuses nothing.
+    assert (preview.refusals, preview.has_blockers) == ([], True)
+    assert preview.blocked
 
 
 def test_a_local_calendar_edit_states_nothing_and_the_calendar_stays_deletable() -> None:

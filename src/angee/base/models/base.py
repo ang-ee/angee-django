@@ -244,13 +244,18 @@ class AngeeModel(
         abstract = True
         base_manager_name = "_angee_base"
 
-    def delete_blocker(self) -> str | None:
-        """Return a public-safe deletion refusal, or ``None`` when allowed.
+    def delete_blocker(self, *, cascaded: bool = False) -> str | None:
+        """Return a public-safe refusal to delete this row, or ``None`` when allowed.
 
-        Overrides require a ``pre_delete`` receiver enforcing the same rule on
-        instance, queryset, and cascade deletes; previews only project it.
+        ``cascaded`` says where the row sits in the delete: ``False`` for a row the
+        delete started from (an instance delete's own row, a queryset delete's
+        rows), ``True`` for one it only reaches through a cascade. An override
+        decides for both and requires a ``pre_delete`` receiver enforcing the same
+        rule, passing where each row sits, on instance, queryset and cascade
+        deletes; the delete preview projects it the same way (``DeletePreview``).
         """
 
+        del cascaded
         return None
 
     def lock_for_delete(self, *, queryset: models.QuerySet[models.Model] | None = None) -> Self | None:

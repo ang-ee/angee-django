@@ -501,17 +501,17 @@ class Calendar(OwnerMixin, ArchiveMixin, StatementsMixin, HistoryMixin, AngeeDat
         """Refuse deleting a source's calendar, as its backend words it (``calendar_delete_refusal``).
 
         A mirrored calendar is retained by its source's link and statements: a
-        delete started at it is refused, and one another row ``cascaded`` to it (its
-        source's removal) proceeds. A published calendar stays until it is
-        unpublished, whatever the delete started from: its events' deletes would
-        propagate, and deleting it must not empty its remote calendar.
+        delete started at it is refused, and one its source's removal cascades to
+        proceeds. A published calendar stays until it is unpublished, wherever it
+        sits in the delete: its events' deletes would propagate, and deleting it
+        must not empty its remote calendar.
         """
 
         key = self.source_backend_key
         backend = CalendarSource.backend_class_for(key) if key is not None else None
         if backend is not None and (not cascaded or backend.direction == StreamDirection.PUSH):
             return backend.calendar_delete_refusal
-        return None if cascaded else cast(Any, super()).delete_blocker()
+        return cast(Any, super()).delete_blocker(cascaded=cascaded)
 
 
 class CalendarEventQuerySet(AngeeHistoryQuerySet[Any]):
@@ -1028,16 +1028,17 @@ class CalendarEvent(
         if calendar is not None and not calendar.takes_write():
             raise ValidationError(READ_ONLY_CALENDAR)
 
-    def delete_blocker(self, *, takes_write: bool | None = None) -> str | None:
-        """Refuse deleting an event the calendar does not let this caller write (:meth:`Calendar.takes_write`).
+    def delete_blocker(self, *, cascaded: bool = False, takes_write: bool | None = None) -> str | None:
+        """Refuse a delete started at an event its calendar does not let this caller write (``Calendar.takes_write``).
 
+        An event a delete only cascades to goes with the row it started from.
         ``takes_write`` is the calendar's answer when the caller already holds it (a
         queryset delete reads it once per calendar).
         """
 
-        if not (self.calendar.takes_write() if takes_write is None else takes_write):
+        if not cascaded and not (self.calendar.takes_write() if takes_write is None else takes_write):
             return READ_ONLY_CALENDAR
-        return cast(Any, super()).delete_blocker()
+        return cast(Any, super()).delete_blocker(cascaded=cascaded)
 
     def _override_errors(self) -> dict[str, str]:
         """Return why this override does not fit its series, if it does not."""
@@ -1290,7 +1291,8 @@ class CalendarEvent(
         moved, detached or deleted like a local one, and its push links let it go
         (``RecordLinkManager.release_pushes``), since the instance they name is no
         longer its own. The push then restores that instance and writes the
-        override's new one.
+        override's new one. The overrides are locked as they are read, before any
+        is moved or deleted, as ``release_pushes`` requires of its caller.
         """
 
         old_tz, zone = get_zone_info(previous_zone), self.expansion_zone
@@ -1300,7 +1302,9 @@ class CalendarEvent(
         )
         order = "-original_start" if shift > timedelta(0) else "original_start"
         rows = type(self)._base_manager.filter(series_id=self.pk)
-        overrides = list(rows.order_by(order, "pk"))
+        # Locked before any moves or goes: a push binding an override's link locks its row first
+        # (``RecordLinkManager.lock_target``), so it binds before this or finds the row moved or gone.
+        overrides = list(rows.order_by(order, "pk").lock_if_supported())
         edges = [
             reference.live_pointing(type(self))
             for reference in references(type(self))
@@ -1614,12 +1618,15 @@ class EventAttendee(ImmutableFieldsMixin, AuditMixin, HistoryMixin, AngeeDataMod
         if self.event_id is not None and not self.event.calendar.takes_write():
             raise ValidationError(READ_ONLY_CALENDAR)
 
-    def delete_blocker(self) -> str | None:
-        """Refuse deleting an attendee its event's calendar does not let this caller write."""
+    def delete_blocker(self, *, cascaded: bool = False) -> str | None:
+        """Refuse a delete started at an attendee its event's calendar does not let this caller write.
 
-        if not self.event.calendar.takes_write():
+        An attendee a delete only cascades to goes with the row it started from.
+        """
+
+        if not cascaded and not self.event.calendar.takes_write():
             return READ_ONLY_CALENDAR
-        return cast(Any, super()).delete_blocker()
+        return cast(Any, super()).delete_blocker(cascaded=cascaded)
 
 
 _ROLE_RANK = (AttendeeRole.ORGANIZER, AttendeeRole.REQUIRED, AttendeeRole.OPTIONAL)

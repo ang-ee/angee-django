@@ -2403,6 +2403,18 @@ def test_streams_lock_roots_before_the_streams_their_containers_hold(stream_brid
     assert [row.pk for row in ordered] == [notes.pk, shelves.pk, books.pk]
 
 
+def test_a_contained_stream_cannot_hold_containers(stream_bridge: Channel) -> None:
+    """Containers nest one level, so ``in_lock_order``'s roots before contained streams is parents before children."""
+
+    shelves = current_stream(stream_bridge, "shelves", kind=StreamKind.RECORD_REPLICA, holds_containers=True)
+    shelf = RecordLink.objects.observe(shelves, "a", target=shelves)
+    with pytest.raises(ValidationError, match="A contained stream cannot hold containers"):
+        current_stream(
+            stream_bridge, "books", "a", kind=StreamKind.RECORD_REPLICA, container=shelf, holds_containers=True
+        )
+    assert not SyncStream.objects.filter(integration_id=stream_bridge.pk, key="books").exists()
+
+
 def test_a_tombstoned_container_retires_its_streams_and_its_revival_reopens_them(
     stream_bridge: Channel, monkeypatch: pytest.MonkeyPatch
 ) -> None:
