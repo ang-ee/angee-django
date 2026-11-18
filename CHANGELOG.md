@@ -10,6 +10,10 @@ live in code docstrings.
 
 ## Unreleased — shared addon contracts, native embeddings and graph retrieval
 
+- The sign-in card's "or use password" divider shows only beside a sign-in method
+  that renders. A contributed method that renders nothing, such as the OIDC
+  method with no configured connection, no longer leaves an orphan divider above
+  the password form.
 - A theme or branding fragment owns the sign-in presentation through
   `auth.login#hero`, a framework container with one child per host. Installing
   the fragment is enough: `LoginPage` renders the hero on `/login` and

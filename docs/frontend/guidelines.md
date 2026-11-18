@@ -1759,8 +1759,11 @@ framework's), so IAM's rotating backdrops never show behind a contributed hero.
 The hero renders at every width: beside the card from `lg` up, stacked above it
 on small screens. `LoginPage` passes it no props and no viewport hint; the hero
 picks its own responsive assets (a lighter image or video on phones) through
-ordinary CSS or media queries. The backdrop image is one URL that covers the page
-at every width.
+ordinary CSS or media queries. Below `lg` the hero's wrapper has no height of its
+own, so a hero built to fill the `lg` column (`absolute inset-0`) collapses there:
+the hero gives itself a small-screen height, for example
+`relative h-[34svh] lg:absolute lg:inset-0 lg:h-auto`. The backdrop image is one
+URL that covers the page at every width.
 
 The container is unique per address, as a model's card is: two installed
 contributors fail at boot ("… are both its one child"). Keep one by removing the

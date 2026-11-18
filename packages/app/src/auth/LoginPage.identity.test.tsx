@@ -85,4 +85,18 @@ describe("login identity precedence", () => {
     expect(screen.queryByRole("button", { name: "Replacement sign-in" })).toBeNull();
     expect(screen.queryByText("or use password")).toBeNull();
   });
+
+  test("a contributed method that renders nothing hides the password divider", () => {
+    function NoConfiguredProvider(): null {
+      return null;
+    }
+    const runtime = { ...branded, containers: containersFromChildren(LOGIN_CONTAINERS, {
+      "auth.login#method": { "oidc.sso": { content: <NoConfiguredProvider /> } },
+    }) };
+    login({}, runtime);
+    const methods = document.querySelector("[data-login-methods]");
+    expect(methods?.childNodes.length).toBe(0);
+    // The divider's block hides itself through `:has(> [data-login-methods]:empty)`.
+    expect(methods?.parentElement?.className).toContain("[&:has(>[data-login-methods]:empty)]:hidden");
+  });
 });
