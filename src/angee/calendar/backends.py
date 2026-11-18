@@ -349,6 +349,23 @@ def excluded_dates(component: Component) -> list[tuple[date | datetime, str]]:
     return [(value.dt, str(prop.params.get("TZID") or "")) for prop in props for value in prop.dts]
 
 
+def effective_timezone(zone: str, *, calendar_zone: str) -> str:
+    """Return the zone a parsed event keeping ``zone`` keeps on a calendar in ``calendar_zone``.
+
+    ``zone`` is the event's own (``ParsedEvent.timezone``, blank for its
+    calendar's) and ``calendar_zone`` its calendar's (blank for the project's).
+    ``CalendarEvent.effective_timezone`` decides, asked of an unsaved event on an
+    unsaved calendar as :func:`cancelled_instances` asks its series: a backend reads
+    a parsed event's times, its ``EXDATE``s and its exceptions' original starts in it.
+    """
+
+    # The unsaved rows only lend the event owner's chain; nothing writes them.
+    event: Any = apps.get_model("calendar", "CalendarEvent")(
+        calendar=apps.get_model("calendar", "Calendar")(timezone=calendar_zone), timezone=zone
+    )
+    return str(event.effective_timezone)
+
+
 def cancelled_instances(
     event: ParsedEvent,
     uid: str,

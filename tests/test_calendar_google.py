@@ -853,6 +853,46 @@ def test_an_all_day_exception_reads_its_original_day_in_its_series_zone(connecte
     assert (override.series_id, override.original_start) == (events["offsite"].pk, _utc(2026, 4, 13, zone=tokyo))
 
 
+def test_a_series_without_a_zone_on_a_calendar_without_one_reads_its_days_in_the_project_zone(
+    connected: Connected, settings: Any
+) -> None:
+    """The zone chain ends at the project ``TIME_ZONE``: a date ``EXDATE`` and an exception's original day lie in it."""
+
+    settings.TIME_ZONE = "Pacific/Kiritimati"
+    connected.google.accounts["home-token"].calendars["floating@example.test"] = {
+        "id": "floating@example.test", "summary": "Floating",
+    }
+    offsite = {
+        "id": "offsite",
+        "status": "confirmed",
+        "summary": "Offsite",
+        "start": {"date": "2026-04-06"},
+        "end": {"date": "2026-04-07"},
+        "recurrence": ["RRULE:FREQ=WEEKLY;COUNT=3", "EXDATE;VALUE=DATE:20260413"],
+    }
+    moved = {
+        "id": "offsite_20260420",
+        "status": "confirmed",
+        "recurringEventId": "offsite",
+        "originalStartTime": {"date": "2026-04-20"},
+        "summary": "Offsite (moved)",
+        "start": {"date": "2026-04-21"},
+        "end": {"date": "2026-04-22"},
+    }
+    for event in (offsite, moved):
+        connected.google.put("home-token", "floating@example.test", event)
+    connected.poll("home-token")
+
+    events = connected.events(token="home-token", partition="floating@example.test")
+    kiritimati = ZoneInfo("Pacific/Kiritimati")
+    with system_context(reason="tests.google"):
+        assert events["offsite"].calendar.timezone == events["offsite"].timezone == ""
+    cancelled, override = events["offsite#20260412T100000Z"], events["offsite#20260419T100000Z"]
+    assert (cancelled.status, cancelled.original_start) == ("cancelled", _utc(2026, 4, 13, zone=kiritimati))
+    assert (override.series_id, override.original_start) == (events["offsite"].pk, _utc(2026, 4, 20, zone=kiritimati))
+    assert events["offsite"].start == _utc(2026, 4, 6, zone=kiritimati)
+
+
 def test_a_cancelled_master_with_linked_exceptions_withdraws_the_series(connected: Connected) -> None:
     connected.poll()
     connected.google.put("work-token", "work@example.test", {"id": "standup", "status": "cancelled"})

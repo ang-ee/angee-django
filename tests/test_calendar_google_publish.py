@@ -1031,8 +1031,8 @@ def test_the_published_projection_is_pinned_to_the_events_mapping_version(publis
     with system_context(reason="tests.google.publish.pinned"):
         stored = {row.pk: row for row in CalendarEvent.system_queryset().filter(pk__in=[series.pk, day.pk])}
     projected = [
-        _published(stored[series.pk], "Europe/Berlin", stamp="evt_series"),
-        _published(stored[day.pk], "Europe/Berlin"),
+        _published(stored[series.pk], stored[series.pk].effective_timezone, stamp="evt_series"),
+        _published(stored[day.pk], stored[day.pk].effective_timezone),
     ]
 
     assert (version, projected) == (1, [
@@ -1049,6 +1049,33 @@ def test_the_published_projection_is_pinned_to_the_events_mapping_version(publis
             "recurrence": "", "timezone": "Europe/Berlin", "stamp": "",
         },
     ])
+
+
+def test_an_events_version_names_the_zone_its_projection_falls_back_to(published: Published, settings: Any) -> None:
+    """A push's version and its projection read one zone, the calendar's, else the project's: they cannot drift."""
+
+    published.publish()
+    floating = published.event(title="Floating", start=_berlin(5, 4, 10), end=_berlin(5, 4, 12))
+    zoned = published.event(title="Tokyo call", start=_berlin(5, 5, 10), end=_berlin(5, 5, 11), timezone="Asia/Tokyo")
+    published.poll()
+    for calendar_zone, kept in (("Europe/Berlin", "Europe/Berlin"), ("", settings.TIME_ZONE)):
+        with system_context(reason="tests.google.publish.zone"):
+            calendar = Calendar.objects.get(pk=published.calendar.pk)
+            calendar.timezone = calendar_zone
+            calendar.save()
+        published.rewind_sweep()
+        stream = published.events_stream()
+        with system_context(reason="tests.google.publish.zone"):
+            backend = CalendarSource.objects.get(pk=published.source.pk).backend
+            changes = {change.target.pk: change for change in backend.local_changes(stream)}
+            rows = CalendarEvent.system_queryset().filter(pk__in=[floating.pk, zoned.pk])
+            versions = RecordLink.objects.with_local_versions(rows, context=kept).values_list("pk", "local_version")
+
+        assert {pk: change.projection["timezone"] for pk, change in changes.items()} == {
+            floating.pk: kept, zoned.pk: "Asia/Tokyo"
+        }
+        # Each version is the row's under exactly the zone a zone-less event projects.
+        assert {pk: change.local_version for pk, change in changes.items()} == dict(versions)
 
 
 def test_keeping_angees_side_restores_an_event_cancelled_in_google(published: Published) -> None:

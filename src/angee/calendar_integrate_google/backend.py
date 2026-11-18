@@ -60,7 +60,6 @@ from time import monotonic
 from typing import Any, ClassVar
 
 from django.apps import apps
-from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.db import transaction
 from django.db.models import Q
@@ -78,6 +77,7 @@ from angee.calendar.backends import (
     PublishingCalendarBackend,
     cancelled_instances,
     canonical_rule,
+    effective_timezone,
     event_columns,
     excluded_dates,
     instance_key,
@@ -332,7 +332,7 @@ class GoogleCalendarBackend(_GoogleBackend):
         if listing is not None and sweep and listing[0] == sweep:
             return {key: listing[1].get(key) for key in keys}
         client = self._client()
-        zone = self.get_calendar(stream).timezone
+        zone = self.get_calendar(stream).effective_timezone
         found: dict[str, dict[str, Any] | None] = {}
         masters: dict[str, tuple[dict[str, Any] | None, dict[str, dict[str, Any] | None]]] = {}
         for key in keys:
@@ -347,7 +347,8 @@ class GoogleCalendarBackend(_GoogleBackend):
             master, observed = masters[master_id]
             if moment is not None and master is not None:
                 start = master.get("start")
-                day_zone = (_series_zone(master) or zone) if isinstance(start, Mapping) and "date" in start else None
+                all_day = isinstance(start, Mapping) and "date" in start
+                day_zone = effective_timezone(_series_zone(master), calendar_zone=zone) if all_day else None
                 item = client.instance(stream.partition, master_id, moment, all_day_zone=day_zone)
                 if item is not None:
                     own = self._observe_item(item, zone, series_zones={master_id: _series_zone(master)})
@@ -370,7 +371,7 @@ class GoogleCalendarBackend(_GoogleBackend):
 
         sweep = _sweep(stream)
         if self._listing is None or self._listing[0] != sweep:
-            zone = self.get_calendar(stream).timezone
+            zone = self.get_calendar(stream).effective_timezone
             client = self._client()
             payloads: dict[str, dict[str, Any] | None] = {}
             token = ""
@@ -414,7 +415,7 @@ class GoogleCalendarBackend(_GoogleBackend):
         except PageTokenInvalid:
             # The listing starts again from the sync token the page continued, else as a new baseline.
             raise CursorInvalid(cursor={"sync_token": sync_token} if sync_token else None) from None
-        zone = self.get_calendar(stream).timezone
+        zone = self.get_calendar(stream).effective_timezone
         items = list(page.get("items") or ())
         series_zones = self._series_zones(stream, items)
         payloads: dict[str, dict[str, Any] | None] = {}
@@ -436,7 +437,7 @@ class GoogleCalendarBackend(_GoogleBackend):
 
         A master on the same page states its own; another's is its stored master's
         (an exception may arrive on an earlier page than its master). A series not
-        known yet expands in the calendar's zone.
+        known yet keeps the calendar's (blank, as a master stating none).
         """
 
         zones = {str(item["id"]): _series_zone(item) for item in items if item.get("id") and item.get("recurrence")}
@@ -447,30 +448,33 @@ class GoogleCalendarBackend(_GoogleBackend):
             rows = apps.get_model("calendar", "CalendarEvent").system_queryset().filter(pk__in=list(targets))
             for pk, own in rows.values_list("pk", "timezone"):
                 zones[targets[str(pk)]] = own
-        return {master: own for master, own in zones.items() if own}
+        return zones
 
     def _observe_item(
         self, item: Mapping[str, Any], zone: str, *, series_zones: Mapping[str, str] | None = None
     ) -> list[tuple[str, dict[str, Any] | None]]:
         """Map one Google event to its keyed payload, then a master's ``EXDATE`` instances.
 
-        ``series_zones`` names the zone a series expands in, by master id
-        (:meth:`_series_zones`): an exception's all-day original start is read
-        there. A removed master or single event is ``None``; an event the calendar
+        ``zone`` is the calendar's (``Calendar.effective_timezone``) and
+        ``series_zones`` each series' own, by master id (:meth:`_series_zones`): an
+        exception's all-day original start is read in the zone its series keeps,
+        and a master's ``EXDATE``s in its own (``effective_timezone``, the event
+        chain). A removed master or single event is ``None``; an event the calendar
         cannot take is a quarantine payload under its own key.
         """
 
         google_id = str(item.get("id") or "")
         if not google_id:
             return []
-        series_zone = (series_zones or {}).get(str(item.get("recurringEventId") or "")) or zone
+        own = (series_zones or {}).get(str(item.get("recurringEventId") or ""), "")
+        series_zone = effective_timezone(own, calendar_zone=zone)
         try:
             key, event = _event(item, zone, series_zone)
             if event is None:
                 return [(key, None)]
             observed: list[tuple[str, ParsedEvent]] = [(key, event)]
             if event.recurrence:
-                local = event.timezone or zone
+                local = effective_timezone(event.timezone, calendar_zone=zone)
                 exdates = [_instant(value, tzid, local) for value, tzid in excluded_dates(_recurrence(item))]
                 observed.extend(
                     cancelled_instances(
@@ -537,22 +541,25 @@ class GooglePublishingCalendarBackend(_GoogleBackend, PublishingCalendarBackend)
         An event keeps the key of the link that names it. A new master or single
         event is keyed :func:`event_id`, the Google id it is created under; a new
         override, by its series' key and original start (``instance_key``).
-        :func:`_published` reads only the event's own columns and the calendar's
-        zone, so each event carries its version under that zone, read with it
-        (``RecordLinkManager.with_local_versions``): a changed zone changes every
-        event's version without touching one. Without ``keys``, only the events
-        their link does not hold at that version are read
-        (``RecordLinkManager.changed_since_base``; every event while the stream's
-        sweep is due, and after a raised :attr:`events_mapping_version`); given
-        ``keys``, the events those keys name, changed or not. Integrate writes only
-        the events whose projection differs from their link's base. The calendars
-        stream pushes nothing: its links are :meth:`CalendarSource.publish`'s.
+        :func:`_published` reads only the event's own columns and the zone it keeps
+        (``CalendarEvent.effective_timezone``: its own, else the calendar's
+        ``Calendar.effective_timezone``), so each event carries its version under
+        the calendar's zone, read with it (``RecordLinkManager.with_local_versions``):
+        a changed zone changes every event's version without touching one. One
+        calendar row decides both, so a version names the zone its projection
+        read. Without ``keys``, only the events their link does not hold at that
+        version are read (``RecordLinkManager.changed_since_base``; every event
+        while the stream's sweep is due, and after a raised
+        :attr:`events_mapping_version`); given ``keys``, the events those keys name,
+        changed or not. Integrate writes only the events whose projection differs
+        from their link's base. The calendars stream pushes nothing: its links are
+        :meth:`CalendarSource.publish`'s.
         """
 
         if stream.key != EVENTS_STREAM:
             return
         calendar = self.get_calendar(stream)
-        zone = _published_zone(calendar)
+        zone = calendar.effective_timezone
         links = stream.links.model.objects
         events = apps.get_model("calendar", "CalendarEvent").system_queryset().filter(calendar=calendar)
         events = links.with_local_versions(events, context=zone)
@@ -561,6 +568,8 @@ class GooglePublishingCalendarBackend(_GoogleBackend, PublishingCalendarBackend)
         else:
             events = links.changed_since_base(stream, events)
         rows = list(events.select_related("series").order_by("pk"))
+        for row in rows:
+            row.calendar = calendar  # The row's zone chain reads the calendar whose zone its version names.
         pks = {str(row.pk) for row in rows} | {str(row.series_id) for row in rows if row.series_id is not None}
         linked = dict(stream.links.filter(target_object_id__in=pks).values_list("target_object_id", "external_key"))
 
@@ -575,7 +584,7 @@ class GooglePublishingCalendarBackend(_GoogleBackend, PublishingCalendarBackend)
         for key, row in sorted(((key_of(row), row) for row in rows), key=lambda pair: pair[0]):
             if keys is None or key in keys:
                 stamp = row.sqid if row.series_id is None else ""
-                projection = _published(row, zone, stamp=stamp)
+                projection = _published(row, row.effective_timezone, stamp=stamp)
                 yield LocalChange(key, projection, target=row, local_version=row.local_version)
 
     def _named(self, stream: Any, keys: frozenset[str]) -> Q:
@@ -645,7 +654,7 @@ class GooglePublishingCalendarBackend(_GoogleBackend, PublishingCalendarBackend)
         side writes it back as Angee has it.
         """
 
-        client, zone = self._client(), self._zone(stream)
+        client, zone = self._client(), self.get_calendar(stream).effective_timezone
         written = {
             link.external_key: (link.source_payload or {}).get("id")
             for link in stream.links.filter(external_key__in=list(keys))
@@ -704,7 +713,7 @@ class GooglePublishingCalendarBackend(_GoogleBackend, PublishingCalendarBackend)
         except PreconditionFailed:
             item = client.event(stream.partition, written)
             if item is not None and (
-                _remote_published(item, self._zone(stream), stamped=False) != restored
+                _remote_published(item, self.get_calendar(stream).effective_timezone, stamped=False) != restored
                 if original is not None
                 else item.get("status") != "cancelled"
             ):
@@ -732,7 +741,7 @@ class GooglePublishingCalendarBackend(_GoogleBackend, PublishingCalendarBackend)
         mine = [item for item in found if item.get("id") == key and _stamp(item) == projection["stamp"]]
         if len(found) != 1 or not mine:
             raise RemoteRejected("remote_id_taken")
-        if _remote_published(mine[0], self._zone(stream), stamped=True) != projection:
+        if _remote_published(mine[0], self.get_calendar(stream).effective_timezone, stamped=True) != projection:
             raise RemoteRejected()
         return mine[0]
 
@@ -766,7 +775,7 @@ class GooglePublishingCalendarBackend(_GoogleBackend, PublishingCalendarBackend)
         item = _instance(client, stream, series, original, sent)
         if item is None:
             raise RemoteRejected("instance_unavailable", conflict=False)
-        remote = _remote_published(item, self._zone(stream), stamped=False)
+        remote = _remote_published(item, self.get_calendar(stream).effective_timezone, stamped=False)
         if projection["status"] == EventStatus.CANCELLED:
             landed = item.get("status") == "cancelled"
         else:
@@ -783,17 +792,6 @@ class GooglePublishingCalendarBackend(_GoogleBackend, PublishingCalendarBackend)
         link = stream.links.filter(external_key=series).select_related("applied_base").first()
         base = link.applied_base if link is not None else None
         return dict(base.mapped_payload) if base is not None and base.mapped_payload else None
-
-    def _zone(self, stream: Any) -> str:
-        """Return the zone the published calendar keeps (:func:`_published_zone`)."""
-
-        return _published_zone(self.get_calendar(stream))
-
-
-def _published_zone(calendar: Any) -> str:
-    """Return the zone a published calendar keeps: its own, else the project's."""
-
-    return calendar.timezone or settings.TIME_ZONE
 
 
 def _instance(
@@ -830,16 +828,18 @@ def _published(event: Any, zone: str, *, stamp: str = "") -> dict[str, Any]:
     ``event`` is a stored ``CalendarEvent`` or a :class:`ParsedEvent` read from
     Google: calendar's column projection (``event_columns``) of the columns Google
     keeps, its rule in the form icalendar reads it back (``canonical_rule``), its zone
-    and its stamp. ``zone`` is the calendar's (the project's when blank): an event
-    without a zone of its own keeps it, since Google expands a series in a named
-    zone. ``stamp`` is a master's or single event's public id; an instance has none.
+    and its stamp. ``zone`` is the zone the event keeps, always named, since Google
+    expands a series in a named zone: a stored event's
+    ``CalendarEvent.effective_timezone``, a parsed one's ``effective_timezone`` on
+    the published calendar. ``stamp`` is a master's or single event's public id; an
+    instance has none.
     Attendees and the conference link are not published.
     """
 
     return {
         **event_columns(event, _PUBLISHED_COLUMNS),
         "recurrence": canonical_rule(event.recurrence),
-        "timezone": event.timezone or zone,
+        "timezone": zone,
         "stamp": stamp,
     }
 
@@ -847,8 +847,9 @@ def _published(event: Any, zone: str, *, stamp: str = "") -> dict[str, Any]:
 def _remote_published(item: Mapping[str, Any], zone: str, *, stamped: bool) -> dict[str, Any] | None:
     """Return a Google event as :func:`_published` shapes it, or ``None`` once it is cancelled or unreadable.
 
-    The sync-in mapping reads it (:func:`_event`); ``stamped`` reads its
-    ``angee_event`` stamp, which only a master or single event carries.
+    ``zone`` is the published calendar's. The sync-in mapping reads it
+    (:func:`_event`); ``stamped`` reads its ``angee_event`` stamp, which only a
+    master or single event carries.
     """
 
     try:
@@ -857,7 +858,8 @@ def _remote_published(item: Mapping[str, Any], zone: str, *, stamped: bool) -> d
         return None
     if event is None:
         return None
-    return _published(event, zone, stamp=_stamp(item) if stamped else "")
+    kept = effective_timezone(event.timezone, calendar_zone=zone)
+    return _published(event, kept, stamp=_stamp(item) if stamped else "")
 
 
 def _instance_of(series: Mapping[str, Any], original: datetime) -> dict[str, Any]:
@@ -973,7 +975,7 @@ def _event(item: Mapping[str, Any], zone: str, series_zone: str) -> tuple[str, P
         )
     start_prop, end_prop = item["start"], item.get("end") or item["start"]
     event_zone = _known_zone(start_prop.get("timeZone"))
-    local = event_zone or zone
+    local = effective_timezone(event_zone, calendar_zone=zone)
     start = _moment(start_prop, local)
     end = _moment(end_prop, local)
     all_day = "date" in start_prop

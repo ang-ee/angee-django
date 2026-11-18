@@ -66,7 +66,11 @@ live in code docstrings.
   (record forms, filters, structured form specs, action dialogs) sends the
   instant meant, never a naive time the server reads in its own zone, and
   `mutationDialogValueCodecs.datetime` composes it. `formatDateStorage(date,
-  timeZone)` reads the day an instant falls on in a zone.
+  timeZone)` reads the day an instant falls on in a zone. A backend asks a parsed
+  event's zone of the same chain (`angee.calendar.backends.effective_timezone`):
+  Google Calendar reads and publishes every zone through it and the two
+  properties, and a published event's version names the zone its projection
+  reads.
 - A calendar source can publish local calendars out. `CalendarBackend.direction`
   (`PULL` by default) declares which way a source's streams sync; a `PUSH`
   backend's calendars and events streams are push streams, never swept.
