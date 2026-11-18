@@ -8,7 +8,8 @@ calendar shows, expanded server-side through
 :meth:`~angee.calendar.models.CalendarEventQuerySet.occurrences` over the actor's
 ``see_busy`` scope, with busy-only occurrences for the events the actor may not
 read. Sharing is the generic record-access surface over each calendar's
-``rebac_grantable`` relations.
+``rebac_grantable`` relations. ``delete_calendar`` and ``delete_calendar_event``
+are the authored cascade delete previews the UI's Delete composes.
 
 ``reschedule_event`` is the drag verb: it preflights the row's ``write`` and
 dispatches to :meth:`~angee.calendar.models.CalendarEvent.reschedule`, which owns
@@ -49,6 +50,7 @@ from angee.graphql.access import ChangeReadGate
 from angee.graphql.actions import ActionResult, action_guard, authorized_action_target, session_user
 from angee.graphql.capabilities import permission_expression, permissions_field
 from angee.graphql.data.hasura import AngeeHasuraWriteBackend, hasura_model_resource, public_pk_decoder
+from angee.graphql.deletion import DeletePreview, attach_delete_preview_metadata, delete_by_public_id
 from angee.graphql.events import ChangeEvent, ChangePayload
 from angee.graphql.ids import PublicID, require_instance_for_id
 from angee.graphql.node import NODE_DISPLAY_NAME_DESCRIPTION, AngeeNode
@@ -356,6 +358,42 @@ class CalendarActionMutation:
 
 
 @strawberry.type
+class CalendarDeletePreviewMutation:
+    """The cascade delete previews that offer Delete for calendars and events, under the row's ``delete``."""
+
+    @strawberry.mutation(name="delete_calendar")
+    def delete_calendar(self, id: PublicID, confirm: bool = False) -> DeletePreview:
+        """Preview or confirm deleting one calendar and its events; a source's calendar is refused in the preview."""
+
+        return delete_by_public_id(Calendar, str(id), confirm=confirm, queryset=Calendar.objects.for_write())
+
+    @strawberry.mutation(name="delete_calendar_event")
+    def delete_calendar_event(self, id: PublicID, confirm: bool = False) -> DeletePreview:
+        """Preview or confirm deleting one stored event: a recurring master goes with its overrides.
+
+        A read-only calendar's event is refused in the preview (``CalendarEvent.delete_blocker``).
+        """
+
+        return delete_by_public_id(
+            CalendarEvent, str(id), confirm=confirm, queryset=CalendarEvent.objects.for_write()
+        )
+
+
+attach_delete_preview_metadata(
+    CalendarDeletePreviewMutation,
+    model=Calendar,
+    node=CalendarType,
+    field="delete_calendar",
+)
+attach_delete_preview_metadata(
+    CalendarDeletePreviewMutation,
+    model=CalendarEvent,
+    node=CalendarEventType,
+    field="delete_calendar_event",
+)
+
+
+@strawberry.type
 class CalendarSourceActionMutation:
     """A connected calendar's owner verbs: sync it now, and unsubscribe."""
 
@@ -407,6 +445,7 @@ schemas = {
         "query": [*[resource.query for resource in _RESOURCES], CalendarQuery],
         "mutation": [
             *[resource.mutation for resource in _RESOURCES],
+            CalendarDeletePreviewMutation,
             CalendarActionMutation,
             CalendarEventActionMutation,
             CalendarSourceActionMutation,
