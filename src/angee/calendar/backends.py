@@ -435,7 +435,7 @@ class CalendarBackend(BridgeImpl, HttpClientMixin):
     applies every record and applies integrate's absence sweep (:meth:`on_absent`).
     Its calendars are its source's replicas: they take no local edits
     (``Calendar.is_writable`` reads :attr:`direction`). A backend that reads with
-    one kind of credential refuses any other (:meth:`admit_credential`). An
+    one kind of credential refuses any other (:meth:`credential_blocker`). An
     unsubscribed source's replica goes through :meth:`release`. A publishing
     backend extends :class:`PublishingCalendarBackend` instead.
     """
@@ -520,15 +520,27 @@ class CalendarBackend(BridgeImpl, HttpClientMixin):
             raise IntegrationError("The calendar list came back empty; the next sync reads it again.", transient=True)
         return remotes
 
-    def admit_credential(self, credential: Any) -> None:
-        """Refuse a credential this backend cannot use, raising ``ValidationError`` on ``credential``.
+    def credential_blocker(self, credential: Any) -> str | None:
+        """Return a public-safe refusal of a credential this backend cannot use, or ``None`` when it admits it.
 
-        ``CalendarSource.admit_credential`` asks on every attachment, so no path
-        points a source at a credential its backend would send elsewhere. The base
-        admits any credential.
+        The source's admission rule (``CalendarSource.credential_blocker``):
+        :meth:`admit_credential` raises it on every attachment, so no path points a
+        source at a credential its backend would send elsewhere, and the connect
+        picker shows it beside each account. The base admits any credential.
         """
 
         del credential
+        return None
+
+    def admit_credential(self, credential: Any) -> None:
+        """Refuse a credential this backend cannot use, raising :meth:`credential_blocker` on ``credential``.
+
+        ``CalendarSource.admit_credential`` asks on every attachment. A backend
+        overrides this only to hold a lock around its rule.
+        """
+
+        if (refusal := self.credential_blocker(credential)) is not None:
+            raise ValidationError({"credential": refusal})
 
     def release(self, calendars: Sequence[Any]) -> int:
         """Let an unsubscribed source's replica go; return how many events went.

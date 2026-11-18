@@ -212,7 +212,7 @@ class GoogleCalendarBackend(_GoogleBackend):
     One source per account: a user with several Google accounts connects each as
     its own source. The account's OAuth credential comes from the deployment's
     ``google`` client (``integrate_google``) with :data:`CALENDAR_READONLY` granted;
-    no other credential is admitted (:meth:`admit_credential`).
+    no other credential is admitted (:meth:`credential_blocker`).
     """
 
     key = "google"
@@ -227,33 +227,39 @@ class GoogleCalendarBackend(_GoogleBackend):
     _listing: tuple[tuple[Any, ...], dict[str, dict[str, Any] | None]] | None = None
     """The current sweep's full listing of one calendar: its sweep identity, then its payloads by key."""
 
-    def admit_credential(self, credential: Any) -> None:
-        """Admit only an account the source reads with that no other source syncs.
+    def credential_blocker(self, credential: Any) -> str | None:
+        """Refuse an account the source does not read with, or one another source already syncs.
 
         The source reads with an OAuth account of its ``google`` client that
-        granted :attr:`oauth_scopes` (``Integration.reads_with``). Integrate asks on
-        every attachment (a connect, the console's credential patch, a reconnect),
-        so one account is one source on every path. The one-source rule runs under
-        the credential's row lock, held to the caller's commit, so two racing
-        attachments of one account serialize and the second is refused.
+        granted :attr:`oauth_scopes` (``Integration.reads_with``). One account is
+        one source: an account (by its credential, or any credential of its
+        external account) that another connected source of this backend syncs is
+        already connected, and the connect picker lists it so.
         """
 
         if not self.bridge.reads_with(credential):
-            raise ValidationError(
-                {"credential": "This account cannot read Google calendars; connect it with Calendar access."}
-            )
+            return "This account cannot read Google calendars; connect it with Calendar access."
+        same = Q(credential_id=credential.pk)
+        if credential.external_account_id is not None:
+            same |= Q(account_id=credential.external_account_id)
+        synced = (
+            type(self.bridge).system_queryset()
+            .filter(same, backend_class=self.key)
+            .exclude(lifecycle=IntegrationLifecycle.DISCONNECTED)
+        )
+        return "Already connected" if synced.exclude(pk=self.bridge.pk).exists() else None
+
+    def admit_credential(self, credential: Any) -> None:
+        """Admit by :meth:`credential_blocker` under the credential's row lock, held to the caller's commit.
+
+        Integrate asks on every attachment (a connect, the console's credential
+        patch, a reconnect), so one account is one source on every path: two racing
+        attachments of one account serialize, and the second is refused.
+        """
+
         with system_context(reason="calendar_integrate_google.admit_credential"), transaction.atomic():
             apps.get_model("integrate", "Credential").objects.lock_if_supported().get(pk=credential.pk)
-            same = Q(credential_id=credential.pk)
-            if credential.external_account_id is not None:
-                same |= Q(account_id=credential.external_account_id)
-            synced = (
-                type(self.bridge).system_queryset()
-                .filter(same, backend_class=self.key)
-                .exclude(lifecycle=IntegrationLifecycle.DISCONNECTED)
-            )
-            if synced.exclude(pk=self.bridge.pk).exists():
-                raise ValidationError({"credential": "This Google account's calendars are already connected."})
+            super().admit_credential(credential)
 
     # --- calendars ---
 
@@ -490,7 +496,7 @@ class GooglePublishingCalendarBackend(_GoogleBackend, PublishingCalendarBackend)
     account as writer (a Workspace resource calendar's is
     ``c_…@resource.calendar.google.com``), and that calendar keeps taking local
     edits. The source's credential is the key, a ``jwt_bearer`` credential
-    (:meth:`admit_credential`) minted for :data:`CALENDAR_EVENTS` without
+    (:meth:`credential_blocker`) minted for :data:`CALENDAR_EVENTS` without
     delegation; it connects through no OAuth client. Each event of a published
     calendar is projected (:meth:`local_changes`) and written conditionally
     (:meth:`write_event`); nothing is ever read back to sync.
@@ -502,17 +508,15 @@ class GooglePublishingCalendarBackend(_GoogleBackend, PublishingCalendarBackend)
     defaults: ClassVar[dict[str, Any]] = {"vendor": "google", "poll_interval": 300}
     oauth_client: ClassVar[str] = ""
 
-    def admit_credential(self, credential: Any) -> None:
-        """Admit only a service-account key (``jwt_bearer``) acting as itself: the source never writes as a person.
+    def credential_blocker(self, credential: Any) -> str | None:
+        """Refuse all but a service-account key (``jwt_bearer``) acting as itself: the source never writes as a person.
 
         A key whose assertions name a delegated user (``Credential.delegated``) is refused.
         """
 
-        if credential.kind != CredentialKind.JWT_BEARER or credential.delegated:
-            raise ValidationError(
-                {"credential": "Publishing to Google calendars needs a service-account key (JWT bearer) without "
-                 "delegation."}
-            )
+        if credential.kind == CredentialKind.JWT_BEARER and not credential.delegated:
+            return None
+        return "Publishing to Google calendars needs a service-account key (JWT bearer) without delegation."
 
     def _client_scopes(self) -> tuple[str, ...]:
         """Write with :data:`CALENDAR_EVENTS`, the one scope the key mints for."""

@@ -10,6 +10,16 @@ live in code docstrings.
 
 ## Unreleased — shared addon contracts, native embeddings and graph retrieval
 
+- `angee.integrate`: `Integration.credential_blocker(credential)` is a
+  capability's one admission rule, a public-safe refusal or `None`;
+  `admit_credential` raises it on every attachment and the connect picker shows
+  it. `ConnectWithAccount.accounts` lists `ConnectWithAccountChoice` entries (`id`,
+  `display_name`, `blocked_reason`), so the connect-with-account field lists an
+  account the capability refuses with its reason ("Already connected" for a Google
+  account another calendar source syncs) and never offers it, instead of refusing
+  it once picked. `Mount`, `CalendarSource` and the calendar backends move their
+  rules onto `credential_blocker`; `GoogleCalendarBackend.admit_credential` only
+  holds the credential's row lock around it.
 - A calendar source can publish local calendars out. `CalendarBackend.direction`
   (`PULL` by default) declares which way a source's streams sync; a `PUSH`
   backend's calendars and events streams are push streams, never swept.

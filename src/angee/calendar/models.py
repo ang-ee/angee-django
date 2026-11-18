@@ -1744,7 +1744,7 @@ class CalendarSource(Bridge, inherits="integrate.Integration"):
     ``sync_integration`` mutation drive it). ``backend_class`` selects the protocol
     (``ics`` from ``calendar_integrate_ics``, ``google`` and
     ``google_publishing`` from ``calendar_integrate_google``), and the backend admits the credential it uses
-    (:meth:`admit_credential`). A secret address (a
+    (:meth:`credential_blocker`). A secret address (a
     private feed URL) is its credential's material, never ``config``, which keeps
     only what may be shown. Its owner syncs and unsubscribes it
     (:meth:`sync_now`, :meth:`unsubscribe`); :meth:`admit_subscription` bounds how
@@ -1890,13 +1890,19 @@ class CalendarSource(Bridge, inherits="integrate.Integration"):
 
         return key is None or cls.backend_class_for(key).direction != StreamDirection.PULL
 
-    def admit_credential(self, credential: Any) -> None:
-        """Admit only a credential this source's backend uses (``CalendarBackend.admit_credential``).
+    def credential_blocker(self, credential: Any) -> str | None:
+        """Refuse a credential this source's backend does not use (``CalendarBackend.credential_blocker``).
 
-        Integrate asks on every attachment, so neither a connect, the console's
-        credential patch nor a re-attachment points a source at a credential its
-        backend would send to another vendor.
+        Integrate admits by it on every attachment, so neither a connect, the
+        console's credential patch nor a re-attachment points a source at a
+        credential its backend would send to another vendor; the connect picker
+        shows it beside each account.
         """
+
+        return self.backend.credential_blocker(credential)
+
+    def admit_credential(self, credential: Any) -> None:
+        """Admit through the backend (``CalendarBackend.admit_credential``), which may lock around its rule."""
 
         self.backend.admit_credential(credential)
 
