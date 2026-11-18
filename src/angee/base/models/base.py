@@ -251,8 +251,10 @@ class AngeeModel(
         delete started from (an instance delete's own row, a queryset delete's
         rows), ``True`` for one it only reaches through a cascade. An override
         decides for both and requires a ``pre_delete`` receiver enforcing the same
-        rule, passing where each row sits, on instance, queryset and cascade
-        deletes; the delete preview projects it the same way (``DeletePreview``).
+        rule on instance, queryset and cascade deletes, passing
+        ``cascaded=not starts_delete(instance, origin)``
+        (:func:`angee.base.signals.starts_delete`); the delete preview judges its
+        rows by the same rule (``DeletePreview``).
         """
 
         del cascaded

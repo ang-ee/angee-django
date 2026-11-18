@@ -916,9 +916,10 @@ def push_candidates(
     link just before writing it, since the batch predates the writes ahead of it.
 
     On a push stream, a written link whose row went (released by its deletion,
-    ``RecordLinkManager.release_pushes``) is a removal, ``LocalChange(key, None)``,
-    unless the adapter named its key again: the adapter writes it as ``write_back(link,
-    None)`` and its link is tombstoned.
+    ``RecordLinkManager.release_pushes``, or still naming a row a delete that locked
+    nothing removed: ``RecordLinkQuerySet.released``) is a removal,
+    ``LocalChange(key, None)``, unless the adapter named its key again: the adapter
+    writes it as ``write_back(link, None)`` and its link is tombstoned.
     """
 
     candidates = iter(adapter.local_changes(stream, keys=external_keys))
@@ -938,14 +939,11 @@ def push_candidates(
                 yield candidate, link
     if stream.direction != StreamDirection.PUSH:
         return
-    released = (
-        links.filter(stream=stream, target_object_id=None)
-        .exclude(applied_base=None)
-        .exclude(status=LinkStatus.TOMBSTONE)
-    )
+    written = links.filter(stream=stream).exclude(applied_base=None).exclude(status=LinkStatus.TOMBSTONE)
     if external_keys is not None:
-        released = released.filter(external_key__in=external_keys)
-    for link in released.with_sync_evidence().order_by("external_key").iterator(chunk_size=_CANDIDATE_BATCH):
+        written = written.filter(external_key__in=external_keys)
+    released = written.released().with_sync_evidence().order_by("external_key")
+    for link in released.iterator(chunk_size=_CANDIDATE_BATCH):
         if link.external_key not in named and link.local_changed(None):
             yield LocalChange(link.external_key, None), link
 

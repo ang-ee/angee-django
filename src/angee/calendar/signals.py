@@ -9,7 +9,7 @@ from django.core.exceptions import ValidationError
 from django.db import models
 from django.db.models.signals import pre_delete
 
-from angee.base.signals import connect_for_models
+from angee.base.signals import connect_for_models, starts_delete
 from angee.calendar.models import Calendar, CalendarEvent, EventAttendee
 
 _OWNED = (Calendar, CalendarEvent, EventAttendee)
@@ -32,21 +32,15 @@ def connect() -> None:
 def refuse_source_owned_delete(sender: Any, instance: Any, *, origin: Any, **kwargs: Any) -> None:
     """Refuse a calendar, event or attendee delete its ``delete_blocker`` refuses, for where the row sits in it.
 
-    A row the delete started from (an instance delete's own row, a queryset
-    delete's rows, every row of a delete without an origin) is judged as the
-    start; any other is ``cascaded``. So removing a subscription cascades to its
-    calendars and events, editing them does not, and a cascade to a published
-    calendar is refused (``Calendar.delete_blocker``,
-    ``CalendarEvent.delete_blocker``). A queryset delete reads each calendar's
-    writability once for the events it starts from (a source's purge reads it
-    once per calendar, not per row).
+    A row the delete starts at (``starts_delete``) is judged as the start; any
+    other is ``cascaded``. So removing a subscription cascades to its calendars
+    and events, editing them does not, and a cascade to a published calendar is
+    refused (``Calendar.delete_blocker``, ``CalendarEvent.delete_blocker``). A
+    queryset delete reads each calendar's writability once for the events it
+    starts from (a source's purge reads it once per calendar, not per row).
     """
 
-    if isinstance(origin, models.QuerySet):
-        started = isinstance(instance, origin.model)
-    else:
-        # A delete without an origin judges every row as its own start.
-        started = origin is None or origin is instance
+    started = starts_delete(instance, origin)
     if started and isinstance(instance, CalendarEvent) and isinstance(origin, models.QuerySet):
         writable = _WRITABLE.setdefault(origin, {})
         if instance.calendar_id not in writable:

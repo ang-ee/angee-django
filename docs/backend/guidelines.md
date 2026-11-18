@@ -1386,8 +1386,10 @@ exception closes the rows as failed. Tests inherit a boundary from the root
   before deleting, judging its target as the start and every collected row as
   cascaded, without row counts or hidden identities. A model overriding the hook must
   bind a `pre_delete` receiver enforcing the hook's rule for where each row sits in the
-  delete (the start of an instance or queryset delete, else a cascade) on every
-  deletion path; an instance override cannot protect cascades.
+  delete on every deletion path, passing `cascaded=not starts_delete(instance, origin)`:
+  [`starts_delete`](../../src/angee/base/signals.py) owns that rule (the start of an
+  instance or queryset delete, else a cascade) for receivers and the preview alike; an
+  instance override cannot protect cascades.
   Receivers remain authoritative when state changes after preview and ensure
   Django collects those models rather than fast-deleting them.
   When deleting a model needs locks in a domain order (a parent before the row),

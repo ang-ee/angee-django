@@ -16,6 +16,7 @@ from rebac import PermissionDenied, RebacMixin, SubjectRef, actor_context, syste
 
 import angee.graphql.deletion as deletion_module
 from angee.base.models.base import AngeeModel
+from angee.base.signals import starts_delete
 from angee.graphql.data.hasura import AngeeHasuraWriteBackend
 from angee.graphql.deletion import (
     DeletePreview,
@@ -25,6 +26,7 @@ from angee.graphql.deletion import (
 )
 from angee.graphql.ids import RECORD_NOT_FOUND_MESSAGE
 from angee.iam import signals as iam_signals
+from tests.mtidemo.models import MtiChild, MtiParent
 from tests.tables import model_tables
 
 
@@ -220,6 +222,20 @@ def test_deletion_preview_judges_its_target_as_the_start_and_every_collected_row
         assert DeletePreview.from_instance(child).refusals == ["Delete the parent instead."]
         cascade = DeletePreview.from_instance(parent)
         assert (cascade.refusals, cascade.has_blockers, cascade.total_deleted_count) == ([], False, 2)
+
+
+def test_a_delete_starts_at_its_origin_row_at_its_querysets_model_or_without_an_origin_at_every_row() -> None:
+    """``starts_delete`` is where a row sits in its delete, for ``pre_delete`` receivers and the preview alike."""
+
+    child = MtiChild(pk=7)
+    parent, other = MtiParent(pk=7), MtiChild(pk=8)
+    assert starts_delete(child, child) and starts_delete(MtiChild(pk=7), child)
+    # An instance delete's multi-table parent row, and any other row, only cascade from its start.
+    assert not starts_delete(parent, child) and not starts_delete(other, child)
+    # A queryset delete starts at every row of its model: the collector does not say which it selected.
+    rows = MtiChild._base_manager.none()
+    assert starts_delete(other, rows) and not starts_delete(parent, rows)
+    assert starts_delete(parent, None)
 
 
 @pytest.mark.django_db(transaction=True)

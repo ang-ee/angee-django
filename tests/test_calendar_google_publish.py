@@ -753,22 +753,43 @@ def test_local_changes_given_keys_read_only_the_events_they_name(published: Publ
               for day in (5, 6, 7)]
     published.poll()
     fresh = published.event(title="New", start=_berlin(5, 8, 10), end=_berlin(5, 8, 11))
+    # Not pushed yet: an override of a pushed series, and a new series with its override.
+    late = published.event(
+        title="Standup (late)", series=standup, original_start=_berlin(5, 18, 9),
+        start=_berlin(5, 18, 11), end=_berlin(5, 18, 11, 30),
+    )
+    retro = published.event(
+        title="Retro", start=_berlin(5, 5, 15), end=_berlin(5, 5, 16), recurrence="FREQ=WEEKLY;COUNT=3"
+    )
+    retro_moved = published.event(
+        title="Retro (moved)", series=retro, original_start=_berlin(5, 12, 15),
+        start=_berlin(5, 12, 17), end=_berlin(5, 12, 18),
+    )
     master = event_id(standup.sqid)
-    override = f"{master}#{_basic(_berlin(5, 11, 9))}"
+    override, late_key = (f"{master}#{_basic(_berlin(5, day, 9))}" for day in (11, 18))
+    retro_key = f"{event_id(retro.sqid)}#{_basic(_berlin(5, 12, 15))}"
     with system_context(reason="tests.google.publish"):
         backend = CalendarSource.objects.get(pk=published.source.pk).backend
         stream = SyncStream.objects.get(integration_id=published.source.pk, key="events")
         every = {change.external_key: change.target.pk for change in backend.local_changes(stream)}
         named = {
             change.external_key: change.target.pk
-            for change in backend.local_changes(stream, keys=frozenset({override, event_id(fresh.sqid)}))
+            for change in backend.local_changes(
+                stream, keys=frozenset({override, event_id(fresh.sqid), late_key, retro_key})
+            )
+        }
+        # One override's key selects that override alone, not every override of its series.
+        selected = {
+            key: set(CalendarEvent.system_queryset().filter(backend._named(stream, frozenset({key}))))
+            for key in (override, late_key, retro_key)
         }
 
     assert every == {
-        master: standup.pk, override: moved.pk, event_id(fresh.sqid): fresh.pk,
-        **{event_id(row.sqid): row.pk for row in others},
+        master: standup.pk, override: moved.pk, event_id(fresh.sqid): fresh.pk, late_key: late.pk,
+        event_id(retro.sqid): retro.pk, retro_key: retro_moved.pk, **{event_id(row.sqid): row.pk for row in others},
     }
-    assert named == {override: moved.pk, event_id(fresh.sqid): fresh.pk}
+    assert named == {override: moved.pk, event_id(fresh.sqid): fresh.pk, late_key: late.pk, retro_key: retro_moved.pk}
+    assert selected == {override: {moved}, late_key: {late}, retro_key: {retro_moved}}
 
 
 def test_keeping_angees_side_restores_an_event_cancelled_in_google(published: Published) -> None:

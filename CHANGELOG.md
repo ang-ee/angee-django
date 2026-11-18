@@ -34,7 +34,9 @@ live in code docstrings.
   nothing (`RecordLink.live_reference_filter`): a row only push links name is
   deletable, its deletion releases them (`RecordLink.teardown_for_target`,
   `RecordLinkManager.release_pushes`), and `push_stream` writes the removal of
-  each released, written link as `write_back(link, None)` before tombstoning it.
+  each released, written link as `write_back(link, None)` before tombstoning it;
+  a link still naming a row a delete that locked nothing removed counts as
+  released (`RecordLinkQuerySet.released`, one anti-join per target type).
   A row a pull or two-way link names stays protected, and a published calendar
   is refused deletion until it is unpublished. Keeping the remote of a push
   stream's conflict (`RecordLink.resolve_conflict`) records the remote's current
@@ -50,10 +52,12 @@ live in code docstrings.
   (`RecordLinkManager.release_pushes` no longer refuses; its caller holds the
   row's lock inside the deleting or moving transaction, and it locks the row
   again before its links). `RecordLinkManager.lock_target` locks a linked row in
-  its model's delete order (`AngeeModel.lock_for_delete`). `push_stream` skips a
-  link released since its batch read it, and binds a written candidate's row
-  only when, under the row's lock, the adapter's keyed `local_changes` still
-  yields it under that key on a push stream; a row deleted or moved off its key
+  its model's delete order (`AngeeModel.lock_for_delete`), read through its base
+  manager. `push_stream` skips a link released since its batch read it, and binds
+  a written candidate's row only when, under the row's lock, the adapter's keyed
+  `local_changes` still yields it under that key on a push stream (a push
+  adapter's keyed read yields each selected row, changed or not:
+  `BridgeImpl.local_changes`); a row deleted or moved off its key
   meanwhile (a moved override, new or written before) binds nothing, so the next
   push writes the removal. `CalendarEvent.rebase_overrides` locks the overrides
   before moving or deleting any. `SyncStreamQuerySet.in_lock_order` is
@@ -62,10 +66,16 @@ live in code docstrings.
   containers (`SyncStreamManager.current`). A missing seeded row an
   implementation default names raises `ImproperlyConfigured` with the
   `manage.py resources load` guidance (was `ValueError`).
+  `angee.base.querysets.row_lock_queryset(model, *, no_key=False)` is the one
+  base-manager row lock (each row it reads and its MTI tables): `lock_subject`,
+  `lock_target`, storage's and knowledge's target locks and messaging's thread
+  teardown compose it.
 - **Breaking (`delete_blocker` overrides):** `AngeeModel.delete_blocker(*,
   cascaded=False)` says where the row sits in the delete: `DeletePreview` judges
   its target as the start and every collected row as cascaded, and a model's
-  `pre_delete` receiver enforces the hook's rule for where each row sits. Every
+  `pre_delete` receiver enforces the hook's rule for where each row sits,
+  passing `cascaded=not starts_delete(instance, origin)`
+  (`angee.base.signals.starts_delete`, which the preview composes too). Every
   override accepts `cascaded` (pass it to `super()`). A mirrored calendar
   refuses only a delete started at it, so its source's delete preview no longer
   shows that refusal; a published calendar refuses wherever it sits; an event or
@@ -79,8 +89,9 @@ live in code docstrings.
   Google cancelled meanwhile is a held conflict. Every mapping error of one
   synced event, its `observe` included, is that event's quarantine, and a
   master Angee cannot map keeps its linked instances listed under its refusal
-  (`CalendarBackend.quarantine_series_instances`), so no absence sweep or
-  identity read withdraws its cancelled instances.
+  (`CalendarBackend.quarantine_series_instances`, one read of the stream's
+  instance keys), so no absence sweep or identity read withdraws its cancelled
+  instances; an instance Google serves on its own keeps its own payload in both.
 - A publishing calendar backend implements `write_event` and `read_written`;
   `PublishingCalendarBackend.write_back` and `read_keys` run them after `admit_push`, which
   refuses an unsubscribed source and a remote calendar

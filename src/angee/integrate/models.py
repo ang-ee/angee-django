@@ -39,8 +39,8 @@ from django.contrib.contenttypes.models import ContentType
 from django.core import checks
 from django.core.exceptions import ImproperlyConfigured, ValidationError
 from django.db import connection, models, transaction
-from django.db.models import BooleanField, ExpressionWrapper, OuterRef, Prefetch, Q, Subquery
-from django.db.models.functions import JSONObject
+from django.db.models import BooleanField, Exists, ExpressionWrapper, OuterRef, Prefetch, Q, Subquery
+from django.db.models.functions import Cast, JSONObject
 from django.utils import timezone
 from django.utils.text import capfirst
 from django_compose.models import Composable
@@ -71,7 +71,7 @@ from angee.base.models.ownership import OwnerMixin, OwnerQuerySet
 from angee.base.models.refs import RecordRefMixin
 from angee.base.models.transitions import StateTransitions, save_state, transition
 from angee.base.permissions import actor_user_id, instance_actor
-from angee.base.querysets import row_lock_paths
+from angee.base.querysets import row_lock_queryset
 from angee.base.refs import generic_pointer_target
 from angee.base.serialization import canonical_json
 from angee.graphql.capabilities import held_permissions
@@ -5263,6 +5263,28 @@ class RecordLinkQuerySet[RecordLinkT: RecordLink](AngeeHistoryQuerySet[RecordLin
 
         return self.filter(Q(last_seen_at__isnull=True) | Q(last_seen_at__lt=started))
 
+    def released(self) -> Self:
+        """Links naming no row now: released ones, and ones still bound to a row that is gone.
+
+        A deletion releases its row's push links (:meth:`RecordLink.teardown_for_target`)
+        only if one names the row when the delete reads them. A delete that locked
+        nothing (a cascade Django's collector reaches) can lose the row after a push
+        bound its link meanwhile, and that link keeps naming the missing row. One
+        anti-join per target content type finds it, the pointer cast to the target's
+        key so the key's index answers. A link whose target model is no longer
+        installed stays bound.
+        """
+
+        gone = Q(target_object_id=None)
+        bound = self.exclude(target_object_id=None).order_by().values_list("target_content_type_id", flat=True)
+        for content_type_id in sorted(bound.distinct()):
+            model = ContentType.objects.get_for_id(content_type_id).model_class()
+            if model is None:
+                continue
+            present = model._base_manager.filter(pk=Cast(OuterRef("target_object_id"), output_field=model._meta.pk))
+            gone |= Q(~Exists(present), target_content_type_id=content_type_id)
+        return self.filter(gone)
+
     @staticmethod
     def observing_rule(path: str = "") -> Q:
         """The observing rule on the link at ``path`` (``"container__"`` from a stream): not tombstoned or withdrawn."""
@@ -5500,13 +5522,15 @@ class RecordLinkManager[RecordLinkT: RecordLink](_RecordLinkManagerBase[RecordLi
         An Angee model is locked through its ``lock_for_delete`` hook (its domain
         locks, then the row), the order its deletion takes before the teardown
         releases its push links (:meth:`release_pushes`); any other model, its row
-        and multi-table parents. Lock the row before its links.
+        and multi-table parents. Either way the row is read through its base
+        manager: a row its default manager hides is still there. Lock the row
+        before its links.
         """
 
-        if isinstance(target, AngeeModel):
-            return target.lock_for_delete() is not None
         model = type(target)
-        return model._base_manager.select_for_update(of=row_lock_paths(model)).filter(pk=target.pk).exists()
+        if isinstance(target, AngeeModel):
+            return target.lock_for_delete(queryset=model._base_manager.all()) is not None
+        return row_lock_queryset(model).filter(pk=target.pk).exists()
 
     def release_targets(self, links: models.QuerySet[Any]) -> int:
         """Let every row ``links`` binds go at once, as :meth:`release_target` lets one go; return how many.

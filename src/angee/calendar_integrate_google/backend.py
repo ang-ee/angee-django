@@ -316,8 +316,10 @@ class GoogleCalendarBackend(_GoogleBackend):
         The absence sweep reads what its listing just served (:meth:`event_keys`), so
         it asks Google nothing more. Otherwise a master or single event is read by its
         id, and an instance through its series' ``instances`` at its original start,
-        or as its master's ``EXDATE``; an instance of a master Angee cannot map takes
-        its master's refusal (``CalendarBackend.quarantine_series_instances``).
+        or as its master's ``EXDATE``. What Google serves is then set aside as a
+        listing is (``CalendarBackend.quarantine_series_instances``): an instance
+        served on its own keeps its own payload, and a linked one Google does not
+        serve, of a master Angee cannot map, takes the master's refusal.
         """
 
         listing, sweep = self._listing, _sweep(stream)
@@ -326,7 +328,7 @@ class GoogleCalendarBackend(_GoogleBackend):
         client = self._client()
         zone = self.get_calendar(stream).timezone
         found: dict[str, dict[str, Any] | None] = {}
-        masters: dict[str, dict[str, Any] | None] = {}
+        masters: dict[str, tuple[dict[str, Any] | None, dict[str, dict[str, Any] | None]]] = {}
         for key in keys:
             master_id, moment = parse_key(key)
             if master_id is None:
@@ -334,23 +336,21 @@ class GoogleCalendarBackend(_GoogleBackend):
                 found[key] = {"error": "unreadable_identity"}
                 continue
             if master_id not in masters:
-                masters[master_id] = client.event(stream.partition, master_id)
-            master = masters[master_id]
-            if moment is None or master is None:
-                found[key] = dict(self._observe_item(master, zone)).get(key) if master is not None else None
-                continue
-            observed = dict(self._observe_item(master, zone))
-            refusal = observed.get(series_key(master_id))
-            if refusal is not None and "error" in refusal:
-                # A master Angee cannot map yields no instances: each stays set aside with it.
-                found[key] = refusal
-                continue
-            day_zone = (_series_zone(master) or zone) if "date" in (master.get("start") or {}) else None
-            item = client.instance(stream.partition, master_id, moment, all_day_zone=day_zone)
-            if item is not None:
-                observed.update(self._observe_item(item, zone, series_zones={master_id: _series_zone(master)}))
-            found[key] = observed.get(key)
-        return found
+                read = client.event(stream.partition, master_id)
+                masters[master_id] = (read, dict(self._observe_item(read, zone)) if read is not None else {})
+            master, observed = masters[master_id]
+            if moment is not None and master is not None:
+                start = master.get("start")
+                day_zone = (_series_zone(master) or zone) if isinstance(start, Mapping) and "date" in start else None
+                item = client.instance(stream.partition, master_id, moment, all_day_zone=day_zone)
+                if item is not None:
+                    own = self._observe_item(item, zone, series_zones={master_id: _series_zone(master)})
+                    observed = {**observed, **dict(own)}
+            if moment is None or key in observed:
+                found[key] = observed.get(key)
+        served = {key: payload for _master, observed in masters.values() for key, payload in observed.items()}
+        served = self.quarantine_series_instances(stream, served | found)
+        return {key: served.get(key) for key in keys}
 
     def event_keys(self, stream: Any) -> list[str]:
         """Return every key the calendar serves now, removals left out, from one full listing per sweep.
@@ -532,8 +532,8 @@ class GooglePublishingCalendarBackend(_GoogleBackend, PublishingCalendarBackend)
 
         if stream.key != EVENTS_STREAM:
             return
-        zone = self._zone(stream)
         calendar = self.get_calendar(stream)
+        zone = _published_zone(calendar)
         events = apps.get_model("calendar", "CalendarEvent").system_queryset().filter(calendar=calendar)
         if keys is not None:
             events = events.filter(self._named(stream, keys))
@@ -555,14 +555,27 @@ class GooglePublishingCalendarBackend(_GoogleBackend, PublishingCalendarBackend)
                 yield LocalChange(key, _published(row, zone, stamp=stamp), target=row)
 
     def _named(self, stream: Any, keys: frozenset[str]) -> Q:
-        """Select the events ``keys`` may name, a series' overrides included: bound by a link, or new by their id."""
+        """Select the events ``keys`` may name: bound by a link, new by their id, or a new override by its start.
 
-        names = set(keys) | {series for key in keys if (series := parse_key(key)[0]) is not None}
-        bound = stream.links.filter(external_key__in=names).exclude(target_object_id=None)
-        named = Q(pk__in=list(bound.values_list("target_object_id", flat=True))) | Q(
-            sqid__in=[sqid for name in names if (sqid := _sqid(name))]
+        An instance key names the override of its series (bound by the series' link,
+        else new by its id) at its original start, read to the key's second; so
+        writing each override of a series reads that override, not all of them.
+        """
+
+        instances = [(series, moment) for series, moment in map(parse_key, keys) if series and moment]
+        names = set(keys) | {series for series, _moment in instances}
+        bound = dict(
+            stream.links.filter(external_key__in=names)
+            .exclude(target_object_id=None)
+            .values_list("external_key", "target_object_id")
         )
-        return named | Q(series__in=apps.get_model("calendar", "CalendarEvent").system_queryset().filter(named))
+        named = Q(pk__in=[bound[key] for key in keys if key in bound]) | Q(
+            sqid__in=[sqid for key in keys if (sqid := _sqid(key))]
+        )
+        for series, moment in instances:
+            master = Q(series_id=bound[series]) if series in bound else Q(series__sqid=_sqid(series))
+            named |= master & Q(original_start__gte=moment, original_start__lt=moment + timedelta(seconds=1))
+        return named
 
     def write_event(self, link: Any, projection: Any, *, expected_version: str) -> WriteBackResult:
         """Write one published event to Google conditionally; a refusal is integrate's held outbox entry.
@@ -748,9 +761,15 @@ class GooglePublishingCalendarBackend(_GoogleBackend, PublishingCalendarBackend)
         return dict(base.mapped_payload) if base is not None and base.mapped_payload else None
 
     def _zone(self, stream: Any) -> str:
-        """Return the zone the published calendar keeps: its own, else the project's."""
+        """Return the zone the published calendar keeps (:func:`_published_zone`)."""
 
-        return self.get_calendar(stream).timezone or settings.TIME_ZONE
+        return _published_zone(self.get_calendar(stream))
+
+
+def _published_zone(calendar: Any) -> str:
+    """Return the zone a published calendar keeps: its own, else the project's."""
+
+    return calendar.timezone or settings.TIME_ZONE
 
 
 def _instance(

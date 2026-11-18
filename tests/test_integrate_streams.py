@@ -20,6 +20,7 @@ from django.db import (
     models,
     transaction,
 )
+from django.db.models.signals import pre_delete
 from django.utils import timezone
 from hypothesis import example, given, settings
 from hypothesis import strategies as st
@@ -2656,6 +2657,46 @@ def test_only_push_links_let_their_row_go_and_the_push_writes_its_removal(
     assert push_stream(stream, adapter).count == 1
     assert adapter.written == [("ada", None, "v1")]
     assert RecordLink.objects.get(pk=link.pk).status == LinkStatus.TOMBSTONE
+    assert push_stream(stream, adapter).count == 0
+
+
+def test_a_push_link_naming_a_row_deleted_without_releasing_it_writes_the_rows_removal(stream_bridge: Channel) -> None:
+    """A delete that locked nothing (a cascade) read no link, then a first push bound one before the row went.
+
+    The link still names the missing row; the push reads it as released and writes its removal.
+    """
+
+    from angee.messaging.testing.models import Person
+
+    stream = current_stream(stream_bridge, "people", kind=StreamKind.RECORD_REPLICA, direction=StreamDirection.PUSH)
+    person = Person.objects.create(display_name="Ada")
+    link = RecordLink.objects.observe(stream, "ada")
+
+    def bind_as_the_push_does(sender: Any, **kwargs: Any) -> None:
+        # After the delete's last read of the links naming its row (none yet), the push binds the row it wrote.
+        RecordLink.objects.promote(
+            link, source_payload={}, source_hash="v1", mapped_payload={"n": 1}, remote_version="v1", target=person
+        )
+
+    # The delete reads those links at each of the row's tables: the person's, then its party parent's.
+    (party,) = Person._meta.parents
+    pre_delete.connect(bind_as_the_push_does, sender=party, dispatch_uid="tests.integrate.bind_during_delete")
+    try:
+        Person.objects.get(pk=person.pk).delete()
+    finally:
+        pre_delete.disconnect(sender=party, dispatch_uid="tests.integrate.bind_during_delete")
+    assert RecordLink.objects.get(pk=link.pk).target_object_id == str(person.pk)
+
+    class RemovingAdapter(MemoryAdapter):
+        def write_back(self, link: Any, projection: Any, *, expected_version: str) -> WriteBackResult:
+            result = super().write_back(link, projection, expected_version=expected_version)
+            return replace(result, tombstone=projection is None)
+
+    adapter = RemovingAdapter()
+    assert push_stream(stream, adapter).count == 1
+    assert adapter.written == [("ada", None, "v1")]
+    written = RecordLink.objects.get(pk=link.pk)
+    assert (written.status, written.target_object_id) == (LinkStatus.TOMBSTONE, None)
     assert push_stream(stream, adapter).count == 0
 
 

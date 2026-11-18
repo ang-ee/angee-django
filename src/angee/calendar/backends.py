@@ -41,7 +41,6 @@ from typing import Any, ClassVar
 
 from django.apps import apps
 from django.core.exceptions import ValidationError
-from django.db.models import Q
 from icalendar import Component, vRecur
 
 from angee.base.serialization import canonical_json_sha256
@@ -654,7 +653,9 @@ class CalendarBackend(BridgeImpl, HttpClientMixin):
         their keys reads them as gone, and the absence sweep withdraws them; so each
         instance key a live link of ``stream`` still names and the listing lacks
         takes its master's refusal, until the master maps again. An instance the
-        source lists on its own keeps its own payload.
+        source lists on its own keeps its own payload. The stream's live instance
+        keys are read once and matched to their masters here, however many masters
+        are refused.
         """
 
         refused = {
@@ -664,14 +665,15 @@ class CalendarBackend(BridgeImpl, HttpClientMixin):
         }
         if not refused:
             return dict(payloads)
-        named = Q()
-        for key in refused:
-            named |= Q(external_key__startswith=f"{key}#")
+        instances = (
+            stream.links.filter(external_key__contains="#")
+            .exclude(status=LinkStatus.TOMBSTONE)
+            .order_by("external_key")
+            .values_list("external_key", flat=True)
+        )
         held = {
             key: refused[key.rpartition("#")[0]]
-            for key in stream.links.filter(named).exclude(status=LinkStatus.TOMBSTONE).values_list(
-                "external_key", flat=True
-            )
+            for key in instances
             if key not in payloads and key.rpartition("#")[0] in refused and parse_key(key)[1] is not None
         }
         return {**payloads, **held}

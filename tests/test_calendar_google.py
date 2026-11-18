@@ -22,6 +22,7 @@ from django.core.cache import caches
 from django.core.exceptions import ValidationError
 from django.db import connection, transaction
 from django.db.models import Q
+from django.test.utils import CaptureQueriesContext
 from rebac import actor_context, system_context
 
 from angee.calendar import schema as calendar_schema
@@ -548,6 +549,50 @@ def test_a_series_set_aside_keeps_its_cancelled_instances_through_absence_sweeps
     with system_context(reason="tests.google"):
         links = RecordLink.objects.filter(stream=connected.stream(), external_key__startswith="standup")
         assert not [row.code for link in links for row in link.failures(open_only=True)]
+
+
+def test_an_exception_google_lists_on_its_own_keeps_its_payload_in_a_sweep_and_an_identity_read(
+    connected: Connected,
+) -> None:
+    """A master Angee cannot map sets aside only the instances Google does not serve on their own, read either way."""
+
+    connected.poll()
+    moved = "standup#20260309T130000Z"
+    connected.google.put("work-token", "work@example.test", {**STANDUP, "recurrence": ["RRULE:FREQ=SOMETIMES"]})
+    SyncStream.objects.sudo(reason="tests.google").filter(
+        integration_id=connected.sources["work-token"].pk
+    ).update(last_reconciled_at=None)
+    connected.poll()
+
+    with system_context(reason="tests.google"):
+        link = RecordLink.objects.get(stream=connected.stream(), external_key=moved)
+        failures = link.failures(open_only=True)
+        adapter = connected.source().capability_impl
+        [record] = read_stream_keys(adapter, connected.stream(), [moved])
+    # The sweep listed the exception on its own and left it as it was; an identity read serves the same payload.
+    assert (failures, connected.events()[moved].title) == ((), "Standup (moved)")
+    assert (record.failure, record.tombstone, record.source_hash) == (None, False, link.source_hash)
+
+
+def test_setting_aside_many_unmappable_series_reads_the_streams_instance_keys_once(connected: Connected) -> None:
+    """However many masters a listing refuses, their linked instances are matched to them from one read."""
+
+    connected.poll()
+    refusal = {"error": "invalid_event"}
+    refused = {f"series-{index:04d}": refusal for index in range(1500)} | {"standup": refusal}
+    with system_context(reason="tests.google"):
+        stream = connected.stream()
+        instances = set(
+            RecordLink.objects.filter(stream=stream, external_key__startswith="standup#")
+            .exclude(status=LinkStatus.TOMBSTONE)
+            .values_list("external_key", flat=True)
+        )
+        adapter = connected.source().capability_impl
+        with CaptureQueriesContext(connection) as queries:
+            held = adapter.quarantine_series_instances(stream, refused)
+
+    assert instances and len(queries) == 1
+    assert {key: payload for key, payload in held.items() if key not in refused} == dict.fromkeys(instances, refusal)
 
 
 def test_a_hidden_calendar_retires_its_events_and_they_come_back_when_it_returns(connected: Connected) -> None:

@@ -207,7 +207,15 @@ class BridgeImpl(IntegrationImpl):
         """
 
     def local_changes(self, stream: Any, *, keys: frozenset[str] | None = None) -> Iterable[LocalChange]:
-        """Project only selected local identities, or all candidates when keys is None."""
+        """Project only selected local identities, or all candidates when keys is None.
+
+        The driver writes only a projection that differs from its link's base. On a
+        PUSH stream, given ``keys``, yield each selected key's current row under that
+        key with its ``target``, changed or not: a push binds the row it wrote only
+        while this keyed read, under the row's lock, still yields it under the key it
+        was written to (``streams._lock_written``). A row it no longer yields there
+        (deleted, or moved to another key) binds nothing, and its removal follows.
+        """
 
         raise AdapterContractError("Push adapters must project local changes.")
 
