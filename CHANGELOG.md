@@ -10,6 +10,18 @@ live in code docstrings.
 
 ## Unreleased — shared addon contracts, native embeddings and graph retrieval
 
+- A change to `ANGEE_UI` alone now recomposes. `angee.web` renders it into
+  `runtime/web/manifest.json` but never declared it a compiler input, so
+  `compose --if-stale`, the stack's compose job, found the receipt current and
+  kept the old deployment layer while `compose --check` reported it stale. The
+  web autoconfig appends `ANGEE_UI` to `COMPOSE_FINGERPRINT_SETTINGS`. Like
+  every structural input, `ANGEE_UI` is authored YAML: a deployment that set it
+  through `ANGEE_UI` or `YAMLCONF_ANGEE_UI` in the environment is refused and
+  moves it to its `settings.yaml`. GraphQL had the same gap for the SDL: its
+  autoconfig now appends `STRAWBERRY_DJANGO` and `ANGEE_GRAPHQL_RESOURCE_FILTERS`,
+  so a host override of either alone recomposes, and neither comes from the
+  environment.
+
 - The sign-in card's "or use password" divider shows only beside a sign-in method
   that renders. A contributed method that renders nothing, such as the OIDC
   method with no configured connection, no longer leaves an orphan divider above

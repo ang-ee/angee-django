@@ -71,6 +71,15 @@ def test_environment_cannot_replace_authored_compiler_structure(project: Path, m
     assert Path(namespace["COMPOSE_OUTPUT_DIR"]) == project / "runtime"
 
 
+def test_capability_fingerprinted_setting_cannot_come_from_the_environment(
+    project: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Web declares ``ANGEE_UI`` a compiler input, so it is authored configuration only."""
+    monkeypatch.setenv("YAMLCONF_ANGEE_UI", "shell")
+    with pytest.raises(ImproperlyConfigured, match="Structural setting ANGEE_UI must not come from the environment"):
+        configure(_namespace(project, INSTALLED_APPS=["angee.web"]))
+
+
 def test_nested_environment_override_does_not_mutate_python_declarations(
     project: Path,
     monkeypatch: pytest.MonkeyPatch,

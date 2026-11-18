@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import json
+import os
 import re
+import subprocess
 import sys
 from importlib import import_module
 from pathlib import Path
@@ -11,6 +13,7 @@ from types import ModuleType
 from typing import Any, cast
 
 import pytest
+import yaml
 from django.apps import apps
 from django.core.exceptions import ImproperlyConfigured
 from django.db import OperationalError, models
@@ -282,6 +285,107 @@ def test_web_runtime_transports_shell_values_for_the_shared_js_validator() -> No
     ]["shell"]["apps"]["ap"]["railExpanded"] is False
     with pytest.raises(ImproperlyConfigured, match="only JSON values"):
         _web_runtime((addon,), ui={"shell": {"not_json": object()}})
+
+
+class _TemplateHost:
+    """A subprocess host running the project template's launcher and settings bootstrap.
+
+    ``angee.base.conf.configure`` reads the host's ``settings.yaml`` and, through
+    ``ANGEE_PROJECT_DIR``, the overlay in ``project_dir``, as a stack loads them.
+    """
+
+    def __init__(self, root: Path, *installed_apps: str, project_dir: Path | None = None) -> None:
+        template = Path(__file__).resolve().parents[1] / "templates/projects/web/template"
+        root.mkdir()
+        (root / "settings.py").write_text((template / "settings.py").read_text())
+        (root / "manage.py").write_text(
+            (template / "manage.py.jinja").read_text().replace("{{ project_name }}", "compose-probe")
+        )
+        self.root = root
+        self.authored = {
+            "SECRET_KEY": "compose-probe",
+            "COMPOSE_OUTPUT_DIR": str(root / "runtime"),
+            "COMPOSE_OUTPUT_MODULE": "runtime",
+            "INSTALLED_APPS": list(installed_apps),
+            "DATABASES": {"default": {"ENGINE": "django.db.backends.sqlite3", "NAME": ":memory:"}},
+        }
+        self.environment = {
+            key: value
+            for key, value in os.environ.items()
+            if not key.startswith(("ANGEE_", "COMPOSE_", "YAMLCONF_", "SENTRY_"))
+            and key not in {"DJANGO_SETTINGS_MODULE", "DJANGO_COMPOSE_MODE", "DATABASE_URL", "PYTHONPATH"}
+        }
+        self.environment["ANGEE_PROJECT_DIR"] = str(project_dir or root)
+
+    def write_settings(self, **values: Any) -> None:
+        """Author the host's ``settings.yaml``: the compiler inputs plus ``values``."""
+
+        (self.root / "settings.yaml").write_text(yaml.safe_dump({**self.authored, **values}))
+
+    def compose(self, *arguments: str) -> str:
+        """Run ``manage.py compose`` and return its output."""
+
+        result = subprocess.run(
+            [sys.executable, str(self.root / "manage.py"), "compose", *arguments],
+            cwd=self.root, env=self.environment, capture_output=True, text=True, timeout=120, check=False,
+        )
+        assert result.returncode == 0, result.stdout + result.stderr
+        return result.stdout
+
+
+@pytest.mark.parametrize("overlay", ["host", "deployment"])
+def test_if_stale_recomposes_when_only_the_deployment_ui_layer_changes(tmp_path: Path, overlay: str) -> None:
+    """``ANGEE_UI`` is a snapshot input, so ``compose --if-stale`` sees a settings-file change alone.
+
+    ``ANGEE_UI`` sits in the host's own ``settings.yaml`` (a process stack's
+    ``ANGEE_PROJECT_DIR``) or in a deployment directory's overlay.
+    """
+
+    deployment = tmp_path / "deployment"
+    host = _TemplateHost(tmp_path / "host", "angee.web", project_dir=deployment if overlay == "deployment" else None)
+
+    def deploy(hosts: dict[str, str]) -> None:
+        ui = {"ANGEE_UI": {"shell": {"apps": {"payables": {"rail": ["accounting"]}}, "hosts": hosts}}}
+        if overlay == "host":
+            host.write_settings(**ui)
+        else:
+            host.write_settings()
+            deployment.mkdir(exist_ok=True)
+            (deployment / "settings.yaml").write_text(yaml.safe_dump(ui))
+
+    def deployed_hosts() -> dict[str, str]:
+        manifest = json.loads((host.root / "runtime/web/manifest.json").read_text())
+        return cast(dict[str, str], manifest["deployment"]["shell"]["hosts"])
+
+    deploy({"old.example.test": "payables"})
+    assert "Composition generated." in host.compose()
+    assert "Composition is current." in host.compose("--if-stale")
+
+    deploy({"new.example.test": "payables"})
+    assert "Composition generated." in host.compose("--if-stale")
+    assert deployed_hosts() == {"new.example.test": "payables"}
+    assert "Composition is current." in host.compose("--check")
+
+
+@pytest.mark.parametrize(
+    ("setting", "override"),
+    [
+        ("STRAWBERRY_DJANGO", {"TYPE_DESCRIPTION_FROM_MODEL_DOCSTRING": True}),
+        ("ANGEE_GRAPHQL_RESOURCE_FILTERS", ["host_filters.resource_filters"]),
+    ],
+)
+def test_if_stale_recomposes_when_only_a_schema_setting_changes(tmp_path: Path, setting: str, override: Any) -> None:
+    """GraphQL declares the settings its SDL follows, so a host override alone recomposes."""
+
+    host = _TemplateHost(tmp_path / "host", "angee.tags")
+    (host.root / "host_filters.py").write_text("def resource_filters(model):\n    return {}\n")
+    host.write_settings()
+    assert "Composition generated." in host.compose()
+    assert "Composition is current." in host.compose("--if-stale")
+
+    host.write_settings(**{setting: override})
+    assert "Composition generated." in host.compose("--if-stale")
+    assert "Composition is current." in host.compose("--if-stale")
 
 
 def test_web_runtime_projects_external_codegen_entries() -> None:

@@ -337,6 +337,11 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
   }}
   ```
 
+  `ANGEE_UI` is authored in the host's or the deployment's `settings.yaml`,
+  never the environment. It is a compiler input, so a change to it alone
+  recomposes on the stack's `compose --if-stale`
+  ([integration inputs](../composer.md#runtime-build-and-import)).
+
   [`selectApp`](../../packages/app/src/boot-app.tsx) takes `?app=<root id |
   apps name>`, else the hostname's `hosts` entry, else `shell.app`, else
   nothing; no choice is stored. A root id is the one-root app with the root's home, brand, theme and rail default.
