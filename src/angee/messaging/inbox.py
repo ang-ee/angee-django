@@ -468,17 +468,26 @@ class MessageInbox:
     def uses(self, target: str) -> Any:
         """Distinct readable messages using one target, independent of coverage and sender scope."""
 
-        parts = self.target_parts(target)
+        return self.messages_using(self.target_parts(target))
+
+    def messages_using(self, parts: Any) -> Any:
+        """Distinct readable messages among an authorized target's parts (:meth:`target_parts`)."""
+
         return self.messages.filter(pk__in=Subquery(parts.order_by().values("message_id")))
 
-    def related(self, target: str, *, text: str = "", page: int = 1, size: int = 25, oldest: bool = False) -> InboxPage:
-        """Page one target's message uses; the total counts them before the text search."""
+    def related(self, parts: Any, *, text: str = "", page: int = 1, size: int = 25, oldest: bool = False) -> InboxPage:
+        """Page the message uses of an authorized target's parts; the total counts them before the text search.
 
-        all_uses = self.uses(target)
+        The caller authorizes the target once (:meth:`target_parts`) and passes its parts.
+        """
+
+        all_uses = self.messages_using(parts)
         rows = self.matching(all_uses, InboxSearch(text=text, quoted=True))
+        total = all_uses.count()
         # A lazy page lets the GraphQL projection load the selected relations once.
         return InboxPage(
             rows.with_title_text().chronological(oldest_first=oldest)[InboxPage.window(page, size)],
-            rows.count(),
-            all_uses.count(),
+            # A search that narrows nothing returns the same population: count it once.
+            total if rows is all_uses else rows.count(),
+            total,
         )
