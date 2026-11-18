@@ -19,6 +19,9 @@ import { cn } from "../lib/cn";
  * provider (drawers, settings shells) register there, not here, and never
  * affect the page's count.
  *
+ * The band holding the host row carries `data-layout-band`, so a band's own
+ * styling can tell the layout's row from an inline place (a card, a dialog).
+ *
  * `ControlBand`, the `PaneToolbar` band and `Statusline` are the instances; they
  * differ only in the wrapper element and its flush styling, so the
  * context/provider/portal logic lives here once.
@@ -135,7 +138,11 @@ export function createLayoutBand(
     }, [portalHost]);
     const band = React.createElement(
       element,
-      { className: cn(baseClassName, className), ref: node },
+      {
+        className: cn(baseClassName, className),
+        ref: node,
+        ...(portalHost ? { "data-layout-band": "" } : {}),
+      },
       children,
     );
     if (!context) return band; // no provider (standalone/test) → inline

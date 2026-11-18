@@ -6,7 +6,8 @@ import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
 import { createMemoryHistory, createRootRoute, createRouter, RouterContextProvider } from "@tanstack/react-router";
 import type { Row } from "@angee/metadata";
 import { testDataResource } from "@angee/metadata/testing";
-import { AppRuntimeProvider, ModalsHost, ToastProvider, baseIcons, defaultWidgets } from "@angee/ui";
+import { AppRuntimeProvider, ControlBandProvider, ModalsHost, ToastProvider, baseIcons, defaultWidgets } from "@angee/ui";
+import * as React from "react";
 import { afterEach, expect, test, vi } from "vitest";
 
 import { FileDetail } from "./FileDetail";
@@ -66,4 +67,49 @@ test("route identity starts the native form read without a preview and resets va
   expect(getOne).toHaveBeenCalledTimes(2);
   expect(update).not.toHaveBeenCalled();
   expect(onChanged).not.toHaveBeenCalled();
+});
+
+test("the editable details card draws no empty command strip above its fields", async () => {
+  const provider = {
+    getOne: vi.fn(async () => ({ data: { id: "file-a", title: "Alpha", filename: "alpha.txt", upload_state: "ready" } as Row })),
+    update: vi.fn(async () => ({ data: {} })),
+    getList: vi.fn(async () => ({ data: [], total: 0 })),
+  } satisfies RefineTestDataProvider;
+  const router = createRouter({ routeTree: createRootRoute(), history: createMemoryHistory({ initialEntries: ["/"] }) });
+  // As the file page renders it: the page's own band holds the layout's control row, and the
+  // details card keeps the metadata form's band inline beside its fields.
+  function FilePage() {
+    const [host, setHost] = React.useState<HTMLElement | null>(null);
+    return (
+      <ControlBandProvider host={host}>
+        <div data-testid="control-row" ref={setHost} />
+        <section data-testid="details">
+          <ControlBandProvider host={undefined}>
+            <FileDetail id="file-a" onChanged={vi.fn()} />
+          </ControlBandProvider>
+        </section>
+      </ControlBandProvider>
+    );
+  }
+  render(
+    <Provider resources={[resource]} dataProvider={provider}>
+      <RouterContextProvider router={router}>
+        <AppRuntimeProvider runtime={{ icons: baseIcons, widgets: defaultWidgets }}>
+          <ModalsHost><ToastProvider><FilePage /></ToastProvider></ModalsHost>
+        </AppRuntimeProvider>
+      </RouterContextProvider>
+    </Provider>,
+  );
+  const title = await screen.findByDisplayValue("Alpha") as HTMLInputElement;
+  expect(title.readOnly || title.disabled).toBe(false);
+
+  const band = screen.getByTestId("details").querySelector<HTMLElement>("[role=toolbar]");
+  expect(screen.getByTestId("control-row").childElementCount).toBe(0);
+  expect(band?.hasAttribute("data-layout-band")).toBe(false);
+  // With no edit yet, none of its groups holds an item, and the inline band collapses on that.
+  // (happy-dom does not evaluate the `:has` rule, so the test reads the DOM fact it reads.)
+  const items = [...band!.children].flatMap((group) => [...group.children])
+    .filter((child) => !child.hasAttribute("hidden") && child.childNodes.length > 0);
+  expect(items).toEqual([]);
+  expect(band!.classList).toContain("not-data-layout-band:not-has-[>div>:not([hidden]):not(:empty)]:hidden");
 });

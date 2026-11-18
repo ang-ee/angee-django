@@ -11,9 +11,13 @@ live in code docstrings.
 ## Unreleased — shared addon contracts, native embeddings and graph retrieval
 
 - `@angee/ui`: `CommandBand.editable` keeps an editable record's command band
-  row while nothing in it renders, so the Save and Discard its first edit brings
-  shift nothing; `FormView` sets it from the form's own read-only fact. A record
-  that takes no edits and has no verbs still collapses the band.
+  row in the layout while nothing in it renders, blank and hidden from assistive
+  technology, so the Save and Discard its first edit brings shift nothing.
+  `FormView` sets it from the save surface's `formTakesEdits` (`formReadOnly`
+  without the wait for the record), so the row holds from load on. The layout
+  band marks the band holding its row `data-layout-band`; an inline band (the file
+  details card, a relation record dialog) collapses as before, as does a record
+  that takes no edits and has no verbs.
 - `@angee/ui`: every call `MutationDialog` makes for its caller (`validate`,
   `onSubmit`, `mutation`) gets the `AuthoredMutateOptions` that turn refine's
   generic error notification off, so a failure is reported once, in the dialog.

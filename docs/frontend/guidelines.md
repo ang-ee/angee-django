@@ -983,8 +983,10 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
   band. The band of a record that takes no edits takes no row while none of its
   items renders (a contribution that offers nothing renders `null`), and returns
   with the first one. An editable record's band (`CommandBand.editable`, which
-  `FormView` sets) keeps its row, so the Save and Discard its first edit brings
-  move nothing. Collection and transcript controls remain in their owning pane toolbar.
+  `FormView` sets from `formTakesEdits`, so it holds while the record loads) keeps
+  the layout's control row blank and out of the accessibility tree, so the Save and
+  Discard its first edit brings move nothing; inline, in a card or a dialog, it
+  collapses as any band. Collection and transcript controls remain in their owning pane toolbar.
 - **Trash composes the shared owner.** A resource whose metadata marks a field
   `trashable` gets Trash and Restore from [the trash module](../../packages/ui/src/views/resource/trash.tsx):
   `useTrashActions` for record forms, `useTrashRowActions` for lists, and
