@@ -25,6 +25,9 @@ const resources = [
         ...field, name: "calendar", kind: "relation", relationModelLabel: CALENDAR_MODEL, relationObject: true,
         creatable: true, updatable: false, requiredOnCreate: true,
       },
+      { ...field, name: "start", kind: "scalar", scalar: "DateTime", creatable: true, updatable: true },
+      { ...field, name: "end", kind: "scalar", scalar: "DateTime", creatable: true, updatable: true },
+      { ...field, name: "all_day", kind: "scalar", scalar: "Boolean", creatable: true, updatable: true },
     ],
   }),
   testDataResource(CALENDAR_MODEL, {
@@ -35,11 +38,15 @@ const resources = [
   }),
 ];
 
+// A timed event, 10:00 to 11:00 on Nov 20 in whatever zone the browser (the runner) is in.
 const SAVED = {
   id: "cev_1",
   title: "Design review",
   permissions: ["write", "delete"],
   calendar: { id: "cal_1", name: "Personal", color: "#4f46e5", is_writable: true },
+  start: new Date(2026, 10, 20, 10).toISOString(),
+  end: new Date(2026, 10, 20, 11).toISOString(),
+  all_day: false,
 };
 
 const { Provider, clearClients } = createUiTestProviders({ resources, apiUrl: "test://calendar-event-form" });
@@ -97,5 +104,20 @@ describe("CalendarEventForm", () => {
     const [[saved]] = update.mock.calls as unknown as [[{ variables: Record<string, unknown> }]];
     expect(saved.variables).toEqual({ title: "Design review v2" });
     await waitFor(async () => expect((await calendarControl()).textContent).toContain("Personal"));
+  });
+
+  test("turning a timed event all day picks and sends the days it touches, which the event places in its zone", async () => {
+    const { update } = renderSavedEvent();
+    await waitFor(async () => expect((await calendarControl()).textContent).toContain("Personal"));
+
+    fireEvent.click(screen.getByRole("switch", { name: /all day/i }));
+    // The bounds are now picked as days: the date picker shows the day, with no time.
+    await waitFor(() => expect(screen.getByRole("button", { name: "Start" }).textContent).not.toMatch(/AM|PM|:/));
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+
+    await waitFor(() => expect(update).toHaveBeenCalledOnce());
+    const [[saved]] = update.mock.calls as unknown as [[{ variables: Record<string, unknown> }]];
+    // Days, never this browser's midnight as an instant: the server places them at midnight in the event's zone.
+    expect(saved.variables).toEqual({ all_day: true, start: "2026-11-20", end: "2026-11-21" });
   });
 });

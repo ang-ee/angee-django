@@ -9,7 +9,7 @@ host that composes it.
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from typing import Any
 
@@ -438,3 +438,46 @@ def test_a_calendars_holder_previews_its_events_going_with_it_and_an_editor_may_
     assert refused.errors
     with system_context(reason="tests.calendar.access.read"):
         assert Calendar.objects.filter(pk=w.calendar.pk).exists()
+
+
+_INSERT_ALL_DAY = """
+mutation ($calendar: ID!, $start: DateTime!, $end: DateTime!) {
+  insert_calendar_events_one(object: {calendar: $calendar, title: "Holiday", all_day: true, start: $start, end: $end}) {
+    id start end all_day
+  }
+}
+"""
+
+
+@pytest.mark.parametrize(("zone", "midnight"), [
+    # A blank zone is the project's (America/Chicago): the server places the day where the client cannot.
+    ("", datetime(2026, 11, 20, 6, tzinfo=UTC)),
+    ("Asia/Tokyo", datetime(2026, 11, 19, 15, tzinfo=UTC)),
+])
+def test_an_all_day_event_written_as_dates_lands_on_midnight_in_its_zone(
+    world: SimpleNamespace, zone: str, midnight: datetime
+) -> None:
+    """A browser in any zone names the days; the event places them at midnight in its calendar's zone."""
+
+    w = world
+    with system_context(reason="tests.calendar.access.setup"):
+        w.calendar.timezone = zone
+        w.calendar.save(update_fields=["timezone", "updated_at"])
+    variables = {"calendar": w.calendar.sqid, "start": "2026-11-20", "end": "2026-11-21"}
+
+    inserted = result_data(execute_schema(_console(), _INSERT_ALL_DAY, variables, user=w.holder))
+
+    with system_context(reason="tests.calendar.access.read"):
+        event = CalendarEvent.objects.get(sqid=inserted["insert_calendar_events_one"]["id"])
+    assert (event.all_day, event.start, event.end) == (True, midnight, midnight + timedelta(days=1))
+
+
+def test_an_all_day_instant_off_its_zones_midnight_is_still_refused(world: SimpleNamespace) -> None:
+    """An offset makes a bound an instant: Tokyo's midnight is not the project zone's, so it is refused, not moved."""
+
+    w = world
+    variables = {"calendar": w.calendar.sqid, "start": "2026-11-19T15:00:00Z", "end": "2026-11-20T15:00:00Z"}
+
+    refused = execute_schema(_console(), _INSERT_ALL_DAY, variables, user=w.holder)
+
+    assert refused.errors and "An all-day event starts at midnight in its time zone" in repr(refused.errors)

@@ -63,8 +63,12 @@ export interface FieldDescriptor extends FieldPresentation {
   hidden?: boolean;
   /** Resolve implementation-dependent presentation from current form values. */
   resolve?: (values: Row) => FieldDescriptor;
-  /** Load the chosen preset onto sibling fields when this field changes (see `FieldProps.prefill`). */
-  prefill?: (value: unknown) => Record<string, unknown> | null | undefined;
+  /**
+   * Load the chosen preset onto sibling fields when this field changes (see `FieldProps.prefill`).
+   * It reads the new value and the form's current values (this field's scope in a nested form),
+   * for a preset derived from siblings (whole days from the bounds an all-day toggle finds).
+   */
+  prefill?: (value: unknown, values: Row) => Record<string, unknown> | null | undefined;
   /** Keep dirty sibling values when applying a preset, except for names explicitly replaced below. */
   prefillPreserveDirty?: boolean;
   /** Fields a preset must replace even when they are dirty (for example private implementation config). */

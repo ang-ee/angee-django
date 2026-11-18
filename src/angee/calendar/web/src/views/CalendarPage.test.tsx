@@ -129,13 +129,25 @@ describe("CalendarPage sources", () => {
 });
 
 describe("CalendarPage quick-create", () => {
-  test.each([
-    { allDay: true, start: "2026-06-17T00:00:00.000Z", end: "2026-06-18T00:00:00.000Z" },
-    { allDay: false, start: "2026-06-17T14:00:00.000Z", end: "2026-06-17T15:00:00.000Z" },
-  ])("a selected range seeds the event's bounds and whether it is all day ($allDay)", async ({ allDay, start, end }) => {
+  test("a timed selection seeds the event's instants", async () => {
     const createDefaults = (await spec()).createDefaults!;
+    const start = "2026-06-17T14:00:00.000Z";
+    const end = "2026-06-17T15:00:00.000Z";
 
-    expect(createDefaults(new Date(start), new Date(end), allDay)).toEqual({ start, end, all_day: allDay });
+    expect(createDefaults(new Date(start), new Date(end), false)).toEqual({ start, end, all_day: false });
+  });
+
+  // Vitest's thread pool keeps its process zone (a worker cannot switch TZ), so this reads the
+  // runner's own zone, which is the point: whichever zone the browser is in, the page sends the
+  // days FullCalendar selected and never that zone's midnight as an instant (Tokyo's Nov 20 is
+  // 15:00 UTC the day before, which the server refuses on a Chicago calendar).
+  test("a month-view day seeds the chosen days, which the event places at midnight in its own zone", async () => {
+    const createDefaults = (await spec()).createDefaults!;
+    // FullCalendar selects whole days at the browser's local midnights.
+    const start = new Date(2026, 10, 20);
+    const end = new Date(2026, 10, 21);
+
+    expect(createDefaults(start, end, true)).toEqual({ start: "2026-11-20", end: "2026-11-21", all_day: true });
   });
 });
 

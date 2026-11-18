@@ -59,8 +59,10 @@ cancelled master hides its moved instances too.
   only the events without a zone of their own: an all-day event keeps its local
   dates, and every series derives its end again and rebases its overrides.
 - **All-day** events start and end at midnight in their zone, a whole number of
-  days apart; a form that sends another time is refused, and a drag lands on the
-  nearest midnights.
+  days apart. A bound written as a date (`2026-11-20`, no offset) names a day, and
+  the event places it at that midnight, so a browser in any zone sends the days its
+  viewer picked (the event form and a month-view selection do); an instant at
+  another time is refused, and a drag lands on the nearest midnights.
 - **Tags, chatter and history** come from `TaggedModel`, `ThreadedModelMixin` and
   `HistoryMixin`.
 - **Attendees** are the `through` rows of `CalendarEvent.attendees` to

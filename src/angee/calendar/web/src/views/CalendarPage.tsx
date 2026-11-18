@@ -6,6 +6,7 @@ import {
   ResourceList,
   calendarWindowBounds,
   calendarWindowSource,
+  formatDateStorage,
   useActionResultRun,
   useContainer,
   useResourceRecordHrefLookup,
@@ -110,8 +111,12 @@ export function CalendarPage(): React.ReactElement {
     () => ({
       sources,
       onReschedule,
-      // The surface opens routed create seeded with the selection; a month-view day is an all-day event.
-      createDefaults: (start, end, allDay) => ({ start: start.toISOString(), end: end.toISOString(), all_day: allDay }),
+      // The surface opens routed create seeded with the selection. A month-view day is an all-day
+      // event whose bounds are the days chosen (FullCalendar's local dates): the event places them at
+      // midnight in its own zone, which only the server knows. A timed selection is its instants.
+      createDefaults: (start, end, allDay) => allDay
+        ? { start: formatDateStorage(start), end: formatDateStorage(end), all_day: true }
+        : { start: start.toISOString(), end: end.toISOString(), all_day: false },
     }),
     [sources, onReschedule],
   );

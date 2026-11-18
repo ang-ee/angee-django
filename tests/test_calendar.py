@@ -791,6 +791,23 @@ def test_an_all_day_event_starts_and_ends_at_local_midnight(db: None) -> None:
     _place(calendar, _ny(2026, 7, 7), _ny(2026, 7, 8), all_day=True)
 
 
+def test_an_all_day_event_edited_to_dates_keeps_them_in_its_own_zone(db: None) -> None:
+    """A date names a day: an edit to dates lands on the event's zone, which outranks its calendar's."""
+
+    calendar = _calendar(zone="America/New_York")
+    holiday = _event(calendar, title="Holiday", all_day=True, start=_ny(2026, 7, 7), end=_ny(2026, 7, 8))
+
+    with system_context(reason="tests.calendar.all_day"):
+        holiday.timezone = "Asia/Tokyo"
+        holiday.start, holiday.end = datetime(2026, 7, 9), datetime(2026, 7, 11)
+        holiday.full_clean()
+        holiday.save()
+
+    tokyo = ZoneInfo("Asia/Tokyo")
+    holiday.refresh_from_db()
+    assert (holiday.start, holiday.end) == (datetime(2026, 7, 9, tzinfo=tokyo), datetime(2026, 7, 11, tzinfo=tokyo))
+
+
 def test_dragging_an_all_day_event_lands_on_the_nearest_local_midnights(db: None) -> None:
     calendar = _calendar(zone="America/New_York")
     holiday = _event(calendar, title="Holiday", all_day=True, start=_ny(2026, 7, 7), end=_ny(2026, 7, 8))

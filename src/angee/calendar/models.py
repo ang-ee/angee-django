@@ -47,7 +47,7 @@ import operator
 from collections import defaultdict
 from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
 from dataclasses import dataclass, replace
-from datetime import UTC, datetime, time, timedelta
+from datetime import UTC, date, datetime, time, timedelta
 from functools import reduce
 from typing import Any, ClassVar, Self, cast
 
@@ -172,18 +172,23 @@ class EventMoment:
     end: datetime
 
 
+def _midnight(day: date, tz: Any) -> datetime:
+    """The midnight that starts ``day`` in ``tz``: where an all-day bound on that date lies."""
+
+    return timezone.make_aware(datetime.combine(day, time.min), tz)
+
+
 def _nearest_midnight(moment: datetime, tz: Any) -> datetime:
     """The midnight in ``tz`` nearest ``moment``: a dragged date lands on the day the viewer meant."""
 
     local = moment.astimezone(tz)
-    day = local.date() + timedelta(days=1 if local.time() >= time(12) else 0)
-    return timezone.make_aware(datetime.combine(day, time.min), tz)
+    return _midnight(local.date() + timedelta(days=1 if local.time() >= time(12) else 0), tz)
 
 
 def _same_local_day(moment: datetime, old_tz: Any, new_tz: Any) -> datetime:
     """The midnight in ``new_tz`` on the local date ``moment`` has in ``old_tz``: an all-day bound keeps its date."""
 
-    return timezone.make_aware(datetime.combine(moment.astimezone(old_tz).date(), time.min), new_tz)
+    return _midnight(moment.astimezone(old_tz).date(), new_tz)
 
 
 logger = logging.getLogger(__name__)
@@ -861,6 +866,9 @@ class CalendarEvent(
 
     ``start``/``end`` are timezone-aware UTC datetimes; an all-day event stores
     ``start`` as local midnight in its expansion zone and expands by calendar date.
+    An all-day bound written as a date (no offset, as a date picker sends it) is
+    placed at that date's midnight in the expansion zone (:meth:`clean`): the
+    writer names the day and the event, which knows its zone, places it.
     A master carries the RRULE; an override carries ``series`` and
     ``original_start`` and no rule. Containment is set once: ``calendar``,
     ``series`` and ``original_start`` never change after insert, except when the
@@ -972,11 +980,13 @@ class CalendarEvent(
 
         Its moments lie within the representable range calendar arithmetic needs
         (two days inside Python's). An all-day event's ``start`` and ``end`` are
-        midnights in its expansion zone, a whole number of days apart. The overlap
-        policy reads other rows, so :meth:`save` checks it, after the write, under
-        the calendar's lock.
+        midnights in its expansion zone, a whole number of days apart; a bound
+        written as a date is first placed there (:meth:`_place_all_day_dates`). The
+        overlap policy reads other rows, so :meth:`save` checks it, after the write,
+        under the calendar's lock.
         """
 
+        self._place_all_day_dates()
         super().clean()
         errors: dict[str, Any] = {}
         for name in ("start", "end"):
@@ -1045,6 +1055,24 @@ class CalendarEvent(
         if not series.is_instance(self.original_start):
             return {"original_start": "The original start is not an instance of the series."}
         return {}
+
+    def _place_all_day_dates(self) -> None:
+        """Place each all-day bound written as a date at that date's midnight in the expansion zone.
+
+        A bound without an offset names a day, not an instant: its writer cannot
+        know which zone the event expands in (its own, its calendar's or the
+        project's), so the event places it. A bound with an offset is an instant,
+        held to :meth:`_all_day_errors` as it is.
+        """
+
+        if not self.all_day or self.calendar_id is None:
+            return
+        bounds = {name: getattr(self, name) for name in ("start", "end")}
+        days = {name: bound.date() for name, bound in bounds.items() if bound is not None and timezone.is_naive(bound)}
+        if days:
+            tz = get_zone_info(self.expansion_zone)
+            for name, day in days.items():
+                setattr(self, name, _midnight(day, tz))
 
     def _all_day_errors(self) -> dict[str, str]:
         """Return why this all-day event's bounds are not local midnights in its zone."""
@@ -1181,13 +1209,16 @@ class CalendarEvent(
           result; a refusal rolls the whole save back.
 
         The rule frequency floor and ``series_end`` are enforced and derived here, so
-        every save path (a form, a drag, a sync) keeps them. So is writability: a
+        every save path (a form, a drag, a sync) keeps them, and so is an all-day
+        bound written as a date placed (:meth:`_place_all_day_dates`): a create
+        validates a copy of the row, then saves the values it was given. So is writability: a
         replica of a read-only calendar is written only by its source's own work
         (:meth:`_refuse_read_only`), and its series is the source's, so a moved
         master never rebases its overrides there: the source re-sends each instance
         under its own key.
         """
 
+        self._place_all_day_dates()
         self._refuse_read_only()
         update_fields = kwargs.get("update_fields")
         schedule_changes = update_fields is None or bool(_SCHEDULE_FIELDS & set(update_fields))
@@ -1460,8 +1491,7 @@ class CalendarEvent(
             tz = get_zone_info(self.expansion_zone)
             start, end = _nearest_midnight(start, tz), _nearest_midnight(end, tz)
             if end <= start:
-                next_day = start.astimezone(tz).date() + timedelta(days=1)
-                end = timezone.make_aware(datetime.combine(next_day, time.min), tz)
+                end = _midnight(start.astimezone(tz).date() + timedelta(days=1), tz)
         self.start = start
         self.end = end
         self.full_clean(
