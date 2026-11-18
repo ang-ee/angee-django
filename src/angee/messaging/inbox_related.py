@@ -6,9 +6,10 @@ from dataclasses import dataclass
 from typing import Any, cast
 
 from django.db import models
-from django.db.models import F, Q, Subquery, Value
+from django.db.models import F, Prefetch, Q, Subquery, Value
 from django.db.models.functions import Cast
 
+from angee.base.permissions import relation_read_queryset
 from angee.messaging.inbox import InboxPage, InboxSearch, MessageInbox
 
 
@@ -168,7 +169,32 @@ class InboxRelated:
         window = InboxPage.window(page, size)
         if self.kind in ("file", "fragment"):
             uses = self.inbox.related(self.parts, text=text, oldest=oldest, page=page, size=size)
-            parts = self.parts.filter(message_id__in=[message.pk for message in uses.rows]).order_by("position", "pk")
+            # A row projects its part with the part's parent, fragment and file. Each is read once
+            # for the page as the parts are read, never once per row.
+            fields = self.parts.model._meta
+            file_model = fields.get_field("file").related_model
+            parts = (
+                self.parts.filter(message_id__in=[message.pk for message in uses.rows])
+                .prefetch_related(
+                    Prefetch("parent", queryset=relation_read_queryset(self.parts.model, self.parts)),
+                    Prefetch(
+                        "fragment",
+                        queryset=relation_read_queryset(fields.get_field("fragment").related_model, self.parts),
+                    ),
+                    Prefetch(
+                        "file",
+                        queryset=relation_read_queryset(file_model, self.parts).prefetch_related(
+                            Prefetch(
+                                "mime_type",
+                                queryset=relation_read_queryset(
+                                    file_model._meta.get_field("mime_type").related_model, self.parts
+                                ),
+                            )
+                        ),
+                    ),
+                )
+                .order_by("position", "pk")
+            )
             by_message: dict[int, Any] = {}
             for part in parts:
                 by_message.setdefault(part.message_id, part)
