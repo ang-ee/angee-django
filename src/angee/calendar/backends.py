@@ -152,9 +152,13 @@ def series_key(uid: str) -> str:
 
 
 def basic_instant(moment: datetime) -> str:
-    """Return a moment as UTC ISO-8601 basic: an occurrence id's and an instance key's suffix."""
+    """Return a moment as UTC ISO-8601 basic: an occurrence id's and an instance key's suffix.
 
-    return moment.astimezone(UTC).strftime("%Y%m%dT%H%M%SZ")
+    ``isoformat`` pads every year to four digits on every platform; ``strftime`` need not.
+    """
+
+    stamp = moment.astimezone(UTC).replace(tzinfo=None).isoformat(timespec="seconds")
+    return stamp.replace("-", "").replace(":", "") + "Z"
 
 
 def instance_key(uid: str, original_start: datetime) -> str:

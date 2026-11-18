@@ -82,25 +82,6 @@ class BridgeImpl(IntegrationImpl):
     supports_identity_reads: ClassVar[bool] = False
     """Declare identity reads; otherwise retries request a fresh baseline."""
 
-    deadline: float | None = None
-    """The sync deadline (a monotonic instant) of the call the driver is making, or ``None``.
-
-    Extraction receives its deadline as an argument. An identity read and the
-    sweep's enumeration take no such argument, so the driver sets this for exactly
-    that call (:meth:`until`); an adapter that parses or fetches there reads it.
-    Outside a driver call it is ``None``: no cycle's deadline outlives its call.
-    """
-
-    @contextmanager
-    def until(self, deadline: float | None) -> Iterator[None]:
-        """Run one driver call on this adapter against ``deadline``, restoring the previous one after."""
-
-        previous, self.deadline = self.deadline, deadline
-        try:
-            yield
-        finally:
-            self.deadline = previous
-
     def source_url(self, link: Any) -> str | None:
         """Return the provider URL for ``link``, or none when it has no web view."""
 

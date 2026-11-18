@@ -206,6 +206,12 @@ def _earlier(moment: datetime, span: timedelta) -> datetime:
 UNEXPANDABLE = frozenset({"series_too_long", "out_of_range"})
 """The refusals that make one row unexpandable; a read over many rows skips that row (R-R2)."""
 
+UNEXPANDABLE_MESSAGE = (
+    "This time cannot be checked against “%(title)s” on this calendar: it repeats past what the calendar "
+    "can expand. Edit or delete it first."
+)
+"""The overlap check's refusal when it cannot read another row; it names that row, which the calendar's writers read."""
+
 
 def _codes(error: ValidationError) -> set[str]:
     """Return the codes a ``ValidationError`` carries, whatever its form."""
@@ -466,7 +472,7 @@ class Calendar(OwnerMixin, ArchiveMixin, StatementsMixin, HistoryMixin, AngeeDat
 class CalendarEventQuerySet(AngeeHistoryQuerySet[Any]):
     """Event rows that expand to the occurrences a calendar shows."""
 
-    def moments(self, window_start: datetime, window_end: datetime) -> list[EventMoment]:
+    def moments(self, window_start: datetime, window_end: datetime, *, strict: bool = False) -> list[EventMoment]:
         """Return every shown moment of these rows that meets ``[window_start, window_end)``.
 
         A moment meets the window when it starts before ``window_end`` and ends
@@ -480,9 +486,11 @@ class CalendarEventQuerySet(AngeeHistoryQuerySet[Any]):
         starting at or after ``window_end`` cannot meet it, and neither can a single
         row ending before ``window_start`` nor a series whose stored
         ``series_end`` is at or before it. An open-ended series is always read. A row
-        whose expansion is refused (:data:`UNEXPANDABLE`: a series past the cap from
-        its start, an occurrence past the representable dates) is skipped, noted at
-        debug level, so it never fails the read or another row's overlap check.
+        whose expansion is refused (:data:`UNEXPANDABLE`: a window past the cap, an
+        occurrence past the representable dates) is skipped, noted at debug level, so
+        it never fails the read; a ``strict`` read (the overlap check) refuses
+        instead, naming that row (:data:`UNEXPANDABLE_MESSAGE`, code ``unexpandable``),
+        since a row it cannot read might be the one it meets.
         """
 
         window_start, window_end = _clamped(window_start), _clamped(window_end)
@@ -525,6 +533,10 @@ class CalendarEventQuerySet(AngeeHistoryQuerySet[Any]):
                 codes = _codes(error)
                 if not codes or not codes <= UNEXPANDABLE:
                     raise
+                if strict:
+                    raise ValidationError(
+                        UNEXPANDABLE_MESSAGE, code="unexpandable", params={"title": row.title or row.sqid}
+                    ) from error
                 # One row the calendar cannot expand never fails the read: it is skipped. Its source's
                 # ingest already quarantined it, so each read notes it only at debug level.
                 logger.debug(
@@ -823,7 +835,7 @@ class CalendarEvent(
     immutable_fields = ("calendar_id", "series_id", "original_start")
 
     overlap_horizon: ClassVar[timedelta] = timedelta(days=730)
-    """How far an open-ended series is checked against a ``refuse`` calendar, from its start."""
+    """How much of a series a ``refuse`` calendar checks (:meth:`_overlap_span`), and how far ahead its save counts."""
 
     occurrence_window_limit: ClassVar[timedelta] = timedelta(days=400)
     """The longest window :meth:`CalendarEventQuerySet.occurrences` expands."""
@@ -1043,9 +1055,10 @@ class CalendarEvent(
 
         A row without a rule has none: its own start is no instance of a series.
 
-        The recurrence owner counts every occurrence from the start, so a moment
-        far from it is refused (``series_too_long``) rather than walked to; a bound
-        past the representable dates is refused (``out_of_range``).
+        The recurrence owner reads the window from the rule period before it
+        (re-anchoring), so a moment far from the start costs one window; a window
+        holding more than its cap is refused (``series_too_long``), and a bound past
+        the representable dates too (``out_of_range``).
         """
 
         if not self.recurrence:
@@ -1059,19 +1072,38 @@ class CalendarEvent(
     def horizon_end(self, since: datetime) -> datetime:
         """Return where :attr:`overlap_horizon` from ``since`` ends, within the dates the calendar reaches.
 
-        The one horizon an open-ended series is judged to, at save and in the
-        overlap check; a start near the last date ends the horizon there.
+        The one horizon a series is judged to, at save (:meth:`_refuse_unreadable_series`)
+        and in the overlap check (:meth:`_overlap_span`); a start near the last date
+        ends the horizon there.
         """
 
         return min(moment_after(since, self.overlap_horizon) or _LATEST, _LATEST)
 
-    def _refuse_unreadable_series(self) -> None:
-        """Refuse an open-ended series past the save-time cap (R-R1).
+    def _overlap_span(self) -> tuple[datetime, datetime]:
+        """Return the span ``[since, until)`` whose instances of this series the overlap check judges.
 
-        Counted from the series' start to now plus :attr:`overlap_horizon` against
-        the recurrence owner's cap (``Recurrence.validate(through=…)``). A read is
-        re-anchored at its window (R-R3), so it never refuses for the series' age;
-        this cap is the series' own length, held at save.
+        From now, or the series' start when that is later, :attr:`overlap_horizon` on
+        (:meth:`horizon_end`), and no further than its stored ``series_end``; a series
+        that ended before now is judged on its last horizon. However old or long the
+        series, the check reads one horizon of it and of every other row.
+        """
+
+        now = timezone.now()
+        if self.series_end is not None and self.series_end <= now:
+            since = max(self.start, _earlier(self.series_end, self.overlap_horizon))
+        else:
+            since = max(self.start, now)
+        until = self.horizon_end(since)
+        return since, until if self.series_end is None else min(until, self.series_end)
+
+    def _refuse_unreadable_series(self) -> None:
+        """Refuse a series past the save-time cap (R-R1), open-ended or bounded alike.
+
+        Counted from the series' start to now plus :attr:`overlap_horizon` (or its
+        ``UNTIL``, when sooner) against the recurrence owner's cap
+        (``Recurrence.validate(through=…)``). A read is re-anchored at its window
+        (R-R3), and a bounded series' end is read back from its ``UNTIL``, so neither
+        refuses for the series' age or length; this cap is what lies ahead of a save.
         """
 
         horizon = self.horizon_end(max(timezone.now(), self.start))
@@ -1109,7 +1141,7 @@ class CalendarEvent(
         if schedule_changes:
             self.validate_rule()
             self.series_end = self._derive_series_end()
-            if self.recurrence and self.series_end is None:
+            if self.recurrence:
                 self._refuse_unreadable_series()
             if update_fields is not None:
                 kwargs["update_fields"] = [*update_fields, "series_end"]
@@ -1182,9 +1214,10 @@ class CalendarEvent(
         expansion zone. An override that still names an instance keeps it; one that
         no longer does is detached as a standalone event when it carries edits, so
         nothing is lost, and deleted when it is a cancellation; one moved past the
-        representable dates is no instance. The new schedule's instances are expanded
-        once for every override. Overrides move in the shift's direction, so two
-        never claim the same instance at once. An override a
+        representable dates is no instance. Each moved override is judged on its own
+        (:meth:`is_instance`, one window each), however far apart they lie. Overrides
+        move in the shift's direction, so two never claim the same instance at once.
+        An override a
         sync still links (a protecting record edge names it) is left to that sync,
         neither detached nor deleted: a stranded one suppresses no instance.
         """
@@ -1205,11 +1238,9 @@ class CalendarEvent(
                 moves[override.pk] = timezone.make_aware(local, new_tz).astimezone(UTC)
             except OverflowError:
                 moves[override.pk] = None
-        landed = [moved for moved in moves.values() if moved is not None]
-        instances = self.instances(min(landed), max(landed), zone=zone) if landed else set()
         for override in overrides:
             moved = moves[override.pk]
-            if moved is not None and moved in instances:
+            if moved is not None and self.is_instance(moved, zone=zone):
                 if moved == override.original_start:
                     continue
                 override.original_start = moved
@@ -1228,14 +1259,15 @@ class CalendarEvent(
     def _refuse_overlap(self) -> None:
         """Refuse this busy event when any of its instances meets another busy occurrence on a ``refuse`` calendar.
 
-        Every instance is checked: a single row's ``[start, end)``, or each instance
-        of a series up to its stored ``series_end``, or :attr:`overlap_horizon` from
-        its start for an open-ended rule, minus the instances its own overrides
-        replace. Both sides are sorted and swept once. This row's stored copy, a
-        master's own overrides, and the instance an override replaces are not
+        A single row's ``[start, end)`` is checked, or each instance of a series in
+        its :meth:`_overlap_span` (a horizon from now), minus the instances its own
+        overrides replace. Both sides are sorted and swept once. This row's stored
+        copy, a master's own overrides, and the instance an override replaces are not
         others. :meth:`save` calls it after the write it judges, which the REBAC save
         gates have admitted (a rehearsed save never reaches it), so every row is read
-        as system work; the refusal names no other event.
+        as system work; the refusal names no other event. It fails closed: another
+        row it cannot expand refuses the save, naming that row
+        (:data:`UNEXPANDABLE_MESSAGE`), rather than pass as no clash.
         """
 
         if self.calendar_id is None or self.start is None or self.end is None or self.end <= self.start:
@@ -1253,23 +1285,28 @@ class CalendarEvent(
         # The window stops short of the largest date, so another series expanding in a
         # zone ahead of UTC cannot overflow it; nothing past that margin is judged.
         window = (min(mine[0][0], _LATEST), min(max(end for _start, end in mine), _LATEST))
+        try:
+            shown = rows.moments(*window, strict=True)
+        except ValidationError as error:
+            if _codes(error) != {"unexpandable"}:
+                raise
+            raise ValidationError({"start": error.error_list}) from None
         theirs = sorted(
             (moment.start, moment.end)
-            for moment in rows.moments(*window)
+            for moment in shown
             if moment.event.transparency == EventTransparency.BUSY and not self._is_own(moment)
         )
         if _intervals_meet(mine, theirs):
             raise ValidationError({"start": OVERLAP_MESSAGE})
 
     def _own_instances(self) -> list[tuple[datetime, datetime]]:
-        """This row's instances, sorted: itself, or its series to ``series_end`` (open-ended: the overlap horizon)."""
+        """This row's instances, sorted: itself, or its series' in its :meth:`_overlap_span`."""
 
         if not self.recurrence:
             return [(self.start, self.end)]
         zone = self.expansion_zone
         # The horizon stops short of the largest date, so a far-future start cannot overflow it.
-        stop = self.series_end or self.horizon_end(self.start)
-        starts = Recurrence(self.recurrence).occurrences(self.start, self.start, stop, zone=zone)
+        starts = Recurrence(self.recurrence).occurrences(self.start, *self._overlap_span(), zone=zone)
         replaced: set[datetime] = set()
         if self.pk is not None:
             stored = type(self)._base_manager.filter(series_id=self.pk)

@@ -21,8 +21,9 @@ live in code docstrings.
   `Recurrence.get_last_occurrence` returns where a series ends, `None` when any
   rule it holds is open-ended. Recurrence is bounded for every consumer: a `COUNT`
   over `MAX_OCCURRENCES` (10,000) is invalid and an expansion past it
-  raises `ValidationError` instead of running on, counting every occurrence from
-  the series' start (`series_too_long`); a rule is one bare `RRULE`, and one with no
+  raises `ValidationError` instead of running on (`series_too_long`): a read is
+  re-anchored at its window, like libical's, and a save counts a series from its
+  start to a horizon; a rule is one bare `RRULE`, and one with no
   occurrence within about 30 years of its start is refused (`never_occurs`);
   `RecurrenceField(finest_frequency=…)` refuses finer rules (a calendar event
   repeats at most daily). A calendar read skips a row it cannot expand.

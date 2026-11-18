@@ -72,13 +72,15 @@ expanded server-side in each calendar's zone.
 - **Bounds:** each series stores where it ends (`series_end`, when every rule it
   holds carries `UNTIL` or `COUNT`), so reads skip series that ended before their
   window. An event's rule repeats at most daily and occurs within about 30 years
-  of its start. A read costs its window, not the series' age: an open rule is read
-  from the period before the window (scheduling's re-anchoring). At save, an open
-  series is counted from its start to now plus the overlap horizon against
-  `MAX_OCCURRENCES` (10,000, scheduling's one cap), and a `COUNT` series is read
-  from its start; past the cap the save is refused, never truncated. An event's
-  moments, and every occurrence's end, stay within the dates the calendar can
-  reach; a row a read still cannot expand is skipped, never failing the read.
+  of its start. A read costs its window, not the series' age: a rule without
+  `COUNT` is read from the period before the window (scheduling's re-anchoring),
+  and a bounded one's end is read back from its `UNTIL`. At save, every series is
+  counted from its start to now plus the overlap horizon (or its end, when
+  sooner) against `MAX_OCCURRENCES` (10,000, scheduling's one cap), and a `COUNT`
+  series is read from its start; past the cap the save is refused, never
+  truncated. An event's moments, and every occurrence's end, stay within the
+  dates the calendar can reach; a row a read still cannot expand is skipped, never
+  failing the read.
 - **Live updates:** `changes(CalendarEvent)` sends readers the change as usual, and
   sends free/busy viewers only that an event's busy time changed, so they refetch
   the redacted occurrences. A free event reaches them only through a partial save
@@ -88,10 +90,11 @@ expanded server-side in each calendar's zone.
 
 A calendar whose overlap policy is `refuse` rejects a busy event any of whose
 instances meets another busy occurrence on it. A single event is checked over its
-`[start, end)`. A series is checked instance by instance, up to its stored
-`series_end` for a bounded rule, or two years from its start for an open-ended
-one (`CalendarEvent.overlap_horizon`). Free and cancelled events never conflict,
-and neither do a cancelled master's moved instances.
+`[start, end)`. A series is checked instance by instance over two years
+(`CalendarEvent.overlap_horizon`) from now, or from its start when that is later,
+and no further than its stored `series_end`; a series that ended before now is
+checked over its last two years. Free and cancelled events never conflict, and
+neither do a cancelled master's moved instances.
 
 - **Where it runs:** `CalendarEvent.save`. A save that can change an event's time
   locks the calendar row (on any policy), then the event, then writes, rebases a
@@ -99,9 +102,12 @@ and neither do a cancelled master's moved instances.
   whole save back and reaches a form, a drag or a sync as a field error. Every save
   path is covered, and two concurrent saves cannot take the same time. Queryset
   `update()` and `bulk_create` skip `save` and are not checked.
-- **What it reveals:** the refusal names no other event. It runs only after the
+- **What it reveals:** a clash names no other event. It runs only after the
   REBAC save gates admitted the write, so a save the actor may not make is refused
   for its permission before any other event is read.
+- **It fails closed:** another event on the calendar that it cannot expand (a
+  legacy row past the cap) refuses the save, naming that event, which the
+  calendar's writers read, instead of passing as no clash.
 
 ## Sources
 
