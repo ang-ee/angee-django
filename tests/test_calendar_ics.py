@@ -22,10 +22,12 @@ from zoneinfo import ZoneInfo
 import httpx2
 import icalendar
 import pytest
+from django.apps import apps
 from django.core.cache import caches
 from django.core.exceptions import ValidationError
 from django.db import connection, transaction
 from django.db.models import ProtectedError
+from django.utils import timezone
 from rebac import actor_context, system_context
 
 from angee.calendar import models as calendar_models
@@ -44,12 +46,14 @@ from angee.calendar_integrate_ics.connect import subscribe_calendar
 from angee.integrate.errors import IntegrationError
 from angee.integrate.states import LinkStatus
 from angee.integrate.streams import BridgeSyncError, advance_stream, read_stream_keys, sync_bridge
+from angee.integrate.sync import sync_deadline, sync_deadline_context
 from angee.integrate.testing.http import mock_transport
 from angee.integrate.testing.models import RecordLink, SyncStream
 from angee.jobs.celery import app as celery_app
 from angee.messaging.testing.models import Handle, Person
+from angee.resources.testing.models import Resource
 from angee.scheduling.zones import get_zone_info
-from tests.conftest import Credential, ExternalAccount, OAuthClient, create_user
+from tests.conftest import Credential, ExternalAccount, OAuthClient, Vendor, create_user
 from tests.lock_waits import submit, wait_for_lock
 
 pytestmark = pytest.mark.django_db(transaction=True)
@@ -257,6 +261,29 @@ def _fresh_subscribe_rate() -> None:
     caches["default"].clear()
 
 
+def _load_vendor() -> Any:
+    """Load the addon's master tier, its ``ics`` vendor, as provisioning does."""
+
+    return Resource.objects.load_addons(
+        (apps.get_app_config("calendar_integrate_ics"),), tiers=[Resource.Tier.MASTER], allow_non_dev=True
+    )
+
+
+@pytest.fixture(autouse=True)
+def _ics_vendor(db: None) -> None:
+    """Every ICS source names the seeded ``ics`` vendor; subscribing never creates it."""
+
+    del db
+    _load_vendor()
+
+
+@pytest.fixture
+def march(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Pin now to 1 March 2026, before the feed's events, so the overlap check judges each from its start."""
+
+    monkeypatch.setattr(timezone, "now", lambda: datetime(2026, 3, 1, tzinfo=UTC))
+
+
 @pytest.fixture
 def subscription() -> Iterator[Subscription]:
     feed = FakeFeed(_feed(STANDUP, MOVED, HOLIDAY, BERLIN_EVENT, LAUNCH))
@@ -271,6 +298,19 @@ def _snapshot(subscription: Subscription) -> dict[str, tuple[Any, ...]]:
 
 
 # --- subscribe ---------------------------------------------------------------
+
+
+def test_the_ics_vendor_is_seeded_before_any_feed_and_adopted_by_slug() -> None:
+    with system_context(reason="tests.ics"):
+        vendor = Vendor.objects.seeded("ics")
+        assert (vendor.display_name, vendor.icon, CalendarSource.objects.count()) == ("ICS feed", "calendar", 0)
+        # A row an earlier subscription created is adopted by its slug, never duplicated.
+        Vendor.objects.filter(pk=vendor.pk).delete()
+        Vendor.objects.create(slug="ics", display_name="ics")
+    _load_vendor()
+    _load_vendor()
+    with system_context(reason="tests.ics"):
+        assert list(Vendor.objects.filter(slug="ics").values_list("display_name", flat=True)) == ["ICS feed"]
 
 
 def test_subscribing_fetches_nothing_and_the_first_sync_mirrors_the_calendar(subscription: Subscription) -> None:
@@ -676,7 +716,10 @@ END:VEVENT"""
     assert (event.timezone, event.start) == ("America/New_York", _utc(2026, 7, 1, 13))
 
 
-def test_an_overlap_on_a_refusing_calendar_is_a_record_failure_not_a_failed_page(subscription: Subscription) -> None:
+def test_an_overlap_on_a_refusing_calendar_is_a_record_failure_not_a_failed_page(
+    march: None, subscription: Subscription
+) -> None:
+    del march
     subscription.poll()
     with system_context(reason="tests.ics"):
         Calendar.objects.filter(pk=subscription.calendar.pk).update(overlap_policy="refuse")
@@ -865,8 +908,7 @@ END:VEVENT"""
 
     subscription.poll()
 
-    # The field refuses the minutely rule before anything expands it; the hourly rule
-    # reaches the recurrence owner's occurrence bound before its far EXDATE.
+    # The field's daily floor refuses both rules before anything expands them.
     assert subscription.failures() == {
         "hourly@example.test": ["invalid_event"],
         "minutely@example.test": ["invalid_event"],
@@ -1195,12 +1237,14 @@ def _make_unexpandable(event: Any, **columns: Any) -> None:
         ),
     ],
 )
-def test_a_row_the_calendar_cannot_expand_never_fails_a_read_or_another_save(
+def test_a_row_the_calendar_cannot_expand_never_fails_a_read_or_a_save_beside_it(
+    march: None,
     subscription: Subscription,
     columns: dict[str, Any],
     window: tuple[datetime, datetime],
     caplog: pytest.LogCaptureFixture,
 ) -> None:
+    del march
     subscription.poll()
     with system_context(reason="tests.ics"):
         Calendar.objects.filter(pk=subscription.calendar.pk).update(overlap_policy="refuse")
@@ -1213,7 +1257,7 @@ def test_a_row_the_calendar_cannot_expand_never_fails_a_read_or_another_save(
     assert len([record for record in caplog.records if "cannot be expanded" in record.getMessage()]) == 1
     if window[0].year == 2050:
         assert all(occurrence.title != "Berlin sync" for occurrence in shown)
-    # A new event saved to the refusing calendar is judged against every other row.
+    # A new event saved to the refusing calendar, in a window where the row is readable, is judged against it.
     late = LAUNCH.replace("launch@example.test", "late@example.test").replace(
         "DTSTART:20260401T120000Z", "DTSTART:20260402T120000Z"
     ).replace("DTEND:20260401T130000Z", "DTEND:20260402T130000Z")
@@ -1268,13 +1312,23 @@ def test_a_feed_zone_counts_its_true_transitions(subscription: Subscription) -> 
     assert subscription.events()["busy@example.test"].start == _utc(2026, 7, 1, 9, zone=calendar_zone)
 
     # A nested observance counts too (icalendar's own parse refuses one in a feed, so it is built here).
+    class Observance(icalendar.Component):
+        name = "X-OBSERVANCE"
+
     nested_zone = icalendar.Timezone({"TZID": "Nested"})
-    standard = icalendar.TimezoneStandard({"DTSTART": datetime(1970, 1, 1), "RRULE": {"FREQ": "YEARLY"}})
-    nested = icalendar.Component({"DTSTART": datetime(1970, 1, 1), "RRULE": {"FREQ": "SECONDLY"}})
-    nested.name = "X-OBSERVANCE"
+    standard = icalendar.TimezoneStandard()
+    standard.add("DTSTART", datetime(1970, 1, 1))
+    standard.add("RRULE", {"FREQ": ["YEARLY"]})
+    nested = Observance()
+    nested.add("DTSTART", datetime(1970, 1, 1))
+    nested.add("RRULE", {"FREQ": ["SECONDLY"]})
     standard.add_component(nested)
     nested_zone.add_component(standard)
+    # The standard observance alone is 69 yearly transitions; its nested secondly rule is refused.
+    assert ics_backend._transitions(standard, 5_000) > 5_000
     assert ics_backend._transitions(nested_zone, 5_000) > 5_000
+    nested_zone.subcomponents[0].subcomponents.clear()
+    assert ics_backend._transitions(nested_zone, 5_000) == 69
 
 
 def test_two_subscriptions_to_one_feed_share_a_credential_and_one_purge_spares_the_other(
@@ -1410,20 +1464,153 @@ def test_each_parse_path_stops_at_the_sync_deadline(subscription: Subscription) 
     subscription.feed.etags = False
     past = monotonic() - 1
 
-    # The feed parse, on extraction.
+    # The feed parse, on extraction, reads the deadline the running sync holds.
     backend = IcsCalendarBackend(CalendarSource.objects.sudo(reason="tests.ics").get(pk=subscription.source.pk))
-    with system_context(reason="tests.ics"), pytest.raises(IcsError, match="took too long"):
-        advance_stream(subscription.stream(), backend, deadline=past)
+    with system_context(reason="tests.ics"), sync_deadline_context(past):
+        with pytest.raises(IcsError, match="took too long"):
+            advance_stream(subscription.stream(), backend)
     # Zone resolution, observance by observance.
     feed = ics_backend._read(_custom_zone_feed("-0500", "-0400").encode())
     with pytest.raises(IcsError, match="took too long"):
         ics_backend._Zones(feed, deadline=past).resolve("Custom Zone")
-    # An identity read gets the deadline integrate holds, for that read only.
+    # An identity read reads the same one; outside the sync there is none.
     reader = IcsCalendarBackend(CalendarSource.objects.sudo(reason="tests.ics").get(pk=subscription.source.pk))
-    with system_context(reason="tests.ics"):
+    with system_context(reason="tests.ics"), sync_deadline_context(past):
         with pytest.raises(IcsError, match="took too long"):
-            read_stream_keys(reader, subscription.stream(), ["launch@example.test"], deadline=past)
-    assert reader.deadline is None
+            read_stream_keys(reader, subscription.stream(), ["launch@example.test"])
+    assert sync_deadline() is None
+
+
+def test_a_direct_driver_hands_its_deadline_to_the_parse(subscription: Subscription) -> None:
+    subscription.poll()
+    subscription.feed.etags = False
+    past = monotonic() - 1
+
+    # A caller outside a bridge sync passes the deadline to the driver; the feed parse reads it.
+    backend = IcsCalendarBackend(CalendarSource.objects.sudo(reason="tests.ics").get(pk=subscription.source.pk))
+    with pytest.raises(IcsError, match="took too long"):
+        advance_stream(subscription.stream(), backend, deadline=past)
+    assert sync_deadline() is None
+    # A driver given none keeps the sync's own.
+    backend = IcsCalendarBackend(CalendarSource.objects.sudo(reason="tests.ics").get(pk=subscription.source.pk))
+    with system_context(reason="tests.ics"), sync_deadline_context(past):
+        with pytest.raises(IcsError, match="took too long"):
+            advance_stream(subscription.stream(), backend)
+        assert sync_deadline() == past
+
+
+def test_a_bridge_sync_hands_its_deadline_to_every_partition(
+    subscription: Subscription, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    seen: list[float | None] = []
+    events_now = IcsCalendarBackend._events_now
+
+    def watched(self: IcsCalendarBackend, stream: Any) -> Any:
+        seen.append(sync_deadline())
+        return events_now(self, stream)
+
+    monkeypatch.setattr(IcsCalendarBackend, "_events_now", watched)
+    subscription.poll()
+    subscription.sweep()
+
+    # The sweep's enumeration read the deadline the sync set once for its cycle.
+    assert seen and None not in seen
+    assert sync_deadline() is None
+
+
+def test_a_year_one_recurrence_id_is_one_records_failure_never_a_failed_page(subscription: Subscription) -> None:
+    ancient = """BEGIN:VEVENT
+UID:ancient@example.test
+DTSTART:00010301T090000Z
+DTEND:00010301T100000Z
+RRULE:FREQ=YEARLY
+SUMMARY:Ancient
+END:VEVENT"""
+    # Not an instance: the yearly series' next one is 0002-03-01, read from the period before it.
+    stray = """BEGIN:VEVENT
+UID:ancient@example.test
+RECURRENCE-ID:00010601T090000Z
+DTSTART:00010601T110000Z
+DTEND:00010601T120000Z
+SUMMARY:Stray
+END:VEVENT"""
+    subscription.feed.body = _feed(STANDUP, MOVED, HOLIDAY, BERLIN_EVENT, LAUNCH, ancient, stray)
+
+    subscription.poll()
+
+    assert subscription.failures() == {"ancient@example.test#00010601T090000Z": ["invalid_record"]}
+    assert {"ancient@example.test", "launch@example.test"} <= set(subscription.events())
+
+
+def test_a_master_with_a_far_until_lands(subscription: Subscription) -> None:
+    long_run = """BEGIN:VEVENT
+UID:long-run@example.test
+DTSTART:20260406T080000Z
+DTEND:20260406T083000Z
+RRULE:FREQ=DAILY;UNTIL=20991231T000000Z
+SUMMARY:Long run
+END:VEVENT"""
+    subscription.feed.body = _feed(STANDUP, MOVED, HOLIDAY, BERLIN_EVENT, LAUNCH, long_run)
+
+    subscription.poll()
+
+    # 27,000 days in all: its end is read back from UNTIL, and only a horizon ahead is counted.
+    assert subscription.failures() == {}
+    assert subscription.events()["long-run@example.test"].series_end == _utc(2099, 12, 30, 8, 30)
+
+
+def test_a_master_naming_more_exdates_than_a_feed_holds_is_refused_unmapped(subscription: Subscription) -> None:
+    first = datetime(2026, 4, 7, 8)
+    excluded = ",".join(f"{first + timedelta(days=day):%Y%m%dT%H%M%S}Z" for day in range(10_001))
+    crowded = f"""BEGIN:VEVENT
+UID:crowded@example.test
+DTSTART:20260406T080000Z
+DTEND:20260406T083000Z
+RRULE:FREQ=DAILY
+EXDATE:{excluded}
+SUMMARY:Crowded
+END:VEVENT"""
+    subscription.feed.body = _feed(STANDUP, MOVED, HOLIDAY, BERLIN_EVENT, LAUNCH, crowded)
+
+    began = perf_counter()
+    subscription.poll()
+
+    assert subscription.failures() == {"crowded@example.test": ["invalid_event"]}
+    assert "launch@example.test" in subscription.events()
+    assert perf_counter() - began < 5
+
+
+def test_an_exdate_list_stops_at_the_sync_deadline() -> None:
+    feed = ics_backend._read(_feed(STANDUP).encode())
+    [standup] = feed.walk("VEVENT")
+    zones = ics_backend._Zones(feed)
+
+    # Its master maps; its EXDATE is checked against the deadline before it is judged.
+    with pytest.raises(IcsError, match="took too long"):
+        ics_backend._events(
+            standup, uid="standup@example.test", zones=zones, zone="America/New_York", feed_zone="America/New_York",
+            calendar_zone="UTC", master=standup, deadline=monotonic() - 1,
+        )
+
+
+def test_many_rules_on_one_zone_observance_stop_at_the_cap_fast() -> None:
+    repeated = _parsed_zone("\nRRULE:".join(["FREQ=YEARLY;BYMONTH=10;BYDAY=-1SU"] * 200), start="16010101T000000")
+
+    began = perf_counter()
+    # 438 transitions a rule from 1601 to 2038: what the cap leaves shrinks rule by rule, so twelve are read.
+    assert 5_000 < ics_backend._transitions(repeated, 5_000) <= 5_000 + 438
+    assert perf_counter() - began < 1
+    with pytest.raises(IcsError, match="took too long"):
+        ics_backend._transitions(repeated, 5_000, monotonic() - 1)
+
+
+def test_a_zone_rule_is_probed_from_its_own_start_and_its_rdates_count() -> None:
+    # The fifth Sunday of February that is also its first never meets: an ordinal rule the day probe cannot read.
+    never = ics_backend._transitions(_parsed_zone("FREQ=YEARLY;BYMONTH=2;BYDAY=5SU;BYMONTHDAY=1"), 5_000)
+    assert never > 5_000
+    # A ruled observance's RDATEs count beside its rule's transitions: 2030 to 2038, and two more.
+    ruled = _parsed_zone("FREQ=YEARLY\nRDATE:20310601T000000,20320601T000000", start="20300101T000000")
+    assert ics_backend._transitions(ruled, 5_000) == 9 + 2
 
 
 @pytest.mark.skipif(connection.vendor != "postgresql", reason="Real PostgreSQL row locks are required.")
@@ -1494,6 +1681,7 @@ def test_a_credential_an_account_holds_survives_the_last_detach(
     monkeypatch.setattr(celery_app, "send_task", lambda name, **options: None)
     with system_context(reason="tests.ics"):
         credential = CalendarSource.objects.get(pk=subscription.source.pk).credential
+        assert credential is not None
         provider = OAuthClient.objects.create(
             slug="borrowed", display_name="Borrowed", client_id="borrowed-cid",
             authorize_endpoint="https://provider.example/auth", token_endpoint="https://provider.example/token",

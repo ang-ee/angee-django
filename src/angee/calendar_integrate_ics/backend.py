@@ -20,7 +20,8 @@ The external key is the UID (its digest when too long), plus the
 ``RECURRENCE-ID`` instant for an instance. A feed produces at most 10,000
 events, cancelled instances included, and defines at most 100 time zones; both
 are counted before it is parsed. A rule is validated by the event's own field
-before any ``EXDATE`` is judged (``cancelled_instances``).
+before any ``EXDATE`` is judged (``cancelled_instances``); a master names at most
+10,000 ``EXDATE``s, each judged on its own window.
 
 **Zones are resolved per parse.** icalendar's parser caches each feed-defined
 ``VTIMEZONE`` in a process-wide registry, so a resolved value can carry another
@@ -93,6 +94,7 @@ from angee.integrate.http import DownloadResult, OutboundBudget
 from angee.integrate.net import AddressNotAllowedError, AddressResolutionError, is_unsafe_address, parse_http_url
 from angee.integrate.states import StreamPhase
 from angee.integrate.streams import StreamPage
+from angee.integrate.sync import sync_deadline
 from angee.scheduling.recurrence import Recurrence
 from angee.scheduling.zones import get_zone_info, get_zone_names
 
@@ -109,7 +111,7 @@ _EVENTS_PER_FEED = 10_000
 """The most events a feed may produce, cancelled instances included; a larger feed fails its poll."""
 
 _PARSE_SECONDS = 60.0
-"""How long one parse may run when no sync call names a deadline (a direct identity read)."""
+"""How long one parse may run outside a bridge sync, which holds no deadline (a direct identity read)."""
 
 _TIMEZONES_PER_FEED = 100
 """The most VTIMEZONEs a feed may define; a larger feed fails its poll before it is parsed."""
@@ -214,6 +216,9 @@ class IcsCalendarBackend(CalendarBackend):
     def extract_events(self, stream: Any, page_bound: int, *, deadline: float | None = None) -> StreamPage:
         """Page the feed's events in key order; the feed's validators commit with the last page.
 
+        The parse reads the sync's deadline where every other parse does
+        (:meth:`_read_snapshot`), so ``deadline``, the same instant, is not read twice.
+
         Without a snapshot in hand, a delta poll asks conditionally on the committed
         validators and a 304 is no work; a baseline (a new or resynced stream)
         fetches unconditionally. A snapshot this adapter already holds (an identity
@@ -223,9 +228,10 @@ class IcsCalendarBackend(CalendarBackend):
         absence sweep's to find (:meth:`event_keys`).
         """
 
+        del deadline
         cursor = dict(stream.cursor or {})
         if "after" in cursor:
-            snapshot = self._events_now(stream, deadline=deadline)
+            snapshot = self._events_now(stream)
             return self.page(stream, snapshot.payloads, page_bound, after=cursor["after"], cursor=cursor["next"])
         baseline = stream.phase == StreamPhase.BASELINE
         held = self._snapshot
@@ -233,7 +239,7 @@ class IcsCalendarBackend(CalendarBackend):
             result = self._fetch({} if baseline else cursor)
             if result.status_code == 304:
                 return StreamPage((), cursor)
-            held = self._snapshot = self._read_snapshot(stream, result, deadline)
+            held = self._snapshot = self._read_snapshot(stream, result)
         elif not baseline and any(held.validators.values()) and held.validators == _validators(cursor):
             return StreamPage((), cursor)
         return self.page(stream, held.payloads, page_bound, after=None, cursor=held.validators)
@@ -249,7 +255,7 @@ class IcsCalendarBackend(CalendarBackend):
 
         return list(self._events_now(stream).payloads)
 
-    def _events_now(self, stream: Any, *, deadline: float | None = None) -> _Snapshot:
+    def _events_now(self, stream: Any) -> _Snapshot:
         """Return the snapshot this adapter holds, fetching the feed unconditionally when it holds none.
 
         One adapter serves one sync of the feed's partition. While it holds a
@@ -259,20 +265,21 @@ class IcsCalendarBackend(CalendarBackend):
         """
 
         if self._snapshot is None:
-            self._snapshot = self._read_snapshot(stream, self._fetch({}), deadline)
+            self._snapshot = self._read_snapshot(stream, self._fetch({}))
         return self._snapshot
 
-    def _read_snapshot(self, stream: Any, result: DownloadResult, deadline: float | None = None) -> _Snapshot:
+    def _read_snapshot(self, stream: Any, result: DownloadResult) -> _Snapshot:
         """Parse a fetched feed into its snapshot, kept with the validators it was served with.
 
-        Every parse runs against a deadline: the one the driver gave this call (an
-        extraction's argument, or ``BridgeImpl.deadline`` around an identity read or
-        the sweep), else :data:`_PARSE_SECONDS` from now when it gave none. A parse
-        that reaches it stops, and the next sync reads the feed again.
+        Every parse runs against a deadline: the bridge sync's (integrate's
+        ``sync_deadline()``), whichever call parses (an extraction, an identity read or
+        the sweep), else :data:`_PARSE_SECONDS` from now outside a sync. A parse that
+        reaches it stops, and the next sync reads the feed again.
         """
 
+        deadline = sync_deadline()
         if deadline is None:
-            deadline = self.deadline if self.deadline is not None else monotonic() + _PARSE_SECONDS
+            deadline = monotonic() + _PARSE_SECONDS
         return _Snapshot(
             {"etag": result.headers.get("etag", ""), "last_modified": result.headers.get("last-modified", "")},
             self._observe_feed(_read(result.content), zone=self.get_calendar(stream).timezone, deadline=deadline),
@@ -333,7 +340,7 @@ class IcsCalendarBackend(CalendarBackend):
         copies of one key, the higher ``SEQUENCE`` wins. Every produced record,
         cancelled instances included, counts against :data:`_EVENTS_PER_FEED`.
         ``zone`` is the calendar's; a parse that reaches the sync's ``deadline`` stops
-        as a transient refusal.
+        as a transient refusal, never one event's quarantine.
         """
 
         components = list(feed.walk("VEVENT"))
@@ -360,7 +367,10 @@ class IcsCalendarBackend(CalendarBackend):
                     feed_zone=feed_zone,
                     calendar_zone=zone,
                     master=masters.get(uid),
+                    deadline=deadline,
                 )
+            except IcsError:
+                raise
             except Exception:  # noqa: BLE001 — the driver quarantines semantic input per record.
                 events.setdefault(_own_key(component, uid, zones, local), (sequence, {"error": "invalid_event"}))
                 continue
@@ -371,6 +381,8 @@ class IcsCalendarBackend(CalendarBackend):
                 exceptions[instance] = self.observe(exception)
             if len(events) + len(exceptions) > _EVENTS_PER_FEED:
                 raise IcsError(f"The calendar feed has more than {_EVENTS_PER_FEED} events.")
+        # A deadline an unmappable event's own key swallowed (_own_key) still stops the parse.
+        _check_deadline(deadline)
         return {**exceptions, **{key: payload for key, (_sequence_, payload) in events.items()}}
 
 
@@ -450,12 +462,14 @@ def _transitions(component: Any, cap: int, deadline: float | None = None) -> int
 
     Every observance counts at least once, nested ones included (``walk()``, the
     VTIMEZONE itself excluded), so a flood of observances reaches the cap: its
-    ``DTSTART``, each ``RDATE``, and each instance of its ``RRULE`` up to
+    ``DTSTART``, each ``RDATE``, and each instance of each ``RRULE`` up to
     icalendar's own end (the rule's ``UNTIL`` or ``COUNT``, else
     :data:`_ZONE_RULE_END`). A yearly rule from year 1 counts as the 2,038 it is.
-    A rule finer than yearly, one whose day filters never match (the recurrence
-    owner's ``never_occurs``), or one that does not parse counts past the cap at
-    once. Each observance first checks the parse's ``deadline``.
+    A rule finer than yearly, one with no occurrence within about 30 years of its
+    observance's ``DTSTART`` (the recurrence owner's ``never_occurs``), or one that
+    does not parse counts past the cap at once. Each rule is counted only up to
+    what the cap has left, so many ``RRULE`` lines on one observance stop at the cap
+    too, and each first checks the parse's ``deadline``.
     """
 
     total = 0
@@ -463,12 +477,13 @@ def _transitions(component: Any, cap: int, deadline: float | None = None) -> int
         if observance is component:
             continue
         _check_deadline(deadline)
-        rules = _values(observance, "RRULE")
-        if rules:
-            unrolled = sum(_rule_transitions(observance, rule, cap - total + 1) for rule in rules)
-            total += max(1, unrolled)
-        else:
-            total += 1 + sum(len(rdate.dts) for rdate in _values(observance, "RDATE"))
+        unrolled = 0
+        for rule in _values(observance, "RRULE"):
+            _check_deadline(deadline)
+            unrolled += _rule_transitions(observance, rule, cap - total - unrolled + 1)
+            if total + unrolled > cap:
+                break
+        total += max(1, unrolled) + sum(len(rdate.dts) for rdate in _values(observance, "RDATE"))
         if total > cap:
             break
     return total
@@ -481,11 +496,12 @@ def _rule_transitions(observance: Any, rule: Any, limit: int) -> int:
         return limit
     try:
         text = rule.to_ical().decode()
-        if Recurrence(text).never_occurs():
-            return limit
         start = observance["DTSTART"].dt
-        anchor = datetime.combine(start, time.min) if not isinstance(start, datetime) else start
-        compiled = rrulestr(text, dtstart=anchor.replace(tzinfo=UTC))
+        anchor = (datetime.combine(start, time.min) if not isinstance(start, datetime) else start).replace(tzinfo=UTC)
+        # Probed from the observance's own start, so an ordinal BYDAY or BYSETPOS that never matches is refused too.
+        if Recurrence(text).never_occurs(anchor, zone="UTC"):
+            return limit
+        compiled = rrulestr(text, dtstart=anchor)
         ends = {"UNTIL", "COUNT"} & {str(key).upper() for key in rule}
         moments = compiled if ends else takewhile(lambda moment: moment <= _ZONE_RULE_END, compiled)
         return sum(1 for _moment in islice(moments, limit))
@@ -557,15 +573,26 @@ def _read(content: bytes) -> Any:
 
 
 def _events(
-    component: Any, *, uid: str, zones: _Zones, zone: str, feed_zone: str, calendar_zone: str, master: Any
+    component: Any,
+    *,
+    uid: str,
+    zones: _Zones,
+    zone: str,
+    feed_zone: str,
+    calendar_zone: str,
+    master: Any,
+    deadline: float | None = None,
 ) -> list[tuple[str, ParsedEvent]]:
     """Map one VEVENT to its keyed event, then a master's cancelled ``EXDATE`` instances.
 
     ``master`` is the series' master VEVENT when the feed carries it. An instance
     that states no ``TRANSP`` or ``CLASS`` takes its master's. A master's rule and
-    its ``EXDATE``s go through :func:`~angee.calendar.backends.cancelled_instances`,
-    which validates the rule (an invalid one makes the master an invalid event) and
-    keeps each ``EXDATE`` that is an instance. ``calendar_zone`` is the calendar's.
+    its ``EXDATE``s go through :func:`~angee.calendar.backends.excluded_dates`, which
+    refuses a master naming more than 10,000 of them before any is mapped, and
+    :func:`~angee.calendar.backends.cancelled_instances`, which validates the rule (an
+    invalid one makes the master an invalid event) and keeps each ``EXDATE`` that is
+    an instance, judged on its own window after the parse's ``deadline`` is checked.
+    ``calendar_zone`` is the calendar's.
     """
 
     start_prop = component["DTSTART"]
@@ -609,7 +636,11 @@ def _events(
     )
     observed = [(instance_key(uid, original_start) if original_start is not None else series_key(uid), event)]
     excluded = [_instant(value, tzid, zones, zone) for value, tzid in excluded_dates(component)] if recurrence else []
-    observed.extend(cancelled_instances(event, uid, excluded, calendar_zone=calendar_zone))
+    observed.extend(
+        cancelled_instances(
+            event, uid, excluded, calendar_zone=calendar_zone, check_deadline=lambda: _check_deadline(deadline)
+        )
+    )
     return observed
 
 

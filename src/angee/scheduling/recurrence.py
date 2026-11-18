@@ -22,15 +22,21 @@ period just before the window, not from ``DTSTART``: the parts ``DTSTART`` impli
 day) are made explicit first, so the occurrence set is the same. ``UNTIL`` still
 ends it. :meth:`Recurrence.occurrences`, :meth:`Recurrence.occurrences_after` and
 :meth:`Recurrence.get_occurrence_after` read this way, so a series' age costs
-nothing. A ``COUNT`` rule is read from ``DTSTART``: its count is the cap's.
+nothing, and :meth:`Recurrence.get_last_occurrence` reads back from ``UNTIL``, so
+its length costs nothing either. A ``COUNT`` rule is read from ``DTSTART``: its
+count is the cap's. dateutil scans a rule's gap between two occurrences
+internally, so a read also pays the gap to the first occurrence past its window:
+for a sparse rule, at most one Gregorian cycle of its periods.
 
 One cap, :data:`MAX_OCCURRENCES`, bounds every walk and every ``COUNT``: a window
 holding more, or spanning more of the rule's periods from where its walk starts,
 is refused (``series_too_long``), never truncated, and so is a ``COUNT`` series
-going on past its reach. At save, ``validate(through=…)`` counts an open series
-from ``DTSTART`` to a horizon against the same cap. :meth:`Recurrence.occurrences_after`
-refuses more unless the caller pages with ``limit``. An expansion that reaches past
-the representable dates is refused (``out_of_range``), never overflowed.
+going on past its reach. At save, ``validate(through=…)`` counts a series from
+``DTSTART`` to a horizon against the same cap. :meth:`Recurrence.occurrences_after`
+refuses more unless the caller pages with ``limit``. Moments are compared as
+instants, so a fall-back hour's two passes stay apart. A rule dateutil refuses at
+a start is ``invalid``; an expansion that reaches past the representable dates is
+refused (``out_of_range``), never overflowed.
 
 Parsing and expansion are delegated to ``python-dateutil`` (``rrulestr``), the
 stack's owner of RFC-5545. The timezone/window contract is documented on
@@ -40,9 +46,11 @@ stack's owner of RFC-5545. The timezone/window contract is documented on
 from __future__ import annotations
 
 import re
-from collections.abc import Callable, Iterable
-from datetime import UTC, datetime, time, timedelta
+from collections.abc import Callable, Iterable, Iterator
+from contextlib import contextmanager
+from datetime import UTC, datetime, timedelta
 from functools import lru_cache, wraps
+from itertools import takewhile
 from typing import Any, cast
 
 from dateutil.parser import parse
@@ -88,7 +96,9 @@ def _matches_no_day(rule: str) -> bool:
     if "BYSETPOS" in parts or re.search(r"[+-]?\d", parts.get("BYDAY", "")):
         return False
     probe = ";".join(["FREQ=YEARLY", *(f"{key}={value}" for key, value in sorted(parts.items()) if key in _DAY_PARTS)])
-    return rrulestr(probe, dtstart=_CYCLE_ANCHOR).after(_CYCLE_ANCHOR, inc=True) is None
+    compiled = _parse(probe, _CYCLE_ANCHOR)
+    with _dateutil_dates():
+        return compiled.after(_CYCLE_ANCHOR, inc=True) is None
 
 
 def _rules(compiled: rrule | rruleset) -> list[rrule]:
@@ -97,13 +107,37 @@ def _rules(compiled: rrule | rruleset) -> list[rrule]:
     return list(compiled._rrule) if isinstance(compiled, rruleset) else [compiled]
 
 
-def _in_range[**P, R](method: Callable[P, R]) -> Callable[P, R]:
-    """Refuse an expansion that reaches past the representable dates as a ``ValidationError``, never an overflow.
+def _invalid_rule() -> ValidationError:
+    return ValidationError("Enter a valid RFC-5545 recurrence rule (RRULE).", code="invalid")
 
-    A moment near year 1 or 9999 can leave Python's range once moved into a zone.
-    The refusal is that one row's: a save (a form, a sync's record) refuses it, and
-    a read over many rows skips it (``CalendarEventQuerySet.moments``) rather than
-    fail whatever it was part of.
+
+def _parse(rule: str, dtstart: datetime) -> rrule | rruleset:
+    """Parse ``rule`` anchored at ``dtstart`` through dateutil; a rule it refuses there is ``invalid``.
+
+    A rule can parse at one start and not at another (dateutil refuses a
+    sub-daily ``BYHOUR`` its ``INTERVAL`` never reaches from that start's hour), so
+    every parse, at any start, refuses the same way.
+    """
+
+    try:
+        return rrulestr(rule, dtstart=dtstart)
+    except (ValueError, TypeError, OverflowError) as exc:
+        raise _invalid_rule() from exc
+
+
+def _out_of_range() -> ValidationError:
+    return ValidationError(
+        "This recurrence reaches past the dates it can represent (years 1 to 9999).", code="out_of_range"
+    )
+
+
+def _in_range[**P, R](method: Callable[P, R]) -> Callable[P, R]:
+    """Refuse a read whose moment leaves Python's range in a zone (``OverflowError``) as ``out_of_range``.
+
+    A moment near year 1 or 9999 can leave the range once moved into a zone. The
+    refusal is that one row's: a save (a form, a sync's record) refuses it, and a
+    read over many rows skips it (``CalendarEventQuerySet.moments``) rather than fail
+    whatever it was part of. dateutil's own dates are refused by :func:`_dateutil_dates`.
     """
 
     @wraps(method)
@@ -111,11 +145,26 @@ def _in_range[**P, R](method: Callable[P, R]) -> Callable[P, R]:
         try:
             return method(*args, **kwargs)
         except OverflowError as exc:
-            raise ValidationError(
-                "This recurrence reaches past the last representable date.", code="out_of_range"
-            ) from exc
+            raise _out_of_range() from exc
 
     return bounded
+
+
+@contextmanager
+def _dateutil_dates() -> Iterator[None]:
+    """Refuse dateutil building a date before year 1 or past 9999 (a ``ValueError``) as ``out_of_range``.
+
+    Around a period it steps, dateutil builds that period's neighbours (a
+    week-numbered year's), which can fall outside Python's dates. Only a parsed
+    rule's construction (``replace``) and iteration run under it, so no other
+    ``ValueError`` (a caller's contract, a parse :func:`_parse` refuses) is taken
+    for one.
+    """
+
+    try:
+        yield
+    except ValueError as exc:
+        raise _out_of_range() from exc
 
 
 _LONGEST_PERIOD = (
@@ -130,10 +179,32 @@ _LONGEST_PERIOD = (
 """The longest span of one period of each frequency, in :attr:`Recurrence.FREQUENCIES` order."""
 
 
-def _series_too_long() -> ValidationError:
-    return ValidationError(
-        f"This recurrence passes {MAX_OCCURRENCES} occurrences from its start.", code="series_too_long"
-    )
+def _series_too_long(*, window: bool) -> ValidationError:
+    """The cap's refusal: of a window read from the period before it, or of a series walked from its start."""
+
+    if window:
+        message = (
+            f"This window holds more than {MAX_OCCURRENCES} occurrences of the recurrence, "
+            f"or spans more than {MAX_OCCURRENCES} of its periods."
+        )
+    else:
+        message = (
+            f"This recurrence passes {MAX_OCCURRENCES} occurrences, "
+            f"or {MAX_OCCURRENCES} of its periods, from its start."
+        )
+    return ValidationError(message, code="series_too_long")
+
+
+def utc_stamp(moment: datetime) -> str:
+    """Return an aware moment as an RFC 5545 UTC date-time, ``YYYYMMDDTHHMMSSZ``.
+
+    The one stamp of an instant: a rule's ``UNTIL``, an occurrence id's and an
+    instance key's suffix. ``isoformat`` pads every year to four digits on every
+    platform; ``strftime`` need not.
+    """
+
+    stamp = moment.astimezone(UTC).replace(tzinfo=None).isoformat(timespec="seconds")
+    return stamp.replace("-", "").replace(":", "") + "Z"
 
 
 def moment_after(moment: datetime, span: timedelta) -> datetime | None:
@@ -150,38 +221,48 @@ def moment_after(moment: datetime, span: timedelta) -> datetime | None:
         return None
 
 
+def _span(compiled: rrule | rruleset, periods: int) -> timedelta | None:
+    """Return how long ``periods`` of the rule's shortest period last at most; ``None`` past every span.
+
+    A span too long to represent (``YEARLY;INTERVAL=300``, ten thousand times)
+    reaches past every date.
+    """
+
+    try:
+        return min(_LONGEST_PERIOD[rule._freq] * rule._interval for rule in _rules(compiled)) * periods
+    except OverflowError:
+        return None
+
+
 def _reach(compiled: rrule | rruleset, anchor: datetime) -> datetime | None:
     """Return how far :data:`MAX_OCCURRENCES` of the rule's periods reach from ``anchor``; ``None`` past the range.
 
     A sparse rule (a February 29 filter on a daily rule) costs dateutil one step a
-    period whether or not it matches, so a walk stopped here bounds the steps as
-    well as the occurrences. A span too long to represent (``YEARLY;INTERVAL=300``)
-    reaches past every date, as does one that lands past it.
+    period whether or not it matches, so a walk stopped here bounds the steps up to
+    its last occurrence as well as the occurrences.
     """
 
-    try:
-        span = min(_LONGEST_PERIOD[rule._freq] * rule._interval for rule in _rules(compiled)) * MAX_OCCURRENCES
-    except OverflowError:
-        return None
-    return moment_after(anchor, span)
+    span = _span(compiled, MAX_OCCURRENCES)
+    return moment_after(anchor, span) if span is not None else None
 
 
-def _walk(moments: Iterable[datetime], before: datetime | None) -> tuple[list[datetime], bool]:
-    """Collect a series' occurrences from its start until ``before``, counting each against the cap.
+def _walk(moments: Iterable[datetime], before: datetime | None, *, window: bool) -> tuple[list[datetime], bool]:
+    """Collect a walk's occurrences until the instant ``before``, counting each against the cap.
 
     Returns them and whether the series goes on at or past ``before``. Past
-    :data:`MAX_OCCURRENCES` occurrences from the start the series refuses
-    (``series_too_long``): a window far from the start costs as much as the
-    occurrences before it, so the cap bounds the walk, not only what it returns.
+    :data:`MAX_OCCURRENCES` occurrences the walk refuses (``series_too_long``): the
+    ``window`` it reads from the period before it holds too many, or the series it
+    walks from its start does.
     """
 
     collected: list[datetime] = []
-    for moment in moments:
-        if before is not None and moment >= before:
-            return collected, True
-        if len(collected) >= MAX_OCCURRENCES:
-            raise _series_too_long()
-        collected.append(moment)
+    with _dateutil_dates():
+        for moment in moments:
+            if before is not None and moment >= before:
+                return collected, True
+            if len(collected) >= MAX_OCCURRENCES:
+                raise _series_too_long(window=window)
+            collected.append(moment)
     return collected, False
 
 
@@ -189,42 +270,40 @@ _IMPLIED_PARTS = ("bymonth", "bymonthday", "byweekday", "byhour", "byminute", "b
 """The rule parts dateutil derives from ``DTSTART`` when a rule leaves them out."""
 
 
-def _period_start(compiled: rrule, anchor: datetime, target: datetime) -> datetime:
+def _period_start(compiled: rrule, anchor: datetime, target: datetime) -> datetime | None:
     """Return the start of the rule period just before the one holding ``target``, in ``anchor``'s wall clock.
 
     Periods are ``FREQ`` × ``INTERVAL`` counted from ``DTSTART`` (``anchor``), as
-    dateutil steps them: years, months, weeks from the week start (``WKST``) that
-    holds ``DTSTART``, days, hours, minutes or seconds. The period before is read
-    too, so an occurrence a period reaches past its own end (an ISO week of a
-    yearly ``BYWEEKNO``) is never lost.
+    dateutil steps them: months (twelve a year), days (seven a week, from the week
+    start, ``WKST``, that holds ``DTSTART``), or the hours, minutes or seconds of a
+    finer rule. The period before is read too, so an occurrence a period reaches
+    past its own end (an ISO week of a yearly ``BYWEEKNO``) is never lost. The
+    periods are counted first, and ``None`` returned when that period is not past
+    the one holding ``DTSTART``: no date before it (none before year 1) is built.
     """
 
     start = anchor.replace(tzinfo=None)
     moment = target.astimezone(anchor.tzinfo).replace(tzinfo=None)
-    step = compiled._interval
-    if compiled._freq == 0:
-        periods = (moment.year - start.year) // step - 1
-        return datetime(start.year + periods * step, 1, 1, tzinfo=anchor.tzinfo)
-    if compiled._freq == 1:
-        month = start.year * 12 + start.month - 1
-        periods = (moment.year * 12 + moment.month - 1 - month) // step - 1
-        month += periods * step
-        return datetime(month // 12, month % 12 + 1, 1, tzinfo=anchor.tzinfo)
-    if compiled._freq == 2:
-        week = start.date() - timedelta(days=(start.weekday() - compiled._wkst) % 7)
-        periods = (moment.date() - week).days // (7 * step) - 1
-        return datetime.combine(week + timedelta(weeks=periods * step), time.min, tzinfo=anchor.tzinfo)
-    if compiled._freq == 3:
-        periods = (moment.date() - start.date()).days // step - 1
-        return datetime.combine(start.date() + timedelta(days=periods * step), time.min, tzinfo=anchor.tzinfo)
-    unit = _LONGEST_PERIOD[compiled._freq]
-    origin = start.replace(microsecond=0)
-    if compiled._freq <= 5:
-        origin = origin.replace(second=0)
-    if compiled._freq == 4:
-        origin = origin.replace(minute=0)
-    periods = (moment - origin) // (unit * step) - 1
-    return (origin + unit * step * periods).replace(tzinfo=anchor.tzinfo)
+    freq, step = compiled._freq, compiled._interval
+    if freq <= 1:
+        months = 12 * step if freq == 0 else step
+        origin = start.year * 12 + (start.month - 1 if freq == 1 else 0)
+        periods = (moment.year * 12 + moment.month - 1 - origin) // months - 1
+        if periods < 1:
+            return None
+        year, month = divmod(origin + periods * months, 12)
+        return datetime(year, month + 1, 1)
+    if freq <= 3:
+        days = 7 * step if freq == 2 else step
+        origin = start.toordinal() - ((start.weekday() - compiled._wkst) % 7 if freq == 2 else 0)
+        periods = (moment.toordinal() - origin) // days - 1
+        return datetime.fromordinal(origin + periods * days) if periods >= 1 else None
+    unit = _LONGEST_PERIOD[freq] * step
+    whole = start.replace(
+        minute=0 if freq == 4 else start.minute, second=start.second if freq == 6 else 0, microsecond=0
+    )
+    periods = (moment - whole) // unit - 1
+    return whole + unit * periods if periods >= 1 else None
 
 
 def _reanchored(compiled: rrule | rruleset, anchor: datetime, target: datetime | None) -> tuple[Any, datetime]:
@@ -237,23 +316,25 @@ def _reanchored(compiled: rrule | rruleset, anchor: datetime, target: datetime |
     from ``DTSTART`` unchanged.
     """
 
-    if target is None or not isinstance(compiled, rrule) or compiled._count is not None or target <= anchor:
+    if target is None or not isinstance(compiled, rrule) or compiled._count is not None:
         return compiled, anchor
-    start = _period_start(compiled, anchor, target)
-    if start <= anchor:
+    period = _period_start(compiled, anchor, target)
+    if period is None:
         return compiled, anchor
+    start = period.replace(tzinfo=anchor.tzinfo)
     implied = {
         name: tuple(sorted(resolved)) if isinstance(resolved, set) else resolved
         for name in _IMPLIED_PARTS
         if compiled._original_rule.get(name) is None and (resolved := getattr(compiled, f"_{name}"))
     }
-    return compiled.replace(dtstart=start, **implied), start
+    with _dateutil_dates():
+        return compiled.replace(dtstart=start, **implied), start
 
 
 def _series(
     compiled: rrule | rruleset, anchor: datetime, before: datetime | None, *, after: datetime | None = None
 ) -> list[datetime]:
-    """Return a series' occurrences before ``before`` (``None``: all of it), within its bounds.
+    """Return a series' occurrences before the instant ``before`` (``None``: all of it), within its bounds.
 
     The one walk :meth:`Recurrence.occurrences`, :meth:`Recurrence.get_last_occurrence`
     and ``validate(through=…)`` share. Given ``after`` (a window's start), a rule
@@ -264,20 +345,49 @@ def _series(
     goes on past it, so a bounded series read across its own end never is.
     """
 
-    compiled, anchor = _reanchored(compiled, anchor, after)
-    rules = _rules(compiled)
-    untils = [rule._until for rule in rules]
+    compiled, start = _reanchored(compiled, anchor, after)
+    window = start != anchor
+    untils = [rule._until for rule in _rules(compiled)]
     if all(until is not None for until in untils):
         end = moment_after(max(cast(list[datetime], untils)), timedelta(microseconds=1))
         if end is not None:
             before = end if before is None else min(before, end)
-    reach = _reach(compiled, anchor)
+    reach = _reach(compiled, start)
     if reach is not None and (before is None or before > reach):
-        moments, goes_on = _walk(compiled, reach)
+        moments, goes_on = _walk(compiled, reach, window=window)
         if goes_on:
-            raise _series_too_long()
+            raise _series_too_long(window=window)
         return moments
-    return _walk(compiled, before)[0]
+    return _walk(compiled, before, window=window)[0]
+
+
+_LOOKBACK = (1, 64, MAX_OCCURRENCES)
+"""How many rule periods before its ``UNTIL`` a series' last occurrence is looked for, in turn."""
+
+
+def _last(compiled: rrule | rruleset, anchor: datetime) -> datetime | None:
+    """Return a bounded series' last occurrence (a series whose every rule ends), or ``None`` when it has none.
+
+    A single rule without ``COUNT`` is read back from its ``UNTIL``: re-anchored a
+    period before it, then more (:data:`_LOOKBACK`), so its length costs nothing; one
+    whose last occurrence lies further back still is walked from ``DTSTART``. A
+    ``COUNT`` rule or a rule set is walked from ``DTSTART`` (:func:`_series`).
+    """
+
+    if isinstance(compiled, rrule) and compiled._count is None:
+        until = cast(datetime, compiled._until)
+        for periods in _LOOKBACK:
+            span = _span(compiled, periods)
+            target = moment_after(until, -span) if span is not None else None
+            if target is None:
+                break
+            rule, start = _reanchored(compiled, anchor, target)
+            with _dateutil_dates():
+                last = rule.before(until, inc=True)
+            if last is not None or start == anchor:
+                return last
+    series = _series(compiled, anchor, None)
+    return series[-1] if series else None
 
 
 def _open_ended(rule: str) -> str:
@@ -338,7 +448,9 @@ class Recurrence:
         :data:`NEVER_OCCURS_HORIZON` of it is refused too (``never_occurs``), and,
         given ``through``, one with more than :data:`MAX_OCCURRENCES` occurrences from
         ``dtstart`` before it (``series_too_long``): the save-time cap a series is
-        held to, counted from its start whatever window a later read asks for.
+        held to, counted from its start whatever window a later read asks for. A rule
+        dateutil refuses at ``dtstart`` (a sub-daily ``BYHOUR`` its ``INTERVAL`` never
+        reaches from that hour) is ``invalid`` too.
         """
 
         if not self.rule:
@@ -347,13 +459,7 @@ class Recurrence:
             raise ValidationError(
                 "Enter one bare recurrence rule (FREQ=…), without DTSTART, EXDATE or RDATE lines.", code="invalid"
             )
-        try:
-            rules = _rules(self._compile(_VALIDATION_ANCHOR))
-        except (ValueError, TypeError, OverflowError) as exc:
-            raise ValidationError(
-                "Enter a valid RFC-5545 recurrence rule (RRULE).",
-                code="invalid",
-            ) from exc
+        rules = _rules(self._compile(_VALIDATION_ANCHOR))
         if finest is not None and any(rule._freq > self.FREQUENCIES.index(finest) for rule in rules):
             raise ValidationError(
                 f"Choose a rule that repeats at most {finest.lower()}.", code="too_frequent"
@@ -373,9 +479,8 @@ class Recurrence:
     def _count_through(self, dtstart: datetime, through: datetime, *, zone: str) -> None:
         """Refuse a series with more than :data:`MAX_OCCURRENCES` occurrences from ``dtstart`` before ``through``."""
 
-        tz = get_zone_info(zone)
-        anchor = dtstart.astimezone(tz)
-        _series(self._compile(anchor), anchor, through.astimezone(tz))
+        anchor = dtstart.astimezone(get_zone_info(zone))
+        _series(self._compile(anchor), anchor, through.astimezone(UTC))
 
     @_in_range
     def occurrences(
@@ -403,20 +508,19 @@ class Recurrence:
         series is read from the period just before ``window_start`` (a rule without
         ``COUNT``) or from ``dtstart`` (:func:`_series`): past :data:`MAX_OCCURRENCES`
         occurrences before ``window_end``, or going on past its reach, it is refused
-        (``series_too_long``), never truncated. Two wall times a DST change maps to
-        one instant count once.
+        (``series_too_long``), never truncated. The window holds instants: the two
+        passes of a fall-back hour stay apart, and two wall times a DST change maps
+        to one instant (the spring gap) count once.
         """
 
         require_aware(dtstart=dtstart, window_start=window_start, window_end=window_end)
-        tz = get_zone_info(zone)
-        after = window_start.astimezone(tz)
-        before = window_end.astimezone(tz)
-        anchor = dtstart.astimezone(tz)
+        anchor = dtstart.astimezone(get_zone_info(zone))
+        first, last = window_start.astimezone(UTC), window_end.astimezone(UTC)
         if self.never_occurs():
             return []
-        candidates = _series(self._compile(anchor), anchor, before, after=after) if self.rule else [anchor]
-        # Two wall times a DST change maps to one instant (the spring gap) count once.
-        return list(dict.fromkeys(moment.astimezone(UTC) for moment in candidates if after <= moment < before))
+        candidates = _series(self._compile(anchor), anchor, last, after=first) if self.rule else [anchor]
+        found = (moment.astimezone(UTC) for moment in candidates)
+        return list(dict.fromkeys(moment for moment in found if first <= moment < last))
 
     @_in_range
     def get_occurrence_after(self, dtstart: datetime, moment: datetime, *, zone: str = "") -> datetime | None:
@@ -433,17 +537,17 @@ class Recurrence:
         require_aware(dtstart=dtstart, moment=moment)
         tz = get_zone_info(zone)
         anchor = dtstart.astimezone(tz)
+        instant = moment.astimezone(UTC)
         if not self.rule:
-            following: datetime | None = anchor if anchor > moment else None
+            following: datetime | None = anchor if anchor.astimezone(UTC) > instant else None
         elif self.never_occurs():
             following = None
         else:
-            local = moment.astimezone(tz)
-            compiled, _start = _reanchored(self._compile(anchor), anchor, local)
-            following = compiled.after(local, inc=False)
+            compiled, _start = _reanchored(self._compile(anchor), anchor, instant)
+            with _dateutil_dates():
+                following = compiled.after(instant, inc=False)
         return following.astimezone(UTC) if following is not None else None
 
-    @_in_range
     def occurrences_after(
         self,
         dtstart: datetime,
@@ -469,22 +573,7 @@ class Recurrence:
             raise ValueError(f"An occurrence limit must be between 0 and {MAX_OCCURRENCES}.")
         if not cap or until <= after:
             return []
-        tz = get_zone_info(zone)
-        anchor = dtstart.astimezone(tz)
-        if not self.rule:
-            moments = [anchor] if after < anchor <= until else []
-        elif self.never_occurs():
-            moments = []
-        else:
-            end = until.astimezone(tz)
-            moments = []
-            local = after.astimezone(tz)
-            compiled, _start = _reanchored(self._compile(anchor), anchor, local)
-            for moment in compiled.xafter(local, count=cap + 1, inc=False):
-                if moment > end:
-                    break
-                moments.append(moment)
-        found = list(dict.fromkeys(moment.astimezone(UTC) for moment in moments))
+        found = self._following(dtstart, after.astimezone(UTC), until.astimezone(UTC), zone=zone, count=cap + 1)
         if len(found) > cap:
             if limit is None:
                 raise ValidationError(
@@ -493,6 +582,25 @@ class Recurrence:
                 )
             found = found[:cap]
         return found
+
+    @_in_range
+    def _following(
+        self, dtstart: datetime, first: datetime, last: datetime, *, zone: str, count: int
+    ) -> list[datetime]:
+        """Return at most ``count`` distinct occurrences in the instants ``(first, last]``, as aware UTC."""
+
+        anchor = dtstart.astimezone(get_zone_info(zone))
+        if not self.rule:
+            moments = [anchor] if first < anchor <= last else []
+        elif self.never_occurs():
+            moments = []
+        else:
+            compiled, _start = _reanchored(self._compile(anchor), anchor, first)
+            with _dateutil_dates():
+                moments = list(
+                    takewhile(lambda moment: moment <= last, compiled.xafter(first, count=count, inc=False))
+                )
+        return list(dict.fromkeys(moment.astimezone(UTC) for moment in moments))
 
     @_in_range
     def never_occurs(self, dtstart: datetime | None = None, *, zone: str = "") -> bool:
@@ -521,10 +629,14 @@ class Recurrence:
         latest_year = (datetime.max - NEVER_OCCURS_HORIZON).year - 1
         cycles = max(0, (latest_year - local.year) // _GREGORIAN_CYCLE_YEARS)
         probe = local.replace(year=local.year + cycles * _GREGORIAN_CYCLE_YEARS)
-        first = rrulestr(_open_ended(self.rule), dtstart=probe).after(probe, inc=True)
+        probed = _parse(_open_ended(self.rule), probe)
+        with _dateutil_dates():
+            first = probed.after(probe, inc=True)
         if first is None or first - probe > NEVER_OCCURS_HORIZON:
             return True
-        return self._compile(anchor).after(anchor, inc=True) is None
+        compiled = self._compile(anchor)
+        with _dateutil_dates():
+            return compiled.after(anchor, inc=True) is None
 
     @_in_range
     def get_last_occurrence(self, dtstart: datetime, *, zone: str = "") -> datetime | None:
@@ -534,8 +646,11 @@ class Recurrence:
         set with one rule that has neither repeats for ever. An empty rule is the
         single ``dtstart``, and a rule that never occurs (:meth:`never_occurs`) has
         no last occurrence. The series unrolls in ``zone`` (blank: the project
-        ``TIME_ZONE``), as :meth:`occurrences` expands it. A series of more than
-        :data:`MAX_OCCURRENCES` occurrences is refused (``series_too_long``).
+        ``TIME_ZONE``), as :meth:`occurrences` expands it. A rule that ends ``UNTIL`` is
+        read back from it (re-anchored), so its length costs nothing; a ``COUNT``
+        rule is walked from ``dtstart`` (its count is the cap's), as is one whose
+        last occurrence lies more than :data:`MAX_OCCURRENCES` of its periods before
+        its ``UNTIL``, refused past them (``series_too_long``).
         """
 
         require_aware(dtstart=dtstart)
@@ -548,14 +663,16 @@ class Recurrence:
         compiled = self._compile(anchor)
         if not all(rule._count is not None or rule._until is not None for rule in _rules(compiled)):
             return None
-        series = _series(compiled, anchor, None)
-        return series[-1].astimezone(UTC) if series else None
+        last = _last(compiled, anchor)
+        return last.astimezone(UTC) if last is not None else None
 
     def _compile(self, anchor: datetime) -> rrule | rruleset:
         """Parse the rule anchored at an aware local ``anchor`` (a dateutil rrule/rruleset).
 
-        A floating ``UNTIL`` past the last representable UTC instant (9999-12-31 in
-        a zone behind UTC) ends with the representable range.
+        A floating ``UNTIL`` past the representable UTC instants ends with their
+        range: at the last one (9999-12-31 in a zone behind UTC), or the first (year
+        1 in a zone ahead of it). A rule dateutil refuses here is ``invalid``
+        (:func:`_parse`).
         """
 
         def local_until(match: re.Match[str]) -> str:
@@ -566,9 +683,12 @@ class Recurrence:
                 try:
                     bound = until.replace(tzinfo=anchor.tzinfo).astimezone(UTC)
                 except OverflowError:
-                    bound = datetime.max.replace(tzinfo=UTC)
-                return "UNTIL=" + bound.strftime("%Y%m%dT%H%M%SZ")
+                    bound = (datetime.min if until.year == 1 else datetime.max).replace(tzinfo=UTC)
+                return "UNTIL=" + utc_stamp(bound)
             return match[0]
 
-        rule = re.sub(r"(?im)(?<![A-Z])UNTIL=([^;\s]+)", local_until, self.rule)
-        return rrulestr(rule, dtstart=anchor)
+        try:
+            rule = re.sub(r"(?im)(?<![A-Z])UNTIL=([^;\s]+)", local_until, self.rule)
+        except (ValueError, OverflowError) as exc:
+            raise _invalid_rule() from exc
+        return _parse(rule, anchor)

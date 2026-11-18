@@ -188,11 +188,22 @@ live in code docstrings.
   `Recurrence.get_last_occurrence` returns where a series ends, `None` when any
   rule it holds is open-ended. Recurrence is bounded for every consumer: a `COUNT`
   over `MAX_OCCURRENCES` (10,000) is invalid and an expansion past it
-  raises `ValidationError` instead of running on, counting every occurrence from
-  the series' start (`series_too_long`); a rule is one bare `RRULE`, and one with no
+  raises `ValidationError` instead of running on (`series_too_long`): a read is
+  re-anchored at its window, like libical's, and a save counts a series from its
+  start to a horizon; a rule is one bare `RRULE`, and one with no
   occurrence within about 30 years of its start is refused (`never_occurs`);
   `RecurrenceField(finest_frequency=…)` refuses finer rules (a calendar event
   repeats at most daily). A calendar read skips a row it cannot expand.
+  A `refuse` calendar judges an event's overlap only from now, over two years
+  and no further than the event ends, a series and a single event alike: an event
+  wholly before now is never judged, and nothing is judged against its past. The
+  check fails closed: a save beside another busy event it cannot expand is
+  refused (`unexpandable`, naming that event) where a read skips it; a free one,
+  or the saved event's own series, is skipped. `angee.integrate.sync` gains the
+  sync's deadline seam, `sync_deadline()` and `sync_deadline_context(deadline)`:
+  the bridge sync sets it once per cycle and every stream driver given a
+  `deadline=` enters it, so an adapter's nested parse or identity read stops by
+  it.
   **Host upgrade:** the `calendar` app label carries the deleted `arp.calendar`'s
   migration history and no data moves (clean slate). Each host writes a `calendar`
   migration (`0003`) that purges the old event, attendee and history rows and the

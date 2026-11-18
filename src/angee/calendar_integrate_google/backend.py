@@ -99,6 +99,7 @@ from angee.integrate.streams import (
     StreamPage,
     WriteBackResult,
 )
+from angee.integrate.sync import sync_deadline
 from angee.scheduling.zones import get_zone_info, get_zone_names
 
 CALENDAR_READONLY = "https://www.googleapis.com/auth/calendar.readonly"
@@ -325,9 +326,10 @@ class GoogleCalendarBackend(_GoogleBackend):
         return sorted(key for key, payload in self._listing[1].items() if payload is not None)
 
     def _require_time(self) -> None:
-        """Stop a listing that reaches the cycle's deadline: the next sync lists again."""
+        """Stop a listing that reaches the cycle's deadline (``sync_deadline()``): the next sync lists again."""
 
-        if self.deadline is not None and monotonic() > self.deadline:
+        deadline = sync_deadline()
+        if deadline is not None and monotonic() > deadline:
             raise IntegrationError(
                 "Listing Google Calendar took too long; the next sync lists it again.", transient=True
             )
@@ -408,7 +410,11 @@ class GoogleCalendarBackend(_GoogleBackend):
             if event.recurrence:
                 local = event.timezone or zone
                 exdates = [_instant(value, tzid, local) for value, tzid in excluded_dates(_recurrence(item))]
-                observed.extend(cancelled_instances(event, event_id, exdates, calendar_zone=zone))
+                observed.extend(
+                    cancelled_instances(event, event_id, exdates, calendar_zone=zone, check_deadline=self._require_time)
+                )
+        except IntegrationError:
+            raise
         except Exception:  # noqa: BLE001 — the driver quarantines semantic input per record.
             return [(_own_key(item, series_zone), {"error": "invalid_event"})]
         return [(key, self.observe(event)) for key, event in observed]

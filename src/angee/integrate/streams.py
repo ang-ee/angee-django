@@ -42,7 +42,7 @@ from angee.integrate.states import (
     StreamState,
     SyncFailureKind,
 )
-from angee.integrate.sync import current_progress_bridge, progress_bridge_context
+from angee.integrate.sync import current_progress_bridge, progress_bridge_context, sync_deadline_context
 from angee.jobs.timeouts import task_time_budget
 from angee.provenance.context import changeset, current_changeset
 
@@ -459,7 +459,7 @@ def advance_stream(
         raise RuntimeError("Stream extraction must run outside a database transaction.")
     if page_bound < 1:
         raise ValueError("page_bound must be positive.")
-    with system_context(reason="integrate.stream.advance"):
+    with system_context(reason="integrate.stream.advance"), sync_deadline_context(deadline):
         stream.refresh_from_db()
         if stream.resync_required:
             return reset_stream(stream, cursor={})
@@ -758,7 +758,11 @@ def push_stream(
         raise RuntimeError("Remote writes must run outside a database transaction.")
     count = 0
     failures: list[str] = []
-    with changeset(fresh=True, activity="push", origin=stream), system_context(reason="integrate.stream.push"):
+    with (
+        changeset(fresh=True, activity="push", origin=stream),
+        system_context(reason="integrate.stream.push"),
+        sync_deadline_context(deadline),
+    ):
         stream.refresh_from_db()
         if not stream.writes_back or stream.adopts_baseline():
             return PageResult(stream, exhausted=True)
@@ -874,16 +878,9 @@ def _push_candidates(
                 yield candidate, link
 
 
-def read_stream_keys(
-    adapter: BridgeImpl, stream: Any, keys: Sequence[str], *, deadline: float | None = None
-) -> tuple[RecordChange, ...]:
-    """Read a bounded identity set and enforce the declared adapter contract.
-
-    ``deadline`` is the sync's, when the driver holds one: the adapter reads it as
-    :attr:`BridgeImpl.deadline` for this read only.
-    """
-    with adapter.until(deadline):
-        records = tuple(islice(adapter.read_keys(stream, keys), len(keys) + 1))
+def read_stream_keys(adapter: BridgeImpl, stream: Any, keys: Sequence[str]) -> tuple[RecordChange, ...]:
+    """Read a bounded identity set and enforce the declared adapter contract."""
+    records = tuple(islice(adapter.read_keys(stream, keys), len(keys) + 1))
     if (
         any(not isinstance(record, RecordChange) for record in records)
         or len(records) != len(keys)
@@ -912,7 +909,11 @@ def reconcile_stream(stream: Any, adapter: BridgeImpl, *, page_bound: int = 100,
         raise RuntimeError("Remote enumeration must run outside a database transaction.")
     if page_bound < 1:
         raise ValueError("page_bound must be positive.")
-    with changeset(fresh=True, activity="pull", origin=stream), system_context(reason="integrate.stream.reconcile"):
+    with (
+        changeset(fresh=True, activity="pull", origin=stream),
+        system_context(reason="integrate.stream.reconcile"),
+        sync_deadline_context(deadline),
+    ):
         manager = type(stream).objects
         identity_reads = adapter.supports_identity_reads
         stream.refresh_from_db()
@@ -966,8 +967,7 @@ def reconcile_stream(stream: Any, adapter: BridgeImpl, *, page_bound: int = 100,
                 reconcile_state=state,
             ).stream
         elif state["phase"] == "enumerate":
-            with adapter.until(deadline):
-                keys = tuple(islice(adapter.enumerate_keys(locked, after=state["after"]), page_bound))
+            keys = tuple(islice(adapter.enumerate_keys(locked, after=state["after"]), page_bound))
             if any(not isinstance(key, str) or not key for key in keys) or len(keys) != len(set(keys)):
                 raise AdapterContractError("enumerate_keys must yield unique nonempty external keys.")
             if state["after"] in keys:
@@ -976,9 +976,7 @@ def reconcile_stream(stream: Any, adapter: BridgeImpl, *, page_bound: int = 100,
             if not keys:
                 next_state["phase"] = "roots"
             if identity_reads and keys:
-                page = StreamPage(
-                    read_stream_keys(adapter, locked, keys, deadline=deadline), original_cursor, exhausted=False
-                )
+                page = StreamPage(read_stream_keys(adapter, locked, keys), original_cursor, exhausted=False)
                 locked = _apply_page(
                     locked,
                     adapter,
@@ -1033,12 +1031,8 @@ def begin_stream_cycle(
     *,
     page_bound: int = 100,
     force_apply: frozenset[str] = frozenset(),
-    deadline: float | None = None,
 ) -> Any:
     """Re-read due replica identities, or request a logged baseline fallback.
-
-    ``deadline`` is the sync's, when the driver holds one; the identity read runs
-    against it (:func:`read_stream_keys`).
 
     Call once per cycle before advance_stream, outside any transaction. Adapters
     declaring supports_identity_reads return RecordChange observations through
@@ -1097,7 +1091,7 @@ def begin_stream_cycle(
             if not keys:
                 return stream
             original_cursor = _validated_cursor(stream.cursor)
-        records = read_stream_keys(adapter, stream, tuple(sorted(keys)), deadline=deadline)
+        records = read_stream_keys(adapter, stream, tuple(sorted(keys)))
         return _apply_page(
             stream,
             adapter,
@@ -1174,7 +1168,7 @@ def _drain(bridge: Any, adapter: BridgeImpl, definition: StreamDefinition, deadl
             deadline=deadline,
         )
         stage = "rescan"
-        stream = begin_stream_cycle(stream, adapter, deadline=deadline)
+        stream = begin_stream_cycle(stream, adapter)
         landed, appeared, resets = 0, 0, 0
         page_bound = max(1, int(bridge.config.get("sync_page_bound", 100)))
         exhausted = False
@@ -1386,7 +1380,9 @@ def sync_bridge(bridge: Any) -> int:
     deadline = monotonic() + max(0.0, min(worker_budget, float(config.get("sync_time_budget", worker_budget))))
     adapter = bridge.capability_impl
     try:
-        with system_context(reason="integrate.bridge.streams"):
+        # The cycle's deadline is set once: _drain's identity reads and sweep read it, and each
+        # pool worker inherits it through its copied context.
+        with system_context(reason="integrate.bridge.streams"), sync_deadline_context(deadline):
             parallelism = max(1, int(config.get("sync_parallelism", 4)))
             if adapter.sync_parallelism is not None:
                 parallelism = min(parallelism, adapter.sync_parallelism)

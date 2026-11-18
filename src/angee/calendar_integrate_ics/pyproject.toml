@@ -10,5 +10,9 @@ dynamic = ["entry-points"]
 
 [tool.angee]
 
+[[tool.angee.resources.master]]
+path = "master/010_integrate.vendor.yaml"
+adopt = "slug"
+
 [tool.angee.platform]
 category = "Integration"

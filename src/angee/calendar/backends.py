@@ -34,12 +34,13 @@ refused write in the link's outbox.
 from __future__ import annotations
 
 import hashlib
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from datetime import UTC, date, datetime
 from typing import Any, ClassVar
 
 from django.apps import apps
+from django.core.exceptions import ValidationError
 from icalendar import Component
 
 from angee.base.serialization import canonical_json_sha256
@@ -50,6 +51,7 @@ from angee.integrate.impl import BridgeImpl
 from angee.integrate.models import IntegrationLifecycle
 from angee.integrate.states import LinkStatus, StreamDefinition, StreamDirection, SyncFailureKind
 from angee.integrate.streams import ApplyResult, RecordChange, SemanticError, StreamPage
+from angee.scheduling.recurrence import MAX_OCCURRENCES, utc_stamp
 
 CALENDARS_STREAM = "calendars"
 """The stream of a source's remote calendars: one record per calendar, linked to its ``Calendar``."""
@@ -164,16 +166,10 @@ def series_key(uid: str) -> str:
     return "sha256:" + hashlib.sha256(uid.encode()).hexdigest()
 
 
-def basic_instant(moment: datetime) -> str:
-    """Return a moment as UTC ISO-8601 basic: an occurrence id's and an instance key's suffix."""
-
-    return moment.astimezone(UTC).strftime("%Y%m%dT%H%M%SZ")
-
-
 def instance_key(uid: str, original_start: datetime) -> str:
     """Return the external key of one instance of the series ``uid``: its series key plus its UTC instant."""
 
-    return f"{series_key(uid)}#{basic_instant(original_start)}"
+    return f"{series_key(uid)}#{utc_stamp(original_start)}"
 
 
 def parse_key(key: str) -> tuple[str | None, datetime | None]:
@@ -326,15 +322,25 @@ def excluded_dates(component: Component) -> list[tuple[date | datetime, str]]:
 
     A value is a date, a UTC time, a floating time, or a wall-clock time the source
     reads in the named zone itself: the zone icalendar attached is not the source's.
+    A VEVENT naming more than :data:`~angee.scheduling.recurrence.MAX_OCCURRENCES`
+    of them, the most occurrences the recurrence owner reads of one series, is
+    refused (``ValidationError``, code ``too_many_exdates``) before any is mapped.
     """
 
     found = component.get("EXDATE")
     props = found if isinstance(found, list) else [found] if found is not None else []
+    if sum(len(prop.dts) for prop in props) > MAX_OCCURRENCES:
+        raise ValidationError(f"The event excludes more than {MAX_OCCURRENCES:,} dates.", code="too_many_exdates")
     return [(value.dt, str(prop.params.get("TZID") or "")) for prop in props for value in prop.dts]
 
 
 def cancelled_instances(
-    event: ParsedEvent, uid: str, excluded: Iterable[datetime], *, calendar_zone: str
+    event: ParsedEvent,
+    uid: str,
+    excluded: Iterable[datetime],
+    *,
+    calendar_zone: str,
+    check_deadline: Callable[[], None],
 ) -> list[tuple[str, ParsedEvent]]:
     """Validate a parsed master's rule, then return its cancelled instances at ``excluded`` (its ``EXDATE``s).
 
@@ -345,10 +351,11 @@ def cancelled_instances(
     ``ValidationError`` before anything expands it. Each excluded moment is then
     judged on its own (``CalendarEvent.is_instance``, in the zone the stored series
     uses: the event's own, else ``calendar_zone``), so a far ``EXDATE`` reads only
-    its own window: one that is no instance is dropped, and a cancelled instance
-    ends where the event owner's arithmetic puts it (``CalendarEvent.occurrence_end``:
-    an all-day instance spans local days). Each keeps the master's fields, without
-    its rule and attendees. A blank rule returns none.
+    its own window; ``check_deadline``, the backend's own refusal of a parse past
+    its deadline, runs before each. One that is no instance is dropped, and a
+    cancelled instance ends where the event owner's arithmetic puts it
+    (``CalendarEvent.occurrence_end``: an all-day instance spans local days). Each
+    keeps the master's fields, without its rule and attendees. A blank rule returns none.
     """
 
     if not event.recurrence:
@@ -359,23 +366,23 @@ def cancelled_instances(
         start=event.start, end=event.end, all_day=event.all_day, recurrence=event.recurrence, timezone=event.timezone
     )
     series.validate_rule(zone=zone)
-    return [
-        (
-            instance_key(uid, moment),
-            replace(
-                event,
-                start=moment,
-                end=series.occurrence_end(moment, zone=zone),
-                recurrence="",
-                series=series_key(uid),
-                original_start=moment,
-                status=EventStatus.CANCELLED,
-                attendees=(),
-            ),
+    cancelled = []
+    for moment in sorted(set(excluded)):
+        check_deadline()
+        if not series.is_instance(moment, zone=zone):
+            continue
+        instance = replace(
+            event,
+            start=moment,
+            end=series.occurrence_end(moment, zone=zone),
+            recurrence="",
+            series=series_key(uid),
+            original_start=moment,
+            status=EventStatus.CANCELLED,
+            attendees=(),
         )
-        for moment in sorted(set(excluded))
-        if series.is_instance(moment, zone=zone)
-    ]
+        cancelled.append((instance_key(uid, moment), instance))
+    return cancelled
 
 
 @dataclass
@@ -528,8 +535,7 @@ class CalendarBackend(BridgeImpl, HttpClientMixin):
         if stream.key != CALENDARS_STREAM:
             return self.extract_events(stream, page_bound, deadline=deadline)
         cursor = dict(stream.cursor or {})
-        with self.until(deadline):
-            payloads = {remote.key: remote.payload() for remote in self.discover()}
+        payloads = {remote.key: remote.payload() for remote in self.discover()}
         return self.page(stream, payloads, page_bound, after=cursor.get("after"), cursor={"listed": True})
 
     def get_calendar(self, stream: Any) -> Any:
