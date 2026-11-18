@@ -28,4 +28,8 @@ describe("calendarDay", () => {
     expect(calendarDay(new Date("2026-09-28T22:30:00Z"), "UTC")).toBe("2026-09-28");
     expect(calendarDay(new Date("2026-09-28T22:30:00Z"), "Pacific/Kiritimati")).toBe("2026-09-29");
   });
+
+  test("writes four year digits and two month and day digits whatever the year", () => {
+    expect(calendarDay(new Date("0987-03-04T12:00:00Z"), "UTC")).toBe("0987-03-04");
+  });
 });

@@ -3,7 +3,7 @@
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { createMemoryHistory, createRootRoute, createRouter, RouterContextProvider } from "@tanstack/react-router";
 import { testDataResource } from "@angee/storybook/testing";
-import { AppRuntimeProvider, ModalsHost, ToastProvider, defaultWidgets } from "@angee/ui";
+import { AppRuntimeProvider, ModalsHost, ToastProvider, defaultWidgets, formatDate } from "@angee/ui";
 import { createUiTestProviders } from "@angee/ui/testing";
 import { afterEach, describe, expect, test, vi } from "vitest";
 
@@ -143,6 +143,19 @@ describe("CalendarEventForm", () => {
     expect(screen.getByRole("button", { name: "End" }).textContent).toContain("Nov 21, 2026");
     const [[read]] = getOne.mock.calls as unknown as [[{ meta: { fields: unknown[] } }]];
     expect(read.meta.fields).toContain("effective_timezone");
+  });
+
+  // A zone newer than this browser's zone data would throw from Intl while the form renders.
+  test("a saved all-day event in a zone this browser does not know shows the viewer's days", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    renderSavedEvent({ ...SAVED_ALL_DAY, effective_timezone: "Mars/Olympus_Mons" });
+    await waitFor(async () => expect((await calendarControl()).textContent).toContain("Personal"));
+
+    const viewerDay = (instant: string) => formatDate(new Date(instant), { density: "full" });
+    await waitFor(() => expect(screen.getByRole("button", { name: "Start" }).textContent).toContain(viewerDay(SAVED_ALL_DAY.start)));
+    expect(screen.getByRole("button", { name: "End" }).textContent).toContain(viewerDay(SAVED_ALL_DAY.end));
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("Mars/Olympus_Mons"));
+    warn.mockRestore();
   });
 
   test("turning a saved all-day event's all day off gives the viewer's own midnights on its days", async () => {

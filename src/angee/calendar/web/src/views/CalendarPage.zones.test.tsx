@@ -4,7 +4,7 @@ import { cleanup, render, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { operationDocuments } from "@angee/gql/console/actions";
 import { RoutedRuntimeFixture, storySchema, testDataResource, type GraphQLWireRequest } from "@angee/storybook/testing";
-import { containersFromChildren, type Occurrence, type ResourceListCalendarSpec } from "@angee/ui";
+import { containersFromChildren, formatDateStorage, type Occurrence, type ResourceListCalendarSpec } from "@angee/ui";
 import { createRouteHref } from "@angee/ui/runtime";
 
 import { OCCURRENCE_SOURCES } from "../sources";
@@ -141,6 +141,22 @@ describe("CalendarPage sources", () => {
     expect([chicago?.start, chicago?.end]).toEqual(["2026-11-20", "2026-11-21"]);
     expect([tokyo?.start, tokyo?.end]).toEqual(["2026-11-20", "2026-11-22"]);
     expect([timed?.start, timed?.end]).toEqual([ROW.start, ROW.end]);
+  });
+
+  // A zone newer than this browser's zone data would throw from Intl inside the query's select.
+  test("an all-day occurrence in a zone this browser does not know shows on the viewer's days", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const [alice] = (await spec()).sources;
+    const start = "2026-11-20T06:00:00+00:00";
+    const end = "2026-11-21T06:00:00+00:00";
+
+    const [unknown] = selected(alice!, [
+      { ...ROW, all_day: true, editable: false, effective_timezone: "Mars/Olympus_Mons", start, end },
+    ]);
+
+    expect([unknown?.start, unknown?.end]).toEqual([formatDateStorage(new Date(start)), formatDateStorage(new Date(end))]);
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("Mars/Olympus_Mons"));
+    warn.mockRestore();
   });
 
   test("a contributed source is keyed by its container child id and built with the viewer", async () => {
