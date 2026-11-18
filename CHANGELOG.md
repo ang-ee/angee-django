@@ -10,6 +10,33 @@ live in code docstrings.
 
 ## Unreleased — shared addon contracts, native embeddings and graph retrieval
 
+- Permission statements are compiled for the stored grants their actor can hold
+  (django-zed-rebac 0.35.1, actor grant profiles). Inside an evaluator scope one small
+  statement reads which stored relations name the actor, directly, by wildcard or
+  through stored subject sets, and arms the actor holds no row for are left out, in
+  granting positions only. On PostgreSQL an "administrator holds this on every row" arm
+  that is left out keeps `(SELECT FALSE)` in its place, so each id set is still planned
+  at its table's size and broad reads keep their hash joins. On the composed framework
+  host a member's selected-message read went from 1,618 KB of SQL and 1,217 MiB of
+  planner memory to 523 KB and 694 MiB with the same rows. Hosts set nothing:
+  `REBAC_ACTOR_PROFILES` is on by default, and `False` restores the earlier statements.
+  What a host can observe:
+  - Statement totals move inside a scope. A read whose actor holds a fixed role (an
+    administrator) issues one more statement, the profile's; a read whose actor does not
+    issues one fewer on the console documents, because the constant arms it cannot hold
+    need no witness. A denied point check issues the profile's statement again before
+    it answers.
+  - After a grant is written, the next read in that scope reads the profile again.
+    While a transaction holds uncommitted grant writes the profile is read at each
+    compile until that transaction ends, and a queryset read compiles twice.
+  - A grant of a kind the actor did not hold, written by another process, may be missing
+    from reads until the scope ends or a check in it refreshes the profile. It is never
+    the other way round: a revoked grant is evaluated live.
+  - A workflow step body now reads inside one evaluator scope
+    (`WorkflowRunner._run_body`), as a request and a GraphQL operation already do, so
+    workflow steps get the same statements. Work that runs outside any scope (a
+    management command, a task that opens none) is compiled as before.
+
 - A theme or branding fragment owns the sign-in presentation through
   `auth.login#hero`, a framework container with one child per host. Installing
   the fragment is enough: `LoginPage` renders the hero on `/login` and
