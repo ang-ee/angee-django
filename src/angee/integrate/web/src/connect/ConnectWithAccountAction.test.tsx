@@ -140,10 +140,11 @@ describe("ConnectWithAccountAction", () => {
     const onChange = vi.fn();
     render(accountField().control!(controlProps({ onChange })));
 
-    // Listed, with why, but not offered: no choosing control and no "Use this account" verb.
-    expect(screen.getByText(/Already connected/)).toBeTruthy();
-    expect(screen.queryByRole("button", { name: /ada@example\.com/ })).toBeNull();
-    fireEvent.click(screen.getByText("ada@example.com"));
+    // Listed, with why, but not offered: an unavailable row that keyboard users still reach and
+    // hear the reason on, and no "Use this account" verb.
+    const refused = screen.getByRole("button", { name: "ada@example.com", description: "Already connected" });
+    expect(refused.getAttribute("aria-disabled")).toBe("true");
+    fireEvent.click(refused);
     expect(onChange).not.toHaveBeenCalled();
     expect(screen.getAllByTitle("Use this account")).toHaveLength(1);
 

@@ -214,19 +214,15 @@ function AccountPicker({
         <InlineEmpty icon="user" label={t("connectWithAccount.empty")} />
       ) : (
         <PaneRows>
-          {accounts.map((account) => {
-            // The capability refuses this account by its admission rule: listed with why, never offered.
-            const blocked = account.blocked_reason != null;
-            return (
-              <li key={account.id}>
-                <PaneRow icon="user" title={account.display_name} detail={account.blocked_reason ?? undefined}
-                  selected={account.id === selected}
-                  label={blocked ? undefined : t("connectWithAccount.use")}
-                  verb={blocked ? undefined : t("connectWithAccount.use")}
-                  onOpen={readOnly || blocked ? undefined : () => onChange(account.id)} />
-              </li>
-            );
-          })}
+          {accounts.map((account) => (
+            <li key={account.id}>
+              {/* An account the capability refuses by its admission rule is listed with why, never offered. */}
+              <PaneRow icon="user" title={account.display_name} disabledReason={account.blocked_reason}
+                selected={account.id === selected}
+                label={t("connectWithAccount.use")} verb={t("connectWithAccount.use")}
+                onOpen={readOnly ? undefined : () => onChange(account.id)} />
+            </li>
+          ))}
         </PaneRows>
       )}
       {oauthClientId ? (

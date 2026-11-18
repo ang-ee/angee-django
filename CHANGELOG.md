@@ -37,6 +37,11 @@ live in code docstrings.
   it once picked. `Mount`, `CalendarSource` and the calendar backends move their
   rules onto `credential_blocker`; `GoogleCalendarBackend.admit_credential` only
   holds the credential's row lock around it.
+- `@angee/ui`: `PaneRow` takes `disabled` and `disabledReason`. An unavailable row
+  stays listed, muted and without a hover fill; it is a focusable button with
+  `aria-disabled`, so keyboard users reach it, and its reason, shown in full under
+  the title, is its `aria-describedby` description. The connect-with-account
+  field lists a refused account through it.
 - A calendar source can publish local calendars out. `CalendarBackend.direction`
   (`PULL` by default) declares which way a source's streams sync; a `PUSH`
   backend's calendars and events streams are push streams, never swept.
