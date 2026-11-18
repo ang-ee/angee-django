@@ -3,6 +3,7 @@ import type { DocumentType } from "@angee/gql/console";
 import type { ActionFieldName } from "@angee/gql/console/actions";
 import { useActionMutation, useAuthoredQuery } from "@angee/refine";
 import {
+  AbsoluteTime,
   ResourceList,
   calendarDay,
   calendarWindowBounds,
@@ -23,17 +24,33 @@ import { CalendarListDocument, EventOccurrencesDocument } from "../documents.con
 import { useCalendarT } from "../i18n";
 import { CALENDAR_MODEL, EVENT_MODEL } from "../resources";
 import { OCCURRENCE_SOURCES, type OccurrenceSourceContribution } from "../sources";
-import { calendarEventForm } from "./CalendarEventForm";
+import { allDayBoundDay, calendarEventForm } from "./CalendarEventForm";
 
 type OccurrenceRow = DocumentType<typeof EventOccurrencesDocument>["event_occurrences"][number];
+
+/**
+ * A bound as the events list shows it, through the list's date stamp: an all-day event's day in its own zone,
+ * which every viewer reads as that day (a Chicago Nov 20 is no Nov 19 in Los Angeles), and a timed event's
+ * instant, in the viewer's zone.
+ */
+function eventBoundColumn(field: "start" | "end"): ListColumn {
+  return {
+    field,
+    selectionPaths: [field, "all_day", "effective_timezone"],
+    render: (row) => {
+      const shown = row.all_day === true ? allDayBoundDay(row[field], row.effective_timezone) : row[field];
+      return <AbsoluteTime display="date" value={typeof shown === "string" ? shown : null} />;
+    },
+  };
+}
 
 // The plain events table the switcher shows in list view (calendar view renders the
 // windowed surface instead). Headers derive from the field metadata.
 const EVENT_COLUMNS: readonly ListColumn[] = [
   { field: "title" },
   { field: "calendar" },
-  { field: "start" },
-  { field: "end" },
+  eventBoundColumn("start"),
+  eventBoundColumn("end"),
   { field: "status" },
   { field: "location" },
 ];

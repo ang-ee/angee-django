@@ -1,10 +1,12 @@
 // @vitest-environment happy-dom
 
-import { cleanup, render, waitFor } from "@testing-library/react";
+import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { operationDocuments } from "@angee/gql/console/actions";
 import { RoutedRuntimeFixture, storySchema, testDataResource, type GraphQLWireRequest } from "@angee/storybook/testing";
-import { containersFromChildren, formatDateStorage, type Occurrence, type ResourceListCalendarSpec } from "@angee/ui";
+import {
+  containersFromChildren, formatDate, formatDateStorage, type ListColumn, type Occurrence, type ResourceListCalendarSpec,
+} from "@angee/ui";
 import { createRouteHref } from "@angee/ui/runtime";
 
 import { OCCURRENCE_SOURCES } from "../sources";
@@ -13,11 +15,15 @@ import { CalendarPage } from "./CalendarPage";
 // The page runs on the real runtime: refine over the GraphQL wire fake, the composed
 // containers, auth and the resource routes. Only `ResourceList` is captured: its
 // windowed surface is the shared owner's, and the page's part is the spec it hands it.
-const captured = vi.hoisted(() => ({ spec: undefined as ResourceListCalendarSpec | undefined }));
+const captured = vi.hoisted(() => ({
+  spec: undefined as ResourceListCalendarSpec | undefined,
+  columns: undefined as readonly ListColumn[] | undefined,
+}));
 vi.mock("@angee/ui", async (original) => ({
   ...(await original<typeof import("@angee/ui")>()),
-  ResourceList: (props: { calendar?: ResourceListCalendarSpec }) => {
+  ResourceList: (props: { calendar?: ResourceListCalendarSpec; columns?: readonly ListColumn[] }) => {
     captured.spec = props.calendar;
+    captured.columns = props.columns;
     return null;
   },
 }));
@@ -102,6 +108,7 @@ beforeEach(() => {
   requests.length = 0;
   outcome = { ok: true, message: "Event rescheduled." };
   captured.spec = undefined;
+  captured.columns = undefined;
 });
 afterEach(cleanup);
 
@@ -163,6 +170,36 @@ describe("CalendarPage sources", () => {
     const contributed = (await spec()).sources.at(-1)!;
     expect(contributed.key).toBe("projects-calendar.due-tasks");
     expect(contributed.variables({ start: new Date(), end: new Date() })).toEqual({ assignee: "usr_viewer" });
+  });
+});
+
+describe("CalendarPage events list", () => {
+  async function columns(): Promise<readonly ListColumn[]> {
+    await spec();
+    return captured.columns!;
+  }
+
+  // CAL-F4: the list's plain DateTime cell read a Chicago all-day Nov 20 as Nov 19 in Los Angeles.
+  test("an all-day event's bounds read as its days in its own zone, a timed event's as the viewer's day", async () => {
+    const list = await columns();
+    const bound = (field: "start" | "end") => list.find((column) => column.field === field)!;
+    // List rows, as the events list reads them.
+    const timedRow: Record<string, unknown> = { ...ROW };
+    const allDayRow: Record<string, unknown> = {
+      ...ROW, all_day: true, start: "2026-11-20T06:00:00+00:00", end: "2026-11-21T06:00:00+00:00",
+    };
+
+    // The cell reads its siblings, so the list selects them.
+    expect(bound("start").selectionPaths).toEqual(["start", "all_day", "effective_timezone"]);
+    render(<>{bound("start").render!(allDayRow)}{bound("end").render!(allDayRow)}{bound("start").render!(timedRow)}</>);
+
+    const [start, end, timed] = screen.getAllByRole("time");
+    expect([start?.getAttribute("datetime"), end?.getAttribute("datetime")]).toEqual(["2026-11-20", "2026-11-21"]);
+    expect(start?.textContent).toBe(formatDate("2026-11-20"));
+    expect(start?.getAttribute("title")).toBe("Nov 20, 2026");
+    // A timed event is an instant: its day in the viewer's zone, the full stamp on hover.
+    expect(timed?.getAttribute("datetime")).toBe(new Date(ROW.start).toISOString());
+    expect(timed?.textContent).toBe(formatDate(ROW.start));
   });
 });
 

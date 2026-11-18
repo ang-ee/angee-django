@@ -54,9 +54,11 @@ live in code docstrings.
   replaces `expansion_zone`, which left the project zone blank; the
   `effective_timezone_expression()` of `CalendarEventQuerySet` and
   `CalendarQuerySet` reads it as a query), read as `effective_timezone` on an
-  event and on each `event_occurrences` item: the calendar grid and the event
-  form show and edit those days in every browser zone, and changing an all-day
-  event's own zone keeps its days. Dragging an all-day event sends the
+  event and on each `event_occurrences` item: the calendar grid, the events list
+  and the event form show and edit those days in every browser zone, and
+  changing an all-day event's own zone keeps its days. `@angee/ui`'s
+  `AbsoluteTime` reads a bare `yyyy-MM-dd` value as that date, with no time and
+  no zone, and list date cells compose it. Dragging an all-day event sends the
   days it lands on, which the event places at midnight in its zone; the
   nearest-midnight snap is gone, and an instant off that midnight is refused. A
   dragged timed event refuses a time without an offset. A
