@@ -171,6 +171,23 @@ def test_an_insert_with_a_date_holds_and_one_without_follows() -> None:
     assert (following.due_date, following.due_held()) == (date(2026, 12, 14), False)
 
 
+@pytest.mark.parametrize("blank", [pytest.param({}, id="empty-object"), pytest.param("", id="empty-string")])
+def test_a_blank_rule_is_no_rule_so_the_date_stays_a_persons(blank: Any) -> None:
+    owner = _user("due-blank")
+    project = _project(owner)
+    _anchor(owner, project, "last_slot", date(2026, 12, 14))
+    undated = _reload(_task(owner, project, due_rule=blank))
+    assert (undated.due_rule, undated.due_basis, undated.due_date) == (None, {}, None)
+    dated = _reload(_task(owner, project, due_rule=blank, due_date=date(2026, 12, 2)))
+    assert (dated.due_rule, dated.due_basis, dated.due_date) == (None, {}, date(2026, 12, 2))
+    with actor_context(owner):
+        ruled = Task.objects.get(pk=_task(owner, project, due_rule=ON_LAST_SLOT).pk)
+        ruled.due_rule = blank
+        ruled.save()
+    cleared = _reload(ruled)
+    assert (cleared.due_rule, cleared.due_basis, cleared.due_date) == (None, {}, date(2026, 12, 14))
+
+
 def test_a_task_following_its_rule_moves_with_a_rule_edit() -> None:
     owner = _user("due-edit")
     project = _project(owner)
