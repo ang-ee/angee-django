@@ -28,6 +28,80 @@ live in code docstrings.
   checked either directly checks `write`, `delete` or `transfer`. Operators re-sync
   the permission schema: storage revision 14.
 
+- An `angee.integrate` stream names its container: `StreamDefinition.container`,
+  persisted as `SyncStream.container` (a `PROTECT` key to `integrate.RecordLink`,
+  `related_name="child_streams"`), is the parent stream's link whose record
+  holds the partition; the partition is its external key. The container is
+  immutable on the model; a stream declared before containers existed adopts it
+  once. The parent declares `holds_containers` (`SyncStream.holds_containers`).
+  `SyncStream.partition` widens to 512 characters: a child's partition is its
+  container's external key, so both take `integrate.states.EXTERNAL_KEY_LENGTH`;
+  the driver refuses a longer replica identity once, as a coalesced stream
+  failure, and the page goes on.
+  `RecordLinkQuerySet.observing_rule()` and `live_container_rule()` (observing,
+  bound to a target, no absence counted) are the one rule for joined reads,
+  `observing()`, `live_containers()` and `containers_of(bridge, key)` apply it.
+  A container missing from a complete listing (`StreamPage.absent`) counts
+  against the parent's absence threshold: an unavailable container pauses its
+  child, which is neither declared nor retired; a container that stops observing
+  (tombstoned or withdrawn) retires it. Retirement flips the child to
+  `StreamState.RETIRED` inside the parent's page
+  (`SyncStreamManager.retire_children`); a bounded, resumable pass over
+  `reconcile_state` then tombstones the child's links and closes their open
+  failures (`RecordLinkManager.mark_absent(..., confirmed=True)`) with
+  `on_absent`, nothing is deleted, and the pass pauses while the container
+  observes again (reopening drops it). `mark_absent` now returns the links whose
+  status changed.
+  `bump_generation` reopens a retired generation only while its container is
+  live, and `reset_stream` reports a retired one exhausted. `sync_bridge` drains
+  every declared partition in its first wave, a container-held partition only
+  after the stream holding its container applied its pages and sweep (in holder
+  depth order, or concurrently once that worker finished), runs the holders'
+  retirement passes last, declares again only after a container-holding stream
+  gained a live container, and opens no partition and starts no wave after its
+  deadline. A cyclic or self-held container declaration fails fast. New
+  `RecordLinkQuerySet.observing()` and `SyncStreamQuerySet.latest_generations()`.
+  A page of a superseded generation is refused as a "superseded stream generation".
+  `ImmutableFieldsMixin` checks only the immutable fields a partial save's
+  `update_fields` writes.
+- `angee.parties` address books are records of the directory's `addressbooks`
+  stream: each book's link targets its `Folder` (`FolderManager.ingest_addressbook`,
+  which truncates an over-long name) and holds its contacts stream; both
+  declarations live on `DirectoryBackend` (`addressbooks_stream`,
+  `contacts_stream`). The folder's name is an `identity` statement, so a person's
+  rename outranks a remote one; `Folder` composes statements and history, and
+  `parties/folder#write_statements` admits the directory (parties revision 20).
+  A book missing from one listing pauses its contacts; once its absence is
+  confirmed it is tombstoned, its statements are withdrawn (as a read tombstone
+  withdraws them) and its contacts stream retires. An empty listing confirms
+  nothing. CardDAV discovery raises when the server refuses the principal or
+  home-set request instead of falling back to the server URL.
+  Removed: `Folder.source_href` and `uq_folder_directory_source`,
+  `FolderManager.sync_addressbook`, `Directory.addressbook_stream`, GraphQL
+  `ContactFolderType.source_href`, and the `folder` argument of
+  `PartyManager.ingest_contact`, which now takes the page's `stream` and finds
+  its folder through that stream's container. `StatedRecordMixin` moves from
+  `angee.projects.models` (which still imports it) to `angee.integrate.mixins`,
+  beside `LinkedRecordMixin`, the `record_links` relation `Party` composes;
+  `Folder` composes `StatedRecordMixin`. A source backend implements `discover`,
+  `extract_contacts` and `read_contacts`.
+  Upgrade: a host runs `makemigrations integrate` for the `container` and
+  `holds_containers` columns and the widened `partition`, copies the migration template
+  `src/angee/parties/compose_migrations/parties/addressbook_links.py` into
+  `runtime/parties/migrations/` and pins its placeholder dependencies to its own
+  leaves, then runs `makemigrations` for the folder's history and statement
+  tables, `migrate` and `rebac sync`. Every folder, contact and link is kept and
+  nothing is downloaded again. A folder whose href is longer than a link's
+  external key never synced; the template skips it and logs a warning. The first
+  sync states each listed book's name on its folder, so a folder renamed after
+  the last sync before the upgrade takes the directory's name. A book removed
+  before the upgrade misses its first listing then: its contacts pause in that
+  sync, unopened, and retire on the sync that confirms its absence (the second,
+  at the default threshold of two). The template reverses by restoring each
+  folder's `source_href`. Upgrade cutoff: the template ships through the 3.x
+  releases and is removed in 4.0; a host upgrading from an earlier release
+  applies it through a 3.x release first.
+
 - A resource row naming a `to_field` foreign key by xref stores the named row's
   target column, not its primary key: `AngeeResource.get_fk_widget` binds the xref
   widget's native `field` to the relation's `target_field`, so a seed can set
@@ -92,8 +166,22 @@ live in code docstrings.
   `Recurrence.get_last_occurrence` returns where a series ends, `None` when any
   rule it holds is open-ended. Recurrence is bounded for every consumer: a `COUNT`
   over `MAX_OCCURRENCES` (10,000) is invalid and an expansion past it
-  raises `ValidationError` instead of running on; `RecurrenceField(finest_frequency=…)`
-  refuses finer rules (a calendar event repeats at most hourly).
+  raises `ValidationError` instead of running on (`series_too_long`): a read is
+  re-anchored at its window, like libical's, and a save counts a series from its
+  start to a horizon; a rule is one bare `RRULE`, and one with no
+  occurrence within about 30 years of its start is refused (`never_occurs`);
+  `RecurrenceField(finest_frequency=…)` refuses finer rules (a calendar event
+  repeats at most daily). A calendar read skips a row it cannot expand.
+  A `refuse` calendar judges an event's overlap only from now, over two years
+  and no further than the event ends, a series and a single event alike: an event
+  wholly before now is never judged, and nothing is judged against its past. The
+  check fails closed: a save beside another busy event it cannot expand is
+  refused (`unexpandable`, naming that event) where a read skips it; a free one,
+  or the saved event's own series, is skipped. `angee.integrate.sync` gains the
+  sync's deadline seam, `sync_deadline()` and `sync_deadline_context(deadline)`:
+  the bridge sync sets it once per cycle and every stream driver given a
+  `deadline=` enters it, so an adapter's nested parse or identity read stops by
+  it.
   **Host upgrade:** the `calendar` app label carries the deleted `arp.calendar`'s
   migration history and no data moves (clean slate). Each host writes a `calendar`
   migration (`0003`) that purges the old event, attendee and history rows and the
@@ -102,6 +190,35 @@ live in code docstrings.
   revision 3, arp revision 7) and `resources load`. Add `angee.calendar` (and
   `angee.projects_calendar` where projects is composed) to `INSTALLED_APPS` in
   place of `arp.calendar`.
+- `angee.calendar` mirrors connected calendars. A `CalendarSource` (an
+  `integrate.Integration` child and a `Bridge`, its protocol selected by
+  `backend_class` from `ANGEE_CALENDAR_SOURCE_BACKEND_CLASSES`) mirrors each remote
+  calendar it serves through its `calendars` stream as a `Calendar` on its owner's
+  person, whose `source` names it and whose name, colour and zone the source states
+  (a person's own edit outranks it); each calendar's events sync through an
+  `events` stream partitioned by its key. A backend declares `writable`: a
+  read-only source's calendar refuses local edits on every save path
+  (`Calendar.is_writable`), and `CalendarQuerySet.local_edits_rule()`
+  (`taking_local_edits()`) is the same decision as a query, so the event form's
+  `writable` calendars and `Calendar.objects.ensure_personal` take only calendars
+  that accept local events. Its owner syncs it (`sync_calendar_source`) and
+  unsubscribes it (`unsubscribe_calendar_source`): the source disconnects at once
+  and the `calendar.purge_source` job deletes its events, archives its calendar and
+  retires its credential. How many sources a user keeps, and how fast they add them,
+  are bounded (`ANGEE_CALENDAR_SOURCES_PER_OWNER`, `ANGEE_CALENDAR_SUBSCRIBE_RATE`).
+  The new `angee.calendar_integrate_ics` addon is the read-only `ics` backend: any
+  signed-in user subscribes to a feed (`webcal://` reads as `https://`), whose
+  address is the source credential's material; it is polled with a conditional GET
+  through integrate's bounded download and parsed by python-icalendar (`VEVENT`,
+  `VTIMEZONE`, `RRULE`, `EXDATE`, `RECURRENCE-ID`). It seeds the `ics` vendor in the
+  master tier.
+  **Host upgrade:** add `angee.calendar_integrate_ics` to `INSTALLED_APPS` beside
+  `angee.calendar` and install its distribution (it requires `icalendar`); write the
+  `calendar` migration with `makemigrations calendar` (`CalendarSource`, a calendar's
+  `source` and `is_archived`, calendar statements and their history, and the event
+  recurrence's daily floor; the ICS addon has no tables); then `migrate`,
+  `rebac --skip-checks sync --prune-stale --yes` (calendar revision 4) and
+  `resources load` (the `ics` vendor).
 - One Google OAuth client per deployment serves every Google feature. The new
   `angee.integrate_google` addon owns the `google` provider preset and seeds the
   deployment's blank `google` client and Google's public `gemini` client

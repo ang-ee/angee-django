@@ -8,6 +8,7 @@ from datetime import UTC, datetime
 import pytest
 from django.core.exceptions import ValidationError
 from django.db import connection, transaction
+from django.utils import timezone
 from rebac import system_context
 
 from angee.calendar.testing.models import Calendar, CalendarEvent
@@ -22,6 +23,13 @@ pytestmark = [
 
 def _utc(hour: int, minute: int = 0) -> datetime:
     return datetime(2026, 7, 13, hour, minute, tzinfo=UTC)
+
+
+@pytest.fixture(autouse=True)
+def _before_these_events(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The overlap check judges from now (every thread reads the pinned clock): pin it before these July events."""
+
+    monkeypatch.setattr(timezone, "now", lambda: datetime(2026, 7, 1, tzinfo=UTC))
 
 
 def test_a_second_overlapping_save_waits_for_the_first_and_is_refused() -> None:

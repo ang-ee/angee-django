@@ -58,8 +58,8 @@ export interface ResourceListCalendarSpec {
     start: Date,
     end: Date | null,
   ) => void | Promise<unknown>;
-  /** Map a selected range to the create form's seed values (quick-create). */
-  createDefaults?: (start: Date, end: Date) => Record<string, unknown>;
+  /** Map a selected range, whole days when `allDay`, to the create form's seed values (quick-create). */
+  createDefaults?: (start: Date, end: Date, allDay: boolean) => Record<string, unknown>;
 }
 
 export interface RecordSmartButtonDescriptor {

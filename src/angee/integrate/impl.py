@@ -109,15 +109,30 @@ class BridgeImpl(IntegrationImpl):
     def streams(self, *, deadline: float | None = None) -> Iterable[StreamDefinition]:
         """Declare each independently ordered partition exactly once.
 
-        The generic sync declares once per cycle. A workflow cycle declares once per
-        drained partition (``workflows_integrate.StreamStage``), so an adapter synced
-        through one declares from local state, without transport.
+        An adapter that holds containers declares from local state and writes
+        nothing: a partition held by a record of another stream names that
+        record's link as its ``container`` and is declared only while the link is
+        a live container (``RecordLinkQuerySet.containers_of``); the row the
+        container targets is created on the parent stream's apply path. Adapters
+        without containers may declare by discovery: IMAP and Slack list their
+        mailboxes and conversations over transport, and Notion's declaration
+        still ensures its vault, a write recorded as debt.
+        The generic sync declares at the start of a cycle and again after a wave in
+        which container links appeared. A workflow cycle declares once per drained
+        partition (``workflows_integrate.StreamStage``), so an adapter synced through
+        one declares from local state, without transport.
         """
         raise AdapterContractError("Stream adapters must declare their partitions.")
 
 
     def extract(self, stream: Any, page_bound: int, *, deadline: float | None = None) -> StreamPage:
-        """Fetch at most page_bound records outside transactions within the deadline."""
+        """Fetch at most page_bound records outside transactions within the deadline.
+
+        ``deadline`` is the driver's; code nested under any adapter call (a parse,
+        an identity read) reads the same one through
+        :func:`~angee.integrate.sync.sync_deadline`, which every driver given a
+        deadline, and the bridge sync, enter.
+        """
         raise AdapterContractError("Stream adapters must extract bounded pages.")
 
     def read_keys(self, stream: Any, keys: Sequence[str]) -> Iterable[RecordChange]:

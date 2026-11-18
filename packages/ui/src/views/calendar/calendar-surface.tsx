@@ -153,7 +153,7 @@ export default function CalendarSurface({
           emitted.current = key;
           onRangeChange?.({ start: arg.start, end: arg.end });
         }}
-        select={onSelectRange ? (arg) => onSelectRange(arg.start, arg.end) : undefined}
+        select={onSelectRange ? (arg) => onSelectRange(arg.start, arg.end, arg.allDay) : undefined}
         eventDrop={reschedule ? (arg) => void reschedule(arg) : undefined}
         eventResize={reschedule ? (arg) => void reschedule(arg) : undefined}
         eventClick={

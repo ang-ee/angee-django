@@ -81,9 +81,10 @@ const { Provider, clearClients } = createUiTestProviders({ apiUrl: "test://resou
 
 const SPEC: ResourceListCalendarSpec = {
   sources: [{ document: {}, variables: () => ({}), select: () => [] } as never],
-  createDefaults: (start, end) => ({
+  createDefaults: (start, end, allDay) => ({
     start: start.toISOString(),
     end: end.toISOString(),
+    all_day: allDay,
   }),
 };
 
@@ -175,6 +176,7 @@ describe("ResourceList calendar quick-create", () => {
       captured.listCalendar?.onSelectRange?.(
         new Date("2026-06-17T14:00:00.000Z"),
         new Date("2026-06-17T15:00:00.000Z"),
+        false,
       );
     });
     expect(onSelect).toHaveBeenCalledWith(null);
@@ -193,6 +195,7 @@ describe("ResourceList calendar quick-create", () => {
     expect(captured.formDefaults).toEqual({
       start: "2026-06-17T14:00:00.000Z",
       end: "2026-06-17T15:00:00.000Z",
+      all_day: false,
     });
   });
 

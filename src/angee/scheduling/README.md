@@ -31,15 +31,37 @@ the project zone when it is blank. An hourly or finer rule follows the wall cloc
 through a DST change: the missing hour in spring lands on the next instant, which
 counts once, and the repeated hour in autumn runs once.
 
-Expansion is bounded. A rule whose day filters can never match
+Expansion is bounded. A rule is one bare `RRULE` value: a rule set, or `DTSTART`,
+`EXDATE` or `RDATE` lines, are invalid. A rule whose day filters can never match
 (`BYMONTH=2;BYMONTHDAY=30`) is recognised in one 400-year calendar cycle and expands
-to nothing, instead of letting dateutil scan to year 9999. One cap,
-`MAX_OCCURRENCES` (10,000), bounds every rule: a `COUNT` over it is invalid,
-`occurrences` and `get_last_occurrence` refuse an expansion that would yield more
-with a `ValidationError`, never truncated, and `occurrences_after` refuses more
-unless the caller pages with `limit` and resumes after the last occurrence it got. A consumer whose rows must not repeat too often
-declares `RecurrenceField(finest_frequency=…)` (a calendar event refuses minutely
-and secondly rules); other consumers keep every frequency.
+to nothing, instead of letting dateutil scan to year 9999; given a start,
+`validate` also refuses a rule with no occurrence within about 30 years of it
+(`never_occurs`), probed in bounded time.
+
+**A read costs its window, not the series' history.** A rule without `COUNT` is
+read from the rule period (`FREQ` × `INTERVAL`, counted from the start in the
+rule's zone) just before the window, like libical's `icalrecur_iterator_set_start`.
+The parts the start implies are made explicit first (the weekday of a weekly rule,
+the day and month of a monthly or yearly one, the time of day), so the occurrences
+are exactly those a walk from the start would give; `UNTIL` still ends the series.
+`occurrences`, `occurrences_after` and `get_occurrence_after` read this way, and
+`get_last_occurrence` reads a rule's end back from its `UNTIL`. A `COUNT` rule is
+read from its start: its count is already capped. dateutil scans the gap between
+two occurrences itself, so a read also pays the gap to the first occurrence past
+its window: for a sparse rule (a leap day), at most one 400-year cycle of its
+periods. Moments are compared as instants, so the two passes of a fall-back hour
+stay apart.
+
+One cap, `MAX_OCCURRENCES` (10,000), bounds every rule: a `COUNT` over it is
+invalid; a read holding more, or spanning more of the rule's periods from where it
+starts, is refused (`series_too_long`) with a `ValidationError`, never truncated; and
+at save `validate(dtstart=…, through=…)` counts a series from its start to a
+horizon against the same cap. A rule dateutil refuses at a given start is
+`invalid`; an expansion that reaches past the representable dates (years 1 to
+9999) is refused (`out_of_range`). `occurrences_after` refuses more unless the
+caller pages with `limit` and resumes after the last occurrence it got. A consumer
+whose rows must not repeat too often declares `RecurrenceField(finest_frequency=…)`
+(a calendar event repeats at most daily); other consumers keep every frequency.
 
 ## Due rules
 

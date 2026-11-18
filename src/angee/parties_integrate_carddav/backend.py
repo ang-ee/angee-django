@@ -1,8 +1,9 @@
 """CardDAV record replicas: token deltas, ETag inventories and conditional writes.
 
-RFC 6764/6352 discovery creates one contacts stream per address book. Baselines
-list and multiget; later pages use DAV:sync-collection when available, otherwise
-compare inventories with retained link ETags. Optional getctag skips unchanged books.
+RFC 6764/6352 discovery lists the address books the parties ``addressbooks``
+stream mirrors; each book's contacts stream baselines by listing and multiget,
+and later pages use DAV:sync-collection when available, otherwise compare
+inventories with retained link ETags. Optional getctag skips unchanged books.
 vobject owns vCard parsing/serialization, parties owns the synchronized projection
 and ingest policy, and integrate owns bases, conflict classification and cursors.
 Every HTTP request uses the shared SSRF-pinned client and the Integration owner's
@@ -136,22 +137,35 @@ class CardDavDirectoryBackend(DirectoryBackend):
             raise CardDavError("Could not connect to the CardDAV server.") from error
 
     def discover(self) -> list[ParsedAddressbook]:
-        """Resolve the account's principal → home-set → address-book collections."""
+        """Resolve the account's principal → home-set → address-book collections.
+
+        The principal is asked of the server URL, then of its RFC 6764 well-known
+        URL. Only a 207 that names no href falls back to the URL asked; a refusal
+        (any 4xx or 5xx) raises once no candidate answered, and so does a refused
+        home-set request, so an outage never reads as an account without books.
+        """
 
         base = self._base_url()
         if not base:
             return []
-        principal = ""
+        principal, refusal, answered = "", None, False
         for candidate in (base, _well_known(base)):
-            principal = self._first_href(candidate, _PRINCIPAL_BODY, ".//d:current-user-principal/d:href")
+            try:
+                principal = self._first_href(candidate, _PRINCIPAL_BODY, ".//d:current-user-principal/d:href")
+            except CardDavError as error:
+                refusal = refusal or error
+                continue
+            answered = True
             if principal:
                 break
+        if not answered and refusal is not None:
+            raise refusal
         principal = principal or base
         home = self._first_href(principal, _HOME_BODY, ".//card:addressbook-home-set/d:href") or principal
         return self._enumerate(home)
 
-    def extract(self, stream: Any, page_bound: int, *, deadline: float | None = None) -> StreamPage:
-        """Fetch a bounded page; its cursor commits only alongside applied records.
+    def extract_contacts(self, stream: Any, page_bound: int, *, deadline: float | None = None) -> StreamPage:
+        """Fetch a bounded page of one book's cards; its cursor commits only alongside applied records.
 
         Baselines capture the collection marker before listing, so concurrent
         edits replay on the next delta or inventory. A ctag cursor key, even empty,
@@ -210,7 +224,7 @@ class CardDavDirectoryBackend(DirectoryBackend):
                 next_cursor["ctag"] = next_ctag
         return StreamPage(changes, next_cursor, exhausted=not remaining and not more)
 
-    def read_keys(self, stream: Any, keys: Sequence[str]) -> list[RecordChange]:
+    def read_contacts(self, stream: Any, keys: Sequence[str]) -> list[RecordChange]:
         """Read bound identities or new inventory hrefs through the same mapper."""
 
         if not keys:
@@ -402,12 +416,12 @@ class CardDavDirectoryBackend(DirectoryBackend):
     # --- discovery helpers ---
 
     def _first_href(self, url: str, body: str, xpath: str) -> str:
-        """PROPFIND ``url`` and return the first ``xpath`` href, absolutised, or ``""``."""
+        """PROPFIND ``url`` and return the first ``xpath`` href, absolutised, or ``""`` when it names none.
 
-        try:
-            response = self._request("PROPFIND", url, body, depth="0")
-        except CardDavError:
-            return ""
+        A refused request raises its :class:`CardDavError`.
+        """
+
+        response = self._request("PROPFIND", url, body, depth="0")
         node = _xml(response.content).find(xpath, _NS)
         return urljoin(url, node.text.strip()) if node is not None and node.text else ""
 

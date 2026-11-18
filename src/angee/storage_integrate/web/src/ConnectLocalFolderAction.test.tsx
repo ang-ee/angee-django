@@ -84,7 +84,7 @@ describe("ConnectLocalFolderAction", () => {
         name: "Shared",
         root: "/srv/shared/docs",
         mode: "REFERENCE",
-      }),
+      }, { errorNotification: false }),
     );
   });
 });

@@ -29,7 +29,7 @@ class RecurrenceField(models.CharField):
     :meth:`Recurrence.validate`. The column defaults to blank-allowed so
     "non-recurring" is the natural, zero-ceremony state. ``finest_frequency``
     (one of :attr:`Recurrence.FREQUENCIES`) refuses rules that repeat more often,
-    for a consumer whose rows must not (a calendar event refuses minutely).
+    for a consumer whose rows must not (a calendar event repeats at most daily).
     """
 
     description = "RFC-5545 recurrence rule (RRULE)"

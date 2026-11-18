@@ -9,11 +9,12 @@ host that composes it.
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from typing import Any
 
 import pytest
+from django.utils import timezone
 from rebac import PermissionDenied, actor_context, system_context, to_subject_ref
 from rebac.testing import assert_decisions
 
@@ -248,10 +249,14 @@ mutation ($calendar: ID!, $start: DateTime!, $end: DateTime!) {
 """
 
 
-def test_a_refused_insert_on_a_refuse_calendar_learns_nothing_of_its_events(world: SimpleNamespace) -> None:
+def test_a_refused_insert_on_a_refuse_calendar_learns_nothing_of_its_events(
+    world: SimpleNamespace, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """A reader may not insert; the refusal names no event and does not say the time is taken."""
 
     w = world
+    # The overlap check judges from now: before this July's events.
+    monkeypatch.setattr(timezone, "now", lambda: datetime(2026, 7, 1, tzinfo=UTC))
     with system_context(reason="tests.calendar.access.setup"):
         w.calendar.overlap_policy = "refuse"
         w.calendar.save(update_fields=["overlap_policy", "updated_at"])
@@ -371,3 +376,108 @@ def test_a_user_without_a_calendar_starts_their_own_once(world: SimpleNamespace)
         created = Calendar.objects.get(sqid=first["id"])
         assert Calendar.objects.filter(owner=w.stranger).count() == 1
         assert (created.owner_id, created.party_id) == (w.stranger.pk, Person.objects.get(user=w.stranger).pk)
+
+
+# --- deleting: the authored delete previews the UI's Delete composes -------------
+
+_DELETE_EVENT = """
+mutation ($id: ID!, $confirm: Boolean! = false) {
+  delete_calendar_event(id: $id, confirm: $confirm) { has_blockers refusals deleted { label count } }
+}
+"""
+
+_DELETE_CALENDAR = """
+mutation ($id: ID!, $confirm: Boolean! = false) {
+  delete_calendar(id: $id, confirm: $confirm) { has_blockers refusals deleted { label count } }
+}
+"""
+
+
+def test_calendars_and_events_declare_the_delete_preview_that_offers_delete() -> None:
+    resources = {resource.model_label: resource for resource in _console().angee_resources}
+
+    for label, root in (("calendar.Calendar", "delete_calendar"), ("calendar.CalendarEvent", "delete_calendar_event")):
+        assert "deletePreview" in resources[label].capabilities
+        assert resources[label].as_wire(schema_name="console")["roots"]["deletePreview"] == root
+
+
+def test_an_events_writer_previews_then_deletes_it_and_a_reader_may_not(world: SimpleNamespace) -> None:
+    w = world
+    event = {"id": w.default.sqid}
+
+    refused = execute_schema(_console(), _DELETE_EVENT, {**event, "confirm": True}, user=w.reader)
+    preview = result_data(execute_schema(_console(), _DELETE_EVENT, event, user=w.editor))["delete_calendar_event"]
+    with system_context(reason="tests.calendar.access.read"):
+        assert CalendarEvent.objects.filter(pk=w.default.pk).exists()
+    confirmed = execute_schema(_console(), _DELETE_EVENT, {**event, "confirm": True}, user=w.editor)
+
+    assert refused.errors
+    # The event goes with its attendee.
+    assert (preview["has_blockers"], preview["refusals"]) == (False, [])
+    assert {group["label"]: group["count"] for group in preview["deleted"]} == {
+        "calendar events": 1, "event attendees": 1,
+    }
+    assert result_data(confirmed)["delete_calendar_event"]["has_blockers"] is False
+    with system_context(reason="tests.calendar.access.read"):
+        assert not CalendarEvent.objects.filter(pk=w.default.pk).exists()
+
+
+def test_a_calendars_holder_previews_its_events_going_with_it_and_an_editor_may_not_delete_it(
+    world: SimpleNamespace,
+) -> None:
+    w = world
+    calendar = {"id": w.calendar.sqid}
+
+    preview = result_data(execute_schema(_console(), _DELETE_CALENDAR, calendar, user=w.holder))["delete_calendar"]
+    refused = execute_schema(_console(), _DELETE_CALENDAR, {**calendar, "confirm": True}, user=w.editor)
+
+    assert (preview["has_blockers"], preview["refusals"]) == (False, [])
+    assert {group["label"]: group["count"] for group in preview["deleted"]} == {
+        "calendars": 1, "calendar events": 4, "event attendees": 1,
+    }
+    assert refused.errors
+    with system_context(reason="tests.calendar.access.read"):
+        assert Calendar.objects.filter(pk=w.calendar.pk).exists()
+
+
+_INSERT_ALL_DAY = """
+mutation ($calendar: ID!, $start: DateTime!, $end: DateTime!) {
+  insert_calendar_events_one(object: {calendar: $calendar, title: "Holiday", all_day: true, start: $start, end: $end}) {
+    id start end all_day
+  }
+}
+"""
+
+
+@pytest.mark.parametrize(("zone", "midnight"), [
+    # A blank zone is the project's (America/Chicago): the server places the day where the client cannot.
+    ("", datetime(2026, 11, 20, 6, tzinfo=UTC)),
+    ("Asia/Tokyo", datetime(2026, 11, 19, 15, tzinfo=UTC)),
+])
+def test_an_all_day_event_written_as_dates_lands_on_midnight_in_its_zone(
+    world: SimpleNamespace, zone: str, midnight: datetime
+) -> None:
+    """A browser in any zone names the days; the event places them at midnight in its calendar's zone."""
+
+    w = world
+    with system_context(reason="tests.calendar.access.setup"):
+        w.calendar.timezone = zone
+        w.calendar.save(update_fields=["timezone", "updated_at"])
+    variables = {"calendar": w.calendar.sqid, "start": "2026-11-20", "end": "2026-11-21"}
+
+    inserted = result_data(execute_schema(_console(), _INSERT_ALL_DAY, variables, user=w.holder))
+
+    with system_context(reason="tests.calendar.access.read"):
+        event = CalendarEvent.objects.get(sqid=inserted["insert_calendar_events_one"]["id"])
+    assert (event.all_day, event.start, event.end) == (True, midnight, midnight + timedelta(days=1))
+
+
+def test_an_all_day_instant_off_its_zones_midnight_is_still_refused(world: SimpleNamespace) -> None:
+    """An offset makes a bound an instant: Tokyo's midnight is not the project zone's, so it is refused, not moved."""
+
+    w = world
+    variables = {"calendar": w.calendar.sqid, "start": "2026-11-19T15:00:00Z", "end": "2026-11-20T15:00:00Z"}
+
+    refused = execute_schema(_console(), _INSERT_ALL_DAY, variables, user=w.holder)
+
+    assert refused.errors and "An all-day event starts at midnight in its time zone" in repr(refused.errors)

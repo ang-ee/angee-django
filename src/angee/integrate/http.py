@@ -28,9 +28,10 @@ backend.
 
 from __future__ import annotations
 
+import logging
 import ssl
 import time
-from collections.abc import Callable, Iterable, Iterator
+from collections.abc import Callable, Collection, Iterable, Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
@@ -57,6 +58,25 @@ HTTP_TIMEOUT_SECONDS = 10
 
 _DOWNLOAD_CHUNK_BYTES = 64 * 1024
 """Maximum chunk read while enforcing a capped streamed download."""
+
+class _RequestOriginOnly(logging.Filter):
+    """Log only the origin of each request URL httpx2 reports.
+
+    httpx2 logs every request's full URL at INFO. A URL's path and query can be a
+    credential (a private calendar feed, a signed download), so the log keeps the
+    scheme, host and port, and drops the rest.
+    """
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        if isinstance(record.args, tuple):
+            record.args = tuple(
+                f"{arg.scheme}://{arg.netloc.decode('ascii', 'replace')}/…" if isinstance(arg, httpx2.URL) else arg
+                for arg in record.args
+            )
+        return True
+
+
+logging.getLogger("httpx2").addFilter(_RequestOriginOnly())
 
 _SSL_CONTEXT = ssl.create_default_context()
 """One shared system-trust-store TLS context reused by every pinned transport, so the
@@ -121,12 +141,17 @@ class OutboundBudget:
 
 @dataclass(frozen=True, slots=True)
 class DownloadResult:
-    """Successful bounded download with the final validated response facts."""
+    """A bounded download's final validated response facts: a success, or a status the caller listed.
+
+    headers are the final response's (validators, ``Retry-After``); a listed
+    non-success status carries an empty ``content``.
+    """
 
     content: bytes
     final_url: str
     content_type: str
     status_code: int
+    headers: Mapping[str, str] = field(default_factory=dict)
 
 
 @dataclass(slots=True)
@@ -310,6 +335,7 @@ class HttpClient:
         max_redirects: int | None = None,
         headers: dict[str, str] | None = None,
         allow_private: bool = False,
+        statuses: Collection[int] = (),
     ) -> DownloadResult | None:
         """Download decoded bytes within one explicit request/redirect/deadline budget.
 
@@ -319,6 +345,12 @@ class HttpClient:
         Identity encoding is requested; if ignored, httpx2 may allocate a decoded
         network chunk before the cap is checked. See :meth:`request` for the
         residual decoder-memory bound.
+
+        A conditional request sends its validators in ``headers``
+        (``If-None-Match``, ``If-Modified-Since``). A non-success final status in
+        ``statuses`` (a conditional GET's 304, a 429 or 5xx the caller reports
+        itself) returns as a result with its headers and no content; any other
+        returns ``None``, as an exhausted budget does.
         """
 
         if max_bytes is not None and max_bytes < 1:
@@ -343,7 +375,8 @@ class HttpClient:
                 try:
                     response = client.send(request, stream=True, follow_redirects=False)
                     try:
-                        if response.is_redirect:
+                        # Only a 3xx naming a location redirects; a 304 is a conditional GET's answer.
+                        if response.has_redirect_location:
                             if (
                                 response.next_request is None or response_redirects >= redirect_limit
                                 or state.redirects >= budget.redirects
@@ -355,7 +388,15 @@ class HttpClient:
                             request = response.next_request
                             continue
                         if not response.is_success:
-                            return None
+                            if response.status_code not in statuses:
+                                return None
+                            return DownloadResult(
+                                content=b"",
+                                final_url=str(response.url),
+                                content_type=response.headers.get("content-type", ""),
+                                status_code=response.status_code,
+                                headers=dict(response.headers),
+                            )
                         remaining_bytes = budget.bytes - state.bytes
                         if remaining_bytes <= 0:
                             return None
@@ -368,6 +409,7 @@ class HttpClient:
                             final_url=str(response.url),
                             content_type=response.headers.get("content-type", ""),
                             status_code=response.status_code,
+                            headers=dict(response.headers),
                         )
                     finally:
                         response.close()

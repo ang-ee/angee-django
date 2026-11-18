@@ -29,7 +29,11 @@ retiring the record would drop them, and no merge moves them yet.
 
 Every merge shares one system fold, :meth:`MergeableMixin._fold`: its refusals, the
 moves (and the identity copies they drop) as named system work, and the merge
-changeset. :meth:`MergeableMixin.merge` calls it once it has authorized the
+changeset. While its moves run, :func:`merge_maintenance` is true, for a user's
+merge and a system fold alike: a model whose rows refuse ordinary writes by a rule
+of their own (a calendar source's replicas) reads it to admit the merge's moves,
+collapses and drops, which re-point identity and edit nothing.
+:meth:`MergeableMixin.merge` calls it once it has authorized the
 actor, whose own delete retires each merged record; under an actor REBAC only
 deletes and recreates an edge, which would cost a row its identity. A model's own
 system verb that folds a duplicate has no actor to authorize and calls it directly.
@@ -37,8 +41,9 @@ system verb that folds a duplicate has no actor to authorize and calls it direct
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Sequence
-from contextlib import ExitStack
+from collections.abc import Iterable, Iterator, Sequence
+from contextlib import ExitStack, contextmanager
+from contextvars import ContextVar
 from typing import Any, ClassVar, Self, cast
 
 from django.core.exceptions import ValidationError
@@ -61,6 +66,30 @@ MERGE_REASON = "merge"
 
 MERGE_LIMIT = 100
 """The most records one merge folds into its survivor."""
+
+_MAINTENANCE: ContextVar[bool] = ContextVar("angee_merge_maintenance", default=False)
+
+
+def merge_maintenance() -> bool:
+    """Whether a merge's own maintenance runs now: its moves, and the collapses and drops they make.
+
+    A merge re-points identity; it edits nothing. A model whose rows refuse
+    ordinary writes by a rule of its own (a calendar source's replicas, which only
+    their source writes) admits this maintenance by reading it. Only
+    :meth:`MergeableMixin._fold` sets it, around its moves, for a user's merge and a
+    system fold alike.
+    """
+
+    return _MAINTENANCE.get()
+
+
+@contextmanager
+def _maintaining() -> Iterator[None]:
+    token = _MAINTENANCE.set(True)
+    try:
+        yield
+    finally:
+        _MAINTENANCE.reset(token)
 
 class MergeableMixin(AngeeModel):
     """Merge records of this model into a survivor through one template.
@@ -254,7 +283,7 @@ class MergeableMixin(AngeeModel):
             self.validate_merge(merged)
             self.merge_fields(merged, **options)
             moving = model.moved_references()
-            with system_context(reason=MERGE_REASON):
+            with system_context(reason=MERGE_REASON), _maintaining():
                 # Redirects are identity, even when a container keeps its members.
                 # Tracked updates make flattening reversible with this same merge.
                 model._base_manager.filter(

@@ -95,6 +95,7 @@ export {
   authoredQueryOptions,
   type AuthoredDocument,
   type AuthoredMutate,
+  type AuthoredMutateOptions,
   type AuthoredMutationEnvelope,
   type AuthoredMutationOptions,
   type AuthoredOperationOptions,

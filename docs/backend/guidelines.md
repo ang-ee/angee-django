@@ -2127,10 +2127,9 @@ validated at the driver boundary.
 RecordLink is a pointing row with `merge_policy = MOVE`. Merging its target
 moves every link to the survivor; both remote cards receive the survivor's
 projection through their existing write-back policies and remote preconditions.
-`StreamDefinition` declarations own the five generation-seed knobs: `cursor`,
-`reconcile_interval`, `absence_threshold`, `tombstone_retention`, and `config`.
-Persisted stream rows carry runtime state; management pages do not redefine
-those declaration facts.
+[`StreamDefinition`](../../src/angee/integrate/states.py) declarations own every
+stream knob, including the generation seeds. Persisted stream rows carry runtime
+state; management pages do not redefine those declaration facts.
 
 Public-feed responding composes [held replies, reply hold, feed streams and
 delivery settlement](../glossary.md#workflows) through the

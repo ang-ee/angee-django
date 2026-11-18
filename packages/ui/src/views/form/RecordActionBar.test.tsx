@@ -101,6 +101,13 @@ describe("RecordActionBar", () => {
       deleteAction={{ canDelete: false, isPending: false, onDelete: vi.fn() }} />);
     expect(screen.queryByRole("button", { name: "Actions" })).toBeNull();
   });
+  test("a contributed verb that renders nothing leaves no Actions menu", () => {
+    // As a record with no startable workflow: the contribution decides at render time and offers nothing.
+    renderActionBar(<RecordActionBar record={record} actions={[]} menuPlacement="leading" contributedActions={
+      <RecordActionBar record={record} actions={[{ id: "hidden", label: "Hidden", run: vi.fn(), visibleWhen: () => false }]} />
+    } />);
+    expect(screen.queryByRole("button", { name: "Actions" })).toBeNull();
+  });
   test("contributed descriptors compose into the existing Actions menu", async () => {
     const run = vi.fn();
     renderActionBar(<RecordActionBar record={record} actions={[]} contributedActions={

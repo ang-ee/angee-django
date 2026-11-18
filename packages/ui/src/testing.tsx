@@ -19,6 +19,7 @@ import type {
   MutationDialogProps,
   MutationDialogValues,
 } from "./views/form/MutationDialog";
+import { submitMutationDialog } from "./views/form/MutationDialog";
 
 type UiModule = typeof import("./index");
 export type UiTestDoubles = Partial<Record<keyof UiModule, unknown>>;
@@ -168,9 +169,10 @@ export function createMutationDialogTestDouble({
             ...props.initialValues,
             ...rawValues,
           });
-          void Promise.resolve(props.onSubmit(parsed)).then((result) => {
-            if (result.status === "ok") props.onSubmitted?.(result.data, parsed);
-          });
+          void Promise.resolve(submitMutationDialog(props, parsed, String(props.errorFallback ?? "")))
+            .then((result) => {
+              if (result.status === "ok") props.onSubmitted?.(result.data, parsed);
+            });
         }}
       >
         <button type="submit">{buttonLabel}</button>

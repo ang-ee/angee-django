@@ -9,7 +9,7 @@ from __future__ import annotations
 import json
 import logging
 from collections.abc import Iterator, Mapping, Sequence
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from contextvars import copy_context
 from copy import copy
 from dataclasses import dataclass, field, replace
@@ -32,15 +32,17 @@ from angee.base.serialization import canonical_json, canonical_json_sha256
 from angee.integrate.errors import IntegrationError, safe_integration_failure
 from angee.integrate.impl import AdapterContractError, BridgeImpl
 from angee.integrate.states import (
+    EXTERNAL_KEY_LENGTH,
     UNSET,
     LinkStatus,
     StreamDefinition,
     StreamDirection,
     StreamKind,
     StreamPhase,
+    StreamState,
     SyncFailureKind,
 )
-from angee.integrate.sync import current_progress_bridge, progress_bridge_context
+from angee.integrate.sync import current_progress_bridge, progress_bridge_context, sync_deadline_context
 from angee.jobs.timeouts import task_time_budget
 from angee.provenance.context import changeset, current_changeset
 
@@ -137,6 +139,14 @@ class StreamPage:
     exhausted: bool = True
     resync_required: bool = False
     cursor_expires_at: datetime | None = None
+    absent: Sequence[str] = ()
+    """Replica keys a complete listing on this page did not include.
+
+    The driver counts each once against the stream's absence threshold
+    (``RecordLinkManager.mark_absent``), so one incomplete listing never
+    tombstones a record. An adapter reports them on one page per listing, and
+    none when the listing came back empty while records exist.
+    """
 
 
 @dataclass(frozen=True, slots=True)
@@ -282,6 +292,8 @@ class PageResult:
     failure_ids: tuple[Any, ...] = ()
     reset: bool = False
     progress: str = ""
+    appeared: int = 0
+    """Links of a container-holding stream that became live containers on this page: new, revived or bound."""
 
     def check_continuation(self, *, previous: str | None = None, resets: int = 0) -> tuple[str, int]:
         """Reject stalled pages and repeated baseline resets in one partition drain.
@@ -320,11 +332,17 @@ def _quarantine(stream: Any, record: Any, error: SemanticError, *, link: Any = N
 
 
 def reset_stream(stream: Any, *, cursor: dict[str, Any]) -> PageResult:
-    """Retire an epoch and seed its replacement through the stream manager."""
+    """Supersede an epoch and seed its replacement through the stream manager.
+
+    A retired generation whose container is gone is not superseded
+    (``bump_generation`` returns it), so its page reports exhausted, not reset.
+    """
     cursor = _validated_cursor(cursor)
     manager = type(stream).objects
-    stream = manager.bump_generation(stream, cursor=cursor)
-    return PageResult(stream, reset=True)
+    successor = manager.bump_generation(stream, cursor=cursor)
+    if successor.pk == stream.pk:
+        return PageResult(successor, exhausted=True)
+    return PageResult(successor, reset=True)
 
 
 def _decision(record: RecordChange, *, base: Any, adopting: bool, mapping_version: int) -> ChangeKind:
@@ -415,7 +433,7 @@ def advance_stream(
         raise RuntimeError("Stream extraction must run outside a database transaction.")
     if page_bound < 1:
         raise ValueError("page_bound must be positive.")
-    with system_context(reason="integrate.stream.advance"):
+    with system_context(reason="integrate.stream.advance"), sync_deadline_context(deadline):
         stream.refresh_from_db()
         if stream.resync_required:
             return reset_stream(stream, cursor={})
@@ -501,6 +519,10 @@ def _apply_page(
     count = 0
     failures: list[str] = []
     applied: list[ApplyResult] = []
+    # A container that stops observing (tombstoned or withdrawn) retires the streams it holds.
+    ended = any(record.tombstone for record in page.records if isinstance(record, RecordChange)) or any(
+        isinstance(result, WriteBackResult) and result.tombstone for _bases, result in written.values()
+    )
     with changeset(fresh=True, activity="pull", origin=stream), transaction.atomic():
         current_changeset(record=True)
         locked = type(stream).objects.lock_current(stream, fenced_to=stream)
@@ -510,10 +532,23 @@ def _apply_page(
             if evidence_rows is None
             else {link.external_key: link for link in evidence_rows.order_by("pk").lock_if_supported()}
         )
+        holding = evidence_rows is not None and locked.holds_containers
+        live_before = (
+            set(evidence_rows.live_containers().values_list("pk", flat=True))
+            if evidence_rows is not None and holding
+            else set()
+        )
         seen: set[str] = set()
         for record in page.records:
             link = None
+            observed = None
             revision = None
+            if evidence_rows is not None and len(record.external_key) > EXTERNAL_KEY_LENGTH:
+                # No link can hold this identity: the stream keeps one refusal and the page goes on.
+                message = f"The remote identity is longer than {EXTERNAL_KEY_LENGTH} characters."
+                refusal = SemanticError("identity_too_long", details={"message": message})
+                failures.append(_quarantine(locked, record, refusal).pk)
+                continue
             try:
                 with transaction.atomic():
                     if evidence_rows is not None:
@@ -608,12 +643,14 @@ def _apply_page(
                         if outcome.mapped_payload is UNSET:
                             raise AdapterContractError("Replica ApplyResult must include its applied mapped_payload.")
                         _promote(locked, link, record, outcome, origin="remote")
+                        ended = ended or outcome.target is None
                     locked.resolve_applied(record)
                 applied.append(outcome)
                 count += outcome.count
             except (SemanticError, ValidationError, DataError) as error:
-                # The record savepoint rolled back, including a new identity.
-                if locked.kind == StreamKind.RECORD_REPLICA and isinstance(record, RecordChange):
+                # The record savepoint rolled back, including a new identity. Observe it again
+                # only when observing succeeded: an identity that failed to observe stays out.
+                if link is not None and locked.kind == StreamKind.RECORD_REPLICA and isinstance(record, RecordChange):
                     link = links.observe(
                         locked,
                         record.external_key,
@@ -649,6 +686,23 @@ def _apply_page(
                     )
                 record_key = "" if isinstance(record, RecordChange) else adapter.record_key(record)
                 failures.append(_quarantine(locked, record, refusal, link=link, record_key=record_key).pk)
+        if page.absent:
+            if evidence_rows is None:
+                raise AdapterContractError("Only replica pages report absent keys.")
+            absent = links.mark_absent(locked, page.absent)
+            if absent:
+                adapter.on_absent(locked, absent)
+            ended = ended or any(link.status == LinkStatus.TOMBSTONE for link in absent)
+        if ended:
+            type(locked).objects.retire_children(locked)
+        appeared = (
+            links.filter(stream=locked, external_key__in=[record.external_key for record in page.records])
+            .live_containers()
+            .exclude(pk__in=live_before)
+            .count()
+            if holding
+            else 0
+        )
         adapter.finish_page(locked, page, applied)
         if reconcile_state is not None:
             locked.reconcile_state = reconcile_state
@@ -662,7 +716,7 @@ def _apply_page(
             )
     hashes = [record.source_hash for record in page.records] if locked.kind == StreamKind.RECORD_REPLICA else []
     progress = canonical_json_sha256([locked.generation, page.cursor, hashes])
-    return PageResult(locked, count, page.exhausted, tuple(failures), progress=progress)
+    return PageResult(locked, count, page.exhausted, tuple(failures), progress=progress, appeared=appeared)
 
 
 def push_stream(
@@ -678,7 +732,11 @@ def push_stream(
         raise RuntimeError("Remote writes must run outside a database transaction.")
     count = 0
     failures: list[str] = []
-    with changeset(fresh=True, activity="push", origin=stream), system_context(reason="integrate.stream.push"):
+    with (
+        changeset(fresh=True, activity="push", origin=stream),
+        system_context(reason="integrate.stream.push"),
+        sync_deadline_context(deadline),
+    ):
         stream.refresh_from_db()
         if not stream.writes_back or stream.adopts_baseline():
             return PageResult(stream, exhausted=True)
@@ -720,6 +778,8 @@ def push_stream(
                 _reflect_write(locked_stream, locked, record, result)
                 # The write the remote once refused has now landed.
                 locked_stream.resolve_applied(record)
+                if result.tombstone:
+                    type(locked_stream).objects.retire_children(locked_stream)
             count += 1
         if external_keys is None:
             # A due refusal whose record has nothing left to write (deleted or
@@ -812,22 +872,42 @@ def reconcile_stream(stream: Any, adapter: BridgeImpl, *, page_bound: int = 100,
     Continue while stream.reconcile_state is nonempty. Enumeration seeks after
     its last committed key; each key page is read and applied before bounded
     root/child absence passes. Without identity reads, a separate extraction
-    baseline precedes enumeration. The adapter cursor remains opaque.
+    baseline precedes enumeration. The adapter cursor remains opaque. A retired
+    stream runs only the retirement pass its retirement started: the same
+    bounded root/child absence passes, tombstoning each link at once. The pass
+    pauses, touching nothing, while its container observes again; reopening the
+    stream (SyncStreamManager.bump_generation) drops it.
     """
 
     if connection.in_atomic_block:
         raise RuntimeError("Remote enumeration must run outside a database transaction.")
     if page_bound < 1:
         raise ValueError("page_bound must be positive.")
-    with changeset(fresh=True, activity="pull", origin=stream), system_context(reason="integrate.stream.reconcile"):
+    with (
+        changeset(fresh=True, activity="pull", origin=stream),
+        system_context(reason="integrate.stream.reconcile"),
+        sync_deadline_context(deadline),
+    ):
         manager = type(stream).objects
         identity_reads = adapter.supports_identity_reads
         stream.refresh_from_db()
-        if not stream.accepts_rescan() or stream.reconcile_interval is None:
+
+        def idle(row: Any) -> bool:
+            if row.state == StreamState.RETIRED:
+                return not row.reconcile_state
+            return not row.accepts_rescan() or row.reconcile_interval is None
+
+        if idle(stream):
             return 0
         with transaction.atomic():
             locked = manager.lock_current(stream)
-            if not locked.accepts_rescan() or locked.reconcile_interval is None:
+            if idle(locked):
+                return 0
+            if (
+                locked.state == StreamState.RETIRED
+                and locked.links.model.objects.filter(pk=locked.container_id).observing().exists()
+            ):
+                # The container came back: the pass pauses, touching nothing; reopening drops it.
                 return 0
             state = _validated_cursor(locked.reconcile_state) or None
             if state is None:
@@ -899,17 +979,14 @@ def reconcile_stream(stream: Any, adapter: BridgeImpl, *, page_bound: int = 100,
                 )
                 if state["after"] is not None:
                     rows = rows.filter(pk__gt=state["after"])
-                batch = tuple(rows.order_by("pk").lock_if_supported()[:page_bound])
-                changed = links.mark_absent(locked, [link.external_key for link in batch])
-                previous = {link.pk: link.status for link in batch}
-                transitions = tuple(
-                    link
-                    for link in links.filter(pk__in=previous).order_by("pk")
-                    if link.status != previous[link.pk]
-                    and link.status in (LinkStatus.UNAVAILABLE, LinkStatus.TOMBSTONE)
+                batch = tuple(rows.order_by("pk").only("pk", "external_key").lock_if_supported()[:page_bound])
+                transitions = links.mark_absent(
+                    locked, [link.external_key for link in batch], confirmed=locked.state == StreamState.RETIRED
                 )
                 if transitions:
                     adapter.on_absent(locked, transitions)
+                if any(link.status == LinkStatus.TOMBSTONE for link in transitions):
+                    manager.retire_children(locked)
                 if batch:
                     locked.save_reconcile({**state, "after": batch[-1].pk})
                 elif state["phase"] == "roots":
@@ -917,7 +994,7 @@ def reconcile_stream(stream: Any, adapter: BridgeImpl, *, page_bound: int = 100,
                 else:
                     locked.save_reconcile(None)
                 stream.reconcile_state, stream.last_reconciled_at = locked.reconcile_state, locked.last_reconciled_at
-                return changed
+                return len(batch)
         stream.reconcile_state, stream.last_reconciled_at = locked.reconcile_state, locked.last_reconciled_at
         return 0
 
@@ -1041,7 +1118,19 @@ def _report(bridge: Any, message: str, **details: Any) -> None:
         progress.report_progress(str(bridge.SyncStage.SYNCING), message=message, details=details)
 
 
-def _drain(bridge: Any, adapter: BridgeImpl, definition: StreamDefinition, deadline: float) -> int:
+def _drain(bridge: Any, adapter: BridgeImpl, definition: StreamDefinition, deadline: float) -> tuple[int, int]:
+    """Drain one partition; return the records it landed and the container links that appeared.
+
+    A child whose container stopped being live since the declaration pauses. Past
+    the deadline nothing is opened or read: the partition reports its budget.
+    """
+
+    container = definition.container
+    if container is not None and not type(container).objects.filter(pk=container.pk).live_containers().exists():
+        return 0, 0
+    if monotonic() >= deadline:
+        _report_budget(bridge, definition, landed=0)
+        return 0, 0
     stage = "open"
     try:
         stream = open_stream(
@@ -1054,7 +1143,7 @@ def _drain(bridge: Any, adapter: BridgeImpl, definition: StreamDefinition, deadl
         )
         stage = "rescan"
         stream = begin_stream_cycle(stream, adapter)
-        landed, resets = 0, 0
+        landed, appeared, resets = 0, 0, 0
         page_bound = max(1, int(bridge.config.get("sync_page_bound", 100)))
         exhausted = False
         previous = None
@@ -1063,6 +1152,7 @@ def _drain(bridge: Any, adapter: BridgeImpl, definition: StreamDefinition, deadl
             result = advance_stream(stream, adapter, page_bound=page_bound, deadline=deadline)
             stream, exhausted = result.stream, result.exhausted
             landed += result.count
+            appeared += result.appeared
             if monotonic() >= deadline:
                 break
             stage = "continuation"
@@ -1087,20 +1177,47 @@ def _drain(bridge: Any, adapter: BridgeImpl, definition: StreamDefinition, deadl
                             break
                 break
         if not exhausted:
-            _report(
-                bridge,
-                "Sync time budget reached; resuming next run",
-                stream=definition.key,
-                partition=definition.partition,
-                landed=landed,
-                budget_exhausted=True,
-            )
-        return landed
+            _report_budget(bridge, definition, landed=landed)
+        return landed, appeared
     except Exception as error:  # noqa: BLE001 -- retain the operation that actually failed.
         raise BridgeSyncError((PartitionFailure(definition, stage, error),)) from error
 
 
-def _drain_partition(bridge: Any, definition: StreamDefinition, deadline: float) -> int:
+def _report_budget(bridge: Any, definition: StreamDefinition, *, landed: int) -> None:
+    _report(
+        bridge,
+        "Sync time budget reached; resuming next run",
+        stream=definition.key,
+        partition=definition.partition,
+        landed=landed,
+        budget_exhausted=True,
+    )
+
+
+def _retire(bridge: Any, adapter: BridgeImpl, definition: StreamDefinition, deadline: float) -> None:
+    """Run the pending retirement passes of the streams a container-holding partition retired, within the deadline.
+
+    A pass pauses (makes no progress) while its container observes again; reopening
+    is the child's next declaration.
+    """
+
+    try:
+        manager = bridge.sync_streams.model.objects
+        parent = manager.current_for_bridge(bridge, definition.key).filter(partition=definition.partition).first()
+        if parent is None:
+            return
+        page_bound = max(1, int(bridge.config.get("sync_page_bound", 100)))
+        for child in manager.retiring(parent):
+            while monotonic() < deadline:
+                pending = child.reconcile_state
+                reconcile_stream(child, adapter, page_bound=page_bound, deadline=deadline)
+                if not child.reconcile_state or child.reconcile_state == pending:
+                    break
+    except Exception as error:  # noqa: BLE001 -- retain the operation that actually failed.
+        raise BridgeSyncError((PartitionFailure(definition, "retire", error),)) from error
+
+
+def _drain_partition(bridge: Any, definition: StreamDefinition, deadline: float) -> tuple[int, int]:
     close_old_connections()
     try:
         with system_context(reason="integrate.stream.partition"):
@@ -1115,19 +1232,131 @@ def _drain_partition(bridge: Any, definition: StreamDefinition, deadline: float)
         connections.close_all()
 
 
+def _declare(adapter: BridgeImpl, deadline: float) -> tuple[StreamDefinition, ...]:
+    """Read the adapter's declared partitions in their stable order, each once."""
+
+    definitions = tuple(sorted(adapter.streams(deadline=deadline), key=lambda item: (item.key, item.partition)))
+    identities = [(item.key, item.partition) for item in definitions]
+    if len(identities) != len(set(identities)):
+        raise AdapterContractError("A backend declared the same stream partition twice.")
+    return definitions
+
+
+def _holders(wave: Sequence[StreamDefinition]) -> dict[tuple[str, str], tuple[str, str] | None]:
+    """Map each partition of the wave to the partition holding its container, when that one is in the wave too."""
+
+    identities = {(item.key, item.partition) for item in wave}
+    holders: dict[tuple[str, str], tuple[str, str] | None] = {}
+    for item in wave:
+        holder = item.container.stream if item.container is not None else None
+        identity = (holder.key, holder.partition) if holder is not None else None
+        holders[item.key, item.partition] = identity if identity in identities else None
+    return holders
+
+
+def _holder_depths(holders: Mapping[tuple[str, str], tuple[str, str] | None]) -> dict[tuple[str, str], int]:
+    """Count each partition's holders within the wave; a cyclic or self-held declaration fails fast."""
+
+    depths: dict[tuple[str, str], int] = {}
+    for identity in holders:
+        chain: list[tuple[str, str]] = []
+        current: tuple[str, str] | None = identity
+        while current is not None and current not in depths:
+            if current in chain:
+                raise AdapterContractError(f"Stream containers form a cycle: {chain[chain.index(current):]}.")
+            chain.append(current)
+            current = holders[current]
+        depth = -1 if current is None else depths[current]
+        for item in reversed(chain):
+            depth += 1
+            depths[item] = depth
+    return depths
+
+
+def _drain_wave(
+    bridge: Any, adapter: BridgeImpl, wave: Sequence[StreamDefinition], deadline: float, parallelism: int
+) -> tuple[int, int, list[PartitionFailure]]:
+    """Drain independent partitions in order, or concurrently; total what landed and what appeared.
+
+    A partition held by a container starts only after the stream holding that
+    container finished its pages and sweep in this wave: sequentially by holder
+    depth, concurrently once the holder's worker completes. The holders'
+    retirement passes run last, as they change no live container.
+    """
+
+    landed = appeared = 0
+    failures: list[PartitionFailure] = []
+    holders = _holders(wave)
+    depths = _holder_depths(holders)
+    if parallelism <= 1 or len(wave) <= 1:
+        for definition in sorted(wave, key=lambda item: (depths[item.key, item.partition], item.key, item.partition)):
+            try:
+                counts = _drain(bridge, adapter, definition, deadline)
+            except BridgeSyncError as error:
+                failures.extend(error.failures)
+                continue
+            landed, appeared = landed + counts[0], appeared + counts[1]
+    else:
+        held: dict[tuple[str, str], list[StreamDefinition]] = {}
+        for definition in wave:
+            holder = holders[definition.key, definition.partition]
+            if holder is not None:
+                held.setdefault(holder, []).append(definition)
+        with ThreadPoolExecutor(max_workers=min(parallelism, len(wave)), thread_name_prefix="bridge-sync") as pool:
+            # Each worker records its own changeset row under the cycle's boundary
+            # and actor (angee.provenance.context), so the copied context is safe to share.
+            futures: dict[Future[tuple[int, int]], StreamDefinition] = {}
+
+            def submit(items: Sequence[StreamDefinition]) -> None:
+                for item in items:
+                    futures[pool.submit(copy_context().run, _drain_partition, bridge, item, deadline)] = item
+
+            submit([item for item in wave if holders[item.key, item.partition] is None])
+            while futures:
+                done, _pending = wait(futures, return_when=FIRST_COMPLETED)
+                for future in done:
+                    definition = futures.pop(future)
+                    submit(held.pop((definition.key, definition.partition), ()))
+                    try:
+                        counts = future.result()
+                    except BridgeSyncError as error:
+                        failures.extend(error.failures)
+                        continue
+                    except Exception as error:  # noqa: BLE001 -- partition setup/cleanup can also fail.
+                        failures.append(PartitionFailure(definition, "partition", error))
+                        continue
+                    landed, appeared = landed + counts[0], appeared + counts[1]
+        if held:
+            raise AdapterContractError(f"Held stream partitions were never released: {sorted(held)}.")
+    for definition in wave:
+        if definition.holds_containers and monotonic() < deadline:
+            try:
+                _retire(bridge, adapter, definition, deadline)
+            except BridgeSyncError as error:
+                failures.extend(error.failures)
+    return landed, appeared, failures
+
+
 def sync_bridge(bridge: Any) -> int:
-    """Drive declared partitions within the existing bridge task's time budget."""
+    """Drive declared partitions within the existing bridge task's time budget.
+
+    Every declared partition drains in the first wave, in its order and
+    parallelism, children of containers applied before this cycle included; a
+    child starts after the stream holding its container. A wave in which a
+    container-holding stream (``StreamDefinition.holds_containers``) gained a
+    live container (created, revived or newly bound) declares again, so its
+    children drain in a further wave of this cycle; no wave starts after the
+    deadline.
+    """
 
     config = bridge.config
     worker_budget = task_time_budget().total_seconds()
     deadline = monotonic() + max(0.0, min(worker_budget, float(config.get("sync_time_budget", worker_budget))))
     adapter = bridge.capability_impl
     try:
-        with system_context(reason="integrate.bridge.streams"):
-            definitions = tuple(sorted(adapter.streams(deadline=deadline), key=lambda item: (item.key, item.partition)))
-            identities = [(item.key, item.partition) for item in definitions]
-            if len(identities) != len(set(identities)):
-                raise AdapterContractError("A backend declared the same stream partition twice.")
+        # The cycle's deadline is set once: _drain's identity reads and sweep read it, and each
+        # pool worker inherits it through its copied context.
+        with system_context(reason="integrate.bridge.streams"), sync_deadline_context(deadline):
             parallelism = max(1, int(config.get("sync_parallelism", 4)))
             if adapter.sync_parallelism is not None:
                 parallelism = min(parallelism, adapter.sync_parallelism)
@@ -1135,29 +1364,23 @@ def sync_bridge(bridge: Any) -> int:
                 parallelism = 1
             failures: list[PartitionFailure] = []
             landed = 0
-            if parallelism <= 1 or len(definitions) <= 1:
-                for definition in definitions:
-                    try:
-                        landed += _drain(bridge, adapter, definition, deadline)
-                    except BridgeSyncError as error:
-                        failures.extend(error.failures)
-            else:
-                with ThreadPoolExecutor(
-                    max_workers=min(parallelism, len(definitions)), thread_name_prefix="bridge-sync"
-                ) as pool:
-                    # Each worker records its own changeset row under the cycle's boundary
-                    # and actor (angee.provenance.context), so the copied context is safe to share.
-                    futures = {
-                        pool.submit(copy_context().run, _drain_partition, bridge, definition, deadline): definition
-                        for definition in definitions
-                    }
-                    for future in as_completed(futures):
-                        try:
-                            landed += future.result()
-                        except BridgeSyncError as error:
-                            failures.extend(error.failures)
-                        except Exception as error:  # noqa: BLE001 -- partition setup/cleanup can also fail.
-                            failures.append(PartitionFailure(futures[future], "partition", error))
+            drained: set[tuple[str, str]] = set()
+            wave = _declare(adapter, deadline)
+            while wave:
+                wave_landed, appeared, wave_failures = _drain_wave(bridge, adapter, wave, deadline, parallelism)
+                landed += wave_landed
+                failures.extend(wave_failures)
+                drained.update((item.key, item.partition) for item in wave)
+                if not appeared or monotonic() >= deadline:
+                    break
+                try:
+                    declared = _declare(adapter, deadline)
+                except Exception:
+                    # The declaration's own failure must not hide partitions that already failed.
+                    for failure in failures:
+                        failure.log(bridge)
+                    raise
+                wave = tuple(item for item in declared if (item.key, item.partition) not in drained)
             if failures:
                 sync_error = BridgeSyncError(failures)
                 for failure in sync_error.failures:

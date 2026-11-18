@@ -8,10 +8,12 @@ by overriding ``TIME_ZONE`` per case.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from datetime import UTC, datetime, time, timedelta
 from time import perf_counter
 from zoneinfo import ZoneInfo
 
+import dateutil.rrule
 import pytest
 import strawberry
 import strawberry_django
@@ -21,11 +23,13 @@ from django.db.migrations.state import ModelState
 from django.db.migrations.writer import MigrationWriter
 from django.test import override_settings
 from django.test.utils import isolate_apps
+from hypothesis import assume, example, given, settings
+from hypothesis import strategies as st
 from pydantic import TypeAdapter
 from pydantic import ValidationError as PydanticValidationError
 
 from angee.scheduling.fields import RecurrenceField, TimeZoneField
-from angee.scheduling.recurrence import MAX_OCCURRENCES, Recurrence
+from angee.scheduling.recurrence import MAX_OCCURRENCES, Recurrence, utc_stamp
 from angee.scheduling.zones import ZoneName, get_zone_info
 
 with isolate_apps("angee.scheduling"):
@@ -318,6 +322,425 @@ def test_recurrence_refuses_more_occurrences_than_its_limit_and_never_truncates(
         huge.get_last_occurrence(_utc(2026, 7, 6, 9))
     with pytest.raises(ValidationError):
         Recurrence("FREQ=HOURLY").occurrences(_utc(2026, 1, 1), _utc(2026, 1, 1), _utc(2032, 1, 1))
+
+
+def test_a_floating_until_past_the_last_utc_instant_ends_with_the_representable_range() -> None:
+    forever = Recurrence("FREQ=YEARLY;UNTIL=99991231T235959")
+
+    forever.validate()
+    last = forever.get_last_occurrence(_utc(2026, 1, 5, 14), zone="America/New_York")
+
+    assert last == datetime(9999, 1, 5, 14, tzinfo=UTC)
+
+
+def test_an_expansion_past_the_representable_dates_is_refused_never_overflowed() -> None:
+    end_of_time = datetime.max.replace(tzinfo=UTC)
+
+    with pytest.raises(ValidationError) as refused:
+        Recurrence("FREQ=DAILY").occurrences(_utc(2026, 1, 1), end_of_time, end_of_time, zone="Pacific/Kiritimati")
+
+    assert refused.value.code == "out_of_range"
+
+
+def test_a_rule_that_never_matches_a_day_is_refused_at_once() -> None:
+    february_thirtieth = Recurrence("FREQ=DAILY;BYMONTH=2;BYMONTHDAY=30")
+
+    began = perf_counter()
+    with pytest.raises(ValidationError) as refused:
+        february_thirtieth.validate(dtstart=_utc(2026, 1, 1, 9))
+
+    assert refused.value.code == "never_occurs"
+    assert perf_counter() - began < 1
+
+
+@pytest.mark.parametrize(
+    "rule",
+    [
+        pytest.param("FREQ=WEEKLY;INTERVAL=2;BYDAY=TU", id="every-other-tuesday"),
+        pytest.param("FREQ=YEARLY;BYMONTH=2;BYMONTHDAY=29", id="leap-day"),
+    ],
+)
+def test_a_rule_that_occurs_within_thirty_years_of_its_start_is_valid(rule: str) -> None:
+    Recurrence(rule).validate(dtstart=_utc(2026, 3, 2, 9))
+
+
+def test_a_rule_whose_interval_skips_every_matching_day_never_occurs_and_is_probed_fast() -> None:
+    # Every seventh day from a Monday is a Monday: the Tuesday filter never matches.
+    began = perf_counter()
+
+    assert Recurrence("FREQ=DAILY;INTERVAL=7;BYDAY=TU").never_occurs(_utc(2026, 3, 2, 9), zone="UTC")
+    assert perf_counter() - began < 1
+
+
+def test_a_rule_ending_before_its_first_match_never_occurs() -> None:
+    assert Recurrence("FREQ=YEARLY;BYMONTH=12;UNTIL=20260601T000000Z").never_occurs(_utc(2026, 1, 1), zone="UTC")
+
+
+@pytest.mark.parametrize(
+    "rule",
+    [
+        pytest.param("FREQ=DAILY\nFREQ=WEEKLY", id="rule-set"),
+        pytest.param("DTSTART:20260101T090000Z\nRRULE:FREQ=DAILY", id="embedded-dtstart"),
+        pytest.param("RRULE:FREQ=DAILY", id="property-prefix"),
+        pytest.param("FREQ=DAILY\nEXDATE:20260102T090000Z", id="exdate-line"),
+    ],
+)
+def test_only_one_bare_rule_validates(rule: str) -> None:
+    with pytest.raises(ValidationError) as refused:
+        Recurrence(rule).validate()
+
+    assert refused.value.code == "invalid"
+    with pytest.raises(ValidationError):
+        RecurrenceField().clean(rule, None)
+
+
+def test_a_sparse_rule_far_from_its_start_reads_its_window_and_the_gap_after_it(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Every fourth February 29: read seventy years on, the walk starts the period before the window.
+    leap_days = Recurrence("FREQ=DAILY;BYMONTH=2;BYMONTHDAY=29")
+    leap_days.never_occurs()  # its day filters' one-off probe is cached, not a read's cost
+    periods = _count_periods(monkeypatch)
+
+    found = leap_days.occurrences(_utc(2028, 2, 29, 9), _utc(2096, 1, 1), _utc(2096, 3, 1), zone="UTC")
+
+    assert found == [_utc(2096, 2, 29, 9)]
+    # dateutil scans the window and the gap to the next leap day (2100 is none), never the 68 years before it.
+    assert periods() <= (datetime(2104, 2, 29) - datetime(2095, 12, 31)).days + 1
+    assert periods() < (datetime(2096, 1, 1) - datetime(2028, 2, 29)).days // 4
+
+
+def test_a_never_occurs_probe_at_the_end_of_time_is_refused_not_overflowed() -> None:
+    with pytest.raises(ValidationError) as refused:
+        Recurrence("FREQ=DAILY;INTERVAL=7;BYDAY=TU").validate(
+            dtstart=datetime(9999, 12, 31, 23, tzinfo=UTC), zone="Pacific/Kiritimati"
+        )
+
+    assert refused.value.code == "out_of_range"
+
+
+def test_a_span_too_long_to_represent_reaches_past_every_date_and_stays_valid() -> None:
+    once_in_three_centuries = Recurrence("FREQ=YEARLY;INTERVAL=300")
+    start = _utc(2026, 1, 1, 9)
+
+    once_in_three_centuries.validate(dtstart=start)
+    assert once_in_three_centuries.occurrences(start, _utc(2026, 1, 1), _utc(2027, 1, 1), zone="UTC") == [start]
+
+
+def test_a_bounded_series_read_across_its_last_occurrence_is_never_refused() -> None:
+    capped = Recurrence("FREQ=DAILY;COUNT=10000")
+    start = _utc(2026, 1, 1, 9)
+    last = datetime(2053, 5, 18, 9, tzinfo=UTC)  # the 10,000th day, inclusive of the start
+
+    window = capped.occurrences(start, datetime(2053, 5, 15, tzinfo=UTC), datetime(2053, 6, 1, tzinfo=UTC), zone="UTC")
+
+    assert window[-1] == last and len(window) == 4
+    assert capped.get_last_occurrence(start, zone="UTC") == last
+
+
+def test_the_spring_gap_instant_of_an_hourly_rule_counts_once() -> None:
+    hourly = Recurrence("FREQ=HOURLY")
+    start = datetime(2026, 3, 8, 0, tzinfo=ZoneInfo("America/New_York"))
+
+    moments = hourly.occurrences(start, start, start + (datetime(2026, 3, 8, 6) - datetime(2026, 3, 8)),
+                                 zone="America/New_York")
+
+    assert len(moments) == len(set(moments))
+
+
+def test_an_open_daily_series_reads_any_window_and_saving_counts_from_its_start() -> None:
+    daily = Recurrence("FREQ=DAILY")
+    start = _utc(2026, 1, 1, 9)
+
+    assert daily.occurrences(start, _utc(2046, 1, 1), _utc(2046, 1, 2), zone="UTC") == [_utc(2046, 1, 1, 9)]
+    assert daily.occurrences(start, _utc(2200, 1, 1), _utc(2200, 1, 2), zone="UTC") == [_utc(2200, 1, 1, 9)]
+    # The save-time cap still counts from DTSTART: a horizon past 10,000 days refuses.
+    with pytest.raises(ValidationError) as refused:
+        daily.validate(dtstart=start, zone="UTC", through=_utc(2200, 1, 1))
+    assert refused.value.code == "series_too_long"
+    assert "from its start" in refused.value.message
+    # A read refuses only a window holding more, and says so.
+    with pytest.raises(ValidationError) as crowded:
+        daily.occurrences(start, _utc(2100, 1, 1), _utc(2140, 1, 1), zone="UTC")
+    assert crowded.value.code == "series_too_long"
+    assert crowded.value.message.startswith("This window holds more than")
+
+
+def _count_periods(monkeypatch: pytest.MonkeyPatch) -> Callable[[], int]:
+    """Count the rule periods dateutil scans, matched or not (one day set each): the cost a read pays."""
+
+    scanned = 0
+    iterinfo = getattr(dateutil.rrule, "_iterinfo")
+    for name in ("ydayset", "mdayset", "wdayset", "ddayset"):
+
+        def counted(self: object, *args: int, _scan: Callable[..., object] = getattr(iterinfo, name)) -> object:
+            nonlocal scanned
+            scanned += 1
+            return _scan(self, *args)
+
+        monkeypatch.setattr(iterinfo, name, counted)
+    return lambda: scanned
+
+
+@pytest.mark.parametrize(
+    ("rule", "start"),
+    [
+        pytest.param("FREQ=YEARLY", datetime(1, 1, 1, 9, tzinfo=UTC), id="yearly-from-year-one"),
+        pytest.param("FREQ=DAILY", datetime(1976, 3, 1, 9, tzinfo=UTC), id="daily-from-fifty-years-ago"),
+    ],
+)
+def test_a_one_month_read_walks_the_window_not_the_series_history(
+    monkeypatch: pytest.MonkeyPatch, rule: str, start: datetime
+) -> None:
+    Recurrence(rule).never_occurs()  # its day filters' one-off probe is cached, not a read's cost
+    periods = _count_periods(monkeypatch)
+
+    found = Recurrence(rule).occurrences(start, _utc(2026, 1, 1), _utc(2026, 2, 1), zone="UTC")
+
+    assert found and all(_utc(2026, 1, 1) <= moment < _utc(2026, 2, 1) for moment in found)
+    # The period before the window, the window's own, and the one that ends the walk: never the series' past.
+    assert periods() <= 31 + 3
+
+
+def test_a_bounded_series_end_is_read_back_from_its_until(monkeypatch: pytest.MonkeyPatch) -> None:
+    daily = Recurrence("FREQ=DAILY;UNTIL=20991231T000000Z")
+    daily.never_occurs()  # its day filters' one-off probe is cached, not a read's cost
+    periods = _count_periods(monkeypatch)
+
+    last = daily.get_last_occurrence(_utc(2026, 7, 6, 9), zone="UTC")
+
+    assert last == _utc(2099, 12, 30, 9)
+    # A few days before UNTIL, not the 27,000 from its start.
+    assert periods() <= 8
+    # A last occurrence further back than a few periods is found by reading back further.
+    leap_days = Recurrence("FREQ=DAILY;BYMONTH=2;BYMONTHDAY=29;UNTIL=20990301T000000Z")
+    assert leap_days.get_last_occurrence(_utc(2028, 2, 29, 9), zone="UTC") == _utc(2096, 2, 29, 9)
+
+
+@pytest.mark.parametrize(
+    ("rule", "start", "window", "following"),
+    [
+        pytest.param("FREQ=YEARLY", datetime(1, 3, 1, 9), datetime(1, 6, 1), datetime(2, 3, 1, 9), id="yearly"),
+        pytest.param("FREQ=MONTHLY", datetime(1, 1, 15, 9), datetime(1, 1, 20), datetime(1, 2, 15, 9), id="monthly"),
+        pytest.param(
+            "FREQ=YEARLY;INTERVAL=3", datetime(2, 3, 1, 9), datetime(3, 6, 1), datetime(5, 3, 1, 9), id="third-year"
+        ),
+        pytest.param("FREQ=WEEKLY", datetime(1, 1, 3, 9), datetime(1, 1, 5), datetime(1, 1, 10, 9), id="weekly"),
+        pytest.param("FREQ=DAILY", datetime(1, 1, 1, 9), datetime(1, 1, 1, 12), datetime(1, 1, 2, 9), id="daily"),
+    ],
+)
+def test_a_series_in_its_first_years_is_read_without_a_range_error(
+    rule: str, start: datetime, window: datetime, following: datetime
+) -> None:
+    recurrence = Recurrence(rule)
+    start, window, following = (moment.replace(tzinfo=UTC) for moment in (start, window, following))
+
+    recurrence.validate(dtstart=start, zone="UTC")
+    assert recurrence.get_occurrence_after(start, window, zone="UTC") == following
+    assert recurrence.occurrences(start, window, following + timedelta(seconds=1), zone="UTC") == [following]
+    assert recurrence.occurrences_after(start, window, following, zone="UTC") == [following]
+
+
+@pytest.mark.parametrize("zone", ["UTC", "America/New_York", "Asia/Tehran"])
+@pytest.mark.parametrize(
+    "rule",
+    [
+        "FREQ=YEARLY;BYWEEKNO=1",
+        "FREQ=YEARLY;BYWEEKNO=53;BYDAY=MO",
+        "FREQ=WEEKLY;WKST=SU;BYDAY=SA,SU",
+        "FREQ=MONTHLY;BYDAY=-1FR",
+        "FREQ=YEARLY;BYYEARDAY=-1",
+        "FREQ=DAILY;UNTIL=00010101T000000",
+    ],
+)
+@pytest.mark.parametrize("start", [datetime(1, 1, 2, 9, tzinfo=UTC), datetime(9999, 12, 29, 9, tzinfo=UTC)])
+def test_no_range_edge_error_escapes_a_recurrence(rule: str, start: datetime, zone: str) -> None:
+    """At either end of the dates, every question is answered or refused as a ValidationError."""
+
+    window = (start - timedelta(days=1), start + timedelta(days=2))
+    for ask in (
+        lambda recurrence: recurrence.validate(dtstart=start, zone=zone),
+        lambda recurrence: recurrence.occurrences(start, *window, zone=zone),
+        lambda recurrence: recurrence.occurrences_after(start, *window, zone=zone),
+        lambda recurrence: recurrence.get_occurrence_after(start, window[0], zone=zone),
+        lambda recurrence: recurrence.get_last_occurrence(start, zone=zone),
+    ):
+        try:
+            ask(Recurrence(rule))
+        except ValidationError as refused:
+            assert refused.code in {"out_of_range", "never_occurs", "series_too_long"}
+
+
+def test_a_rule_dateutil_refuses_at_its_start_is_invalid_not_an_error() -> None:
+    # From 11:00 every second hour is odd: BYHOUR=10 is never reached, though the grammar holds.
+    rule = Recurrence("FREQ=HOURLY;INTERVAL=2;BYHOUR=10")
+    rule.validate()
+
+    with pytest.raises(ValidationError) as refused:
+        rule.validate(dtstart=_utc(2026, 1, 5, 11), zone="UTC")
+
+    assert refused.value.code == "invalid"
+
+
+def test_a_window_holds_instants_so_a_fall_back_hour_keeps_its_two_passes_apart() -> None:
+    daily = Recurrence("FREQ=DAILY")
+    start = datetime(2026, 10, 31, 1, 30, tzinfo=NEW_YORK)
+    # 01:15 on its second pass (EST) is after 01:30 on its first (EDT).
+    second_pass = datetime(2026, 11, 1, 1, 15, fold=1, tzinfo=NEW_YORK)
+
+    found = daily.occurrences(start, second_pass, _utc(2026, 11, 2, 12), zone="America/New_York")
+
+    assert found == [datetime(2026, 11, 2, 1, 30, tzinfo=NEW_YORK).astimezone(UTC)]
+    assert daily.get_occurrence_after(start, second_pass, zone="America/New_York") == found[0]
+
+
+def test_a_single_moment_is_after_another_as_an_instant_across_a_fall_back_hour() -> None:
+    """01:30 on the second pass (EST) comes after 01:45 on the first (EDT), though its wall clock is earlier."""
+
+    second_pass = datetime(2025, 11, 2, 1, 30, fold=1, tzinfo=NEW_YORK)
+    first_pass = datetime(2025, 11, 2, 1, 45, tzinfo=NEW_YORK)
+
+    following = Recurrence("").get_occurrence_after(second_pass, first_pass, zone="America/New_York")
+    assert following == second_pass.astimezone(UTC)
+    assert Recurrence("").get_occurrence_after(first_pass, second_pass, zone="America/New_York") is None
+
+
+def test_a_utc_stamp_is_rfc_5545_basic_with_its_year_padded() -> None:
+    assert utc_stamp(datetime(1, 3, 1, 9, tzinfo=UTC)) == "00010301T090000Z"
+    assert utc_stamp(datetime(2026, 7, 6, 9, 30, 15, 999, tzinfo=NEW_YORK)) == "20260706T133015Z"
+
+
+NEW_YORK = ZoneInfo("America/New_York")
+_WEEKDAYS = ("MO", "TU", "WE", "TH", "FR", "SA", "SU")
+_ZONES = (
+    "America/New_York", "America/Santiago", "America/Havana", "Asia/Beirut", "America/Sao_Paulo", "Asia/Tehran", "UTC"
+)
+_ERAS = {
+    "recent": (datetime(1990, 1, 1), datetime(2030, 12, 31)),
+    "first years": (datetime(1, 1, 5), datetime(3, 12, 31)),
+    "last years": (datetime(9985, 1, 1), datetime(9997, 12, 31)),
+}
+_FIRST, _LAST = datetime(1, 1, 5, tzinfo=UTC), datetime(9999, 12, 1, tzinfo=UTC)
+_Case = tuple[str, str, datetime, datetime, datetime]
+"""A property case: (rule, zone, dtstart, window_start, window_end)."""
+
+
+def _some(draw: st.DrawFn, values: tuple[object, ...], most: int = 2) -> str:
+    chosen = draw(st.lists(st.sampled_from(values), min_size=1, max_size=most, unique=True))
+    return ",".join(str(value) for value in chosen)
+
+
+@st.composite
+def _cases(draw: st.DrawFn) -> _Case:
+    """Draw ``(rule, zone, dtstart, window_start, window_end)``: hourly to yearly, every BY part, any era.
+
+    An hourly rule reads windows of hours within weeks of its start: the oracle walks
+    every occurrence from DTSTART, so its cost stays bounded.
+    """
+
+    zone = draw(st.sampled_from(_ZONES))
+    # Hypothesis aims some draws at the zone's DST changes, both passes of a fall-back hour included.
+    local = draw(st.datetimes(*_ERAS[draw(st.sampled_from(("recent", "recent", "first years", "last years")))],
+                              timezones=st.just(ZoneInfo(zone))))
+    dtstart = local.astimezone(UTC)
+    freq = draw(st.sampled_from(("HOURLY", "DAILY", "WEEKLY", "MONTHLY", "YEARLY")))
+    parts = [f"FREQ={freq}", f"INTERVAL={draw(st.integers(1, 4))}"]
+    if draw(st.booleans()):
+        parts.append(f"WKST={draw(st.sampled_from(_WEEKDAYS))}")
+    shape = draw(st.sampled_from(("none", "byday", "bymonthday", "bymonthday+byday", "byweekno", "byyearday")))
+    if shape == "byday":
+        days = _some(draw, _WEEKDAYS, 3)
+        if freq in ("MONTHLY", "YEARLY") and draw(st.booleans()):
+            days = ",".join(f"{draw(st.sampled_from((1, 2, -1, -2)))}{day}" for day in days.split(","))
+        parts.append(f"BYDAY={days}")
+    elif shape.startswith("bymonthday"):
+        parts.append(f"BYMONTHDAY={_some(draw, (1, 2, 15, 28, 29, 30, 31, -1, -2, -31))}")
+        if shape.endswith("byday"):
+            parts.append(f"BYDAY={_some(draw, _WEEKDAYS, 3)}")
+    elif shape == "byweekno" and freq == "YEARLY":
+        parts.append(f"BYWEEKNO={_some(draw, (1, 2, 20, 52, 53, -1))}")
+        if draw(st.booleans()):
+            parts.append(f"BYDAY={_some(draw, _WEEKDAYS)}")
+    elif shape == "byyearday" and freq == "YEARLY":
+        parts.append(f"BYYEARDAY={_some(draw, (1, 59, 60, 100, 365, 366, -1, -366))}")
+    if draw(st.booleans()):
+        parts.append(f"BYMONTH={_some(draw, tuple(range(1, 13)), 3)}")
+    if any(part.startswith(("BYDAY", "BYMONTHDAY", "BYWEEKNO", "BYYEARDAY")) for part in parts) and draw(st.booleans()):
+        parts.append(f"BYSETPOS={draw(st.sampled_from((1, 2, -1, -2)))}")
+    for name, values in (("BYHOUR", range(24)), ("BYMINUTE", range(60)), ("BYSECOND", range(1, 60))):
+        if draw(st.booleans()):
+            parts.append(f"{name}={_some(draw, tuple(values))}")
+    room = (_LAST - dtstart).days
+    if draw(st.booleans()):
+        until = dtstart + timedelta(days=draw(st.integers(0, min(20 * 366, room))))
+        floating = draw(st.booleans())
+        # A floating UNTIL is the zone's wall clock, unmarked.
+        wall = until.astimezone(ZoneInfo(zone)).replace(tzinfo=UTC)
+        parts.append(f"UNTIL={utc_stamp(wall).removesuffix('Z')}" if floating else f"UNTIL={utc_stamp(until)}")
+    back = min(60, (dtstart - _FIRST).days)
+    if freq == "HOURLY":
+        window_start = dtstart + timedelta(hours=draw(st.integers(-24 * min(back, 7), 24 * min(21, room - 3))))
+        return ";".join(parts), zone, dtstart, window_start, window_start + timedelta(hours=draw(st.integers(1, 48)))
+    window_start = dtstart + timedelta(
+        days=draw(st.integers(-back, min(12 * 366, room - 63))), hours=draw(st.integers(0, 23))
+    )
+    return ";".join(parts), zone, dtstart, window_start, window_start + timedelta(days=draw(st.integers(1, 62)))
+
+
+def _fall_back(year: int, month: int, day: int, hour: int, zone: str, rule: str) -> _Case:
+    """A case whose DTSTART is the second pass of a fall-back hour, read a year on across the next one."""
+
+    dtstart = datetime(year, month, day, hour, 30, fold=1, tzinfo=ZoneInfo(zone)).astimezone(UTC)
+    window_start = dtstart + timedelta(days=364, minutes=-45)
+    return rule, zone, dtstart, window_start, window_start + timedelta(days=3)
+
+
+@settings(max_examples=200, deadline=4000, database=None)
+@given(case=_cases())
+@example(case=_fall_back(2025, 11, 2, 1, "America/New_York", "FREQ=DAILY;BYHOUR=1;BYMINUTE=0,30,45"))
+@example(case=_fall_back(2025, 4, 5, 23, "America/Santiago", "FREQ=WEEKLY;BYDAY=SA,SU"))
+@example(case=_fall_back(2025, 11, 2, 0, "America/Havana", "FREQ=DAILY;INTERVAL=2"))
+@example(case=_fall_back(2025, 10, 25, 23, "Asia/Beirut", "FREQ=MONTHLY;BYMONTHDAY=25,26,-1"))
+@example(case=_fall_back(2019, 2, 16, 23, "America/Sao_Paulo", "FREQ=YEARLY;BYMONTH=2;BYDAY=3SA"))
+@example(case=_fall_back(2021, 9, 21, 23, "Asia/Tehran", "FREQ=WEEKLY;WKST=SU;BYDAY=TU,WE;BYSECOND=17"))
+def test_a_reanchored_read_equals_the_full_expansion_in_its_window(
+    case: _Case,
+) -> None:
+    """R-R3: each read from the period before its window answers exactly as dateutil's walk from DTSTART."""
+
+    rule, zone, dtstart, window_start, window_end = case
+    recurrence = Recurrence(rule)
+    try:
+        recurrence.validate(dtstart=dtstart, zone=zone)
+    except ValidationError:
+        assume(False)
+    expanded: list[datetime] = []
+    following: datetime | None = None
+    beyond = False
+    for moment in recurrence._compile(dtstart.astimezone(ZoneInfo(zone))):
+        try:
+            instant = moment.astimezone(UTC)
+        except OverflowError:
+            beyond = following is None
+            break
+        if following is None and instant > window_start:
+            following = instant
+        if instant > window_end:
+            break
+        expanded.append(instant)
+
+    assert recurrence.occurrences(dtstart, window_start, window_end, zone=zone) == list(
+        dict.fromkeys(moment for moment in expanded if window_start <= moment < window_end)
+    )
+    assert recurrence.occurrences_after(dtstart, window_start, window_end, zone=zone, limit=MAX_OCCURRENCES) == list(
+        dict.fromkeys(moment for moment in expanded if window_start < moment <= window_end)
+    )
+    if beyond:
+        # The next occurrence lies past the last UTC instant: the read refuses it rather than overflow.
+        with pytest.raises(ValidationError):
+            recurrence.get_occurrence_after(dtstart, window_start, zone=zone)
+    else:
+        assert recurrence.get_occurrence_after(dtstart, window_start, zone=zone) == following
 
 
 @pytest.mark.parametrize(

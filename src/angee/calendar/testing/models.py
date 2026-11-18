@@ -1,6 +1,19 @@
 """Concrete calendar sources for native Django test database setup."""
 
 from angee.calendar import models as sources
+from angee.integrate.testing.integration import Integration
+
+
+class CalendarSource(sources.CalendarSource, Integration):
+    """Concrete calendar source (an Integration child) used by source-addon tests."""
+
+    class Meta(sources.CalendarSource.Meta):
+        """Django options for the shared calendar source test table."""
+
+        abstract = False
+        app_label = "calendar"
+        db_table = "test_calendar_source"
+        rebac_resource_type = "calendar/calendar_source"
 
 
 class Calendar(sources.Calendar):

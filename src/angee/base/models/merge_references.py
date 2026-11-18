@@ -188,6 +188,11 @@ class Reference:
     def pointing(self, target: type[models.Model]) -> Exists:
         """Return a condition on ``target`` rows: some row of this reference points at it."""
 
+        return Exists(self.pointing_rows(target))
+
+    def pointing_rows(self, target: type[models.Model]) -> models.QuerySet[Any]:
+        """Return this reference's rows pointing at the outer ``target`` row, outside any actor scope."""
+
         raise NotImplementedError
 
     def holds(self, survivor: models.Model) -> bool:
@@ -229,8 +234,23 @@ class Reference:
     def live_rows(self, record: models.Model, *, principal: SubjectRef | None = None) -> models.QuerySet[Any]:
         """Return outside callers through the reference's and row owner's contracts."""
 
-        rows = self.rows(record)
-        if self.is_owned(type(record)) or not self.blocks_target_delete(type(record)):
+        return self._live(self.rows(record), type(record), principal=principal)
+
+    def live_pointing(self, target: type[models.Model], *, principal: SubjectRef | None = None) -> Exists:
+        """Return a condition on ``target`` rows: a live outside caller points at it.
+
+        :meth:`live_rows` for every ``target`` row at once, under the same contracts,
+        so a caller asking about many rows reads them in one query.
+        """
+
+        return Exists(self._live(self.pointing_rows(target), target, principal=principal))
+
+    def _live(
+        self, rows: models.QuerySet[Any], target: type[models.Model], *, principal: SubjectRef | None
+    ) -> models.QuerySet[Any]:
+        """Narrow ``rows`` to live callers: none for owned parts or a non-blocking pointer, else the owner's filter."""
+
+        if self.is_owned(target) or not self.blocks_target_delete(target):
             return rows.none()
         if issubclass(self.model, MergeContractMixin):
             rows = rows.filter(self.model.live_reference_filter(principal=principal))
@@ -333,11 +353,11 @@ class ForeignKeyReference(Reference):
         target = self.field.target_field
         return {self.field.attname: record.pk if target.primary_key else getattr(record, target.attname)}
 
-    def pointing(self, target: type[models.Model]) -> Exists:
-        """Return a condition on ``target`` rows: a row's key holds the target's value."""
+    def pointing_rows(self, target: type[models.Model]) -> models.QuerySet[Any]:
+        """Return the rows whose key holds the outer target row's value."""
 
         column = "pk" if self.field.target_field.primary_key else self.field.target_field.attname
-        return Exists(self.model._base_manager.filter(**{self.field.attname: OuterRef(column)}))
+        return self.model._base_manager.filter(**{self.field.attname: OuterRef(column)})
 
     def holds(self, survivor: models.Model) -> bool:
         """Return whether ``survivor`` has a row in the model the key points at.
@@ -373,20 +393,18 @@ class EdgeReference(Reference):
         content_type, pk = generic_pointer_target(record)
         return {self.pointer.ct_field: content_type, self.pointer.fk_field: pk}
 
-    def pointing(self, target: type[models.Model]) -> Exists:
-        """Return a condition on ``target`` rows: an edge row names the target's type and key."""
+    def pointing_rows(self, target: type[models.Model]) -> models.QuerySet[Any]:
+        """Return the edge rows naming the outer target row's type and key."""
 
         object_id = self.model._meta.get_field(self.pointer.fk_field)
         assert isinstance(object_id, models.Field)
         model = generic_pointer_model(target)
         content_type = ContentType.objects.get_for_model(model)
-        return Exists(
-            self.model._base_manager.filter(
-                **{
-                    self.pointer.ct_field: content_type,
-                    self.pointer.fk_field: Cast(OuterRef("pk"), output_field=object_id),
-                }
-            )
+        return self.model._base_manager.filter(
+            **{
+                self.pointer.ct_field: content_type,
+                self.pointer.fk_field: Cast(OuterRef("pk"), output_field=object_id),
+            }
         )
 
 
