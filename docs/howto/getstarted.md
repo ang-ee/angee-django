@@ -225,6 +225,8 @@ Author and commit initial project migration history in the development host
 before deploying its container stack. The container lifecycle consumes that
 tracked history; it does not silently create it on the first start. A brand-new
 project therefore uses the authoring steps above before switching to Docker mode.
+The exception is a [staging host](#a-staging-host-in-one-command), which authors
+its own history and treats its data as disposable.
 
 `runtime_mode` is a template input (a recorded answer, so one stack can switch
 later): the default `process` runs Django, Celery, Vite, and Storybook as local
@@ -257,6 +259,33 @@ To serve further host names from the same stack (for example one per app that
 `ingress_aliases`, comma-separated: `--input ingress_aliases=ap.example.com,crm.example.com`.
 The edge serves them as the same site with a certificate each; `ingress_domain`
 stays the canonical origin. This needs an operator with `ingress.aliases` (v0.20.0).
+
+### A staging host in one command
+
+To put a product on a remote host without carrying a project repository there,
+render `stacks/staging`. It needs Docker with the compose and buildx plugins,
+git, the `angee` CLI (0.28.0 or later) and a DNS A record for the name:
+
+```sh
+angee init /srv/shop -t staging --yes \
+  --input project_name=shop --input ingress_domain=shop.example.com \
+  --repository git@github.com:acme/angee-shop.git \
+  --extra-source git@github.com:acme/angee-catalog.git \
+  --input roots=shop.storefront,shop.checkout \
+  --input settings_file=workspaces/src/angee-shop/deploy/settings.yaml
+# one deploy key per private repository, read from a file you already hold
+angee --root /srv/shop secret set deploy-key-angee-shop --stdin < ~/keys/shop
+angee --root /srv/shop secret set deploy-key-angee-catalog --stdin < ~/keys/catalog
+angee --root /srv/shop up
+angee --root /srv/shop secret reveal admin-password
+```
+
+`angee secret list` names the deploy keys the stack requires; `angee up`
+stops before cloning and gives the command for any key still unset. It clones the
+repositories, cuts the `workspaces/src` slots, installs, composes, authors the
+host's migration history, provisions with a first administrator and builds the
+SPA. The flags, the deploy keys and the disposable-data contract are described in
+[Templates](../../templates/README.md#deploy-a-staging-host-in-one-command).
 
 ### Quickstart: a dev VPS end to end
 

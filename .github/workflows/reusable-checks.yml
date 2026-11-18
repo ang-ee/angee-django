@@ -52,7 +52,7 @@ on:
         description: Release version of the angee CLI the stack lane installs (without the v prefix).
         required: false
         type: string
-        default: "0.27.0"
+        default: "0.28.0"
       consumer-sources:
         description: JSON array of additional addon sources with repository, path (sibling slot), and ref.
         required: false

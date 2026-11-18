@@ -36,6 +36,8 @@ import type { StatusToneMap } from "../widgets/status-tones";
 import { setHumanDateLocale } from "../widgets/date-format";
 
 /**
+ * The sign-in URL of a runtime that composes no `auth.login` route (a workshop,
+ * a bare test); a composed `auth.login` route's declaration owns it otherwise.
  * @kind null
  * @reason Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.
  */
@@ -138,7 +140,7 @@ export interface AppRuntime {
   routesByResource: Readonly<Record<string, RuntimeResourceRoutes>>;
   /** Resolve a composed route name to an encoded href. */
   routeHref: RouteHref;
-  /** App-owned sign-in destination shared by auth gates and chrome. */
+  /** The sign-in destination auth gates and chrome share: the `auth.login` route's path. */
   loginPath: string;
   /** Installed theme catalogue composed from addon contributions. */
   themes: readonly ThemeContribution[];
@@ -502,7 +504,7 @@ export function useActiveRoute<T extends { path: string }>(routes: readonly T[])
   );
 }
 
-/** The app-owned login destination used by shell and IAM surfaces.
+/** The sign-in destination shell and IAM surfaces use: the `auth.login` route's path.
  * @kind null
  * @reason Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.
  */

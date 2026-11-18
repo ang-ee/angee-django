@@ -1,0 +1,254 @@
+_min_copier_version: "9.0"
+_subdirectory: template
+_templates_suffix: .jinja
+# The stack overlays into the project root (ANGEE_ROOT=.), but the PROJECT owns the
+# canonical .copier-answers.yml (rendered by the chained projects/web). The stack
+# keeps its OWN answers file so it never clobbers the project's.
+_answers_file: .copier-answers.stack.yml
+_preserve_symlinks: true
+
+_message_after_copy: |
+  Staging stack rendered — the root folder IS the stack and a project host
+  (ANGEE_ROOT=.). Everything runs in containers with production serving:
+  operator, edge, Postgres, Redis, Django, Celery and the built SPA.
+  {% if deploy_keys %}{% for repository in repositories %}{% if repository.ssh %}
+  Deploy key for {{ repository.name }} (required before the first bring-up):
+    angee secret set deploy-key-{{ repository.name }} --stdin < <private key file>{% endif %}{% endfor %}{% for repository in extra_sources %}{% if repository.ssh %}
+  Deploy key for {{ repository.name }} (required before the first bring-up):
+    angee secret set deploy-key-{{ repository.name }} --stdin < <private key file>{% endif %}{% endfor %}{% endif %}
+
+  Bring it up (also the command for every later start):
+    angee up
+  The first run clones the repositories, cuts the src workspace, installs,
+  composes, authors this host's migration history, provisions and builds the SPA.
+
+  App:   {% if ingress_domain == "localhost" %}http://localhost:{{ ui_port }}{% else %}https://{{ ingress_domain }}/{% endif %}
+  Login: {{ admin_username }} / `angee secret reveal admin-password`
+
+  This host authors its own migration history, so its data is disposable: an
+  update that needs a reviewed data step stops at the makemigrations job.
+
+_angee:
+  schema: 1
+  kind: stack
+  name: staging
+  include_root: "../.."  # includes may read anywhere under templates/; names resolve from this template root, so ../_shared/
+  description: >-
+    A remote, public, container host rendered in one command: the root folder IS
+    the stack AND the project host (ANGEE_ROOT=.). It runs the way the dev
+    stack's Docker mode does — against the framework slot and one slot per
+    repository under workspaces/src/ — with production serving fixed, no
+    development tools, a first administrator, and a job that authors the host's
+    own migration history. `angee init --repository` adds an addon repository
+    the host installs; `--extra-source` adds a repository that is only checked
+    out, such as one a product's addons require. A repository given by SSH URL
+    is fetched with its own deploy key, a required secret.
+  # Chain the project template first so the stack overlays a real host, then this
+  # template adds only the stack overlay (angee.yaml, settings/workspace files).
+  chain:
+    - template: ../../projects/web
+      inputs:
+        project_name: "${inputs.project_name}"
+        web_path: "${inputs.web_path}"
+        addon_namespace: "${inputs.addon_namespace}"
+        addon_installer_backend: operator
+        include_operator_installer: true
+        framework_workspace: true
+        repositories: "${inputs.repositories}"
+        roots: "${inputs.roots}"
+        appearance_theme_id: "${inputs.appearance_theme_id}"
+        appearance_color_scheme: "${inputs.appearance_color_scheme}"
+        appearance_options: "${inputs.appearance_options}"
+        # The rendered pyproject resolves the editable angee meta-distribution
+        # from the framework slot the src workspace materializes.
+        framework_source_path: workspaces/src/angee
+
+project_name:
+  type: str
+  default: app
+  help: >-
+    Machine name of the project host; also the chained project's name and the
+    namespace of every workspace branch this stack cuts (`<project_name>/<workspace>`).
+
+# Directory + import namespace for consumer addons authored in this host (src/<ns>/).
+# Copier-go does not evaluate Jinja defaults before chain-input substitution, so
+# keep this concrete.
+addon_namespace:
+  type: str
+  default: app
+  help: Import namespace for consumer addons authored in this host; a valid Python identifier.
+
+ingress_domain:
+  type: str
+  default: localhost
+  help: The host's public DNS name; the Caddy edge serves https://<name> with automatic Let's Encrypt TLS on ports 443/80. localhost keeps plain local HTTP on edge_port and the project's development settings.
+
+ingress_aliases:
+  type: str
+  default: ""
+  help: Comma-separated further public host names served as the same site, each with its own certificate.
+
+# Addon repositories: `angee init --repository <repo>[@<ref>]`, repeatable. The
+# operator canonicalizes the list to `{name, ref, repo, ssh}` entries. Each is
+# cloned, gets a slot under workspaces/src/<name>, and is installed through the
+# distribution named after the repository.
+repositories:
+  type: json
+  default: "[]"
+  help: Addon repositories the host installs from their workspaces/src/<name> slots (`--repository`).
+
+# Repositories that are only checked out: `angee init --extra-source <repo>[@<ref>]`.
+# A product's addons resolve the repositories they require from the sibling slot.
+extra_sources:
+  type: json
+  default: "[]"
+  help: Repositories cloned into workspaces/src/<name> and not installed by the host (`--extra-source`).
+
+roots:
+  type: str
+  default: ""
+  help: Comma-separated root apps appended to INSTALLED_APPS (e.g. "shop.catalog,shop.checkout"); everything they require is enabled with them.
+
+# A product's own settings, kept in its repository instead of an edit to the
+# rendered settings.yaml: every Python service and job loads the file as
+# YAMLCONF_CONFFILE, the final layer after the host's settings.yaml. The roster
+# stays in settings.yaml, so name roots with `roots`, not in this file.
+settings_file:
+  type: str
+  default: ""
+  validator: '{% if settings_file and settings_file|first == "/" %}settings_file is a path relative to the stack root, e.g. workspaces/src/<repository>/deploy/settings.yaml.{% endif %}'
+  help: Settings file loaded after the host's settings.yaml, relative to the stack root (e.g. workspaces/src/angee-shop/deploy/settings.yaml); empty loads none.
+
+# Every repository given by SSH URL declares a required `deploy-key-<name>` secret
+# and is fetched with that key alone. Turn this off on a host whose own SSH
+# identity (a machine user's key under operator_home) reads every repository.
+deploy_keys:
+  type: bool
+  default: true
+  help: Fetch each SSH repository with its own deploy key, the required secret deploy-key-<name>.
+
+admin_username:
+  type: str
+  default: admin
+  help: Username of the first administrator, created at provision with the generated admin-password secret.
+
+admin_email:
+  type: str
+  default: admin@example.com
+  help: Email of the first administrator.
+
+web_path:
+  type: str
+  default: "web"
+  help: Path of the project's Vite web package, relative to the project root.
+
+appearance_theme_id:
+  type: str
+  default: angee.stock
+  help: Stable ID of the installed host-default theme; empty selects the intrinsic base look.
+
+appearance_color_scheme:
+  type: str
+  default: system
+  choices:
+    - system
+    - light
+    - dark
+  help: Host-default color-scheme preference.
+
+appearance_options:
+  type: str
+  default: ""
+  help: Optional JSON object with `version` and `value` for the configured host theme; empty uses the theme defaults.
+
+serve_workers:
+  type: int
+  default: 0
+  validator: '{% if serve_workers != 0 and serve_workers < 2 %}Use 0 for CPU count or at least 2 workers.{% endif %}'
+  help: Django ASGI worker count; 0 uses CPU count (minimum 2).
+
+db_pool_max_size:
+  type: int
+  default: 2
+  validator: '{% if db_pool_max_size < 1 %}Pool size must be positive.{% endif %}'
+  help: Maximum PostgreSQL connections per Django worker.
+
+db_pool_timeout:
+  type: int
+  default: 5
+  validator: '{% if db_pool_timeout < 1 %}Pool wait timeout must be positive.{% endif %}'
+  help: Seconds a request waits for a free PostgreSQL connection.
+
+enable_celery:
+  type: bool
+  default: true
+  help: Run the Celery workers; disable for hosts without angee.jobs or with external workers.
+
+# Extra Celery queues, comma-separated; they share one `celery-queues` worker
+# service (threads pool, 8 threads per queue) beside the shared worker.
+celery_queues:
+  type: str
+  default: ""
+
+# Sentry error reporting. An empty DSN (the default) renders nothing.
+sentry_dsn:
+  type: str
+  default: ""
+  help: Sentry DSN for Django, Celery and management commands; empty disables backend error reporting.
+
+sentry_web_dsn:
+  type: str
+  default: ""
+  help: Sentry DSN for the React SPA, read at build time; empty keeps the browser SDK unloaded.
+
+django_image:
+  type: str
+  default: "ghcr.io/ang-ee/django-angee-base:latest"
+  help: Image used by the Django and Celery services and the Python jobs.
+
+node_image:
+  type: str
+  default: "node:22-bookworm-slim"
+  help: Image used by the dependency and frontend build jobs.
+
+caddy_image:
+  type: str
+  default: "caddy:2.9-alpine"
+  help: Image serving the built SPA.
+
+operator_image:
+  type: str
+  default: "ghcr.io/ang-ee/angee-operator:latest"
+  help: Operator daemon image (the daemon runs as a container over the docker socket).
+
+operator_home:
+  type: path
+  default: "~"
+  help: >-
+    The home directory of the user who owns the stack root (defaults to the home
+    of the user running `angee init`, recorded as an absolute path). The operator
+    container runs with that HOME and mounts its .ssh read-only at the same path,
+    which a repository without its own deploy key is fetched with. The host must
+    have that .ssh.
+  validator: '{% if operator_home and operator_home|first != "/" %}operator_home must be an absolute path.{% endif %}'
+
+operator_port:
+  type: int
+  default: 9000
+
+django_port:
+  type: int
+  default: 8000
+
+# Published only when ingress_domain is localhost; a public host is reached through the edge.
+ui_port:
+  type: int
+  default: 5173
+
+edge_port:
+  type: int
+  default: 80
+
+process_compose_port:
+  type: int
+  default: 8080

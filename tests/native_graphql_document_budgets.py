@@ -392,6 +392,11 @@ ROW_SIZES = (2, 6)
 # 25 permission sets) and #498's calendar event-chatter arm (13 sets). Re-expressing the
 # policy (#503) recovered 1-4%, and the actor-profile engine change was withdrawn. The
 # ratchet still applies: lower a ceiling when its cost falls; never raise one for a regression.
+#
+# A planner memory context grows in blocks of up to 8 MiB (ALLOCSET_DEFAULT_MAXSIZE), so the
+# same plans can allocate one block more on another runner: person read 600,381 KiB on a
+# web-only change against 592,189 KiB on main. The gate admits that one block over a ceiling.
+PLANNER_BLOCK_KIB = 8 * 1024
 PLANNER_BUDGETS = {
     "person": (19, 579),  # 592,189 KiB
     "projects": (10, 179),  # 182,705 KiB
@@ -736,7 +741,8 @@ class ConsoleDocumentBudgetTests(TransactionTestCase):
                 allocated_kib = sum(plan.allocated_kib for plan in plans)
                 self.assertLessEqual(
                     allocated_kib,
-                    memory_mib * 1024,
+                    memory_mib * 1024 + PLANNER_BLOCK_KIB,
                     f"{name}: PostgreSQL allocated {allocated_kib} KiB across {selects} SELECTs; "
-                    f"ceiling {memory_mib} MiB. Ratchet downward when cost falls; never raise for a regression.",
+                    f"ceiling {memory_mib} MiB plus one {PLANNER_BLOCK_KIB} KiB planner block. "
+                    "Ratchet downward when cost falls; never raise for a regression.",
                 )

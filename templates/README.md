@@ -20,11 +20,11 @@ that is the owner.
 
 ## Stacks: framework-dev vs local instance
 
-One `angee.yaml` describes a stack in either of the two layouts covered by
+One `angee.yaml` describes a stack in the layouts covered by
 [Concepts](https://docs.angee.ai/guide/concepts) and the [glossary](../docs/glossary.md);
-in both, the root folder *is* the stack **and** the project host (`ANGEE_ROOT=.`) —
-the difference is the runtime and where framework code comes from. Both
-render from ONE shared manifest body (`stacks/_shared/stack-body.yaml.jinja`): each
+in all of them, the root folder *is* the stack **and** the project host (`ANGEE_ROOT=.`) —
+the difference is the runtime and where framework code comes from. Every stack
+template renders from ONE shared manifest body (`stacks/_shared/stack-body.yaml.jinja`): each
 template's `angee.yaml.jinja` is a thin `{% set %}` header (mode + address variables)
 that includes it, and `{% if runtime_mode == "process" | "docker" %}` branches cover
 only where the two modes differ. As in Copier, an include names its file from the
@@ -59,6 +59,10 @@ the chain instead of restarting against incomplete generated state.
   the frontend build is another real job. Caddy starts after that build, then Django
   starts once its named trusted proxy is ready. This avoids a proxy DNS startup
   cycle. This runs your own Angee app locally on a real (Postgres + pgvector) database.
+- **`stacks/staging`** (`runtime_mode: docker`, production serving) — a remote,
+  public host rendered in one command from repositories. It runs against the
+  `src` workspace's slots as `stacks/dev` does in Docker mode, without the
+  development tools; see [Deploy a staging host in one command](#deploy-a-staging-host-in-one-command).
 
 Before initializing either layout, check for an existing current or ancestor
 `angee.yaml`. If one exists, it owns the checkout; never initialize a stack
@@ -68,6 +72,66 @@ contract so code agents retain that ownership rule while working below
 host body (`projects/_shared/AGENTS.md.jinja`) that `projects/web` renders on
 its own at a standalone project root: the stack overlay overwrites the project's
 `AGENTS.md` at the shared root, so the stack file carries both sections.
+
+### Deploy a staging host in one command
+
+`stacks/staging` renders a remote, public, container host from repositories alone:
+no project repository is carried to the machine and no rendered file is edited.
+It is `stacks/dev`'s Docker mode with the choices a deployment does not make
+fixed in its wrapper: production serving, bundled Postgres and Redis, no
+Storybook or Playwright, a first administrator, and a job that authors the
+host's own migration history.
+
+```sh
+angee init /srv/shop -t staging --yes \
+  --input project_name=shop --input ingress_domain=shop.example.com \
+  --repository git@github.com:acme/angee-shop.git \
+  --extra-source git@github.com:acme/angee-catalog.git \
+  --input roots=shop.storefront,shop.checkout \
+  --input settings_file=workspaces/src/angee-shop/deploy/settings.yaml
+angee --root /srv/shop secret set deploy-key-angee-shop --stdin < ~/keys/shop
+angee --root /srv/shop secret set deploy-key-angee-catalog --stdin < ~/keys/catalog
+angee --root /srv/shop up
+angee --root /srv/shop secret reveal admin-password
+```
+
+- **`--repository <repo>[@<ref>]`** adds an addon repository: a git source, a slot
+  at `workspaces/src/<name>`, the pnpm glob of its web fragments, and a
+  requirement on the distribution named after the repository, resolved from that
+  slot. `<repo>` is `owner/name` (GitHub over https), an https URL or an SSH URL;
+  `<name>` is the last path segment.
+- **`--extra-source <repo>[@<ref>]`** adds a repository that is checked out the same
+  way and that the host does not install. Use it for a repository the product's
+  addons require: an addon repository resolves its requirements from its sibling
+  slots (`../<name>/…` in its own `[tool.uv.sources]`).
+- **`roots`** names the root apps appended to `INSTALLED_APPS`; what they require
+  is enabled with them. Installing a repository enables nothing.
+- **`settings_file`** names a settings file in one of the repositories, relative to
+  the stack root. Every Python service and job loads it as `YAMLCONF_CONFFILE`,
+  the final layer after the host's `settings.yaml`, so a product keeps the
+  settings it overrides (brand, wording, currency) in its own repository. Keep
+  `INSTALLED_APPS` out of it; the host's roster and `roots` own that.
+- **Deploy keys.** Every repository given by SSH URL declares a required secret
+  `deploy-key-<name>` and `sources.<name>.auth.ssh_key_secret`. The operator
+  fetches that source with that key alone, so two private repositories on one git
+  host need no `~/.ssh/config` aliases. `angee secret list` shows the keys a
+  stack declares; `angee up` stops before cloning on an unset one and gives the
+  command that sets it. `--input deploy_keys=false` falls back to the SSH identity under
+  `operator_home`.
+- **Migration history.** The `makemigrations` job runs between `compose` and
+  `provision` and writes `runtime/*/migrations` on the host. That history exists
+  only there, so the host's data is disposable: an update whose model change
+  needs a reviewed data step, or drops a populated table, stops the chain. A
+  deployment that keeps its data carries reviewed history in a project
+  repository and uses `stacks/dev` or `stacks/local`.
+- **Public settings.** With a public `ingress_domain` the Python services run with
+  `DEBUG` off and `ALLOWED_HOSTS` limited to the domain, its aliases and the
+  compose-internal names. `stacks/dev` rendered for production on a public
+  domain gets the same.
+
+Update a running host with `angee ws sync-base src`, then
+`angee job run deps --chained-restart`. The template needs angee 0.28.0 or later:
+`--repository`, slots per marked source and per-source keys are operator features.
 
 ### Connect framework-dev stacks to shared PostgreSQL and Redis servers
 
