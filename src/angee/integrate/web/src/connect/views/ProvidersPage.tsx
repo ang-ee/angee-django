@@ -21,9 +21,11 @@ const providerList = (
 
 // The registration owner's readiness rule (`OAuthClient.configuration_state`)
 // admits discovery-backed endpoints, which the connect flow resolves at startup.
+// It is no form field, so the form reads it (`returning`) for this predicate.
 function canConnectAccount(record: Record<string, unknown>): boolean {
   return record.configuration_state === "ready";
 }
+const CONNECT_READS = ["configuration_state"];
 
 function fieldString(value: unknown): string {
   return typeof value === "string" ? value.trim() : "";
@@ -74,7 +76,7 @@ export function ProvidersPage(): React.ReactElement {
   return (
     <ResourceList resource={MODEL} placement="inline" routed>
       {providerList}
-      <Form resource={MODEL}>
+      <Form resource={MODEL} returning={CONNECT_READS}>
         <Field name="display_name" title />
         <Group label={t("providers.group.client")} columns={2}>
           <Field
