@@ -682,6 +682,38 @@ def test_a_fragment_grant_cannot_reach_a_trashed_file(drive: Any) -> None:
     assert check_derived_permissions() == []
 
 
+def test_a_trashed_record_file_stays_with_its_owner_only_while_the_owner_writes_its_record(drive: Any) -> None:
+    """A trashed record file's owner keeps it through the record's write, not its read."""
+
+    owner = get_user_model().objects.create_user(username="storage-record-owner")
+    with system_context(reason="test storage trashed record file"):
+        project = Project.objects.create(title="Files", owner=drive.alice)
+        task = Task.objects.create(title="Spec", project=project, owner=drive.alice)
+        row = File.objects.create(
+            drive=drive, filename="spec.txt", content_hash="b" * 64, storage_path="spec.txt",
+            visibility=storage_models.FileVisibility.RECORD, owner=owner, upload_state=UploadState.READY,
+        )
+        FileAttachment.objects.attach(row, task)
+        write_relationships([
+            RelationshipTuple(resource=to_object_ref(task), relation="reader", subject=to_subject_ref(owner)),
+        ])
+
+    def reach() -> tuple[bool, ...]:
+        bound = row.with_actor(owner)
+        listed = File.objects.with_actor(owner).filter(pk=row.pk).exists()
+        return (*(bound.has_access(action) for action in ("read", "write", "share", "delete", "transfer")), listed)
+
+    assert reach() == (True, False, False, False, False, True), "a task reader reads its record file"
+    with system_context(reason="test storage trash the record file"):
+        File._base_manager.filter(pk=row.pk).update(is_trashed=True)
+    assert reach() == (False,) * 6, "reading the task does not keep a trashed record file"
+    with system_context(reason="test storage the owner writes the task"):
+        write_relationships([
+            RelationshipTuple(resource=to_object_ref(task), relation="editor", subject=to_subject_ref(owner)),
+        ])
+    assert reach() == (True,) * 6, "writing the task keeps it, to list, restore and manage"
+
+
 def test_a_record_upload_follows_its_task_while_an_inherited_file_stays_its_owners(drive: Any) -> None:
     """The uploader owns a record upload but reaches it only through the task, and loses it with the task."""
 
