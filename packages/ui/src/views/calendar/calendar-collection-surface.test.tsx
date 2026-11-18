@@ -252,6 +252,7 @@ describe("CalendarCollectionSurface", () => {
     mocks.calendarProps?.onSelectRange?.(
       new Date("2026-06-17T14:00:00.000Z"),
       new Date("2026-06-17T15:00:00.000Z"),
+      false,
     );
     expect(onSelectRange).toHaveBeenCalledTimes(1);
   });

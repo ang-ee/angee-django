@@ -128,6 +128,17 @@ describe("CalendarPage sources", () => {
   });
 });
 
+describe("CalendarPage quick-create", () => {
+  test.each([
+    { allDay: true, start: "2026-06-17T00:00:00.000Z", end: "2026-06-18T00:00:00.000Z" },
+    { allDay: false, start: "2026-06-17T14:00:00.000Z", end: "2026-06-17T15:00:00.000Z" },
+  ])("a selected range seeds the event's bounds and whether it is all day ($allDay)", async ({ allDay, start, end }) => {
+    const createDefaults = (await spec()).createDefaults!;
+
+    expect(createDefaults(new Date(start), new Date(end), allDay)).toEqual({ start, end, all_day: allDay });
+  });
+});
+
 describe("CalendarPage drag", () => {
   test("a drag runs reschedule_event with the new bounds", async () => {
     const onReschedule = (await spec()).onReschedule!;

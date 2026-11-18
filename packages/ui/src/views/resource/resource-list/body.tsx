@@ -206,8 +206,8 @@ export function ResourceListBody<TRow extends Row = Row>({
     handleSelectRecord?.(null);
   }, [handleSelectRecord]);
   const handleCalendarSelectRange = React.useCallback(
-    (start: Date, end: Date) => {
-      setQuickCreateDefaults(calendar?.createDefaults?.(start, end));
+    (start: Date, end: Date, allDay: boolean) => {
+      setQuickCreateDefaults(calendar?.createDefaults?.(start, end, allDay));
       handleSelectRecord?.(null);
     },
     [calendar, handleSelectRecord],

@@ -110,8 +110,8 @@ export function CalendarPage(): React.ReactElement {
     () => ({
       sources,
       onReschedule,
-      // The surface opens routed create seeded with these start/end values.
-      createDefaults: (start, end) => ({ start: start.toISOString(), end: end.toISOString() }),
+      // The surface opens routed create seeded with the selection; a month-view day is an all-day event.
+      createDefaults: (start, end, allDay) => ({ start: start.toISOString(), end: end.toISOString(), all_day: allDay }),
     }),
     [sources, onReschedule],
   );
