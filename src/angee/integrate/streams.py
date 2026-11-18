@@ -176,6 +176,8 @@ class RecordChange:
     """The remote projection in the same domain shape as the local projection."""
     failure: SemanticError | None = None
     """An adapter's refusal when the source cannot produce a mapped projection."""
+    local_version: str = ""
+    """The local version ``projection`` was read at (:attr:`LocalChange.local_version`); a push records it."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -185,6 +187,14 @@ class LocalChange:
     external_key: str
     projection: Any
     target: Any = None
+    local_version: str = ""
+    """The version of the local state ``projection`` was read from, in the same read; ``""`` when unversioned.
+
+    Exact for what the projection reads, and compared only for equality: a push
+    records it with the base it writes (``RecordLink.local_version``), so a row
+    whose version is unchanged is unchanged since that base, and an adapter may
+    leave it out of a full read (``RecordLinkManager.changed_since_base``).
+    """
 
 
 @dataclass(frozen=True, slots=True)
@@ -453,7 +463,7 @@ def _lock_written(
     )
     locked = links.lock_if_supported().get(pk=link.pk)
     if target is not None and not named:
-        record = replace(record, target=None)
+        record = replace(record, target=None, local_version="")
     return locked, record
 
 
@@ -471,6 +481,7 @@ def _reflect_write(stream: Any, link: Any, record: RecordChange, result: WriteBa
         dependency_digest=record.dependency_digest,
         origin="local",
         tombstone=result.tombstone,
+        local_version=record.local_version,
     )
 
 
@@ -814,7 +825,7 @@ def push_stream(
             return PageResult(stream, exhausted=True)
         links = stream.links.model.objects
         candidates: set[str] = set()
-        for candidate, link in push_candidates(stream, adapter, external_keys):
+        for candidate, link in push_candidates(stream, adapter, external_keys, settle=True):
             if (limit := sync_deadline()) is not None and monotonic() >= limit:
                 return PageResult(stream, count, failure_ids=tuple(failures))
             candidates.add(candidate.external_key)
@@ -842,6 +853,7 @@ def push_stream(
                 projection=candidate.projection,
                 target=candidate.target,
                 dependency_digest=revision.dependency_digest if revision is not None else "",
+                local_version=candidate.local_version,
             )
             bases = link.sync_precondition
             try:
@@ -907,13 +919,19 @@ _CANDIDATE_BATCH = 500
 
 
 def push_candidates(
-    stream: Any, adapter: BridgeImpl, external_keys: frozenset[str] | None
+    stream: Any, adapter: BridgeImpl, external_keys: frozenset[str] | None, *, settle: bool = False
 ) -> Iterator[tuple[LocalChange, Any]]:
     """Yield each local change that differs from its link's base, with that link or ``None`` when new.
 
     A link carries its sync evidence (:meth:`RecordLinkQuerySet.with_sync_evidence`),
     so the preview reads its write holds without a query each. The push re-reads a
     link just before writing it, since the batch predates the writes ahead of it.
+
+    ``settle`` (the push's; a preview writes nothing) records the newer local
+    version of each candidate whose projection still equals its base
+    (:meth:`RecordLinkManager.settle`), so an adapter that reads only rows
+    changed since their base (:meth:`RecordLinkManager.changed_since_base`) stops
+    reading a row touched without a change to its projection.
 
     On a push stream, a written link whose row went (released by its deletion,
     ``RecordLinkManager.release_pushes``, or still naming a row a delete that locked
@@ -933,10 +951,15 @@ def push_candidates(
                 stream=stream, external_key__in=[candidate.external_key for candidate in batch]
             ).with_sync_evidence()
         }
+        unchanged = []
         for candidate in batch:
             link = known.get(candidate.external_key)
             if link is None or link.local_changed(candidate.projection):
                 yield candidate, link
+            elif settle and candidate.local_version:
+                unchanged.append((link, candidate.local_version))
+        if unchanged:
+            links.settle(stream, unchanged)
     if stream.direction != StreamDirection.PUSH:
         return
     written = links.filter(stream=stream).exclude(applied_base=None).exclude(status=LinkStatus.TOMBSTONE)

@@ -13,8 +13,9 @@ from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ImproperlyConfigured, ObjectDoesNotExist
 from django.db import models, router, transaction
-from django.db.models import Exists, OuterRef, Q
+from django.db.models import Case, Exists, Expression, OuterRef, Q, Subquery, Value, When
 from django.db.models.base import ModelBase
+from django.db.models.functions import Cast, Concat
 from django.utils import timezone
 from django.utils.functional import classproperty
 from simple_history.manager import HistoricalQuerySet, HistoryManager
@@ -356,6 +357,36 @@ class ModelHistory(HistoricalRecords):
             Q(Exists(get_history_manager_for_model(table).filter(**{table._meta.pk.attname: OuterRef("pk")})))
             for table in self.carriers(model)
         ))
+
+    def current_version(self, model: type[models.Model]) -> Expression:
+        """The outer row's (``OuterRef("pk")``) current version: its latest version's id, as text; ``NULL`` before one.
+
+        Every tracked write records a version in its own transaction, numbered after
+        the row lock it writes under, so a committed tracked change always gives the
+        row an id no earlier state of it had. Compare versions for equality, never by
+        order: equal means the row's tracked columns are as they were. A model whose
+        columns tracked MTI descendants carry (:meth:`carriers`) joins each table's
+        latest id. While capture is off nothing is versioned, and this is ``NULL``.
+        """
+
+        if not self.capture_enabled:
+            return Value(None, output_field=models.CharField())
+        latest = [
+            Cast(
+                Subquery(
+                    get_history_manager_for_model(table)
+                    .filter(**{table._meta.pk.attname: OuterRef("pk")})
+                    .order_by("-history_id")
+                    .values("history_id")[:1]
+                ),
+                models.CharField(),
+            )
+            for table in self.carriers(model)
+        ]
+        if len(latest) == 1:
+            return latest[0]
+        joined = Concat(*(part for version in latest for part in (version, Value("."))))
+        return Case(When(self.recorded(model), then=joined), output_field=models.CharField())
 
     def record_baselines(self, model: type[models.Model], keys: Sequence[Any]) -> None:
         """Snapshot the stored state of ``keys``, rows with no history yet, before a tracked write changes them.

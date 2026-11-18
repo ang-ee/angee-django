@@ -2168,7 +2168,10 @@ bridge advisory lock as polling and delivery settlement.
   edits converge under the accepted record-sync design ruling. An origin
   stamp plus the returned version/hash makes a successful write-back recognizable
   on its next pull. The link checks its complete retained reflection precondition;
-  that does not replace the remote transport version fence.
+  that does not replace the remote transport version fence. A push may skip a row
+  only by the exact local version read with its projection, compared for equality
+  (`RecordLinkManager.changed_since_base`), never by a timestamp: one is stamped
+  before its commit.
 - **Applied evidence has one promoter.** Adapters return the actual mapped
   payload and dependency digest in `ApplyResult`; the driver takes the declared
   mapping version from the stream, promotes the primary link and pins the history

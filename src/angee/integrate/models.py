@@ -39,8 +39,8 @@ from django.contrib.contenttypes.models import ContentType
 from django.core import checks
 from django.core.exceptions import ImproperlyConfigured, ValidationError
 from django.db import connection, models, transaction
-from django.db.models import BooleanField, Exists, ExpressionWrapper, OuterRef, Prefetch, Q, Subquery
-from django.db.models.functions import Cast, JSONObject
+from django.db.models import BooleanField, Exists, ExpressionWrapper, OuterRef, Prefetch, Q, Subquery, Value
+from django.db.models.functions import Cast, Concat, JSONObject, NullIf
 from django.utils import timezone
 from django.utils.text import capfirst
 from django_compose.models import Composable
@@ -72,7 +72,7 @@ from angee.base.models.refs import RecordRefMixin
 from angee.base.models.transitions import StateTransitions, save_state, transition
 from angee.base.permissions import actor_user_id, instance_actor
 from angee.base.querysets import row_lock_queryset
-from angee.base.refs import generic_pointer_target
+from angee.base.refs import generic_pointer_model, generic_pointer_target
 from angee.base.serialization import canonical_json
 from angee.graphql.capabilities import held_permissions
 from angee.graphql.mixins import ImplementationChoicesMixin
@@ -137,9 +137,10 @@ from angee.integrate.sync import SyncDispatch, progress_bridge_context
 from angee.integrate.webhooks import PinnedWebhookClient, WebhookDeliveryError
 from angee.jobs.enqueue import enqueue_task
 from angee.provenance.context import current_changeset
-from angee.provenance.contrib.angee.history import HistoryMixin
+from angee.provenance.contrib.angee.history import HistoryMixin, ModelHistory
 from angee.provenance.contrib.angee.managers import AngeeHistoryManager, AngeeHistoryUnscopedManager
 from angee.provenance.contrib.angee.querysets import AngeeHistoryQuerySet
+from angee.provenance.querysets import model_history
 from angee.provenance.statements import (
     SourceKind,
     Statement,
@@ -5425,6 +5426,12 @@ class RecordLinkQuerySet[RecordLinkT: RecordLink](AngeeHistoryQuerySet[RecordLin
 _RecordLinkManagerBase = AngeeHistoryManager.from_queryset(RecordLinkQuerySet)
 
 
+def _held_version(mapping_version: int, version: str) -> str:
+    """Return the stored form of a local version, framed by the mapping version that projected it; ``""`` for none."""
+
+    return f"{mapping_version}:{version}" if version else ""
+
+
 class RecordLinkManager[RecordLinkT: RecordLink](_RecordLinkManagerBase[RecordLinkT]):
     """Own replica identity, applied bases and count-based absence policy."""
 
@@ -5570,6 +5577,65 @@ class RecordLinkManager[RecordLinkT: RecordLink](_RecordLinkManagerBase[RecordLi
                 target_content_type=None, target_object_id=None, updated_at=timezone.now()
             )
 
+    def with_local_versions(self, rows: models.QuerySet[Any], *, context: str = "") -> models.QuerySet[Any]:
+        """Annotate ``rows`` with their ``local_version``: their current version under ``context``, else ``NULL``.
+
+        The version of a projection that reads only the row's own tracked columns
+        and ``context`` (what else it reads, such as its container's zone): every
+        tracked write of the row gives it a new one (``ModelHistory.current_version``),
+        and a changed ``context`` changes every row's. A projection that reads
+        other rows needs a version of its own. Yield each row's with its
+        projection (``LocalChange.local_version``), read in the same statement.
+        """
+
+        history = model_history(rows.model)
+        if history is None:
+            return rows.annotate(local_version=Value(None, output_field=models.CharField()))
+        prefix = Value(f"{context}@")
+        version = Concat(prefix, history.current_version(rows.model), output_field=models.CharField())
+        # Without a version the concatenation is the bare prefix, which names no state: NULL.
+        return rows.annotate(local_version=NullIf(version, prefix))
+
+    def changed_since_base(self, stream: Any, rows: models.QuerySet[Any]) -> models.QuerySet[Any]:
+        """Narrow ``rows`` to those that changed since a link of ``stream`` last held them, by local version.
+
+        ``rows`` carry each row's current version as their ``local_version``
+        annotation (:meth:`with_local_versions`; ``NULL`` without one), the version
+        a push adapter yields with its projection (``LocalChange.local_version``).
+        A row a link of the stream names at that version, under the stream's
+        mapping version, is unchanged since that link's base and is left out; a
+        new row, a row without a version, and every row after a mapping change
+        stay. One ``NOT EXISTS`` per row, on the link's target index.
+        """
+
+        held = self.model._base_manager.filter(
+            stream=stream,
+            target_content_type=ContentType.objects.get_for_model(generic_pointer_model(rows.model)),
+            target_object_id=Cast(OuterRef("pk"), models.CharField()),
+            # The stored form (``_held_version``); a row without a version matches no stored one.
+            local_version=Concat(
+                Value(f"{stream.mapping_version}:"), OuterRef("local_version"), output_field=models.CharField()
+            ),
+        )
+        return rows.exclude(Exists(held))
+
+    def settle(self, stream: Any, unchanged: Iterable[tuple[Any, str]]) -> int:
+        """Advance each link's local version to a newer one that still projects its base; return how many moved.
+
+        ``unchanged`` pairs a link, read with its base, with the local version of a
+        projection found equal to that base (``push_candidates``). The write is
+        conditional on that base: a link whose base moved since keeps its version.
+        """
+
+        moved = 0
+        with system_context(reason="integrate.record.settle"):
+            for link, version in unchanged:
+                held = _held_version(stream.mapping_version, version)
+                if link.local_version != held:
+                    rows = self.filter(pk=link.pk, applied_base_id=link.applied_base_id)
+                    moved += rows.update(local_version=held)
+        return moved
+
     def promote(
         self,
         link: Any,
@@ -5583,12 +5649,15 @@ class RecordLinkManager[RecordLinkT: RecordLink](_RecordLinkManagerBase[RecordLi
         remote_version: str = "",
         origin: str = "remote",
         tombstone: bool = False,
+        local_version: str = "",
     ) -> Any:
         """Append applied evidence and pin its base; the driver owns promotion.
 
         Adapters return their evidence to the driver, never promote its link
         themselves. Omit ``target`` to retain its binding; pass ``None`` to clear
-        it and retain a WITHDRAWN identity.
+        it and retain a WITHDRAWN identity. ``local_version`` is the version of the
+        local state ``mapped_payload`` was read from (a push's write); any other
+        promotion clears the link's, so a held version always projects its base.
         """
 
         with system_context(reason="integrate.record.promote"), transaction.atomic():
@@ -5603,6 +5672,7 @@ class RecordLinkManager[RecordLinkT: RecordLink](_RecordLinkManagerBase[RecordLi
             if target is not UNSET:
                 self._set_target(locked, target)
             locked.remote_version, locked.origin, locked.status = remote_version, origin, LinkStatus.CURRENT
+            locked.local_version = _held_version(mapping_version, local_version)
             if target is None:
                 locked.status = LinkStatus.WITHDRAWN
             locked.tombstoned_at = timezone.now() if tombstone else None
@@ -5618,6 +5688,7 @@ class RecordLinkManager[RecordLinkT: RecordLink](_RecordLinkManagerBase[RecordLi
                 "target_content_type_id",
                 "target_object_id",
                 "remote_version",
+                "local_version",
                 "origin",
                 "status",
                 "tombstoned_at",
@@ -5760,6 +5831,7 @@ class RecordLink(
 
     # A link's history is sync evidence read through its target: no timeline of its own.
     timeline_subject = False
+    history = ModelHistory(inherit=True, excluded_fields=("local_version",))
 
     merge_policy = MergePolicy.MOVE
     accepts_any_record_target = True
@@ -5806,6 +5878,15 @@ class RecordLink(
     outbox_retry_at = models.DateTimeField(null=True, blank=True)
     outbox_last_error = models.JSONField(default=dict, blank=True)
     remote_version = models.CharField(max_length=512, blank=True)
+    local_version = models.CharField(max_length=255, blank=True, default="")
+    """The local version (``LocalChange.local_version``) whose projection the applied base holds; ``""``: unknown.
+
+    A push records the version it read with what it wrote; any other promotion
+    clears it; :meth:`RecordLinkManager.settle` advances it when a newer version
+    still projects the base. Stored framed by the mapping version that projected
+    it, so a mapping change reads every row again. It advances without a new
+    base, so the link's history leaves it out.
+    """
     origin = models.CharField(max_length=16, blank=True)
     last_seen_at = models.DateTimeField(null=True, blank=True)
     last_verified_generation = models.PositiveIntegerField(default=0)
@@ -6063,9 +6144,9 @@ class RecordLink(
                 )
                 # The local side as it stands: a change the push would write, else the base it already matches.
                 local = (
-                    next((change.projection for change, _link in push_candidates(stream, adapter, keys)), UNSET)
+                    next((change for change, _link in push_candidates(stream, adapter, keys)), None)
                     if accepts_remote
-                    else UNSET
+                    else None
                 )
                 with transaction.atomic():
                     locked_stream = type(stream).objects.lock_current(stream, fenced_to=stream)
@@ -6081,12 +6162,13 @@ class RecordLink(
                             locked,
                             source_payload=remote.source_payload,
                             source_hash=remote.source_hash,
-                            mapped_payload=local,
+                            mapped_payload=UNSET if local is None else local.projection,
                             mapping_version=locked_stream.mapping_version,
                             dependency_digest=locked.dependency_digest,
                             remote_version=remote.remote_version,
                             origin="remote",
                             tombstone=remote.tombstone,
+                            local_version="" if local is None else local.local_version,
                         )
                     elif remote is not None:
                         type(locked).objects.observe(

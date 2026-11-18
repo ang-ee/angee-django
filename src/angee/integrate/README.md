@@ -45,8 +45,20 @@ remote-version fence. Neither makes the two systems atomic.
 Only the driver promotes a primary link; adapters return `ApplyResult` evidence.
 The stream declaration alone owns `mapping_version`. The driver stamps it at
 promotion, write-back reflection and quarantine; `RecordChange`, `LocalChange`
-and `ApplyResult` carry no version copies. Adapters return only the evidence
+and `ApplyResult` carry no mapping-version copies. Adapters return only the evidence
 apply learned.
+
+A push adapter may version its local projection. It yields each row's exact
+`LocalChange.local_version`, read with the projection, and the push records the
+version it read beside the base it wrote (`RecordLink.local_version`). A full
+read may then skip every row a link already holds at its current version
+(`RecordLinkManager.changed_since_base`). A projection that reads only the row's
+own tracked columns, plus a container setting, takes the row's history version
+(`RecordLinkManager.with_local_versions`). Versions are compared for equality,
+never by time: a timestamp is stamped before commit, so a base could postdate an
+uncommitted edit. A push also records the newer version of a row touched without
+a change to its projection (`RecordLinkManager.settle`), and a mapping change
+reads every row again.
 
 Each applied record retains the observe row and the application-evidence row;
 a record delivered again unchanged retains only its observe row. Pinning `applied_base` creates no pointer-only history row. History retention is unbounded: deployments budget both full snapshots and
