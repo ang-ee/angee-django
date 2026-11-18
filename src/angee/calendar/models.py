@@ -12,7 +12,7 @@ attendee whose ``role`` is ``organizer``.
 
 **Occurrences.** :meth:`CalendarEventQuerySet.occurrences` turns a row set into
 the :class:`EventOccurrence` wire shape the calendar renders, composing
-:meth:`Recurrence.occurrences` for the moments in each event's expansion zone. An override
+:meth:`Recurrence.occurrences` for the moments in each event's effective zone. An override
 replaces the moment at its ``original_start`` and keeps that instance's id, a
 cancelled override drops it, and a cancelled event shows nothing. A recurring
 master's occurrences are not draggable (drag-rescheduling moves a single row); a
@@ -147,9 +147,12 @@ class EventOccurrence:
     basic>`` for every instance of a series, overridden or not, so an id survives
     its instance becoming an override; a plain event is its own ``<event_sqid>``.
     ``event_sqid`` names the row to open (the override, when there is one).
-    ``calendar`` is the calendar's public id. A ``redacted`` occurrence is busy time
-    an actor may see but not read: it carries no title and opens nothing.
-    ``editable`` is whether the actor may drag it: a single row it may write.
+    ``calendar`` is the calendar's public id. ``effective_timezone`` is its event's
+    (:attr:`CalendarEvent.effective_timezone`): an all-day occurrence is the days its
+    bounds fall on there, whichever zone the viewer is in, and a redacted one keeps it
+    so its busy days show where they lie. A ``redacted`` occurrence is busy time an
+    actor may see but not read: it carries no title and opens nothing. ``editable``
+    is whether the actor may drag it: a single row it may write.
     """
 
     occurrence_id: str
@@ -159,6 +162,7 @@ class EventOccurrence:
     start: datetime
     end: datetime
     all_day: bool
+    effective_timezone: str
     editable: bool
     redacted: bool
 
@@ -182,13 +186,6 @@ def _midnight(day: date, tz: Any) -> datetime:
     """The midnight that starts ``day`` in ``tz``: where an all-day bound on that date lies."""
 
     return timezone.make_aware(datetime.combine(day, time.min), tz)
-
-
-def _nearest_midnight(moment: datetime, tz: Any) -> datetime:
-    """The midnight in ``tz`` nearest ``moment``: a dragged date lands on the day the viewer meant."""
-
-    local = moment.astimezone(tz)
-    return _midnight(local.date() + timedelta(days=1 if local.time() >= time(12) else 0), tz)
 
 
 def _same_local_day(moment: datetime, old_tz: Any, new_tz: Any) -> datetime:
@@ -555,7 +552,8 @@ class CalendarEventQuerySet(AngeeHistoryQuerySet[Any]):
 
         A moment meets the window when it starts before ``window_end`` and ends
         after ``window_start`` (a zero-length moment at ``window_start`` counts). A
-        recurring master unrolls its rule in its expansion zone, minus the moments
+        recurring master unrolls its rule in its effective zone
+        (:attr:`CalendarEvent.effective_timezone`, read here as a query), minus the moments
         its overrides replace; an override is a single row; a cancelled row yields
         nothing, so a cancelled override drops the moment it replaces, and a
         cancelled master takes its moved instances with it. Overrides are read
@@ -578,7 +576,11 @@ class CalendarEventQuerySet(AngeeHistoryQuerySet[Any]):
             return []
         rows = list(
             self.annotate(
-                occurrence_zone=Coalesce(NullIf(F("timezone"), Value("")), F("calendar__timezone")),
+                occurrence_zone=Coalesce(
+                    NullIf(F("timezone"), Value("")),
+                    NullIf(F("calendar__timezone"), Value("")),
+                    Value(timezone.get_default_timezone_name()),
+                ),
                 occurrence_calendar=F("calendar__sqid"),
                 occurrence_series=F("series__sqid"),
                 occurrence_backend=F("calendar__source__backend_class"),
@@ -667,6 +669,7 @@ class CalendarEventQuerySet(AngeeHistoryQuerySet[Any]):
                     start=moment.start,
                     end=moment.end,
                     all_day=event.all_day,
+                    effective_timezone=cast(Any, event).occurrence_zone,
                     editable=bool(event.occurrence_write)
                     and not event.recurrence
                     and not redacted
@@ -897,9 +900,9 @@ class CalendarEvent(
     """An event on one calendar, with optional recurrence, overrides and attendees.
 
     ``start``/``end`` are timezone-aware UTC datetimes; an all-day event stores
-    ``start`` as local midnight in its expansion zone and expands by calendar date.
+    ``start`` as local midnight in its effective zone and expands by calendar date.
     An all-day bound written as a date (no offset, as a date picker sends it) is
-    placed at that date's midnight in the expansion zone (:meth:`clean`): the
+    placed at that date's midnight in the effective zone (:meth:`clean`): the
     writer names the day and the event, which knows its zone, places it.
     A master carries the RRULE; an override carries ``series`` and
     ``original_start`` and no rule. Containment is set once: ``calendar``,
@@ -1002,17 +1005,23 @@ class CalendarEvent(
         return self.title or self.sqid
 
     @property
-    def expansion_zone(self) -> str:
-        """The zone this event's recurrence, all-day dates and overlap expand on: its own, else its calendar's."""
+    def effective_timezone(self) -> str:
+        """The IANA zone this event keeps: its own, else its calendar's, else the project ``TIME_ZONE``.
 
-        return self.timezone or self.calendar.timezone
+        Its recurrence, its all-day dates and its overlap check expand on it, and a
+        client reads an all-day event's days in it: an all-day event is dates in this
+        zone, a timed event an instant. :meth:`CalendarEventQuerySet.moments` reads the
+        same chain as a query.
+        """
+
+        return self.timezone or self.calendar.timezone or timezone.get_default_timezone_name()
 
     def clean(self) -> None:
         """Validate the interval, the all-day bounds and an override's series; this row alone.
 
         Its moments lie within the representable range calendar arithmetic needs
         (two days inside Python's). An all-day event's ``start`` and ``end`` are
-        midnights in its expansion zone, a whole number of days apart; a bound
+        midnights in its effective zone, a whole number of days apart; a bound
         written as a date is first placed there (:meth:`_place_all_day_dates`). The
         overlap policy reads other rows, so :meth:`save` checks it, after the write,
         under the calendar's lock.
@@ -1090,7 +1099,7 @@ class CalendarEvent(
         return {}
 
     def _place_all_day_dates(self) -> None:
-        """Place each all-day bound written as a date at that date's midnight in the expansion zone.
+        """Place each all-day bound written as a date at that date's midnight in the effective zone.
 
         A bound without an offset names a day, not an instant: its writer cannot
         know which zone the event expands in (its own, its calendar's or the
@@ -1103,20 +1112,19 @@ class CalendarEvent(
         bounds = {name: getattr(self, name) for name in ("start", "end")}
         days = {name: bound.date() for name, bound in bounds.items() if bound is not None and timezone.is_naive(bound)}
         if days:
-            tz = get_zone_info(self.expansion_zone)
+            tz = get_zone_info(self.effective_timezone)
             for name, day in days.items():
                 setattr(self, name, _midnight(day, tz))
 
     def _all_day_errors(self) -> dict[str, str]:
         """Return why this all-day event's bounds are not local midnights in its zone."""
 
-        zone = self.expansion_zone
+        zone = self.effective_timezone
         tz = get_zone_info(zone)
-        named = zone or "the project time zone"
         for name in ("start", "end"):
             local = getattr(self, name).astimezone(tz)
             if local.time() != time.min:
-                return {name: f"An all-day event {name}s at midnight in its time zone ({named})."}
+                return {name: f"An all-day event {name}s at midnight in its time zone ({zone})."}
         if self.end <= self.start:
             return {"end": "An all-day event lasts at least one day."}
         return {}
@@ -1131,17 +1139,17 @@ class CalendarEvent(
 
         if not self.recurrence or self.calendar_id is None:
             return None
-        zone = self.expansion_zone
+        zone = self.effective_timezone
         last = Recurrence(self.recurrence).get_last_occurrence(self.start, zone=zone)
         return self.occurrence_end(last, zone=zone) if last is not None else None
 
     def is_instance(self, moment: datetime, *, zone: str | None = None) -> bool:
-        """Whether ``moment`` is an instance of this master's rule, expanded in ``zone`` (its expansion zone)."""
+        """Whether ``moment`` is an instance of this master's rule, expanded in ``zone`` (its effective zone)."""
 
         return moment in self.instances(moment, moment, zone=zone)
 
     def instances(self, first: datetime, last: datetime, *, zone: str | None = None) -> set[datetime]:
-        """Return this master's instances in ``[first, last]``, expanded once in ``zone`` (its expansion zone).
+        """Return this master's instances in ``[first, last]``, expanded once in ``zone`` (its effective zone).
 
         A row without a rule has none: its own start is no instance of a series.
 
@@ -1153,7 +1161,7 @@ class CalendarEvent(
 
         if not self.recurrence:
             return set()
-        zone = self.expansion_zone if zone is None else zone
+        zone = self.effective_timezone if zone is None else zone
         end = moment_after(last, timedelta(microseconds=1))
         if end is None:
             raise ValidationError(OUT_OF_RANGE_MESSAGE, code="out_of_range")
@@ -1223,7 +1231,7 @@ class CalendarEvent(
 
         horizon = self.horizon_end(max(timezone.now(), self.start))
         try:
-            Recurrence(self.recurrence).validate(dtstart=self.start, zone=self.expansion_zone, through=horizon)
+            Recurrence(self.recurrence).validate(dtstart=self.start, zone=self.effective_timezone, through=horizon)
         except ValidationError as error:
             raise ValidationError({"recurrence": error.error_list}) from None
 
@@ -1293,14 +1301,14 @@ class CalendarEvent(
         The field refuses a malformed rule, one finer than daily and a ``COUNT``
         past the cap; the recurrence owner then refuses a rule that never occurs
         within about 30 years of ``start`` (``never_occurs``), expanded in ``zone``
-        (this row's expansion zone). A source's parse calls it on an unsaved row.
+        (this row's effective zone). A source's parse calls it on an unsaved row.
         """
 
         try:
             self._meta.get_field("recurrence").clean(self.recurrence, self)
             if self.recurrence and self.start is not None:
                 Recurrence(self.recurrence).validate(
-                    dtstart=self.start, zone=self.expansion_zone if zone is None else zone
+                    dtstart=self.start, zone=self.effective_timezone if zone is None else zone
                 )
         except ValidationError as error:
             raise ValidationError({"recurrence": error.error_list}) from None
@@ -1329,7 +1337,7 @@ class CalendarEvent(
 
         Each ``original_start`` moves by the master's local wall-clock change, from
         ``previous_start`` in ``previous_zone`` to the current ``start`` in its
-        expansion zone. An override that still names an instance keeps it; one that
+        effective zone. An override that still names an instance keeps it; one that
         no longer does is detached as a standalone event when it carries edits, so
         nothing is lost, and deleted when it is a cancellation; one moved past the
         representable dates is no instance. Each moved override is judged on its own
@@ -1348,7 +1356,7 @@ class CalendarEvent(
         is moved or deleted, as ``release_pushes`` requires of its caller.
         """
 
-        old_tz, zone = get_zone_info(previous_zone), self.expansion_zone
+        old_tz, zone = get_zone_info(previous_zone), self.effective_timezone
         new_tz = get_zone_info(zone)
         shift = self.start.astimezone(new_tz).replace(tzinfo=None) - previous_start.astimezone(old_tz).replace(
             tzinfo=None
@@ -1464,7 +1472,7 @@ class CalendarEvent(
         if self.recurrence and self.pk is not None:
             stored = type(self)._base_manager.filter(series_id=self.pk)
             replaced = {start for start in stored.values_list("original_start", flat=True) if start is not None}
-        spans = self.spans(since, until, zone=self.expansion_zone, replaced=replaced)
+        spans = self.spans(since, until, zone=self.effective_timezone, replaced=replaced)
         return sorted((max(start, since), end) for start, end in spans)
 
     def _owns(self, other: Any) -> bool:
@@ -1528,25 +1536,28 @@ class CalendarEvent(
 
         A recurring master refuses: its occurrences are dragged one instance at a
         time through an override, and the series itself is edited through the
-        event form. An all-day event lands on the nearest midnights in its expansion
-        zone, since a drag carries the viewer's own midnight. The moved
-        fields are validated before the write (:meth:`clean`: the interval and the
-        series) and the overlap policy by the save, so an invalid move surfaces as a
-        ``ValidationError``, never an ``IntegrityError``. The ordinary save joins the
-        caller's changeset, so provenance owns the resulting field delta and reason.
+        event form. An all-day event moves by days: a bound written as a date (the
+        day it was dropped on, as the viewer sees the event's days) is placed at that
+        midnight in its effective zone (:meth:`_place_all_day_dates`), and an instant
+        off that midnight is refused, never moved to a guessed day; a move without a
+        later end lasts one day. The moved fields are validated before the write
+        (:meth:`clean`: the interval and the series) and the overlap policy by the
+        save, so an invalid move surfaces as a ``ValidationError``, never an
+        ``IntegrityError``. The ordinary save joins the caller's changeset, so
+        provenance owns the resulting field delta and reason.
         """
 
         if self.recurrence:
             raise ValidationError(
                 {"start": "A recurring event's occurrences cannot be dragged; edit the series instead."}
             )
-        if self.all_day:
-            tz = get_zone_info(self.expansion_zone)
-            start, end = _nearest_midnight(start, tz), _nearest_midnight(end, tz)
-            if end <= start:
-                end = _midnight(start.astimezone(tz).date() + timedelta(days=1), tz)
         self.start = start
         self.end = end
+        if self.all_day:
+            self._place_all_day_dates()
+            if self.end <= self.start:
+                tz = get_zone_info(self.effective_timezone)
+                self.end = _midnight(self.start.astimezone(tz).date() + timedelta(days=1), tz)
         self.full_clean(
             exclude=[field.name for field in self._meta.fields if field.name not in ("start", "end")],
             validate_unique=False,

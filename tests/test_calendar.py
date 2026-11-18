@@ -462,7 +462,7 @@ def test_an_event_zone_keeps_its_wall_clock_on_a_calendar_in_another_zone(db: No
     # New York springs forward on 8 March, Berlin on 29 March.
     occurrences = _occurrences(calendar, _utc(2026, 3, 1), _utc(2026, 4, 7))
 
-    assert series.expansion_zone == "Europe/Berlin"
+    assert series.effective_timezone == "Europe/Berlin"
     assert [o.start.astimezone(berlin).strftime("%m-%d %H:%M") for o in occurrences] == [
         "03-02 09:00", "03-09 09:00", "03-16 09:00", "03-23 09:00", "03-30 09:00", "04-06 09:00",
     ]
@@ -808,15 +808,62 @@ def test_an_all_day_event_edited_to_dates_keeps_them_in_its_own_zone(db: None) -
     assert (holiday.start, holiday.end) == (datetime(2026, 7, 9, tzinfo=tokyo), datetime(2026, 7, 11, tzinfo=tokyo))
 
 
-def test_dragging_an_all_day_event_lands_on_the_nearest_local_midnights(db: None) -> None:
+@pytest.mark.parametrize(
+    ("event_zone", "calendar_zone", "expected"),
+    [
+        pytest.param("Asia/Tokyo", "America/New_York", "Asia/Tokyo", id="its-own"),
+        pytest.param("", "America/New_York", "America/New_York", id="its-calendars"),
+        pytest.param("", "", "Pacific/Kiritimati", id="the-projects"),
+    ],
+)
+def test_an_events_effective_timezone_is_its_own_else_its_calendars_else_the_projects(
+    db: None, settings: Any, event_zone: str, calendar_zone: str, expected: str,
+) -> None:
+    """The one chain, as the model and the occurrence read state it: always a zone a client can read days in."""
+
+    settings.TIME_ZONE = "Pacific/Kiritimati"
+    calendar = _calendar(zone=calendar_zone)
+    start = datetime(2026, 7, 7, tzinfo=ZoneInfo(expected))
+    holiday = _event(
+        calendar, title="Holiday", all_day=True, timezone=event_zone, start=start, end=start + timedelta(days=1),
+    )
+
+    [occurrence] = _occurrences(calendar, _utc(2026, 7, 5), _utc(2026, 7, 9))
+    assert holiday.effective_timezone == occurrence.effective_timezone == expected
+    # The occurrence is the event's day in that zone, whichever zone reads it.
+    assert occurrence.start.astimezone(ZoneInfo(expected)) == start
+
+
+def test_dragging_an_all_day_event_to_days_lands_on_their_midnights_in_its_zone(db: None) -> None:
+    """A drag sends the days it lands on: a viewer in Tokyo, 13 hours ahead of New York, moves it to the days it saw."""
+
     calendar = _calendar(zone="America/New_York")
     holiday = _event(calendar, title="Holiday", all_day=True, start=_ny(2026, 7, 7), end=_ny(2026, 7, 8))
 
     with system_context(reason="tests.calendar.reschedule"):
-        # The viewer's own midnight in UTC, four hours off New York's.
-        holiday.reschedule(_utc(2026, 7, 9), _utc(2026, 7, 10))
+        holiday.reschedule(datetime(2026, 7, 9), datetime(2026, 7, 11))
+    assert (holiday.start, holiday.end) == (_ny(2026, 7, 9), _ny(2026, 7, 11))
 
-    assert (holiday.start, holiday.end) == (_ny(2026, 7, 9), _ny(2026, 7, 10))
+    # A drop without a later end lasts one day.
+    with system_context(reason="tests.calendar.reschedule"):
+        holiday.reschedule(datetime(2026, 7, 12), datetime(2026, 7, 12))
+    assert (holiday.start, holiday.end) == (_ny(2026, 7, 12), _ny(2026, 7, 13))
+
+
+def test_dragging_an_all_day_event_refuses_an_instant_off_its_zones_midnight(db: None) -> None:
+    """Tokyo's midnight on Jul 9 is 11:00 on Jul 8 in New York: no day is guessed for it, the drag is refused."""
+
+    calendar = _calendar(zone="America/New_York")
+    holiday = _event(calendar, title="Holiday", all_day=True, start=_ny(2026, 7, 7), end=_ny(2026, 7, 8))
+    tokyo = ZoneInfo("Asia/Tokyo")
+
+    with system_context(reason="tests.calendar.reschedule"):
+        with pytest.raises(ValidationError) as raised:
+            holiday.reschedule(datetime(2026, 7, 9, tzinfo=tokyo), datetime(2026, 7, 10, tzinfo=tokyo))
+        holiday.refresh_from_db()
+
+    assert "America/New_York" in str(raised.value.message_dict["start"])
+    assert (holiday.start, holiday.end) == (_ny(2026, 7, 7), _ny(2026, 7, 8))
 
 
 # --- override defaults -------------------------------------------------------

@@ -137,6 +137,13 @@ class CalendarEventType(TaggedNode, AngeeNode):
     all_day: auto
     recurrence: auto
     timezone: auto
+
+    @strawberry_django.field(only=["timezone", "calendar__timezone"])
+    def effective_timezone(self) -> str:
+        """The zone the event keeps (its own, its calendar's or the project's), where an all-day event's days lie."""
+
+        return str(cast(Any, self).effective_timezone)
+
     original_start: auto
     status: auto
     transparency: auto
@@ -168,8 +175,9 @@ class EventOccurrenceType:
     A server-expanded occurrence, not a stored row: the resolver returns
     :class:`~angee.calendar.models.EventOccurrence` values, which own the id
     shapes. ``event_sqid`` opens the stored row, ``calendar`` is the calendar's
-    public id, ``editable`` gates drag, and a ``redacted`` occurrence is busy time
-    whose details the actor may not read.
+    public id, ``effective_timezone`` is the zone whose days an all-day occurrence
+    spans, ``editable`` gates drag, and a ``redacted`` occurrence is busy time whose
+    details the actor may not read.
     """
 
     occurrence_id: str
@@ -179,6 +187,7 @@ class EventOccurrenceType:
     start: datetime
     end: datetime
     all_day: bool
+    effective_timezone: str
     editable: bool
     redacted: bool
 
@@ -325,7 +334,7 @@ class CalendarQuery:
         """Return the actor's occurrences in ``[window_start, window_end)``.
 
         Aware UTC bounds, start inclusive and end exclusive, at most 400 days apart;
-        every occurrence that meets the window is returned, in each event's expansion zone.
+        every occurrence that meets the window is returned, in each event's effective zone.
         """
 
         return CalendarEvent.objects.with_actor(session_user(info)).occurrences(window_start, window_end)

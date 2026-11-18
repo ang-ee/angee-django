@@ -22,7 +22,7 @@ vi.mock("@angee/ui", async (original) => ({
   },
 }));
 
-type Row = Occurrence & { calendar: string; redacted: boolean };
+type Row = Occurrence & { calendar: string; redacted: boolean; effective_timezone: string };
 
 const ROW: Row = {
   occurrence_id: "cev_a",
@@ -32,6 +32,7 @@ const ROW: Row = {
   start: "2026-06-15T09:00:00.000Z",
   end: "2026-06-15T10:00:00.000Z",
   all_day: false,
+  effective_timezone: "America/Chicago",
   editable: true,
   redacted: false,
 };
@@ -121,6 +122,27 @@ describe("CalendarPage sources", () => {
     expect(busy).toMatchObject({ title: "Busy", to: undefined });
   });
 
+  // Run under several process zones (TZ=Asia/Tokyo, TZ=America/Los_Angeles and the default): the
+  // projection reads each all-day occurrence's days in its event's own zone, so every browser shows
+  // them on the same days (a Chicago Nov 20 is no Nov 19 in Los Angeles), and a timed one stays an
+  // instant, shown in the viewer's zone.
+  test("an all-day occurrence is the days it spans in its event's own zone; a timed one its instants", async () => {
+    const [alice] = (await spec()).sources;
+    const allDay = { ...ROW, all_day: true, editable: false };
+    const [chicago, tokyo, timed] = selected(alice!, [
+      { ...allDay, occurrence_id: "chicago", start: "2026-11-20T06:00:00+00:00", end: "2026-11-21T06:00:00+00:00" },
+      {
+        ...allDay, occurrence_id: "tokyo", effective_timezone: "Asia/Tokyo",
+        start: "2026-11-19T15:00:00+00:00", end: "2026-11-21T15:00:00+00:00",
+      },
+      ROW,
+    ]);
+
+    expect([chicago?.start, chicago?.end]).toEqual(["2026-11-20", "2026-11-21"]);
+    expect([tokyo?.start, tokyo?.end]).toEqual(["2026-11-20", "2026-11-22"]);
+    expect([timed?.start, timed?.end]).toEqual([ROW.start, ROW.end]);
+  });
+
   test("a contributed source is keyed by its container child id and built with the viewer", async () => {
     const contributed = (await spec()).sources.at(-1)!;
     expect(contributed.key).toBe("projects-calendar.due-tasks");
@@ -161,6 +183,20 @@ describe("CalendarPage drag", () => {
 
     expect(requests.find(({ fields }) => fields.includes("reschedule_event"))?.variables).toEqual({
       id: "cev_a", start: start.toISOString(), end: end.toISOString(),
+    });
+  });
+
+  // FullCalendar drops an all-day event on the viewer's local midnight of the day it shows, which the
+  // grid shows in the event's own zone. The page sends that day; the event places it at midnight in
+  // its zone. The browser's midnight as an instant (Tokyo's Nov 22 is 09:00 Nov 21 in Chicago) would
+  // land a day early, and a snap to the nearest midnight cannot tell.
+  test("an all-day drag sends the days it lands on, never the browser's midnight", async () => {
+    const onReschedule = (await spec()).onReschedule!;
+
+    await onReschedule({ ...ROW, all_day: true }, new Date(2026, 10, 22), new Date(2026, 10, 23));
+
+    expect(requests.find(({ fields }) => fields.includes("reschedule_event"))?.variables).toEqual({
+      id: "cev_a", start: "2026-11-22", end: "2026-11-23",
     });
   });
 
