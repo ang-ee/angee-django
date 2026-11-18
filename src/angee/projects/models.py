@@ -1186,7 +1186,7 @@ class Project(
         )
 
     # Promotion lineage stays on the original retained identity.
-    merge_policies = {"converted_from": MergePolicy.KEEP}
+    merge_policies: ClassVar[Mapping[str, Any]] = {"converted_from": MergePolicy.KEEP}
 
     def __str__(self) -> str:
         """Return the project title."""
@@ -1882,7 +1882,7 @@ class Task(
     immutable_fields: ClassVar[tuple[str, ...]] = ("visibility",)
     rebac_grantable = {"reader": "share", "editor": "share"}
     # A repetition's lineage stays on the original retained identity.
-    merge_policies = {"repeated_from": MergePolicy.KEEP}
+    merge_policies: ClassVar[Mapping[str, Any]] = {"repeated_from": MergePolicy.KEEP}
 
     ORDERING_RANK_FIELDS: ClassVar[tuple[str, ...]] = ("sort_order", "sub_sort_order")
     ORDERING_FIELDS: ClassVar[frozenset[str]] = frozenset({

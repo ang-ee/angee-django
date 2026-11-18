@@ -13,7 +13,7 @@ from copy import copy
 from dataclasses import dataclass
 from functools import cache
 from itertools import batched, groupby
-from typing import Any, ClassVar, Self, cast
+from typing import Any, ClassVar, Protocol, Self, cast
 
 from django.core import checks
 from django.core.exceptions import FieldDoesNotExist, ImproperlyConfigured, ValidationError
@@ -1556,6 +1556,18 @@ _StatementPairManager = StatementPairManager.from_queryset(StatementPairQuerySet
 _StatementPairUnscopedManager = AngeeHistoryUnscopedManager.from_queryset(_StatementPairUnscopedQuerySet)
 
 
+class _PairStatements(Protocol):
+    """The ``statements`` descriptor :class:`PairAspect` generates on every carrier.
+
+    simple-history's ``HistoryDescriptor`` returns the table's manager on the
+    class, and bound to the pair on a row.
+    """
+
+    def __get__(
+        self, instance: models.Model | None, owner: type[models.Model] | None = None
+    ) -> StatementManager[Statement]: ...
+
+
 class StatementPair(
     MergeContractMixin, TrashMixin, StatementsMixin, HistoryMixin, SqidMixin, TimestampMixin, RebacMixin
 ):
@@ -1568,7 +1580,7 @@ class StatementPair(
     left: models.ForeignKey[Any, Any]
     right: models.ForeignKey[Any, Any]
     pair_name: str
-    statements: StatementManager[Statement]
+    statements: _PairStatements
 
     class Meta:
         abstract = True

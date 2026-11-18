@@ -127,6 +127,12 @@ export const EditAndRead: Story = {
             initialValue="2026-06-16"
             field={{ label: "Due date" }}
           />
+          <WidgetExample<string | null>
+            kind="time"
+            widget={defaultWidgets.time}
+            initialValue="09:30:00"
+            field={{ label: "Starts" }}
+          />
           <WidgetExample<unknown>
             kind="json"
             widget={defaultWidgets.json}

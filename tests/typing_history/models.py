@@ -33,6 +33,19 @@ class Changeset(Composable, concrete=True):
         abstract = True
 
 
+class Tracked(models.Model):
+    """A pure mixin: no registered model takes its label, so its declaration types its history."""
+
+    history = ModelHistory(
+        inherit=True,
+        history_manager=FixtureHistoryManager,
+        historical_queryset=FixtureHistoricalQuerySet,
+    )
+
+    class Meta:
+        abstract = True
+
+
 class Subject(Composable, concrete=True):
     objects = AngeeHistoryUnscopedManager()
 

@@ -21,6 +21,7 @@ import { booleanToggleWidget, switchWidget } from "./switch";
 import { tagInputWidget } from "./tagInput";
 import { textareaWidget } from "./textarea";
 import { textWidget } from "./text";
+import { timeWidget } from "./time";
 import { toneWidget } from "./tone";
 import { visibilityWidget } from "./visibility";
 import { userRefWidget } from "./userRef";
@@ -155,6 +156,7 @@ export const defaultWidgets = {
   date: dateWidget,
   json: jsonWidget,
   datetime: datetimeWidget,
+  time: timeWidget,
   combobox: comboboxWidget,
   statusBadge: statusBadgeWidget,
   progressBar: progressBarWidget,
