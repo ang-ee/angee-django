@@ -10,6 +10,12 @@ live in code docstrings.
 
 ## Unreleased — shared addon contracts, native embeddings and graph retrieval
 
+- Addons require django-compose 0.1.0.dev13, whose snapshot digest covers each
+  addon's resolved path. A host that changes its sync from `--no-editable` to
+  editable, or moves a source checkout, now recomposes on `compose --if-stale`;
+  before, the receipt stayed current while the web manifest's roots named the old
+  location, and the frontend build failed on a missing addon entry.
+
 - A change to `ANGEE_UI` alone now recomposes. `angee.web` renders it into
   `runtime/web/manifest.json` but never declared it a compiler input, so
   `compose --if-stale`, the stack's compose job, found the receipt current and
