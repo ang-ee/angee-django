@@ -161,7 +161,7 @@ describe("bulk delete flow", () => {
       expect(sdkMocks.mutate).toHaveBeenCalledWith({ id: "record-1", confirm: false }),
     );
     const dialog = await screen.findByRole("dialog");
-    expect(within(dialog).getByText("Delete 1 records?")).toBeTruthy();
+    expect(within(dialog).getByText("Delete 1 record?")).toBeTruthy();
     expect(
       within(dialog).getByRole("button", { name: "Delete" }).querySelector("svg"),
     ).toBeTruthy();
@@ -217,7 +217,8 @@ describe("bulk delete flow", () => {
 
     const dialog = await screen.findByRole("dialog");
     expect(within(dialog).getByText("Stop active work first.")).toBeTruthy();
-    expect(within(dialog).getByText("1 selected records have deletion blockers.")).toBeTruthy();
+    expect(within(dialog).getByText("Delete 2 records?")).toBeTruthy();
+    expect(within(dialog).getByText("1 selected record has deletion blockers.")).toBeTruthy();
     const button = within(dialog).getByRole<HTMLButtonElement>("button", { name: "Delete" });
     expect(button.disabled).toBe(false);
     fireEvent.click(button);

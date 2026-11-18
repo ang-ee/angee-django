@@ -224,9 +224,9 @@ export class NotesPage extends PageObject {
   get deleteDialog(): Locator {
     return this.page.getByRole("dialog");
   }
-  /** The cascade-preview dialog title, e.g. "Delete 3 records?". */
+  /** The cascade-preview dialog title, e.g. "Delete 1 record?" or "Delete 3 records?". */
   get deleteDialogTitle(): Locator {
-    return this.page.getByText(/Delete \d+ records\?/);
+    return this.page.getByText(/Delete \d+ records?\?/);
   }
   get deleteDialogCancel(): Locator {
     return this.page.getByRole("button", { name: "Cancel", exact: true });
