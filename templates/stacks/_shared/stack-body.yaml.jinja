@@ -473,6 +473,8 @@ services:
 {# for its connection, so the pool keeps 8 threads per queue; one process loads the app #}
 {# once for every queue instead of once per queue. The shared worker embeds beat #}
 {# (`--beat`): never scale it, beat has no leader lock (one scheduler per stack); beat's #}
+{# Its prefork pool runs `celery_concurrency` children: each loads the whole app, so the #}
+{# CPU-count default (Celery's) costs a gigabyte-scale footprint on a many-core host. #}
 {# schedule lives in the database. A blank `queue_worker` skips the queue worker's item. #}
 {% if celery_queues %}{% set queue_worker = "queues" %}{% else %}{% set queue_worker = "" %}{% endif %}
 {% for role in "worker,"|add:queue_worker|split:"," %}{% if role %}
@@ -482,13 +484,13 @@ services:
     # Let Celery finish a warm shutdown, then bound native supervisor updates;
     # a local worker that hangs on shutdown costs the whole restart its grace.
     stop_grace_period: 10s
-{% if runtime_mode == "process" %}    command: ["uv", "run", "--no-sync", "python", "manage.py", "celery", "worker", {% if role == "worker" %}"--beat"{% else %}"-Q", "{{ celery_queues }}", "--pool", "threads", "--concurrency", "{{ celery_queues|split:","|length * 8 }}"{% endif %}, "--loglevel=INFO"]
+{% if runtime_mode == "process" %}    command: ["uv", "run", "--no-sync", "python", "manage.py", "celery", "worker", {% if role == "worker" %}"--beat", "--concurrency", "{{ celery_concurrency }}"{% else %}"-Q", "{{ celery_queues }}", "--pool", "threads", "--concurrency", "{{ celery_queues|split:","|length * 8 }}"{% endif %}, "--loglevel=INFO"]
     after: [provision]
 {% else %}    command:
       - sh
       - "-c"
       - >-
-        exec uv run --no-sync python manage.py celery worker {% if role == "worker" %}--beat{% else %}-Q {{ celery_queues }} --pool threads --concurrency {{ celery_queues|split:","|length * 8 }}{% endif %} --loglevel=INFO
+        exec uv run --no-sync python manage.py celery worker {% if role == "worker" %}--beat --concurrency {{ celery_concurrency }}{% else %}-Q {{ celery_queues }} --pool threads --concurrency {{ celery_queues|split:","|length * 8 }}{% endif %} --loglevel=INFO
     after: [provision{% if redis_mode == "external" %}{% else %}, redis{% endif %}]
 {% endif %}
 {% endif %}{% endfor %}

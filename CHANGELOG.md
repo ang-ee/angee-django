@@ -10,6 +10,12 @@ live in code docstrings.
 
 ## Unreleased — shared addon contracts, native embeddings and graph retrieval
 
+- The shared Celery worker runs a bounded prefork pool: `celery_concurrency`
+  (default 2) in `stacks/dev`, `stacks/local` and `stacks/staging`. It ran
+  Celery's default of one child per CPU, each loading the whole application,
+  which held 10 GiB on a 32-core staging host. The queue worker keeps its own
+  thread pool.
+
 - A framework stack serving production (`stacks/dev` with `serve_mode:
   production`, `stacks/staging`) installs its slots editable, so
   `frontend-build` reads each fragment from its slot. A non-editable install
