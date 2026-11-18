@@ -32,8 +32,8 @@ from joserfc import jwt
 from rebac import PermissionDenied, actor_context, system_context, to_subject_ref
 
 from angee.calendar import schema as calendar_schema
-from angee.calendar.apps import check_publish_targets
 from angee.calendar.backends import CalendarBackend, PublishingCalendarBackend
+from angee.calendar.checks import check_publish_targets
 from angee.calendar.tasks import purge_unsubscribed_sources
 from angee.calendar.testing.models import Calendar, CalendarEvent, CalendarSource
 from angee.calendar_integrate_google.backend import (
