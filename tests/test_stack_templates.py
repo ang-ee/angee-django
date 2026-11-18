@@ -454,6 +454,7 @@ def _render_local_stack(
         "_src_path": "https://github.com/ang-ee/angee-django/tree/main/templates/stacks/local",
         "caddy_image": "caddy:2.9-alpine",
         "celery_queues": celery_queues,
+        "celery_concurrency": "2",
         "enable_celery": "true" if enable_celery else "",
         "django_image": "ghcr.io/ang-ee/django-angee-base:latest",
         "django_port": "8000",
@@ -531,6 +532,7 @@ def _render_dev_stack(
         "include_arp": "true" if include_arp else "",
         "arp_repo": arp_repo,
         "celery_queues": celery_queues,
+        "celery_concurrency": "2",
         "enable_celery": "true" if enable_celery else "",
         "caddy_image": "caddy:2.9-alpine",
         "django_image": "ghcr.io/ang-ee/django-angee-base:latest",
@@ -630,6 +632,7 @@ def _render_staging_stack(
         "admin_username": "admin",
         "caddy_image": "caddy:2.9-alpine",
         "celery_queues": celery_queues,
+        "celery_concurrency": "2",
         "db_pool_max_size": "2",
         "db_pool_timeout": "5",
         "deploy_keys": "true" if deploy_keys else "",
@@ -2045,7 +2048,8 @@ def test_serve_modes_cover_both_flavors_and_runtimes() -> None:
         assert "ANGEE_SERVE_MODE" not in django["env"]
         sync_command = stack["jobs"]["py-sync"]["command"][-1]
         assert "exec uv sync --locked" in sync_command
-        assert ("--no-editable" in sync_command) == (serve_mode == "production")
+        # Only an instance installs non-editable: a framework stack's web build reads fragments from its slots.
+        assert ("--no-editable" in sync_command) == (serve_mode == "production" and flavor == "instance")
         assert stack["jobs"]["compose"]["command"][-2:] == ["compose", "--if-stale"]
         if serve_mode == "production":
             assert "manage.py serve" in command
@@ -2669,7 +2673,8 @@ def test_staging_stack_is_the_containerized_dev_shape_with_production_serving() 
     assert set(jobs) == {
         "deps", "py-sync", "compose", "makemigrations", "provision", "operator-schema", "frontend-build",
     }
-    assert "--no-editable" in jobs["py-sync"]["command"][-1]
+    # Editable: the frontend build reads each fragment, its tsconfig chain and its pnpm dependencies from the slot.
+    assert "--no-editable" not in jobs["py-sync"]["command"][-1]
     assert jobs["frontend-build"]["depends_on"] == ["deps", "compose", "operator-schema"]
     assert stack["ports"]["ui"] == {"value": 5173, "export_env": "ANGEE_UI_PORT"}
 
@@ -2854,3 +2859,34 @@ def test_a_product_settings_file_is_the_final_settings_layer_of_every_python_nod
     manifest = yaml.safe_load(STAGING_COPIER.read_text(encoding="utf-8"))
     assert manifest["settings_file"]["default"] == ""
     assert "relative to the stack root" in manifest["settings_file"]["validator"]
+
+
+@pytest.mark.parametrize(
+    "render", [_render_dev_stack, _render_dev_docker_stack, _render_local_stack, _render_staging_stack],
+)
+def test_the_shared_celery_worker_runs_a_bounded_prefork_pool(render) -> None:
+    """Celery's own default is one child per CPU, each loading the whole app; the shared worker takes two."""
+
+    stack = render(celery_queues="reports")
+    worker = " ".join(stack["services"]["celery-worker"]["command"])
+    assert "--beat --concurrency 2" in worker
+    queues = " ".join(stack["services"]["celery-queues"]["command"])
+    assert "--pool threads --concurrency 8" in queues
+    for path in (DEV_COPIER, LOCAL_COPIER, STAGING_COPIER):
+        question = yaml.safe_load(path.read_text(encoding="utf-8"))["celery_concurrency"]
+        assert (question["type"], question["default"]) == ("int", 2)
+
+
+def test_caddy_script_opens_without_a_blank_line_whatever_the_ingress() -> None:
+    """The operator re-saves the manifest; a block scalar opening with a blank line comes back unparsable."""
+
+    for stack in (
+        _render_staging_stack(ingress_domain="localhost"),
+        _render_staging_stack(),
+        _render_dev_stack(_runtime_mode="docker", serve_mode="production"),
+        _render_local_stack(),
+    ):
+        frontend = stack["services"]["frontend" if "frontend" in stack["services"] else "caddy"]
+        script = frontend["command"][-1]
+        assert script == script.lstrip("\n"), script[:80]
+        assert "cat >/etc/caddy/Caddyfile" in script
