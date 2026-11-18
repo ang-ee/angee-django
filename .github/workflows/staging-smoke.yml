@@ -1,0 +1,117 @@
+name: staging smoke
+
+# Brings a staging stack up the way a host deploys one: `angee init -t staging` and
+# `angee up` with the latest released CLI on the runner's Docker, against this
+# commit's templates and framework, then serves the app and signs the administrator
+# in. A pull request runs it only when it changes what a staging boot builds from.
+on:
+  pull_request:
+    paths:
+      - "templates/stacks/**"
+      - "templates/projects/**"
+      - "templates/workspaces/**"
+      - "Dockerfile"
+      - ".dockerignore"
+      - "docker/**"
+      - "package.json"
+      - "pnpm-workspace.yaml"
+      - ".github/workflows/staging-smoke.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# A new push to a pull request cancels the run it supersedes.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  staging:
+    name: staging up
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      UI_PORT: "5173"
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          # A pull request's merge commit and its base give the changed paths.
+          fetch-depth: 2
+      - name: Free disk for the images, node_modules and the venv
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+          df -h /
+      - name: Install the angee CLI (the public install path, latest release)
+        run: curl -fsSL https://raw.githubusercontent.com/ang-ee/angee-operator/main/scripts/install.sh | sh
+      # The stack otherwise runs the published base image; compose uses a local tag
+      # without pulling it.
+      - name: Build the Django base image when this change edits it
+        id: image
+        if: ${{ github.event_name == 'pull_request' }}
+        run: |
+          if git diff --name-only HEAD^1 HEAD | grep -qE '^(Dockerfile|\.dockerignore|docker/)'; then
+            docker build --target final -t angee-base:ci .
+            echo "django-image=angee-base:ci" >> "$GITHUB_OUTPUT"
+          fi
+      # The registry gives `-t staging` and the src workspace template the first
+      # `up` cuts the framework slot with from this commit. The operator container
+      # mounts ~/.ssh read-only, so it must exist; every repository here is public.
+      - name: Render the staging stack from this commit's templates
+        env:
+          ANGEE_TEMPLATE_REGISTRY: ${{ github.workspace }}
+          DJANGO_IMAGE: ${{ steps.image.outputs.django-image }}
+        run: |
+          root="$RUNNER_TEMP/staging"
+          echo "STAGING_ROOT=$root" >> "$GITHUB_ENV"
+          install -d -m 700 ~/.ssh
+          angee init "$root" -t staging --yes \
+            --repository ang-ee/angee-messaging-bridges \
+            --input deploy_keys=false \
+            --input "ui_port=$UI_PORT" --input operator_port=9000 --input edge_port=8080 \
+            ${DJANGO_IMAGE:+--input "django_image=$DJANGO_IMAGE"}
+      # A slot is cut from the cache's local main, which the bring-up's fetch leaves
+      # where it is, so the framework slot starts at this commit.
+      - name: Seed the framework source with this commit
+        run: |
+          cache="$STAGING_ROOT/sources/angee"
+          git clone --quiet "$GITHUB_WORKSPACE" "$cache"
+          git -C "$cache" fetch --quiet "$GITHUB_WORKSPACE" HEAD
+          git -C "$cache" checkout --quiet -B main FETCH_HEAD
+          git -C "$cache" remote set-url origin https://github.com/ang-ee/angee-django.git
+      - name: Bring the stack up
+        env:
+          ANGEE_TEMPLATE_REGISTRY: ${{ github.workspace }}
+        run: |
+          angee --root "$STAGING_ROOT" up
+          test "$(git -C "$STAGING_ROOT/workspaces/src/angee" rev-parse HEAD)" = "$(git rev-parse HEAD)"
+      # `up` returns once the services start, not once they are healthy. Caddy serves
+      # the SPA on ui_port and proxies /auth and /admin to Django.
+      - name: Serve the app and sign the administrator in
+        run: |
+          base="http://127.0.0.1:$UI_PORT"
+          for _ in $(seq 120); do
+            status=$(curl -s -o /dev/null -w '%{http_code}' "$base/auth/csrf/" || true)
+            [ "$status" = 200 ] && break
+            sleep 5
+          done
+          [ "$status" = 200 ] || { echo "Django never answered $base/auth/csrf/ (last status $status)."; exit 1; }
+          curl -fsS -o /dev/null "$base/"
+          password=$(angee --root "$STAGING_ROOT" secret reveal admin-password)
+          echo "::add-mask::$password"
+          jar=$(mktemp)
+          curl -fsS -c "$jar" -o /dev/null "$base/admin/login/"
+          token=$(awk '$6 == "csrftoken" { print $7 }' "$jar")
+          location=$(curl -sS -b "$jar" -c "$jar" -o /dev/null -w '%{redirect_url}' \
+            --data-urlencode "csrfmiddlewaretoken=$token" --data-urlencode username=admin \
+            --data-urlencode "password=$password" --data-urlencode next=/admin/ "$base/admin/login/")
+          [ "$location" = "$base/admin/" ] || { echo "Admin sign-in redirected to '$location', not $base/admin/."; exit 1; }
+      - name: Show the stack's containers and their logs
+        if: ${{ failure() }}
+        run: |
+          docker ps -a --format 'table {{.Names}}\t{{.Status}}\t{{.Image}}'
+          for name in $(docker ps -a --format '{{.Names}}'); do
+            echo "::group::$name"
+            docker logs --tail 200 "$name" 2>&1
+            echo "::endgroup::"
+          done
