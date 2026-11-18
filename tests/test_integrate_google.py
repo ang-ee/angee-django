@@ -141,6 +141,25 @@ def test_seeds_turn_google_sign_in_on_only_for_a_google_client_they_create(exist
     assert (google.login_enabled, google.link_on_email_match) == (not existing, not existing)
 
 
+@pytest.mark.django_db
+@pytest.mark.parametrize("existing", [False, True])
+def test_seeds_never_decide_sign_in_through_the_public_gemini_client(existing: bool) -> None:
+    """A fresh install offers no single sign-on; an operator's Gemini switch survives a load."""
+
+    with system_context(reason="test Gemini sign-in seed"):
+        if existing:
+            OAuthClient.objects.create(slug="gemini", provider_type="google", display_name="Gemini", login_enabled=True)
+        addons = [apps.get_app_config(label) for label in ("integrate", "integrate_google", "iam_integrate_oidc")]
+        Resource.objects.load_addons(addons, tiers=[Resource.Tier.INSTALL])
+        gemini = OAuthClient.objects.get(slug="gemini", environment="prod")
+        offered = set(OAuthClient.login_picker_queryset(OAuthClient.objects.all()).values_list("slug", flat=True))
+
+    # Google's published client id makes the row startable, so only its login policy keeps it out.
+    assert gemini.is_enabled and gemini.client_id and gemini.issuer
+    assert gemini.login_enabled is existing
+    assert offered == ({"gemini"} if existing else set())
+
+
 @pytest.mark.django_db(transaction=True)
 def test_align_template_fills_the_preset_on_existing_google_clients_and_keeps_operator_values() -> None:
     with system_context(reason="test Google client upgrade"):
