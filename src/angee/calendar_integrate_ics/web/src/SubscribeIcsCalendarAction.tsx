@@ -9,8 +9,10 @@ import { useIcsT } from "./i18n";
 /** The ICS subscribe verb: one dialog creates the source and its read-only calendar. */
 export function SubscribeIcsCalendarAction(): React.ReactElement {
   // Correct as-is: calendar declares changes(CalendarSource) and changes(Calendar).
+  // The dialog shows a refusal itself, under the field it names, so no generic toast repeats it.
   const [subscribe] = useAuthoredMutation(SubscribeIcsCalendar, {
     invalidateModels: [SOURCE_MODEL, CALENDAR_MODEL],
+    errorNotification: false,
   });
   const t = useIcsT();
   const fields = React.useMemo<readonly DescriptorField[]>(

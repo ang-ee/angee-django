@@ -44,6 +44,7 @@ from angee.calendar.models import (
 from angee.calendar.tasks import purge_source, purge_unsubscribed_sources
 from angee.calendar.testing.models import Calendar, CalendarEvent, CalendarSource, EventAttendee
 from angee.calendar_integrate_ics import backend as ics_backend
+from angee.calendar_integrate_ics import schema as ics_schema
 from angee.calendar_integrate_ics.backend import FEED_KEY, IcsCalendarBackend, IcsError
 from angee.calendar_integrate_ics.connect import subscribe_calendar
 from angee.graphql.testing.documents import execute_schema, result_data
@@ -385,10 +386,49 @@ def test_a_remote_rename_applies_until_the_holder_renames_the_calendar(subscript
 def test_subscribe_refuses_a_private_address_literal_without_dialling() -> None:
     user = create_user("private-subscriber")
 
-    with pytest.raises(IcsError, match="address is not allowed"):
+    with pytest.raises(ValidationError) as refused:
         subscribe_calendar(user, name="Router", url="http://127.0.0.1/calendar.ics")
 
+    assert refused.value.message_dict == {"url": ["The calendar feed address is not allowed."]}
     assert not CalendarSource.objects.sudo(reason="tests.ics").exists()
+
+
+_SUBSCRIBE = """
+mutation ($url: String!) { subscribe_ics_calendar(name: "", url: $url) { id } }
+"""
+
+
+@pytest.mark.parametrize(
+    ("url", "message"),
+    [
+        pytest.param("not-a-feed", "Enter an http, https or webcal calendar feed address.", id="not-an-address"),
+        pytest.param("ftp://feeds.example.test/team.ics", "Enter an http, https or webcal calendar feed address.",
+                     id="another-scheme"),
+        pytest.param("webcal://127.0.0.1/team.ics", "The calendar feed address is not allowed.", id="private-literal"),
+    ],
+)
+def test_subscribe_refuses_an_address_as_its_url_inputs_validation_error(url: str, message: str) -> None:
+    """The dialog binds the subscribe verb's own reason under the address it took, never a parser's wording."""
+
+    console = addon_schema(calendar_schema.schemas, "console", ics_schema.schemas)
+
+    refused = execute_schema(console, _SUBSCRIBE, {"url": url}, user=create_user("refused-subscriber"))
+
+    [error] = refused.errors
+    assert (error.message, error.extensions["code"]) == (message, "VALIDATION")
+    assert error.extensions["validationErrors"] == {"url": [message]}
+    assert not CalendarSource.objects.sudo(reason="tests.ics").exists()
+
+
+def test_subscribe_takes_a_webcal_address_as_its_https_feed() -> None:
+    console = addon_schema(calendar_schema.schemas, "console", ics_schema.schemas)
+    user = create_user("webcal-subscriber")
+
+    created = execute_schema(console, _SUBSCRIBE, {"url": "webcal://feeds.example.test/team.ics"}, user=user)
+
+    with system_context(reason="tests.ics"):
+        source = CalendarSource.objects.get(sqid=result_data(created)["subscribe_ics_calendar"]["id"])
+        assert source.credential.secret_value() == "https://feeds.example.test/team.ics"
 
 
 def test_the_pinned_transport_refuses_a_feed_host_that_resolves_privately() -> None:

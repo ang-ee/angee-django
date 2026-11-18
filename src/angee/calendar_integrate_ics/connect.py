@@ -6,10 +6,11 @@ import hashlib
 from typing import Any
 
 from django.apps import apps
+from django.core.exceptions import ValidationError
 from django.db import transaction
 from rebac import system_context
 
-from angee.calendar_integrate_ics.backend import feed_label, feed_url
+from angee.calendar_integrate_ics.backend import IcsError, feed_label, feed_url
 from angee.integrate.models import IntegrationLifecycle
 
 
@@ -17,7 +18,9 @@ def subscribe_calendar(user: Any, *, name: str, url: str) -> Any:
     """Subscribe ``user`` to a feed: admit it, keep its address as a credential, and queue the first sync.
 
     Nothing is fetched in the request. The address's shape is checked
-    (:func:`feed_url`), the calendar owner admits one more source for the user
+    (:func:`feed_url`; ``webcal://`` reads as ``https://``) and a refused address is
+    the ``url`` input's validation error, so the subscriber sees its own reason
+    under the field they typed it in. The calendar owner admits one more source for the user
     (:meth:`CalendarSource.admit_subscription`: the create gate, a quota and a
     rate), and the first sync reports a feed it cannot read. The address is a
     secret, a private feed's token rides in it: it is a static-token credential's
@@ -28,7 +31,10 @@ def subscribe_calendar(user: Any, *, name: str, url: str) -> Any:
     source_model = apps.get_model("calendar", "CalendarSource")
     credential_model = apps.get_model("integrate", "Credential")
     vendor_model = apps.get_model("integrate", "Vendor")
-    feed = feed_url(url)
+    try:
+        feed = feed_url(url)
+    except IcsError as error:
+        raise ValidationError({"url": [error.public_message]}) from error
     label = feed_label(feed)
     source_model.admit_subscription(user)
     with system_context(reason="calendar_integrate_ics.subscribe"), transaction.atomic():
