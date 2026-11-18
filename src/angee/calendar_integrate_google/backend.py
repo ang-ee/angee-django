@@ -65,7 +65,6 @@ from angee.calendar.backends import (
 )
 from angee.calendar.choices import AttendeeResponse, AttendeeRole, EventStatus, EventTransparency, EventVisibility
 from angee.calendar_integrate_google.client import GoogleCalendarClient, PageTokenInvalid, SyncTokenExpired
-from angee.integrate.credentials import CredentialKind
 from angee.integrate.errors import IntegrationError
 from angee.integrate.models import IntegrationLifecycle
 from angee.integrate.streams import CursorInvalid, StreamPage
@@ -120,24 +119,22 @@ class GoogleCalendarBackend(CalendarBackend):
     """The current sweep's full listing of one calendar: its sweep identity, then its payloads by key."""
 
     def admit_credential(self, credential: Any) -> None:
-        """Admit only a ``google`` OAuth account that granted :attr:`oauth_scopes` and no other source syncs.
+        """Admit only an account the source reads with that no other source syncs.
 
-        Integrate asks on every attachment (a connect, the console's credential
-        patch, a reconnect), so one account is one source on every path. The check
-        runs under the credential's row lock, held to the caller's commit, so two
-        racing attachments of one account serialize and the second is refused.
+        The source reads with an OAuth account of its ``google`` client that
+        granted :attr:`oauth_scopes` (``Integration.reads_with``). Integrate asks on
+        every attachment (a connect, the console's credential patch, a reconnect),
+        so one account is one source on every path. The one-source rule runs under
+        the credential's row lock, held to the caller's commit, so two racing
+        attachments of one account serialize and the second is refused.
         """
 
-        refused = "This account cannot read Google calendars; connect it with Calendar access."
-        if credential.kind != CredentialKind.OAUTH:
-            raise ValidationError({"credential": refused})
+        if not self.bridge.reads_with(credential):
+            raise ValidationError(
+                {"credential": "This account cannot read Google calendars; connect it with Calendar access."}
+            )
         with system_context(reason="calendar_integrate_google.admit_credential"), transaction.atomic():
             apps.get_model("integrate", "Credential").objects.lock_if_supported().get(pk=credential.pk)
-            client = credential.oauth_client
-            if client is None or client.slug != self.oauth_client:
-                raise ValidationError({"credential": refused})
-            if not set(self.oauth_scopes) <= set(credential.granted_scopes or ()):
-                raise ValidationError({"credential": refused})
             same = Q(credential_id=credential.pk)
             if credential.external_account_id is not None:
                 same |= Q(account_id=credential.external_account_id)

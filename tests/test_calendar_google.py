@@ -24,18 +24,21 @@ from django.db import connection, transaction
 from django.db.models import Q
 from rebac import actor_context, system_context
 
+from angee.calendar import schema as calendar_schema
 from angee.calendar.backends import ParsedAttendee, organizer_first
 from angee.calendar.models import AttendeeResponse, AttendeeRole
 from angee.calendar.tasks import purge_unsubscribed_sources
 from angee.calendar.testing.models import CalendarEvent, CalendarSource, EventAttendee
 from angee.calendar_integrate_google.backend import CALENDAR_READONLY
 from angee.calendar_integrate_google.connect import connect_google_calendar
+from angee.graphql.testing.documents import execute_schema, result_data
+from angee.integrate.credentials import CredentialKind
 from angee.integrate.states import LinkStatus, StreamState
 from angee.integrate.streams import advance_stream, sync_bridge
 from angee.integrate.testing.http import mock_transport
 from angee.integrate.testing.models import RecordLink, SyncStream
 from angee.jobs.celery import app as celery_app
-from tests.conftest import Credential, ExternalAccount, OAuthClient, Vendor, create_user
+from tests.conftest import Credential, ExternalAccount, OAuthClient, Vendor, addon_schema, create_user
 from tests.lock_waits import submit, wait_for_lock
 
 pytestmark = pytest.mark.django_db(transaction=True)
@@ -323,6 +326,51 @@ def test_an_account_already_synced_is_refused_and_only_calendar_grants_attach(co
         source = CalendarSource.objects.get(pk=connected.sources["home-token"].pk)
         with pytest.raises(ValidationError, match="Calendar access"):
             source.attach_credential(narrow)
+
+
+def test_a_source_offers_only_the_users_own_google_grants_with_calendar_access(connected: Connected) -> None:
+    """A Google source reads with a ``google`` grant covering ``calendar.readonly`` and offers the user's own.
+
+    Another client's grant, a grant without Calendar access and a key-pair credential
+    are neither read with, offered nor admitted; another user's grant is read with but
+    never offered. The console query offers the same accounts, before any source exists,
+    with the registration and scopes another account connects with.
+    """
+
+    with system_context(reason="tests.google"):
+        github = OAuthClient.objects.create(slug="github", display_name="GitHub", client_id="github-cid")
+    other_client = _account(github, connected.user, "github-user", "github-token")
+    narrow = _account(connected.client, connected.user, "narrow", "narrow-token", scopes="profile")
+    stranger = create_user("offer-stranger")
+    foreign = _account(connected.client, stranger, "offer-stranger", "stranger-token")
+    key_pair = _account(connected.client, connected.user, "key-pair", "key-pair-token")
+    with system_context(reason="tests.google"):
+        # A grant in every other respect: only its kind keeps the source from reading with it.
+        Credential.objects.filter(pk=key_pair.pk).update(kind=CredentialKind.JWT_BEARER)
+        key_pair.refresh_from_db()
+        own = {connected.source(token).credential for token in ("work-token", "home-token")}
+        source = CalendarSource.objects.build("google")
+        offered = set(source.connectable_credentials(connected.user))
+        assert offered == own
+        assert source.reads_with(foreign)
+        assert not any(source.reads_with(credential) for credential in (other_client, narrow, key_pair))
+        home = connected.source("home-token")
+        for refused in (other_client, narrow, key_pair):
+            with pytest.raises(ValidationError, match="Calendar access"):
+                home.attach_credential(refused)
+
+    schema = addon_schema(calendar_schema.schemas, "console")
+    query = (
+        'query { calendar_source_backend(backend_class: "google") '
+        "{ key label oauth_client oauth_scopes accounts { id } } }"
+    )
+    listed = result_data(execute_schema(schema, query, user=connected.user))["calendar_source_backend"]
+    assert (listed["key"], listed["label"]) == ("google", "Google Calendar")
+    assert listed["oauth_client"] == str(connected.client.public_id)
+    assert listed["oauth_scopes"] == [CALENDAR_READONLY]
+    assert {account["id"] for account in listed["accounts"]} == {str(credential.public_id) for credential in own}
+    theirs = result_data(execute_schema(schema, query, user=stranger))["calendar_source_backend"]
+    assert theirs["accounts"] == [{"id": str(foreign.public_id)}]
 
 
 def test_a_sync_token_replay_changes_nothing_and_a_410_resyncs_once(connected: Connected) -> None:

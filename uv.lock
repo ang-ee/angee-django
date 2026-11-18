@@ -611,6 +611,7 @@ dependencies = [
     { name = "angee-integrate" },
     { name = "angee-integrate-google" },
     { name = "angee-scheduling" },
+    { name = "angee-web" },
     { name = "icalendar" },
 ]
 
@@ -622,6 +623,7 @@ requires-dist = [
     { name = "angee-integrate", editable = "src/angee/integrate" },
     { name = "angee-integrate-google", editable = "src/angee/integrate_google" },
     { name = "angee-scheduling", editable = "src/angee/scheduling" },
+    { name = "angee-web", editable = "src/angee/web" },
     { name = "icalendar", specifier = ">=6.3,<8" },
 ]
 

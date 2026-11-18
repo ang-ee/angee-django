@@ -107,7 +107,7 @@ class GoogleDriveClient:
     """One Google account's Drive, read with its OAuth credential.
 
     Which credential may read whose source is the Mount owner's admission
-    (``MountManager.connectable_credentials``); the client only reads with it.
+    (``Mount.reads_with``, ``Integration.connectable_credentials``); the client only reads with it.
     """
 
     def __init__(self, credential: Any) -> None:

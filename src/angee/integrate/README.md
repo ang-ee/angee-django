@@ -142,11 +142,23 @@ connect rules are `OAuthClient.requested_scopes` (scopes),
 `CredentialManager.upsert_for_user` (one credential per external account and the
 grant checks), `Integration.attach_connection` (the account binding),
 `Integration.admit_credential` (which credentials a capability accepts, asked on
-every attachment), `OAuthProviderType.authorize_params` (the prompt),
+every attachment), `Integration.reads_with` (an OAuth grant of the capability's
+client covering its scopes), `Integration.connectable_credentials` (the user's
+accounts it reads with, offered from an unsaved row before the capability
+exists), `OAuthProviderType.authorize_params` (the prompt),
 [`connect.complete_account_connect`](connect.py) (account identity) and
 `connect.complete_external_account_link` (the consent restart). A credential stored
 without an account, before credentials were per account, and the integrations it
 serves without a binding bind to the first account that connects.
+
+A capability connected with one of the user's accounts projects its connect facts
+through the `ConnectWithAccount` GraphQL interface ([`schema.py`](schema.py)),
+built with `ConnectWithAccount.of` from an unsaved row. Its dialog spreads the
+`ConnectWithAccountFields` fragment and composes `ConnectWithAccountAction`, or
+`useConnectWithAccountField` among its other fields
+([`ConnectWithAccountAction.tsx`](web/src/connect/ConnectWithAccountAction.tsx)):
+the account choice and "Connect another account" with the capability's scopes.
+Storage mounts and Google calendar sources compose it.
 
 Connection adapters declare `IntegrationImpl.requires_connection_discovery = True`
 to opt into asynchronous `discover_connection`/`apply_discovery`. Manual and

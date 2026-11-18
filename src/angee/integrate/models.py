@@ -2402,6 +2402,43 @@ class Integration(StatementSourceMixin, ImplDefaultsMixin, OwnerMixin, AngeeData
             raise OAuthFlowError(OAUTH_CLIENT_NOT_CONNECTABLE, 400, f"{owner_label} has no enabled OAuth client.")
         return oauth_client
 
+    def reads_with(self, credential: Any) -> bool:
+        """Whether this capability reads with ``credential``: an OAuth grant of its client that covers its scopes.
+
+        Only an OAuth credential of the registration this capability connects
+        through (:meth:`connection_oauth_slug`) qualifies, so one vendor's token is
+        never sent to another's API, and only when its grant covers
+        :attr:`connection_oauth_scopes`. A capability without an OAuth client
+        reads with none. A capability whose reads need such a grant composes this
+        rule in its :meth:`admit_credential`; :meth:`connectable_credentials`
+        offers the accounts it holds for.
+        """
+
+        if credential.kind != CredentialKind.OAUTH:
+            return False
+        with system_context(reason="integrate.integration.reads_with"):
+            try:
+                oauth_slug = self.connection_oauth_slug()
+            except OAuthFlowError:
+                return False
+            scopes = self.connection_oauth_scopes
+            client = credential.oauth_client
+        return client is not None and client.slug == oauth_slug and set(scopes) <= set(credential.granted_scopes or ())
+
+    def connectable_credentials(self, user: Any) -> models.QuerySet[Credential]:
+        """Return ``user``'s connected accounts this capability reads with (:meth:`reads_with`).
+
+        A capability offers them before it exists through an unsaved row of it,
+        which its manager builds (``MountManager.build``,
+        ``CalendarSourceManager.build``).
+        """
+
+        credential_model = apps.get_model("integrate", "Credential")
+        accounts = credential_model.objects.connected_for(user).filter(kind=CredentialKind.OAUTH)
+        # The grant's scopes are JSON, whose containment is not portable to SQLite; a user's accounts are few.
+        readable = [account.pk for account in accounts.select_related("oauth_client") if self.reads_with(account)]
+        return cast("models.QuerySet[Credential]", accounts.filter(pk__in=readable))
+
     @classmethod
     def credential_projection_expressions(cls) -> dict[str, Any]:
         """Public health scalars from a protected credential, without a joined object."""
@@ -3055,8 +3092,8 @@ class Integration(StatementSourceMixin, ImplDefaultsMixin, OwnerMixin, AngeeData
 
         :meth:`attach_connection` asks the capability row on every attachment, so
         no path (connect, the console's credential patch, a reconnect) skips it.
-        The base admits any credential; a capability whose reads need a particular
-        registration or grant overrides it.
+        The base admits any credential; a capability whose reads need its OAuth
+        client's grant overrides it with :meth:`reads_with`.
         """
 
         del credential

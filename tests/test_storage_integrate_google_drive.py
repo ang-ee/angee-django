@@ -895,18 +895,41 @@ def test_a_source_refusal_keeps_its_reason_in_the_sync_failure(
     assert mount.sync_error == "The Google Drive folder is no longer available to the account."
 
 
-def test_accounts_without_the_drive_scope_are_neither_offered_nor_admitted(
+def test_a_mount_offers_only_the_users_own_google_grants_with_the_drive_scope(
     drive_env: SimpleNamespace, queued_mounts: list[Any]
 ) -> None:
-    """Only an account whose grant covers the backend's scopes reads its source."""
+    """The Mount reads with an OAuth grant of its client covering its scopes; it offers the user's own of those.
+
+    Another client's grant, a grant without the Drive scope and a key-pair
+    credential are neither read with nor offered; another user's grant is read
+    with but never offered, and a local folder reads with no account.
+    """
 
     drive_env.drive.folder("f-scoped", "Scoped")
-    narrow = _connect_account(drive_env.google, drive_env.owner, "google-owner", scope="openid email")
-    with system_context(reason="test Google Drive scoped accounts"):
-        assert not Mount.objects.connectable_credentials(drive_env.owner, "google_drive").exists()
-    with pytest.raises(ValidationError) as refused:
-        _connect(drive_env, "f-scoped", credential=narrow)
-    assert set(refused.value.message_dict) == {"credential"}
+    with system_context(reason="test Google Drive offered accounts"):
+        github = OAuthClient.objects.create(slug="github", display_name="GitHub", client_id="github-cid")
+    other_client = _connect_account(github, drive_env.owner, "github-owner", scope=f"openid {DRIVE_SCOPE}")
+    narrow = _connect_account(drive_env.google, drive_env.owner, "google-narrow", scope="openid email")
+    stranger = create_platform_admin(username="drive-offer-stranger", email="drive-offer-stranger@example.com")
+    foreign = _connect_account(drive_env.google, stranger, "google-stranger")
+    key_pair = _connect_account(drive_env.google, drive_env.owner, "google-key-pair")
+    with system_context(reason="test Google Drive key-pair credential"):
+        # A grant in every other respect: only its kind keeps the Mount from reading with it.
+        Credential.objects.filter(pk=key_pair.pk).update(kind=CredentialKind.JWT_BEARER)
+        key_pair.refresh_from_db()
+        mount = Mount.objects.build("google_drive")
+        local = Mount.objects.build("local_folder")
+        offered = set(mount.connectable_credentials(drive_env.owner))
+
+    assert offered == {drive_env.credential}
+    assert mount.reads_with(drive_env.credential) and mount.reads_with(foreign)
+    assert not any(mount.reads_with(credential) for credential in (other_client, narrow, key_pair))
+    assert not local.reads_with(drive_env.credential)
+    for refused_credential in (other_client, narrow, foreign, key_pair):
+        with pytest.raises(ValidationError) as refused:
+            _connect(drive_env, "f-scoped", credential=refused_credential)
+        assert set(refused.value.message_dict) == {"credential"}
+    assert queued_mounts == []
 
 
 def test_a_mount_admits_on_every_attachment_only_an_account_its_backend_reads_with(

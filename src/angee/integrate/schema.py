@@ -301,6 +301,42 @@ class ConnectedCredentialType(AngeeNode):
         return str(cast(Any, self).connected_display_name)
 
 
+@strawberry.interface
+class ConnectWithAccount:
+    """What connecting a capability with one of the session user's accounts asks for.
+
+    A capability's connect-facts type implements it (``MountBackendType``,
+    ``CalendarSourceBackendType``) and is built with :meth:`of` from an unsaved
+    row of the capability. ``@angee/integrate``'s connect-with-account action
+    reads it through its ``ConnectWithAccountFields`` fragment.
+    """
+
+    oauth_client: strawberry.ID | None
+    """The enabled OAuth client another account connects through; none while the capability has none ready."""
+    oauth_scopes: list[str]
+    """The scopes an account must grant for the capability to read with it; connecting another requests them."""
+    accounts: list[ConnectedCredentialType]
+    """The session user's accounts the capability reads with (``Integration.connectable_credentials``)."""
+
+    @classmethod
+    def of(cls, integration: Any, user: Any, **fields: Any) -> Self:
+        """Project ``integration``'s connect facts for ``user``, beside the implementing type's own ``fields``."""
+
+        with system_context(reason="integrate.graphql.connect_with_account"):
+            try:
+                registration = integration.connect_oauth_client(capfirst(str(integration._meta.verbose_name)))
+            except OAuthFlowError:
+                registration = None
+            scopes = list(integration.connection_oauth_scopes)
+        accounts = integration.connectable_credentials(user).order_by("pk")
+        return cls(
+            oauth_client=strawberry.ID(registration.public_id) if registration is not None else None,
+            oauth_scopes=scopes,
+            accounts=cast(list[ConnectedCredentialType], list(accounts)),
+            **fields,
+        )
+
+
 @strawberry_django.type(OAuthClient)
 class OAuthClientType(AngeeNode):
     """Admin GraphQL projection of an OAuth client registration."""

@@ -17,10 +17,11 @@ def connect_google_calendar(user: Any, credential: Any) -> Any:
     (``CredentialManager.connected_for``; the mutation looks it up there, so an
     unknown id and another user's fail alike). The calendar owner connects
     it (``CalendarSourceManager.subscribe``: the quota and rate, then integrate's
-    attachment), and the backend admits only an account of its OAuth client that
-    granted Calendar access and that no other source syncs
-    (``GoogleCalendarBackend.admit_credential``). The first sync mirrors each
-    calendar of the account on the user's person, then its events.
+    attachment), and the backend admits only an account the source reads with
+    (``Integration.reads_with``: its OAuth client, with Calendar access) that no
+    other source syncs (``GoogleCalendarBackend.admit_credential``). The user's
+    accounts it reads with are the ``calendar_source_backend`` query's. The first
+    sync mirrors each calendar of the account on the user's person, then its events.
     """
 
     if not apps.get_model("integrate", "Credential").objects.connected_for(user).filter(pk=credential.pk).exists():

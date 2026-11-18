@@ -171,6 +171,14 @@ export {
   useConnectAccountStart,
 } from "./connect/ConnectAccountButton";
 export {
+  CONNECT_WITH_ACCOUNT_FIELD,
+  ConnectWithAccountAction,
+  type ConnectWithAccountActionProps,
+  type ConnectWithAccountFacts,
+  type ConnectWithAccountFieldOptions,
+  useConnectWithAccountField,
+} from "./connect/ConnectWithAccountAction";
+export {
   useOAuthAuthorization,
   type OAuthAuthorization,
   type OAuthAuthorizationStart,

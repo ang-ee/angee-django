@@ -1,3 +1,4 @@
+import { CONNECT_WITH_ACCOUNT_FIELD, useConnectWithAccountField } from "@angee/integrate";
 import { useAuthoredMutation, useAuthoredQuery } from "@angee/refine";
 import {
   ActionTrigger,
@@ -12,7 +13,6 @@ import * as React from "react";
 
 import { ConnectMount, MOUNT_MODEL, MountBackendFacts, MountCopyTargets } from "./documents";
 import { useStorageIntegrateT } from "./i18n";
-import { MountAccountPicker } from "./MountAccountPicker";
 import { MountSourceBrowser } from "./MountSourceBrowser";
 
 export type MountConnectMode = "COPY" | "REFERENCE";
@@ -33,11 +33,11 @@ export interface ConnectMountActionProps {
 
 /**
  * Canonical economy for browsable Mount connection: this factory owns the
- * button, typed dialog, account and browser fields, copy target, generic labels,
- * busy copy, the one `connect_mount` mutation, and invalidation. What a backend
- * asks for (an account, which accounts) comes from the server's `mount_backend`;
- * backends supply only their class and genuinely varying
- * button/title/description/placeholder/error range.
+ * button, typed dialog, browser field, copy target, generic labels, busy copy,
+ * the one `connect_mount` mutation, and invalidation; the account field is
+ * integrate's connect-with-account field. What a backend asks for (an account,
+ * which accounts) comes from the server's `mount_backend`; backends supply only
+ * their class and genuinely varying button/title/description/placeholder/error range.
  *
  * Backend message ranges arrive through addon composition. Providerless raw-key
  * renders are intentional; copying backend strings into this owner is not.
@@ -56,16 +56,16 @@ export function ConnectMountAction({
   const refetchFacts = factsQuery.refetch;
   const targets = useAuthoredQuery(MountCopyTargets).data?.backends;
   const requiresCredential = facts?.requires_credential === true;
-  const accountControl = React.useCallback(
-    (props: DescriptorFieldControlProps) => (
-      <MountAccountPicker {...props} accounts={facts?.accounts ?? []} oauthClientId={facts?.oauth_client ?? null}
-        oauthScopes={facts?.oauth_scopes ?? []} onConnected={() => { void refetchFacts(); }} />
-    ),
-    [facts, refetchFacts],
-  );
+  const onAccountConnected = React.useCallback(() => { void refetchFacts(); }, [refetchFacts]);
+  const accountField = useConnectWithAccountField({
+    facts,
+    returnRoute: "storage-integrate.mounts",
+    onConnected: onAccountConnected,
+  });
   const sourceControl = React.useCallback(
     (props: DescriptorFieldControlProps) => {
-      const credentialId = mutationDialogValueCodecs.string(props.dialogValues.credentialId) ?? undefined;
+      const credentialId =
+        mutationDialogValueCodecs.string(props.dialogValues[CONNECT_WITH_ACCOUNT_FIELD]) ?? undefined;
       // A new account browses afresh: its folders are another account's.
       return (
         <MountSourceBrowser {...props} key={credentialId ?? ""} backendClass={backendClass}
@@ -90,11 +90,7 @@ export function ConnectMountAction({
       },
       ...(requiresCredential
         ? [{
-          name: "credentialId",
-          label: t("mount.connect.account"),
-          required: true,
-          controlLabelMode: "group" as const,
-          control: accountControl,
+          ...accountField,
           // The chosen folder belongs to the account it was browsed with.
           branchReset: () => ({ fields: ["root"], values: {} }),
         }]
@@ -125,7 +121,7 @@ export function ConnectMountAction({
         showWhen: (values: Record<string, unknown>) => values.mode === "COPY",
       },
     ],
-    [accountControl, copyTargetOptions, i18nPrefix, requiresCredential, sourceControl, t],
+    [accountField, copyTargetOptions, i18nPrefix, requiresCredential, sourceControl, t],
   );
   const errorFallback = optionalTranslation(t, `${i18nPrefix}.error`);
   const parseValues = React.useCallback(
@@ -160,7 +156,7 @@ function parseMountConnectValues(
     root: mutationDialogValueCodecs.requiredString(values.root, "root"),
     mode: mountModeValue(values.mode),
   };
-  const credentialId = mutationDialogValueCodecs.string(values.credentialId);
+  const credentialId = mutationDialogValueCodecs.string(values[CONNECT_WITH_ACCOUNT_FIELD]);
   if (credentialId) variables.credentialId = credentialId;
   const copyBackendId = mutationDialogValueCodecs.string(values.copyBackendId);
   if (copyBackendId && variables.mode === "COPY") variables.copyBackendId = copyBackendId;

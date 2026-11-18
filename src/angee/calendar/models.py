@@ -1522,6 +1522,19 @@ _RESPONSE_RANK = (
 class CalendarSourceManager[SourceT: "CalendarSource"](IntegrationManager[SourceT]):
     """Connect calendar sources: the one sequence every connect verb runs."""
 
+    def build(self, backend_class: str, **fields: Any) -> SourceT:
+        """Return an unsaved source of ``backend_class`` with its backend's defaults, its vendor among them.
+
+        It answers what a saved row would before anything is created: the
+        backend's OAuth registration (``connect_oauth_client``) and the user's
+        accounts it reads with (``connectable_credentials``). An unknown
+        ``backend_class`` is refused on ``backend_class``.
+        """
+
+        source = self.model(backend_class=backend_class, **fields)
+        source.prepare_impl_defaults()
+        return source
+
     def subscribe(
         self,
         owner: Any,
@@ -1537,20 +1550,20 @@ class CalendarSourceManager[SourceT: "CalendarSource"](IntegrationManager[Source
         racing connects count one quota; then the credential's, so racing
         attachments of one account or address serialize. The calendar owner admits
         one more source (:meth:`CalendarSource.admit_subscription`: the create gate,
-        the quota and the rate). The source is built from ``backend_class`` (whose
-        defaults name its vendor), its credential attached through integrate, which
-        asks the backend to admit it (``CalendarBackend.admit_credential``), then saved
-        and its first sync requested: a bridge enters the poll loop once its first
-        sync records a result.
+        the quota and the rate). The source is built from ``backend_class``
+        (:meth:`build`: its defaults name its vendor), its credential attached
+        through integrate, which asks the backend to admit it
+        (``CalendarBackend.admit_credential``), then saved and its first sync
+        requested: a bridge enters the poll loop once its first sync records a result.
         """
 
         with system_context(reason="calendar.source.subscribe"), transaction.atomic():
             get_user_model().system_queryset().lock_if_supported(no_key=True).get(pk=owner.pk)
             apps.get_model("integrate", "Credential").objects.lock_if_supported().get(pk=credential.pk)
             self.model.admit_subscription(owner)
-            source = self.model(
+            source = self.build(
+                backend_class,
                 owner=owner,
-                backend_class=backend_class,
                 display_name=display_name,
                 config=dict(config or {}),
                 lifecycle=IntegrationLifecycle.CONNECTED,

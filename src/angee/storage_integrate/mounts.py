@@ -93,7 +93,7 @@ class MountBackend(BridgeImpl):
         """List child locations of ``token`` before a Mount row exists.
 
         A backend that requires a credential reads with ``credential``, one of the
-        connecting user's (``MountManager.connectable_credentials``).
+        connecting user's accounts (``Integration.connectable_credentials``).
         """
 
         raise NotImplementedError

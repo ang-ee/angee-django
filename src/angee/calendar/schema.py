@@ -55,7 +55,7 @@ from angee.graphql.node import NODE_DISPLAY_NAME_DESCRIPTION, AngeeNode
 from angee.graphql.relations import actor_scoped_to_one
 from angee.graphql.subscriptions import changes
 from angee.iam.schema import UserType
-from angee.integrate.schema import BridgeTypeMixin
+from angee.integrate.schema import BridgeTypeMixin, ConnectWithAccount
 from angee.parties.schema import HandleType, PartyType
 from angee.tags.schema import TaggedNode, tags_input_extensions
 
@@ -83,6 +83,14 @@ class CalendarSourceType(BridgeTypeMixin, AngeeNode):
 
     poll_interval: auto
     permissions = permissions_field(("write", "delete"))
+
+
+@strawberry.type
+class CalendarSourceBackendType(ConnectWithAccount):
+    """What connecting a source of one calendar backend asks for: the session user's accounts it reads with."""
+
+    key: str
+    label: str
 
 
 @strawberry_django.type(Calendar)
@@ -293,7 +301,7 @@ _ATTENDEE_RESOURCE = hasura_model_resource(
 
 @strawberry.type
 class CalendarQuery:
-    """The occurrences a calendar shows, expanded server-side."""
+    """The occurrences a calendar shows, expanded server-side, and what connecting a source asks for."""
 
     @strawberry.field(graphql_type=list[EventOccurrenceType])
     def event_occurrences(
@@ -309,6 +317,19 @@ class CalendarQuery:
         """
 
         return CalendarEvent.objects.with_actor(session_user(info)).occurrences(window_start, window_end)
+
+    @strawberry.field
+    def calendar_source_backend(self, info: strawberry.Info, backend_class: str) -> CalendarSourceBackendType:
+        """Describe connecting a source of one backend for the signed-in user, before any source exists.
+
+        The accounts are the user's own that the backend reads with
+        (``Integration.connectable_credentials``); a source addon's connect verb
+        takes one of them.
+        """
+
+        source = CalendarSource.objects.build(backend_class)
+        impl = source.get_backend_class_impl()
+        return CalendarSourceBackendType.of(source, session_user(info), key=impl.key, label=str(impl.label))
 
 
 @strawberry.type
@@ -413,6 +434,7 @@ schemas = {
             EventAttendeeType,
             EventOccurrenceType,
             CalendarSourceType,
+            CalendarSourceBackendType,
             *[type_ for resource in _RESOURCES for type_ in resource.types],
         ],
         "input_extensions": tags_input_extensions(_EVENT_RESOURCE),

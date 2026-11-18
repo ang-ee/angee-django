@@ -35,12 +35,7 @@ export const MountBackendFacts = graphql(`
     mount_backend(backend_class: $backendClass) {
       key
       requires_credential
-      oauth_client
-      oauth_scopes
-      accounts {
-        id
-        display_name
-      }
+      ...ConnectWithAccountFields
     }
   }
 `);

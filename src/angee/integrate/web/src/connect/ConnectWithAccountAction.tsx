@@ -1,0 +1,168 @@
+import { type DocumentType } from "@angee/gql/console";
+import {
+  ActionTrigger,
+  InlineEmpty,
+  MutationDialog,
+  PaneRow,
+  PaneRows,
+  mutationDialogValueCodecs,
+  useRouteHref,
+  type DescriptorField,
+  type DescriptorFieldControlProps,
+  type MutationDialogValues,
+} from "@angee/ui";
+import * as React from "react";
+
+import { ConnectWithAccountFields } from "../documents";
+import { useIntegrateT } from "../i18n";
+import { ConnectAccountButton } from "./ConnectAccountButton";
+
+/** What connecting with one of the session user's accounts asks for: a consumer query's `ConnectWithAccountFields`. */
+export type ConnectWithAccountFacts = DocumentType<typeof ConnectWithAccountFields>;
+
+/** The dialog value naming the chosen account's credential. */
+export const CONNECT_WITH_ACCOUNT_FIELD = "credentialId";
+
+export interface ConnectWithAccountFieldOptions {
+  /** The consumer's connect facts (its `ConnectWithAccount` query); none while they load. */
+  facts: ConnectWithAccountFacts | null | undefined;
+  /** The consumer's route a redirect-back provider returns to once another account connected. */
+  returnRoute: string;
+  /** Called once another account connected in place (a manual-code provider), so the consumer reloads its facts. */
+  onConnected?: () => void;
+}
+
+/**
+ * The account field of a connect-with-account dialog: choose one of the session
+ * user's accounts the consumer reads with (`Integration.connectable_credentials`),
+ * or connect another through its OAuth client asking for its `oauth_scopes`
+ * ({@link ConnectAccountButton}). A dialog with more fields composes it among
+ * them; {@link ConnectWithAccountAction} is the dialog that asks for nothing else.
+ */
+export function useConnectWithAccountField({
+  facts,
+  returnRoute,
+  onConnected,
+}: ConnectWithAccountFieldOptions): DescriptorField {
+  const t = useIntegrateT();
+  const control = React.useCallback(
+    (props: DescriptorFieldControlProps) => (
+      <AccountPicker {...props} facts={facts} returnRoute={returnRoute} onConnected={onConnected} />
+    ),
+    [facts, returnRoute, onConnected],
+  );
+  return React.useMemo<DescriptorField>(
+    () => ({
+      name: CONNECT_WITH_ACCOUNT_FIELD,
+      label: t("connectWithAccount.account"),
+      required: true,
+      controlLabelMode: "group",
+      control,
+    }),
+    [control, t],
+  );
+}
+
+export interface ConnectWithAccountActionProps<TResult> extends ConnectWithAccountFieldOptions {
+  /** The toolbar button's label. */
+  label: string;
+  title: string;
+  description?: string;
+  /** Shown when the connect fails without a message of its own. */
+  errorFallback?: string;
+  /** The consumer's connect verb, given the chosen account's credential id. */
+  connect: (credentialId: string) => Promise<TResult>;
+}
+
+/**
+ * A toolbar connect verb whose dialog asks only which account to connect with,
+ * then calls the consumer's verb with it. The consumer supplies its facts, copy
+ * and verb; the account choice and "Connect another account" are this owner's.
+ */
+export function ConnectWithAccountAction<TResult>({
+  label,
+  title,
+  description,
+  errorFallback,
+  connect,
+  ...field
+}: ConnectWithAccountActionProps<TResult>): React.ReactElement {
+  const t = useIntegrateT();
+  const accountField = useConnectWithAccountField(field);
+  const fields = React.useMemo(() => [accountField], [accountField]);
+
+  return (
+    <MutationDialog
+      trigger={<ActionTrigger glyph="plus">{label}</ActionTrigger>}
+      title={title}
+      description={description}
+      fields={fields}
+      submitLabel={t("connectWithAccount.submit")}
+      submittingLabel={t("connectWithAccount.submitting")}
+      errorFallback={errorFallback}
+      parseValues={parseConnectWithAccountValues}
+      onSubmit={async ({ credentialId }) => ({ status: "ok", data: await connect(credentialId) })}
+    />
+  );
+}
+
+function parseConnectWithAccountValues(values: MutationDialogValues): { credentialId: string } {
+  return {
+    credentialId: mutationDialogValueCodecs.requiredString(
+      values[CONNECT_WITH_ACCOUNT_FIELD],
+      CONNECT_WITH_ACCOUNT_FIELD,
+    ),
+  };
+}
+
+type AccountPickerProps = DescriptorFieldControlProps & ConnectWithAccountFieldOptions;
+
+/** The bare dialog control listing the accounts to choose from, and connecting another one. */
+function AccountPicker({
+  facts,
+  returnRoute,
+  onConnected,
+  readOnly,
+  invalid,
+  describedBy,
+  labelledBy,
+  value,
+  onChange,
+}: AccountPickerProps): React.ReactElement {
+  const t = useIntegrateT();
+  const routeHref = useRouteHref();
+  const selected = mutationDialogValueCodecs.string(value) ?? "";
+  const accounts = facts?.accounts ?? [];
+  const oauthClientId = facts?.oauth_client ?? null;
+
+  return (
+    <div
+      role="group"
+      aria-labelledby={labelledBy}
+      aria-describedby={describedBy}
+      aria-invalid={invalid || undefined}
+      className="grid gap-3"
+    >
+      {accounts.length === 0 ? (
+        <InlineEmpty icon="user" label={t("connectWithAccount.empty")} />
+      ) : (
+        <PaneRows>
+          {accounts.map((account) => (
+            <li key={account.id}>
+              <PaneRow icon="user" title={account.display_name} selected={account.id === selected}
+                label={t("connectWithAccount.use")} verb={t("connectWithAccount.use")}
+                onOpen={readOnly ? undefined : () => onChange(account.id)} />
+            </li>
+          ))}
+        </PaneRows>
+      )}
+      {oauthClientId ? (
+        <div>
+          <ConnectAccountButton oauthClientId={oauthClientId} scopes={facts?.oauth_scopes ?? []}
+            next={routeHref(returnRoute)} label={t("connectWithAccount.connect")}
+            onConnected={onConnected} disabled={readOnly} />
+        </div>
+      ) : null}
+    </div>
+  );
+}

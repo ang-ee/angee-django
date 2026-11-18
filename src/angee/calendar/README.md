@@ -173,7 +173,10 @@ calendar's events stream in the same sync.
   the fields it maps.
 
 The sources page lists them with their sync status. Source addons add their
-subscribe or connect verb to its `calendar.sources#toolbar` container.
+subscribe or connect verb to its `calendar.sources#toolbar` container. A verb that
+connects one of the user's accounts asks `calendar_source_backend(backend_class)`
+which of their accounts the backend reads with, and composes integrate's
+connect-with-account action (Google's does).
 
 ## Access
 

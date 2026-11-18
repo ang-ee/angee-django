@@ -10,6 +10,23 @@ live in code docstrings.
 
 ## Unreleased — shared addon contracts, native embeddings and graph retrieval
 
+- One connect-with-account surface in `angee.integrate`: `Integration.reads_with`
+  (an OAuth grant of the capability's client covering its `oauth_scopes`) and
+  `Integration.connectable_credentials(user)` replace `Mount.reads_with`'s rule,
+  `MountManager.connectable_credentials` and `MountManager.connect_oauth_client`;
+  a capability offers accounts before it exists from an unsaved row
+  (`MountManager.build`, the new `CalendarSourceManager.build`, which
+  `subscribe` now composes). The `ConnectWithAccount` GraphQL interface
+  (`oauth_client`, `oauth_scopes`, `accounts`) is implemented by `MountBackendType`
+  and the new `calendar_source_backend(backend_class)` query's type.
+  `@angee/integrate` exports `ConnectWithAccountAction` and
+  `useConnectWithAccountField` and owns the `ConnectWithAccountFields` fragment
+  their consumers spread. `ConnectMountAction` composes the field
+  (`MountAccountPicker` is deleted; its `mount.account.*` copy moves to the
+  `integrate` namespace), and `@angee/calendar-integrate-google` adds "Connect
+  Google Calendar" to the sources toolbar over `connectGoogleCalendar(credentialId)`.
+  `GoogleCalendarBackend.admit_credential` composes `reads_with` and keeps only
+  one source per account.
 - `angee.calendar_integrate_google` syncs a connected Google account's calendars
   (the `google` client, `calendar.readonly`) with sync tokens;
   `connectGoogleCalendar(credentialId)` connects one of the user's accounts as
