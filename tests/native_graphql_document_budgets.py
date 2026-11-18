@@ -383,23 +383,23 @@ ROW_SIZES = (2, 6)
 
 
 # SELECT count and total planner allocation rounded up to MiB, measured on PostgreSQL 17,
-# the CI server, with REBAC 0.33.1: person allocates 496,957 KiB across 19 SELECTs (ceil =
-# 486 MiB; its two audit INSERTs keep the 21-statement document ceiling), projects 150,705
-# KiB across all 10 SELECTs (ceil = 148 MiB). PostgreSQL 18 allocates slightly less and is
-# not the gate's reference.
+# the CI server, with REBAC 0.34.1 on main after #503. Person's two audit INSERTs keep its
+# 21-statement document ceiling. PostgreSQL 18 allocates slightly less and is not the gate's
+# reference.
+#
+# The growth over the #479 ceilings is the cost of two features, accepted by the user on
+# 2026-11-18: #490's record-scoped file access (storage/file delete through owner_writer,
+# 25 permission sets) and #498's calendar event-chatter arm (13 sets). Re-expressing the
+# policy (#503) recovered 1-4%, and the actor-profile engine change was withdrawn. The
+# ratchet still applies: lower a ceiling when its cost falls; never raise one for a regression.
 PLANNER_BUDGETS = {
-    # Storage's deliberate trash-hiding file read split adds 8 MiB per file permission read; falls with rebac 0.34.
-    # REBAC 0.33.1: the inherited witness adds one SELECT; 496,957 KiB across 19 SELECTs.
-    "person": (19, 486),
-    "projects": (10, 148),
-    # The member's inbox selection reads plan the merged policy's non-admin id sets, the largest
-    # remaining planner cost: 1,094,927 / 607,379 / 730,612 KiB. Ratchet down as they fall.
-    # The parts tree answers part parents without their two per-row reads: 26 SELECTs and
-    # 1,325,377 KiB before.
-    "selected": (24, 1070),
-    # The target file is authorized once: 17 SELECTs and 764,084 KiB before.
-    "connections": (15, 594),
-    "related": (19, 715),
+    "person": (19, 579),  # 592,189 KiB
+    "projects": (10, 179),  # 182,705 KiB
+    # The member's inbox selection reads plan the merged policy's non-admin id sets, the
+    # largest remaining planner cost.
+    "selected": (24, 1234),  # 1,262,880 KiB
+    "connections": (15, 696),  # 711,828 KiB
+    "related": (19, 864),  # 884,229 KiB
 }
 
 
