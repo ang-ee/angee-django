@@ -29,9 +29,9 @@ import { allDayBoundDay, calendarEventForm } from "./CalendarEventForm";
 type OccurrenceRow = DocumentType<typeof EventOccurrencesDocument>["event_occurrences"][number];
 
 /**
- * A bound as the events list shows it, through the list's date stamp: an all-day event's day in its own zone,
- * which every viewer reads as that day (a Chicago Nov 20 is no Nov 19 in Los Angeles), and a timed event's
- * instant, in the viewer's zone.
+ * A bound as the events list shows it, through `AbsoluteTime`'s date and time: a timed event's instant, its
+ * date and clock time in the viewer's zone, and an all-day event's day in its own zone, which has no clock time
+ * and which every viewer reads as that day (a Chicago Nov 20 is no Nov 19 in Los Angeles).
  */
 function eventBoundColumn(field: "start" | "end"): ListColumn {
   return {
@@ -39,7 +39,7 @@ function eventBoundColumn(field: "start" | "end"): ListColumn {
     selectionPaths: [field, "all_day", "effective_timezone"],
     render: (row) => {
       const shown = row.all_day === true ? allDayBoundDay(row[field], row.effective_timezone) : row[field];
-      return <AbsoluteTime display="date" value={typeof shown === "string" ? shown : null} />;
+      return <AbsoluteTime display="datetime" value={typeof shown === "string" ? shown : null} />;
     },
   };
 }

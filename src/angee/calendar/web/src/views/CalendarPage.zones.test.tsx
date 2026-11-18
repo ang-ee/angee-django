@@ -5,7 +5,8 @@ import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { operationDocuments } from "@angee/gql/console/actions";
 import { RoutedRuntimeFixture, storySchema, testDataResource, type GraphQLWireRequest } from "@angee/storybook/testing";
 import {
-  containersFromChildren, formatDate, formatDateStorage, type ListColumn, type Occurrence, type ResourceListCalendarSpec,
+  containersFromChildren, formatDate, formatDateStorage, formatTime, type ListColumn, type Occurrence,
+  type ResourceListCalendarSpec,
 } from "@angee/ui";
 import { createRouteHref } from "@angee/ui/runtime";
 
@@ -174,32 +175,43 @@ describe("CalendarPage sources", () => {
 });
 
 describe("CalendarPage events list", () => {
-  async function columns(): Promise<readonly ListColumn[]> {
+  async function bounds(): Promise<(field: "start" | "end") => ListColumn> {
     await spec();
-    return captured.columns!;
+    return (field) => captured.columns!.find((column) => column.field === field)!;
   }
 
   // CAL-F4: the list's plain DateTime cell read a Chicago all-day Nov 20 as Nov 19 in Los Angeles.
-  test("an all-day event's bounds read as its days in its own zone, a timed event's as the viewer's day", async () => {
-    const list = await columns();
-    const bound = (field: "start" | "end") => list.find((column) => column.field === field)!;
-    // List rows, as the events list reads them.
-    const timedRow: Record<string, unknown> = { ...ROW };
-    const allDayRow: Record<string, unknown> = {
+  test("an all-day event's bounds read as its days in its own zone, with no clock time", async () => {
+    const bound = await bounds();
+    // A list row, as the events list reads it: the event's midnights in Chicago.
+    const row: Record<string, unknown> = {
       ...ROW, all_day: true, start: "2026-11-20T06:00:00+00:00", end: "2026-11-21T06:00:00+00:00",
     };
 
     // The cell reads its siblings, so the list selects them.
     expect(bound("start").selectionPaths).toEqual(["start", "all_day", "effective_timezone"]);
-    render(<>{bound("start").render!(allDayRow)}{bound("end").render!(allDayRow)}{bound("start").render!(timedRow)}</>);
+    render(<>{bound("start").render!(row)}{bound("end").render!(row)}</>);
 
-    const [start, end, timed] = screen.getAllByRole("time");
+    const [start, end] = screen.getAllByRole("time");
     expect([start?.getAttribute("datetime"), end?.getAttribute("datetime")]).toEqual(["2026-11-20", "2026-11-21"]);
-    expect(start?.textContent).toBe(formatDate("2026-11-20"));
-    expect(start?.getAttribute("title")).toBe("Nov 20, 2026");
-    // A timed event is an instant: its day in the viewer's zone, the full stamp on hover.
-    expect(timed?.getAttribute("datetime")).toBe(new Date(ROW.start).toISOString());
-    expect(timed?.textContent).toBe(formatDate(ROW.start));
+    expect([start?.textContent, end?.textContent]).toEqual(["Nov 20, 2026", "Nov 21, 2026"]);
+  });
+
+  // 03:30 UTC falls on another day or clock time in each zone the suite runs in.
+  test("a timed event's bound reads as its date and clock time in the viewer's zone", async () => {
+    const bound = await bounds();
+    const start = "2026-11-20T03:30:00+00:00";
+    // The event's own zone is no runner's: a timed bound never reads in it.
+    const row: Record<string, unknown> = { ...ROW, start, effective_timezone: "Pacific/Kiritimati" };
+    const viewer = Intl.DateTimeFormat().resolvedOptions().timeZone;
+
+    render(<>{bound("start").render!(row)}</>);
+
+    const timed = screen.getByRole("time");
+    expect(timed.getAttribute("datetime")).toBe(new Date(start).toISOString());
+    expect(timed.textContent).toContain(formatDate(start, { density: "full", timeZone: viewer }));
+    expect(timed.textContent).toContain(formatTime(start, { timeZone: viewer }));
+    expect(timed.textContent).not.toContain(formatTime(start, { timeZone: "Pacific/Kiritimati" }));
   });
 });
 

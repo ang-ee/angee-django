@@ -56,12 +56,13 @@ live in code docstrings.
   `CalendarQuerySet` reads it as a query), read as `effective_timezone` on an
   event and on each `event_occurrences` item: the calendar grid, the events list
   and the event form show and edit those days in every browser zone, and
-  changing an all-day event's own zone keeps its days. `@angee/ui`'s
-  `AbsoluteTime` reads a bare `yyyy-MM-dd` value as that date, with no time and
-  no zone, and list date cells compose it. Dragging an all-day event sends the
-  days it lands on, which the event places at midnight in its zone; the
-  nearest-midnight snap is gone, and an instant off that midnight is refused. A
-  dragged timed event refuses a time without an offset. A
+  changing an all-day event's own zone keeps its days. The events list shows a
+  timed event's bounds as their date and clock time in the viewer's zone.
+  `@angee/ui`'s `AbsoluteTime` reads a bare `yyyy-MM-dd` value as that date,
+  with no time and no zone, and list date cells compose it. Dragging an all-day
+  event sends the days it lands on, which the event places at midnight in its
+  zone; the nearest-midnight snap is gone, and an instant off that midnight is
+  refused. A dragged timed event refuses a time without an offset. A
   timed event is an instant edited on the viewer's clock: `@angee/ui`'s
   `formatDateTimeStorage` (`DATETIME_STORAGE_FORMAT`) writes the local wall time
   with its UTC offset (`yyyy-MM-dd'T'HH:mm:ssxxx`), so every `datetime` widget
