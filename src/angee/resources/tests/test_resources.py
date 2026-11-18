@@ -24,6 +24,7 @@ from tests.tables import model_tables
 from angee.base.models.base import AngeeModel
 from angee.base.testing.fixtures import prime_content_types
 from angee.base.testing.queries import statement_startswith
+from angee.projects.testing.models import ActivityType, Task
 from angee.resources.entries import EntryGraph, GrantGroup, GrantRow, LoadResult, ResourceEntry
 from angee.resources.exceptions import ResourceLoadError
 from angee.resources.grants import _grant_tuples, materialize_grant_groups
@@ -2554,3 +2555,45 @@ def test_content_type_label_rows_hash_labels_not_ids(tmp_path: Path) -> None:
     finally:
         # Later tests start from the session's warm content-type cache.
         prime_content_types()
+
+
+@pytest.mark.django_db
+def test_to_field_foreign_key_stores_and_renders_its_target_column(tmp_path: Path) -> None:
+    """An xref names a ``to_field`` foreign key's row by its target column; an ordinary one keeps the pk."""
+
+    (tmp_path / "resources").mkdir()
+    for name, model, rows in (
+        ("kinds.yaml", ActivityType, [{"xref": "follow_up", "fields": {"key": "follow-up", "name": "Follow up"}}]),
+        ("tasks.yaml", Task, [
+            {"xref": "plan", "fields": {"title": "Plan the visit"}},
+            {"xref": "ring", "fields": {
+                "title": "Ring back", "parent": "resource_addon.plan", "activity_type": "resource_addon.follow_up",
+            }},
+        ]),
+    ):
+        payload = {"_meta": {"model": model._meta.label}, "rows": rows}
+        (tmp_path / "resources" / name).write_text(yaml.safe_dump(payload), encoding="utf-8")
+    owner = addon(tmp_path, manifest={"master": ({"path": "kinds.yaml"}, {"path": "tasks.yaml"})})
+    ledger = apps.get_model("resources", "Resource")
+
+    with system_context(reason="test.resources.to_field_load"):
+        result = ledger.objects.load_addons((owner,), tiers=[Resource.Tier.MASTER])
+        kind = ActivityType.objects.get(key="follow-up")
+        plan, ring = (Task.objects.get(title=title) for title in ("Plan the visit", "Ring back"))
+
+    assert result.created == 3
+    assert (ring.activity_type_id, ring.parent_id) == ("follow-up", plan.pk)
+    aliases = {"resource_addon": owner.name, owner.name: owner.name}
+    source = entry(tmp_path, {"path": "tasks.yaml"}, owner=owner)
+    resource = build_resource(Task, source, ledger_model=ledger, addon_aliases=aliases)
+    # Export renders the stored columns, so the row round-trips to what the xref resolved.
+    assert resource.fields["activity_type"].export(ring) == "follow-up"
+    assert resource.fields["parent"].export(ring) == plan.pk
+    # A widget bound to the relation itself (no ``_id`` attribute) returns the row and renders its key.
+    widget = AngeeResource.get_fk_widget(Task._meta.get_field("activity_type"))()
+    widget.ledger_model, widget.addon_aliases = ledger, aliases
+    xref_row = {"activity_type": "resource_addon.follow_up"}
+    with system_context(reason="test.resources.to_field_widget"):
+        assert widget.clean(xref_row["activity_type"]) == kind
+        assert resource._row_matches_condition(xref_row, models.Q(activity_type=kind))
+    assert widget.render(kind) == "follow-up"

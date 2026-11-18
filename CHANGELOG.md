@@ -84,6 +84,13 @@ live in code docstrings.
   releases and is removed in 4.0; a host upgrading from an earlier release
   applies it through a 3.x release first.
 
+- A resource row naming a `to_field` foreign key by xref stores the named row's
+  target column, not its primary key: `AngeeResource.get_fk_widget` binds the xref
+  widget's native `field` to the relation's `target_field`, so a seed can set
+  `projects.Task.activity_type` (keyed by `ActivityType.key`), which previously
+  failed validation, and export renders the key back. An adoption condition
+  compares a related row by the same column.
+
 - Time-of-day fields can be exposed as resources. Resource metadata accepts the
   GraphQL `Time` scalar, which it previously refused at schema build, and a Django
   `TimeField` defaults to the new `time` widget. It filters with Date's operators
