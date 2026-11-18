@@ -444,11 +444,12 @@ def test_iam_integrate_oidc_config_installs_oauth_client_oidc_defaults() -> None
     oidc_by_xref = {
         row["_xref"]: {key: value for key, value in row.items() if value is not NOT_PROVIDED} for row in oidc_rows
     }
-    # Released rows, unchanged so existing installations are not re-applied.
+    # Gemini carries OIDC metadata and no login policy: Google's public Gemini CLI
+    # client is never a default sign-in. Grok is the released row, unchanged.
     assert oidc_by_xref == {
         "oauth_gemini_oidc": {
             "_xref": "oauth_gemini_oidc", "slug": "gemini", "environment": "prod", "provider_type": "google",
-            "login_enabled": True, "issuer": "https://accounts.google.com",
+            "issuer": "https://accounts.google.com",
             "jwks_uri": "https://www.googleapis.com/oauth2/v3/certs",
             "discovery_url": "https://accounts.google.com/.well-known/openid-configuration",
         },

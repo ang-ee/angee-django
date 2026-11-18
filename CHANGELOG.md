@@ -10,6 +10,14 @@ live in code docstrings.
 
 ## Unreleased — shared addon contracts, native embeddings and graph retrieval
 
+- A fresh installation no longer offers "Continue with Google Gemini" on the
+  sign-in page. `iam_integrate_oidc`'s install seed gave Google's public Gemini
+  CLI client `login_enabled: true`, and that client ships with a published client
+  id, so every new database showed it. The seed now contributes the client's OIDC
+  metadata only; signing in through it is an operator's switch on the OAuth
+  client. An installation that already loaded the row keeps its current value:
+  turn it off on the client if it was never chosen.
+
 - `storage/file#write_granted` holds only the fragments' record arms; `write`
   derives the drive, folder, inherited-owner, draft-owner and admin arms itself,
   and `owner_writer` is `inherited_owner + draft_owner + (owner & write_granted)`.
