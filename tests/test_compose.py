@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import json
+import os
 import re
+import subprocess
 import sys
 from importlib import import_module
 from pathlib import Path
@@ -11,6 +13,7 @@ from types import ModuleType
 from typing import Any, cast
 
 import pytest
+import yaml
 from django.apps import apps
 from django.core.exceptions import ImproperlyConfigured
 from django.db import OperationalError, models
@@ -282,6 +285,68 @@ def test_web_runtime_transports_shell_values_for_the_shared_js_validator() -> No
     ]["shell"]["apps"]["ap"]["railExpanded"] is False
     with pytest.raises(ImproperlyConfigured, match="only JSON values"):
         _web_runtime((addon,), ui={"shell": {"not_json": object()}})
+
+
+@pytest.mark.parametrize("overlay", ["host", "deployment"])
+def test_if_stale_recomposes_when_only_the_deployment_ui_layer_changes(tmp_path: Path, overlay: str) -> None:
+    """``ANGEE_UI`` is a snapshot input, so ``compose --if-stale`` sees a settings-file change alone.
+
+    The host runs the project template's launcher and settings bootstrap. ``ANGEE_UI``
+    sits in the host's own ``settings.yaml`` (a process stack's ``ANGEE_PROJECT_DIR``)
+    or in a deployment directory's overlay, as ``angee.base.conf.configure`` loads them.
+    """
+
+    template = Path(__file__).resolve().parents[1] / "templates/projects/web/template"
+    host = tmp_path / "host"
+    deployment = host if overlay == "host" else tmp_path / "deployment"
+    host.mkdir()
+    deployment.mkdir(exist_ok=True)
+    (host / "settings.py").write_text((template / "settings.py").read_text())
+    (host / "manage.py").write_text(
+        (template / "manage.py.jinja").read_text().replace("{{ project_name }}", "ui-layer-probe")
+    )
+    authored = {
+        "SECRET_KEY": "ui-layer-probe",
+        "COMPOSE_OUTPUT_DIR": str(host / "runtime"),
+        "COMPOSE_OUTPUT_MODULE": "runtime",
+        "INSTALLED_APPS": ["angee.web"],
+        "DATABASES": {"default": {"ENGINE": "django.db.backends.sqlite3", "NAME": ":memory:"}},
+    }
+
+    def deploy(hosts: dict[str, str]) -> None:
+        ui = {"ANGEE_UI": {"shell": {"apps": {"payables": {"rail": ["accounting"]}}, "hosts": hosts}}}
+        (host / "settings.yaml").write_text(yaml.safe_dump({**authored, **(ui if overlay == "host" else {})}))
+        if overlay == "deployment":
+            (deployment / "settings.yaml").write_text(yaml.safe_dump(ui))
+
+    environment = {
+        key: value
+        for key, value in os.environ.items()
+        if not key.startswith(("ANGEE_", "COMPOSE_", "YAMLCONF_", "SENTRY_"))
+        and key not in {"DJANGO_SETTINGS_MODULE", "DJANGO_COMPOSE_MODE", "DATABASE_URL", "PYTHONPATH"}
+    }
+    environment["ANGEE_PROJECT_DIR"] = str(deployment)
+
+    def compose(*arguments: str) -> str:
+        result = subprocess.run(
+            [sys.executable, str(host / "manage.py"), "compose", *arguments],
+            cwd=host, env=environment, capture_output=True, text=True, timeout=120, check=False,
+        )
+        assert result.returncode == 0, result.stdout + result.stderr
+        return result.stdout
+
+    def deployed_hosts() -> dict[str, str]:
+        manifest = json.loads((host / "runtime/web/manifest.json").read_text())
+        return cast(dict[str, str], manifest["deployment"]["shell"]["hosts"])
+
+    deploy({"old.example.test": "payables"})
+    assert "Composition generated." in compose()
+    assert "Composition is current." in compose("--if-stale")
+
+    deploy({"new.example.test": "payables"})
+    assert "Composition generated." in compose("--if-stale")
+    assert deployed_hosts() == {"new.example.test": "payables"}
+    assert "Composition is current." in compose("--check")
 
 
 def test_web_runtime_projects_external_codegen_entries() -> None:

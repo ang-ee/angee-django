@@ -176,6 +176,17 @@ and artifact rendering. Register dotted integration classes in
 owns deterministic publication and receipt checking. Serving code consumes
 published results and never imports an addon build adapter.
 
+An integration's output may depend only on inputs the snapshot holds: the
+selected apps, their fingerprinted files (`COMPOSE_FINGERPRINT_GLOBS`) and
+fingerprinted settings. A setting an integration renders into its output is
+declared beside the integration, `"COMPOSE_FINGERPRINT_SETTINGS:append"` in the
+addon's autoconfig, as [`angee.web`](../src/angee/web/autoconfig.py) does for
+`ANGEE_UI`. `compose --if-stale` and serving startup verify only the receipt's
+snapshot digest and owned-file bytes, never a re-render: output that follows an
+undeclared input goes stale under `compose --check` while `--if-stale` skips.
+A fingerprinted setting is structural: it is authored configuration and refused
+from the environment.
+
 ### Project migration history
 
 Each project owns ordinary Django migration files in
