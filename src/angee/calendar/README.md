@@ -79,10 +79,13 @@ expanded server-side in each calendar's zone.
 - **Bounds:** each series stores where it ends (`series_end`, when every rule it
   holds carries `UNTIL` or `COUNT`), so reads skip series that ended before their
   window. An event's rule repeats at most daily and occurs within about 30 years
-  of its start. An expansion counts every occurrence from the series' start, not
-  only those in its window, against `MAX_OCCURRENCES` (10,000, scheduling's one
-  cap): past it the save or read is refused, never truncated. An event's moments,
-  and every occurrence's end, stay within the dates the calendar can reach.
+  of its start. A read costs its window, not the series' age: an open rule is read
+  from the period before the window (scheduling's re-anchoring). At save, an open
+  series is counted from its start to now plus the overlap horizon against
+  `MAX_OCCURRENCES` (10,000, scheduling's one cap), and a `COUNT` series is read
+  from its start; past the cap the save is refused, never truncated. An event's
+  moments, and every occurrence's end, stay within the dates the calendar can
+  reach; a row a read still cannot expand is skipped, never failing the read.
 - **Live updates:** `changes(CalendarEvent)` sends readers the change as usual, and
   sends free/busy viewers only that an event's busy time changed, so they refetch
   the redacted occurrences. A free event reaches them only through a partial save

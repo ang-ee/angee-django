@@ -400,12 +400,6 @@ class CalendarBackend(BridgeImpl, HttpClientMixin):
 
     _page: _EventsPage | None = None
 
-    deadline: float | None = None
-    """The sync's deadline (a monotonic instant) this adapter's cycle runs to, once the driver names one.
-
-    ``streams`` and ``extract`` receive it; an identity read or the absence sweep,
-    which the driver calls without one, reads it here.
-    """
 
     def discover(self) -> list[ParsedCalendar]:
         """Return the remote calendars this source serves, each with its stable key."""
@@ -474,12 +468,9 @@ class CalendarBackend(BridgeImpl, HttpClientMixin):
 
         Local state only: a calendar is known once the ``calendars`` stream applied
         it, and integrate declares again after the wave in which its link appeared
-        (``RecordLinkQuerySet.containers_of``). The cycle's deadline is kept for the
-        parses of this adapter.
+        (``RecordLinkQuerySet.containers_of``).
         """
 
-        if deadline is not None:
-            self.deadline = deadline
         yield self.bridge.calendars_stream()
         for link in apps.get_model("integrate", "RecordLink").objects.containers_of(self.bridge, CALENDARS_STREAM):
             yield self.bridge.events_stream(link)
@@ -492,14 +483,13 @@ class CalendarBackend(BridgeImpl, HttpClientMixin):
         guards a page extracted before).
         """
 
-        if deadline is not None:
-            self.deadline = deadline
         if not self._subscribed():
             return StreamPage((), dict(stream.cursor or {}))
         if stream.key != CALENDARS_STREAM:
             return self.extract_events(stream, page_bound, deadline=deadline)
         cursor = dict(stream.cursor or {})
-        payloads = {remote.key: remote.payload() for remote in self.discover()}
+        with self.until(deadline):
+            payloads = {remote.key: remote.payload() for remote in self.discover()}
         return self.page(stream, payloads, page_bound, after=cursor.get("after"), cursor={"listed": True})
 
     def get_calendar(self, stream: Any) -> Any:

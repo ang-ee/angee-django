@@ -84,12 +84,13 @@ from angee.calendar.backends import (
     series_key,
 )
 from angee.calendar.choices import AttendeeResponse, AttendeeRole, EventStatus, EventTransparency, EventVisibility
+from angee.integrate.credentials import CredentialKind
 from angee.integrate.errors import IntegrationError
 from angee.integrate.http import DownloadResult, OutboundBudget
 from angee.integrate.net import AddressNotAllowedError, AddressResolutionError, is_unsafe_address, parse_http_url
 from angee.integrate.states import StreamPhase
 from angee.integrate.streams import StreamPage
-from angee.scheduling.recurrence import Recurrence, moment_after
+from angee.scheduling.recurrence import Recurrence
 from angee.scheduling.zones import get_zone_info, get_zone_names
 
 FEED_KEY = "feed"
@@ -105,7 +106,7 @@ _EVENTS_PER_FEED = 10_000
 """The most events a feed may produce, cancelled instances included; a larger feed fails its poll."""
 
 _PARSE_SECONDS = 60.0
-"""How long one parse may run when no sync names a deadline (a direct identity read)."""
+"""How long one parse may run when no sync call names a deadline (a direct identity read)."""
 
 _TIMEZONES_PER_FEED = 100
 """The most VTIMEZONEs a feed may define; a larger feed fails its poll before it is parsed."""
@@ -191,6 +192,17 @@ class IcsCalendarBackend(CalendarBackend):
 
     _snapshot: _Snapshot | None = None
 
+    def admit_credential(self, credential: Any) -> None:
+        """Admit only a static token: the feed address a subscription keeps as its secret.
+
+        The backend reads the feed address from that token alone, so any other kind
+        (an OAuth grant, a key pair) would send another credential's material to a
+        feed server.
+        """
+
+        if credential.kind != CredentialKind.STATIC_TOKEN:
+            raise ValidationError({"credential": "An ICS feed subscription keeps its feed address as a static token."})
+
     def discover(self) -> list[ParsedCalendar]:
         """Return the feed, the source's one remote calendar, named as subscribed."""
 
@@ -210,7 +222,7 @@ class IcsCalendarBackend(CalendarBackend):
 
         cursor = dict(stream.cursor or {})
         if "after" in cursor:
-            snapshot = self._events_now(stream)
+            snapshot = self._events_now(stream, deadline=deadline)
             return self.page(stream, snapshot.payloads, page_bound, after=cursor["after"], cursor=cursor["next"])
         baseline = stream.phase == StreamPhase.BASELINE
         held = self._snapshot
@@ -218,7 +230,7 @@ class IcsCalendarBackend(CalendarBackend):
             result = self._fetch({} if baseline else cursor)
             if result.status_code == 304:
                 return StreamPage((), cursor)
-            held = self._snapshot = self._read_snapshot(stream, result)
+            held = self._snapshot = self._read_snapshot(stream, result, deadline)
         elif not baseline and any(held.validators.values()) and held.validators == _validators(cursor):
             return StreamPage((), cursor)
         return self.page(stream, held.payloads, page_bound, after=None, cursor=held.validators)
@@ -234,7 +246,7 @@ class IcsCalendarBackend(CalendarBackend):
 
         return list(self._events_now(stream).payloads)
 
-    def _events_now(self, stream: Any) -> _Snapshot:
+    def _events_now(self, stream: Any, *, deadline: float | None = None) -> _Snapshot:
         """Return the snapshot this adapter holds, fetching the feed unconditionally when it holds none.
 
         One adapter serves one sync of the feed's partition. While it holds a
@@ -244,19 +256,20 @@ class IcsCalendarBackend(CalendarBackend):
         """
 
         if self._snapshot is None:
-            self._snapshot = self._read_snapshot(stream, self._fetch({}))
+            self._snapshot = self._read_snapshot(stream, self._fetch({}), deadline)
         return self._snapshot
 
-    def _read_snapshot(self, stream: Any, result: DownloadResult) -> _Snapshot:
+    def _read_snapshot(self, stream: Any, result: DownloadResult, deadline: float | None = None) -> _Snapshot:
         """Parse a fetched feed into its snapshot, kept with the validators it was served with.
 
-        Every parse runs against a deadline: the sync's, which this adapter keeps from
-        the cycle (``CalendarBackend.deadline``: first and continuing pages, identity
-        reads and the sweep alike), else :data:`_PARSE_SECONDS` from now when no sync
-        names one. A parse that reaches it stops, and the next sync reads the feed again.
+        Every parse runs against a deadline: the one the driver gave this call (an
+        extraction's argument, or ``BridgeImpl.deadline`` around an identity read or
+        the sweep), else :data:`_PARSE_SECONDS` from now when it gave none. A parse
+        that reaches it stops, and the next sync reads the feed again.
         """
 
-        deadline = self.deadline if self.deadline is not None else monotonic() + _PARSE_SECONDS
+        if deadline is None:
+            deadline = self.deadline if self.deadline is not None else monotonic() + _PARSE_SECONDS
         return _Snapshot(
             {"etag": result.headers.get("etag", ""), "last_modified": result.headers.get("last-modified", "")},
             self._observe_feed(_read(result.content), zone=self.get_calendar(stream).timezone, deadline=deadline),
@@ -613,8 +626,6 @@ def _events(
         }
     )
     if excluded:
-        until = moment_after(excluded[-1], timedelta(microseconds=1)) or excluded[-1]
-        instances = set(Recurrence(recurrence).occurrences(start, start, until, zone=expansion))
         observed.extend(
             (
                 instance_key(uid, moment),
@@ -630,7 +641,7 @@ def _events(
                 ),
             )
             for moment in excluded
-            if moment in instances
+            if series.is_instance(moment, zone=expansion)
         )
     return observed
 

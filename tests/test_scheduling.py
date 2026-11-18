@@ -8,6 +8,7 @@ by overriding ``TIME_ZONE`` per case.
 
 from __future__ import annotations
 
+from collections.abc import Callable, Iterable, Iterator
 from datetime import UTC, datetime, time, timedelta
 from time import perf_counter
 from zoneinfo import ZoneInfo
@@ -15,15 +16,19 @@ from zoneinfo import ZoneInfo
 import pytest
 import strawberry
 import strawberry_django
+from dateutil.rrule import rrulestr
 from django.core.exceptions import ValidationError
 from django.db import migrations, models
 from django.db.migrations.state import ModelState
 from django.db.migrations.writer import MigrationWriter
 from django.test import override_settings
 from django.test.utils import isolate_apps
+from hypothesis import given, settings
+from hypothesis import strategies as st
 from pydantic import TypeAdapter
 from pydantic import ValidationError as PydanticValidationError
 
+from angee.scheduling import recurrence as recurrence_module
 from angee.scheduling.fields import RecurrenceField, TimeZoneField
 from angee.scheduling.recurrence import MAX_OCCURRENCES, Recurrence
 from angee.scheduling.zones import ZoneName, get_zone_info
@@ -390,16 +395,15 @@ def test_only_one_bare_rule_validates(rule: str) -> None:
         RecurrenceField().clean(rule, None)
 
 
-def test_a_sparse_rule_far_from_its_start_is_refused_before_any_walk() -> None:
-    # Every fourth February 29 costs dateutil a step a day: the span alone refuses it.
+def test_a_sparse_rule_far_from_its_start_reads_only_its_window(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Every fourth February 29: read seventy years on, the walk starts the period before the window.
     leap_days = Recurrence("FREQ=DAILY;BYMONTH=2;BYMONTHDAY=29")
+    steps = _count_steps(monkeypatch)
 
-    began = perf_counter()
-    with pytest.raises(ValidationError) as refused:
-        leap_days.occurrences(_utc(2028, 2, 29, 9), _utc(2100, 1, 1), _utc(2100, 3, 1), zone="UTC")
+    found = leap_days.occurrences(_utc(2028, 2, 29, 9), _utc(2096, 1, 1), _utc(2096, 3, 1), zone="UTC")
 
-    assert refused.value.code == "series_too_long"
-    assert perf_counter() - began < 0.5
+    assert found == [_utc(2096, 2, 29, 9)]
+    assert steps() <= 2
 
 
 def test_a_never_occurs_probe_at_the_end_of_time_is_refused_not_overflowed() -> None:
@@ -440,14 +444,109 @@ def test_the_spring_gap_instant_of_an_hourly_rule_counts_once() -> None:
     assert len(moments) == len(set(moments))
 
 
-def test_an_open_daily_series_twenty_years_on_still_expands_and_one_past_the_cap_refuses() -> None:
+def test_an_open_daily_series_reads_any_window_and_saving_counts_from_its_start() -> None:
     daily = Recurrence("FREQ=DAILY")
     start = _utc(2026, 1, 1, 9)
 
     assert daily.occurrences(start, _utc(2046, 1, 1), _utc(2046, 1, 2), zone="UTC") == [_utc(2046, 1, 1, 9)]
+    assert daily.occurrences(start, _utc(2200, 1, 1), _utc(2200, 1, 2), zone="UTC") == [_utc(2200, 1, 1, 9)]
+    # The save-time cap still counts from DTSTART: a horizon past 10,000 days refuses.
     with pytest.raises(ValidationError) as refused:
-        daily.occurrences(start, _utc(2200, 1, 1), _utc(2200, 1, 2), zone="UTC")
+        daily.validate(dtstart=start, zone="UTC", through=_utc(2200, 1, 1))
     assert refused.value.code == "series_too_long"
+
+
+def _count_steps(monkeypatch: pytest.MonkeyPatch) -> Callable[[], int]:
+    """Count the moments every walk pulls from dateutil, the cost a read pays."""
+
+    pulled = 0
+    walk = recurrence_module._walk
+
+    def counted(moments: Iterable[datetime], before: datetime | None) -> tuple[list[datetime], bool]:
+        def tally() -> Iterator[datetime]:
+            nonlocal pulled
+            for moment in moments:
+                pulled += 1
+                yield moment
+
+        return walk(tally(), before)
+
+    monkeypatch.setattr(recurrence_module, "_walk", counted)
+    return lambda: pulled
+
+
+@pytest.mark.parametrize(
+    ("rule", "start"),
+    [
+        pytest.param("FREQ=YEARLY", datetime(1, 1, 1, 9, tzinfo=UTC), id="yearly-from-year-one"),
+        pytest.param("FREQ=DAILY", datetime(1976, 3, 1, 9, tzinfo=UTC), id="daily-from-fifty-years-ago"),
+    ],
+)
+def test_a_one_month_read_walks_the_window_not_the_series_history(
+    monkeypatch: pytest.MonkeyPatch, rule: str, start: datetime
+) -> None:
+    steps = _count_steps(monkeypatch)
+
+    found = Recurrence(rule).occurrences(start, _utc(2026, 1, 1), _utc(2026, 2, 1), zone="UTC")
+
+    assert found and all(_utc(2026, 1, 1) <= moment < _utc(2026, 2, 1) for moment in found)
+    # The period before the window and the window itself: never the series' past.
+    assert steps() <= 2 * 31 + 2
+
+
+_ZONE = ZoneInfo("America/New_York")
+_WEEKDAYS = ("MO", "TU", "WE", "TH", "FR", "SA", "SU")
+
+
+@st.composite
+def _rules(draw: st.DrawFn) -> str:
+    """Draw a bare rule a calendar event may hold: daily to yearly, with BY parts and an optional UNTIL."""
+
+    freq = draw(st.sampled_from(("DAILY", "WEEKLY", "MONTHLY", "YEARLY")))
+    parts = [f"FREQ={freq}", f"INTERVAL={draw(st.integers(1, 4))}"]
+    if draw(st.booleans()):
+        days = draw(st.lists(st.sampled_from(_WEEKDAYS), min_size=1, max_size=3, unique=True))
+        if freq in ("MONTHLY", "YEARLY") and draw(st.booleans()):
+            days = [f"{draw(st.sampled_from((1, 2, -1)))}{day}" for day in days]
+        parts.append("BYDAY=" + ",".join(days))
+        if freq in ("MONTHLY", "YEARLY") and draw(st.booleans()):
+            parts.append(f"BYSETPOS={draw(st.sampled_from((1, -1, 2)))}")
+    elif freq in ("MONTHLY", "YEARLY") and draw(st.booleans()):
+        parts.append(f"BYMONTHDAY={draw(st.sampled_from((1, 15, 28, 29, 30, 31, -1)))}")
+    if freq == "YEARLY" and draw(st.booleans()):
+        parts.append(f"BYMONTH={draw(st.integers(1, 12))}")
+    if draw(st.booleans()):
+        parts.append(f"UNTIL={draw(st.integers(2030, 2045))}0101T000000Z")
+    return ";".join(parts)
+
+
+@settings(max_examples=150, deadline=2000, database=None)
+@given(
+    rule=_rules(),
+    start=st.datetimes(min_value=datetime(2000, 1, 1), max_value=datetime(2026, 12, 31)),
+    offset_days=st.integers(0, 365 * 12),
+    length_days=st.integers(1, 62),
+)
+def test_a_reanchored_read_equals_the_full_expansion_in_its_window(
+    rule: str, start: datetime, offset_days: int, length_days: int
+) -> None:
+    """R-R3: reading from the period before the window yields exactly what walking from DTSTART yields there."""
+
+    dtstart = start.replace(second=0, microsecond=0, tzinfo=_ZONE)
+    window_start = (dtstart + timedelta(days=offset_days)).astimezone(UTC)
+    window_end = window_start + timedelta(days=length_days)
+    anchor = dtstart.astimezone(_ZONE)
+    full = [
+        moment.astimezone(UTC)
+        for moment in rrulestr(rule, dtstart=anchor).between(
+            window_start.astimezone(_ZONE), window_end.astimezone(_ZONE), inc=True
+        )
+        if window_start <= moment.astimezone(UTC) < window_end
+    ]
+
+    assert Recurrence(rule).occurrences(dtstart, window_start, window_end, zone="America/New_York") == list(
+        dict.fromkeys(full)
+    )
 
 
 @pytest.mark.parametrize(
