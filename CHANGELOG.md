@@ -11,7 +11,7 @@ live in code docstrings.
 ## Unreleased — shared addon contracts, native embeddings and graph retrieval
 
 - Permission statements are compiled for the stored grants their actor can hold
-  (django-zed-rebac 0.35.1, actor grant profiles). Inside an evaluator scope one small
+  (django-zed-rebac 0.35.2, actor grant profiles). Inside an evaluator scope one small
   statement reads which stored relations name the actor, directly, by wildcard or
   through stored subject sets, and arms the actor holds no row for are left out, in
   granting positions only. On PostgreSQL an "administrator holds this on every row" arm
@@ -36,6 +36,12 @@ live in code docstrings.
     (`WorkflowRunner._run_body`), as a request and a GraphQL operation already do, so
     workflow steps get the same statements. Work that runs outside any scope (a
     management command, a task that opens none) is compiled as before.
+  - Every changeset writes one stored grant naming its actor, so an active user holds
+    one grant row per write boundary. 0.35.2 is the floor because its profile read does
+    not grow with those rows: a member with 100,000 of them reads the projects list in
+    79 ms where a member with none takes 71 ms, and 0.35.1 took 315 ms. Such a user's
+    scope issues two profile statements instead of one, and a relation it holds is
+    kept on every type that declares that relation name.
 
 - A theme or branding fragment owns the sign-in presentation through
   `auth.login#hero`, a framework container with one child per host. Installing
