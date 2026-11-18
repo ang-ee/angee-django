@@ -424,6 +424,14 @@ when a separate suite exercises real provider integration; compose the existing
 of copying provider setup. These names share the same Vitest discovery and
 focused-file selection convention.
 
+Use `.zones.test.ts` (or `.tsx`) for a suite whose days or instants depend on the
+browser's zone. The [shared Vitest defaults](../packages/app/config/vitest.ts)
+run it in the runner's zone and again under `TZ=Asia/Tokyo` and
+`TZ=America/Los_Angeles`. Each pinned zone runs in forked processes, because a
+worker thread keeps its parent's zone. The package's ordinary `test` script
+runs all three, in CI as well; a focused file filter selects the suite in each.
+A suite that reads only explicit zones needs no pinning.
+
 Waiting queries (`findBy*`, `waitFor`) share one limit, set in the published
 [Vitest setup](../packages/app/config/vitest-setup.ts) to cover a runner's cold
 first render. Do not pass a per-test timeout for a slow render: split a wait that

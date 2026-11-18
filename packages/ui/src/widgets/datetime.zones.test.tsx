@@ -9,7 +9,7 @@ const Edit = datetimeWidget.edit;
 
 afterEach(cleanup);
 
-// Run under several process zones (TZ=Asia/Tokyo, TZ=America/Los_Angeles and the default): the
+// A zone suite, run in the runner's zone and under each zone the shared Vitest defaults pin: the
 // widget edits in the viewer's zone and stores the instant meant, which a server in any zone reads
 // back as that instant. A naive wall time would be read in the server's zone instead.
 describe("datetime widget", () => {

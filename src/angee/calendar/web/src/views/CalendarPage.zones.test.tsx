@@ -122,7 +122,7 @@ describe("CalendarPage sources", () => {
     expect(busy).toMatchObject({ title: "Busy", to: undefined });
   });
 
-  // Run under several process zones (TZ=Asia/Tokyo, TZ=America/Los_Angeles and the default): the
+  // The suite runs in the runner's zone and under each zone the shared Vitest defaults pin: the
   // projection reads each all-day occurrence's days in its event's own zone, so every browser shows
   // them on the same days (a Chicago Nov 20 is no Nov 19 in Los Angeles), and a timed one stays an
   // instant, shown in the viewer's zone.
@@ -159,10 +159,9 @@ describe("CalendarPage quick-create", () => {
     expect(createDefaults(new Date(start), new Date(end), false)).toEqual({ start, end, all_day: false });
   });
 
-  // Vitest's thread pool keeps its process zone (a worker cannot switch TZ), so this reads the
-  // runner's own zone, which is the point: whichever zone the browser is in, the page sends the
-  // days FullCalendar selected and never that zone's midnight as an instant (Tokyo's Nov 20 is
-  // 15:00 UTC the day before, which the server refuses on a Chicago calendar).
+  // Whichever zone the browser is in (the suite runs in each pinned zone), the page sends the days
+  // FullCalendar selected and never that zone's midnight as an instant (Tokyo's Nov 20 is 15:00 UTC
+  // the day before, which the server refuses on a Chicago calendar).
   test("a month-view day seeds the chosen days, which the event places at midnight in its own zone", async () => {
     const createDefaults = (await spec()).createDefaults!;
     // FullCalendar selects whole days at the browser's local midnights.

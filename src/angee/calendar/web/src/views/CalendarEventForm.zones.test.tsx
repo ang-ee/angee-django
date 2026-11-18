@@ -133,7 +133,7 @@ describe("CalendarEventForm", () => {
     expect(saved.variables).toEqual({ all_day: true, start: "2026-11-20", end: "2026-11-21" });
   });
 
-  // Run under several process zones (TZ=Asia/Tokyo, TZ=America/Los_Angeles and the default): an
+  // The suite runs in the runner's zone and under each zone the shared Vitest defaults pin: an
   // all-day event is dates in its own zone, so every browser shows and edits the same days.
   test("a saved all-day event shows the days it spans in its own zone, whichever zone the browser is in", async () => {
     const { getOne } = renderSavedEvent(SAVED_ALL_DAY);
