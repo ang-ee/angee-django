@@ -1,7 +1,8 @@
 """Google Calendar API v3, called with one source credential through the one Google REST transport.
 
 The one owner of the Calendar wire protocol for this addon: the backends list an
-account's calendars and page a calendar's events through it. Requests go through
+account's calendars and page a calendar's events through it, and a publishing
+backend finds, inserts and conditionally patches the events it writes. Requests go through
 ``angee.integrate_google.api.GoogleApi`` (integrate's SSRF-pinned HTTP owner, the
 credential's authorization for the backend's scopes, one renew of a rejected
 token, Google's error envelope). No Google client library is involved.
@@ -10,7 +11,10 @@ A sync token Google no longer honours (``410 Gone``) is :class:`SyncTokenExpired
 which the backend turns into a new baseline; a page token it refuses (``400``,
 reason ``invalid``) is :class:`PageTokenInvalid`, which lists again from the sync
 token the page continued. An event or instance Google no longer
-has reads as ``None``. Every other refusal is a :class:`GoogleCalendarError`, as
+has reads as ``None``. A write names its precondition: an insert whose id is taken
+is :class:`EventIdTaken` (``409``), and a patch whose ``If-Match`` ETag is stale is
+:class:`PreconditionFailed` (``412``); writes send no invitations
+(``sendUpdates=none``). Every other refusal is a :class:`GoogleCalendarError`, as
 the transport names it (``GoogleApi.refusal``).
 """
 
@@ -30,6 +34,12 @@ _CALENDAR_FIELDS = "nextPageToken,items(id,summary,summaryOverride,backgroundCol
 _CALENDAR_LIST = {"fields": _CALENDAR_FIELDS, "showHidden": "true", "minAccessRole": "reader"}
 """Every calendar the account reads, hidden ones included; deleted entries are not listed (no ``showDeleted``)."""
 
+_QUIET = {"sendUpdates": "none"}
+"""A write tells no attendee: a published event is the calendar's, not an invitation."""
+
+_STAMPED_PAGE = 10
+"""How many stamped events one lookup reads: a stamp names one event, so more is already a conflict."""
+
 
 class GoogleCalendarError(GoogleApiError):
     """A Google Calendar refusal whose message is safe to show an operator."""
@@ -41,6 +51,14 @@ class SyncTokenExpired(Exception):
 
 class PageTokenInvalid(Exception):
     """Google refused a continued listing's page token (``400``, reason ``invalid``): list from its start again."""
+
+
+class EventIdTaken(Exception):
+    """Google refused an insert (``409``): an event, a deleted one included, already has the chosen id."""
+
+
+class PreconditionFailed(Exception):
+    """Google refused a conditional write (``412``): the event changed since the ETag the write named."""
 
 
 class GoogleCalendarClient:
@@ -106,6 +124,39 @@ class GoogleCalendarClient:
         )
         items = (page or {}).get("items") or ()
         return dict(items[0]) if items else None
+
+    def stamped(self, calendar_id: str, name: str, value: str) -> list[dict[str, Any]]:
+        """Return the events whose private extended property ``name`` is ``value``, removed ones included."""
+
+        page = self._get(
+            f"calendars/{_segment(calendar_id)}/events",
+            {"privateExtendedProperty": f"{name}={value}", "showDeleted": "true", "maxResults": str(_STAMPED_PAGE)},
+        )
+        return [dict(item) for item in page.get("items") or ()]
+
+    def insert(self, calendar_id: str, body: Mapping[str, Any]) -> dict[str, Any]:
+        """Insert one event under the id ``body`` names and return it; raise :class:`EventIdTaken` when it is taken."""
+
+        response = self.api.send("POST", _url(f"calendars/{_segment(calendar_id)}/events", _QUIET), body=dict(body))
+        if response.status_code == 409:
+            raise EventIdTaken()
+        self._raise_for_status(response)
+        return self.api.json(response)
+
+    def patch(self, calendar_id: str, event_id: str, body: Mapping[str, Any], *, etag: str) -> dict[str, Any] | None:
+        """Change the fields ``body`` names while the event's ETag is ``etag``; ``None`` once Google no longer has it.
+
+        Raises :class:`PreconditionFailed` when the event changed since that ETag.
+        """
+
+        path = f"calendars/{_segment(calendar_id)}/events/{_segment(event_id)}"
+        response = self.api.send("PATCH", _url(path, _QUIET), body=dict(body), headers={"If-Match": etag})
+        if response.status_code == 412:
+            raise PreconditionFailed()
+        if response.status_code in (404, 410):
+            return None
+        self._raise_for_status(response)
+        return self.api.json(response)
 
     def _get(self, path: str, params: Mapping[str, str]) -> dict[str, Any]:
         """GET one Calendar JSON resource."""

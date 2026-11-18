@@ -115,7 +115,7 @@ and neither do a cancelled master's moved instances.
 A `CalendarSource` is a connected calendar account or a subscribed feed: an
 `integrate.Integration` child, selected by `backend_class` from
 `ANGEE_CALENDAR_SOURCE_BACKEND_CLASSES`. It syncs through integrate's pull
-streams:
+streams (a publishing source pushes instead, see **Publishing** below):
 
 - **`calendars`:** one record per remote calendar. Its `RecordLink` names the
   mirrored calendar (on the owner's person, `source` naming the source), and the
@@ -171,6 +171,20 @@ calendar's events stream in the same sync.
   calendar's events sync with Google's sync tokens, and an expired token reads the
   calendar again in full. The calendars are read-only. Its module docstring lists
   the fields it maps.
+- **Publishing.** A backend whose `direction` is `PUSH` publishes local calendars
+  out. `CalendarSource.publish(calendar, remote_id)` (the `publish_calendar`
+  mutation: `write` on the source, `delete` on the calendar) binds an existing local
+  calendar to a remote calendar: the source's `calendars` link keyed by the remote
+  id targets the calendar, and the calendar's `source` names the source. The
+  calendar stays writable, and its events push through the events stream that link
+  holds; nothing is read back, so a remote edit surfaces as a held conflict the
+  next time Angee writes that event. A calendar another source mirrors or
+  publishes is refused, and `ANGEE_CALENDAR_PUBLISH_TARGETS` (`None`: any) lists
+  the remote calendars a deployment publishes to, so a test profile is refused
+  before any call. Unsubscribing a publishing source unbinds: its calendars are
+  local again with every event kept, and its key is detached, not retired.
+  `calendar_integrate_google`'s `google_resource` backend publishes to Google
+  calendars a service-account key writes, such as Workspace resource calendars.
 
 The sources page lists them with their sync status. Source addons add their
 subscribe or connect verb to its `calendar.sources#toolbar` container. A verb that

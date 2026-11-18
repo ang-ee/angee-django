@@ -37,7 +37,9 @@ of calendars and of events, live only in the streams' ``RecordLink`` rows.
 source's event write path. A calendar takes local edits when it has no source or
 when its source's backend writes (:attr:`Calendar.is_writable`); a read-only
 subscription refuses them on every save path, and only its source's own work
-writes, cancels or removes its events (:meth:`Calendar.takes_write`).
+writes, cancels or removes its events (:meth:`Calendar.takes_write`). A publishing
+source mirrors the other way: :meth:`CalendarSource.publish` binds an existing
+local calendar to a remote one, whose events the source then pushes out.
 """
 
 from __future__ import annotations
@@ -341,8 +343,10 @@ class Calendar(OwnerMixin, ArchiveMixin, StatementsMixin, HistoryMixin, AngeeDat
     their own onto the new wall clock (:meth:`_follow_zone`). History keeps
     ``party``, so reverting a merge of the owning parties restores whose calendar
     it was.
-    ``source`` names the :class:`CalendarSource` a subscribed calendar mirrors; a
-    local calendar has none.
+    ``source`` names the :class:`CalendarSource` a subscribed calendar mirrors, or
+    the publishing source it is published through (:meth:`CalendarSource.publish`);
+    a local calendar has none. A published calendar stays the person's own: it
+    takes every local edit, and its source states nothing about it.
 
     A source's calendar is a stated record: the source's ``calendars``-stream
     ``RecordLink`` names it and the source states its ``identity`` (name, colour,
@@ -1581,8 +1585,8 @@ class CalendarSource(Bridge, inherits="integrate.Integration"):
     An ``integrate.Integration`` child (its owner, credential and status come from
     the connection substrate) and a ``Bridge`` (the scheduler and the eager
     ``syncIntegration`` mutation drive it). ``backend_class`` selects the protocol
-    (``ics`` from ``calendar_integrate_ics``, ``google`` from
-    ``calendar_integrate_google``), and the backend admits the credential it uses
+    (``ics`` from ``calendar_integrate_ics``, ``google`` and
+    ``google_resource`` from ``calendar_integrate_google``), and the backend admits the credential it uses
     (:meth:`admit_credential`). A secret address (a
     private feed URL) is its credential's material, never ``config``, which keeps
     only what may be shown. Its owner syncs and unsubscribes it
@@ -1596,6 +1600,11 @@ class CalendarSource(Bridge, inherits="integrate.Integration"):
     through the ``events`` stream its link holds as a container
     (:meth:`events_stream`); the calendar managers own every event write. Whether a calendar takes local
     edits is its backend's ``writable`` declaration (:meth:`is_backend_writable`).
+
+    A publishing source (:attr:`publishes`) runs the same two streams the other
+    way: :meth:`publish` binds an existing local calendar to a remote one, and its
+    backend pushes that calendar's events out. Its purge unbinds instead of
+    removing anything.
     """
 
     objects = CalendarSourceManager()
@@ -1624,6 +1633,76 @@ class CalendarSource(Bridge, inherits="integrate.Integration"):
 
         backend_class = self.get_backend_class_impl()
         return backend_class(self)
+
+    @property
+    def publishes(self) -> bool:
+        """Whether this source publishes local calendars out: its backend's ``direction`` is ``PUSH``."""
+
+        return self.backend.direction == StreamDirection.PUSH
+
+    @classmethod
+    def may_publish_to(cls, remote_id: str) -> bool:
+        """Whether this deployment lets a source publish to the remote calendar ``remote_id``.
+
+        ``ANGEE_CALENDAR_PUBLISH_TARGETS`` lists the remote calendars sources may
+        write: ``None`` admits any, and a list admits only those (a test profile
+        lists none, or its own). :meth:`publish` asks before binding, and a
+        publishing backend asks again before every remote call.
+        """
+
+        targets = settings.ANGEE_CALENDAR_PUBLISH_TARGETS
+        return targets is None or remote_id in targets
+
+    def publish(self, calendar: Calendar, remote_id: str) -> Any:
+        """Publish ``calendar`` to the remote calendar ``remote_id`` and queue the push; return the binding link.
+
+        The source's ``calendars``-stream link keyed ``remote_id`` is observed
+        targeting ``calendar`` (the remote id lives only there), and the calendar's
+        ``source`` names this source, so its events push through the events stream
+        that link holds (:meth:`events_stream`). The calendars stream is a push
+        stream: nothing ever sweeps the binding as absent. Publishing again to the
+        same remote calendar changes nothing. Refused: a source that does not
+        publish or is not connected, a remote calendar the deployment does not
+        admit (:meth:`may_publish_to`), a calendar another source mirrors or
+        publishes, a calendar published elsewhere, and a remote calendar this
+        source publishes another calendar to. Runs as this source's own work: the
+        source's row is locked, then the calendar's, so racing publishes of one
+        calendar bind it once. The caller authorizes it on both rows.
+        """
+
+        if not self.publishes:
+            raise ValidationError("This calendar source does not publish calendars.")
+        if self.lifecycle != IntegrationLifecycle.CONNECTED:
+            raise ValidationError("This calendar source is not connected.")
+        remote_id = remote_id.strip()
+        if not remote_id:
+            raise ValidationError({"remote_id": "Name the remote calendar to publish to."})
+        if not self.may_publish_to(remote_id):
+            raise ValidationError({"remote_id": "This deployment does not publish to that calendar."})
+        links = apps.get_model("integrate", "RecordLink").objects
+        with (
+            changeset(fresh=True, activity="system", origin=self, change_reason="calendar.source.publish"),
+            system_context(reason="calendar.source.publish"),
+            transaction.atomic(),
+        ):
+            self.lock_capability()
+            bound = calendar.lock_subject()
+            if bound.source_id not in (None, self.pk):
+                raise ValidationError("Another calendar source already mirrors or publishes this calendar.")
+            stream = apps.get_model("integrate", "SyncStream").objects.current(self, self.calendars_stream())
+            published = links.filter(stream=stream)
+            if published.filter(target_object_id=str(bound.pk)).exclude(external_key=remote_id).exists():
+                raise ValidationError("This calendar is already published to another calendar.")
+            if published.filter(external_key=remote_id).exclude(target_object_id=str(bound.pk)).exclude(
+                target_object_id=None
+            ).exists():
+                raise ValidationError({"remote_id": "This source already publishes another calendar there."})
+            link = links.observe(stream, remote_id, target=bound)
+            if bound.source_id != self.pk:
+                bound.source = self
+                bound.save(update_fields=["source", "updated_at"])
+            self.request_sync()
+        return link
 
     @classmethod
     def is_backend_writable(cls, key: str | None) -> bool:
@@ -1700,6 +1779,11 @@ class CalendarSource(Bridge, inherits="integrate.Integration"):
     def purge(self) -> int:
         """Purge an unsubscribed source: delete its events, archive its calendars, retire its credential.
 
+        A publishing source (:attr:`publishes`) is unbound instead: its links
+        release their targets, its calendars become local again with every event
+        kept, and its credential (the deployment's key) is detached, never retired.
+        Nothing remote changes.
+
         Returns how many events went. Runs as the ``calendar.purge_source`` job, and
         again from the reconciler while anything is left (:meth:`purge_unsubscribed`),
         as this source's own work (:meth:`Calendar.takes_write`), in integrate's lock
@@ -1738,6 +1822,14 @@ class CalendarSource(Bridge, inherits="integrate.Integration"):
             ]
             if not all(calendar.takes_write() for calendar in owned):
                 raise ValidationError(READ_ONLY_CALENDAR)
+            if source.publishes:
+                links.release_targets(links.filter(stream__integration_id=self.pk))
+                for calendar in owned:
+                    calendar.source = None
+                    calendar.save(update_fields=["source", "updated_at"])
+                if source.credential is not None:
+                    source.attach_credential(None)
+                return 0
             links.release_targets(links.filter(stream__integration_id=self.pk, stream__key=EVENTS_STREAM))
             _deleted, per_model = events.system_queryset().filter(calendar__in=owned).delete()
             for calendar in owned:
@@ -1783,9 +1875,10 @@ class CalendarSource(Bridge, inherits="integrate.Integration"):
         """Declare the stream of the remote calendars this source serves: one record per calendar.
 
         Each record's link is a container: it holds that calendar's events stream
-        (:meth:`events_stream`). Like each events stream, it sweeps for absent
-        records once per poll interval (:meth:`_replica`); a calendar whose absence is
-        confirmed retires the events stream it holds.
+        (:meth:`events_stream`). Like each events stream, a pulled one sweeps for
+        absent records once per poll interval (:meth:`_replica`); a calendar whose
+        absence is confirmed retires the events stream it holds. A publishing
+        source's is a push stream: :meth:`publish` observes its links.
         """
 
         return self._replica(CALENDARS_STREAM, holds_containers=True)
@@ -1793,11 +1886,11 @@ class CalendarSource(Bridge, inherits="integrate.Integration"):
     def events_stream(self, calendar_link: Any) -> StreamDefinition:
         """Declare the events stream ``calendar_link`` (the calendar's ``calendars``-stream link) holds.
 
-        A pull-only record replica keyed by remote event identity, partitioned by the
+        A record replica keyed by remote event identity, partitioned by the
         calendar's key and naming its link as its container, so integrate drains it
-        after the calendar is mirrored and pauses or retires it with that link. A
-        backend that takes writes makes its calendar writable; it does not change the
-        stream.
+        after the calendar is mirrored and pauses or retires it with that link. It
+        syncs the backend's way (:meth:`_replica`): a publishing backend pushes the
+        calendar's events out through it.
         """
 
         return self._replica(EVENTS_STREAM, partition=calendar_link.external_key, container=calendar_link)
@@ -1805,21 +1898,23 @@ class CalendarSource(Bridge, inherits="integrate.Integration"):
     def _replica(
         self, key: str, *, partition: str = "", container: Any = None, holds_containers: bool = False
     ) -> StreamDefinition:
-        """A pull-only record replica whose removals integrate's absence sweep finds.
+        """A record replica in the backend's ``direction``, whose pulled removals integrate's absence sweep finds.
 
         ``partition`` and ``container`` name an events stream's calendar (its link);
         ``holds_containers`` marks the calendars stream.
 
-        The sweep runs at most once per poll interval: a record the source stops
-        serving is unavailable after one sweep and tombstoned after the stream's
-        absence threshold (:meth:`CalendarBackend.on_absent` applies it).
+        A pulled stream sweeps at most once per poll interval: a record the source
+        stops serving is unavailable after one sweep and tombstoned after the
+        stream's absence threshold (:meth:`CalendarBackend.on_absent` applies it). A
+        push stream never reads its remote, so it is never swept.
         """
 
+        direction = self.backend.direction
         return StreamDefinition(
             key,
             kind=StreamKind.RECORD_REPLICA,
-            direction=StreamDirection.PULL,
-            reconcile_interval=timedelta(seconds=self.poll_interval),
+            direction=direction,
+            reconcile_interval=None if direction == StreamDirection.PUSH else timedelta(seconds=self.poll_interval),
             partition=partition,
             container=container,
             holds_containers=holds_containers,

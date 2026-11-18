@@ -368,7 +368,7 @@ class CalendarActionMutation:
 
 @strawberry.type
 class CalendarSourceActionMutation:
-    """A connected calendar's owner verbs: sync it now, and unsubscribe."""
+    """A connected calendar's owner verbs: sync it now, publish a calendar through it, and unsubscribe."""
 
     @strawberry.mutation
     @action_guard("Sync failed.")
@@ -380,13 +380,38 @@ class CalendarSourceActionMutation:
         return ActionResult(ok=True, message="Sync queued." if queued else "A sync is already running.", id=source.sqid)
 
     @strawberry.mutation
+    @action_guard("Publishing failed.")
+    def publish_calendar(
+        self, info: strawberry.Info, id: PublicID, calendar_id: PublicID, remote_id: str
+    ) -> ActionResult:
+        """Publish a calendar through a publishing source to the remote calendar ``remote_id``.
+
+        The actor manages both: ``write`` on the source and ``delete`` on the
+        calendar (its owner, holder or a platform admin), since its events then
+        leave for the remote calendar. ``CalendarSource.publish`` refuses the rest.
+        """
+
+        source = authorized_action_target(info, CalendarSource, id, "write")
+        calendar = authorized_action_target(info, Calendar, calendar_id, "delete")
+        source.publish(calendar, remote_id)
+        return ActionResult(ok=True, message="Calendar published; its events are being pushed.", id=calendar.sqid)
+
+    @strawberry.mutation
     @action_guard("Unsubscribe failed.")
     def unsubscribe_calendar_source(self, info: strawberry.Info, id: PublicID) -> ActionResult:
-        """End the subscription after the ``delete`` preflight: disconnect it now and queue its purge."""
+        """End the subscription after the ``delete`` preflight: disconnect it now and queue its purge.
+
+        A publishing source's purge unbinds its calendars, which keep their events.
+        """
 
         source = authorized_action_target(info, CalendarSource, id, "delete")
         source.unsubscribe()
-        return ActionResult(ok=True, message="Unsubscribed; its events are being removed.", id=source.sqid)
+        message = (
+            "Unpublished; its calendars are local again."
+            if source.publishes
+            else "Unsubscribed; its events are being removed."
+        )
+        return ActionResult(ok=True, message=message, id=source.sqid)
 
 
 _SOURCE_RESOURCE = hasura_model_resource(

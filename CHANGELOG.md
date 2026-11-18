@@ -10,6 +10,25 @@ live in code docstrings.
 
 ## Unreleased — shared addon contracts, native embeddings and graph retrieval
 
+- A calendar source can publish local calendars out. `CalendarBackend.direction`
+  (`PULL` by default) declares which way a source's streams sync; a `PUSH`
+  backend's calendars and events streams are push streams, never swept.
+  `CalendarSource.publish(calendar, remote_id)` and the `publish_calendar`
+  mutation (`write` on the source, `delete` on the calendar) bind an existing
+  local calendar to a remote one through the source's `calendars` link, refusing
+  a calendar another source mirrors or publishes; `ANGEE_CALENDAR_PUBLISH_TARGETS`
+  (`None`: any) bounds the remote calendars a deployment publishes to, checked
+  again before every remote call. A publishing source's purge unbinds its
+  calendars and keeps their events and its key. `angee.calendar_integrate_google`
+  adds the `google_resource` backend: a `jwt_bearer` key minted for
+  `calendar.events` (no delegation) and `connect_google_resource_calendars(credential_id)`.
+  It creates each master or single event once under an id derived from its
+  public id, stamped `extendedProperties.private.angee_event` and looked up by
+  that stamp before any insert (a `409` adopts the event when the stamp and the
+  sent fields match), maps a series to its `RRULE` and each override to its
+  instance (a cancelled override cancels it), and writes every later change under
+  `If-Match`: Google's `412` is a held conflict, never an overwrite.
+  `GoogleCalendarClient` gains `stamped`, `insert` and `patch`.
 - One connect-with-account surface in `angee.integrate`: `Integration.reads_with`
   (an OAuth grant of the capability's client covering its `oauth_scopes`) and
   `Integration.connectable_credentials(user)` replace `Mount.reads_with`'s rule,

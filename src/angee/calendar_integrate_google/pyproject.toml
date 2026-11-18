@@ -3,7 +3,7 @@ build-system = { requires = ["hatch-angee>=1.1,<2"], build-backend = "hatch_ange
 [project]
 name = "angee-calendar-integrate-google"
 version = "3.0.0"
-description = "Google Calendar accounts as read-only calendar sources, synced with Google's sync tokens"
+description = "Google Calendar accounts as read-only calendar sources, and local calendars published to Google resource calendars"
 keywords = ["calendar", "google", "google calendar", "sync"]
 dependencies = ["angee-calendar>=3,<4", "angee-integrate>=3,<4", "angee-integrate-google>=3,<4", "angee-scheduling>=3,<4", "angee-graphql>=3,<4", "angee-web>=3,<4", "angee-base>=3,<4", "icalendar>=6.3,<8"]
 dynamic = ["entry-points"]

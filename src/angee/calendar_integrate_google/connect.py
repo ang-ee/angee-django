@@ -7,7 +7,7 @@ from typing import Any
 from django.apps import apps
 from django.core.exceptions import ValidationError
 
-from angee.calendar_integrate_google.backend import GoogleCalendarBackend
+from angee.calendar_integrate_google.backend import GoogleCalendarBackend, GoogleResourceCalendarBackend
 
 
 def connect_google_calendar(user: Any, credential: Any) -> Any:
@@ -30,4 +30,24 @@ def connect_google_calendar(user: Any, credential: Any) -> Any:
     name = (account.email or account.display_name) if account is not None else ""
     return apps.get_model("calendar", "CalendarSource").objects.subscribe(
         user, credential, backend_class=GoogleCalendarBackend.key, display_name=name or GoogleCalendarBackend.label
+    )
+
+
+def connect_google_resource_calendars(user: Any, credential: Any) -> Any:
+    """Connect ``credential``, a service-account key of ``user``'s, as a source that publishes calendars.
+
+    ``credential`` must be one of the user's own (the mutation looks it up among
+    them). The calendar owner connects it (``CalendarSourceManager.subscribe``), and
+    the backend admits only a ``jwt_bearer`` key
+    (``GoogleResourceCalendarBackend.admit_credential``). The source publishes
+    nothing until a calendar is published through it (``CalendarSource.publish``).
+    """
+
+    if not apps.get_model("integrate", "Credential").objects.filter(user=user, pk=credential.pk).exists():
+        raise ValidationError({"credential": "Choose one of your own credentials."})
+    return apps.get_model("calendar", "CalendarSource").objects.subscribe(
+        user,
+        credential,
+        backend_class=GoogleResourceCalendarBackend.key,
+        display_name=credential.name or GoogleResourceCalendarBackend.label,
     )

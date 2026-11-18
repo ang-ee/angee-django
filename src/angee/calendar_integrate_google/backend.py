@@ -1,4 +1,6 @@
-"""Google Calendar sync-in: each calendar of a connected Google account, synced with Google's sync tokens.
+"""Google Calendar: sync each calendar of a connected account in, or publish local calendars out.
+
+**Sync in** (:class:`GoogleCalendarBackend`).
 
 The account's calendar list is the source's ``calendars`` stream: one record per
 calendar, keyed by its Google calendar id, stating its name (the account's own
@@ -32,17 +34,29 @@ an optional attendee); the conference URL (a video entry point, else
 
 The calendars are synced, not locally writable: the backend is read-only
 (``writable`` stays false) and reads with ``calendar.readonly``.
+
+**Publish out** (:class:`GoogleResourceCalendarBackend`). A publishing source writes
+local calendars to Google calendars shared with its service-account key, such as a
+Workspace resource calendar, and never reads them back. A new master or single event
+is created under a Google id derived from its public id (:func:`event_id`), stamped
+with that public id (``extendedProperties.private.angee_event``), and found by its
+stamp before any insert. A series' rule is its ``recurrence`` line; each override
+patches its instance (a cancelled override cancels it). Every later write names the
+ETag Angee last wrote, so a remote edit surfaces as Google's ``412`` the next time
+Angee writes that event: a held conflict, never an overwrite.
 """
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+import base64
+from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, time, timedelta
 from time import monotonic
 from typing import Any, ClassVar
 
 from django.apps import apps
+from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.db import transaction
 from django.db.models import Q
@@ -50,7 +64,9 @@ from django.utils import timezone
 from icalendar import Component, Event
 from rebac import system_context
 
+from angee.base.serialization import canonical_json_sha256
 from angee.calendar.backends import (
+    EVENTS_STREAM,
     CalendarBackend,
     ParsedAttendee,
     ParsedCalendar,
@@ -64,14 +80,35 @@ from angee.calendar.backends import (
     series_rule,
 )
 from angee.calendar.choices import AttendeeResponse, AttendeeRole, EventStatus, EventTransparency, EventVisibility
-from angee.calendar_integrate_google.client import GoogleCalendarClient, PageTokenInvalid, SyncTokenExpired
+from angee.calendar_integrate_google.client import (
+    EventIdTaken,
+    GoogleCalendarClient,
+    PageTokenInvalid,
+    PreconditionFailed,
+    SyncTokenExpired,
+)
+from angee.integrate.credentials import CredentialKind
 from angee.integrate.errors import IntegrationError
 from angee.integrate.models import IntegrationLifecycle
-from angee.integrate.streams import CursorInvalid, StreamPage
+from angee.integrate.states import StreamDirection
+from angee.integrate.streams import (
+    CursorInvalid,
+    LocalChange,
+    RecordChange,
+    RemoteRejected,
+    StreamPage,
+    WriteBackResult,
+)
 from angee.scheduling.zones import get_zone_info, get_zone_names
 
 CALENDAR_READONLY = "https://www.googleapis.com/auth/calendar.readonly"
 """The OAuth scope sync-in reads every calendar of the account with."""
+
+CALENDAR_EVENTS = "https://www.googleapis.com/auth/calendar.events"
+"""The scope a publishing source's key mints for: it writes the events of the calendars shared with it."""
+
+STAMP = "angee_event"
+"""The private extended property every published master or single event carries: its Angee public id."""
 
 _SWEEP_PAGE = 250
 """Events per page of a sweep's full listing: well under the transport's 8 MiB answer cap."""
@@ -96,7 +133,32 @@ _RESPONSES = {
 }
 
 
-class GoogleCalendarBackend(CalendarBackend):
+class _GoogleBackend(CalendarBackend):
+    """What both Google backends share: one Calendar client per adapter, over the source's credential."""
+
+    _calendar_client: GoogleCalendarClient | None = None
+
+    def _client_scopes(self) -> tuple[str, ...]:
+        """Return the scopes this backend's requests ask the source's credential for."""
+
+        raise NotImplementedError("Google calendar backends name the scopes their client asks for.")
+
+    def _client(self) -> GoogleCalendarClient:
+        """Return this adapter's client, built once over the source's credential as loaded for this sync.
+
+        One client per adapter: its transport renews a rejected token once per sync,
+        not once per page.
+        """
+
+        if self._calendar_client is None:
+            credential = self.bridge.fresh_credential()
+            if credential is None:
+                raise IntegrationError("This Google calendar source has no connected account.")
+            self._calendar_client = GoogleCalendarClient(credential, self._client_scopes())
+        return self._calendar_client
+
+
+class GoogleCalendarBackend(_GoogleBackend):
     """Syncs every calendar of one connected Google account into read-only calendars.
 
     One source per account: a user with several Google accounts connects each as
@@ -113,7 +175,6 @@ class GoogleCalendarBackend(CalendarBackend):
     oauth_scopes: ClassVar[tuple[str, ...]] = (CALENDAR_READONLY,)
 
     _calendars: list[ParsedCalendar] | None = None
-    _calendar_client: GoogleCalendarClient | None = None
     _held: _GooglePage | None = None
     _listing: tuple[tuple[Any, ...], dict[str, dict[str, Any] | None]] | None = None
     """The current sweep's full listing of one calendar: its sweep identity, then its payloads by key."""
@@ -352,19 +413,336 @@ class GoogleCalendarBackend(CalendarBackend):
             return [(_own_key(item, series_zone), {"error": "invalid_event"})]
         return [(key, self.observe(event)) for key, event in observed]
 
-    def _client(self) -> GoogleCalendarClient:
-        """Return this adapter's client, built once over the source's credential as loaded for this sync.
+    def _client_scopes(self) -> tuple[str, ...]:
+        """Read with the scope the account granted at connect: :attr:`oauth_scopes`."""
 
-        One client per adapter: its transport renews a rejected token once per sync,
-        not once per page.
+        return self.oauth_scopes
+
+
+class GoogleResourceCalendarBackend(_GoogleBackend):
+    """Publishes local calendars to Google calendars a service-account key writes, such as Workspace resource calendars.
+
+    A publishing source (``direction`` is ``PUSH``): ``CalendarSource.publish`` binds
+    a local calendar to a Google calendar id (a resource calendar's
+    ``c_…@resource.calendar.google.com``) shared with the key's service account as
+    writer, and that calendar keeps taking local edits. The source's credential is
+    the key, a ``jwt_bearer`` credential (:meth:`admit_credential`) minted for
+    :data:`CALENDAR_EVENTS` without delegation; it connects through no OAuth client.
+    Each event of a published calendar is projected (:meth:`local_changes`) and
+    written conditionally (:meth:`write_back`); nothing is ever read back to sync.
+    """
+
+    key = "google_resource"
+    label = "Google resource calendars"
+    icon = "google"
+    defaults: ClassVar[dict[str, Any]] = {"vendor": "google", "poll_interval": 300}
+    oauth_client: ClassVar[str] = ""
+    direction: ClassVar[StreamDirection] = StreamDirection.PUSH
+    writable: ClassVar[bool] = True
+
+    def admit_credential(self, credential: Any) -> None:
+        """Admit only a service-account key (``jwt_bearer``): the source writes as that key, never as a person."""
+
+        if credential.kind != CredentialKind.JWT_BEARER:
+            raise ValidationError(
+                {"credential": "Publishing to Google calendars needs a service-account key (JWT bearer)."}
+            )
+
+    def _client_scopes(self) -> tuple[str, ...]:
+        """Write with :data:`CALENDAR_EVENTS`, the one scope the key mints for."""
+
+        return (CALENDAR_EVENTS,)
+
+    def local_changes(self, stream: Any, *, keys: frozenset[str] | None = None) -> Iterator[LocalChange]:
+        """Project each event of the published calendar under its key, masters before their overrides.
+
+        An event keeps the key of the link that names it. A new master or single
+        event is keyed :func:`event_id`, the Google id it is created under; a new
+        override, by its series' key and original start (``instance_key``). Integrate
+        writes only the events whose projection differs from their link's base. The
+        calendars stream pushes nothing: its links are :meth:`CalendarSource.publish`'s.
         """
 
-        if self._calendar_client is None:
-            credential = self.bridge.fresh_credential()
-            if credential is None:
-                raise IntegrationError("This Google calendar source has no connected account.")
-            self._calendar_client = GoogleCalendarClient(credential, self.oauth_scopes)
-        return self._calendar_client
+        if stream.key != EVENTS_STREAM:
+            return
+        calendar = self.get_calendar(stream)
+        zone = calendar.timezone or settings.TIME_ZONE
+        events = apps.get_model("calendar", "CalendarEvent")
+        rows = list(events.system_queryset().filter(calendar=calendar).order_by("pk"))
+        linked = dict(stream.links.exclude(target_object_id=None).values_list("target_object_id", "external_key"))
+        named: dict[Any, str] = {}
+        for row in sorted(rows, key=lambda row: row.series_id is not None):
+            named[row.pk] = linked.get(str(row.pk)) or (
+                event_id(row.sqid) if row.series_id is None else instance_key(named[row.series_id], row.original_start)
+            )
+        parsed = events.objects.project_events(rows)
+        for row in sorted(rows, key=lambda row: named[row.pk]):
+            if keys is None or named[row.pk] in keys:
+                stamp = row.sqid if row.series_id is None else ""
+                yield LocalChange(named[row.pk], _published(parsed[row.pk], zone, stamp=stamp), target=row)
+
+    def write_back(self, link: Any, projection: Any, *, expected_version: str) -> WriteBackResult:
+        """Write one published event to Google conditionally; a refusal is integrate's held outbox entry.
+
+        Before any call, a calendar the deployment no longer publishes to refuses
+        (``CalendarSource.may_publish_to``). A master or single event without a
+        version is created once (:meth:`_create`); with one it is patched under
+        ``If-Match``. An override patches its series' instance (:meth:`_write_instance`).
+        A stale ETag (``412``) is a held conflict (``RemoteRejected``), and so is an
+        event Google no longer has: Angee never overwrites or recreates a remote change.
+        """
+
+        stream = link.stream
+        if not self.bridge.may_publish_to(stream.partition):
+            raise RemoteRejected("target_not_allowed", conflict=False)
+        client = self._client()
+        series, original = parse_key(link.external_key)
+        try:
+            if original is not None:
+                written = self._write_instance(client, link, projection, str(series), original, expected_version)
+            elif expected_version:
+                written = client.patch(
+                    stream.partition, link.external_key, _body(projection, instance=False), etag=expected_version
+                )
+            else:
+                written = self._create(client, stream, link.external_key, projection)
+        except PreconditionFailed:
+            raise RemoteRejected() from None
+        if written is None:
+            raise RemoteRejected("remote_deleted")
+        return WriteBackResult(str(written.get("etag") or ""), canonical_json_sha256(written), {"id": written["id"]})
+
+    def read_keys(self, stream: Any, keys: Sequence[str]) -> list[RecordChange]:
+        """Read the published events ``keys`` name, each with its ETag; one Google no longer has is a tombstone.
+
+        Integrate reads them when a person keeps Angee's side of a held conflict: the
+        push then writes over the version read here.
+        """
+
+        client, zone = self._client(), self._zone(stream)
+        written = {
+            link.external_key: (link.source_payload or {}).get("id")
+            for link in stream.links.filter(external_key__in=list(keys))
+        }
+        changes = []
+        for key in keys:
+            series, original = parse_key(key)
+            if written.get(key) or original is None:
+                item = client.event(stream.partition, str(written.get(key) or key))
+            else:
+                sent = self._series(stream, str(series))
+                item = self._instance(client, stream, str(series), original, sent) if sent is not None else None
+            remote = _remote_published(item, zone, stamped=original is None) if item is not None else None
+            if item is None or remote is None:
+                changes.append(RecordChange(key, {}, "", tombstone=True))
+                continue
+            changes.append(
+                RecordChange(
+                    key,
+                    {"id": item["id"]},
+                    canonical_json_sha256(item),
+                    remote_version=str(item.get("etag") or ""),
+                    mapped_payload=remote,
+                )
+            )
+        return changes
+
+    def _create(self, client: GoogleCalendarClient, stream: Any, key: str, projection: Mapping[str, Any]) -> Any:
+        """Create a master or single event once under ``key``; one already there is adopted, or held.
+
+        The stamp lookup runs first, then the insert under the chosen id, so a crash
+        between Google's create and the link's record makes no second event: the
+        retry finds the first by its stamp, or by its taken id (``409``). It is
+        adopted when it is the one event carrying this event's stamp and holds what
+        Angee sends; anything else is a held conflict.
+        """
+
+        found = client.stamped(stream.partition, STAMP, projection["stamp"])
+        if not found:
+            try:
+                return client.insert(stream.partition, {"id": key, **_body(projection, instance=False)})
+            except EventIdTaken:
+                found = [item for item in (client.event(stream.partition, key),) if item is not None]
+        mine = [item for item in found if item.get("id") == key and _stamp(item) == projection["stamp"]]
+        if len(found) != 1 or not mine:
+            raise RemoteRejected("remote_id_taken")
+        if _remote_published(mine[0], self._zone(stream), stamped=True) != projection:
+            raise RemoteRejected()
+        return mine[0]
+
+    def _write_instance(
+        self,
+        client: GoogleCalendarClient,
+        link: Any,
+        projection: Mapping[str, Any],
+        series: str,
+        original: datetime,
+        expected_version: str,
+    ) -> Any:
+        """Patch the instance of the series ``series`` at ``original`` an override names.
+
+        Its first write reads the instance: one Google holds unlike the series as
+        Angee last wrote it is a remote edit, held; later writes patch the instance
+        id it returned under ``If-Match``. A series not written yet, or without that
+        instance, refuses for now.
+        """
+
+        stream = link.stream
+        written = (link.source_payload or {}).get("id") if expected_version else None
+        if written:
+            return client.patch(stream.partition, written, _body(projection, instance=True), etag=expected_version)
+        sent = self._series(stream, series)
+        if sent is None:
+            raise RemoteRejected("series_unavailable", conflict=False)
+        item = self._instance(client, stream, series, original, sent)
+        if item is None:
+            raise RemoteRejected("instance_unavailable", conflict=False)
+        if _remote_published(item, self._zone(stream), stamped=False) != _instance_of(sent, original):
+            raise RemoteRejected()
+        return client.patch(
+            stream.partition, str(item["id"]), _body(projection, instance=True), etag=str(item.get("etag") or "")
+        )
+
+    def _series(self, stream: Any, series: str) -> dict[str, Any] | None:
+        """Return the projection the series ``series`` was last written with, or ``None`` before its first write."""
+
+        link = stream.links.filter(external_key=series).select_related("applied_base").first()
+        base = link.applied_base if link is not None else None
+        return dict(base.mapped_payload) if base is not None and base.mapped_payload else None
+
+    def _instance(
+        self, client: GoogleCalendarClient, stream: Any, series: str, original: datetime, sent: Mapping[str, Any]
+    ) -> Any:
+        """Read the instance of the series ``series``, last written as ``sent``, originally at ``original``.
+
+        ``None`` when Google has none. Google names an all-day series' instance by its
+        local date, any other by its UTC instant.
+        """
+
+        start = (
+            _local_day(original, sent["timezone"]).isoformat()
+            if sent["all_day"]
+            else original.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+        )
+        return client.instance(stream.partition, series, start)
+
+    def _zone(self, stream: Any) -> str:
+        """Return the zone the published calendar keeps: its own, else the project's."""
+
+        return self.get_calendar(stream).timezone or settings.TIME_ZONE
+
+
+def event_id(sqid: str) -> str:
+    """Return the Google event id a new published event is created under: its public id in lowercase base32hex.
+
+    Google takes a client-chosen id of 5 to 1024 characters from ``a``-``v`` and
+    ``0``-``9``. The id is the event's link key, so every retry creates under it.
+    """
+
+    return base64.b32hexencode(sqid.encode()).decode().rstrip("=").lower()
+
+
+def _published(event: ParsedEvent, zone: str, *, stamp: str = "") -> dict[str, Any]:
+    """Return what publishing writes of one event, the shape both sides of a push compare.
+
+    ``zone`` is the calendar's (the project's when blank): an event without a zone
+    of its own keeps it, since Google expands a series in a named zone. The rule is
+    icalendar's canonical text (``series_rule``), so a rule reads back as it was
+    sent. ``stamp`` is a master's or single event's public id; an instance has none.
+    Attendees and the conference link are not published.
+    """
+
+    rule = series_rule(_recurrence({"recurrence": [f"RRULE:{event.recurrence}"]})) if event.recurrence else ""
+    return {
+        "title": event.title,
+        "description": event.description,
+        "location": event.location,
+        "start": event.start.astimezone(UTC).isoformat(),
+        "end": event.end.astimezone(UTC).isoformat(),
+        "all_day": event.all_day,
+        "recurrence": rule,
+        "timezone": event.timezone or zone,
+        "status": str(event.status),
+        "transparency": str(event.transparency),
+        "visibility": str(event.visibility),
+        "stamp": stamp,
+    }
+
+
+def _remote_published(item: Mapping[str, Any], zone: str, *, stamped: bool) -> dict[str, Any] | None:
+    """Return a Google event as :func:`_published` shapes it, or ``None`` once it is cancelled or unreadable.
+
+    The sync-in mapping reads it (:func:`_event`); ``stamped`` reads its
+    ``angee_event`` stamp, which only a master or single event carries.
+    """
+
+    try:
+        _key, event = _event(item, zone, zone)
+    except Exception:  # noqa: BLE001 — an event Angee cannot read is not one Angee wrote.
+        return None
+    if event is None:
+        return None
+    return _published(event, zone, stamp=_stamp(item) if stamped else "")
+
+
+def _instance_of(series: Mapping[str, Any], original: datetime) -> dict[str, Any]:
+    """Return the projection a series (as last written) gives its unchanged instance at ``original``.
+
+    The instance ends where the event owner's arithmetic puts it
+    (``CalendarEvent.occurrence_end``: an all-day instance spans local days).
+    """
+
+    shape: Any = apps.get_model("calendar", "CalendarEvent")(
+        start=datetime.fromisoformat(series["start"]),
+        end=datetime.fromisoformat(series["end"]),
+        all_day=series["all_day"],
+    )
+    end = shape.occurrence_end(original, zone=series["timezone"])
+    return {
+        **series,
+        "start": original.astimezone(UTC).isoformat(),
+        "end": end.astimezone(UTC).isoformat(),
+        "recurrence": "",
+        "stamp": "",
+    }
+
+
+def _body(published: Mapping[str, Any], *, instance: bool) -> dict[str, Any]:
+    """Return the Google event fields a projection writes (:func:`_published`).
+
+    Times carry the projection's zone (a ``date`` for an all-day event). A master or
+    single event states its rule (an empty ``recurrence`` clears one) and its stamp;
+    an instance states neither.
+    """
+
+    zone = published["timezone"]
+
+    def moment(name: str) -> dict[str, str]:
+        value = datetime.fromisoformat(published[name])
+        if published["all_day"]:
+            return {"date": _local_day(value, zone).isoformat(), "timeZone": zone}
+        return {"dateTime": value.isoformat(), "timeZone": zone}
+
+    body: dict[str, Any] = {
+        "summary": published["title"],
+        "description": published["description"],
+        "location": published["location"],
+        "start": moment("start"),
+        "end": moment("end"),
+        "status": published["status"],
+        "transparency": "transparent" if published["transparency"] == EventTransparency.FREE else "opaque",
+        "visibility": published["visibility"],
+    }
+    if not instance:
+        body["recurrence"] = [f"RRULE:{published['recurrence']}"] if published["recurrence"] else []
+        body["extendedProperties"] = {"private": {STAMP: published["stamp"]}}
+    return body
+
+
+def _stamp(item: Mapping[str, Any]) -> str:
+    """Return the ``angee_event`` stamp a Google event carries, or ``""``."""
+
+    return str(((item.get("extendedProperties") or {}).get("private") or {}).get(STAMP) or "")
 
 
 @dataclass(frozen=True)

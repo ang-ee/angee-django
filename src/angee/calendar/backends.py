@@ -1,6 +1,7 @@
 """Calendar source mapping: integrate owns the loop and the calendar owns its calendars and events.
 
-A source has two kinds of stream, both pull-only record replicas:
+A source has two kinds of stream, both record replicas that sync the way the
+backend declares (:attr:`CalendarBackend.direction`): pulled in, or published out:
 
 - ``calendars``: one record per remote calendar the backend discovers
   (:class:`ParsedCalendar`), keyed by its remote key. Its ``RecordLink`` names
@@ -21,6 +22,13 @@ integrate's absence sweep finds what it stopped serving (:meth:`CalendarBackend.
 :meth:`CalendarBackend.on_absent`). A calendar the source stopped serving retires its
 events stream, whose events are then withdrawn as removed records. The manual backend
 declares no streams.
+
+A publishing backend (``direction`` is ``PUSH``) mirrors local calendars out instead:
+``CalendarSource.publish`` observes the ``calendars`` link of a remote calendar the
+source writes, targeting an existing local calendar, and each event of that calendar
+is pushed through the events stream the link holds. A push stream never reads its
+remote, so it is never swept; the backend writes conditionally and integrate holds a
+refused write in the link's outbox.
 """
 
 from __future__ import annotations
@@ -40,7 +48,7 @@ from angee.integrate.errors import IntegrationError
 from angee.integrate.http import HttpClientMixin
 from angee.integrate.impl import BridgeImpl
 from angee.integrate.models import IntegrationLifecycle
-from angee.integrate.states import LinkStatus, StreamDefinition, SyncFailureKind
+from angee.integrate.states import LinkStatus, StreamDefinition, StreamDirection, SyncFailureKind
 from angee.integrate.streams import ApplyResult, RecordChange, SemanticError, StreamPage
 
 CALENDARS_STREAM = "calendars"
@@ -405,7 +413,9 @@ class CalendarBackend(BridgeImpl, HttpClientMixin):
     applies every record and applies integrate's absence sweep (:meth:`on_absent`).
     ``writable`` declares whether the source takes local edits: a read-only
     backend's calendars refuse them (``Calendar.is_writable``). A backend that reads
-    with one kind of credential refuses any other (:meth:`admit_credential`).
+    with one kind of credential refuses any other (:meth:`admit_credential`). A
+    publishing backend (:attr:`direction` ``PUSH``) implements integrate's
+    ``local_changes`` and ``write_back`` instead of the extraction methods.
     """
 
     registry_setting = "ANGEE_CALENDAR_SOURCE_BACKEND_CLASSES"
@@ -416,6 +426,14 @@ class CalendarBackend(BridgeImpl, HttpClientMixin):
 
     writable: ClassVar[bool] = False
     """Whether calendars of this backend take local edits; a read-only subscription does not."""
+
+    direction: ClassVar[StreamDirection] = StreamDirection.PULL
+    """Which way this backend's streams sync: ``PULL`` mirrors remote calendars in.
+
+    ``PUSH`` publishes local calendars out (``CalendarSource.publish``): the
+    backend projects each event of a published calendar (``local_changes``) and
+    writes it conditionally (``write_back``); its calendars take local edits.
+    """
 
     supports_identity_reads: ClassVar[bool] = True
     """Both stream kinds re-read identities (:meth:`read_keys`), so a retried or held record reads its source."""
