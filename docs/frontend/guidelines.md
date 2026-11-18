@@ -1042,7 +1042,9 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
   [`useRelationForms`](../../packages/ui/src/views/relation/RelationRecordDialog.tsx).
 - Toolbar and record action menus compose [ActionMenu](../../packages/ui/src/toolbars/ActionMenu.tsx).
   Contributions use `ActionTrigger` to adapt between a toolbar button and a native
-  menu item and report pending state to the menu trigger. Render menu-opened
+  menu item and report pending state to the menu trigger. A menu whose
+  contributions render no item shows no trigger, so a contribution that offers
+  nothing for this record renders `null`. Render menu-opened
   dialogs inside the menu: the shared owner keeps them mounted after it closes
   and returns focus to its toolbar trigger. `DialogContent` resets menu context
   for its body, so nested dialogs return to their own triggers. Pages supply

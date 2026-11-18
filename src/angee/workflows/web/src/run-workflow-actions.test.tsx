@@ -57,7 +57,8 @@ function mount(data: Workflows = offered, blocked = false) {
 }
 
 async function openWorkflows() {
-  fireEvent.click(screen.getByRole("button", { name: "Actions" }));
+  // The menu shows once the contribution renders its item, after the workflows read.
+  fireEvent.click(await screen.findByRole("button", { name: "Actions" }));
   fireEvent.click(await screen.findByRole("menuitem", { name: "Run workflow" }));
 }
 
@@ -129,13 +130,14 @@ test("relation annotations render the standard record picker", async () => {
 test("omits the contribution when no workflow applies", async () => {
   const { custom } = mount({ workflow: [] });
   await waitFor(() => expect(custom).toHaveBeenCalledOnce());
-  fireEvent.click(screen.getByRole("button", { name: "Actions" }));
-  expect(screen.queryByRole("menuitem", { name: "Run workflow" })).toBeNull();
+  // With nothing to offer, the menu holds no item and shows no trigger.
+  expect(screen.queryByRole("button", { name: "Actions" })).toBeNull();
+  expect(screen.queryByRole("menuitem", { name: "Run workflow", hidden: true })).toBeNull();
 });
 
 test("inherits the record's dirty form gate", async () => {
   mount(offered, true);
-  fireEvent.click(screen.getByRole("button", { name: "Actions" }));
+  fireEvent.click(await screen.findByRole("button", { name: "Actions" }));
   const item = await screen.findByRole("menuitem", { name: "Run workflow" });
   expect(item.getAttribute("aria-disabled")).toBe("true");
   fireEvent.click(item);
