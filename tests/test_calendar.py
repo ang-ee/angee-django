@@ -317,8 +317,10 @@ def test_clearing_the_rule_detaches_edited_overrides_and_drops_cancellations(dst
     assert [o.event_sqid for o in shown] == [master.sqid, moved.sqid]
 
 
-def test_a_cancelled_master_hides_its_moved_instances_from_the_calendar_and_from_overlap(db: None) -> None:
-    del db
+def test_a_cancelled_master_hides_its_moved_instances_from_the_calendar_and_from_overlap(
+    db: None, july: datetime
+) -> None:
+    del db, july
     calendar = _calendar(overlap_policy="refuse")
     master = _event(calendar, start=_utc(2026, 7, 6, 9), end=_utc(2026, 7, 6, 10), recurrence="FREQ=WEEKLY")
     _event(
@@ -353,13 +355,18 @@ def test_an_event_stays_on_its_calendar_series_and_instance(dst_series: tuple[An
 # --- overlap -----------------------------------------------------------------
 
 
-@pytest.fixture
-def july(monkeypatch: pytest.MonkeyPatch) -> datetime:
-    """Pin now to 1 July 2026, before these tests' series, so the overlap horizon starts at each series' start."""
+def _pin_now(monkeypatch: pytest.MonkeyPatch, now: datetime) -> datetime:
+    """Pin ``timezone.now``, where the overlap check starts judging (D-R8)."""
 
-    now = _utc(2026, 7, 1)
     monkeypatch.setattr(timezone, "now", lambda: now)
     return now
+
+
+@pytest.fixture
+def july(monkeypatch: pytest.MonkeyPatch) -> datetime:
+    """Pin now to 1 July 2026, before these tests' events, so the overlap check judges each from its start."""
+
+    return _pin_now(monkeypatch, _utc(2026, 7, 1))
 
 
 def _place(calendar: Any, start: datetime, end: datetime, **fields: Any) -> None:
@@ -383,8 +390,9 @@ def _place(calendar: Any, start: datetime, end: datetime, **fields: Any) -> None
     ],
 )
 def test_a_refuse_calendar_rejects_an_overlap_of_busy_time(
-    db: None, existing: dict[str, Any], candidate: dict[str, Any], refused: bool,
+    db: None, july: datetime, existing: dict[str, Any], candidate: dict[str, Any], refused: bool,
 ) -> None:
+    del db, july
     calendar = _calendar(overlap_policy="refuse")
     fields = dict(existing)
     shift = fields.pop("start_week", 0) * 7
@@ -398,7 +406,8 @@ def test_a_refuse_calendar_rejects_an_overlap_of_busy_time(
         _place(calendar, _utc(2026, 7, 13, 10, 30), _utc(2026, 7, 13, 11, 30), **candidate)
 
 
-def test_an_accept_calendar_takes_an_overlap_and_adjacent_slots_never_overlap(db: None) -> None:
+def test_an_accept_calendar_takes_an_overlap_and_adjacent_slots_never_overlap(db: None, july: datetime) -> None:
+    del db, july
     accepting = _calendar()
     refusing = _calendar(overlap_policy="refuse", name="Refusing")
     for calendar in (accepting, refusing):
@@ -408,7 +417,8 @@ def test_an_accept_calendar_takes_an_overlap_and_adjacent_slots_never_overlap(db
     _place(refusing, _utc(2026, 7, 13, 11), _utc(2026, 7, 13, 12))
 
 
-def test_an_override_does_not_conflict_with_the_instance_it_replaces(db: None) -> None:
+def test_an_override_does_not_conflict_with_the_instance_it_replaces(db: None, july: datetime) -> None:
+    del db, july
     calendar = _calendar(overlap_policy="refuse")
     master = _event(calendar, start=_utc(2026, 7, 6, 9), end=_utc(2026, 7, 6, 10), recurrence="FREQ=WEEKLY")
 
@@ -517,21 +527,97 @@ def test_a_series_until_a_far_year_is_checked_over_one_horizon(db: None, july: d
     assert series.series_end == _utc(2199, 12, 30, 10)
 
 
+def test_an_ended_series_is_renamed_while_a_later_series_reuses_its_slot(
+    db: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """D-R8: an ended series is not judged, so a series reusing its slot, judged from now, never blocks it."""
+
+    del db
+    _pin_now(monkeypatch, _utc(2026, 7, 15))
+    calendar = _calendar(zone="UTC", overlap_policy="refuse")
+    ended = _event(
+        calendar, title="Old standup", start=_utc(2026, 1, 5, 10), end=_utc(2026, 1, 5, 11),
+        recurrence="FREQ=WEEKLY;UNTIL=20260629T235959Z",
+    )
+    # Its successor starts back in June, over the old series' last weeks: judged from now, it saves.
+    _event(
+        calendar, title="New standup", start=_utc(2026, 6, 1, 10), end=_utc(2026, 6, 1, 11), recurrence="FREQ=WEEKLY"
+    )
+
+    _save(ended, title="Old standup (ended)")
+
+
+def test_a_single_event_is_judged_from_now_never_against_its_past(
+    db: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    del db
+    _pin_now(monkeypatch, _utc(2026, 7, 15, 12))
+    calendar = _calendar(zone="UTC", overlap_policy="refuse")
+    yesterday = _event(calendar, title="Yesterday", start=_utc(2026, 7, 14, 10), end=_utc(2026, 7, 14, 11))
+    _event(calendar, title="This morning", start=_utc(2026, 7, 15, 11), end=_utc(2026, 7, 15, 11, 30))
+
+    # Wholly before now: neither recorded nor edited past events are judged.
+    _place(calendar, _utc(2026, 7, 14, 10, 30), _utc(2026, 7, 14, 11, 30))
+    _save(yesterday, title="Yesterday's review")
+    # Under way: it meets this morning's event only before now, so it saves ...
+    _place(calendar, _utc(2026, 7, 15, 11), _utc(2026, 7, 15, 13))
+    # ... and is refused for what it meets from now on.
+    _event(calendar, title="This afternoon", start=_utc(2026, 7, 15, 12, 30), end=_utc(2026, 7, 15, 13, 30))
+    with pytest.raises(ValidationError) as refused:
+        _place(calendar, _utc(2026, 7, 15, 11), _utc(2026, 7, 15, 13))
+    assert refused.value.message_dict == {"start": ["This calendar is already busy at this time."]}
+
+
+def test_a_series_ending_a_minute_from_now_is_judged_on_that_minute(
+    db: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    del db
+    _pin_now(monkeypatch, _utc(2026, 7, 15, 9, 59))
+    calendar = _calendar(zone="UTC", overlap_policy="refuse")
+    daily = {"recurrence": "FREQ=DAILY;UNTIL=20260715T090000Z"}
+    _event(calendar, title="Earlier", start=_utc(2026, 7, 15, 9, 30), end=_utc(2026, 7, 15, 9, 45))
+
+    # Its last instance runs 09:00 to 10:00: what it met before 09:59 is past.
+    _place(calendar, _utc(2026, 7, 1, 9), _utc(2026, 7, 1, 10), **daily)
+    _event(
+        calendar, title="Overrunning", start=datetime(2026, 7, 15, 9, 59, 30, tzinfo=UTC),
+        end=_utc(2026, 7, 15, 10, 30),
+    )
+    with pytest.raises(ValidationError):
+        _place(calendar, _utc(2026, 7, 1, 9), _utc(2026, 7, 1, 10), **daily)
+
+
 def test_an_unreadable_neighbour_refuses_a_save_on_a_refusing_calendar(db: None) -> None:
     del db
     calendar = _calendar(zone="UTC", overlap_policy="refuse")
-    legacy = _event(calendar, title="Legacy", start=_utc(2026, 7, 1, 7), end=_utc(2026, 7, 1, 8))
+    legacy = [
+        _event(calendar, title=title, start=_utc(2026, 7, 1, hour), end=_utc(2026, 7, 1, hour + 1))
+        for title, hour in (("Legacy", 7), ("Later legacy", 8))
+    ]
     with system_context(reason="tests.calendar.legacy"):
-        # Stored before the save-time cap held it: past 10,000 days by 2050, its count read from its start.
-        CalendarEvent.system_queryset().filter(pk=legacy.pk).update(
-            start=_utc(2000, 1, 1, 7), end=_utc(2000, 1, 1, 8), recurrence="FREQ=DAILY;COUNT=20000"
+        # Stored before the save-time cap held them: past 10,000 days by 2050, their count read from their start.
+        CalendarEvent.system_queryset().filter(pk__in=[row.pk for row in legacy]).update(
+            start=_utc(2000, 1, 1, 7), end=_utc(2000, 1, 1, 8), recurrence="FREQ=DAILY;COUNT=20000",
+            transparency="free",
         )
 
-    # A read skips it; the overlap check cannot, since it might be the clash.
+    # A read skips them; a free one cannot be the clash, so the overlap check skips it too.
     assert _occurrences(calendar, _utc(2050, 3, 1), _utc(2050, 3, 2)) == []
+    _place(calendar, _utc(2050, 3, 1, 9), _utc(2050, 3, 1, 10))
+    # A busy one might be: the check cannot read it and refuses, naming the first by key.
+    with system_context(reason="tests.calendar.legacy"):
+        CalendarEvent.system_queryset().filter(pk__in=[row.pk for row in legacy]).update(transparency="busy")
     with pytest.raises(ValidationError) as refused:
         _place(calendar, _utc(2050, 3, 1, 9), _utc(2050, 3, 1, 10))
     assert refused.value.message_dict == {"start": [UNEXPANDABLE_MESSAGE % {"title": "Legacy"}]}
+    # The saved event's own series is never the clash: an override of the first, moved decades on, saves.
+    with system_context(reason="tests.calendar.legacy"):
+        CalendarEvent.system_queryset().filter(pk=legacy[1].pk).update(transparency="free")
+    _refreshed(*legacy)
+    _event(
+        calendar, series=legacy[0], original_start=_utc(2027, 3, 1, 7), title="Moved on",
+        start=_utc(2050, 3, 1, 9), end=_utc(2050, 3, 1, 10),
+    )
 
 
 def test_a_master_with_overrides_decades_apart_can_be_rescheduled(db: None) -> None:

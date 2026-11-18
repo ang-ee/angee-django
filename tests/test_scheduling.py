@@ -29,7 +29,7 @@ from pydantic import TypeAdapter
 from pydantic import ValidationError as PydanticValidationError
 
 from angee.scheduling.fields import RecurrenceField, TimeZoneField
-from angee.scheduling.recurrence import MAX_OCCURRENCES, Recurrence
+from angee.scheduling.recurrence import MAX_OCCURRENCES, Recurrence, utc_stamp
 from angee.scheduling.zones import ZoneName, get_zone_info
 
 with isolate_apps("angee.scheduling"):
@@ -594,6 +594,22 @@ def test_a_window_holds_instants_so_a_fall_back_hour_keeps_its_two_passes_apart(
     assert daily.get_occurrence_after(start, second_pass, zone="America/New_York") == found[0]
 
 
+def test_a_single_moment_is_after_another_as_an_instant_across_a_fall_back_hour() -> None:
+    """01:30 on the second pass (EST) comes after 01:45 on the first (EDT), though its wall clock is earlier."""
+
+    second_pass = datetime(2025, 11, 2, 1, 30, fold=1, tzinfo=NEW_YORK)
+    first_pass = datetime(2025, 11, 2, 1, 45, tzinfo=NEW_YORK)
+
+    following = Recurrence("").get_occurrence_after(second_pass, first_pass, zone="America/New_York")
+    assert following == second_pass.astimezone(UTC)
+    assert Recurrence("").get_occurrence_after(first_pass, second_pass, zone="America/New_York") is None
+
+
+def test_a_utc_stamp_is_rfc_5545_basic_with_its_year_padded() -> None:
+    assert utc_stamp(datetime(1, 3, 1, 9, tzinfo=UTC)) == "00010301T090000Z"
+    assert utc_stamp(datetime(2026, 7, 6, 9, 30, 15, 999, tzinfo=NEW_YORK)) == "20260706T133015Z"
+
+
 NEW_YORK = ZoneInfo("America/New_York")
 _WEEKDAYS = ("MO", "TU", "WE", "TH", "FR", "SA", "SU")
 _ZONES = (
@@ -609,12 +625,6 @@ _Case = tuple[str, str, datetime, datetime, datetime]
 """A property case: (rule, zone, dtstart, window_start, window_end)."""
 
 
-def _stamp(moment: datetime) -> str:
-    """An RFC 5545 date-time, its year padded to four digits."""
-
-    return moment.replace(tzinfo=None).isoformat(timespec="seconds").replace("-", "").replace(":", "")
-
-
 def _some(draw: st.DrawFn, values: tuple[object, ...], most: int = 2) -> str:
     chosen = draw(st.lists(st.sampled_from(values), min_size=1, max_size=most, unique=True))
     return ",".join(str(value) for value in chosen)
@@ -622,14 +632,18 @@ def _some(draw: st.DrawFn, values: tuple[object, ...], most: int = 2) -> str:
 
 @st.composite
 def _cases(draw: st.DrawFn) -> _Case:
-    """Draw ``(rule, zone, dtstart, window_start, window_end)``: daily to yearly, every BY part, any era."""
+    """Draw ``(rule, zone, dtstart, window_start, window_end)``: hourly to yearly, every BY part, any era.
+
+    An hourly rule reads windows of hours within weeks of its start: the oracle walks
+    every occurrence from DTSTART, so its cost stays bounded.
+    """
 
     zone = draw(st.sampled_from(_ZONES))
     # Hypothesis aims some draws at the zone's DST changes, both passes of a fall-back hour included.
     local = draw(st.datetimes(*_ERAS[draw(st.sampled_from(("recent", "recent", "first years", "last years")))],
                               timezones=st.just(ZoneInfo(zone))))
     dtstart = local.astimezone(UTC)
-    freq = draw(st.sampled_from(("DAILY", "WEEKLY", "MONTHLY", "YEARLY")))
+    freq = draw(st.sampled_from(("HOURLY", "DAILY", "WEEKLY", "MONTHLY", "YEARLY")))
     parts = [f"FREQ={freq}", f"INTERVAL={draw(st.integers(1, 4))}"]
     if draw(st.booleans()):
         parts.append(f"WKST={draw(st.sampled_from(_WEEKDAYS))}")
@@ -660,8 +674,13 @@ def _cases(draw: st.DrawFn) -> _Case:
     if draw(st.booleans()):
         until = dtstart + timedelta(days=draw(st.integers(0, min(20 * 366, room))))
         floating = draw(st.booleans())
-        parts.append(f"UNTIL={_stamp(until.astimezone(ZoneInfo(zone)))}" if floating else f"UNTIL={_stamp(until)}Z")
+        # A floating UNTIL is the zone's wall clock, unmarked.
+        wall = until.astimezone(ZoneInfo(zone)).replace(tzinfo=UTC)
+        parts.append(f"UNTIL={utc_stamp(wall).removesuffix('Z')}" if floating else f"UNTIL={utc_stamp(until)}")
     back = min(60, (dtstart - _FIRST).days)
+    if freq == "HOURLY":
+        window_start = dtstart + timedelta(hours=draw(st.integers(-24 * min(back, 7), 24 * min(21, room - 3))))
+        return ";".join(parts), zone, dtstart, window_start, window_start + timedelta(hours=draw(st.integers(1, 48)))
     window_start = dtstart + timedelta(
         days=draw(st.integers(-back, min(12 * 366, room - 63))), hours=draw(st.integers(0, 23))
     )

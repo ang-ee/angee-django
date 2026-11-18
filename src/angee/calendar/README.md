@@ -96,12 +96,14 @@ expanded server-side in each calendar's zone.
 ## Overlap
 
 A calendar whose overlap policy is `refuse` rejects a busy event any of whose
-instances meets another busy occurrence on it. A single event is checked over its
-`[start, end)`. A series is checked instance by instance over two years
-(`CalendarEvent.overlap_horizon`) from now, or from its start when that is later,
-and no further than its stored `series_end`; a series that ended before now is
-checked over its last two years. Free and cancelled events never conflict, and
-neither do a cancelled master's moved instances.
+instances meets another busy occurrence on it. An event is checked only from now:
+over two years (`CalendarEvent.overlap_horizon`) from now, or from its start when
+that is later, and no further than it ends (a single event's `end`, a series'
+stored `series_end`). A single event is checked over that part of its
+`[start, end)`, a series instance by instance, and an instance under way from now
+on. An event wholly before now is not checked, and nothing is checked against its
+past. Free and cancelled events never conflict, and neither do a cancelled
+master's moved instances.
 
 - **Where it runs:** `CalendarEvent.save`. A save that can change an event's time
   locks the calendar row (on any policy), then the event, then writes, rebases a
@@ -112,9 +114,10 @@ neither do a cancelled master's moved instances.
 - **What it reveals:** a clash names no other event. It runs only after the
   REBAC save gates admitted the write, so a save the actor may not make is refused
   for its permission before any other event is read.
-- **It fails closed:** another event on the calendar that it cannot expand (a
+- **It fails closed:** another busy event on the calendar that it cannot expand (a
   legacy row past the cap) refuses the save, naming that event, which the
-  calendar's writers read, instead of passing as no clash.
+  calendar's writers read, instead of passing as no clash. A free one cannot clash
+  and is skipped, as is the saved event's own series.
 
 ## Sources
 

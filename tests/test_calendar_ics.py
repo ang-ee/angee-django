@@ -27,6 +27,7 @@ from django.core.cache import caches
 from django.core.exceptions import ValidationError
 from django.db import connection, transaction
 from django.db.models import ProtectedError
+from django.utils import timezone
 from rebac import actor_context, system_context
 
 from angee.calendar import models as calendar_models
@@ -275,6 +276,13 @@ def _ics_vendor(db: None) -> None:
 
     del db
     _load_vendor()
+
+
+@pytest.fixture
+def march(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Pin now to 1 March 2026, before the feed's events, so the overlap check judges each from its start."""
+
+    monkeypatch.setattr(timezone, "now", lambda: datetime(2026, 3, 1, tzinfo=UTC))
 
 
 @pytest.fixture
@@ -704,7 +712,10 @@ END:VEVENT"""
     assert (event.timezone, event.start) == ("America/New_York", _utc(2026, 7, 1, 13))
 
 
-def test_an_overlap_on_a_refusing_calendar_is_a_record_failure_not_a_failed_page(subscription: Subscription) -> None:
+def test_an_overlap_on_a_refusing_calendar_is_a_record_failure_not_a_failed_page(
+    march: None, subscription: Subscription
+) -> None:
+    del march
     subscription.poll()
     with system_context(reason="tests.ics"):
         Calendar.objects.filter(pk=subscription.calendar.pk).update(overlap_policy="refuse")
@@ -1196,11 +1207,13 @@ def _make_unexpandable(event: Any, **columns: Any) -> None:
     ],
 )
 def test_a_row_the_calendar_cannot_expand_never_fails_a_read_or_a_save_beside_it(
+    march: None,
     subscription: Subscription,
     columns: dict[str, Any],
     window: tuple[datetime, datetime],
     caplog: pytest.LogCaptureFixture,
 ) -> None:
+    del march
     subscription.poll()
     with system_context(reason="tests.ics"):
         Calendar.objects.filter(pk=subscription.calendar.pk).update(overlap_policy="refuse")
@@ -1435,6 +1448,24 @@ def test_each_parse_path_stops_at_the_sync_deadline(subscription: Subscription) 
         with pytest.raises(IcsError, match="took too long"):
             read_stream_keys(reader, subscription.stream(), ["launch@example.test"])
     assert sync_deadline() is None
+
+
+def test_a_direct_driver_hands_its_deadline_to_the_parse(subscription: Subscription) -> None:
+    subscription.poll()
+    subscription.feed.etags = False
+    past = monotonic() - 1
+
+    # A caller outside a bridge sync passes the deadline to the driver; the feed parse reads it.
+    backend = IcsCalendarBackend(CalendarSource.objects.sudo(reason="tests.ics").get(pk=subscription.source.pk))
+    with pytest.raises(IcsError, match="took too long"):
+        advance_stream(subscription.stream(), backend, deadline=past)
+    assert sync_deadline() is None
+    # A driver given none keeps the sync's own.
+    backend = IcsCalendarBackend(CalendarSource.objects.sudo(reason="tests.ics").get(pk=subscription.source.pk))
+    with system_context(reason="tests.ics"), sync_deadline_context(past):
+        with pytest.raises(IcsError, match="took too long"):
+            advance_stream(subscription.stream(), backend)
+        assert sync_deadline() == past
 
 
 def test_a_bridge_sync_hands_its_deadline_to_every_partition(
