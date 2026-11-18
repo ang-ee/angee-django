@@ -219,6 +219,15 @@ celery_queues:
   type: str
   default: ""
 
+# Prefork children of the shared Celery worker. Each child loads the whole
+# application, so Celery's own default (one per CPU) costs gigabytes on a
+# many-core host; the queue worker keeps its own thread pool.
+celery_concurrency:
+  type: int
+  default: 2
+  validator: '{% if celery_concurrency < 1 %}Run at least one worker process.{% endif %}'
+  help: Number of prefork processes of the shared Celery worker; each loads the whole application.
+
 # Sentry error reporting. An empty DSN (the default) renders nothing: Django
 # never starts the SDK and the SPA never loads it. sentry_dsn becomes SENTRY_DSN
 # for every Python service; sentry_web_dsn becomes VITE_SENTRY_DSN for the

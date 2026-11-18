@@ -190,6 +190,15 @@ celery_queues:
   type: str
   default: ""
 
+# Prefork children of the shared Celery worker. Each child loads the whole
+# application, so Celery's own default (one per CPU) costs gigabytes on a
+# many-core host; the queue worker keeps its own thread pool.
+celery_concurrency:
+  type: int
+  default: 2
+  validator: '{% if celery_concurrency < 1 %}Run at least one worker process.{% endif %}'
+  help: Number of prefork processes of the shared Celery worker; each loads the whole application.
+
 # Sentry error reporting. An empty DSN (the default) renders nothing.
 sentry_dsn:
   type: str

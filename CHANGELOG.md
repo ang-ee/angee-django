@@ -16,6 +16,26 @@ live in code docstrings.
   before, the receipt stayed current while the web manifest's roots named the old
   location, and the frontend build failed on a missing addon entry.
 
+- A Docker-mode framework stack serving production on `localhost` comes up: the
+  Caddy `frontend` script no longer opens with a blank line, which the operator
+  re-saved as an unparsable `|4-` block once it had cut the `src` workspace
+  (`Stack prepare: yaml: … did not find expected '-' indicator`).
+
+- The shared Celery worker runs a bounded prefork pool: `celery_concurrency`
+  (default 2) in `stacks/dev`, `stacks/local` and `stacks/staging`. It ran
+  Celery's default of one child per CPU, each loading the whole application,
+  which held 10 GiB on a 32-core staging host. The queue worker keeps its own
+  thread pool.
+
+- A framework stack serving production (`stacks/dev` with `serve_mode:
+  production`, `stacks/staging`) installs its slots editable, so
+  `frontend-build` reads each fragment from its slot. A non-editable install
+  copied the addons into site-packages, where the fragments' `tsconfig.json`
+  chain (`../../tsconfig.base.json`) and their pnpm dependencies do not exist,
+  and the build failed with `Tsconfig not found`. `stacks/local` still installs
+  non-editable; its frontend builds from the baked web image. An existing stack
+  drops `--no-editable` from its `py-sync` command and reruns the chain.
+
 - A change to `ANGEE_UI` alone now recomposes. `angee.web` renders it into
   `runtime/web/manifest.json` but never declared it a compiler input, so
   `compose --if-stale`, the stack's compose job, found the receipt current and
