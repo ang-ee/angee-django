@@ -39,7 +39,7 @@ from django.contrib.contenttypes.models import ContentType
 from django.core import checks
 from django.core.exceptions import ImproperlyConfigured, ValidationError
 from django.db import connection, models, transaction
-from django.db.models import OuterRef, Prefetch, Q, Subquery
+from django.db.models import BooleanField, ExpressionWrapper, OuterRef, Prefetch, ProtectedError, Q, Subquery
 from django.db.models.functions import JSONObject
 from django.utils import timezone
 from django_compose.models import Composable
@@ -126,6 +126,7 @@ from angee.integrate.streams import (
     PushPreview,
     begin_stream_cycle,
     preview_push,
+    push_candidates,
     push_stream,
     read_stream_keys,
     sync_bridge,
@@ -1469,6 +1470,16 @@ class Credential(AuditMixin, AngeeDataModel, concrete=True):
             and self.oauth_client.supports_refresh
             and bool(self.reveal().get("refresh_token"))
         )
+
+    @property
+    def delegated(self) -> bool:
+        """Whether this credential acts for another principal: a signing key whose assertions name a ``subject``.
+
+        A ``jwt_bearer`` key with a stored ``subject`` mints tokens as that delegated
+        user (domain-wide delegation), not as its own service account.
+        """
+
+        return self.kind == CredentialKind.JWT_BEARER and bool(self.reveal().get("subject"))
 
     @property
     def is_reconnect_required(self) -> bool:
@@ -5400,6 +5411,30 @@ class RecordLinkManager[RecordLinkT: RecordLink](_RecordLinkManagerBase[RecordLi
         link.target = None
         return link
 
+    def release_pushes(self, target: models.Model) -> int:
+        """Let ``target`` go from the push links naming it, so each push writes its removal; return how many.
+
+        A row only push links name is the local side of what they publish. Once it is
+        deleted (:meth:`RecordLink.teardown_for_target`), or no longer the record a
+        link names, its links release it, and ``push_stream`` yields each released
+        link's removal. A link that holds the row (:meth:`RecordLink.live_reference_filter`)
+        refuses with ``ProtectedError``, the policy of every other record edge.
+        """
+
+        content_type, object_id = generic_pointer_target(target)
+        live = ExpressionWrapper(self.model.live_reference_filter(principal=None), output_field=BooleanField())
+        # One unscoped read, the cost of every record delete: the base manager is the unscoped one.
+        pointing = list(
+            self.model._base_manager.filter(target_content_type=content_type, target_object_id=object_id)
+            .annotate(live=live)
+            .only("pk")
+        )
+        if held := {link for link in pointing if link.live}:
+            raise ProtectedError(f"{self.model._meta.label} rows still refer to {target}.", held)
+        if not pointing:
+            return 0
+        return self.release_targets(self.model._base_manager.filter(pk__in=[link.pk for link in pointing]))
+
     def release_targets(self, links: models.QuerySet[Any]) -> int:
         """Let every row ``links`` binds go at once, as :meth:`release_target` lets one go; return how many.
 
@@ -5665,6 +5700,31 @@ class RecordLink(
 
         return self.external_key
 
+    @classmethod
+    def live_reference_filter(cls, *, principal: SubjectRef | None) -> Q:
+        """Select the links that hold their target: every link but a push stream's.
+
+        A push link names the local row its stream publishes, not a remote record
+        Angee keeps: deleting the row releases it (:meth:`teardown_for_target`) and the
+        push writes the removal. A pull or two-way link keeps its row.
+        """
+
+        del principal
+        return ~Q(stream__direction=StreamDirection.PUSH)
+
+    @classmethod
+    def blocks_target_delete(cls, target: type[models.Model]) -> bool:
+        """A link the live filter keeps blocks its target's deletion: :meth:`teardown_for_target` refuses it."""
+
+        del target
+        return True
+
+    @classmethod
+    def teardown_for_target(cls, target: models.Model) -> None:
+        """Refuse deleting a row a live link holds, else release the push links naming it (``release_pushes``)."""
+
+        cls.objects.release_pushes(target)
+
     @property
     def failure_stream(self) -> SyncStream:
         return self.stream
@@ -5830,6 +5890,13 @@ class RecordLink(
         read before it and the apply or push after it are adapter I/O, run by the
         stream driver outside the transaction. A follow-through that leaves the
         record unsynchronized reopens the conflict.
+
+        A push stream never applies its remote: keeping the remote there accepts the
+        remote's current version, read through the adapter's identity read. It
+        becomes the link's applied base, with its ``remote_version``, over the local
+        projection as it stands; nothing is copied into the local row. Nothing is
+        pushed until the row changes locally again, and that push writes over the
+        version accepted here.
         """
 
         if keep not in ConflictKeep.values:
@@ -5861,9 +5928,20 @@ class RecordLink(
                 if keep == ConflictKeep.LOCAL and (not stream.writes_back or not stream.has_completed_baseline()):
                     raise ValidationError("Keeping local changes requires a completed writable baseline.")
                 precondition = owner.sync_precondition
-                remote = read_stream_keys(adapter, stream, tuple(keys))[0] if keep == ConflictKeep.LOCAL else None
+                accepts_remote = keep == ConflictKeep.REMOTE and stream.direction == StreamDirection.PUSH
+                remote = (
+                    read_stream_keys(adapter, stream, tuple(keys))[0]
+                    if keep == ConflictKeep.LOCAL or accepts_remote
+                    else None
+                )
+                # The local side as it stands: a change the push would write, else the base it already matches.
+                local = (
+                    next((change.projection for change, _link in push_candidates(stream, adapter, keys)), UNSET)
+                    if accepts_remote
+                    else UNSET
+                )
                 with transaction.atomic():
-                    type(stream).objects.lock_current(stream, fenced_to=stream)
+                    locked_stream = type(stream).objects.lock_current(stream, fenced_to=stream)
                     locked = type(owner).objects.lock_if_supported().get(pk=owner.pk)
                     current_link = type(link).objects.lock_if_supported().get(pk=link.pk)
                     current = current_link.failure_at(slot)
@@ -5871,7 +5949,19 @@ class RecordLink(
                         return current
                     if not locked.sync_precondition_matches(precondition):
                         raise RuntimeError("Record bases changed during conflict resolution; retry the choice.")
-                    if remote is not None:
+                    if remote is not None and accepts_remote:
+                        type(locked).objects.promote(
+                            locked,
+                            source_payload=remote.source_payload,
+                            source_hash=remote.source_hash,
+                            mapped_payload=local,
+                            mapping_version=locked_stream.mapping_version,
+                            dependency_digest=locked.dependency_digest,
+                            remote_version=remote.remote_version,
+                            origin="remote",
+                            tombstone=remote.tombstone,
+                        )
+                    elif remote is not None:
                         type(locked).objects.observe(
                             stream,
                             locked.external_key,
@@ -5881,11 +5971,11 @@ class RecordLink(
                         )
                     current_link.resolve_failure(slot, conflict=True)
                 resolved = True
-                if keep == ConflictKeep.REMOTE:
+                if keep == ConflictKeep.REMOTE and not accepts_remote:
                     prepared = begin_stream_cycle(stream, adapter, force_apply=keys)
                     if prepared.resync_required:
                         raise ValidationError("Complete the requested stream baseline before resolving its conflict.")
-                elif not push_stream(stream, adapter, external_keys=keys).count:
+                elif keep == ConflictKeep.LOCAL and not push_stream(stream, adapter, external_keys=keys).count:
                     raise ValidationError("The selected local record could not be written; its failure remains open.")
                 if type(link).objects.filter(pk__in=(link.pk, owner.pk)).open_failures():
                     raise ValidationError("The record could not be synchronized; its failure remains open.")

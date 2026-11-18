@@ -1946,7 +1946,10 @@ importing the composed model toolkit.
 native reverse relation's exclusion from automatic collection.
 Each edge declares `on_target_delete` as `CASCADE`, `PROTECT`, or `SET_NULL`; a
 model needing row-aware cleanup implements `teardown_for_target(target)` instead,
-which never blocks the target's deletion. The foundation target-delete receiver
+which never blocks the target's deletion unless its owner declares rows that do
+(`blocks_target_delete`, narrowed by `live_reference_filter`, as
+[`RecordLink`](../../src/angee/integrate/models.py) keeps pulled rows and lets
+pushed ones go). The foundation target-delete receiver
 invokes that one declaration for instance and queryset deletion paths, once per
 collected instance (an MTI child's deletion also collects its canonical parent, so
 a teardown is idempotent), whether the target names the edge through a reverse

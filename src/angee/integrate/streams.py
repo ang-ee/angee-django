@@ -42,7 +42,12 @@ from angee.integrate.states import (
     StreamState,
     SyncFailureKind,
 )
-from angee.integrate.sync import current_progress_bridge, progress_bridge_context, sync_deadline_context
+from angee.integrate.sync import (
+    current_progress_bridge,
+    progress_bridge_context,
+    sync_deadline,
+    sync_deadline_context,
+)
 from angee.jobs.timeouts import task_time_budget
 from angee.provenance.context import changeset, current_changeset
 
@@ -752,7 +757,12 @@ def push_stream(
     external_keys: frozenset[str] | None = None,
     deadline: float | None = None,
 ) -> PageResult:
-    """Conditionally write local candidates after a two-way replica's first baseline."""
+    """Conditionally write local candidates after a two-way replica's first baseline.
+
+    The cycle's deadline (``sync_deadline()``: ``deadline``, else the enclosing
+    sync's) is checked between candidates; a push stream's released links are
+    candidates too, their removal (:func:`push_candidates`).
+    """
 
     if connection.in_atomic_block:
         raise RuntimeError("Remote writes must run outside a database transaction.")
@@ -768,8 +778,8 @@ def push_stream(
             return PageResult(stream, exhausted=True)
         links = stream.links.model.objects
         candidates: set[str] = set()
-        for candidate, link in _push_candidates(stream, adapter, external_keys):
-            if deadline is not None and monotonic() >= deadline:
+        for candidate, link in push_candidates(stream, adapter, external_keys):
+            if (limit := sync_deadline()) is not None and monotonic() >= limit:
                 return PageResult(stream, count, failure_ids=tuple(failures))
             candidates.add(candidate.external_key)
             if link is None:
@@ -844,7 +854,7 @@ def preview_push(stream: Any, adapter: BridgeImpl) -> PushPreview:
             return PushPreview()
         writes: list[str] = []
         held: list[str] = []
-        for candidate, link in _push_candidates(stream, adapter, None):
+        for candidate, link in push_candidates(stream, adapter, None):
             (held if link is not None and (link.pinned or link.write_holds) else writes).append(candidate.external_key)
         return PushPreview(tuple(writes), tuple(held))
 
@@ -853,7 +863,7 @@ _CANDIDATE_BATCH = 500
 """Local changes whose links one query loads, with their sync evidence."""
 
 
-def _push_candidates(
+def push_candidates(
     stream: Any, adapter: BridgeImpl, external_keys: frozenset[str] | None
 ) -> Iterator[tuple[LocalChange, Any]]:
     """Yield each local change that differs from its link's base, with that link or ``None`` when new.
@@ -861,11 +871,18 @@ def _push_candidates(
     A link carries its sync evidence (:meth:`RecordLinkQuerySet.with_sync_evidence`),
     so the preview reads its write holds without a query each. The push re-reads a
     link just before writing it, since the batch predates the writes ahead of it.
+
+    On a push stream, a written link whose row went (released by its deletion,
+    ``RecordLinkManager.release_pushes``) is a removal, ``LocalChange(key, None)``,
+    unless the adapter named its key again: the adapter writes it as ``write_back(link,
+    None)`` and its link is tombstoned.
     """
 
     candidates = iter(adapter.local_changes(stream, keys=external_keys))
     links = stream.links.model.objects
+    named: set[str] = set()
     while batch := list(islice(candidates, _CANDIDATE_BATCH)):
+        named.update(candidate.external_key for candidate in batch)
         known = {
             link.external_key: link
             for link in links.filter(
@@ -876,6 +893,18 @@ def _push_candidates(
             link = known.get(candidate.external_key)
             if link is None or link.local_changed(candidate.projection):
                 yield candidate, link
+    if stream.direction != StreamDirection.PUSH:
+        return
+    released = (
+        links.filter(stream=stream, target_object_id=None)
+        .exclude(applied_base=None)
+        .exclude(status=LinkStatus.TOMBSTONE)
+    )
+    if external_keys is not None:
+        released = released.filter(external_key__in=external_keys)
+    for link in released.with_sync_evidence().order_by("external_key").iterator(chunk_size=_CANDIDATE_BATCH):
+        if link.external_key not in named and link.local_changed(None):
+            yield LocalChange(link.external_key, None), link
 
 
 def read_stream_keys(adapter: BridgeImpl, stream: Any, keys: Sequence[str]) -> tuple[RecordChange, ...]:

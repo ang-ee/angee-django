@@ -112,8 +112,10 @@ class RecordRefMixin(RecordRefMergeContract):
     It runs before each collected target instance is deleted, whether the target
     names the edge through a reverse ``GenericRelation`` or the edge's schema
     declares the target's type. An MTI child's deletion collects its canonical
-    parent too, so a teardown is idempotent. An edge with a teardown never blocks
-    its target's deletion.
+    parent too, so a teardown is idempotent. An edge with a teardown does not block
+    its target's deletion, unless its owner declares that some of its rows do
+    (``blocks_target_delete``, narrowed by ``live_reference_filter``) and its
+    teardown refuses while one of them names the target.
     """
 
     class Meta:

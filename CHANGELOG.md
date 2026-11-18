@@ -28,7 +28,33 @@ live in code docstrings.
   sent fields match), maps a series to its `RRULE` and each override to its
   instance (a cancelled override cancels it), and writes every later change under
   `If-Match`: Google's `412` is a held conflict, never an overwrite.
-  `GoogleCalendarClient` gains `stamped`, `insert` and `patch`.
+  `GoogleCalendarClient` gains `stamped`, `insert`, `patch` and `delete`.
+- Push streams propagate deletes and accept a kept remote. A push link holds
+  nothing (`RecordLink.live_reference_filter`): a row only push links name is
+  deletable, its deletion releases them (`RecordLink.teardown_for_target`,
+  `RecordLinkManager.release_pushes`), and `push_stream` writes the removal of
+  each released, written link as `write_back(link, None)` before tombstoning it.
+  A row a pull or two-way link names stays protected, and a published calendar
+  is refused deletion until it is unpublished. Keeping the remote of a push
+  stream's conflict (`RecordLink.resolve_conflict`) records the remote's current
+  version as the link's base over the local projection, copies nothing, and
+  pushes again only after the next local change. `push_stream` reads the cycle's
+  deadline (`sync_deadline()`) between candidates. `push_candidates` is public.
+- A publishing calendar backend implements `write_event` and `read_written`;
+  `CalendarBackend.write_back` and `read_keys` run them after `admit_push`, which
+  refuses an unsubscribed source and a remote calendar
+  `ANGEE_CALENDAR_PUBLISH_TARGETS` does not list, once per push as the stream's
+  failure. The setting is matched whole and checked at startup (`calendar.E001`).
+  A publishing purge moves the source's streams to a new generation before
+  unbinding, so a push already writing binds nothing. `publish` reads the
+  lifecycle on the locked source, locks the vendor, the stream, then the
+  calendar, and refuses a remote calendar another source publishes to. An
+  override only pushed is rebased with its series, and its push restores the old
+  instance. `Credential.delegated` names a `jwt_bearer` key with a `subject`;
+  the Google publishing backend refuses one. Google's refusal of one event
+  (`400`, or a `403` naming the event) is `EventRefused`, that event's own
+  `RemoteRejected("event_refused")`; a `404` reads as a gone event only once the
+  calendar is known to be served, else it is the calendar's failure.
 - One connect-with-account surface in `angee.integrate`: `Integration.reads_with`
   (an OAuth grant of the capability's client covering its `oauth_scopes`) and
   `Integration.connectable_credentials(user)` replace `Mount.reads_with`'s rule,

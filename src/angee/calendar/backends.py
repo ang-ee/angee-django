@@ -50,7 +50,7 @@ from angee.integrate.http import HttpClientMixin
 from angee.integrate.impl import BridgeImpl
 from angee.integrate.models import IntegrationLifecycle
 from angee.integrate.states import LinkStatus, StreamDefinition, StreamDirection, SyncFailureKind
-from angee.integrate.streams import ApplyResult, RecordChange, SemanticError, StreamPage
+from angee.integrate.streams import ApplyResult, RecordChange, SemanticError, StreamPage, WriteBackResult
 from angee.scheduling.recurrence import MAX_OCCURRENCES, utc_stamp
 
 CALENDARS_STREAM = "calendars"
@@ -422,7 +422,9 @@ class CalendarBackend(BridgeImpl, HttpClientMixin):
     backend's calendars refuse them (``Calendar.is_writable``). A backend that reads
     with one kind of credential refuses any other (:meth:`admit_credential`). A
     publishing backend (:attr:`direction` ``PUSH``) implements integrate's
-    ``local_changes`` and ``write_back`` instead of the extraction methods.
+    ``local_changes``, and :meth:`write_event` and :meth:`read_written` instead of
+    the extraction methods: this base runs integrate's ``write_back`` and
+    ``read_keys`` through them, after :meth:`admit_push`.
     """
 
     registry_setting = "ANGEE_CALENDAR_SOURCE_BACKEND_CLASSES"
@@ -468,9 +470,48 @@ class CalendarBackend(BridgeImpl, HttpClientMixin):
 
         raise NotImplementedError("CalendarBackend subclasses must implement event_keys().")
 
-    def read_keys(self, stream: Any, keys: Sequence[str]) -> list[RecordChange]:
-        """Re-read the requested identities, each once, a missing one as a tombstone (integrate's identity reads)."""
+    def write_event(self, link: Any, projection: Any, *, expected_version: str) -> WriteBackResult:
+        """Write one event of a published calendar to its remote calendar: a publishing backend implements it.
 
+        ``projection`` is ``None`` for an event deleted locally: its remote is removed.
+        """
+
+        raise NotImplementedError("A publishing CalendarBackend must implement write_event().")
+
+    def read_written(self, stream: Any, keys: Sequence[str]) -> list[RecordChange]:
+        """Read the remote events ``keys`` name, each with its version: a publishing backend implements it."""
+
+        raise NotImplementedError("A publishing CalendarBackend must implement read_written().")
+
+    def admit_push(self, stream: Any) -> None:
+        """Refuse a publishing ``stream``'s remote call, as the stream's failure, before anything is sent.
+
+        Every remote call of a publishing backend (a write, an identity read, and the
+        token the first one mints) runs behind it: the source is still subscribed (an
+        unsubscribe stops the writes of a push already running) and the deployment
+        publishes to the stream's remote calendar (``CalendarSource.may_publish_to``).
+        Its refusal fails the stream's push once per cycle, never record by record.
+        """
+
+        self._require_subscribed()
+        if not self.bridge.may_publish_to(stream.partition):
+            raise IntegrationError("This deployment does not publish to this calendar.")
+
+    def write_back(self, link: Any, projection: Any, *, expected_version: str) -> WriteBackResult:
+        """Write one local change of a published calendar out: :meth:`admit_push`, then :meth:`write_event`."""
+
+        self.admit_push(link.stream)
+        return self.write_event(link, projection, expected_version=expected_version)
+
+    def read_keys(self, stream: Any, keys: Sequence[str]) -> list[RecordChange]:
+        """Re-read the requested identities, each once, a missing one as a tombstone (integrate's identity reads).
+
+        A publishing backend reads what it wrote (:meth:`read_written`), after :meth:`admit_push`.
+        """
+
+        if self.direction == StreamDirection.PUSH:
+            self.admit_push(stream)
+            return self.read_written(stream, keys)
         if stream.key == CALENDARS_STREAM:
             remotes = {remote.key: remote.payload() for remote in self._listed_calendars(stream)}
             payloads: Mapping[str, Any] = {key: remotes.get(key) for key in keys}

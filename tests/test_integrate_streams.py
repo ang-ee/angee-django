@@ -2599,3 +2599,76 @@ def test_a_self_held_declaration_fails_fast(stream_bridge: Channel, monkeypatch:
         sync_bridge(stream_bridge)
     assert adapter.extracted == []
 
+
+
+@pytest.mark.parametrize("direction", [StreamDirection.PUSH, StreamDirection.PULL, StreamDirection.BIDIRECTIONAL])
+def test_only_push_links_let_their_row_go_and_the_push_writes_its_removal(
+    stream_bridge: Channel, direction: StreamDirection
+) -> None:
+    from angee.messaging.testing.models import Person
+
+    stream = current_stream(stream_bridge, "people", kind=StreamKind.RECORD_REPLICA, direction=direction)
+    person = Person.objects.create(display_name="Ada")
+    link = RecordLink.objects.observe(stream, "ada", target=person)
+    RecordLink.objects.promote(link, source_payload={}, source_hash="v1", mapped_payload={"n": 1}, remote_version="v1")
+    if direction != StreamDirection.PUSH:
+        # A pulled or two-way record is the source's: its link keeps it.
+        with pytest.raises(models.ProtectedError):
+            Person.objects.get(pk=person.pk).delete()
+        assert RecordLink.objects.get(pk=link.pk).target_object_id == str(person.pk)
+        return
+
+    Person.objects.get(pk=person.pk).delete()
+
+    assert RecordLink.objects.get(pk=link.pk).target_object_id is None
+
+    class RemovingAdapter(MemoryAdapter):
+        def write_back(self, link: Any, projection: Any, *, expected_version: str) -> WriteBackResult:
+            result = super().write_back(link, projection, expected_version=expected_version)
+            return replace(result, tombstone=projection is None)
+
+    adapter = RemovingAdapter()
+    assert push_stream(stream, adapter).count == 1
+    assert adapter.written == [("ada", None, "v1")]
+    assert RecordLink.objects.get(pk=link.pk).status == LinkStatus.TOMBSTONE
+    assert push_stream(stream, adapter).count == 0
+
+
+def test_keeping_the_remote_of_a_push_stream_accepts_its_version_until_the_next_local_change(
+    stream_bridge: Channel, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from angee.integrate.states import ConflictKeep
+    from angee.integrate.streams import RemoteRejected
+
+    stream = current_stream(stream_bridge, "outbox", kind=StreamKind.RECORD_REPLICA, direction=StreamDirection.PUSH)
+    link = RecordLink.objects.observe(stream, "one")
+    RecordLink.objects.promote(link, source_payload={}, source_hash="v1", mapped_payload={"n": 0}, remote_version="v1")
+    SyncStream.objects.advance(stream, {}, exhausted=True)
+
+    class RefusingAdapter(ReadKeysAdapter):
+        refuse: bool = True
+
+        def write_back(self, link: Any, projection: Any, *, expected_version: str) -> WriteBackResult:
+            if self.refuse:
+                raise RemoteRejected()
+            return super().write_back(link, projection, expected_version=expected_version)
+
+    adapter = RefusingAdapter(
+        candidates=(LocalChange("one", {"n": 1}),),
+        remote={"one": RecordChange("one", {"id": 1}, "v2-hash", remote_version="v2", mapped_payload={"n": 5})},
+    )
+    assert push_stream(stream, adapter).failure_ids
+    [conflict] = RecordLink.objects.get(pk=link.pk).failures(open_only=True)
+    adapter.refuse = False
+
+    monkeypatch.setattr(Channel, "capability_impl", property(lambda self: adapter))
+    conflict.resolve_conflict(keep=ConflictKeep.REMOTE)
+
+    accepted = RecordLink.objects.with_sync_evidence().get(pk=link.pk)
+    # The remote's version is the base, over the local projection: nothing applies, nothing pushes.
+    assert (accepted.remote_version, accepted.applied_base.mapped_payload) == ("v2", {"n": 1})
+    assert accepted.failures(open_only=True) == ()
+    assert push_stream(stream, adapter).count == 0
+    adapter.candidates = (LocalChange("one", {"n": 2}),)
+    assert push_stream(stream, adapter).count == 1
+    assert adapter.written[-1] == ("one", {"n": 2}, "v2")

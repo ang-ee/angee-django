@@ -91,6 +91,10 @@ class FakeGoogle:
         parts = [unquote(part) for part in url.path.removeprefix(API).split("/")]
         if parts == ["users", "me", "calendarList"]:
             return httpx2.Response(200, json={"items": list(account.calendars.values())})
+        if parts[2:] == []:
+            # The calendar a read of one missing event confirms is still served.
+            served = parts[1] in account.calendars or parts[1] in account.events
+            return httpx2.Response(200, json={"id": parts[1]}) if served else httpx2.Response(404)
         events = account.events.get(parts[1], {})
         if parts[2:] == ["events"]:
             return self._list(events, params)

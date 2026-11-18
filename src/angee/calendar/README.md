@@ -187,11 +187,17 @@ calendar's events stream in the same sync.
   id targets the calendar, and the calendar's `source` names the source. The
   calendar stays writable, and its events push through the events stream that link
   holds; nothing is read back, so a remote edit surfaces as a held conflict the
-  next time Angee writes that event. A calendar another source mirrors or
-  publishes is refused, and `ANGEE_CALENDAR_PUBLISH_TARGETS` (`None`: any) lists
-  the remote calendars a deployment publishes to, so a test profile is refused
-  before any call. Unsubscribing a publishing source unbinds: its calendars are
-  local again with every event kept, and its key is detached, not retired.
+  next time Angee writes that event. Keeping Google's side of that conflict
+  accepts its version, and the next local edit writes over it. Deleting an event
+  deletes it remotely, and deleting an override restores its instance; a
+  published calendar itself is refused deletion until it is unpublished. A
+  calendar another source mirrors or publishes is refused, and so is a remote
+  calendar another source publishes to. `ANGEE_CALENDAR_PUBLISH_TARGETS` (`None`:
+  any; else a list, matched whole) lists the remote calendars a deployment
+  publishes to: every remote call of a push passes `CalendarBackend.admit_push`,
+  so a test profile is refused before any call, once per push. Unsubscribing a
+  publishing source unbinds: its streams move to a new generation, its calendars
+  are local again with every event kept, and its key is detached, not retired.
   `calendar_integrate_google`'s `google_resource` backend publishes to Google
   calendars a service-account key writes, such as Workspace resource calendars.
 

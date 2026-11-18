@@ -43,7 +43,10 @@ with that public id (``extendedProperties.private.angee_event``), and found by i
 stamp before any insert. A series' rule is its ``recurrence`` line; each override
 patches its instance (a cancelled override cancels it). Every later write names the
 ETag Angee last wrote, so a remote edit surfaces as Google's ``412`` the next time
-Angee writes that event: a held conflict, never an overwrite.
+Angee writes that event: a held conflict, never an overwrite. An event deleted
+locally is deleted in Google, and an override deleted locally restores its instance,
+on the same condition. Google's refusal of one event sets that event aside; the
+calendar's other events still push.
 """
 
 from __future__ import annotations
@@ -82,6 +85,7 @@ from angee.calendar.backends import (
 from angee.calendar.choices import AttendeeResponse, AttendeeRole, EventStatus, EventTransparency, EventVisibility
 from angee.calendar_integrate_google.client import (
     EventIdTaken,
+    EventRefused,
     GoogleCalendarClient,
     PageTokenInvalid,
     PreconditionFailed,
@@ -90,7 +94,7 @@ from angee.calendar_integrate_google.client import (
 from angee.integrate.credentials import CredentialKind
 from angee.integrate.errors import IntegrationError
 from angee.integrate.models import IntegrationLifecycle
-from angee.integrate.states import StreamDirection
+from angee.integrate.states import UNSET, StreamDirection
 from angee.integrate.streams import (
     CursorInvalid,
     LocalChange,
@@ -109,7 +113,11 @@ CALENDAR_EVENTS = "https://www.googleapis.com/auth/calendar.events"
 """The scope a publishing source's key mints for: it writes the events of the calendars shared with it."""
 
 STAMP = "angee_event"
-"""The private extended property every published master or single event carries: its Angee public id."""
+"""The private extended property every published master or single event carries: its Angee public id.
+
+It names no deployment, since no Angee instance identity exists to name: two
+deployments publishing to one remote calendar could adopt each other's events.
+"""
 
 _SWEEP_PAGE = 250
 """Events per page of a sweep's full listing: well under the transport's 8 MiB answer cap."""
@@ -447,11 +455,15 @@ class GoogleResourceCalendarBackend(_GoogleBackend):
     writable: ClassVar[bool] = True
 
     def admit_credential(self, credential: Any) -> None:
-        """Admit only a service-account key (``jwt_bearer``): the source writes as that key, never as a person."""
+        """Admit only a service-account key (``jwt_bearer``) acting as itself: the source never writes as a person.
 
-        if credential.kind != CredentialKind.JWT_BEARER:
+        A key whose assertions name a delegated user (``Credential.delegated``) is refused.
+        """
+
+        if credential.kind != CredentialKind.JWT_BEARER or credential.delegated:
             raise ValidationError(
-                {"credential": "Publishing to Google calendars needs a service-account key (JWT bearer)."}
+                {"credential": "Publishing to Google calendars needs a service-account key (JWT bearer) without "
+                 "delegation."}
             )
 
     def _client_scopes(self) -> tuple[str, ...]:
@@ -487,42 +499,48 @@ class GoogleResourceCalendarBackend(_GoogleBackend):
                 stamp = row.sqid if row.series_id is None else ""
                 yield LocalChange(named[row.pk], _published(parsed[row.pk], zone, stamp=stamp), target=row)
 
-    def write_back(self, link: Any, projection: Any, *, expected_version: str) -> WriteBackResult:
+    def write_event(self, link: Any, projection: Any, *, expected_version: str) -> WriteBackResult:
         """Write one published event to Google conditionally; a refusal is integrate's held outbox entry.
 
-        Before any call, a calendar the deployment no longer publishes to refuses
-        (``CalendarSource.may_publish_to``). A master or single event without a
-        version is created once (:meth:`_create`); with one it is patched under
-        ``If-Match``. An override patches its series' instance (:meth:`_write_instance`).
+        The calendar base admitted the call (``CalendarBackend.admit_push``). A master
+        or single event without a version is created once (:meth:`_create`); with one
+        it is patched under ``If-Match``. An override patches its series' instance
+        (:meth:`_write_instance`). An event deleted locally is removed (:meth:`_remove`).
         A stale ETag (``412``) is a held conflict (``RemoteRejected``), and so is an
         event Google no longer has: Angee never overwrites or recreates a remote change.
+        Google's refusal of this one event (``EventRefused``) sets it aside for a retry,
+        and the push goes on with the next.
         """
 
         stream = link.stream
-        if not self.bridge.may_publish_to(stream.partition):
-            raise RemoteRejected("target_not_allowed", conflict=False)
         client = self._client()
         series, original = parse_key(link.external_key)
         try:
+            if projection is None:
+                return self._remove(client, link, str(series), original, expected_version)
             if original is not None:
                 written = self._write_instance(client, link, projection, str(series), original, expected_version)
             elif expected_version:
-                written = client.patch(
-                    stream.partition, link.external_key, _body(projection, instance=False), etag=expected_version
-                )
+                body = _body(projection, instance=False, patch=True)
+                written = client.patch(stream.partition, link.external_key, body, etag=expected_version)
             else:
                 written = self._create(client, stream, link.external_key, projection)
         except PreconditionFailed:
             raise RemoteRejected() from None
+        except EventRefused as refused:
+            details = {"status": refused.status, "reason": refused.reason}
+            raise RemoteRejected("event_refused", details=details, conflict=False) from None
         if written is None:
             raise RemoteRejected("remote_deleted")
         return WriteBackResult(str(written.get("etag") or ""), canonical_json_sha256(written), {"id": written["id"]})
 
-    def read_keys(self, stream: Any, keys: Sequence[str]) -> list[RecordChange]:
-        """Read the published events ``keys`` name, each with its ETag; one Google no longer has is a tombstone.
+    def read_written(self, stream: Any, keys: Sequence[str]) -> list[RecordChange]:
+        """Read the published events ``keys`` name, each with its ETag; only one Google no longer has is a tombstone.
 
-        Integrate reads them when a person keeps Angee's side of a held conflict: the
-        push then writes over the version read here.
+        Integrate reads them when a person resolves a held conflict: keeping Angee's
+        side writes over the version read here, and keeping Google's accepts it. An
+        event cancelled in Google is still there, with its ETag, so keeping Angee's
+        side writes it back as Angee has it.
         """
 
         client, zone = self._client(), self._zone(stream)
@@ -538,20 +556,41 @@ class GoogleResourceCalendarBackend(_GoogleBackend):
             else:
                 sent = self._series(stream, str(series))
                 item = self._instance(client, stream, str(series), original, sent) if sent is not None else None
-            remote = _remote_published(item, zone, stamped=original is None) if item is not None else None
-            if item is None or remote is None:
+            if item is None:
                 changes.append(RecordChange(key, {}, "", tombstone=True))
                 continue
+            remote = _remote_published(item, zone, stamped=original is None)
             changes.append(
                 RecordChange(
                     key,
                     {"id": item["id"]},
                     canonical_json_sha256(item),
                     remote_version=str(item.get("etag") or ""),
-                    mapped_payload=remote,
+                    mapped_payload=UNSET if remote is None else remote,
                 )
             )
         return changes
+
+    def _remove(
+        self, client: GoogleCalendarClient, link: Any, series: str, original: datetime | None, expected_version: str
+    ) -> WriteBackResult:
+        """Remove a published event deleted locally; its link is then a tombstone.
+
+        A master or single event is deleted, and an override's instance restored to
+        the series as last written, both under ``If-Match`` (a ``412`` is a held
+        conflict). An event, series or instance Google no longer has is already gone.
+        """
+
+        if not expected_version:
+            raise RemoteRejected("remote_version_missing")
+        stream = link.stream
+        written = str((link.source_payload or {}).get("id") or link.external_key)
+        if original is None:
+            client.delete(stream.partition, written, etag=expected_version)
+        elif (sent := self._series(stream, series)) is not None:
+            restored = _body(_instance_of(sent, original), instance=True, patch=True)
+            client.patch(stream.partition, written, restored, etag=expected_version)
+        return WriteBackResult("", "", {"id": written}, tombstone=True)
 
     def _create(self, client: GoogleCalendarClient, stream: Any, key: str, projection: Mapping[str, Any]) -> Any:
         """Create a master or single event once under ``key``; one already there is adopted, or held.
@@ -560,13 +599,15 @@ class GoogleResourceCalendarBackend(_GoogleBackend):
         between Google's create and the link's record makes no second event: the
         retry finds the first by its stamp, or by its taken id (``409``). It is
         adopted when it is the one event carrying this event's stamp and holds what
-        Angee sends; anything else is a held conflict.
+        Angee sends; anything else is a held conflict. A series' instances carry its
+        stamp too: only masters and single events are counted.
         """
 
-        found = client.stamped(stream.partition, STAMP, projection["stamp"])
+        stamped = client.stamped(stream.partition, STAMP, projection["stamp"])
+        found = [item for item in stamped if not item.get("recurringEventId")]
         if not found:
             try:
-                return client.insert(stream.partition, {"id": key, **_body(projection, instance=False)})
+                return client.insert(stream.partition, {"id": key, **_body(projection, instance=False, patch=False)})
             except EventIdTaken:
                 found = [item for item in (client.event(stream.partition, key),) if item is not None]
         mine = [item for item in found if item.get("id") == key and _stamp(item) == projection["stamp"]]
@@ -587,27 +628,35 @@ class GoogleResourceCalendarBackend(_GoogleBackend):
     ) -> Any:
         """Patch the instance of the series ``series`` at ``original`` an override names.
 
-        Its first write reads the instance: one Google holds unlike the series as
-        Angee last wrote it is a remote edit, held; later writes patch the instance
-        id it returned under ``If-Match``. A series not written yet, or without that
+        Its first write reads the instance. One that already holds this write (an
+        earlier attempt landed before its answer was lost; for a cancelled override,
+        its status alone) is adopted. One Google holds unlike the series as Angee
+        last wrote it is a remote edit, held. Later writes patch the instance id it
+        returned under ``If-Match``. A series not written yet, or without that
         instance, refuses for now.
         """
 
         stream = link.stream
         written = (link.source_payload or {}).get("id") if expected_version else None
+        body = _body(projection, instance=True, patch=True)
         if written:
-            return client.patch(stream.partition, written, _body(projection, instance=True), etag=expected_version)
+            return client.patch(stream.partition, written, body, etag=expected_version)
         sent = self._series(stream, series)
         if sent is None:
             raise RemoteRejected("series_unavailable", conflict=False)
         item = self._instance(client, stream, series, original, sent)
         if item is None:
             raise RemoteRejected("instance_unavailable", conflict=False)
-        if _remote_published(item, self._zone(stream), stamped=False) != _instance_of(sent, original):
+        remote = _remote_published(item, self._zone(stream), stamped=False)
+        if projection["status"] == EventStatus.CANCELLED:
+            landed = item.get("status") == "cancelled"
+        else:
+            landed = remote == projection
+        if landed:
+            return item
+        if remote != _instance_of(sent, original):
             raise RemoteRejected()
-        return client.patch(
-            stream.partition, str(item["id"]), _body(projection, instance=True), etag=str(item.get("etag") or "")
-        )
+        return client.patch(stream.partition, str(item["id"]), body, etag=str(item.get("etag") or ""))
 
     def _series(self, stream: Any, series: str) -> dict[str, Any] | None:
         """Return the projection the series ``series`` was last written with, or ``None`` before its first write."""
@@ -713,21 +762,25 @@ def _instance_of(series: Mapping[str, Any], original: datetime) -> dict[str, Any
     }
 
 
-def _body(published: Mapping[str, Any], *, instance: bool) -> dict[str, Any]:
+def _body(published: Mapping[str, Any], *, instance: bool, patch: bool) -> dict[str, Any]:
     """Return the Google event fields a projection writes (:func:`_published`).
 
-    Times carry the projection's zone (a ``date`` for an all-day event). A master or
-    single event states its rule (an empty ``recurrence`` clears one) and its stamp;
-    an instance states neither.
+    Times carry the projection's zone (a ``date`` for an all-day event). A patch
+    also clears the other time key (``null``), since Google merges a patched
+    ``start`` into the one it holds: an event switched between all-day and timed
+    keeps one. A master or single event states its rule (an empty ``recurrence``
+    clears one) and its stamp; an instance states neither.
     """
 
     zone = published["timezone"]
 
-    def moment(name: str) -> dict[str, str]:
+    def moment(name: str) -> dict[str, str | None]:
         value = datetime.fromisoformat(published[name])
         if published["all_day"]:
-            return {"date": _local_day(value, zone).isoformat(), "timeZone": zone}
-        return {"dateTime": value.isoformat(), "timeZone": zone}
+            kept, cleared, written = "date", "dateTime", _local_day(value, zone).isoformat()
+        else:
+            kept, cleared, written = "dateTime", "date", value.isoformat()
+        return {kept: written, **({cleared: None} if patch else {}), "timeZone": zone}
 
     body: dict[str, Any] = {
         "summary": published["title"],

@@ -108,6 +108,12 @@ conflicts await an explicit remote/local choice (`RecordLink.resolve_conflict`).
 identity through `BridgeImpl.read_keys`; unsupported identity reads fall back to
 a baseline with the reason retained in failure details. Refused writes retry
 through the outbox. A due refusal with no remaining local candidate closes.
+A push stream never applies its remote: keeping the remote of its conflict
+records the remote's current version as the link's base over the local
+projection, and the next local change writes over it. A push link holds no row
+(`RecordLink.live_reference_filter`): deleting the row releases the link
+(`RecordLinkManager.release_pushes`), and the push writes its removal as
+`write_back(link, None)`.
 `RecordLink.pin()` withholds automatic application and push; `unpin()` resumes
 them. Admin actions dispatch to those owners.
 

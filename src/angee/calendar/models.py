@@ -123,6 +123,9 @@ READ_ONLY_CALENDAR = "This calendar is a read-only subscription."
 SOURCE_CALENDAR_DELETE = "This calendar mirrors a subscription; unsubscribe to stop it, which archives the calendar."
 """The refusal of deleting a source's calendar on its own; its source's record link and statements retain it."""
 
+PUBLISHED_CALENDAR_DELETE = "This calendar is published; unpublish it before deleting it."
+"""The refusal of deleting a published calendar: deleting it must never remove its remote calendar's events."""
+
 PURGE_SOURCE_TASK = "calendar.purge_source"
 """The job that purges an unsubscribed source (:meth:`CalendarSource.purge`)."""
 
@@ -486,10 +489,14 @@ class Calendar(OwnerMixin, ArchiveMixin, StatementsMixin, HistoryMixin, AngeeDat
         return isinstance(origin, apps.get_model("integrate", "Integration")) and origin.pk == self.source_id
 
     def delete_blocker(self) -> str | None:
-        """Refuse deleting a source's calendar on its own: its source's link and statements retain it."""
+        """Refuse deleting a source's calendar on its own: its source's link and statements retain it.
+
+        A published calendar stays until it is unpublished: its events' deletes would
+        propagate, and deleting it must not empty its remote calendar.
+        """
 
         if self.source_id is not None:
-            return SOURCE_CALENDAR_DELETE
+            return PUBLISHED_CALENDAR_DELETE if cast(Any, self.source).publishes else SOURCE_CALENDAR_DELETE
         return cast(Any, super()).delete_blocker()
 
 
@@ -1264,7 +1271,12 @@ class CalendarEvent(
         edge's own policy:
         :meth:`~angee.base.models.merge_references.Reference.live_pointing`) is left to
         that sync, neither detached nor deleted: a stranded one suppresses no instance.
-        Which overrides are so held is read once, for all of them.
+        Which overrides are so held is read once, for all of them. A push link holds
+        nothing (``RecordLink.live_reference_filter``): an override only pushed is
+        moved, detached or deleted like a local one, and its push links let it go
+        (``RecordLinkManager.release_pushes``), since the instance they name is no
+        longer its own. The push then restores that instance and writes the
+        override's new one.
         """
 
         old_tz, zone = get_zone_info(previous_zone), self.expansion_zone
@@ -1290,6 +1302,7 @@ class CalendarEvent(
                 moves[override.pk] = timezone.make_aware(local, new_tz).astimezone(UTC)
             except OverflowError:
                 moves[override.pk] = None
+        links = apps.get_model("integrate", "RecordLink").objects
         for override in overrides:
             moved = moves[override.pk]
             if moved is not None and self.is_instance(moved, zone=zone):
@@ -1302,11 +1315,15 @@ class CalendarEvent(
                 # A synced row: its sync tombstones the old instance through its own stream.
                 continue
             elif override.status == EventStatus.CANCELLED:
+                # Its deletion releases its push links (RecordLink.teardown_for_target).
                 override.delete()
+                continue
             else:
                 override.series, override.original_start = None, None
                 override.allow_immutable_save("series_id", "original_start")
                 override.save(update_fields=["series", "original_start", "updated_at"])
+            if override.pk not in held:
+                links.release_pushes(override)
 
     def _refuse_overlap(self) -> None:
         """Refuse this busy event when any of its instances meets another busy occurrence on a ``refuse`` calendar.
@@ -1718,13 +1735,13 @@ class CalendarSource(Bridge, inherits="integrate.Integration"):
         """Whether this deployment lets a source publish to the remote calendar ``remote_id``.
 
         ``ANGEE_CALENDAR_PUBLISH_TARGETS`` lists the remote calendars sources may
-        write: ``None`` admits any, and a list admits only those (a test profile
-        lists none, or its own). :meth:`publish` asks before binding, and a
-        publishing backend asks again before every remote call.
+        write: ``None`` admits any, and a list admits only those, matched whole (a
+        test profile lists none, or its own). :meth:`publish` asks before binding,
+        and ``CalendarBackend.admit_push`` before every remote call of a push.
         """
 
         targets = settings.ANGEE_CALENDAR_PUBLISH_TARGETS
-        return targets is None or remote_id in targets
+        return targets is None or remote_id in frozenset(targets)
 
     def publish(self, calendar: Calendar, remote_id: str) -> Any:
         """Publish ``calendar`` to the remote calendar ``remote_id`` and queue the push; return the binding link.
@@ -1737,32 +1754,45 @@ class CalendarSource(Bridge, inherits="integrate.Integration"):
         same remote calendar changes nothing. Refused: a source that does not
         publish or is not connected, a remote calendar the deployment does not
         admit (:meth:`may_publish_to`), a calendar another source mirrors or
-        publishes, a calendar published elsewhere, and a remote calendar this
-        source publishes another calendar to. Runs as this source's own work: the
-        source's row is locked, then the calendar's, so racing publishes of one
-        calendar bind it once. The caller authorizes it on both rows.
+        publishes, a calendar published elsewhere, a remote calendar this source
+        publishes another calendar to, and one another source publishes to. Runs as
+        this source's own work, its lifecycle read from its locked row: the source's
+        row, then its vendor's (the owner of the remote calendar ids, so two
+        sources' publishes to one remote calendar bind it once), then the calendars
+        stream, then the calendar (so racing publishes of one calendar bind it once).
+        The caller authorizes it on both rows.
         """
 
         if not self.publishes:
             raise ValidationError("This calendar source does not publish calendars.")
-        if self.lifecycle != IntegrationLifecycle.CONNECTED:
-            raise ValidationError("This calendar source is not connected.")
         remote_id = remote_id.strip()
         if not remote_id:
             raise ValidationError({"remote_id": "Name the remote calendar to publish to."})
         if not self.may_publish_to(remote_id):
             raise ValidationError({"remote_id": "This deployment does not publish to that calendar."})
         links = apps.get_model("integrate", "RecordLink").objects
+        streams = apps.get_model("integrate", "SyncStream").objects
         with (
             changeset(fresh=True, activity="system", origin=self, change_reason="calendar.source.publish"),
             system_context(reason="calendar.source.publish"),
             transaction.atomic(),
         ):
-            self.lock_capability()
+            source = self.lock_capability()
+            if source.lifecycle != IntegrationLifecycle.CONNECTED:
+                raise ValidationError("This calendar source is not connected.")
+            apps.get_model("integrate", "Vendor").objects.lock_if_supported().get(pk=source.vendor_id)
+            stream = streams.lock_current(streams.current(self, self.calendars_stream()))
             bound = calendar.lock_subject()
             if bound.source_id not in (None, self.pk):
                 raise ValidationError("Another calendar source already mirrors or publishes this calendar.")
-            stream = apps.get_model("integrate", "SyncStream").objects.current(self, self.calendars_stream())
+            others = links.filter(
+                stream__key=CALENDARS_STREAM,
+                stream__direction=StreamDirection.PUSH,
+                stream__integration__vendor_id=source.vendor_id,
+                external_key=remote_id,
+            )
+            if others.exclude(stream__integration_id=self.pk).exclude(target_object_id=None).exists():
+                raise ValidationError({"remote_id": "Another calendar source already publishes to that calendar."})
             published = links.filter(stream=stream)
             if published.filter(target_object_id=str(bound.pk)).exclude(external_key=remote_id).exists():
                 raise ValidationError("This calendar is already published to another calendar.")
@@ -1852,10 +1882,12 @@ class CalendarSource(Bridge, inherits="integrate.Integration"):
     def purge(self) -> int:
         """Purge an unsubscribed source: delete its events, archive its calendars, retire its credential.
 
-        A publishing source (:attr:`publishes`) is unbound instead: its links
-        release their targets, its calendars become local again with every event
-        kept, and its credential (the deployment's key) is detached, never retired.
-        Nothing remote changes.
+        A publishing source (:attr:`publishes`) is unbound instead: each of its
+        streams moves to a new generation first, so a push already writing finds its
+        generation superseded and binds nothing it wrote; then its links release
+        their targets, its calendars become local again with every event kept, and
+        its credential (the deployment's key) is detached, never retired. Nothing
+        remote changes.
 
         Returns how many events went. Runs as the ``calendar.purge_source`` job, and
         again from the reconciler while anything is left (:meth:`purge_unsubscribed`),
@@ -1884,11 +1916,13 @@ class CalendarSource(Bridge, inherits="integrate.Integration"):
             transaction.atomic(),
         ):
             source = self.lock_capability()
-            list(
-                streams.system_queryset(lock=("self",)).filter(integration_id=self.pk, key=EVENTS_STREAM).order_by("pk")
-            )
+            fenced = Q() if source.publishes else Q(key=EVENTS_STREAM)
+            list(streams.system_queryset(lock=("self",)).filter(fenced, integration_id=self.pk).order_by("pk"))
             if source.lifecycle != IntegrationLifecycle.DISCONNECTED:
                 return 0
+            if source.publishes:
+                for stream in streams.objects.current_for_bridge(source):
+                    streams.objects.bump_generation(stream)
             owned = [
                 calendar.lock_subject()
                 for calendar in calendars.system_queryset().filter(source_id=self.pk).order_by("pk")
