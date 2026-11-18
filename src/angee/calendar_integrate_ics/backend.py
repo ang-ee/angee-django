@@ -19,9 +19,10 @@ its pages, identity reads and sweep (:meth:`IcsCalendarBackend._events_now`).
 The external key is the UID (its digest when too long), plus the
 ``RECURRENCE-ID`` instant for an instance. A feed produces at most 10,000
 events, cancelled instances included, and defines at most 100 time zones; both
-are counted before it is parsed. A rule is validated by the event's own field
-before any ``EXDATE`` is judged; a master names at most 10,000 ``EXDATE``s, each
-judged on its own window.
+are counted before it is parsed (:attr:`IcsCalendarBackend.events_per_feed`,
+:attr:`IcsCalendarBackend.timezones_per_feed`). A rule is validated by the
+event's own field before any ``EXDATE`` is judged; a master names at most 10,000
+``EXDATE``s, each judged on its own window.
 
 **Zones are resolved per parse.** icalendar's parser caches each feed-defined
 ``VTIMEZONE`` in a process-wide registry, so a resolved value can carry another
@@ -65,7 +66,7 @@ from dataclasses import dataclass, replace
 from datetime import UTC, date, datetime, time, timedelta, tzinfo
 from itertools import islice, takewhile
 from time import monotonic
-from typing import Any
+from typing import Any, ClassVar
 from urllib.parse import urlsplit
 
 import icalendar
@@ -103,15 +104,6 @@ _FEED_BUDGET = OutboundBudget(requests=6, redirects=5, bytes=16 * 1024 * 1024, d
 
 _REPORTED_STATUSES = frozenset({304, *range(400, 600)})
 """The statuses a fetch reports itself: a conditional GET's 304, and a refusal named to the operator."""
-
-_EVENTS_PER_FEED = 10_000
-"""The most events a feed may produce, cancelled instances included; a larger feed fails its poll."""
-
-_PARSE_SECONDS = 60.0
-"""How long one parse may run outside a bridge sync, which holds no deadline (a direct identity read)."""
-
-_TIMEZONES_PER_FEED = 100
-"""The most VTIMEZONEs a feed may define; a larger feed fails its poll before it is parsed."""
 
 _TRANSITIONS_PER_ZONE = 5_000
 """The most transitions one feed-defined VTIMEZONE may unroll (``Timezone.to_tz``), every observance counted."""
@@ -192,6 +184,18 @@ class IcsCalendarBackend(CalendarBackend):
     icon = "calendar"
     defaults = {"vendor": "ics", "poll_interval": 3600}
 
+    events_per_feed: ClassVar[int] = 10_000
+    """The most events a feed may produce, cancelled instances included; a larger feed fails its poll.
+
+    It also bounds the dates one master's ``EXDATE`` properties may name: past it, that master is an invalid event.
+    """
+
+    timezones_per_feed: ClassVar[int] = 100
+    """The most VTIMEZONEs a feed may define; a larger feed fails its poll before it is parsed."""
+
+    parse_seconds: ClassVar[float] = 60.0
+    """How long one parse may run outside a bridge sync, which holds no deadline (a direct identity read)."""
+
     _snapshot: _Snapshot | None = None
 
     def admit_credential(self, credential: Any) -> None:
@@ -270,16 +274,17 @@ class IcsCalendarBackend(CalendarBackend):
 
         Every parse runs against a deadline: the bridge sync's (integrate's
         ``sync_deadline()``), whichever call parses (an extraction, an identity read or
-        the sweep), else :data:`_PARSE_SECONDS` from now outside a sync. A parse that
+        the sweep), else :attr:`parse_seconds` from now outside a sync. A parse that
         reaches it stops, and the next sync reads the feed again.
         """
 
         deadline = sync_deadline()
         if deadline is None:
-            deadline = monotonic() + _PARSE_SECONDS
+            deadline = monotonic() + self.parse_seconds
+        feed = _read(result.content, events=self.events_per_feed, timezones=self.timezones_per_feed)
         return _Snapshot(
             {"etag": result.headers.get("etag", ""), "last_modified": result.headers.get("last-modified", "")},
-            self._observe_feed(_read(result.content), zone=self.get_calendar(stream).timezone, deadline=deadline),
+            self._observe_feed(feed, zone=self.get_calendar(stream).timezone, deadline=deadline),
         )
 
     # --- transport ---
@@ -335,7 +340,7 @@ class IcsCalendarBackend(CalendarBackend):
         series' master, and replaces a cancelled ``EXDATE`` instance at the same
         moment; an instance whose master the feed lacks is a single event. Of two
         copies of one key, the higher ``SEQUENCE`` wins. Every produced record,
-        cancelled instances included, counts against :data:`_EVENTS_PER_FEED`.
+        cancelled instances included, counts against :attr:`events_per_feed`.
         ``zone`` is the calendar's; a parse that reaches the sync's ``deadline`` stops
         as a transient refusal, never one event's quarantine.
         """
@@ -364,6 +369,7 @@ class IcsCalendarBackend(CalendarBackend):
                     feed_zone=feed_zone,
                     calendar_zone=zone,
                     master=masters.get(uid),
+                    exdate_cap=self.events_per_feed,
                     deadline=deadline,
                 )
             except IcsError:
@@ -376,8 +382,8 @@ class IcsCalendarBackend(CalendarBackend):
                 events[key] = (sequence, self.observe(event))
             for instance, exception in cancelled:
                 exceptions[instance] = self.observe(exception)
-            if len(events) + len(exceptions) > _EVENTS_PER_FEED:
-                raise IcsError(f"The calendar feed has more than {_EVENTS_PER_FEED} events.")
+            if len(events) + len(exceptions) > self.events_per_feed:
+                raise IcsError(f"The calendar feed has more than {self.events_per_feed} events.")
         # A deadline an unmappable event's own key swallowed (_own_key) still stops the parse.
         _check_deadline(deadline)
         return {**exceptions, **{key: payload for key, (_sequence_, payload) in events.items()}}
@@ -545,20 +551,19 @@ def _components(text: str) -> Counter[str]:
     return counts
 
 
-def _read(content: bytes) -> Any:
+def _read(content: bytes, *, events: int, timezones: int) -> Any:
     """Parse one iCalendar body without NUL characters, refusing anything that is not a ``VCALENDAR``.
 
-    Its components are counted before it is parsed: a feed past
-    :data:`_EVENTS_PER_FEED` events or :data:`_TIMEZONES_PER_FEED` time zones fails
-    its poll unparsed.
+    Its components are counted before it is parsed: a feed past ``events`` events
+    or ``timezones`` time zones (the backend's caps) fails its poll unparsed.
     """
 
     text = content.decode("utf-8-sig", errors="replace").replace("\x00", "")
     counts = _components(text)
-    if counts["VEVENT"] > _EVENTS_PER_FEED:
-        raise IcsError(f"The calendar feed has more than {_EVENTS_PER_FEED} events.")
-    if counts["VTIMEZONE"] > _TIMEZONES_PER_FEED:
-        raise IcsError(f"The calendar feed defines more than {_TIMEZONES_PER_FEED} time zones.")
+    if counts["VEVENT"] > events:
+        raise IcsError(f"The calendar feed has more than {events} events.")
+    if counts["VTIMEZONE"] > timezones:
+        raise IcsError(f"The calendar feed defines more than {timezones} time zones.")
     try:
         # Bytes: icalendar reads a one-line str as a file path on this server.
         feed = icalendar.Calendar.from_ical(text.encode())
@@ -578,6 +583,7 @@ def _events(
     feed_zone: str,
     calendar_zone: str,
     master: Any,
+    exdate_cap: int,
     deadline: float | None = None,
 ) -> list[tuple[str, ParsedEvent]]:
     """Map one VEVENT to its keyed event, then a master's cancelled ``EXDATE`` instances.
@@ -587,7 +593,7 @@ def _events(
     by the event's own owner first (``CalendarEvent.validate_rule``: its daily
     floor, its ``COUNT`` bound, and an occurrence within about 30 years of its
     start), so an invalid rule makes the master an invalid event before anything
-    expands it, and so does naming more than :data:`_EVENTS_PER_FEED` ``EXDATE``s.
+    expands it, and so does naming more than ``exdate_cap`` ``EXDATE``s.
     Each ``EXDATE`` is then judged on its own (``CalendarEvent.is_instance``, which
     reads only that moment's window), in the zone the stored series uses, against
     the parse's ``deadline``: one that is no instance is dropped, and a cancelled
@@ -644,8 +650,8 @@ def _events(
     )
     observed = [(instance_key(uid, original_start) if original_start is not None else series_key(uid), event)]
     exdates = _values(component, "EXDATE") if recurrence else []
-    if sum(len(exdate.dts) for exdate in exdates) > _EVENTS_PER_FEED:
-        raise ValidationError(f"The event excludes more than {_EVENTS_PER_FEED} dates.", code="too_many_exdates")
+    if sum(len(exdate.dts) for exdate in exdates) > exdate_cap:
+        raise ValidationError(f"The event excludes more than {exdate_cap} dates.", code="too_many_exdates")
     excluded = sorted(
         {_instant(value.dt, _param(exdate, "TZID"), zones, zone) for exdate in exdates for value in exdate.dts}
     )
