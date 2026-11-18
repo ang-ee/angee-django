@@ -331,8 +331,9 @@ jobs:
   # fixture), and run the optional bridge source tests.
   # The consolidated checkout supplies packages, src, examples, and
   # templates. Only the optional full-profile bridges remain external.
-  # Consumer collections span independent PostgreSQL hosts; the first group
-  # also checks lint, types and frontend fragments. The stack job keeps one verdict.
+  # A consumer call runs six groups: the first provisions and smokes the host and
+  # checks lint, types and frontend fragments; the other five split the consumer's
+  # Python collection, each on its own PostgreSQL host. The stack job keeps one verdict.
   stack-shard:
     name: stack ${{ matrix.group }}/${{ strategy.job-total }}
     if: ${{ inputs.stack-enabled }}
@@ -485,7 +486,9 @@ jobs:
           uv run --no-sync python manage.py makemigrations --check --dry-run
           uv run --no-sync python manage.py compose --check
           uv run --no-sync python manage.py schema --check
+      # Only the smoke reads the host database; consumer shards test in pytest-django's own.
       - name: Provision the composed stack
+        if: ${{ matrix.group == 1 }}
         working-directory: stack
         run: |
           uv run --no-sync python manage.py provision
@@ -581,13 +584,13 @@ jobs:
           ], cwd=framework, check=True)
           PY
       - name: Size the PostgreSQL lock table for consumer test schemas
-        if: ${{ inputs.consumer-path != '' }}
+        if: ${{ inputs.consumer-path != '' && matrix.group != 1 }}
         run: |
           docker exec ${{ job.services.postgres.id }} psql -U postgres -d angee -c "ALTER SYSTEM SET max_locks_per_transaction = 256"
           docker restart ${{ job.services.postgres.id }}
           until docker exec ${{ job.services.postgres.id }} pg_isready -U postgres -d angee; do sleep 1; done
       - name: Run the consumer's PostgreSQL test shard
-        if: ${{ inputs.consumer-path != '' }}
+        if: ${{ inputs.consumer-path != '' && matrix.group != 1 }}
         working-directory: stack
         env:
           DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/angee
@@ -628,7 +631,9 @@ jobs:
               "-p", "django", "-p", "angee.base.testing.fixtures", "-p", "angee.provenance.testing.fixtures",
               *(arg for plugin in plugins for arg in ("-p", plugin)),
               "-p", "no:randomly", "-n", "4", "--dist", "worksteal", "-q",
-              "--splits", os.environ["CONSUMER_SPLITS"], "--group", os.environ["CONSUMER_GROUP"],
+              # Group 1 carries the composed checks; the other groups split the collection.
+              "--splits", str(int(os.environ["CONSUMER_SPLITS"]) - 1),
+              "--group", str(int(os.environ["CONSUMER_GROUP"]) - 1),
               "--splitting-algorithm", "least_duration", "--durations=25",
               "-o", "faulthandler_timeout=300",
               *(str(slot / path) for path in paths),
