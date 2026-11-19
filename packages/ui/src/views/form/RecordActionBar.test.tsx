@@ -54,6 +54,33 @@ describe("RecordActionBar", () => {
     for (const button of buttons) expect(button.tabIndex).toBe(0);
   });
 
+  test("contributed band buttons render before the Actions trigger, which marks itself as the overflow", () => {
+    renderActionBar(<RecordActionBar record={record} menuTrigger="icon" fillBand
+      contributedVerbs={<button type="button">Pause</button>}
+      actions={[
+        { id: "sync", label: "Sync now", run: vi.fn() },
+        { id: "copy", label: "Copy link", placement: "menu", run: vi.fn() },
+      ]} />);
+
+    const trigger = screen.getByRole("button", { name: "Actions" });
+    expect(screen.getAllByRole("button")).toEqual([
+      screen.getByRole("button", { name: "Sync now" }),
+      screen.getByRole("button", { name: "Pause" }),
+      trigger,
+    ]);
+    expect(trigger.hasAttribute("data-overflow-trigger")).toBe(true);
+    expect(trigger.classList.contains("order-last")).toBe(true);
+  });
+
+  test("the labeled Actions menu is an overflow menu too", () => {
+    renderActionBar(<RecordActionBar record={record} actions={[
+      { id: "copy", label: "Copy link", placement: "menu", run: vi.fn() },
+    ]} />);
+    const trigger = screen.getByRole("button", { name: "Actions" });
+    expect(trigger.hasAttribute("data-overflow-trigger")).toBe(true);
+    expect(trigger.classList.contains("order-last")).toBe(true);
+  });
+
   test("primary alone puts a verb on the toolbar with primary emphasis", () => {
     renderActionBar(<RecordActionBar record={record} actions={[
       { id: "review", label: "Review", primary: true, run: vi.fn() },

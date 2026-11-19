@@ -318,6 +318,23 @@ describe("FormView", () => {
     expect(screen.queryByRole("button", { name: "Actions" })).toBeNull();
   });
 
+  test("the Actions menu is the band's last verb control, after the form's own and contributed buttons", async () => {
+    sdkMocks.record = { ...sdkMocks.record, permissions: ["read", "write"] };
+    renderWithProviders(<FormView resource="notes.Note" id="note-1">
+      <Field name="title" title />
+      <Action id="sync" label="Sync now" permission="write" run={vi.fn()} />
+      <Action id="copy" label="Copy link" permission="write" placement="menu" run={vi.fn()} />
+    </FormView>, recordActionsMetadata(), undefined, formChildren({ "notes.Note#actions": {
+      "notes.pause": { permission: "write", content: <button type="button">Pause</button> },
+    } }));
+    const trigger = await screen.findByRole("button", { name: "Actions" });
+    const own = screen.getByRole("button", { name: "Sync now" });
+    const contributed = screen.getByRole("button", { name: "Pause" });
+    expect(own.compareDocumentPosition(contributed) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(contributed.compareDocumentPosition(trigger) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(trigger.hasAttribute("data-overflow-trigger")).toBe(true);
+  });
+
   test("an editable record keeps its command band's layout row from load to its first edit; a read-only record's collapses", async () => {
     const collapse = "not-has-[>div>:not([hidden]):not(:empty)]:hidden";
     const kept = "data-layout-band:not-has-[>div>:not([hidden]):not(:empty)]:invisible";

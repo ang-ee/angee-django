@@ -42,7 +42,13 @@ live in code docstrings.
     that toolbar. Filled buttons stay secondary; the rest go to `⋮`, after the
     verb buttons. `RecordActionBar` replaces `menuPlacement` with
     `menuTrigger="icon" | "label"` (default `"label"`); both triggers follow the
-    buttons.
+    buttons. An overflow menu is the last control of its group and never sits
+    between two buttons, in any toolbar: `ActionMenu` owns the rule, and a menu
+    behind the `more-vertical` or `more-horizontal` glyph orders its own trigger
+    after every sibling of its row, whatever contributed them; menus behind
+    other glyphs are unaffected. Contributed band buttons also render before
+    it (`RecordActionBar` `contributedVerbs`), and the message reader writes its
+    record chrome before its menu.
     A verb contributed through `#sections` stays in the menu unless it declares
     a placement. Create forms show Save / Create without record verbs.
   - **Delete.** `hasura_model_resource(delete=True)` generates

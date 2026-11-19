@@ -972,7 +972,16 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
 - **Record verbs compose the shared action owner.** On a saved record, the form's
   own command band fills to two buttons with its visible, unplaced, non-danger
   verbs in declaration order, counting verbs already placed on that toolbar;
-  the rest go to the icon-only `⋮` overflow menu after those buttons. These filled
+  the rest go to the `⋮` overflow menu. An overflow menu is the last control of
+  its group of buttons and never sits between two of them, in any toolbar:
+  [`ActionMenu`](../../packages/ui/src/toolbars/ActionMenu.tsx) owns the rule. A
+  menu behind the `more-vertical` or `more-horizontal` glyph, labeled or not,
+  orders its own trigger after every sibling of its row, whichever owner,
+  contribution or portal rendered them; a menu behind any other glyph (New,
+  Connect, a column picker) is a button of its own and stays where it is
+  written. No caller positions an overflow trigger. Owners that compose one also
+  write it last, so keyboard order matches what is drawn: the form renders
+  contributed band buttons before it (`RecordActionBar` `contributedVerbs`). These filled
   buttons stay secondary. Mark `primary` the subject model's lifecycle transition that its statusbar explains
   (post, confirm, cancel); secondary lifecycle verbs and model-owned utilities
   (pay, reverse, send, PDF, merge, download) can fill the remaining places.

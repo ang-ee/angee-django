@@ -52,6 +52,7 @@ export function RecordActionBar({
   reload = noop,
   deleteAction,
   contributedActions,
+  contributedVerbs,
   blocked: blockedByForm = false,
   menuTrigger = "label",
   fillBand = false,
@@ -65,6 +66,8 @@ export function RecordActionBar({
   deleteAction?: RecordDeleteAction;
   /** Addon-contributed verbs rendered inside this same Actions menu. */
   contributedActions?: React.ReactNode;
+  /** Addon-contributed band buttons: rendered after this bar's own buttons and before its Actions menu, so the menu is always the band's last verb control. */
+  contributedVerbs?: React.ReactNode;
   /** A dirty or pending form must be saved before acting on its persisted record. */
   blocked?: boolean;
   /** How the Actions menu trigger looks: an accessible icon-only `⋮` or a labeled menu (default). Both follow the verb buttons. */
@@ -182,6 +185,7 @@ export function RecordActionBar({
     visibleActions.length === 0 &&
     visibleDeleteAction === undefined &&
     contributedActions == null &&
+    contributedVerbs == null &&
     formAction === null
   ) return null;
 
@@ -242,6 +246,7 @@ export function RecordActionBar({
     <>
       {menu ? <>
         {menuContents}
+        {contributedVerbs}
         {formDialog}
       </> : <>
         {toolbarActions.map((action) => { const reason = disabledReason(action); return (
@@ -257,6 +262,7 @@ export function RecordActionBar({
             </Button>
           </Tooltip>
         ); })}
+        {contributedVerbs}
         {actionMenu}
         {formAction && !formAction.fromMenu ? formDialog : null}
       </>}

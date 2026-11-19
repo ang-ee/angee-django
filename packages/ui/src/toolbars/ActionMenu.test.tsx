@@ -22,6 +22,27 @@ describe("ActionMenu", () => {
     expect(menu.closest("[data-align]")?.getAttribute("data-align")).toBe("end");
   });
 
+  test.each([
+    ["the default labeled Actions menu", {}],
+    ["an icon-only vertical menu", { label: null, "aria-label": "Actions" }],
+    ["a horizontal more menu", { glyph: "more-horizontal", label: "More actions" }],
+  ])("%s is an overflow menu: its trigger orders itself last in its row", (_name, props) => {
+    render(<div className="flex">
+      <ActionMenu {...props}><ActionTrigger>Inspect example</ActionTrigger></ActionMenu>
+      <button type="button">Pause</button>
+    </div>);
+    const trigger = screen.getAllByRole("button").find((button) => button.textContent !== "Pause");
+    expect(trigger?.hasAttribute("data-overflow-trigger")).toBe(true);
+    expect(trigger?.classList.contains("order-last")).toBe(true);
+  });
+
+  test.each(["plus", "columns", "layout-dashboard", null])("a menu behind the %s glyph is a button of its own and stays where it is written", (glyph) => {
+    render(<ActionMenu glyph={glyph} label="New"><ActionTrigger>Folder</ActionTrigger></ActionMenu>);
+    const trigger = screen.getByRole("button", { name: "New" });
+    expect(trigger.hasAttribute("data-overflow-trigger")).toBe(false);
+    expect(trigger.classList.contains("order-last")).toBe(false);
+  });
+
   test("uses UI vocabulary and adapts toolbar actions into native menu items", async () => {
     const run = vi.fn();
     render(

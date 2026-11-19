@@ -63,6 +63,23 @@ const nothing = <>
   } />
 </>;
 
+test("the overflow trigger orders itself last in the verbs group, even when a button is written after the action bar", () => {
+  const band = renderBand(<>
+    <RecordActionBar record={record} menuTrigger="icon" actions={[
+      { id: "sync", label: "Sync now", placement: "toolbar", run: vi.fn() },
+      { id: "copy", label: "Copy link", placement: "menu", run: vi.fn() },
+    ]} />
+    <Button type="button">Pause</Button>
+  </>);
+  const trigger = band.querySelector<HTMLElement>("[data-overflow-trigger]");
+  expect(trigger?.getAttribute("aria-label")).toBe("Actions");
+  // The trigger's own rule, not the caller's order, places it: here the caller wrote a button after the bar.
+  expect(trigger?.classList.contains("order-last")).toBe(true);
+  const group = trigger?.parentElement;
+  expect([...(group?.querySelectorAll("button") ?? [])].map((button) => button.textContent || button.getAttribute("aria-label")))
+    .toEqual(["Sync now", "Actions", "Pause"]);
+});
+
 test("a band none of whose items renders takes no row", () => {
   const band = renderBand(nothing);
   expect(bandItems(band)).toEqual([]);

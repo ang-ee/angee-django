@@ -340,6 +340,10 @@ function FormViewContent({ surface, ...props }: FormViewProps & {
     event.preventDefault();
     void submitForm();
   };
+  // Contributed band buttons render inside the action bar, before its overflow menu:
+  // the menu is the band's last verb control whatever contributes a button.
+  const contributedBandVerbs = !awaitingRecord && !readOnly && recordChromeContext && primaryRecordActions.length > 0
+    ? <ContainerOutlet entries={primaryRecordActions} /> : null;
   const rawControlBand = readOnly && props.hideRecordChrome && !toolbarStartNode && !toolbar ? null : (
     <CommandBand
       className={formIsDirty ? dirtyControlBandClassName : undefined}
@@ -375,14 +379,12 @@ function FormViewContent({ surface, ...props }: FormViewProps & {
                 <ContainerOutlet entries={menuRecordActions} />
               ) : undefined
             }
+            contributedVerbs={contributedBandVerbs ?? undefined}
             blocked={actionsBlocked}
             menuTrigger="icon"
             fillBand
           />
-        ) : null}
-        {!awaitingRecord && !readOnly && recordChromeContext ? (
-          <ContainerOutlet entries={primaryRecordActions} />
-        ) : null}
+        ) : contributedBandVerbs}
       </>}
       chrome={recordChromeContext && !props.hideRecordChrome ? recordChromeContext : null}
       end={toolbar}
