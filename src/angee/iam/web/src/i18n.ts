@@ -6,6 +6,8 @@
 import { createNamespaceT } from "@angee/ui/i18n";
 
 export const enIamMessages: Record<string, string> = {
+  "group.removed": "Member removed",
+  "grants.revoke.succeededTitle": "Role revoked",
   // Shared action labels.
   "revoke": "Revoke",
   "password.change": "Change password",

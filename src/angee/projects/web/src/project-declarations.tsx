@@ -10,6 +10,8 @@ import {
   ListView,
   type GanttViewSpec,
   useEnumOptions,
+  mutationDialogValueCodecs,
+  relationValueId,
   useActionOutcomeMutation,
   useActionResultMutation,
   useActionResultRun,
@@ -35,7 +37,7 @@ import { TaskManagementTab } from "./task-declarations";
 
 export interface ProjectFormSelection {
   groups?: readonly ("planning" | "details")[];
-  verbs?: readonly ("pause" | "resume" | "complete" | "drop" | "createFromTemplate")[];
+  verbs?: readonly ("pause" | "resume" | "complete" | "drop" | "createFromTemplate" | "transfer")[];
   contextLine?: FormProps["contextLine"];
   /** Compact read-only extras the host adds to the record header (a card in `RecordHeader.extra`). */
   headerExtras?: FormProps["headerExtras"];
@@ -69,6 +71,9 @@ export function useProjectFormDeclaration(
   const resumeProject = useRecordAction((id, context) => resume(id, { expected_revision: context.record?.revision }));
   const completeProject = useRecordAction((id, context) => complete(id, { expected_revision: context.record?.revision }));
   const dropProject = useRecordAction((id, context) => drop(id, { expected_revision: context.record?.revision }));
+  const [transferOwnership, transferState] = useActionOutcomeMutation("transfer_project_ownership", {
+    invalidateModels: [PROJECT_MODEL],
+  });
   const [createFromTemplate] = useActionOutcomeMutation("create_project_from_template", {
     invalidateModels: [PROJECT_MODEL],
   });
@@ -86,8 +91,17 @@ export function useProjectFormDeclaration(
       return outcome;
     });
   });
-  const verbs = selection.verbs ?? ["pause", "resume", "complete", "drop", "createFromTemplate"];
+  const verbs = selection.verbs ?? ["pause", "resume", "complete", "drop", "createFromTemplate", "transfer"];
   const standardActions = <>
+    {verbs.includes("transfer") ? <Action
+      id="transfer-ownership" placement="menu" label={t("project.action.transferOwnership")} permission="transfer"
+      disabled={transferState.fetching}
+      args={[{ name: "owner", label: t("project.action.newOwner"), argKind: "relation", resource: "iam.User", optional: true,
+        fromContext: ({ record }) => relationValueId(record?.owner) }]}
+      submit={(values, context) => transferOwnership(
+        mutationDialogValueCodecs.requiredString(context.record?.id, "id"),
+        { owner: mutationDialogValueCodecs.string(values.owner) },
+      )} /> : null}
     {verbs.includes("pause") ? <Action
       id="pause" placement="menu" label={t("project.action.pause")} permission="write"
       icon="archive" run={pauseProject} visibleWhen={(record) => record.is_template !== true && recordStatus(record) === "open"} /> : null}
@@ -109,7 +123,7 @@ export function useProjectFormDeclaration(
     <Form
       {...props}
       resource={PROJECT_MODEL}
-      returning={["permissions", "on_path", "status_changed_at", "is_template", "selectable_milestones.id", "current_milestone.id", "current_milestone.name", ...(props.returning ?? []), ...(selection.returning ?? [])]}
+      returning={["owner.id", "permissions", "on_path", "status_changed_at", "is_template", "selectable_milestones.id", "current_milestone.id", "current_milestone.name", ...(props.returning ?? []), ...(selection.returning ?? [])]}
       contextLine={selection.contextLine ?? props.contextLine}
       headerExtras={selection.headerExtras ?? props.headerExtras}
       eyebrow={selection.eyebrow ?? props.eyebrow ?? t("project.eyebrow")}

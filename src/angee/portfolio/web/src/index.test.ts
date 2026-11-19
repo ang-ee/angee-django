@@ -7,4 +7,11 @@ describe("portfolio addon manifest", () => {
   test("satisfies rendered-addon invariants", () => {
     expect(() => expectValidBaseAddon(portfolio)).not.toThrow();
   });
+
+  test("promotion adds only product creation admission at the container", () => {
+    const contribution = portfolio.containers?.["projects.Project#actions-menu"]?.["portfolio.promote-project"];
+    expect(contribution).toMatchObject({ requires: "portfolio.Product#create" });
+    expect(contribution).not.toHaveProperty("permission");
+    expect(contribution).not.toHaveProperty("requiredFields");
+  });
 });

@@ -111,7 +111,7 @@ const work = defineBaseAddon({
     [`${QUEUE_MODEL}#sections`]: QUEUE_FORM_SECTIONS,
     // Every triage verb is a menu verb: it joins the form's one Actions menu.
     [`${TASK_MODEL}#actions-menu`]: {
-      "work.task-triage-actions": { sequence: 40, requiredFields: TASK_ACTION_FIELDS, content: <TriageRecordActions /> },
+      "work.task-triage-actions": { sequence: 40, requiredFields: [...TASK_ACTION_FIELDS, "revision"], content: <TriageRecordActions /> },
     },
   },
   icons: {

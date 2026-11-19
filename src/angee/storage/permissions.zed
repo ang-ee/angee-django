@@ -1,7 +1,7 @@
 // Authorization schema for the storage addon.
 // @rebac_package: storage
 // @rebac_package_version: 0.1.0
-// @rebac_schema_revision: 14
+// @rebac_schema_revision: 15
 
 // Roles-as-namespace anchor, mirroring operator/role: `includes` lets one
 // storage role imply another, and resources gate on `effective_member` so
@@ -119,6 +119,7 @@ definition storage/file {
     permission read   = (read_granted - withheld) + delete
     permission write  = ((inherited_drive->write + inherited_folder->write + inherited_owner + draft_owner + admin->member + write_granted) - withheld) + delete
     permission share  = (share_granted - withheld) + delete
+    permission inherit_visibility = drive->share
     // The owner while it may write the file: always for an inherited file, and
     // for a record file while it is a draft or through its records' write.
     permission owner_writer = inherited_owner + draft_owner + (owner & write_granted)

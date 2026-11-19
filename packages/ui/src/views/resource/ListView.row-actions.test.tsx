@@ -202,7 +202,8 @@ function renderList(): ReturnType<typeof render> {
                     confirm: () => "Remove",
                   },
                   toast: {
-                    title: () => "Remove failed",
+                    successTitle: () => "Row removed",
+                    failureTitle: () => "Remove failed",
                     description: () => "Could not remove row.",
                   },
                   pendingPolicy: "active-row",

@@ -164,10 +164,21 @@ export function TriageRecordActions(): React.ReactElement | null {
   const stage = taskContext.data?.project_tasks_by_pk?.stage ?? record?.stage;
   const [start, startState] = useRecordChromeActionMutation<ActionFieldName>("start_task");
   const [returnToTriage, returnState] = useRecordChromeActionMutation<ActionFieldName>("return_task_to_triage");
-  if (!record || !queueId || context.formReadOnly) return null;
+  const [wake, wakeState] = useRecordChromeActionMutation<ActionFieldName>("wake_task", { idArgument: "task" });
+  const wakeAction: ActionDescriptor = {
+    id: "work-wake-task", label: t("triage.action.wake"),
+    placement: "menu", disabled: wakeState.fetching,
+    visibleWhen: (row) => offersTaskAction(row, "wake") && typeof row.revision === "number",
+    run: async () => {
+      if (typeof record?.revision !== "number") return;
+      await wake(context.recordId, { expected_revision: record.revision });
+    },
+  };
+  if (!record || context.formReadOnly) return null;
+  if (!queueId) return <RecordActionBar record={record} actions={[wakeAction]} />;
   if (!isTaskInTriage(record)) {
     // Start shows where it would act (a waiting stage); the row's task_actions admit both verbs.
-    const verbs: ActionDescriptor[] = [];
+    const verbs: ActionDescriptor[] = [wakeAction];
     if (["BACKLOG", "UNSTARTED"].includes(String(stage?.category).toUpperCase()) && offersTaskAction(record, "start")) verbs.push({
       id: "work-start-task", label: t("task.action.start"), icon: "work-start",
       disabled: startState.fetching || returnState.fetching,
@@ -180,7 +191,7 @@ export function TriageRecordActions(): React.ReactElement | null {
     });
     return <RecordActionBar record={record} actions={verbs} />;
   }
-  return <RecordActionBar record={record} actions={actions} />;
+  return <RecordActionBar record={record} actions={[wakeAction, ...actions]} />;
 }
 
 function canonicalTaskFilters(queueId: string) {

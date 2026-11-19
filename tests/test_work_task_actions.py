@@ -3,9 +3,11 @@
 
 from django.core.exceptions import ValidationError
 from django.db import transaction
+from django.utils import timezone
 from rebac import PermissionDenied, actor_context, system_context
 
 from tests.native_work import WorkCase
+from tests.test_work_task_holds import WAKE
 
 ACTIONS = """query($id: String!) { project_tasks_by_pk(id: $id) { task_actions } }"""
 ARGUMENTS = {"drop": ("obsolete",)}
@@ -24,11 +26,13 @@ class TaskActionTests(WorkCase):
     def run_verb(self, task, verb):
         """Run ``verb`` as the owner and roll it back; return whether it was admitted and changed the row."""
 
-        before = type(task)._base_manager.values_list("stage_id", "status", "is_trashed").get(pk=task.pk)
+        before = type(task)._base_manager.values_list("stage_id", "status", "is_trashed", "snoozed_at").get(pk=task.pk)
         try:
             with actor_context(self.owner), transaction.atomic():
                 getattr(self.as_user(task), verb)(*ARGUMENTS.get(verb, ()))
-                after = type(task)._base_manager.values_list("stage_id", "status", "is_trashed").get(pk=task.pk)
+                after = type(task)._base_manager.values_list(
+                    "stage_id", "status", "is_trashed", "snoozed_at",
+                ).get(pk=task.pk)
                 raise _Rollback(after != before)
         except _Rollback as outcome:
             return True, outcome.args[0]
@@ -37,7 +41,7 @@ class TaskActionTests(WorkCase):
 
     def test_each_offered_verb_is_admitted_and_each_withheld_verb_refuses_or_changes_nothing(self):
         verbs = self.Task.hand_actions()
-        self.assertEqual(verbs, ("complete", "drop", "reopen", "accept", "start", "return_to_triage", "remove"))
+        self.assertEqual(verbs, ("complete", "drop", "reopen", "accept", "start", "return_to_triage", "remove", "wake"))
         for name in STAGES:
             task = self.task(name)
             offered = self.offered(task)
@@ -109,3 +113,22 @@ class TaskActionTests(WorkCase):
         task = self.task("Triage")
         self.share(task, self.reader)
         self.assertEqual(self.offered(task, user=self.reader), set())
+
+    def test_wake_follows_the_hold_and_write_permission_even_without_a_queue(self):
+        for stage in (None, "Triage", "Active", "Completed"):
+            task = self.task(stage, queue=None) if stage is None else self.task(stage)
+            self.assertNotIn("wake", self.offered(task))
+            with system_context(reason="tests.work.held_action"):
+                self.Task._base_manager.filter(pk=task.pk).update(snoozed_at=timezone.now())
+            self.assertIn("wake", self.offered(task))
+            self.share(task, self.reader)
+            self.assertNotIn("wake", self.offered(task, user=self.reader))
+            task.refresh_from_db()
+            values = {"task": task.sqid, "revision": task.revision}
+            refused = self.graphql(WAKE, values, user=self.reader)["wake_task"]
+            self.assertFalse(refused["ok"], refused)
+            task.refresh_from_db()
+            self.assertIsNotNone(task.snoozed_at)
+            accepted = self.graphql(WAKE, values)["wake_task"]
+            self.assertTrue(accepted["ok"], accepted)
+            self.assertNotIn("wake", self.offered(task))

@@ -145,7 +145,7 @@ class FolderType(AngeeNode):
 class FileType(AuthoredRefMixin, TrashedRefMixin, AngeeNode):
     """GraphQL projection of a file row."""
 
-    permissions = permissions_field(("read", "write", "share", "delete"))
+    permissions = permissions_field(("read", "write", "share", "delete", "inherit_visibility"))
     """The verbs record chrome gates on (``holdsPermission``), e.g. a contributed
     ``storage.File#actions`` child declaring ``permission: "read"``."""
 

@@ -3403,16 +3403,13 @@ class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
         if actor is None:
             raise PermissionDenied("Authentication required.")
         with transaction.atomic():
-            row = self.with_actor(actor).with_action("send_held").lock_if_supported().get(pk=message.pk)
+            row = (
+                self.with_actor(actor).with_action(self.model.delivery_action_permission).lock_if_supported()
+                .get(pk=message.pk)
+            )
             row.require_revision(expected_revision)
-            if (row.status == "uncertain" and row.scheduled_at is None
-                    and row.delivery_lease_until is not None and row.delivery_lease_until > timezone.now()):
-                raise DeliveryReconciliationBusy()
-            allowed = ("uncertain", "failed") if retry else ("uncertain",)
-            if row.status not in allowed or row.delivery_blocked:
-                raise ValidationError(
-                    "Retry requires a retained failed or uncertain delivery; acknowledgement requires uncertainty."
-                )
+            if (error := row.delivery_resolution_error(retry=retry)) is not None:
+                raise error
             with system_context(reason="messaging.delivery.acknowledge"):
                 row.acknowledged_by_id = actor_user_id(to_subject_ref(actor))
                 if retry:
@@ -3457,7 +3454,8 @@ class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
             # send_held is precisely channel write, including for discard. The
             # identity owner decodes once and performs one scoped pk__in query.
             scoped = (
-                self.with_actor(actor).inbox().with_action("send_held").lock_if_supported().order_by("pk")
+                self.with_actor(actor).inbox().with_action(self.model.delivery_action_permission)
+                .lock_if_supported().order_by("pk")
             )
             rows = instances_from_public_ids(self.model, [str(item.id) for item in selection], queryset=scoped)
             threads = []
