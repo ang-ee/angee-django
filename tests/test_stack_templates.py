@@ -130,7 +130,8 @@ def _render_stack_manifest(
     strip comments, bind ``{% set %}`` variables, expand the item loops and the celery
     ``{% for %}`` loop, evaluate nested/inline conditionals, evaluate the queue worker's
     ``{{ var|split:…|length * n }}`` product, then substitute the remaining
-    ``{{ var }}`` interpolations.
+    ``{{ var }}`` interpolations. Every render refuses a blank line in a frontend
+    ``env:`` block, which parsing would hide.
     """
 
     text = _inline_includes(manifest_path)
@@ -146,9 +147,32 @@ def _render_stack_manifest(
         text = text.replace(f"{{{{ {key} }}}}", value)
     assert "{{" not in text, text
     assert "{%" not in text, text
+    blank_env_lines = _frontend_env_blank_lines(text)
+    assert not blank_env_lines, blank_env_lines
     rendered = yaml.safe_load(text)
     assert isinstance(rendered, dict)
     return rendered
+
+
+def _frontend_env_blank_lines(text: str) -> list[str]:
+    """Return ``name:line`` for each blank line in or after a frontend service's or job's ``env:``.
+
+    A conditional guard at the start of a line leaves one behind when it renders nothing.
+    A block mapping's end mark is the next key's line, so trailing blank lines count.
+    """
+
+    lines = text.splitlines()
+    return [
+        f"{name.value}:{line + 1}"
+        for section, components in yaml.compose(text).value
+        if section.value in ("services", "jobs")
+        for name, component in components.value
+        if name.value.startswith("frontend")
+        for key, env in component.value
+        if key.value == "env"
+        for line in range(key.start_mark.line + 1, env.end_mark.line)
+        if not lines[line].strip()
+    ]
 
 
 _LENGTH_PRODUCT = re.compile(r'{{\s*(\w+)\|split:"([^"]*)"\|length\s*\*\s*(\d+)\s*}}')
@@ -2543,6 +2567,7 @@ _PUBLIC_INGRESS = "site.example.test"
 def test_public_origin_reaches_python_and_one_frontend_independently_of_sentry(
     render: Any, section: str, service: str, origin: str | None, sentry: str,
 ) -> None:
+    # The renderer also refuses a blank line in each frontend env block for every origin/Sentry pair.
     stack = render(sentry_web_dsn=sentry)
     assert ("VITE_SENTRY_DSN" in (stack[section][service].get("env") or {})) == bool(sentry)
     carriers = _env_nodes(stack, "ANGEE_PUBLIC_ORIGIN")

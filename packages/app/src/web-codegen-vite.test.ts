@@ -347,6 +347,15 @@ async function listen(server: ViteDevServer) {
   if (!address || typeof address === "string") throw new Error("Missing dev server address");
   return (url: string) => fetch(`http://127.0.0.1:${address.port}${url}`);
 }
+/** A dev server without a watcher, transforming a page whose host head holds `tags`. */
+async function headServer() {
+  const server = await createServer({
+    ...await config(), configFile: false, logLevel: "silent",
+    optimizeDeps: { noDiscovery: true, entries: [] }, server: { middlewareMode: true, ws: false, watch: null },
+  });
+  servers.push(server);
+  return (tags = "") => server.transformIndexHtml("/", `<html><head>${tags}</head><body></body></html>`);
+}
 
 test("dev replaces only the head's title, writes ordered escaped tags, and serves only the selected files", async () => {
   siteFiles();
@@ -418,6 +427,22 @@ test("dev asset edits reload, missing newly selected files retry, and only this 
   expect((await get(`/@fs${join(later, "kept.txt")}`)).status).toBe(200);
 }, 30_000);
 
+test("dev keeps a selected file the host's own list allows when regeneration drops it", async () => {
+  siteFiles();
+  const image = join(addon, siteAssets["demo.image"]);
+  const other = join(addon, "art/other.png");
+  write(other, tinyPng);
+  const server = await start([image]);
+  const get = await listen(server);
+  const sent = vi.spyOn(server.ws, "send");
+  await editSource(server, join(runtime, "web/manifest.json"), () => {
+    declareSite("demo.other", { ...siteAssets, "demo.other": "./art/other.png" });
+  });
+  await vi.waitFor(() => expect(sent).toHaveBeenCalledWith({ type: "full-reload" }));
+  expect((await get(encodeURI(`/@fs${other}`))).status).toBe(200);
+  expect((await get(encodeURI(`/@fs${image}`))).status).toBe(200);
+}, 30_000);
+
 test("dev serves the head's files behind a non-root base on a listening server", async () => {
   siteFiles();
   const server = await createServer({
@@ -462,14 +487,16 @@ test.each([undefined, "https://site.example.test:8443/"])(
     const selected = first.outputs.filter((entry) => entry.type === "asset" && entry.originalFileNames.some((file) => file.startsWith("../addon/art/")));
     expect(selected).toHaveLength(2); // image and touch icon select the same file.
     const imageUrl = documentHead.querySelector('meta[property="og:image"]')!.getAttribute("content")!;
-    const imageHref = `/preview/${first.emitted(emittedImage).fileName}`;
+    // Rolldown keeps the space in the emitted name; the href encodes it.
+    expect(first.emitted(emittedImage).fileName).toContain(" ");
+    const imageHref = `/preview/${encodeURI(first.emitted(emittedImage).fileName)}`;
     expect(imageUrl).toBe(origin ? new URL(imageHref, origin).href : imageHref);
     for (const [selector, file, bytes] of [
       ['link[rel="icon"]', emittedIcon, Buffer.from(iconBytes)],
       ['link[rel="apple-touch-icon"]', emittedImage, tinyPng],
     ] as const) {
       const asset = first.emitted(file);
-      expect(documentHead.querySelector(selector)?.getAttribute("href")).toBe(`/preview/${asset.fileName}`);
+      expect(documentHead.querySelector(selector)?.getAttribute("href")).toBe(`/preview/${encodeURI(asset.fileName)}`);
       expect(Buffer.from(asset.source)).toEqual(bytes);
     }
     const changed = Buffer.concat([tinyPng, Buffer.from("new bytes")]);
@@ -488,9 +515,9 @@ test.each(["./", "https://cdn.example.test/app/"])(
     const built = await builtSite({ base });
     const documentHead = head(built.html);
     expect(documentHead.querySelector('meta[property="og:url"]')).toBeNull();
-    expect(documentHead.querySelector('link[rel="icon"]')?.getAttribute("href")).toBe(`${base}${built.emitted(emittedIcon).fileName}`);
+    expect(documentHead.querySelector('link[rel="icon"]')?.getAttribute("href")).toBe(`${base}${encodeURI(built.emitted(emittedIcon).fileName)}`);
     expect(documentHead.querySelector('meta[property="og:image"]')?.getAttribute("content"))
-      .toBe(`${base}${built.emitted(emittedImage).fileName}`);
+      .toBe(`${base}${encodeURI(built.emitted(emittedImage).fileName)}`);
   }, 30_000,
 );
 
@@ -538,22 +565,66 @@ test("the host head may not also declare a fact the site writes, and the site ne
   await expect(builtSite()).rejects.toThrow("needs a <head> element for the static head");
 }, 30_000);
 
-test.each([
-  "not a URL", "ftp://site.example.test", "file:///tmp/site", "mailto:site@example.test",
-  "https://user:secret@site.example.test:8443", "https://site.example.test/path",
-  "https://site.example.test/?ignored=yes", "https://site.example.test/#fragment",
-])("config refuses a public origin that is not a bare http(s) origin: %s", async (origin) => {
-  vi.stubEnv("ANGEE_PUBLIC_ORIGIN", origin);
-  await expect(resolveConfig({ ...await config(), configFile: false }, "build"))
-    .rejects.toThrow(`ANGEE_PUBLIC_ORIGIN must be a bare http(s) origin such as https://example.com, not ${JSON.stringify(origin)}`);
+test("a host tag is matched across rel lists, letter case and unquoted values; head tags for other facts pass", async () => {
+  siteFiles();
+  const transform = await headServer();
+  for (const tag of [
+    '<link rel="shortcut icon" href="https://cdn.example.test/host.ico">',
+    '<META NAME="Description" CONTENT="Host">',
+    "<meta name=twitter:card content=summary>",
+  ]) {
+    await expect(transform(tag)).rejects.toThrow(`declares ${tag} in its head; ANGEE_UI.shell.site owns that tag`);
+  }
+  const kept = [
+    '<meta charset="utf-8">', '<meta name="viewport" content="width=device-width">', '<meta name="robots" content="noindex">',
+    '<link rel="manifest" href="https://cdn.example.test/site.webmanifest">', '<link rel="stylesheet" href="https://cdn.example.test/site.css">',
+  ];
+  expect(headTags(head(await transform(kept.join(""))))).toEqual(expect.arrayContaining(kept));
 });
 
-test("theme files resolve inside their canonical package, as site assets do", async () => {
-  rmSync(join(addon, "src", "mark.svg"));
-  write(join(root, "outside.svg"), "<svg/>");
-  symlinkSync(join(root, "outside.svg"), join(addon, "src", "mark.svg"));
-  await expect(resolveConfig({ ...await config(), configFile: false, logLevel: "silent" }, "build"))
-    .rejects.toThrow("stylesheet asset escapes its package or is missing: ./mark.svg");
+test.each([
+  ["https://Site.Example.Test", "https://site.example.test"],
+  ["HTTPS://site.example.test/", "https://site.example.test"],
+  ["https://site.example.test:443", "https://site.example.test"],
+  ["https://bücher.example.test", "https://xn--bcher-kva.example.test"],
+  [" https://site.example.test:8443\n", "https://site.example.test:8443"],
+])("a public origin Django accepts, %j, writes its normalized form %s", async (value, origin) => {
+  vi.stubEnv("ANGEE_PUBLIC_ORIGIN", value);
+  manifest({ deployment: { shell: { site: { title: "Site" } } } });
+  const html = await (await headServer())();
+  expect(head(html).querySelector('meta[property="og:url"]')?.getAttribute("content")).toBe(`${origin}/`);
+});
+
+test.each([
+  ["site.example.test", "ANGEE_PUBLIC_ORIGIN is not a URL"],
+  ["ftp://site.example.test", "origin such as https://example.com, with no user info"],
+  ["file:///tmp/site", "origin such as https://example.com, with no user info"],
+  ["mailto:u:p@example.test", "origin such as https://example.com, with no user info"],
+  ["https://u:p@site.example.test:8443", "origin such as https://site.example.test:8443, with no user info"],
+  ["https://site.example.test/p", "origin such as https://site.example.test, with no user info"],
+  ["https://site.example.test?x", "origin such as https://site.example.test, with no user info"],
+  ["https://site.example.test#f", "origin such as https://site.example.test, with no user info"],
+])("config refuses a public origin that is not a bare http(s) origin, %s, without echoing it", async (value, expected) => {
+  vi.stubEnv("ANGEE_PUBLIC_ORIGIN", value);
+  const message = await resolveConfig({ ...await config(), configFile: false }, "build")
+    .then(() => "", (error: Error) => error.message);
+  expect(message).toContain(expected);
+  expect(message).not.toContain(value);
+  expect(message).not.toContain("u:p");
+});
+
+test.each([
+  ["themes.mjs", "@demo/theme exports ./themes from an invalid or missing path: ./src/themes.mjs"],
+  ["palette.mjs", "Headless theme source escapes its package or is missing: "],
+  ["theme.css", "Theme demo.theme references missing stylesheet ./theme.css."],
+  ["mark.svg", "Theme demo.theme stylesheet asset escapes its package or is missing: ./mark.svg."],
+])("theme file %s resolves inside its canonical package, as site assets do", async (name, message) => {
+  // The same bytes through a link out of the package: only the containment rule refuses them.
+  const outside = join(root, "outside", name);
+  write(outside, readFileSync(join(addon, "src", name)));
+  rmSync(join(addon, "src", name));
+  symlinkSync(outside, join(addon, "src", name));
+  await expect(resolveConfig({ ...await config(), configFile: false, logLevel: "silent" }, "build")).rejects.toThrow(message);
 });
 
 test("preview serves the built site and assets after sources and runtime disappear", async () => {
