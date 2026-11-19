@@ -1331,24 +1331,31 @@ class PartyQuerySet[PartyT: Party](MergeableQuerySet[PartyT], StatementSubjectQu
                 return
 
     def review_pairs(self, entries: Sequence[tuple[Any, tuple[Any, ...]]]) -> list[SameAsPair]:
-        """Read these walked pairs (:meth:`review_walk`) in full, endpoints included, in their order."""
+        """Read these walked pairs (:meth:`review_walk`) in full, endpoints included, in their order.
+
+        The walk and this read are separate statements: a pair whose party was
+        merged away or trashed between them (its endpoint no longer canonical) is
+        moot and left out, never read through a missing relation.
+        """
 
         if not entries:
             return []
         actor, unscoped = self.effective_actor(strict=True)
         pair_model = self.model.same_as.model
+        rows = pair_model._base_manager.in_bulk([pk for pk, _cited in entries])
         endpoints = self.canonical() if unscoped else self.canonical().with_display_avatars(actor)
-        rows = pair_model._base_manager.prefetch_related(
-            *(Prefetch(side, queryset=endpoints) for side in ("left", "right")),
-        ).in_bulk([pk for pk, _cited in entries])
-        return [
-            SameAsPair(
-                rows[pk].left, rows[pk].right, cited[0].normalized_value if cited else "", cited,
-                id=pair_model.public_id_from_pk(pk),
-            )
-            for pk, cited in entries
-            if pk in rows
-        ]
+        parties = endpoints.in_bulk({pk for row in rows.values() for pk in (row.left_id, row.right_id)})
+        pairs = []
+        for pk, cited in entries:
+            row = rows.get(pk)
+            left = parties.get(row.left_id) if row is not None else None
+            right = parties.get(row.right_id) if row is not None else None
+            if left is None or right is None:
+                continue
+            pairs.append(SameAsPair(
+                left, right, cited[0].normalized_value if cited else "", cited, id=pair_model.public_id_from_pk(pk),
+            ))
+        return pairs
 
 
 _PartyManagerBase = AngeeHistoryManager.from_queryset(PartyQuerySet)

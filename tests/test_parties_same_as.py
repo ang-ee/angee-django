@@ -520,6 +520,23 @@ def test_a_reader_of_both_endpoints_but_not_the_cited_handles_walks_their_run(db
     assert long[0] > short[0]
 
 
+def test_a_pair_whose_party_merged_between_the_reviews_reads_is_dropped_not_raised(db: None) -> None:
+    """The walk lists a pair, its party is merged before the members' read: the pair is moot and left out."""
+
+    del db
+    reader = create_user("same-as-merged-mid-read")
+    _review_pairs(reader, 3, tag="mid")
+    review = Party.objects.with_actor(reader)
+    ((entries, _examined),) = list(review.review_walk())
+    first = Party.same_as.model._base_manager.get(pk=entries[0][0])
+    with actor_context(reader):
+        Party.objects.get(pk=first.left_id).merge(records=[Party._base_manager.get(pk=first.right_id).public_id])
+
+    pairs = review.review_pairs(entries)
+
+    assert [pair.id for pair in pairs] == [Party.same_as.model.public_id_from_pk(pk) for pk, _cited in entries[1:]]
+
+
 def test_a_link_a_person_dismissed_pairs_nobody(db: None) -> None:
     del db
     owner = create_user("same-as-dismissed-link")

@@ -919,7 +919,9 @@ live in code docstrings.
   end, with no cap, so every pair stays reachable; a reader who reads the cited
   handles reads one window whatever the number of pairs, and a reader who
   reads both endpoints of a long run of pairs but not their cited handles
-  walks that run. The totals are exact in the rows' scope up to 1,000
+  walks that run. A pair whose party was merged away between the walk and the
+  members' read is moot and left out, never read through its missing party.
+  The totals are exact in the rows' scope up to 1,000
   (`same_as_pair_counts { pairs certain capped }`); past that the page reads
   "1,000+", and the certain count covers the first 1,000 pairs and reads
   "<n>+". `certain_same_as_pairs(limit,
