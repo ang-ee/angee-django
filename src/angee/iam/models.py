@@ -327,10 +327,11 @@ class UserQuerySet[UserT: User](AngeeQuerySet[UserT]):
             condition |= Q(pk__isnull=False)
         elif holders:
             condition |= Q(pk__in=sorted(holders))
-        return condition | self.own_account_condition(actor)
+        own = self.own_account_condition(actor)
+        return condition | own if own is not None else condition
 
-    def own_account_condition(self, actor: Any = None) -> Q:
-        """Match only the account named by a concrete user subject."""
+    def own_account_condition(self, actor: Any = None) -> Q | None:
+        """Match a concrete user's account; ``None`` means the subject is not a user."""
 
         subject = to_subject_ref(actor) if actor is not None else None
         if (
@@ -340,7 +341,7 @@ class UserQuerySet[UserT: User](AngeeQuerySet[UserT]):
             and subject.subject_id not in {"", "*"}
         ):
             return Q(pk=subject.subject_id)
-        return Q(pk__in=[])
+        return None
 
     def unprotected(self, actor: Any = None) -> Self:
         """Exclude the accounts :meth:`protection_condition` protects from ``actor``."""
@@ -848,24 +849,30 @@ class User(AbstractBaseUser, RebacPermissionsMixin, OptimisticLockMixin, AngeeDa
         super().save(*args, **kwargs)
 
     @staticmethod
-    def account_action_blockers(action: str, protection: Q, inactive: Q, own: Q | None) -> tuple[tuple[Q, str], ...]:
+    def account_action_blockers(
+        action: str, protection: Q, inactive: Q, own: Q | None, *, system: bool,
+    ) -> tuple[tuple[Q, str], ...]:
         """Return the target conditions refusing ``action``, each with its refusal.
 
         The conditions come from the acting subject's ``protection_condition``,
         ``inactive_condition`` and ``own_account_condition``. The locked verbs and
         the batched ``account_actions`` projection share these conditions, so a
-        control is offered exactly when its verb admits it. ``own=None`` denotes
-        actorless system work, which retains the full protected-account refusal.
+        control is offered exactly when its verb admits it. Only ``actor is None``
+        denotes system work, which retains the full protected-account refusal.
+        Other subjects without a concrete user cannot set passwords.
         """
 
         usable_password = ~Q(password__startswith=UNUSABLE_PASSWORD_PREFIX)
         blockers = [
             (~Q(kind=UserKind.PERSON), "Only person accounts can be managed."),
         ]
-        if action == UserAccountAction.SET_PASSWORD and own is not None:
-            # Its sealed permission composes administer and both write gates.
-            blockers.append((own, "Use Change password for your own account; it requires your current password "
-                             "and keeps this session signed in."))
+        if action == UserAccountAction.SET_PASSWORD and not system:
+            # Its sealed permission caps the audience at platform admins, with both write gates.
+            if own is None:
+                blockers.append((Q(pk__isnull=False), "Only a concrete user can set another person's password."))
+            else:
+                blockers.append((own, "Use Change password for your own account; it requires your current password "
+                                 "and keeps this session signed in."))
         else:
             blockers.append((protection, PROTECTED_ACCOUNT_MESSAGE))
         if action in {UserAccountAction.RESET_PASSWORD, UserAccountAction.ISSUE_PASSWORD}:
@@ -895,7 +902,7 @@ class User(AbstractBaseUser, RebacPermissionsMixin, OptimisticLockMixin, AngeeDa
         annotations: dict[str, models.expressions.BaseExpression] = {}
         for action in UserAccountAction.values:
             rows = cls.objects.with_actor(actor).with_action(action).scoped_for_aggregate()
-            for condition, _error in cls.account_action_blockers(action, protection, inactive, own):
+            for condition, _error in cls.account_action_blockers(action, protection, inactive, own, system=False):
                 rows = rows.exclude(condition)
             annotations[action] = models.Exists(rows.filter(pk=models.OuterRef("pk")))
         return annotations
@@ -936,7 +943,8 @@ class User(AbstractBaseUser, RebacPermissionsMixin, OptimisticLockMixin, AngeeDa
             action,
             users.protection_condition(actor),
             users.inactive_condition(actor),
-            users.own_account_condition(actor) if actor is not None else None,
+            users.own_account_condition(actor),
+            system=actor is None,
         )
         for condition, error in blockers:
             if rows.filter(condition).exists():
@@ -1115,11 +1123,21 @@ class User(AbstractBaseUser, RebacPermissionsMixin, OptimisticLockMixin, AngeeDa
             user = self._lock_for_account_action(
                 str(UserAccountAction.SET_PASSWORD), expected_revision=expected_revision,
             )
+            actor, _bypass = user.effective_actor(strict=True)
             user._set_validated_password(password)
             user.sudo(reason="iam.password.set").save(
                 update_fields=["password", "updated_at"], expected_revision=expected_revision,
             )
             self.password, self.account_revision = user.password, user.account_revision
+            transaction.on_commit(partial(
+                logger.info,
+                "Account password set.",
+                extra={
+                    "verb": str(UserAccountAction.SET_PASSWORD),
+                    "actor_public_id": type(self).public_id_from_pk(actor.subject_id) if actor is not None else None,
+                    "target_public_id": user.public_id,
+                },
+            ))
 
     @transaction.atomic
     def update_account(

@@ -793,7 +793,7 @@ data through REBAC, never a queryset bypass.
   projection batches the same conditions. These verbs refuse a protected
   account: staff, superusers, the actor's own and effective members of
   `iam/protected:main#member`, except Set password admits another person's protected
-  account through the same `administer` right as protected-account updates. Self
+  account for a concrete platform-administrator user. Self
   still requires Change password; non-person accounts remain refused.
   A consumer marks an elevated role by unioning it
   into that permission from its fragment, never by mirroring holders; see
@@ -801,9 +801,11 @@ data through REBAC, never a queryset bypass.
   updates pass `write` and `write__<field>` gates on changed fields only;
   protected accounts additionally need `administer`. Generic updates do not
   accept `password`; use `set_user_password` with the observed revision.
-  Its sealed Zed permission intersects `administer`, `write` and
+  Its sealed Zed permission intersects `admin->member`, `write` and
   `write__password`, so the model and projection check one permission. Permission
-  and account kind are checked before password validation or hashing. Actor-requested
+  and account kind are checked before password validation or hashing. Extending
+  `administer` never widens this audience. Successful sets log only the verb and
+  actor/target public ids after commit through IAM's logger. Actor-requested
   creation, Set password and Change password share `User._set_validated_password`,
   with the user as Django's validator context; trusted bootstrap/resource
   factories retain their native behavior. **Change password** verifies the actor's current
@@ -1422,8 +1424,9 @@ exception closes the rows as failed. Tests inherit a boundary from the root
   Record-reference refusals use the same read-only
   [`record_refs_for_delete()`](../../src/angee/base/models/refs.py) admission in
   preview and `delete_record_refs`: each edge owns `blocks_target_delete` and
-  `live_reference_filter`. Preview checks cascaded targets too; confirmation
-  retains a readable blocker even when `ProtectedError` first arises at deletion.
+  `live_reference_filter`. Preview passes all collected targets together; blocking
+  edges read them in bounded batches per target type. Confirmation retains a
+  readable blocker even when a deletion-time refusal names no retaining rows.
   When deleting a model needs locks in a domain order (a parent before the row),
   override its [`lock_for_delete()`](../../src/angee/base/models/base.py); its `pre_delete`
   receiver and every confirmed-delete caller of that model then lock through the

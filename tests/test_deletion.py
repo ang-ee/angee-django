@@ -9,10 +9,10 @@ import strawberry
 import strawberry_django
 from django.contrib.auth.models import Group
 from django.core.exceptions import ImproperlyConfigured, ValidationError
-from django.db import models, transaction
-from django.db.models.deletion import Collector
+from django.db import connection, models, transaction
+from django.db.models.deletion import Collector, ProtectedError, RestrictedError
 from django.db.models.signals import pre_delete
-from django.test.utils import isolate_apps
+from django.test.utils import CaptureQueriesContext, isolate_apps
 from graphql import GraphQLError
 from rebac import PermissionDenied, RebacMixin, SubjectRef, actor_context, system_context
 
@@ -34,9 +34,10 @@ from angee.iam import signals as iam_signals
 from angee.integrate.states import StreamDirection, StreamKind
 from angee.integrate.testing.models import RecordLink
 from angee.messaging.testing.models import Channel
-from angee.projects.testing.models import Milestone, Project
+from angee.projects.testing.models import Milestone, Project, Task
 from tests.conftest import addon_schema, create_platform_admin, current_stream, make_integration
 from tests.mtidemo.models import MtiChild, MtiParent
+from tests.scopedemo.models import ProjectionDoc
 from tests.tables import model_tables
 
 
@@ -51,6 +52,20 @@ class DeleteGroupType:
 @strawberry_django.type(Project)
 class DeleteProjectType(AngeeNode):
     """An existing typed record whose milestones exercise real cascades."""
+
+    title: strawberry.auto
+
+
+@strawberry_django.type(MtiChild)
+class DeleteChildType(AngeeNode):
+    """A multi-table row whose record links use its canonical parent identity."""
+
+    title: strawberry.auto
+
+
+@strawberry_django.type(Task)
+class DeleteTaskType(AngeeNode):
+    """A trashable record exercising permanent deletion with a retained link."""
 
     title: strawberry.auto
 
@@ -70,12 +85,21 @@ def linked_deletion(db):
     with system_context(reason="tests.deletion.links"):
         bridge = make_integration("linked-delete", model=Channel)
         stream = current_stream(bridge, "projects", kind=StreamKind.RECORD_REPLICA, direction=StreamDirection.PULL)
-    resource = hasura_model_resource(
-        DeleteProjectType, model=Project, name="linked_projects",
-        filterable=["title"], sortable=["title"], aggregatable=["title"], insert=False, update=False,
-    )
+    resources = [
+        hasura_model_resource(
+            row_type, model=model, name=name,
+            filterable=["title"], sortable=["title"], aggregatable=["title"], insert=False, update=False,
+        )
+        for row_type, model, name in (
+            (DeleteProjectType, Project, "linked_projects"),
+            (DeleteChildType, MtiChild, "linked_children"),
+            (DeleteTaskType, Task, "linked_tasks"),
+        )
+    ]
     schema = addon_schema({"public": {
-        "query": [resource.query], "mutation": [resource.mutation], "types": resource.types,
+        "query": [resource.query for resource in resources],
+        "mutation": [resource.mutation for resource in resources],
+        "types": [row_type for resource in resources for row_type in resource.types],
     }}, "public")
     return schema, admin, stream
 
@@ -168,6 +192,120 @@ def test_generated_delete_returns_a_late_reference_refusal_after_rollback(linked
     assert preview["blocked"] == [{"label": str(RecordLink._meta.verbose_name_plural), "count": 1}]
     assert Project._base_manager.filter(pk=project.pk).exists()
     assert not RecordLink._base_manager.filter(stream=stream, external_key="late").exists()
+
+
+@pytest.mark.parametrize("error_type", (ProtectedError, RestrictedError))
+def test_generated_delete_reports_a_late_refusal_without_retaining_rows(linked_deletion, error_type):
+    schema, admin, _stream = linked_deletion
+    with system_context(reason="tests.deletion.empty_refusal"):
+        project = Project.objects.create(title="Empty late refusal")
+
+    def refuse(sender, instance, **kwargs):
+        raise error_type("Internal receiver detail must not be exposed.", [])
+
+    pre_delete.connect(refuse, sender=Project)
+    try:
+        preview = result_data(execute_schema(
+            schema, LINKED_DELETE, {"id": project.public_id, "confirm": True}, user=admin,
+        ))["linked_projects_delete"]
+    finally:
+        pre_delete.disconnect(refuse, sender=Project)
+    assert preview == {
+        "has_blockers": True, "blocked": [],
+        "refusals": ["Deletion was refused by a related record; nothing was deleted."],
+    }
+    assert Project._base_manager.filter(pk=project.pk).exists()
+
+
+def test_delete_preview_batches_holds_across_a_large_cascade(linked_deletion):
+    """Growing one collected type changes its IN list, not its query count."""
+
+    _schema, admin, stream = linked_deletion
+    counts = []
+    for size in (2, 250):
+        with system_context(reason="tests.deletion.large_cascade"):
+            root = ProjectionDoc.objects.create(title=f"Cascade {size}")
+            children = ProjectionDoc.objects.bulk_create([
+                ProjectionDoc(parent=root, title=f"Child {index}") for index in range(size)
+            ])
+            RecordLink.objects.observe(stream, f"held-cascade-{size}", target=children[-1])
+        with actor_context(admin), CaptureQueriesContext(connection) as queries:
+            preview = DeletePreview.from_instance(root, actor=admin)
+        assert preview.has_blockers and preview.blocked[0].count == 1
+        hold_reads = [query for query in queries if "_angee_holds_deleted_target" in query["sql"]]
+        assert len(hold_reads) == 1  # The root and every child share one target type.
+        assert len(queries) <= 30
+        counts.append(len(queries))
+        assert ProjectionDoc._base_manager.filter(parent=root).count() == size
+    assert counts[1] <= counts[0]
+
+
+def test_generated_delete_reports_retained_provenance_statements(linked_deletion):
+    """Source statements hold their record even without a live integration link."""
+
+    schema, admin, _stream = linked_deletion
+    with system_context(reason="tests.deletion.statements"):
+        project = Project.objects.create(title="Retained project")
+        statement = project.statements_for("identity").set(
+            aspect="identity", values={"title": "Retained project", "body": ""}, asserted_by=admin,
+        )
+    for confirm in (False, True):
+        preview = result_data(execute_schema(
+            schema, LINKED_DELETE, {"id": project.public_id, "confirm": confirm}, user=admin,
+        ))["linked_projects_delete"]
+        assert preview["has_blockers"]
+        assert any("source statements" in message for message in preview["refusals"])
+        assert {"label": str(type(statement)._meta.verbose_name_plural), "count": 1} in preview["blocked"]
+        assert Project._base_manager.filter(pk=project.pk).exists()
+        assert type(statement)._base_manager.filter(pk=statement.pk).exists()
+
+
+def test_generated_delete_preserves_history_without_turning_snapshots_into_holds(linked_deletion):
+    """Provenance explicitly exempts historical snapshots from blocks_target_delete."""
+
+    schema, admin, _stream = linked_deletion
+    with system_context(reason="tests.deletion.history"):
+        project = Project.objects.create(title="Retained snapshot")
+    pk = project.pk
+    history = Project.history.model
+    assert history._base_manager.filter(id=pk).exists()
+    assert not history.blocks_target_delete(Project)
+    for confirm in (False, True):
+        preview = result_data(execute_schema(
+            schema, LINKED_DELETE, {"id": project.public_id, "confirm": confirm}, user=admin,
+        ))["linked_projects_delete"]
+        assert not preview["has_blockers"]
+    assert not Project._base_manager.filter(pk=pk).exists()
+    assert history._base_manager.filter(id=pk).exists()
+
+
+@pytest.mark.parametrize(("model", "root"), [(MtiChild, "linked_children"), (Task, "linked_tasks")])
+def test_generated_delete_keeps_a_held_child_or_trashed_record(linked_deletion, model, root):
+    schema, admin, stream = linked_deletion
+    with system_context(reason="tests.deletion.held_shapes"):
+        target = model.objects.create(title="Held record")
+        if isinstance(target, Task):
+            target.trash(reason="Ready for permanent deletion")
+            assert Task._base_manager.get(pk=target.pk).is_trashed
+        link = RecordLink.objects.observe(stream, root, target=target)
+    document = LINKED_DELETE.replace("linked_projects", root)
+    for confirm in (False, True):
+        preview = result_data(execute_schema(
+            schema, document, {"id": target.public_id, "confirm": confirm}, user=admin,
+        ))[f"{root}_delete"]
+        assert preview["has_blockers"]
+        assert preview["blocked"] == [{"label": str(RecordLink._meta.verbose_name_plural), "count": 1}]
+        assert model._base_manager.filter(pk=target.pk).exists()
+        if model is MtiChild:
+            assert MtiParent._base_manager.filter(pk=target.pk).exists()
+    RecordLink.objects.observe(stream, link.external_key, target=None)
+    released = result_data(execute_schema(
+        schema, document, {"id": target.public_id, "confirm": True}, user=admin,
+    ))[f"{root}_delete"]
+    assert not released["has_blockers"]
+    assert not model._base_manager.filter(pk=target.pk).exists()
+    if model is MtiChild:
+        assert not MtiParent._base_manager.filter(pk=target.pk).exists()
 
 
 @pytest.mark.parametrize("delete", (False, True))

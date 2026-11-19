@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sqlite3
 from typing import Any
 
 import pytest
@@ -390,7 +391,7 @@ def test_a_blocking_teardown_edge_refuses_on_its_live_rows_first_and_its_teardow
         RecordRefTargetEdge.objects.create(target=held)
         live.append(kept.pk)
         with pytest.raises(ProtectedError) as forecast:
-            record_refs_for_delete(held, using="default")
+            record_refs_for_delete([held], using="default")
         assert set(forecast.value.protected_objects) == {kept}
         assert torn == []
         with pytest.raises(ProtectedError, match=f"{RecordRefTargetEdge._meta.label} rows still refer to ") as refused:
@@ -398,7 +399,7 @@ def test_a_blocking_teardown_edge_refuses_on_its_live_rows_first_and_its_teardow
         assert (set(refused.value.protected_objects), torn) == ({kept}, [])
 
         live.clear()
-        assert any(edge is RecordRefTargetEdge for edge, rows in record_refs_for_delete(held, using="default"))
+        assert any(edge is RecordRefTargetEdge for edge, rows in record_refs_for_delete([held], using="default"))
         assert torn == []
         held.delete()
         unnamed = RecordRefTypedTarget.objects.create(name="unnamed")
@@ -407,6 +408,35 @@ def test_a_blocking_teardown_edge_refuses_on_its_live_rows_first_and_its_teardow
     # The receiver runs per collected instance and per connected receiver; a teardown is idempotent.
     assert set(torn) == {held_pk}
     assert not RecordRefTypedTarget._base_manager.filter(name__in=["held", "unnamed"]).exists()
+
+
+def test_record_delete_holds_batch_within_the_database_parameter_budget(
+    record_ref_tables, record_ref_delete_receiver,
+):
+    """A large group uses bounded edge reads and retains every blocking row."""
+
+    if connection.vendor != "sqlite":
+        pytest.skip("SQLite exposes a runtime parameter limit for this boundary test.")
+    with system_context(reason="record-ref bounded batch"):
+        targets = RecordRefTypedTarget.objects.bulk_create([
+            RecordRefTypedTarget(name=f"Target {index}") for index in range(80)
+        ])
+        edges = RecordRefSubjectEdge.objects.bulk_create([RecordRefSubjectEdge(subject=row) for row in targets])
+    reads = []
+
+    def count_parameters(execute, sql, params, many, context):
+        if "_angee_holds_deleted_target" in sql:
+            reads.append(len(params))
+        return execute(sql, params, many, context)
+
+    old_limit = connection.connection.setlimit(sqlite3.SQLITE_LIMIT_VARIABLE_NUMBER, 25)
+    try:
+        with connection.execute_wrapper(count_parameters), pytest.raises(ProtectedError) as refused:
+            record_refs_for_delete(targets, using="default")
+    finally:
+        connection.connection.setlimit(sqlite3.SQLITE_LIMIT_VARIABLE_NUMBER, old_limit)
+    assert set(refused.value.protected_objects) == set(edges)
+    assert len(reads) == 4 and max(reads) <= 25
 
 
 def test_target_delete_nulls_declared_record_edges_from_a_queryset(

@@ -12,7 +12,8 @@ and orphans edge rows on delete.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterable, Mapping
+from itertools import batched
 from types import MappingProxyType
 from typing import Any, ClassVar, Protocol, cast
 
@@ -37,7 +38,7 @@ from angee.base.models.merge import MergeableMixin
 from angee.base.models.merge_references import MergePolicy, RecordRefMergeContract
 from angee.base.permissions import effective_rebac_definition, reader_queryset, relation_read_queryset
 from angee.base.prefetch import InstancePrefetch
-from angee.base.querysets import MergeableQuerySet
+from angee.base.querysets import MergeableQuerySet, query_batch_size
 from angee.base.refs import RecordRef, generic_pointer_model, generic_pointer_target
 
 
@@ -460,43 +461,57 @@ def record_ref_cleanup_edges_for_target(
 
 
 def record_refs_for_delete(
-    instance: models.Model, using: str,
+    instances: Iterable[models.Model], using: str,
 ) -> list[tuple[type[RecordRefMixin], models.QuerySet[Any]]]:
-    """Read a target's controlled edges, refusing any live rows that hold it.
+    """Read targets' controlled edges, refusing any live rows that hold them.
 
-    Every edge controlling the target, named by its retained reverse relations
-    or declaring its type in the edge's schema, is judged once per collected
-    instance. An edge that ``blocks_target_delete`` reads the rows naming the
-    target first: one its ``live_reference_filter`` selects refuses the deletion
-    with ``ProtectedError``, the rule creation undo applies
-    (``has_live_references``), and none at all leaves the edge nothing to do.
-    This admission is read-only: deletion previews and :func:`delete_record_refs`
-    compose it before any teardown or deletion policy runs.
+    Reads are batched per blocking edge and concrete target type, bounded by the
+    database's parameter budget. Each target keeps its first blocking edge, as a
+    singleton does. An edge's ``live_reference_filter`` owns the refusal, as for
+    creation undo; no rows naming a target means no teardown. This admission is
+    read-only: previews pass their cascade and :func:`delete_record_refs` passes
+    its singleton before any teardown or deletion policy runs.
     """
 
-    cleanup_edges = record_ref_cleanup_edges_for_target(type(instance))
-    target = canonical_model(type(instance))
-    declared = record_edges_by_target().get(target, ()) if target is not None else ()
-    edges = (*cleanup_edges, *(edge for edge in declared if edge not in cleanup_edges))
-    if not edges:
-        return []
-    content_type, object_id = generic_pointer_target(instance)
+    grouped: dict[type[models.Model], list[models.Model]] = {}
+    for instance in instances:
+        grouped.setdefault(type(instance), []).append(instance)
     references = []
-    for edge in edges:
-        pointer = edge.record_ref_field()
-        rows = edge._base_manager.using(using).filter(
-            **{pointer.ct_field: content_type, pointer.fk_field: object_id}
-        )
-        if edge.blocks_target_delete(type(instance)):
-            live = ExpressionWrapper(edge.live_reference_filter(principal=None), output_field=BooleanField())
-            # One narrow read per blocking edge, as a PROTECT edge always cost: every row naming the target,
-            # marked live. A refusal's rows load the rest of their fields only if a preview names them.
-            naming = list(rows.only("pk").annotate(**{_HOLDS_TARGET: live}))
-            if held := {row for row in naming if getattr(row, _HOLDS_TARGET)}:
-                raise ProtectedError(f"{edge._meta.label} rows still refer to {instance}.", held)
-            if not naming:
-                continue
-        references.append((edge, rows))
+    blockers: set[models.Model] = set()
+    message = ""
+    for model, targets in grouped.items():
+        cleanup_edges = record_ref_cleanup_edges_for_target(model)
+        target = canonical_model(model)
+        declared = record_edges_by_target().get(target, ()) if target is not None else ()
+        edges = (*cleanup_edges, *(edge for edge in declared if edge not in cleanup_edges))
+        if not edges:
+            continue
+        content_type, _object_id = generic_pointer_target(targets[0])
+        remaining = {str(generic_pointer_target(row)[1]): row for row in targets}
+        for edge in edges:
+            pointer = edge.record_ref_field()
+            rows = edge._base_manager.using(using).filter(**{pointer.ct_field: content_type})
+            if edge.blocks_target_delete(model):
+                live = ExpressionWrapper(edge.live_reference_filter(principal=None), output_field=BooleanField())
+                marked = rows.only("pk", pointer.fk_field).annotate(**{_HOLDS_TARGET: live})
+                for chunk in batched(tuple(remaining), query_batch_size(marked)):
+                    naming = list(marked.filter(**{f"{pointer.fk_field}__in": chunk}))
+                    held = {row for row in naming if getattr(row, _HOLDS_TARGET)}
+                    held_ids = {str(getattr(row, pointer.fk_field)) for row in held}
+                    if held and not message:
+                        first = next(key for key in chunk if key in held_ids)
+                        message = f"{edge._meta.label} rows still refer to {remaining[first]}."
+                    blockers.update(held)
+                    for key in held_ids:
+                        remaining.pop(key, None)
+                    named_ids = {str(getattr(row, pointer.fk_field)) for row in naming} - held_ids
+                    if named_ids:
+                        references.append((edge, rows.filter(**{f"{pointer.fk_field}__in": sorted(named_ids)})))
+            else:
+                for chunk in batched(tuple(remaining), query_batch_size(rows)):
+                    references.append((edge, rows.filter(**{f"{pointer.fk_field}__in": chunk})))
+    if blockers:
+        raise ProtectedError(message, blockers)
     return references
 
 
@@ -509,7 +524,7 @@ def delete_record_refs(instance: models.Model, using: str, **kwargs: Any) -> Non
     """
 
     del kwargs
-    for edge, rows in record_refs_for_delete(instance, using):
+    for edge, rows in record_refs_for_delete([instance], using):
         if edge.teardown_for_target is not None:
             edge.teardown_for_target(instance)
             continue

@@ -122,15 +122,20 @@ The user record's **Set password** action submits a chosen password through
 `set_user_password(id, password, expected_revision)`, returning `ActionResult`.
 `User.set_account_password` checks `set_password`, the shared account blockers
 and the required observed revision before validation or hashing. Zed owns the
-permission's `administer & write & write__password` intersection; IAM seals
-it so fragments cannot bypass those gates (`angee.iam.E003`). `administer` is the
-same platform-admin right required for protected-account updates: it admits
-another person's account, including elevated role members, staff and superusers.
+permission's `admin->member & write & write__password` intersection; IAM seals
+it so fragments cannot bypass platform-admin membership or either write gate
+(`angee.iam.E003`). Extending the protected-update permission `administer` does
+not widen this audience. A concrete platform-administrator user can set another
+person's password across **all protected classes**: peer administrators, staff,
+superusers and holders of any elevated role, as well as ordinary accounts.
 The actor's own account still requires Change password with the current password,
 which keeps the requesting session; service and other non-person accounts remain
 refused. Issue password, Reset password and the other account verbs retain their
 protected-account refusals. A successful set invalidates the target's existing
-session hashes and retires outstanding sign-in links.
+session hashes and retires outstanding sign-in links. After commit, IAM logs one
+`set_password` event with `actor_public_id` and `target_public_id`; it records no
+password, hash or validator message. Actorless system calls retain the full
+protected-account refusal; other non-user subjects cannot set passwords.
 **Contract change:** the raw `users` update input no longer accepts `password`.
 Set a password with `set_user_password`; creation still accepts `password`.
 Metadata updates and password changes are separate operations.

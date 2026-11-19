@@ -9,13 +9,13 @@ from django.contrib.auth.password_validation import MinimumLengthValidator, get_
 from django.core.exceptions import ValidationError
 from django.db import transaction
 from django.utils import timezone
-from rebac import PermissionDenied, actor_context, system_context, to_subject_ref
+from rebac import PermissionDenied, SubjectRef, actor_context, system_context, to_subject_ref
 
 from angee.graphql.testing.documents import execute_schema, graphql_request, result_data
 from angee.graphql.view_as import ViewAs
 from angee.iam.auth import ONE_ATTEMPT_MESSAGE
 from angee.iam.autoconfig import SETTINGS as IAM_SETTINGS
-from angee.iam.models import SignInLinkSpent
+from angee.iam.models import SignInLinkSpent, UserAccountAction
 from tests.conftest import create_platform_admin
 from tests.iam_models import SignInLink
 from tests.test_iam_account_actions import _actions, _manager
@@ -217,6 +217,76 @@ def test_set_password_keeps_actorless_protected_account_refusal(password_user):
     assert User._base_manager.get(pk=target.pk).check_password(CURRENT)
 
 
+@pytest.mark.parametrize("subject", [
+    SubjectRef.of("auth/group", "1", "member"),
+    SubjectRef.of("auth/user", "*"),
+    SubjectRef.of("auth/user", "1", "self"),
+])
+def test_set_password_refuses_non_user_subjects_in_both_permission_and_eligibility(password_user, subject):
+    """A non-user is not actorless system work; all sibling protection rules still apply."""
+
+    protected = create_platform_admin("subject-protected-password", password=CURRENT)
+    for target in (password_user, protected):
+        before = User._base_manager.get(pk=target.pk)
+        assert "concrete user" in target.account_action_error("set_password", subject)
+        with pytest.raises(PermissionDenied, match="set_password"):
+            target.with_actor(subject).set_account_password(NEW, expected_revision=before.account_revision)
+        stored = User._base_manager.get(pk=target.pk)
+        assert (stored.password, stored.account_revision) == (before.password, before.account_revision)
+        assert "set_password" not in target.account_actions_for(subject)
+    for action in UserAccountAction.values:
+        if action != "set_password":
+            assert protected.account_action_error(action, subject) == protected.account_action_error(action, None)
+            assert "protected" in protected.account_action_error(action, subject)
+
+
+@pytest.mark.parametrize("actor_flags", [{"is_staff": True}, {"is_superuser": True}])
+def test_set_password_graphql_refuses_staff_and_superusers_without_admin_role(password_user, actor_flags,
+                                                                           password_checks):
+    actor = User.objects.create_user("flag-only-password-actor", password=CURRENT, **actor_flags)
+    target = create_platform_admin("flag-only-password-target", password=CURRENT)
+    schema = _schema("console")
+    hasher, validator = password_checks
+    before = User._base_manager.get(pk=target.pk)
+    calls = hasher.encode_calls, validator.calls
+    refused = result_data(execute_schema(schema, SET, {
+        "id": target.public_id, "password": NEW, "revision": before.account_revision,
+    }, user=actor))["set_user_password"]
+    assert not refused["ok"]
+    assert "set_password" not in target.account_actions_for(actor)
+    stored = User._base_manager.get(pk=target.pk)
+    assert (stored.password, stored.account_revision) == (before.password, before.account_revision)
+    assert (hasher.encode_calls, validator.calls) == calls
+
+
+def test_set_password_logs_only_committed_public_attribution(password_user, caplog,
+                                                           django_capture_on_commit_callbacks):
+    admin = create_platform_admin("password-audit-admin", password=CURRENT)
+    target = create_platform_admin("password-audit-target", password=CURRENT)
+    before = User._base_manager.get(pk=target.pk)
+    caplog.set_level("INFO", logger="angee.iam.models")
+    with django_capture_on_commit_callbacks(execute=True):
+        result = result_data(execute_schema(_schema("console"), SET, {
+            "id": target.public_id, "password": NEW, "revision": before.account_revision,
+        }, user=admin))["set_user_password"]
+    assert result["ok"]
+    events = [record for record in caplog.records if getattr(record, "verb", None) == "set_password"]
+    assert len(events) == 1
+    event = events[0]
+    assert event.getMessage() == "Account password set."
+    assert (event.actor_public_id, event.target_public_id) == (admin.public_id, target.public_id)
+    stored = User._base_manager.get(pk=target.pk)
+    assert all(secret not in str(vars(event)) for secret in (CURRENT, NEW, before.password, stored.password))
+
+    caplog.clear()
+    with django_capture_on_commit_callbacks(execute=True), pytest.raises(RuntimeError, match="rollback"):
+        with transaction.atomic():
+            target.with_actor(admin).set_account_password(CURRENT, expected_revision=stored.account_revision)
+            raise RuntimeError("rollback")
+    assert not [record for record in caplog.records if getattr(record, "verb", None) == "set_password"]
+    assert User._base_manager.get(pk=target.pk).password == stored.password
+
+
 def test_set_password_ends_target_sessions_and_retires_sign_in_links(password_user, caplog):
     admin = create_platform_admin("session-password-admin", password=CURRENT)
     requests = [graphql_request(user, session=True) for user in (admin, password_user, password_user)]
@@ -410,3 +480,14 @@ def test_view_as_hides_password_usability_and_refuses_password_changes(password_
     stored = User._base_manager.get(pk=password_user.pk)
     assert (stored.password, stored.account_revision) == (before.password, before.account_revision)
     assert CURRENT not in str(refused) and NEW not in str(refused)
+
+    peer = create_platform_admin("preview-password-peer", password=CURRENT)
+    before_peer = User._base_manager.get(pk=peer.pk)
+    refused_set = execute_schema(schema, SET, {
+        "id": peer.public_id, "password": NEW, "revision": before_peer.account_revision,
+    }, request=request)
+    assert refused_set.errors and refused_set.errors[0].extensions["code"] == "VIEW_AS_READ_ONLY"
+    assert refused_set.data is None
+    stored_peer = User._base_manager.get(pk=peer.pk)
+    assert (stored_peer.password, stored_peer.account_revision) == (before_peer.password, before_peer.account_revision)
+    assert CURRENT not in str(refused_set) and NEW not in str(refused_set)

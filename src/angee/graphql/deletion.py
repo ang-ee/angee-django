@@ -204,10 +204,10 @@ class DeletePreview:
             ):
                 if message not in refusals:
                     refusals.append(message)
-            try:
-                record_refs_for_delete(row, using=collector.using)
-            except ProtectedError as error:
-                blockers.update(error.protected_objects)
+        try:
+            record_refs_for_delete(collected, using=collector.using)
+        except ProtectedError as error:
+            blockers.update(error.protected_objects)
         blocked = _groups(_count_by_model(blockers))
         groups = _PreviewRows.by_model(
             instance,
@@ -387,6 +387,9 @@ def delete_by_public_id(
                 preview = DeletePreview.from_instance(instance)
                 if not preview.has_blockers:
                     preview = DeletePreview.blocked_from_error(instance, error)
+                    if not preview.has_blockers:
+                        preview.has_blockers = True
+                        preview.refusals = ["Deletion was refused by a related record; nothing was deleted."]
             except ValidationError as error:
                 preview.refusals = list(dict.fromkeys([*preview.refusals, *error.messages]))
                 preview.has_blockers = True
