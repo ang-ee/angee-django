@@ -138,8 +138,7 @@ test.describe("addon route smoke", () => {
     });
     const sourceRow = templateSources.getByRole("row").filter({ hasText: "templates" }).first();
     await sourceRow.click();
-    await page.getByRole("button", { name: "Actions" }).click();
-    await page.getByRole("menuitem", { name: "Sync templates" }).click();
+    await page.getByRole("button", { name: "Sync templates" }).click();
 
     await expect(page.getByText("LAST SYNCED AT").last().locator("xpath=..")).toContainText(
       /[A-Z][a-z]{2} \d{1,2}, \d{4}, \d{1,2}:\d{2} (AM|PM)/,

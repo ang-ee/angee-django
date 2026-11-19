@@ -950,15 +950,17 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
   [FormView](../../packages/ui/src/views/form/form-view-surface.ts) selects
   required fields from the resolved children; authored fields and passive chrome
   remain host-owned.
-- **Record verbs compose the shared action owner.** The primary toolbar is
-  reserved for the subject model's lifecycle transitions, the ones its statusbar
-  explains (post, cancel); secondary lifecycle verbs and model-owned utilities
-  (pay, reverse, send, PDF, merge, download) live in the overflow menu; a
-  capability contributed to another model (run a workflow, rate, generate a
-  delivery, read a file again) uses that model's overflow menu, never its
-  toolbar. Classify an action by the subject it changes and its semantic owner:
-  a bridge addon implementing an inherited lifecycle (connect a channel) is not
-  a foreign capability because it lives in another package. Process drill-ins
+- **Record verbs compose the shared action owner.** A form's only visible,
+  unplaced non-danger verb is a secondary button when no declared verb is already
+  on the toolbar; among several, the toolbar holds verbs marked `primary` or
+  explicitly placed there, and the rest live in the overflow menu (`primary`
+  needs no `placement`, while an explicit `placement="menu"` wins).
+  `#actions` and `#actions-menu` container children are unchanged: lone-verb
+  promotion is enabled only for the form's declared actions in its command band,
+  and everything inside an `ActionMenu` stays in the menu.
+  Visibility and permission are checked before counting; danger verbs and
+  explicitly placed verbs never count toward lone-verb promotion. A contributed
+  capability uses its subject model's declared container. Process drill-ins
   expose the verbs of the inspected run, decision or changeset (answer, stop,
   retry, revert); collection controls stay with their collection. Every
   placement composes the shared action owner, projected permission/admission,
@@ -971,9 +973,8 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
   not effective access, a reader is not a subscriber, and following or being
   made a recipient never grants access. There is no Access aside tab and
   grants are not a Related group; a model's own audience and role adapters
-  (visibility, responders, rosters) compose the same Share owner. A verb
-  in the toolbar is a
-  `#actions` child and one in the overflow menu a `#actions-menu` child; either
+  (visibility, responders, rosters) compose the same Share owner. Contributed
+  toolbar verbs use `#actions` and overflow verbs use `#actions-menu`; either
   may render [RecordActionBar](../../packages/ui/src/views/form/RecordActionBar.tsx)
   with server-gated descriptors. [Record chrome](../../packages/ui/src/views/form/use-form-view-record-chrome.ts)
   carries the form's dirty/pending gate to toolbar and menu verbs. `<Action>`

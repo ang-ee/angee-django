@@ -247,6 +247,7 @@ function actionDescriptor(props: ActionProps): ActionDescriptor {
     ...(props.disabled !== undefined ? { disabled: props.disabled } : {}),
     ...(props.disabledReason !== undefined ? { disabledReason: props.disabledReason } : {}),
     ...(props.danger !== undefined ? { danger: props.danger } : {}),
+    ...(props.submitLabel !== undefined ? { submitLabel: props.submitLabel } : {}),
     ...(props.placement !== undefined ? { placement: props.placement } : {}),
     ...(props.primary !== undefined ? { primary: props.primary } : {}),
     ...(props.permission !== undefined ? { permission: props.permission } : {}),

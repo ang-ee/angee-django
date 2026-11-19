@@ -206,7 +206,7 @@ describe("FormView", () => {
     warn.mockRestore();
   });
 
-  test("renders declared record actions in the action menu", async () => {
+  test("renders a lone declared record action as a secondary button", async () => {
     renderWithProviders(
       <FormView resource="notes.Note" id="note-1">
         <Field name="title" label="Title" title />
@@ -214,8 +214,9 @@ describe("FormView", () => {
       </FormView>,
     );
 
-    fireEvent.click(await screen.findByRole("button", { name: "Actions" }));
-    await screen.findByRole("menuitem", { name: "Archive" });
+    const archive = await screen.findByRole("button", { name: "Archive" });
+    expect(archive.classList.contains("bg-inset")).toBe(true);
+    expect(screen.queryByRole("button", { name: "Actions" })).toBeNull();
   });
 
   test("a section contribution with a permission is absent for a reader without it", async () => {
@@ -259,17 +260,15 @@ describe("FormView", () => {
     renderActions();
     await screen.findByRole("heading", { name: "First" });
     expect(screen.queryByRole("button", { name: "Reopen" })).toBeNull();
-    // The verb is a menu item: open the menu when there is one and look for it there.
-    const actionsMenu = screen.queryByRole("button", { name: "Actions" });
-    if (actionsMenu) fireEvent.click(actionsMenu);
-    expect(screen.queryByRole("menuitem", { name: "Archive" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Archive" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Actions" })).toBeNull();
 
     cleanup();
     sdkMocks.record = { ...sdkMocks.record, permissions: ["read", "write"] };
     renderActions();
     expect(await screen.findByRole("button", { name: "Reopen" })).toBeTruthy();
-    fireEvent.click(screen.getByRole("button", { name: "Actions" }));
-    expect(await screen.findByRole("menuitem", { name: "Archive" })).toBeTruthy();
+    expect(await screen.findByRole("button", { name: "Archive" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Actions" })).toBeNull();
   });
 
   test("hides the record delete action when its predicate does not match", async () => {
@@ -347,8 +346,7 @@ describe("FormView", () => {
       </FormView>,
     );
 
-    fireEvent.click(await screen.findByRole("button", { name: "Actions" }));
-    fireEvent.click(await screen.findByRole("menuitem", { name: "Archive" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Archive" }));
 
     await waitFor(() =>
       expect(sdkMocks.mutate).toHaveBeenCalledWith({
@@ -366,8 +364,7 @@ describe("FormView", () => {
       </FormView>,
     );
 
-    fireEvent.click(await screen.findByRole("button", { name: "Actions" }));
-    fireEvent.click(await screen.findByRole("menuitem", { name: "Sync" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Sync" }));
 
     await waitFor(() => expect(run).toHaveBeenCalledTimes(1));
     expect(run.mock.calls[0]?.[0]).toMatchObject({ record: { id: "note-1" } });
@@ -2266,7 +2263,7 @@ describe("FormView", () => {
     renderWithProviders(
       <FormView resource="notes.Note" id="note-1">
         <Field name="title" label="Title" title />
-        <Action id="archive" label="Archive" set={{ status: "ARCHIVED" }} />
+        <Action id="archive" label="Archive" placement="menu" set={{ status: "ARCHIVED" }} />
       </FormView>,
       undefined,
       undefined,
@@ -2415,15 +2412,12 @@ describe("FormView", () => {
     // The original and its variant may reuse a tab id: only one reaches the row, as its one pane.
     expect(screen.getByRole("heading", { name: kind === "WHATSAPP" ? "WhatsApp sync" : "Sync" })).toBeTruthy();
     expect(screen.queryByRole("heading", { name: kind === "WHATSAPP" ? "Sync" : "WhatsApp sync" })).toBeNull();
-    const actions = screen.queryByRole("button", { name: "Actions" });
     if (kind === "IMAP") {
-      fireEvent.click(actions!);
-      expect(await screen.findByRole("menuitem", { name: "Reindex IMAP" })).toBeTruthy();
-    } else if (actions) {
-      fireEvent.click(actions);
-      await waitFor(() => expect(screen.queryByRole("menu")).toBeTruthy());
-      expect(screen.queryByRole("menuitem", { name: "Reindex IMAP" })).toBeNull();
+      expect(await screen.findByRole("button", { name: "Reindex IMAP" })).toBeTruthy();
+    } else {
+      expect(screen.queryByRole("button", { name: "Reindex IMAP" })).toBeNull();
     }
+    expect(screen.queryByRole("button", { name: "Actions" })).toBeNull();
   });
 
   test("a create form knows no implementation: originals stand, row-decided children stay out, fields and all", async () => {
@@ -3515,11 +3509,12 @@ describe("FormView", () => {
     expect(screen.queryByRole("tab")).toBeNull();
   });
 
-  test("read-only records retain declared lifecycle actions while generated edits stay hidden", async () => {
+  test.each(["run", "submit"] as const)("read-only records promote their remaining %s verb after omitting set actions", async (binding) => {
     const run = vi.fn(async () => undefined);
+    const submit = vi.fn(async () => ({ ok: true, message: "Review recorded." }));
     renderWithProviders(<FormView resource="notes.Note" id="note-1" readOnly>
       <Field name="title" label="Title" title />
-      <Action id="review" label="Review" placement="toolbar" primary run={run} />
+      <Action id="review" label="Review" submitLabel="Record review" {...(binding === "run" ? { run } : { submit })} />
       <Action id="rename" label="Rename" set={{ title: "Changed" }} />
     </FormView>);
     expect(await screen.findByRole("heading", { name: "First" })).toBeTruthy();
@@ -3528,8 +3523,20 @@ describe("FormView", () => {
     expect(screen.queryByRole("button", { name: "Actions" })).toBeNull();
     expect(screen.queryByRole("menuitem", { name: "Delete" })).toBeNull();
     expect(screen.queryByRole("menuitem", { name: "Rename" })).toBeNull();
-    fireEvent.click(screen.getByRole("button", { name: "Review" }));
-    await waitFor(() => expect(run).toHaveBeenCalledOnce());
+    expect(screen.queryByRole("button", { name: "Rename" })).toBeNull();
+    const review = screen.getByRole("button", { name: "Review" });
+    expect(review.classList.contains("bg-inset")).toBe(true);
+    fireEvent.click(review);
+    if (binding === "submit") {
+      const dialog = await screen.findByRole("dialog", { name: "Review" });
+      expect(screen.queryByRole("button", { name: "Actions" })).toBeNull();
+      fireEvent.click(within(dialog).getByRole("button", { name: "Record review" }));
+      await waitFor(() => expect(submit).toHaveBeenCalledWith({}, expect.objectContaining({ record: sdkMocks.record })));
+      expect(run).not.toHaveBeenCalled();
+    } else {
+      await waitFor(() => expect(run).toHaveBeenCalledOnce());
+      expect(submit).not.toHaveBeenCalled();
+    }
   });
 
   test("a title-placed field wraps below the title instead of squeezing it to a sliver", async () => {

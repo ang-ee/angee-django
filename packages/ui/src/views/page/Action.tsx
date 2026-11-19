@@ -198,9 +198,9 @@ export interface ActionProps extends ActionBinding {
   danger?: boolean;
   /** The verb on the collected form's submit button when it differs from the trigger's label ("Run report"). */
   submitLabel?: ReactNode;
-  /** Promote a frequent record verb out of the default Actions menu. */
+  /** Explicit placement wins over `primary` and lone-verb promotion. Otherwise `primary` uses the toolbar; the form's band also promotes its sole visible, unplaced non-danger verb when no verb is already on the toolbar. Inside an Actions menu every verb stays in the menu. */
   placement?: "menu" | "toolbar";
-  /** The page's one primary verb: rendered as the primary button when it is on the toolbar and visible. */
+  /** Implies toolbar placement unless explicitly placed in the menu. The first visible toolbar action declaring `primary` gets primary styling (danger verbs keep their danger tone); lone-verb promotion alone stays secondary. */
   primary?: boolean;
   /** Static confirmation copy, or copy derived from the loaded record; a danger verb's copy takes the danger tone. */
   confirm?: ActionConfirm | ((record: Row) => ActionConfirm);

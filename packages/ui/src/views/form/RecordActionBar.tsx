@@ -53,6 +53,7 @@ export function RecordActionBar({
   contributedActions,
   blocked: blockedByForm = false,
   menuPlacement = "trailing",
+  promoteLoneAction = false,
 }: {
   record: Row | null;
   actions: readonly RecordActionDescriptor[];
@@ -65,6 +66,8 @@ export function RecordActionBar({
   blocked?: boolean;
   /** Where the Actions menu sits: an icon-only `⋮` before the verbs (the command band), or a labeled menu after them. */
   menuPlacement?: "leading" | "trailing";
+  /** Show the only visible, unplaced non-danger verb as a secondary button when no verb is already on the toolbar. Off by default; ignored inside an Actions menu. */
+  promoteLoneAction?: boolean;
 }): React.ReactElement | null {
   const preview = useRuntimeViewAs();
   const t = useUiT();
@@ -122,6 +125,17 @@ export function RecordActionBar({
 
   const recordId = rowPublicId(record);
 
+  // Count only admitted verbs: a predicate needs a loaded record to match.
+  const visibleActions = actions.filter(
+    (action) =>
+      (!action.permission || holdsPermission(record, action.permission))
+      && (!action.visibleWhen || (record != null && action.visibleWhen(record))),
+  );
+  const placements = effectiveActionPlacements(visibleActions, promoteLoneAction, menu !== null);
+  const toolbarActions = visibleActions.filter((action) => placements.get(action) === "toolbar");
+  const menuActions = visibleActions.filter((action) => placements.get(action) === "menu");
+  const primaryAction = toolbarActions.find((action) => action.primary);
+
   const runAction = React.useCallback(
     async (action: RecordActionDescriptor): Promise<void> => {
       if (blockedRef.current || action.disabled || disabledReason(action) || (action.permission && !holdsPermission(record, action.permission))) return;
@@ -142,7 +156,7 @@ export function RecordActionBar({
       // collects any args (none when undeclared), merges the record/selection
       // context and fires `submit` — never a record patch or the string-only prompt.
       if (action.submit) {
-        setFormAction({ action, fromMenu: menu !== null || action.placement !== "toolbar" });
+        setFormAction({ action, fromMenu: placements.get(action) === "menu" });
         return;
       }
       let values: Record<string, string> = {};
@@ -156,18 +170,9 @@ export function RecordActionBar({
         .mutateAsync({ action, values })
         .catch(() => undefined);
     },
-    [actionMutation, blockedRef, confirm, prompt, record, menu, t],
+    [actionMutation, blockedRef, confirm, prompt, record, placements, t],
   );
 
-  // An action with a `visibleWhen` predicate shows only when the open record
-  // matches (e.g. "Disable" only while enabled); a record must be loaded first.
-  const visibleActions = actions.filter(
-    (action) =>
-      (!action.permission || holdsPermission(record, action.permission))
-      && (!action.visibleWhen || (record != null && action.visibleWhen(record))),
-  );
-  const toolbarActions = visibleActions.filter((action) => action.placement === "toolbar");
-  const menuActions = visibleActions.filter((action) => action.placement !== "toolbar");
   const visibleDeleteAction = deleteAction?.canDelete ? deleteAction : undefined;
   const disabled = (action: ActionDescriptor) =>
     blocked || Boolean(action.disabled) || Boolean(disabledReason(action)) || pendingId !== null ||
@@ -237,12 +242,12 @@ export function RecordActionBar({
         {formDialog}
       </> : <>
         {menuPlacement === "leading" ? actionMenu : null}
-        {toolbarActions.map((action, index) => { const reason = disabledReason(action); return (
+        {toolbarActions.map((action) => { const reason = disabledReason(action); return (
           // A band verb's disabled reason is its tooltip: the verb stays focusable while
           // disabled so keyboard users reach the reason too.
           <Tooltip key={action.id} label={reason} side="bottom">
             <Button type="button" size="sm"
-              variant={action.danger ? "danger" : action.primary && toolbarActions.findIndex((entry) => entry.primary) === index ? "primary" : "secondary"}
+              variant={action.danger ? "danger" : action === primaryAction ? "primary" : "secondary"}
               disabled={disabled(action)} focusableWhenDisabled={Boolean(reason)}
               loading={pendingId === action.id} onClick={() => void runAction(action)}>
               {action.icon ? <Glyph name={action.icon} /> : null}
@@ -255,6 +260,24 @@ export function RecordActionBar({
       </>}
     </>
   );
+}
+
+/** Resolve placement once, after permission and visibility filtering. A parent menu keeps every verb. */
+function effectiveActionPlacements(
+  actions: readonly RecordActionDescriptor[],
+  promoteLoneAction: boolean,
+  inMenu: boolean,
+): Map<RecordActionDescriptor, "toolbar" | "menu"> {
+  const placements = new Map(actions.map((action) => [
+    action,
+    inMenu ? "menu" : action.placement ?? (action.primary ? "toolbar" : "menu"),
+  ] as const));
+  if (promoteLoneAction && !inMenu && ![...placements.values()].includes("toolbar")) {
+    const candidates = actions.filter((action) => action.placement === undefined && !action.danger);
+    const [candidate] = candidates;
+    if (candidates.length === 1 && candidate) placements.set(candidate, "toolbar");
+  }
+  return placements;
 }
 
 /**

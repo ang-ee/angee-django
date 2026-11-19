@@ -13,7 +13,7 @@ const COMMAND_BAND_COLLAPSE = "not-has-[>div>:not([hidden]):not(:empty)]:hidden"
 export interface CommandBandProps {
   /** Secondary verbs behind the leading icon-only menu (`ActionTrigger` children). */
   menu?: ReactNode;
-  /** Lifecycle verbs shown as buttons after the menu: at most two, the first primary. */
+  /** Record verbs shown after the menu; their action owner decides placement and primary emphasis. */
   verbs?: ReactNode;
   /** The open record; renders the `form#chrome` controls (Needs you, Follow, Share) on the right. */
   chrome?: RecordChromeContext | null;
@@ -27,8 +27,8 @@ export interface CommandBandProps {
 }
 
 /**
- * The record page's command band: `⋮` menu · lifecycle verbs · (space) · header
- * controls · pager, in the shell's control row. Pages with lifecycle commands
+ * The record page's command band: `⋮` menu · record verbs · (space) · header
+ * controls · pager, in the shell's control row. Pages with record commands
  * contribute to this one band, never a second bar. Read-only inspectors can
  * compose secondary actions and RecordChrome in RecordHeader.actions instead.
  *

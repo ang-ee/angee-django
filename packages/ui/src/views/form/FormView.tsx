@@ -371,6 +371,7 @@ function FormViewContent({ surface, ...props }: FormViewProps & {
             }
             blocked={actionsBlocked}
             menuPlacement="leading"
+            promoteLoneAction
           />
         ) : null}
         {!awaitingRecord && !readOnly && recordChromeContext ? (
