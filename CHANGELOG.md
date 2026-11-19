@@ -10,6 +10,24 @@ live in code docstrings.
 
 ## Unreleased — shared addon contracts, native embeddings and graph retrieval
 
+- `angee.parties`: a consumer addon maps a pull-only directory backend's source
+  fields onto its own person columns with a `DirectoryMapping`
+  (`angee.parties.backends`), registered under its key in the new
+  `ANGEE_DIRECTORY_MAPPING_CLASSES` setting from its `autoconfig.py`. It names
+  the backend, the source `fields` and a `version`; `project(row)` keeps what may
+  enter the system and `apply_record(person, values, *, link)` states it on the
+  landed person through the contact's link, after the ingest in its savepoint.
+  A backend asks its source for `DirectoryBackend.mapped_fields()` and passes
+  their values to `observe(..., row=...)`; the payload and the compared mapped
+  payload keep only the projections, under a `mappings` key that appears only
+  while a mapping applies. Each mapping is one `MappingContribution` of the
+  contacts stream, so adding, removing, exchanging or re-versioning one replays
+  every contact once. The system check refuses a mapping of a backend that
+  writes back (`parties.E002`) or of no registered backend (`parties.E001`).
+  CardDAV and any backend without a mapping keep their payloads, comparison and
+  mapping version. Known gap: a mapping no longer registered leaves what it
+  stated asserted until the link is withdrawn.
+
 - `angee.integrate`: a stream's mapping can be composed from several declarers.
   `StreamDefinition.mapping_contributions` declares one
   `MappingContribution(key, version, sequence=...)` per part; integrate orders
