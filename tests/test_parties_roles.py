@@ -149,7 +149,8 @@ MATRIX: dict[str, dict[str, tuple[str, ...]]] = {
     "vault": {
         "read": (*ROLE_HOLDERS, "platform"),
         "write": ("manager", "admin", "group manager", "platform"),
-        "delete": ("admin", "platform"),
+        # A contact admin removes the vault's pages, never the vault (pending ruling, knowledge/vault#page_delete).
+        "delete": ("platform",),
         "share": ("platform",),
         "transfer": ("platform",),
     },
@@ -324,3 +325,22 @@ def test_a_contact_admin_grants_a_per_record_reader_and_a_manager_cannot(world: 
         with actor_context(admin):
             model.objects.with_actor(admin).get(pk=pk).revoke_record_access("reader", grantee)
         assert not _allowed(row, grantee), model.__name__
+
+
+def test_a_contact_admin_trashes_and_restores_a_persons_page_but_never_the_people_vault(world: SimpleNamespace) -> None:
+    """Removing the vault would refuse every importer (``Vault.objects.for_resource``); its pages are the admin's."""
+
+    w = world
+    admin, manager = w.holders["contact_admin"], w.holders["contact_manager"]
+    with actor_context(admin):
+        page = Page.objects.with_actor(admin).get(pk=w.note.pk)
+        page.require_access("delete")
+        page.trash(reason="Duplicate note.")
+        # The remover keeps reading a trashed page, to list and restore it; a manager no longer does.
+        assert Page.objects.with_actor(admin).filter(pk=w.note.pk).exists()
+        assert not Page.objects.with_actor(manager).filter(pk=w.note.pk).exists()
+        Page.objects.with_actor(admin).get(pk=w.note.pk).restore()
+        with pytest.raises(PermissionDenied):
+            Vault.objects.with_actor(admin).get(pk=w.vault.pk).require_access("delete")
+    with system_context(reason="tests.parties_roles.vault_readback"):
+        assert Vault.objects.for_resource(Vault.PEOPLE).pk == w.vault.pk

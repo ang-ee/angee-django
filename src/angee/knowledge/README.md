@@ -137,7 +137,11 @@ read, write and delete it, as on every vault; a platform admin may transfer it
 to a person, who then owns it. Parties' roles reach it by grant rows its install
 tier writes beside it (`install/020_knowledge.vault_grants.yaml`): a contact
 reader reads it (`contact_viewer`), a contact manager writes it
-(`contact_editor`), a contact admin also removes it (`contact_admin`); share and
+(`contact_editor`), a contact admin also removes its pages (`contact_admin`,
+through `knowledge/vault#page_delete`, which also keeps a trashed page readable
+to restore it) but never the vault, whose removal would refuse every importer
+its `for_resource` (pending the architect's ruling; `delete` in place of
+`page_delete` in the extension lets a contact admin remove the vault); share and
 transfer stay with its owner and platform admins. A deployment may grant more
 with a vault's ordinary grants: an operator shares it as viewers with a user
 or a group's members through the vault's share surface (`viewer` is the vault's
