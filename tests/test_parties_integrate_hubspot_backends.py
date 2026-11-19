@@ -14,7 +14,7 @@ from angee.integrate.states import StreamPhase
 from angee.integrate.testing.http import request_fields
 from angee.parties.backends import ParsedAddress, ParsedContact
 from angee.parties_integrate_hubspot.backends import OVERLAP, HubSpotCursor, contact_from_properties
-from angee.parties_integrate_hubspot.client import EPOCH, HubSpotClient, HubSpotPage
+from angee.parties_integrate_hubspot.client import EPOCH, HubSpotClient, HubSpotError, HubSpotPage
 from angee.parties_integrate_hubspot.testing.server import TOKEN, HubSpotServer, serve
 from angee.parties_integrate_hubspot.testing.server import hubspot_server as hubspot_server
 
@@ -38,7 +38,7 @@ def run_pass(
     between: Callable[[list[str]], None] | None = None,
     drains: dict[datetime, list[str]] | None = None,
 ) -> tuple[HubSpotCursor, list[str]]:
-    """Drive one pass page by page, as the backend's extract will; return the closed cursor and every id read.
+    """Drive one pass page by page, as the backend's extract does; return the closed cursor and every id read.
 
     The cursor goes through its stored JSON between pages, as the driver persists it.
     ``between`` runs before each following page with the ids read so far; ``drains``
@@ -47,18 +47,10 @@ def run_pass(
 
     cursor = cursor.begin(phase, now=now)
     read: list[str] = []
-    page: HubSpotPage
     while cursor.is_open:
-        if cursor.block is not None:
-            page = client.search_modified_at(
-                "contacts", moment=cursor.block, after=cursor.after, limit=limit, properties=()
-            )
-            if drains is not None:
-                drains.setdefault(cursor.block, []).extend(record.id for record in page.results)
-        elif cursor.since is not None:
-            page = client.search_modified("contacts", since=cursor.since, limit=limit, properties=())
-        else:
-            page = client.list_page("contacts", after=cursor.after, limit=limit, properties=())
+        page = cursor.fetch(client, "contacts", limit=limit, properties=())
+        if drains is not None and cursor.block is not None:
+            drains.setdefault(cursor.block, []).extend(record.id for record in page.results)
         read += [record.id for record in page.results]
         cursor = cursor.advance(page, object_type="contacts")
         cursor = HubSpotCursor.model_validate(cursor.model_dump(mode="json"))
@@ -194,6 +186,19 @@ def test_a_block_of_one_modified_time_is_drained_by_id_from_its_lowest_and_the_s
     assert closed == HubSpotCursor(watermark=moment + timedelta(minutes=2))
 
 
+def test_a_request_asks_for_no_more_records_than_hubspots_page_limits(
+    hubspot_server: HubSpotServer, client: HubSpotClient
+) -> None:
+    searching = HubSpotCursor(watermark=T0).begin(DELTA, now=T0)
+
+    for cursor in (HubSpotCursor().begin(BASELINE, now=T0), searching, searching.model_copy(update={"block": T0})):
+        cursor.fetch(client, "contacts", limit=500, properties=())
+
+    listing, search, drain = hubspot_server.requests
+    assert listing.url.params["limit"] == "100"
+    assert [request_fields(request)["limit"] for request in (search, drain)] == [200, 200]
+
+
 def test_begin_continues_an_open_pass_of_the_stream_phase_and_reopens_for_another() -> None:
     walking = HubSpotCursor().begin(BASELINE, now=T0).model_copy(update={"after": "205"})
     later = T0 + timedelta(hours=1)
@@ -205,18 +210,27 @@ def test_begin_continues_an_open_pass_of_the_stream_phase_and_reopens_for_anothe
         HubSpotCursor().advance(HubSpotPage(), object_type="contacts")
 
 
-def test_a_record_whose_modified_time_cannot_be_read_moves_nothing_and_fails_nothing() -> None:
+def test_an_unreadable_modified_time_moves_nothing_and_a_page_of_changes_with_none_is_refused() -> None:
     walking = HubSpotCursor().begin(BASELINE, now=T0)
     searching = HubSpotCursor(watermark=T0).begin(DELTA, now=T0 + timedelta(hours=1))
     draining = searching.model_copy(update={"block": T0, "after": "100"})
 
     walked = walking.advance(page_of("soon", "2026-11-02T11:00:00Z", after="103"), object_type="contacts")
-    searched = searching.advance(page_of("soon", "9" * 30, after="2"), object_type="contacts")
     drained = draining.advance(page_of("soon", "soon", after="2"), object_type="contacts")
+    searched = searching.advance(page_of("soon", "2026-11-02T13:30:00Z", "late", after="3"), object_type="contacts")
 
     assert walked == walking.model_copy(update={"after": "103", "watermark": T0 - timedelta(hours=1)})
-    assert searched == searching
     assert drained == draining.model_copy(update={"after": "102"})
+    assert searched == searching.model_copy(
+        update={"block": T0 + timedelta(minutes=90), "watermark": T0 + timedelta(hours=1)}
+    )
+    with pytest.raises(HubSpotError) as refused:
+        searching.advance(page_of("soon", "9" * 30, after="2"), object_type="contacts")
+    assert refused.value.public_message == (
+        "HubSpot sent a page of changed records without a readable modified time."
+    )
+    assert not refused.value.transient
+    assert searching.advance(page_of("soon"), object_type="contacts") == HubSpotCursor(watermark=T0)
 
 
 @settings(deadline=None, max_examples=80)

@@ -1,0 +1,482 @@
+"""HubSpot contacts through the real directory driver, onto real tables, against the scripted account.
+
+The backend reads the scripted HubSpot (``HubSpotServer`` behind ``mock_transport``);
+the driver opens, pages and sweeps the streams, and the parties ingest owners land
+the people, handles and statements. Tests assert those outcomes and what HubSpot
+was asked, never how the directory base builds its records.
+"""
+
+from __future__ import annotations
+
+import json
+from collections.abc import Callable, Iterator
+from dataclasses import dataclass
+from datetime import datetime, timedelta
+from time import monotonic
+from typing import Any
+from urllib.parse import parse_qs, urlsplit
+
+import pytest
+from django.core.exceptions import ValidationError
+from django.utils import timezone
+from rebac import system_context
+
+from angee.integrate.errors import IntegrationError
+from angee.integrate.states import LinkStatus, StreamDirection, StreamPhase
+from angee.integrate.streams import BridgeSyncError, PageResult, advance_stream, reconcile_stream
+from angee.integrate.testing.models import RecordLink, SyncStream
+from angee.messaging.testing.models import Directory, Handle, Party, Person, RelationshipKind
+from angee.parties.backends import ParsedContact
+from angee.parties_integrate_hubspot.backends import HubSpotDirectoryBackend
+from angee.parties_integrate_hubspot.client import HubSpotError
+from angee.parties_integrate_hubspot.testing.server import HUB_ID, TOKEN, HubSpotServer, error_response, serve
+from tests.conftest import Credential, make_integration
+from tests.stream_adapters import applied_history
+
+pytestmark = pytest.mark.django_db(transaction=True)
+
+CONTACTS_READ = "crm.objects.contacts.read"
+OTHER_KEY = "pat-na1-ffffffff-ffff-4fff-8fff-ffffffffffff"
+REJECTED = "HubSpot rejected the access token. Enter a valid HubSpot service key."
+MISSING_SCOPE = f"The HubSpot service key is missing a scope this connection needs: {CONTACTS_READ}."
+
+ADA = {
+    "firstname": "Ada",
+    "lastname": "Example",
+    "email": "ada@example.com",
+    "phone": "+15555550100",
+    "jobtitle": "Engineer",
+    "company": "Example Engines",
+}
+GRACE = {
+    "firstname": "Grace",
+    "lastname": "Example",
+    "email": "grace@example.com",
+    "hs_additional_emails": "grace.work@example.com",
+    "mobilephone": "+15555550101",
+}
+MARY = {"firstname": "Mary", "lastname": "Example", "email": "mary@example.com", "favourite_colour": "green"}
+ALAN = {"firstname": "Alan", "lastname": "Example", "email": "alan@example.com"}
+KATE = {"email": "kate@example.com"}
+
+
+def ago(*, days: float = 0, minutes: float = 0) -> datetime:
+    return timezone.now() - timedelta(days=days, minutes=minutes)
+
+
+@dataclass
+class HubSpot:
+    directory: Any
+    backend: HubSpotDirectoryBackend
+    server: HubSpotServer
+    stream: Any
+
+    def pull(self, *, page_bound: int = 100) -> PageResult:
+        result = advance_stream(self.stream, self.backend, page_bound=page_bound)
+        self.stream = result.stream
+        return result
+
+    def drain(self, *, page_bound: int = 100, between: Callable[[], None] | None = None) -> list[PageResult]:
+        """Pull pages until the pass is done; ``between`` runs after each page."""
+
+        pages = []
+        for _ in range(60):
+            pages.append(result := self.pull(page_bound=page_bound))
+            if result.exhausted:
+                return pages
+            if between is not None:
+                between()
+        pytest.fail("The HubSpot pass did not finish")
+
+    def sweep(self) -> int:
+        """Run one absence sweep to completion, one key per pulse; return the absences it observed."""
+
+        SyncStream._base_manager.filter(pk=self.stream.pk).update(last_reconciled_at=None)
+        absent = 0
+        for _ in range(30):
+            absent += reconcile_stream(self.stream, self.backend, page_bound=1)
+            self.stream.refresh_from_db()
+            if not self.stream.reconcile_state:
+                return absent
+        pytest.fail("The absence sweep did not finish")
+
+    def discover(self) -> dict[str, Any]:
+        """Run the directory's connection discovery, as the discovery task does."""
+
+        result = self.directory.run_discovery(
+            credential_pk=self.directory.credential_id, generation=self.directory.discovery_generation
+        )
+        self.directory.refresh_from_db()
+        return result
+
+    def link(self, key: str) -> Any:
+        return RecordLink.objects.get(stream=self.stream, external_key=key)
+
+    def person(self, key: str) -> Any:
+        return Party.objects.contact_person(self.link(key))
+
+    def contact(self, key: str) -> ParsedContact:
+        return Party.objects.project_contact(self.person(key))
+
+    def searches(self) -> list[dict[str, Any]]:
+        return [json.loads(request.content) for request in self.server.requests if request.url.path.endswith("/search")]
+
+    def listings(self) -> list[dict[str, str]]:
+        return [
+            {name: values[-1] for name, values in parse_qs(urlsplit(str(request.url)).query).items()}
+            for request in self.server.requests
+            if request.method == "GET" and request.url.path == "/crm/objects/2026-09/contacts"
+        ]
+
+
+@pytest.fixture
+def hubspot(db: None) -> Iterator[HubSpot]:
+    del db
+    with system_context(reason="test HubSpot directory"), serve(HubSpotServer()) as server:
+        directory = make_integration(
+            "hubspot-directory", model=Directory, backend_class="hubspot", material={"api_key": TOKEN}
+        )
+        RelationshipKind.objects.create(
+            slug="employee", name="Employee", inverse_name="Employer", category="professional",
+            other_party_kind="organization",
+        )
+        backend = directory.backend
+        assert isinstance(backend, HubSpotDirectoryBackend)
+        (books,) = backend.streams()
+        advance_stream(SyncStream.objects.current(directory, books), backend)
+        (_, contacts) = backend.streams()
+        assert (contacts.partition, contacts.direction) == ("contacts", StreamDirection.PULL)
+        yield HubSpot(directory, backend, server, SyncStream.objects.current(directory, contacts))
+        backend.close()
+
+
+def asserted(party_id: Any, link: Any) -> Any:
+    """The statements ``link`` currently asserts on the party."""
+
+    records: Any = Party.statements
+    statements = records.filter(subject_id=party_id, link=link).current()
+    return statements.filter(status=records.model.StatementStatus.ASSERTED)
+
+
+def failures(hubspot: HubSpot) -> list[Any]:
+    return [failure for link in RecordLink.objects.filter(stream=hubspot.stream) for failure in link.failures()]
+
+
+def handle_values(person: Any) -> set[str]:
+    return set(Handle.objects.filter(party_id=person.pk).values_list("value", flat=True))
+
+
+def test_a_baseline_over_several_pages_lands_people_with_their_handles_and_a_second_run_changes_nothing(
+    hubspot: HubSpot,
+) -> None:
+    ids = [
+        hubspot.server.add("contacts", properties, modified=ago(days=days))
+        for days, properties in zip((5, 4, 3, 2, 1), (ADA, GRACE, MARY, ALAN, KATE), strict=True)
+    ]
+
+    pages = hubspot.drain(page_bound=2)
+
+    assert [page.count for page in pages] == [2, 2, 1]
+    assert hubspot.stream.phase == StreamPhase.DELTA
+    assert [listing["limit"] for listing in hubspot.listings()] == ["2", "2", "2"]
+    ada, grace = hubspot.contact(ids[0]), hubspot.contact(ids[1])
+    assert (ada.display_name, ada.title, ada.organization) == ("Ada Example", "Engineer", "Example Engines")
+    assert {email for email, _label, _preferred in ada.emails} == {"ada@example.com"}
+    assert {phone for phone, _label, _preferred in ada.phones} == {"+15555550100"}
+    assert {email for email, _label, _preferred in grace.emails} == {"grace@example.com", "grace.work@example.com"}
+    assert handle_values(hubspot.person(ids[1])) == {"grace@example.com", "grace.work@example.com", "+15555550101"}
+    assert hubspot.contact(ids[4]).display_name == "kate@example.com"
+    assert Person.objects.count() == 5
+    assert all(hubspot.link(key).status == LinkStatus.CURRENT for key in ids)
+
+    applications = applied_history().count()
+    hubspot.server.requests.clear()
+    assert [page.count for page in hubspot.drain(page_bound=2)] == [0]
+    assert applied_history().count() == applications
+    assert hubspot.listings() == []
+    assert all("after" not in search for search in hubspot.searches())
+    assert not failures(hubspot)
+
+
+def test_a_delta_lands_hubspots_edits_including_one_made_between_its_pages(hubspot: HubSpot) -> None:
+    ada, grace, mary = (
+        hubspot.server.add("contacts", properties, modified=ago(days=days))
+        for days, properties in zip((3, 2, 1), (ADA, GRACE, MARY), strict=True)
+    )
+    hubspot.drain()
+    hubspot.server.requests.clear()
+    hubspot.server.update("contacts", grace, {"lastname": "Hopper"}, modified=timezone.now())
+    alan = hubspot.server.add("contacts", ALAN, modified=timezone.now())
+    edited: list[str] = []
+
+    def edit_grace_once_read() -> None:
+        """Once the delta has landed Grace's first edit, HubSpot records a second one before the next page."""
+
+        if not edited and hubspot.contact(grace).display_name == "Grace Hopper":
+            hubspot.server.update("contacts", grace, {"email": "grace@navy.example"}, modified=timezone.now())
+            edited.append(grace)
+
+    pages = hubspot.drain(page_bound=1, between=edit_grace_once_read)
+
+    assert edited
+    assert sum(page.count for page in pages) == 3
+    assert (hubspot.contact(grace).display_name, hubspot.contact(alan).display_name) == (
+        "Grace Hopper",
+        "Alan Example",
+    )
+    assert "grace@navy.example" in {email for email, _label, _preferred in hubspot.contact(grace).emails}
+    assert hubspot.contact(ada).title == "Engineer"
+    assert hubspot.contact(mary).display_name == "Mary Example"
+    assert hubspot.listings() == []
+    assert all("after" not in search and search["limit"] == 1 for search in hubspot.searches())
+    assert [page.count for page in hubspot.drain()] == [0]
+    assert not failures(hubspot)
+
+
+def test_a_persons_own_edit_survives_the_next_pull_beside_hubspots_edits(hubspot: HubSpot) -> None:
+    ada = hubspot.server.add("contacts", ADA, modified=ago(days=1))
+    hubspot.drain()
+    person = hubspot.person(ada)
+    party: Any = Party.objects.get(pk=person.pk).with_actor(hubspot.directory.owner)
+    party.statements.set(aspect="identity", values={"display_name": "Ada (a friend)"})
+
+    hubspot.server.update("contacts", ada, {"jobtitle": "Analyst"}, modified=timezone.now())
+    assert [page.count for page in hubspot.drain()] == [1]
+
+    person.refresh_from_db()
+    assert (person.display_name, hubspot.contact(ada).title) == ("Ada (a friend)", "Analyst")
+    assert [page.count for page in hubspot.drain()] == [0]
+    assert not failures(hubspot)
+
+
+@pytest.mark.parametrize("removal", ["archived", "deleted"])
+def test_a_contact_hubspot_removes_is_withdrawn_by_the_sweep_and_the_person_stays(
+    hubspot: HubSpot, removal: str
+) -> None:
+    ada, grace = (
+        hubspot.server.add("contacts", properties, modified=ago(days=days))
+        for days, properties in zip((2, 1), (ADA, GRACE), strict=True)
+    )
+    hubspot.drain()
+    assert hubspot.sweep() == 0
+    person, link = hubspot.person(grace), hubspot.link(grace)
+    assert asserted(person.pk, link).exists()
+
+    if removal == "archived":
+        hubspot.server.archive("contacts", grace, at=timezone.now())
+    else:
+        del hubspot.server.records["contacts"][grace]
+    assert [page.count for page in hubspot.drain()] == [0]
+
+    for status, stated in ((LinkStatus.UNAVAILABLE, True), (LinkStatus.TOMBSTONE, False)):
+        assert hubspot.sweep() == 1
+        link.refresh_from_db()
+        assert (link.status, asserted(person.pk, link).exists()) == (status, stated)
+    assert Person.objects.filter(pk=person.pk).exists()
+    assert hubspot.link(ada).status == LinkStatus.CURRENT
+
+
+def test_a_merged_contact_lands_on_the_person_of_a_record_it_replaced(hubspot: HubSpot) -> None:
+    ada, ada_again, grace = (
+        hubspot.server.add("contacts", properties, modified=ago(days=days))
+        for days, properties in zip((3, 2, 1), (ADA, {**ADA, "email": "ada.lovelace@example.com"}, GRACE), strict=True)
+    )
+    hubspot.drain()
+    people = Person.objects.count()
+    person, again = hubspot.person(ada), hubspot.person(ada_again)
+
+    survivor = hubspot.server.merge("contacts", ada, ada_again, modified=timezone.now())
+    pages = hubspot.drain(page_bound=3)
+
+    assert hubspot.person(survivor).pk == person.pk
+    assert Person.objects.count() == people
+    assert Person.objects.filter(pk=again.pk).exists()
+    assert {hubspot.link(ada).status, hubspot.link(ada_again).status} == {LinkStatus.TOMBSTONE}
+    assert asserted(person.pk, hubspot.link(survivor)).exists()
+    assert not asserted(person.pk, hubspot.link(ada)).exists()
+    assert hubspot.link(grace).status == LinkStatus.CURRENT
+    # The survivor takes room for its two replaced records: beside Grace's re-read it waits for a page of its own.
+    assert [page.count for page in pages] == [0, 0, 3]
+    (merged,) = hubspot.backend.read_keys(hubspot.stream, [ada])
+    assert (merged.external_key, merged.tombstone) == (ada, True)
+    assert not failures(hubspot)
+
+
+def test_a_merge_that_replaces_more_records_than_a_page_holds_is_refused_for_the_operator(hubspot: HubSpot) -> None:
+    ada, ada_again = (
+        hubspot.server.add("contacts", properties, modified=ago(days=days))
+        for days, properties in zip((2, 1), (ADA, {**ADA, "email": "ada.lovelace@example.com"}), strict=True)
+    )
+    hubspot.drain()
+    hubspot.server.merge("contacts", ada, ada_again, modified=timezone.now())
+
+    with pytest.raises(HubSpotError) as refused:
+        hubspot.pull(page_bound=2)
+
+    assert not refused.value.transient
+    assert refused.value.public_message == (
+        "A merged HubSpot contact replaces more contacts than a page of 2 records holds."
+    )
+
+
+def test_a_page_stays_within_its_bound_hubspots_page_limit_and_the_deadline(hubspot: HubSpot) -> None:
+    for number in range(101):
+        hubspot.server.add("contacts", {"email": f"person{number}@example.com"}, modified=ago(days=1, minutes=number))
+
+    page = hubspot.backend.extract_contacts(hubspot.stream, 101)
+    assert (len(page.records), page.exhausted) == (101, True)
+    assert [listing["limit"] for listing in hubspot.listings()] == ["100", "1"]
+
+    hubspot.server.requests.clear()
+    late = hubspot.backend.extract_contacts(hubspot.stream, 101, deadline=monotonic() - 1)
+    assert (len(late.records), late.exhausted) == (100, False)
+    assert len(hubspot.listings()) == 1
+
+
+def test_an_identity_read_answers_a_missing_contact_as_gone_and_fails_on_any_other_error(hubspot: HubSpot) -> None:
+    ada = hubspot.server.add("contacts", ADA, modified=ago(days=1))
+    hubspot.drain()
+
+    (record, missing) = hubspot.backend.read_keys(hubspot.stream, [ada, "999"])
+    assert (record.external_key, record.tombstone, record.mapped_payload["display_name"]) == (ada, False, "Ada Example")
+    assert (missing.external_key, missing.tombstone) == ("999", True)
+
+    hubspot.server.read_errors[ada] = "INTERNAL_ERROR"
+    with pytest.raises(HubSpotError) as failed:
+        hubspot.backend.read_keys(hubspot.stream, [ada])
+    assert failed.value.transient
+
+
+@pytest.mark.parametrize(
+    ("refuse", "message", "transient", "wait"),
+    [
+        pytest.param(lambda server: setattr(server, "token", OTHER_KEY), REJECTED, False, None, id="401"),
+        pytest.param(lambda server: setattr(server, "scopes", set()), MISSING_SCOPE, False, None, id="403-scope"),
+        pytest.param(
+            lambda server: server.queue(error_response(429, policy_name="TEN_SECONDLY_ROLLING")),
+            "HubSpot is rate limiting this account.",
+            True,
+            timedelta(seconds=10),
+            id="429-ten-secondly",
+        ),
+        pytest.param(
+            lambda server: server.queue(error_response(429, policy_name="DAILY")),
+            "This HubSpot account has used its daily API request limit.",
+            True,
+            timedelta(hours=1),
+            id="429-daily",
+        ),
+    ],
+)
+def test_a_refusal_reaches_the_operator_and_the_contacts_wait_where_they_were(
+    hubspot: HubSpot,
+    refuse: Callable[[HubSpotServer], None],
+    message: str,
+    transient: bool,
+    wait: timedelta | None,
+) -> None:
+    ada = hubspot.server.add("contacts", ADA, modified=ago(days=1))
+    assert hubspot.discover()["ok"]
+    assert hubspot.directory.run_sync(now=timezone.now()) == 1
+    hubspot.stream.refresh_from_db()
+    cursor, applications = hubspot.stream.cursor, applied_history().count()
+    hubspot.server.update("contacts", ada, {"jobtitle": "Analyst"}, modified=timezone.now())
+
+    refuse(hubspot.server)
+    now = timezone.now()
+    with pytest.raises(BridgeSyncError) as refused:
+        hubspot.directory.run_sync(now=now)
+
+    assert (refused.value.transient, refused.value.retry_after) == (transient, wait)
+    hubspot.directory.refresh_from_db()
+    assert hubspot.directory.sync_error == f"contacts (contacts): {message}"
+    hubspot.stream.refresh_from_db()
+    assert (hubspot.stream.cursor, applied_history().count()) == (cursor, applications)
+    assert hubspot.contact(ada).title == "Engineer"
+    if wait is not None and wait > timedelta(seconds=hubspot.directory.poll_interval):
+        assert hubspot.directory.next_sync_at >= now + wait
+
+
+def test_the_connection_test_names_the_account_and_tells_a_rejected_key_from_a_missing_scope(
+    hubspot: HubSpot,
+) -> None:
+    connected = f"Connected to HubSpot account {HUB_ID}."
+    assert hubspot.directory.test_connection() == connected
+
+    # HubSpot documents introspection for private-app keys only: a refused one asks for one contact instead.
+    hubspot.server.requests.clear()
+    hubspot.server.queue(error_response(403))
+    assert hubspot.directory.test_connection() == connected
+    assert [request.url.path for request in hubspot.server.requests] == [
+        "/oauth/v2/private-apps/get/access-token-info",
+        "/crm/objects/2026-09/contacts",
+        "/account-info/2026-09/details",
+    ]
+    assert hubspot.listings()[0]["limit"] == "1"
+
+    hubspot.server.scopes = set()
+    for refused_introspection in (False, True):
+        if refused_introspection:
+            hubspot.server.queue(error_response(403))
+        with pytest.raises(HubSpotError) as missing:
+            hubspot.directory.test_connection()
+        assert missing.value.public_message == MISSING_SCOPE
+
+    hubspot.server.scopes, hubspot.server.token = {CONTACTS_READ}, OTHER_KEY
+    with pytest.raises(HubSpotError) as rejected:
+        hubspot.directory.test_connection()
+    assert (rejected.value.public_message, rejected.value.transient) == (REJECTED, False)
+
+    hubspot.server.queue(error_response(429, policy_name="TEN_SECONDLY_ROLLING"))
+    with pytest.raises(HubSpotError) as throttled:
+        hubspot.directory.test_connection()
+    assert throttled.value.transient
+
+
+def test_discovery_learns_the_account_a_contacts_source_link_opens(hubspot: HubSpot) -> None:
+    ada = hubspot.server.add("contacts", ADA, modified=ago(days=1))
+    hubspot.drain()
+    assert hubspot.link(ada).source_url is None
+    with pytest.raises(IntegrationError, match="discovery"):
+        hubspot.directory.run_sync(now=timezone.now())
+
+    assert hubspot.discover() == {"ok": True, "reason": "applied"}
+
+    state = hubspot.directory.subscription_state
+    assert (state["hub_id"], state["ui_domain"]) == (HUB_ID, "app.hubspot.com")
+    link = hubspot.link(ada)
+    assert link.source_url == f"https://app.hubspot.com/contacts/{HUB_ID}/record/0-1/{ada}"
+    assert link.source_label == "Ada Example"
+    book = RecordLink.objects.get(stream__key="addressbooks", stream__integration=hubspot.directory)
+    assert (book.source_url, book.source_label) == (None, "contacts")
+    assert hubspot.directory.discovery_ready
+
+
+def test_a_rejected_key_stops_at_discovery_with_the_operator_message(hubspot: HubSpot) -> None:
+    hubspot.server.token = OTHER_KEY
+
+    assert hubspot.discover() == {"ok": False, "reason": "discovery-failed"}
+
+    assert hubspot.directory.last_error == REJECTED
+    assert not hubspot.directory.discovery_ready
+    with pytest.raises(IntegrationError, match="discovery"):
+        hubspot.directory.run_sync(now=timezone.now())
+
+
+def test_a_hubspot_directory_admits_only_a_static_token(hubspot: HubSpot) -> None:
+    owner, held = hubspot.directory.owner, hubspot.directory.credential_id
+    basic = Credential.objects.create_local_credential(
+        owner, kind="basic_auth", name="Not a service key", material={"username": "ada", "password": "secret"}
+    )
+
+    with pytest.raises(ValidationError, match="static token"):
+        hubspot.directory.attach_connection(basic)
+    hubspot.directory.refresh_from_db()
+    assert hubspot.directory.credential_id == held
+
+    key = Credential.objects.create_local_credential(
+        owner, kind="static_token", name="Another service key", material={"api_key": TOKEN}
+    )
+    hubspot.directory.attach_connection(key)
+    assert hubspot.directory.credential_id == key.pk
+    assert hubspot.discover()["ok"]

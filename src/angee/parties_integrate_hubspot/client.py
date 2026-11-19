@@ -93,11 +93,10 @@ class HubSpotError(IntegrationError):
         body = _error_body(response)
         transient, wait = _retry_policy(response, body)
         status = response.status_code
+        if status == 403 and body.category == "MISSING_SCOPES":
+            return cls.missing_scopes(scopes, status=status)
         if status == 401:
             message = "HubSpot rejected the access token. Enter a valid HubSpot service key."
-        elif status == 403 and body.category == "MISSING_SCOPES":
-            needed = ", ".join(scopes) or "the scope this request needs"
-            message = f"The HubSpot service key is missing a scope this connection needs: {needed}."
         elif status == 403:
             message = "HubSpot refused this request for the service key."
         elif status == 423:
@@ -111,6 +110,17 @@ class HubSpotError(IntegrationError):
         else:
             message = f"HubSpot refused the request (HTTP {status})."
         return cls(message, status=status, transient=transient, retry_after=wait)
+
+    @classmethod
+    def missing_scopes(cls, scopes: Sequence[str], *, status: int | None = None) -> HubSpotError:
+        """Refuse a service key that lacks ``scopes``, which this connection needs; permanent.
+
+        ``status`` is 403 when HubSpot refused a request for it, ``None`` when the
+        key's introspection showed the scopes it lacks.
+        """
+
+        needed = ", ".join(scopes) or "the scope this request needs"
+        return cls(f"The HubSpot service key is missing a scope this connection needs: {needed}.", status=status)
 
 
 class _HubSpotModel(BaseModel):
@@ -129,16 +139,16 @@ class _HubSpotErrorBody(_HubSpotModel):
 
 
 class HubSpotTokenInfo(_HubSpotModel):
-    """What HubSpot's token introspection states about one access token: its account (hub) and scopes."""
+    """What HubSpot's token introspection states about one access token: the scopes it grants."""
 
-    hub_id: int
     scopes: tuple[str, ...] = ()
 
 
 class HubSpotAccount(_HubSpotModel):
-    """The account (portal) a token belongs to."""
+    """The account (portal, or hub) a token belongs to, and the host its web app serves it from."""
 
     portal_id: int
+    ui_domain: str = Field(pattern=r"^[A-Za-z0-9.-]+$")
 
 
 class HubSpotObject(_HubSpotModel):
@@ -187,6 +197,18 @@ class HubSpotPage(_HubSpotModel):
 
         return self.paging.next.after if self.paging is not None and self.paging.next is not None else ""
 
+    def head(self, count: int) -> HubSpotPage:
+        """Return the page cut to its first ``count`` records, the following page starting at the first one cut.
+
+        That position is the cut record's id, where a list walk resumes; a search
+        page's position is read only as a sign that more results follow.
+        """
+
+        if count >= len(self.results):
+            return self
+        following = HubSpotPaging(next=HubSpotNext(after=self.results[count].id))
+        return HubSpotPage(results=self.results[:count], paging=following)
+
 
 class _HubSpotBatchError(_HubSpotModel):
     """One error a partial (207) batch answer states for some of its records."""
@@ -227,10 +249,10 @@ class HubSpotClient:
         self.http = HttpClient()
 
     def token_info(self, token_key: str) -> HubSpotTokenInfo:
-        """Introspect ``token_key``: its account (hub) id and granted scopes.
+        """Introspect ``token_key``: the scopes it grants.
 
         HubSpot documents introspection for private-app keys only; a caller that is
-        refused can read :meth:`account` instead.
+        refused learns what it needs from the requests the key makes instead.
         """
 
         return self._request(

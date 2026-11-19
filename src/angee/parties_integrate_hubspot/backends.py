@@ -1,9 +1,15 @@
-"""HubSpot records into the parties directory: the sync cursor and the neutral contact.
+"""HubSpot contacts into the parties directory: the backend, its sync cursor and the neutral contact.
+
+:class:`HubSpotDirectoryBackend` reads one HubSpot account's contacts one way,
+into one address book, through the directory base: it turns HubSpot records into
+the base's payloads, and the base builds and applies the records.
 
 A HubSpot pass is a baseline or a delta. The stream owns which
 (``SyncStream.phase``, a ``StreamPhase``) and passes it in to open a pass;
 :class:`HubSpotCursor` carries only the position inside a pass and the
-modified-time watermark, and its two pure methods decide the next request:
+modified-time watermark. It sends the request its position names
+(:meth:`HubSpotCursor.fetch`) and decides the next one from the answer
+(:meth:`HubSpotCursor.advance`):
 
 - a baseline walks the list endpoint by record id until it is exhausted, having
   recorded its start time first;
@@ -23,14 +29,33 @@ the parties neutral contact.
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping, Sequence
 from datetime import datetime, timedelta
+from time import monotonic
+from typing import Any, ClassVar
 
+from django.core.exceptions import ValidationError
+from django.utils import timezone
 from pydantic import BaseModel, ConfigDict
 
+from angee.integrate.credentials import CredentialKind
+from angee.integrate.discovery import ConnectionDiscovery
 from angee.integrate.states import StreamPhase
-from angee.parties.backends import ParsedAddress, ParsedContact
-from angee.parties_integrate_hubspot.client import EPOCH, HubSpotPage, parse_options, parse_string
+from angee.integrate.streams import StreamPage
+from angee.parties.backends import CONTACTS, DirectoryBackend, ParsedAddress, ParsedAddressbook, ParsedContact
+from angee.parties_integrate_hubspot.client import (
+    EPOCH,
+    LIST_PAGE_LIMIT,
+    SEARCH_PAGE_LIMIT,
+    HubSpotAccount,
+    HubSpotClient,
+    HubSpotError,
+    HubSpotObject,
+    HubSpotPage,
+    get_read_scope,
+    parse_options,
+    parse_string,
+)
 
 OVERLAP = timedelta(minutes=5)
 """How far a delta search reaches back behind the watermark, for writes HubSpot's search index had not caught."""
@@ -51,6 +76,11 @@ CONTACT_PROPERTIES = (
     "country",
 )
 """The standard HubSpot contact properties :func:`contact_from_properties` reads."""
+
+_OBJECT_TYPE = "contacts"
+_MERGED_PROPERTY = "hs_merged_object_ids"
+_READ_PROPERTIES = (*CONTACT_PROPERTIES, _MERGED_PROPERTY)
+_BOOK = ParsedAddressbook(key="contacts", name="HubSpot contacts")
 
 
 class HubSpotCursor(BaseModel):
@@ -97,6 +127,30 @@ class HubSpotCursor(BaseModel):
             since = max(self.watermark - OVERLAP, EPOCH) if self.watermark is not None else EPOCH
         return HubSpotCursor(since=since, started=now, watermark=self.watermark)
 
+    def fetch(
+        self, client: HubSpotClient, object_type: str, *, limit: int, properties: Sequence[str]
+    ) -> HubSpotPage:
+        """Send the request this open pass's position names, for at most ``limit`` records within HubSpot's limits.
+
+        A drain searches the block's modified time above the last record id it
+        read, a delta searches strictly after the time it has read in full, and a
+        baseline lists from the record id it continues at.
+        """
+
+        if self.block is not None:
+            return client.search_modified_at(
+                object_type,
+                moment=self.block,
+                after=self.after,
+                limit=min(limit, SEARCH_PAGE_LIMIT),
+                properties=properties,
+            )
+        if self.since is not None:
+            return client.search_modified(
+                object_type, since=self.since, limit=min(limit, SEARCH_PAGE_LIMIT), properties=properties
+            )
+        return client.list_page(object_type, after=self.after, limit=min(limit, LIST_PAGE_LIMIT), properties=properties)
+
     def advance(self, page: HubSpotPage, *, object_type: str) -> HubSpotCursor:
         """Return the cursor after ``page``, the answer to this cursor's request; closed once the pass is done.
 
@@ -108,7 +162,9 @@ class HubSpotCursor(BaseModel):
         it orders records of one time, so the block is drained from its lowest
         record id, each drain page above the last id read, and only the drain's
         last page moves the search past the block. A record whose modified time
-        cannot be read moves nothing, so a search page with none repeats its request.
+        cannot be read moves nothing; a search page that more results follow and
+        whose records state no readable time is refused, since no request could
+        move past it.
         """
 
         if self.started is None:
@@ -127,9 +183,11 @@ class HubSpotCursor(BaseModel):
             return HubSpotCursor(watermark=watermark)
         if self.since is None:
             return self.model_copy(update={"after": page.next_after, "watermark": watermark})
+        if not moments:
+            raise HubSpotError("HubSpot sent a page of changed records without a readable modified time.")
         if len(moments) > 1:
             return self.model_copy(update={"since": moments[-2], "watermark": watermark})
-        return self.model_copy(update={"block": moments[0] if moments else None, "watermark": watermark})
+        return self.model_copy(update={"block": moments[0], "watermark": watermark})
 
 
 def contact_from_properties(properties: Mapping[str, str | None]) -> ParsedContact:
@@ -169,3 +227,164 @@ def contact_from_properties(properties: Mapping[str, str | None]) -> ParsedConta
         phones=tuple((number, label, False) for number, label in numbers if number),
         addresses=(address,) if address != ParsedAddress() else (),
     )
+
+
+class HubSpotDirectoryBackend(DirectoryBackend):
+    """One HubSpot account's contacts, read one way into one address book of a directory.
+
+    The directory's credential is a static token holding a HubSpot service key
+    with the contacts read scope (:meth:`admit_credential`). Each page, identity
+    read and key walk reloads it, and every request sends the credential's own
+    authorization headers; the backend keeps no key. The connection test reads the
+    credential the directory holds, which a connect flow tests before saving
+    either. Connection discovery learns the account's hub id and the host of
+    its web app, which the source links name (:meth:`apply_discovery`). A
+    contact's external key is its HubSpot record id. Contacts HubSpot archived or
+    deleted are found by integrate's absence sweep (:meth:`contact_keys`).
+    """
+
+    key = "hubspot"
+    label = "HubSpot"
+    defaults = {"vendor": "hubspot"}
+    requires_connection_discovery: ClassVar[bool] = True
+    sync_parallelism: ClassVar[int | None] = 1
+
+    def admit_credential(self, credential: Any) -> None:
+        """Admit only a static token: the service key this backend sends as its bearer."""
+
+        if credential.kind != CredentialKind.STATIC_TOKEN:
+            raise ValidationError(
+                {"credential": "A HubSpot directory reads with a HubSpot service key (a static token)."}
+            )
+
+    def test_connection(self) -> str:
+        """Name the account the directory's key reads; a rejected key and a missing scope are refused apart."""
+
+        return f"Connected to HubSpot account {self._account(self.bridge.credential).portal_id}."
+
+    def discover_connection(self, credential: Any) -> ConnectionDiscovery:
+        """Learn, outside transactions, the account ``credential`` reads: its hub id and its web app's host."""
+
+        account = self._account(credential)
+        return ConnectionDiscovery(data={"hub_id": account.portal_id, "ui_domain": account.ui_domain})
+
+    def apply_discovery(self, discovery: ConnectionDiscovery) -> None:
+        """Keep the account's hub id and web host on the directory, the connection facts its source links name."""
+
+        self.bridge.merge_subscription_state(hub_id=discovery.data["hub_id"], ui_domain=discovery.data["ui_domain"])
+
+    def discover(self) -> list[ParsedAddressbook]:
+        """Return the account's one address book, which holds every contact."""
+
+        return [_BOOK]
+
+    def extract_contacts(self, stream: Any, page_bound: int, *, deadline: float | None = None) -> StreamPage:
+        """Read the next contacts of the stream's pass, at most ``page_bound`` records, as one page.
+
+        The stream's phase opens a baseline or a delta (:class:`HubSpotCursor`).
+        Requests follow one another until the page is full or the pass is done,
+        and none starts after ``deadline`` once one has answered. A merge's
+        survivor takes room for every record it replaces, whose tombstones follow it
+        in the page (``DirectoryBackend.record_changes``); one that does not fit
+        waits for the next page.
+        """
+
+        client = self._client(self.bridge.fresh_credential())
+        cursor = HubSpotCursor.model_validate(stream.cursor).begin(stream.phase, now=timezone.now())
+        payloads: dict[str, Mapping[str, Any] | None] = {}
+        room, asked = page_bound, False
+        while cursor.is_open and room > 0:
+            if asked and deadline is not None and monotonic() >= deadline:
+                break
+            page, asked = cursor.fetch(client, _OBJECT_TYPE, limit=room, properties=_READ_PROPERTIES), True
+            fits, taken = 0, 0
+            for record in page.results:
+                size = 1 + len(_replaced(record))
+                if taken + size > room:
+                    break
+                fits, taken = fits + 1, taken + size
+            if page.results and not fits:
+                if payloads:
+                    break
+                raise HubSpotError(
+                    f"A merged HubSpot contact replaces more contacts than a page of {page_bound} records holds."
+                )
+            cut = fits < len(page.results)
+            page = page.head(fits)
+            payloads.update((record.id, self._payload(record)) for record in page.results)
+            cursor = cursor.advance(page, object_type=_OBJECT_TYPE)
+            room = 0 if cut else room - taken
+        records = self.record_changes(stream, payloads)
+        return StreamPage(records, cursor.model_dump(mode="json"), exhausted=not cursor.is_open)
+
+    def read_contacts(self, stream: Any, keys: Sequence[str]) -> Mapping[str, Mapping[str, Any] | None]:
+        """Read ``keys`` in HubSpot's batch read; an id it has no record under, or answers under another, is gone.
+
+        Any other error HubSpot states for a record fails the read
+        (``HubSpotClient.batch_read``).
+        """
+
+        del stream
+        answer = self._client(self.bridge.fresh_credential()).batch_read(_OBJECT_TYPE, keys, _READ_PROPERTIES)
+        found = {record.id: record for record in answer.found}
+        return {key: None if key in answer.missing else self._payload(found[key]) for key in keys}
+
+    def contact_keys(self, stream: Any, *, after: str | None) -> Iterable[str]:
+        """Walk the account's live contact ids past ``after``; an archived or deleted contact is not among them."""
+
+        del stream
+        return self._client(self.bridge.fresh_credential()).record_ids(_OBJECT_TYPE, after=after)
+
+    def source_url(self, link: Any) -> str | None:
+        """Return a contact's page in the account's HubSpot web app, once discovery has learned the account."""
+
+        state = self.bridge.subscription_state or {}
+        if link.stream.key != CONTACTS or not state.get("hub_id") or not state.get("ui_domain"):
+            return None
+        # ``0-1`` is HubSpot's object type id for contacts.
+        return f"https://{state['ui_domain']}/contacts/{state['hub_id']}/record/0-1/{link.external_key}"
+
+    def source_label(self, link: Any) -> str:
+        """Name a contact as HubSpot last stated it, else by its record id."""
+
+        contact = (link.source_payload or {}).get("contact") or {}
+        return str(contact.get("display_name") or "") or super().source_label(link)
+
+    def _client(self, credential: Any) -> HubSpotClient:
+        """Return a client that sends ``credential``'s own authorization headers."""
+
+        if credential is None:
+            raise HubSpotError("Attach a HubSpot service key to this directory.")
+        return HubSpotClient(credential.auth_headers())
+
+    def _account(self, credential: Any) -> HubSpotAccount:
+        """Return the account ``credential``'s key reads, refusing a key without the contacts read scope.
+
+        The key's introspection states its scopes. HubSpot documents introspection
+        for private-app keys only, so a key it refuses asks for one contact instead,
+        which refuses a rejected key and a missing scope with their own messages.
+        """
+
+        client = self._client(credential)
+        scope = get_read_scope(_OBJECT_TYPE)
+        try:
+            granted = client.token_info(credential.secret_value()).scopes
+        except HubSpotError as error:
+            if error.transient:
+                raise
+            client.list_page(_OBJECT_TYPE, after="", limit=1, properties=())
+        else:
+            if scope not in granted:
+                raise HubSpotError.missing_scopes((scope,))
+        return client.account()
+
+    def _payload(self, record: HubSpotObject) -> dict[str, Any]:
+        """Return one contact's payload; a merge's survivor names the records it replaced."""
+
+        return self.observe(contact_from_properties(record.properties), replaces=_replaced(record))
+
+
+def _replaced(record: HubSpotObject) -> tuple[str, ...]:
+    """Return the ids of the records HubSpot merged into ``record``."""
+
+    return parse_options(record.properties.get(_MERGED_PROPERTY))

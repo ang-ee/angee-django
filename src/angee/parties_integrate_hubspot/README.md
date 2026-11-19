@@ -1,17 +1,30 @@
 # HubSpot for parties
 
-`angee.parties_integrate_hubspot` is meant to read HubSpot CRM contacts one way,
-from HubSpot into `angee.parties`. It does not do that yet: it registers no
-directory backend, connect action or stream. What it ships is the layer such a
-backend builds on, and the `hubspot` vendor row.
+`angee.parties_integrate_hubspot` reads one HubSpot account's CRM contacts one
+way, from HubSpot into `angee.parties`. It registers the `hubspot` directory
+backend and the `hubspot` vendor row. A HubSpot directory has one address book
+holding every contact. Each contact lands as a person with its names, emails,
+phones, job title, employer and postal address, and HubSpot's later edits follow
+on each sync. A person's own edits outrank HubSpot's. A contact HubSpot merges
+lands on the person of a record it replaced. A contact HubSpot archives or
+deletes is withdrawn by the daily absence sweep, and the person stays.
 
-That layer speaks HubSpot's date-versioned REST API through integrate's shared
+A directory reads with a static-token credential holding a HubSpot service key
+that has the `crm.objects.contacts.read` scope; the backend admits no other kind.
+Connection discovery checks the key and learns the account it reads, so a
+directory syncs only once discovery has finished, and its source links open
+each contact in HubSpot. The connection test names the account, and it refuses a
+rejected key and a key without the scope with separate messages. The addon ships
+no connect action yet; until it does, a host creates the credential and a
+`Directory` with `backend_class="hubspot"` that attaches it.
+
+The backend speaks HubSpot's date-versioned REST API through integrate's shared
 HTTP client, with no HubSpot SDK; [the stack guide](../../../docs/stack.md#backend)
-records why. `HubSpotClient` takes the authorization headers its caller gives it
-and never reads a credential. `HubSpotCursor` holds a stream's position inside a
-baseline or delta pass, and `contact_from_properties` maps HubSpot's standard
-contact properties onto the parties neutral contact. Their docstrings own the
-contracts.
+records why. `HubSpotDirectoryBackend` composes the parties directory base,
+`HubSpotClient` takes the authorization headers its caller gives it and never
+reads a credential, `HubSpotCursor` holds a stream's position inside a baseline
+or delta pass, and `contact_from_properties` maps HubSpot's standard contact
+properties onto the parties neutral contact. Their docstrings own the contracts.
 
 ## Tests
 

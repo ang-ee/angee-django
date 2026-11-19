@@ -181,21 +181,26 @@ def test_a_record_hubspot_failed_to_read_is_a_transient_refusal_and_never_missin
     assert VENDOR_TEXT not in refusal.value.public_message
 
 
-def test_token_info_states_the_hub_and_its_scopes(hubspot_server: HubSpotServer, client: HubSpotClient) -> None:
+def test_token_info_states_its_scopes(hubspot_server: HubSpotServer, client: HubSpotClient) -> None:
     info = client.token_info(TOKEN)
 
-    assert (info.hub_id, info.scopes) == (HUB_ID, (CONTACTS_READ,))
+    assert info.scopes == (CONTACTS_READ,)
     assert request_fields(hubspot_server.requests[0]) == {"tokenKey": TOKEN}
     with pytest.raises(HubSpotError) as rejected:
         client.token_info("pat-na1-ffffffff-ffff-4fff-8fff-ffffffffffff")
     assert (rejected.value.status, rejected.value.transient) == (401, False)
 
 
-def test_account_details_state_the_portal(hubspot_server: HubSpotServer, client: HubSpotClient) -> None:
+def test_account_details_state_the_portal_and_its_web_host(
+    hubspot_server: HubSpotServer, client: HubSpotClient
+) -> None:
     account = client.account()
 
-    assert account.portal_id == HUB_ID
+    assert (account.portal_id, account.ui_domain) == (HUB_ID, "app.hubspot.com")
     assert hubspot_server.requests[0].url.path == "/account-info/2026-09/details"
+    hubspot_server.queue(httpx2.Response(200, json={"portalId": HUB_ID, "uiDomain": "example.com/elsewhere"}))
+    with pytest.raises(HubSpotError):
+        client.account()
 
 
 def test_a_search_asks_for_changes_strictly_after_a_time_ascending_on_the_contacts_modified_property(
@@ -361,10 +366,10 @@ def test_an_unreachable_host_and_an_oversized_answer_are_transient(
 def test_an_answer_that_fails_validation_is_a_permanent_vendor_error(
     hubspot_server: HubSpotServer, client: HubSpotClient
 ) -> None:
-    hubspot_server.queue(httpx2.Response(200, json={"hubId": "not a number"}))
+    hubspot_server.queue(httpx2.Response(200, json={"portalId": "not a number", "uiDomain": "app.hubspot.com"}))
 
     with pytest.raises(HubSpotError) as refusal:
-        client.token_info(TOKEN)
+        client.account()
 
     assert (refusal.value.status, refusal.value.transient) == (None, False)
 
