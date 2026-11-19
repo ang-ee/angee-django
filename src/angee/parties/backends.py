@@ -17,7 +17,7 @@ import hashlib
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import asdict, dataclass
 from datetime import date, timedelta
-from typing import Any, ClassVar, cast
+from typing import TYPE_CHECKING, Any, ClassVar, cast
 
 from django.apps import apps
 
@@ -35,6 +35,9 @@ from angee.integrate.states import (
     StreamPhase,
 )
 from angee.integrate.streams import ApplyResult, LocalChange, RecordChange, SemanticError, StreamPage
+
+if TYPE_CHECKING:
+    from angee.parties.managers import EmailLookup
 
 ADDRESSBOOKS = "addressbooks"
 """The stream whose records are a directory's address books; each targets its folder."""
@@ -341,8 +344,8 @@ class DirectoryBackend(BridgeImpl, HttpClientMixin):
 
     def __init__(self, integration: Any) -> None:
         super().__init__(integration)
-        self._page_holders: dict[str, list[Any]] = {}
-        """Who each email of the page in application names (:meth:`prepare_page`), read under its locks."""
+        self._page_lookup: EmailLookup | None = None
+        """The page in application's lookup of its addresses (:meth:`prepare_page`), read under its locks."""
 
     def test_connection(self) -> str:
         """Prove this backend reaches its source; return the operator message.
@@ -667,23 +670,24 @@ class DirectoryBackend(BridgeImpl, HttpClientMixin):
         return states
 
     def prepare_page(self, stream: Any, page: StreamPage) -> None:
-        """Lock a pull-only contacts page's identities once, before any of its records decides its person.
+        """Lock a pull-only contacts page's identities in one call, then read who its addresses name under the locks.
 
-        Who each unlinked contact's emails name is read once for the page
-        (``PartyManager.people_for_emails``, kept for :meth:`_contact_target`): a
-        contact is unlinked while neither its own link nor a link it replaces
-        names a live party. Then, in parties' one identity order
-        (``PartyManager.lock_identity_rows``), the page locks every spelling of its
-        contacts' addresses (``PartyManager.contact_handle_ids``) and the people
-        those handles' statements name, the people the lookup names and the
-        parties the page's links name. Two address books of one directory syncing
-        at once therefore serialize on a person both could adopt, and each record
-        checks its candidates' admission again under these locks. A two-way
-        stream adopts nobody and an address-book page names no person: they lock
-        nothing here.
+        In parties' one identity order (``PartyManager.lock_identity_rows``),
+        handles first, then parties: every spelling of the page's contact
+        addresses (``PartyManager.contact_handle_ids``), every handle stated on a
+        party the page's links name or on a party those addresses' statements
+        name, then those parties. A record's own contact locks then find their
+        rows held, so the page never locks a handle after a person, the reverse
+        of mail ingestion's order. Only then are the page's addresses looked up
+        once (``PartyManager.lookup_emails``: who each names, and which a person
+        account signs in with), kept for :meth:`_contact_target` and the ingest.
+        Two address books of one directory syncing at once therefore serialize on
+        a person both could adopt, and every adoption limit reads rows loaded
+        under these locks. A two-way stream adopts nobody and an address-book
+        page names no person: they lock nothing here.
         """
 
-        self._page_holders = {}
+        self._page_lookup = None
         if stream.key != CONTACTS or stream.direction != StreamDirection.PULL:
             return
         records = [
@@ -691,65 +695,76 @@ class DirectoryBackend(BridgeImpl, HttpClientMixin):
             for record in page.records
             if not record.tombstone and record.failure is None and "contact" in record.source_payload
         ]
-        contacts = {
-            record.external_key: contact_from_projection(record.source_payload["contact"]) for record in records
-        }
-        named = {
-            record.external_key: [record.external_key, *record.source_payload.get("replaces", ())] for record in records
-        }
-        links = stream.links.filter(external_key__in={key for keys in named.values() for key in keys})
-        targets = dict(links.exclude(target_object_id__isnull=True).values_list("external_key", "target_object_id"))
+        contacts = [contact_from_projection(record.source_payload["contact"]) for record in records]
+        keys = {key for record in records for key in (record.external_key, *record.source_payload.get("replaces", ()))}
+        bound = set(
+            stream.links.filter(external_key__in=keys, target_object_id__isnull=False).values_list(
+                "target_object_id", flat=True
+            )
+        )
         parties = apps.get_model("parties", "Party")
-        rows = parties._base_manager.filter(pk__in=set(targets.values()))
-        live = {str(pk) for pk in rows.filter(is_trashed=False).values_list("pk", flat=True)}
-        unlinked = [key for key, keys in named.items() if not any(targets.get(each) in live for each in keys)]
-        holders = parties.objects.people_for_emails(email for key in unlinked for email in _preferred(contacts[key]))
-        for holder in holders:
-            self._page_holders.setdefault(holder.email, []).append(holder)
-        parties.objects.lock_identity_rows(
-            party_ids={*rows.values_list("pk", flat=True), *(holder.person.pk for holder in holders)},
-            handle_ids=parties.objects.contact_handle_ids(contacts.values()),
+        handles = parties.objects.contact_handle_ids(contacts)
+        handles |= set(apps.get_model("parties", "Handle").canonical_ids(handles).values())
+        statements = parties.objects.handle_statements()
+        named = {
+            *parties._base_manager.filter(pk__in=bound).values_list("pk", flat=True),
+            *statements.filter(handle_id__in=handles).values_list("subject_id", flat=True),
+        }
+        handles |= set(statements.filter(subject_id__in=named).values_list("handle_id", flat=True))
+        parties.objects.lock_identity_rows(party_ids=named, handle_ids=handles)
+        self._page_lookup = parties.objects.lookup_emails(
+            value for contact in contacts for value, _label, _preferred in contact.emails
         )
 
     def _contact_target(
-        self, stream: Any, link: Any, replaced: Sequence[Any], parsed: ParsedContact | None = None
+        self, stream: Any, link: Any, replaced: Sequence[Any], parsed: ParsedContact
     ) -> tuple[Any | None, Any | None, list[tuple[Any, Any | None]]]:
         """Return a contact's target (``None`` mints one), the handle an adoption found it by, and whom it passed over.
 
-        The one place a contact's target is decided, in order: its own link's
-        person; then, for a merge at the source, the person of the first link it
-        ``replaced``, in the source's order; then, for ``parsed`` on a pull-only
-        stream, an existing person one of its emails names, the preferred email
-        first (the page's lookup, :meth:`prepare_page`), the first whose
-        adoption parties admits (``PartyManager.adoption_blocker``). A trashed
-        person is nobody's target (``PartyManager.contact_people``), and a
-        two-way stream never adopts. The people passed over are every other
-        person a replaced link names, each with that link; :meth:`apply_record`
-        proposes each as the target's same person. A person an adoption limit
-        refused is named by one of the contact's emails, so the ingest proposes
-        them (``PartyManager.ingest_contact``). Call it once, under the page's
-        and the contact's locks (:meth:`apply_record`).
+        The one place a contact's target is decided, in order: the person its
+        own link keeps; then, for a merge at the source, the person of the first
+        link it ``replaced``, in the source's order, that hands one over
+        (``PartyManager.holding_links``: bound, observing, of this stream). Then,
+        on a pull-only stream, the first candidate parties admit
+        (``PartyManager.adoption_blocker``): the person its own link named when
+        it returns from a tombstone, each person a replaced link that hands
+        nothing over names, then an existing person one of its emails names, the
+        preferred email first (the page's lookup, :meth:`prepare_page`). A
+        trashed person is nobody's target (``PartyManager.contact_people``), and
+        a two-way stream never adopts. The people passed over are every other
+        person the contact's links name, each with the replaced link naming it
+        (``None`` for its own link); :meth:`apply_record` proposes each as the
+        target's same person. A person an email names and a limit refused is
+        proposed by the ingest (``PartyManager.ingest_contact``). Call it once,
+        under the page's and the contact's locks (:meth:`apply_record`).
         """
 
         parties = apps.get_model("parties", "Party").objects
         people = parties.contact_people([link, *replaced])
+        holding = parties.holding_links(link, replaced)
         named = [(person, row) for row in (link, *replaced) if (person := people[row.pk]) is not None]
-        if named:
-            target = named[0][0]
-            others: dict[Any, tuple[Any, Any]] = {}
-            for person, row in named[1:]:
-                if person.pk != target.pk:
-                    others.setdefault(person.pk, (person, row))
-            return target, None, list(others.values())
-        if parsed is None or stream.direction != StreamDirection.PULL:
-            return None, None, []
-        tried: set[Any] = set()
-        for holder in (holder for email in _preferred(parsed) for holder in self._page_holders.get(email, ())):
-            if holder.person.pk not in tried:
-                tried.add(holder.person.pk)
-                if parties.adoption_blocker(holder.person, link=link, through=holder.handle) is None:
-                    return holder.person, holder.handle, []
-        return None, None, []
+        target = next((person for person, row in named if row.pk in holding), None)
+        through = None
+        if target is None and stream.direction == StreamDirection.PULL:
+            lookup = self._page_lookup = parties.lookup_emails(_preferred(parsed), lookup=self._page_lookup)
+            candidates: list[tuple[Any, Any | None]] = [(person, None) for person, _row in named]
+            candidates += [
+                (holder.person, holder.handle) for email in _preferred(parsed) for holder in lookup.named(email)
+            ]
+            tried: set[Any] = set()
+            for person, handle in candidates:
+                if person.pk in tried:
+                    continue
+                tried.add(person.pk)
+                blocker = parties.adoption_blocker(person, link=link, parsed=parsed, lookup=lookup, replaces=replaced)
+                if blocker is None:
+                    target, through = person, handle
+                    break
+        others: dict[Any, tuple[Any, Any | None]] = {}
+        for person, row in named:
+            if target is None or person.pk != target.pk:
+                others.setdefault(person.pk, (person, None if row.pk == link.pk else row))
+        return target, through, list(others.values())
 
     def apply_record(self, stream: Any, record: RecordChange) -> ApplyResult:
         """Revalidate under domain locks, then use the single folder or contact ingest verb.
@@ -758,14 +773,15 @@ class DirectoryBackend(BridgeImpl, HttpClientMixin):
         statement while the folder stays. A contact lands through
         ``PartyManager.ingest_contact`` from its payload's ``contact`` projection:
         the people its own link and the links it replaces name, and its handles,
-        are locked first (beside the page's locks, :meth:`prepare_page`), then
-        :meth:`_contact_target` decides its person once, the ingest admits that
-        person again as the binding owner, cites the handle an adoption found them
-        by, claims for review an address someone else holds and proposes them,
-        withdraws what neither its link nor a replaced link still supports, and,
-        for a link leaving a trashed person, what it stated there and the
-        proposals pairing that person. Each other person a replaced link names is
-        proposed for the same-as review as the landed person's same person
+        are locked first (already held by the page's locks, :meth:`prepare_page`),
+        then :meth:`_contact_target` decides its person once, the ingest binds a
+        person new to the link only as admitted (the page's lookup keeps the
+        verdict), cites the handle an adoption found them by, claims for review
+        an address someone else holds or an account signs in with and proposes
+        them, withdraws what neither its link nor a replaced link still supports,
+        and, for a link leaving a person, what it stated there. Each other person
+        the contact's links name is proposed for the same-as review as the landed
+        person's same person
         (``PartyManager.propose_directory_match``). Then each of the backend's
         :meth:`mappings` the payload carries a projection of states it on the
         landed person through the link (:meth:`DirectoryMapping.apply_record`),
@@ -789,7 +805,7 @@ class DirectoryBackend(BridgeImpl, HttpClientMixin):
             return ApplyResult(target=folder, mapped_payload={"name": name})
         parties = apps.get_model("parties", "Party").objects
         if record.tombstone:
-            target = self._contact_target(stream, link, ())[0]
+            target = parties.contact_people([link])[link.pk]
             parties.lock_contact(target)
             link.withdraw_statements()
         else:
@@ -809,6 +825,7 @@ class DirectoryBackend(BridgeImpl, HttpClientMixin):
                 target=target,
                 through=through,
                 created_by_id=self.bridge.owner_id,
+                lookup=self._page_lookup,
             )
             for other, tie in passed_over:
                 parties.propose_directory_match(target, other, evidence=[link, *([tie] if tie is not None else [])])

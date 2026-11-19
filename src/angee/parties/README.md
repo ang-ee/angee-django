@@ -76,21 +76,33 @@ until its link is withdrawn, because its replay cannot tell which statements
 were its own.
 
 One function decides a contact's target (`DirectoryBackend._contact_target`),
-once, under the page's and the contact's locks: its own link's person, then a
-replaced link's, then, on a pull-only stream, an existing person one of its
-emails names (`PartyManager.people_for_emails`, the preferred email first). A
-page reads who its unlinked contacts' emails name once, and locks every spelling
-of its contacts' addresses, the people they name and the parties its links name
-before any record decides (`DirectoryBackend.prepare_page`). Adoption is an
-access change, so the binding owner admits it: `PartyManager.adoption_blocker`
-refuses unless the stream is pull-only, the person is no account's own, the
-address that found them is no account's sign-in address, the directory's owner
-holds `adopt` on them (their owner or an editor, with no platform-admin arm,
-since every directory's owner is a platform admin; checked for that user though
-sync runs as system work), no other live link of the directory names them, and no
-live link of a stream that writes back names them. `ingest_contact` asks it for
-every person new to its link that no replaced link names, so neither a vendor's
-own `apply_record` nor another caller binds past it. Otherwise the contact mints
+once, under the page's and the contact's locks: the person its own link keeps,
+then the person a replaced link hands over, then, on a pull-only stream, the
+first candidate the binding owner admits: the person its own link named when it
+returns from a tombstone, a person a replaced link that hands nothing over names,
+then an existing person one of its emails names (the preferred email first). Only
+a bound, observing link of the contact's own stream keeps or hands over its
+person (`PartyManager.holding_links`); a two-way stream's own link keeps it
+through a tombstone, since such a stream adopts nobody. A page locks, in one call
+and in the identity order, every spelling of its contacts' addresses and every
+handle stated on a party its links or those addresses name, then those parties,
+and only then reads who its addresses name, once
+(`PartyManager.lookup_emails`: `people_for_emails`, and which addresses a person
+account signs in with, `UserManager.sign_in_addresses`), so no record locks a
+handle after a person (`DirectoryBackend.prepare_page`). The ingest and the target
+decision read that lookup; an address a record lands is read again by the next
+record that asks for it. Adoption is an access change, so the binding owner
+admits it: `PartyManager.adoption_blocker` refuses unless the stream is pull-only,
+the person, loaded under the locks, is live and no account's own, no address the
+contact carries is a person account's sign-in address in any spelling, whether
+or not the account has a person, the directory's owner holds `adopt` on them
+(their owner or an editor, with no platform-admin arm, since every directory's
+owner is a platform admin; checked for that user though sync runs as system
+work), no other contact of the directory names them, a tombstoned one included,
+and no live link of a stream that writes back names them. The page's lookup keeps
+each verdict, so a person is admitted once per record. `ingest_contact` asks it
+for every person new to its link, so neither a vendor's own `apply_record` built
+on the ingest verbs nor another caller of them binds past it. Otherwise the contact mints
 its own person; a two-way directory never adopts. The handle an adoption found
 the person by is the evidence of the directory's identity statement on them,
 restated on every later record, and the contact's spelling of that address lands
@@ -103,7 +115,8 @@ person's.
 What a pull-only contact may state about an address depends on whom the lookup
 finds by it (`PartyManager._contested_emails`): an address it answers with a
 person other than the contact's own, who does not hold it too, is someone else's,
-so the contact states it as a claim for review (below the confidence at which a
+and so is an address a person account signs in with, whether or not the account
+has a person, so the contact states it as a claim for review (below the confidence at which a
 handle statement applies) and leaves the handle's display fields alone; an
 address nobody holds, or the contact's own person holds, is stated in full. A
 refused or colliding contact therefore never moves an address, and what is
@@ -125,7 +138,9 @@ standing, though no shared handle row supports them. A trashed person is
 nobody's target (`PartyManager.contact_people`), so its record lands on a new
 person or adopts one; the link first withdraws what it stated on the trashed
 person, and the proposals pairing the trashed person with the new one, or with
-whom the contact's addresses name, are withdrawn with it. The ingest verbs
+whom the contact's addresses name, are withdrawn with it. A record returning from
+a tombstone whose person is refused again lands on another person, and that
+person stays proposed as its same person. The ingest verbs
 decide nothing: they land on the target they are given (admitted as above) or
 mint one, and refuse to move a link off a live party.
 

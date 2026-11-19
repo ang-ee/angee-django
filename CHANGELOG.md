@@ -10,6 +10,31 @@ live in code docstrings.
 
 ## Unreleased — shared addon contracts, native embeddings and graph retrieval
 
+- `angee.parties`: every adoption limit is checked on rows read under the page's
+  locks, for every way a link reaches a person. Only a bound, observing link of
+  the contact's own stream keeps its person or hands a replaced record's over
+  (`PartyManager.holding_links`); any other link's person, a pull-only record
+  returning from a tombstone included, is admitted again, and a two-way stream's
+  own link keeps its person through a tombstone. "No other contact of the
+  directory names the person" counts every bound link that has not withdrawn it,
+  tombstoned ones included (the records a merge replaced are the contact's own).
+  `PartyManager.adoption_blocker(person, *, link, parsed, lookup=None,
+  replaces=())` replaces `through=` with the contact `parsed`: it refuses when any
+  address the contact carries, in any spelling a handle holds, is a person
+  account's sign-in address, whether or not the account has a person, and it
+  reads the person's liveness (neither trashed nor merged away) and account on a
+  freshly loaded row. A pull-only contact also only claims an address an account
+  signs in with. `DirectoryBackend.prepare_page` locks the page's whole handle set
+  (every spelling of its addresses and every handle stated on the parties its
+  links and addresses name) and those parties in one call, then reads who its
+  addresses name once (`PartyManager.lookup_emails`, returning the new
+  `EmailLookup`); the target decision and `ingest_contact(..., lookup=)` read it,
+  an address a record lands is read again by the next record that asks, and each
+  adoption verdict is kept for the page. `ingest_contact` takes the contact's
+  locks before it decides, whatever its target. `angee.iam`:
+  `UserManager.sign_in_addresses(emails)` answers which given addresses a person
+  account signs in with, by the key `person_for_email` reads, in one query.
+
 - `angee.parties`: a consumer addon maps a pull-only directory backend's source
   fields onto its own person columns with a `DirectoryMapping`
   (`angee.parties.backends`), registered under its key in the new

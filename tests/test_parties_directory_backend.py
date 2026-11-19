@@ -10,6 +10,7 @@ three-way classifier.
 from __future__ import annotations
 
 from collections.abc import Iterator, Mapping, Sequence
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field, replace
 from datetime import date
 from typing import Any
@@ -17,7 +18,8 @@ from typing import Any
 import pytest
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
-from django.db import transaction
+from django.db import connection, transaction
+from django.utils import timezone
 from rebac import system_context
 from rebac.actors import to_subject_ref
 from rebac.roles import grant as grant_role
@@ -36,6 +38,7 @@ from angee.parties.backends import (
 )
 from angee.provenance.evidence import EvidenceReference
 from tests.conftest import File, current_stream, make_integration
+from tests.lock_waits import submit, wait_for_lock
 from tests.stream_adapters import applied_history
 from tests.test_storage import PNG_BYTES, drive, image_drive  # noqa: F401 -- the image drive avatars land on
 
@@ -1021,6 +1024,222 @@ def test_a_contact_refused_the_one_person_claimed_for_its_address_keeps_only_cla
     assert pull.sync().count == 1
     assert _held_by("ada@example.com") is None
     assert _claim_confidences(ada.target_object_id, "ada@example.com") == [0.4]
+
+
+def _tombstone(pull: Pull, key: str) -> None:
+    """The source deletes the contact and the next page reports it."""
+
+    del pull.source.contacts[key]
+    pull.source.deleted.add(key)
+    assert pull.sync().count == 1
+    assert pull.link(key).status == LinkStatus.TOMBSTONE
+
+
+def test_a_replaced_link_of_another_stream_hands_no_person_over(pull: Pull) -> None:
+    """A caller may name any link as replaced; only one of the contact's own stream hands its person over."""
+
+    person = _existing(_user("someone-else"))[0]
+    other = current_stream(pull.directory, CONTACTS, "other-book", kind=StreamKind.RECORD_REPLICA)
+    foreign = RecordLink.objects.observe(other, "ada-elsewhere", target=Party._base_manager.get(pk=person.pk))
+    link = RecordLink.objects.observe(pull.stream, "downstream")
+
+    with pytest.raises(ValidationError, match="may not adopt"):
+        Party.objects.ingest_contact(
+            _ADA,
+            stream=pull.stream,
+            link=link,
+            created_by_id=pull.directory.owner_id,
+            target=person,
+            replaces=[foreign],
+        )
+    link.refresh_from_db()
+    assert link.target_object_id is None
+
+
+def test_a_tombstoned_replaced_link_hands_over_only_a_person_admitted_again(pull: Pull) -> None:
+    """The merged-away record's person became an account's own while its link was tombstoned: the survivor mints."""
+
+    pull.sync()
+    first = pull.link("ada").target_object_id
+    _tombstone(pull, "ada")
+    Person._base_manager.filter(pk=first).update(user=_user("ada-account"))
+    pull.source.put("merged", _ADA, replaces=("ada",))
+
+    result = pull.sync()
+
+    assert (result.count, result.failure_ids) == (1, ())
+    assert pull.link("merged").target_object_id not in (None, first)
+
+
+def test_a_tombstoned_contact_still_names_its_person_for_the_directorys_other_contacts(pull: Pull) -> None:
+    """While its record is gone at the source, no other contact of the directory adopts the person its link names."""
+
+    person, _handle = _existing(pull.directory.owner)
+    pull.sync()
+    assert pull.link("ada").target_object_id == str(person.pk)
+    _tombstone(pull, "ada")
+    pull.source.put("ada-again", _ADA)
+
+    assert pull.sync().count == 1
+
+    assert pull.link("ada-again").target_object_id not in (None, str(person.pk))
+    assert _held_by("ada@example.com") == person.pk
+
+
+def test_a_contact_returning_from_a_tombstone_is_admitted_again(pull: Pull) -> None:
+    """Another contact of the directory names the person now: the returning record mints its own and proposes them."""
+
+    person, handle = _existing(pull.directory.owner)
+    pull.sync()
+    _tombstone(pull, "ada")
+    copy = RecordLink.objects.observe(pull.stream, "ada-copy", target=Party._base_manager.get(pk=person.pk))
+    pull.source.put("ada", _ADA)
+
+    result = pull.sync()
+
+    assert (result.count, result.failure_ids) == (1, ())
+    ada = pull.link("ada")
+    assert ada.target_object_id not in (None, str(person.pk))
+    assert copy.pk in RecordLink.objects.filter(target_object_id=str(person.pk)).values_list("pk", flat=True)
+    assert _held_by("ada@example.com") == person.pk
+    assert _claim_confidences(ada.target_object_id, "ada@example.com") == [0.4]
+    assert frozenset({ada.target_object_id, str(person.pk)}) in {pair for pair, _status, _evidence in _proposals()}
+
+
+def test_an_address_an_account_signs_in_with_adopts_nobody_without_the_handle_that_found_them(pull: Pull) -> None:
+    """A caller binding the person directly passes no handle; the contact's own addresses still refuse it."""
+
+    get_user_model().objects.create_user(username="ada-signin", email="ada@example.com")
+    person, _handle = _existing(pull.directory.owner)
+    link = RecordLink.objects.observe(pull.stream, "downstream")
+
+    with pytest.raises(ValidationError, match="sign-in address"):
+        Party.objects.ingest_contact(
+            _ADA, stream=pull.stream, link=link, created_by_id=pull.directory.owner_id, target=person
+        )
+
+
+def test_an_address_an_account_signs_in_with_in_another_spelling_adopts_nobody(pull: Pull) -> None:
+    """The handle that found the person spells the account's address the provider's other way; it is the same one."""
+
+    get_user_model().objects.create_user(username="ada-signin", email="ada.lovelace@gmail.com")
+    person, handle = _existing(pull.directory.owner, email="adalovelace@gmail.com")
+    pull.source.put("ada", replace(_ADA, emails=(("ada.lovelace@gmail.com", "home", True),)))
+
+    pull.sync()
+
+    ada = pull.link("ada")
+    assert ada.target_object_id not in (None, str(person.pk))
+    handle.refresh_from_db()
+    assert handle.party_id == person.pk
+    assert _claim_confidences(ada.target_object_id, "adalovelace@gmail.com") == [0.4]
+
+
+def test_an_address_an_account_without_a_person_signs_in_with_stays_a_claim(pull: Pull) -> None:
+    """The lookup names nobody by it, yet it is the account's: the contact only claims it, record after record."""
+
+    account = get_user_model().objects.create_user(username="ada-signin", email="ada@example.com")
+    assert not Person._base_manager.filter(user=account).exists()
+
+    pull.sync()
+
+    ada = pull.link("ada")
+    assert _held_by("ada@example.com") is None
+    assert _claim_confidences(ada.target_object_id, "ada@example.com") == [0.4]
+    pull.source.put("ada", replace(_ADA, notes="Edited at the source."))
+    assert pull.sync().count == 1
+    assert _held_by("ada@example.com") is None
+    assert _claim_confidences(ada.target_object_id, "ada@example.com") == [0.4]
+
+
+def _between_lookup_and_lock(monkeypatch: pytest.MonkeyPatch, change: Any) -> None:
+    """Run ``change`` once, in the page's transaction, just before the page takes its identity locks."""
+
+    lock = Party.objects.lock_identity_rows
+    pending = [change]
+
+    def racing(**kwargs: Any) -> Any:
+        while pending:
+            pending.pop()()
+        return lock(**kwargs)
+
+    monkeypatch.setattr(Party.objects, "lock_identity_rows", racing)
+
+
+def test_a_person_trashed_before_the_page_locks_is_not_adopted(pull: Pull, monkeypatch: pytest.MonkeyPatch) -> None:
+    person, _handle = _existing(pull.directory.owner)
+    _between_lookup_and_lock(
+        monkeypatch, lambda: Person._base_manager.get(pk=person.pk).trash(reason="Removed by its holder")
+    )
+
+    result = pull.sync()
+
+    assert result.failure_ids == ()
+    assert pull.link("ada").target_object_id not in (None, str(person.pk))
+
+
+def test_a_person_merged_away_before_the_page_locks_is_not_adopted(pull: Pull, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The survivor holds the address once the page reads under its locks, and is the one adopted."""
+
+    person, _handle = _existing(pull.directory.owner)
+    survivor = Person.objects.create(display_name="Ada (kept)", created_by=pull.directory.owner)
+    _between_lookup_and_lock(
+        monkeypatch,
+        lambda: Party._base_manager.filter(pk=person.pk).update(
+            merged_into_id=survivor.pk, is_trashed=True, trashed_at=timezone.now()
+        ),
+    )
+
+    result = pull.sync()
+
+    assert result.failure_ids == ()
+    assert pull.link("ada").target_object_id == str(survivor.pk)
+
+
+def test_a_page_looks_up_its_addresses_once(pull: Pull, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The contested-address rule and the admission read the page's one lookup instead of each record's own."""
+
+    _existing(pull.directory.owner)
+    lookups: list[list[str]] = []
+    lookup = Party.objects.people_for_emails
+
+    def counted(emails: Any) -> Any:
+        lookups.append(list(emails))
+        return lookup(lookups[-1])
+
+    monkeypatch.setattr(Party.objects, "people_for_emails", counted)
+
+    assert pull.sync().count == 2
+
+    assert lookups == [["ada@example.com", "grace@example.com"]]
+
+
+@pytest.mark.skipif(connection.vendor != "postgresql", reason="Real PostgreSQL row locks are required.")
+def test_a_page_holds_every_handle_its_linked_people_carry_before_any_record_applies(pull: Pull) -> None:
+    """A record's own locks then find its person's other handles held: no handle is locked after a person.
+
+    Mail ingestion locks a handle, then its party; a page that locked a person and
+    only later another handle of theirs could deadlock with it.
+    """
+
+    pull.sync()
+    person = Party.objects.get(pk=pull.link("ada").target_object_id)
+    owner_id = pull.directory.owner_id
+    other = Handle.objects.upsert(platform="email", value="ada@elsewhere.example", created_by_id=owner_id)
+    Party.objects.assert_handle(person, other, asserted_by=pull.directory.owner)
+    pull.source.changed.add("ada")
+    page = pull.backend.extract_contacts(pull.stream, 100)
+
+    def lock_other_handle() -> None:
+        with system_context(reason="tests.directory_page.contender"), transaction.atomic():
+            list(Handle._base_manager.filter(pk=other.pk).select_for_update())
+
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        with system_context(reason="tests.directory_page.holder"), transaction.atomic():
+            pull.backend.prepare_page(pull.stream, page)
+            contender, pid = submit(pool, lock_other_handle)
+            wait_for_lock(pid, contender)
+        contender.result(timeout=10)
 
 
 def test_a_directory_forwards_its_connection_test_and_credential_rule(
