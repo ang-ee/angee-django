@@ -259,6 +259,7 @@ export const DuplicateSetPreviews = graphql(`
         statements { id source_kind handle { id platform value } }
       }
       disagreements { field values shown }
+      fills { field values shown }
     }
   }
 `);

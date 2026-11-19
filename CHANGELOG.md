@@ -925,7 +925,14 @@ live in code docstrings.
   own Include toggle, off by default when the set carries a warning (a
   disagreement, a member that no longer matches its group) and off again when
   the set changes from the state the person saw or ticked it in, and the
-  mutation sends only the included sets. Each set that may merge carries a `digest`
+  mutation sends only the included sets. A disagreement is a field the records
+  state at least two different values for; a field one value is stated for,
+  the rest empty, is a fill (`DuplicateSetPreview.fills`, the same
+  `MergeFieldValues` rows), which the merge gives the survivor and which warns
+  nobody. The group-match mark reads either list, so a member whose grouping
+  value was cleared since the selection still no longer matches its group; when
+  every member moved to the same new value nothing differs and nothing is
+  marked. Each set that may merge carries a `digest`
   (`DuplicateSetPreview.digest`, `keyed_facts_digest`, the keyed hashing
   `IdentityBasis.facts_hash` now shares) of what the dialog shows of it: each
   member's id, name, creation time and first-met note as the reader's gates

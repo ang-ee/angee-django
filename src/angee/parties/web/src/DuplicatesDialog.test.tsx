@@ -53,6 +53,7 @@ const PREVIEWS = [
       member("augusta", "Augusta King", "augusta@example.test", "2021-01-01T00:00:00Z"),
     ],
     disagreements: [{ field: "given_name", values: ["Ada", "Augusta"], shown: "Ada" }],
+    fills: [],
   },
   {
     outcome: "REFUSED",
@@ -64,6 +65,7 @@ const PREVIEWS = [
       member("amazing-grace", "Amazing Grace", "amazing@example.test", "2020-03-01T00:00:00Z"),
     ],
     disagreements: [],
+    fills: [],
   },
   {
     outcome: null,
@@ -75,6 +77,7 @@ const PREVIEWS = [
       member("joan-2", "Joan Clarke", "joan@example.test", "2020-05-01T00:00:00Z"),
     ],
     disagreements: [],
+    fills: [],
   },
 ];
 
@@ -88,13 +91,13 @@ const merged = (id: string, name: string) => ({
 });
 
 /** The dialog over the review queue of the app opened with `?app=console`, links routed as the host routes them. */
-function renderDialog(onClose = vi.fn(), sets = SETS) {
+function renderDialog(onClose = vi.fn(), sets = SETS, certain = false) {
   function Host(): React.ReactElement {
     const router = useRouter();
     const navigate = React.useMemo(() => routerNavigator(router), [router]);
     return (
       <InAppLinkProvider navigate={navigate}>
-        <DuplicatesDialog sets={sets} onClose={onClose} />
+        <DuplicatesDialog sets={sets} certain={certain} onClose={onClose} />
         <Outlet />
       </InAppLinkProvider>
     );
@@ -175,6 +178,7 @@ describe("the batch merge dialog", () => {
         member("ada-2", "Augusta King", "ada@example.test", "2021-01-01T00:00:00Z"),
       ],
       disagreements: [{ field: "display_name", values: ["Ada Lovelace", "Augusta King"], shown: "Ada Lovelace" }],
+      fills: [],
     }];
 
     renderDialog(vi.fn(), [{
@@ -222,5 +226,56 @@ describe("the batch merge dialog", () => {
     await waitFor(() => expect(mocks.merge).toHaveBeenCalledWith({
       sets: [["grace", "amazing-grace"]], digests: ["digest-grace"], certain: false,
     }));
+  });
+
+  test("a certain pair from Review whose only difference is a fill carries no warning, starts ticked and is counted", async () => {
+    mocks.previews = [{
+      ...PREVIEWS[2]!,
+      fills: [{ field: "nickname", values: [null, "Jo"], shown: "Jo" }],
+    }];
+    renderDialog(vi.fn(), [{ members: ["joan", "joan-2"], heading: "Joan Clarke and Joan Clarke, both at joan@example.test" }], true);
+
+    const [set] = await screen.findAllByRole("checkbox");
+    expect(set!.getAttribute("aria-checked")).toBe("true");
+    expect(screen.queryByText(message("duplicates.includeWarned"))).toBeNull();
+    expect(screen.getByRole("button", { name: message("duplicates.confirm", { count: "1" }) })).toBeTruthy();
+  });
+
+  test("a set whose records state two different values starts unticked", async () => {
+    mocks.previews = [PREVIEWS[0]!];
+    renderDialog(vi.fn(), [SETS[0]!]);
+
+    const [set] = await screen.findAllByRole("checkbox");
+    expect(set!.getAttribute("aria-checked")).toBe("false");
+    expect(screen.getByText(message("duplicates.includeWarned"))).toBeTruthy();
+  });
+
+  test("in a grouped selection, a member whose grouping value was cleared is marked and its set starts unticked, its other differences fills only", async () => {
+    mocks.previews = [{
+      ...PREVIEWS[2]!,
+      disagreements: [],
+      fills: [
+        { field: "family_name", values: ["Clarke", null], shown: "Clarke" },
+        { field: "nickname", values: [null, "Jo"], shown: "Jo" },
+      ],
+    }];
+    renderDialog(vi.fn(), [{
+      members: ["joan", "joan-2"], heading: "Clarke", grouping: [{ field: "family_name", key: "Clarke" }],
+    }]);
+
+    const [set] = await screen.findAllByRole("checkbox");
+    expect(set!.getAttribute("aria-checked")).toBe("false");
+    expect(screen.getAllByText(message("duplicates.moved"))).toHaveLength(1);
+  });
+
+  test("a grouped set whose members all still match and differ only by fills starts ticked", async () => {
+    mocks.previews = [{ ...PREVIEWS[2]!, disagreements: [], fills: [{ field: "nickname", values: [null, "Jo"], shown: "Jo" }] }];
+    renderDialog(vi.fn(), [{
+      members: ["joan", "joan-2"], heading: "Clarke", grouping: [{ field: "family_name", key: "Clarke" }],
+    }]);
+
+    const [set] = await screen.findAllByRole("checkbox");
+    expect(set!.getAttribute("aria-checked")).toBe("true");
+    expect(screen.queryByText(message("duplicates.moved"))).toBeNull();
   });
 });

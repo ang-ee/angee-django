@@ -457,8 +457,9 @@ value as a plain value no one states (`Party.merge_values`). The dialog shows, f
 each set that merges, the fields its records disagree on and the value that will
 show, leaving out a field the person's `read__<field>` gate hides on any record.
 Each set that may merge has its own Include toggle, off until the person ticks it
-when the set carries a warning (its records disagree, or one no longer matches its
-group) or has changed from the state the person saw or ticked it in (a refreshed
+when the set carries a warning (its records state two different values of a field,
+or one no longer matches its group; a field one record states and the others leave
+empty is a fill the merge gives the survivor, no warning) or has changed from the state the person saw or ticked it in (a refreshed
 preview, a refused set that became mergeable), and the merge sends only the
 included sets, each with the digest of what
 the dialog showed of it: a set whose shown names, addresses or sources changed

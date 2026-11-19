@@ -991,8 +991,13 @@ class DuplicateMergeOutcome(StrEnum):
 
 
 @dataclass(frozen=True, slots=True)
-class FieldDisagreement:
-    """A merge field the members of a set disagree on, and what the merged record will show."""
+class MergeFieldValues:
+    """A merge field whose values differ across a set's members, and what the merged record will show.
+
+    A preview files it as a disagreement (two different stated values, a choice
+    for the person) or as a fill (one value stated, the rest empty, which the
+    merge gives the survivor), :class:`DuplicateSetPreview`.
+    """
 
     field: str
     values: tuple[str | None, ...]
@@ -1011,12 +1016,16 @@ class DuplicateSetPreview:
     outcome: DuplicateMergeOutcome | None
     """``None`` when the set merges as listed; else why it would not."""
     reason: str = ""
-    disagreements: tuple[FieldDisagreement, ...] = ()
-    """The merge fields the members disagree on, only for a set that merges; a field the actor's
-    ``read__<field>`` gate hides on any member is left out."""
+    disagreements: tuple[MergeFieldValues, ...] = ()
+    """The merge fields the members state at least two different values for, only for a set that
+    merges: what a person must look at. A field the actor's ``read__<field>`` gate hides on any
+    member is left out, here and in :attr:`fills`."""
+    fills: tuple[MergeFieldValues, ...] = ()
+    """The merge fields exactly one value is stated for, the rest empty, only for a set that merges:
+    nothing to choose, the merge gives the survivor that value (``Party.merge_values``)."""
     digest: str = ""
-    """For a set that merges, a keyed digest of everything the dialog shows of it, which the merge
-    compares under its lock (:meth:`PartyManager.merge_duplicates`)."""
+    """For a set that merges, a keyed digest of everything the dialog shows of it, the fills
+    included, which the merge compares under its lock (:meth:`PartyManager.merge_duplicates`)."""
 
     @property
     def survivor(self) -> Any:
@@ -2675,10 +2684,13 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
             else:
                 previews.append(DuplicateSetPreview(tuple(members), None))
         # Only a set the actor may merge discloses its members' values.
-        shown = self._disagreements(
+        differing = self._differing_fields(
             actor, [preview.members if preview.outcome is None else () for preview in previews], people,
         )
-        judged = [replace(preview, disagreements=shown[index]) for index, preview in enumerate(previews)]
+        judged = [
+            replace(preview, disagreements=differing[index][0], fills=differing[index][1])
+            for index, preview in enumerate(previews)
+        ]
         return [
             replace(preview, digest=self._shown_digest(preview)) if preview.outcome is None else preview
             for preview in judged
@@ -2701,7 +2713,7 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
         It covers what the reader was shown and nothing else: each member's id,
         name, creation time, first-met note (as the reader's gates leave it) and
         the readable handle statements with their source and handle, the
-        survivor, and the disagreements with the values that will show.
+        survivor, and the disagreements and the fills with the values that will show.
         """
 
         def statement(row: Any) -> list[Any]:
@@ -2724,13 +2736,18 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
             ],
             "survivor": preview.members[0].public_id if preview.members else None,
             "disagreements": [[row.field, list(row.values), row.shown] for row in preview.disagreements],
+            "fills": [[row.field, list(row.values), row.shown] for row in preview.fills],
         })
 
     @staticmethod
-    def _disagreements(
+    def _differing_fields(
         actor: Any, sets: Sequence[Sequence[Any]], people: Mapping[Any, Any],
-    ) -> list[tuple[FieldDisagreement, ...]]:
-        """For each set, the merge fields its members disagree on and what the survivor will show, in fixed reads.
+    ) -> list[tuple[tuple[MergeFieldValues, ...], tuple[MergeFieldValues, ...]]]:
+        """For each set, its disagreements and its fills (:class:`DuplicateSetPreview`), in fixed reads.
+
+        A merge field whose values differ is a disagreement when its members state
+        at least two different values, else a fill: one value stated, the rest
+        empty. Each row carries every member's value and what the survivor will show.
 
         ``sets`` hold members read through ``actor`` and the person rows are read
         through it too, so each field's own ``read__<field>`` gate has hidden what
@@ -2743,7 +2760,7 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
         person_model = apps.get_model("parties", "Person")
         pks = sorted({row.pk for members in sets for row in members})
         if not pks:
-            return [() for _members in sets]
+            return [((), ()) for _members in sets]
         persons = person_model._default_manager.with_actor(actor).in_bulk([pk for pk in pks if pk in people])
         owners: dict[str, tuple[Any, str]] = {}
         stated: defaultdict[tuple[str, Any], list[Any]] = defaultdict(list)
@@ -2775,14 +2792,15 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
         def source_of(row: Any, name: str) -> Any:
             return persons.get(row.pk, row) if name in personal else row
 
-        result: list[tuple[FieldDisagreement, ...]] = []
+        result: list[tuple[tuple[MergeFieldValues, ...], tuple[MergeFieldValues, ...]]] = []
         for members in sets:
             if len(members) < 2:
-                result.append(())
+                result.append(((), ()))
                 continue
             kind = "person" if all(row.pk in people for row in members) else None
             fields = party_model.merge_scalar_fields_of(kind)
-            disagreements = []
+            disagreements: list[MergeFieldValues] = []
+            fills: list[MergeFieldValues] = []
             for name in fields:
                 sources = [source_of(row, name) for row in members]
                 if any(name in redacted_fields(source) for source in sources):
@@ -2797,8 +2815,9 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
                     shown = text(winner.stated_value(name))
                 else:
                     shown = next((value for value in values if value is not None), None)
-                disagreements.append(FieldDisagreement(name, values, shown))
-            result.append(tuple(disagreements))
+                given = {value for value in values if value is not None}
+                (disagreements if len(given) > 1 else fills).append(MergeFieldValues(name, values, shown))
+            result.append((tuple(disagreements), tuple(fills)))
         return result
 
     def for_user(self, user: Any, *, adopt: Any = None) -> Any:
