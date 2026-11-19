@@ -43,6 +43,7 @@ def _status_error(status: int) -> httpx2.HTTPStatusError:
         (OperationalError("the connection is closed"), True),
         (httpx2.ConnectError("refused"), True),
         (_status_error(503), True),
+        (_status_error(429), True),
         (_status_error(404), False),
         (ValueError("bad input"), False),
         (ValidationError("bad config"), False),

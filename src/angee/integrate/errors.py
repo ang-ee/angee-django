@@ -94,6 +94,12 @@ class IntegrationFailure:
     message: str
 
 
+def is_transient_status(status: int) -> bool:
+    """Whether a later attempt can outlive an HTTP answer with ``status``: a 429 rate limit or any 5xx."""
+
+    return status == 429 or status >= 500
+
+
 def is_transient_failure(error: BaseException) -> bool:
     """Whether retrying an idempotent connection attempt can succeed unchanged.
 
@@ -101,9 +107,10 @@ def is_transient_failure(error: BaseException) -> bool:
     so from its HTTP status. Of the unclassified infrastructure failures, only
     the ones a later attempt can outlive are retryable: a refused, reset or
     timed-out connection, a DNS lookup failure, an exhausted OS resource
-    (:data:`RETRYABLE_ERRNOS`), an HTTP transport failure or 5xx answer, and a
-    dropped database connection. A known-broken setup — a failed certificate
-    verification, a missing file or binary, a permission refusal — is not.
+    (:data:`RETRYABLE_ERRNOS`), an HTTP transport failure or an answer whose
+    status :func:`is_transient_status` names, and a dropped database connection.
+    A known-broken setup — a failed certificate verification, a missing file or
+    binary, a permission refusal — is not.
     Callers whose attempt may already have caused a side effect (a sent message)
     decide uncertainty themselves instead.
     """
@@ -111,7 +118,7 @@ def is_transient_failure(error: BaseException) -> bool:
     if isinstance(error, IntegrationError):
         return error.transient
     if isinstance(error, httpx2.HTTPStatusError):
-        return error.response.status_code >= 500
+        return is_transient_status(error.response.status_code)
     if isinstance(error, ssl.SSLCertVerificationError):
         return False
     if isinstance(error, (ConnectionError, TimeoutError, socket.gaierror)):

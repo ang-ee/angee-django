@@ -24,27 +24,32 @@ front metadata services), multicast, and unspecified. Redirects are not followed
 unless requested through native ``follow_redirects`` or the bounded,
 method-preserving ``same_origin_redirects`` policy; each hop re-enters the pinned
 backend.
+
+A vendor's typed JSON request is :meth:`HttpClient.request_model`. Whatever
+brings no usable answer is one :class:`HttpRefusal`, classified once, from which
+the vendor composes its own ``IntegrationError``.
 """
 
 from __future__ import annotations
 
+import json
 import logging
 import ssl
 import time
-from collections.abc import Callable, Collection, Iterable, Iterator, Mapping
+from collections.abc import Callable, Collection, Iterable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from email.utils import parsedate_to_datetime
 from functools import cached_property
-from typing import Any, ClassVar
+from typing import TYPE_CHECKING, Any, ClassVar, Literal
 
 import httpcore2
 import httpx2
 from django.core.exceptions import ValidationError
 from django.utils import timezone
 
-from .errors import RequestNotSentError
+from .errors import RequestNotSentError, is_transient_status
 from .net import (
     AddressNotAllowedError,
     canonical_address,
@@ -53,8 +58,14 @@ from .net import (
     resolved_addresses,
 )
 
+if TYPE_CHECKING:
+    from pydantic import BaseModel
+
 HTTP_TIMEOUT_SECONDS = 10
 """Default timeout (seconds) for one outbound request."""
+
+JSON_MAX_BYTES = 8 * 1024 * 1024
+"""The largest JSON answer :meth:`HttpClient.request_model` reads unless its caller sets another cap."""
 
 _DOWNLOAD_CHUNK_BYTES = 64 * 1024
 """Maximum chunk read while enforcing a capped streamed download."""
@@ -86,14 +97,13 @@ RETRY_AFTER_LIMIT = timedelta(days=1)
 """The longest ``Retry-After`` delay honoured; a longer hint is treated as absent."""
 
 
-def retry_after(response: httpx2.Response, *, now: datetime | None = None) -> timedelta | None:
+def retry_after(response: httpx2.Response | DownloadResult, *, now: datetime | None = None) -> timedelta | None:
     """Return the ``Retry-After`` of ``response`` as a positive delay, or ``None`` (RFC 9110 §10.2.3).
 
     The header is delay-seconds or an HTTP-date, which is measured from ``now`` (the
     current time when omitted). An absent, malformed, past or zero value, or one
     past :data:`RETRY_AFTER_LIMIT`, is ``None``, so the caller keeps its own
-    backoff; a backend raises ``IntegrationError(transient=True, retry_after=...)``
-    with what this returns.
+    backoff. :meth:`HttpRefusal.of` reads it for every refused answer.
     """
 
     value = response.headers.get("Retry-After", "").strip()
@@ -143,15 +153,68 @@ class OutboundBudget:
 class DownloadResult:
     """A bounded download's final validated response facts: a success, or a status the caller listed.
 
-    headers are the final response's (validators, ``Retry-After``); a listed
-    non-success status carries an empty ``content``.
+    headers are the final response's, read case-insensitively (validators,
+    ``Retry-After``); a listed non-success status carries an empty ``content``.
     """
 
     content: bytes
     final_url: str
     content_type: str
     status_code: int
-    headers: Mapping[str, str] = field(default_factory=dict)
+    headers: httpx2.Headers = field(default_factory=httpx2.Headers)
+
+
+@dataclass(frozen=True, slots=True)
+class HttpRefusal:
+    """Why one request brought no usable answer: the facts a caller composes its error from, never their text.
+
+    ``cause`` is ``"status"`` (a non-success ``status`` with its ``Retry-After``
+    and parsed JSON ``body``), ``"unreachable"`` (a transport failure),
+    ``"oversized"`` (over the byte cap) or ``"unreadable"`` (a success answer that
+    does not validate). A caller adds its own transient statuses and waits in the
+    error it builds: ``transient=refusal.transient or refusal.status == 423``.
+    """
+
+    cause: Literal["status", "unreachable", "oversized", "unreadable"]
+    status: int | None = None
+    retry_after: timedelta | None = None
+    body: Any = None
+
+    @classmethod
+    def of(cls, answer: httpx2.Response | DownloadResult, body: bytes | None = None) -> HttpRefusal:
+        """Return the refusal a non-success ``answer`` states; ``body`` is its content when read apart (a stream)."""
+
+        content = answer.content if body is None else body
+        try:
+            parsed = json.loads(content) if content else None
+        except ValueError:
+            parsed = None
+        return cls("status", status=answer.status_code, retry_after=retry_after(answer), body=parsed)
+
+    @property
+    def transient(self) -> bool:
+        """The one rule: a transport failure or a status ``is_transient_status`` names can be outlived.
+
+        An oversized or unreadable answer cannot: the same request brings the same
+        answer, and the next scheduled sync reads it again.
+        """
+
+        return self.cause == "unreachable" or (self.status is not None and is_transient_status(self.status))
+
+    def message(self, service: str) -> str:
+        """Return an operator message naming ``service`` that states only this refusal's facts."""
+
+        if self.cause == "unreachable":
+            return f"{service} could not be reached."
+        if self.cause == "oversized":
+            return f"{service} returned an oversized response."
+        if self.cause == "unreadable":
+            return f"{service} returned an unreadable response."
+        if self.status == 429:
+            return f"{service} is rate limiting requests (HTTP 429)."
+        if self.transient:
+            return f"{service} is temporarily unavailable (HTTP {self.status})."
+        return f"{service} refused the request (HTTP {self.status})."
 
 
 @dataclass(slots=True)
@@ -395,7 +458,7 @@ class HttpClient:
                                 final_url=str(response.url),
                                 content_type=response.headers.get("content-type", ""),
                                 status_code=response.status_code,
-                                headers=dict(response.headers),
+                                headers=response.headers,
                             )
                         remaining_bytes = budget.bytes - state.bytes
                         if remaining_bytes <= 0:
@@ -409,7 +472,7 @@ class HttpClient:
                             final_url=str(response.url),
                             content_type=response.headers.get("content-type", ""),
                             status_code=response.status_code,
-                            headers=dict(response.headers),
+                            headers=response.headers,
                         )
                     finally:
                         response.close()
@@ -480,6 +543,7 @@ class HttpClient:
         same_origin_redirects: int = 0,
         max_bytes: int | None = None,
         timeout: int = HTTP_TIMEOUT_SECONDS,
+        error: Callable[[HttpRefusal], Exception] | None = None,
     ) -> httpx2.Response:
         """Send one pinned request to ``url`` and return the response.
 
@@ -497,6 +561,10 @@ class HttpClient:
         ``Accept-Encoding: identity``. If a server still encodes its response,
         httpx2 may decode a whole network chunk before the cap is checked: the
         cap bounds accepted decoded content, not peak decoder memory.
+        With ``error``, a transport failure (``RequestNotSentError`` included) and
+        an oversized answer raise what ``error`` returns for their
+        :class:`HttpRefusal` instead; the response is returned whatever its status.
+        A caller whose request may already have taken effect decides that itself.
         """
 
         if same_origin_redirects < 0 or (same_origin_redirects and follow_redirects):
@@ -519,35 +587,73 @@ class HttpClient:
                 # the decoded cache it owns, preserving the native response.
                 response._content = content
 
-        with httpx2.Client(
-            transport=self.transport_factory(allow_private=allow_private),
-            timeout=timeout,
-            event_hooks={"response": [read_response]},
-        ) as client:
-            for hop in range(same_origin_redirects + 1):
-                parse_http_url(url)  # scheme/host gate; the pinned backend judges the address
-                try:
-                    response = client.request(
-                        method, url,
-                        headers=_request_headers(headers, capped=max_bytes is not None),
-                        content=body, follow_redirects=follow_redirects,
-                    )
-                except RequestNotSentError as error:
-                    if response_seen:
-                        raise httpx2.TransportError("HTTP request failed after an earlier request was sent.") from error
-                    raise
-                if (
-                    hop == same_origin_redirects
-                    or response.status_code not in {301, 302, 307, 308}
-                    or not response.headers.get("location")  # httpx2 also creates next_request for an empty Location.
-                    or response.next_request is None
-                ):
-                    break
-                destination = response.next_request.url
-                if not same_origin(destination, response.url):
-                    raise RedirectOriginError("Redirects must retain the request origin.")
-                url = str(destination)
+        try:
+            with httpx2.Client(
+                transport=self.transport_factory(allow_private=allow_private),
+                timeout=timeout,
+                event_hooks={"response": [read_response]},
+            ) as client:
+                for hop in range(same_origin_redirects + 1):
+                    parse_http_url(url)  # scheme/host gate; the pinned backend judges the address
+                    try:
+                        response = client.request(
+                            method, url,
+                            headers=_request_headers(headers, capped=max_bytes is not None),
+                            content=body, follow_redirects=follow_redirects,
+                        )
+                    except RequestNotSentError as not_sent:
+                        if response_seen:
+                            raise httpx2.TransportError(
+                                "HTTP request failed after an earlier request was sent."
+                            ) from not_sent
+                        raise
+                    if (
+                        hop == same_origin_redirects
+                        or response.status_code not in {301, 302, 307, 308}
+                        or not response.headers.get("location")  # httpx2 builds next_request for an empty one too.
+                        or response.next_request is None
+                    ):
+                        break
+                    destination = response.next_request.url
+                    if not same_origin(destination, response.url):
+                        raise RedirectOriginError("Redirects must retain the request origin.")
+                    url = str(destination)
+        except (httpx2.TransportError, RequestNotSentError, ResponseTooLargeError) as failure:
+            if error is None:
+                raise
+            raise error(
+                HttpRefusal("oversized" if isinstance(failure, ResponseTooLargeError) else "unreachable")
+            ) from failure
         return response
+
+    def request_model[T: BaseModel](
+        self, method: str, url: str, *, error: Callable[[HttpRefusal], Exception], model: type[T] | None = None,
+        payload: Any = None, headers: dict[str, str] | None = None, allow_private: bool = False,
+        max_bytes: int = JSON_MAX_BYTES, timeout: int = HTTP_TIMEOUT_SECONDS,
+    ) -> T | Any:
+        """Send one JSON request and return its answer validated into ``model``, or its parsed JSON without one.
+
+        ``payload`` is the JSON body; ``Accept: application/json`` is sent unless
+        ``headers`` names another. Every :class:`HttpRefusal` (a transport failure,
+        an answer over ``max_bytes``, a non-success status, one that does not
+        validate) raises what ``error`` returns for it: the caller's
+        ``IntegrationError``, or a domain signal it owns (a ``FileNotFoundError`` for
+        a 404). The URL gate's and address policy's ``ValidationError`` propagate.
+        """
+
+        sent = {"Accept": "application/json", **(headers or {})}
+        if payload is not None:
+            sent.setdefault("Content-Type", "application/json")
+        response = self.request(
+            method, url, headers=sent, body=None if payload is None else json.dumps(payload).encode(),
+            allow_private=allow_private, max_bytes=max_bytes, timeout=timeout, error=error,
+        )
+        if not response.is_success:
+            raise error(HttpRefusal.of(response))
+        try:
+            return response.json() if model is None else model.model_validate_json(response.content)
+        except ValueError as failure:  # a JSON decode error, or pydantic's ValidationError
+            raise error(HttpRefusal("unreadable")) from failure
 
 
 def _read_capped(
