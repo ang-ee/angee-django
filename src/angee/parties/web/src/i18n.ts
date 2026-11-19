@@ -161,7 +161,7 @@ export const enPartiesMessages: Record<string, string> = {
   "merge.dismissError": "Could not save the keep-separate decision.",
   "person.action.merge": "Merge into…",
   "person.action.mergeOther": "Other party",
-  "person.action.mergeOther.description": "Choose the duplicate record to compare with this person.",
+  "person.action.mergeOther.description": "Choose the duplicate record to compare with this one.",
   "person.action.mergeRequired": "Choose another party.",
   "people.smart.heading": "Smart views",
   "people.smart.all": "All people",
@@ -206,7 +206,7 @@ export const enPartiesMessages: Record<string, string> = {
   "review.sameAs.mergeCertain": "Merge certain pairs ({count} of {total})",
   "review.sameAs.pagerUnit": "pairs",
   "duplicates.nextBatch":
-    "These are {count} of the {total} certain pairs. When this dialog closes, Merge certain pairs offers the next ones, until the last.",
+    "These are {count} of the {total} certain pairs. When this dialog closes, Merge certain pairs offers the next ones, until the last; a pair left out here comes back after the last batch.",
   "review.sameAs.certainHeading": "{left} and {right}, both at {address}",
   "merge.selection.action": "Merge…",
   "merge.selection.unplaceable":
@@ -233,6 +233,9 @@ export const enPartiesMessages: Record<string, string> = {
   "duplicates.unpaired": "Left out, with no one else selected in their group: {count}.",
   "duplicates.blank": "Left out, in a group without a value: {count}.",
   "duplicates.overCap": "This merges the first {count} of {total} groups; select Merge… again for the rest.",
+  "duplicates.include": "Include in this merge",
+  "duplicates.includeWarned": "Not included until you tick it: these records disagree, or one no longer matches its group.",
+  "duplicates.outcome.left": "Left out of this merge.",
   "duplicates.confirm": "Merge ({count})",
   "duplicates.cancel": "Cancel",
   "duplicates.done": "Done",

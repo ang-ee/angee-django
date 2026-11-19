@@ -12,7 +12,7 @@ from django.core.exceptions import ValidationError
 from django.db import OperationalError, connection
 from django.test import override_settings
 from django.test.utils import CaptureQueriesContext
-from rebac import actor_context, system_context, to_subject_ref
+from rebac import RelationshipTuple, actor_context, system_context, to_object_ref, to_subject_ref, write_relationships
 
 import tests.test_parties_circles  # noqa: F401 -- register the fixture model graph before database setup
 from angee.messaging.testing.models import Handle, Organization, Party, Person
@@ -345,20 +345,32 @@ def test_a_set_a_lock_conflict_stops_is_reported_and_the_next_set_still_merges(d
     assert _merged_into(first[1], second[1]) == [None, second[0].pk]
 
 
-def test_a_database_error_other_than_a_lock_conflict_stops_the_call(db: None) -> None:
-    """A lost connection is no set's outcome: it reaches the caller."""
+def test_a_set_the_database_fails_is_its_own_outcome_and_the_next_set_still_merges(
+    db: None, caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Any other database failure (here a statement timeout) rolls that set back and reports it; the batch goes on."""
 
     del db
-    owner = create_user("duplicates-lost")
-    pair = _people(owner, "Zoë Example", "Zoe Example")
+    owner = create_user("duplicates-failed")
+    first = _people(owner, "Zoë Example", "Zoe Example", value="zoe@example.com")
+    second = _people(owner, "Yan Example", "yan example", value="yan@example.com")
+    failed: list[str] = []
 
-    def lost(execute: Any, sql: str, params: Any, many: bool, context: Any) -> Any:
-        if sql.lstrip().upper().startswith("UPDATE") and '"merged_into_id"' in sql:
-            raise _lock_conflict("08006")
+    def time_out_once(execute: Any, sql: str, params: Any, many: bool, context: Any) -> Any:
+        if not failed and sql.lstrip().upper().startswith("UPDATE") and '"merged_into_id"' in sql:
+            failed.append(sql)
+            raise _lock_conflict("57014")
         return execute(sql, params, many, context)
 
-    with connection.execute_wrapper(lost), pytest.raises(OperationalError):
-        _merge(owner, pair)
+    with connection.execute_wrapper(time_out_once), caplog.at_level("ERROR", logger="angee.parties.managers"):
+        outcomes = _merge(owner, first, second)
+
+    assert outcomes[0] == ("failed", None, Party.objects.FAILED_REASON)
+    assert [outcome for outcome, _survivor, _reason in outcomes] == ["failed", "merged"]
+    assert _merged_into(first[1], second[1]) == [None, second[0].pk]
+    # The reason is for the person; the error itself is for an operator, in the log.
+    assert "deadlock detected" not in outcomes[0][2]
+    assert any(record.exc_info for record in caplog.records)
 
 
 def test_a_batch_takes_at_most_fifty_sets_and_a_set_at_most_ten_records(db: None) -> None:
@@ -433,33 +445,46 @@ def _direct_read(viewer: Any, person: Any) -> dict[str, Any]:
     return result_data(execute_schema(_schema("console"), query, {"id": person.sqid}, user=viewer))["people_by_pk"]
 
 
-def test_each_field_gate_hides_its_values_from_a_reader_without_it(db: None) -> None:
-    """Each field's own ``read__<field>`` gate decides per member, as the record read does: no second list.
+def test_a_party_editor_without_the_persons_gates_merges_without_seeing_their_values(db: None) -> None:
+    """Each field's own ``read__<field>`` gate decides per member, as its record read does: no second list.
 
-    No person account may merge a set while lacking a private field's gate on a member: ``write`` on a party
-    is its owner, an editor, an admin or a statement source, and the statement-source role holds only rules,
-    seeds and admins, while ``read_private`` covers owners, editors and admins. So the preview of a set that
-    merges never meets a hidden field through a real actor. The gate itself is pinned here on the members as
-    the preview reads them, through a reader without the gate and through the owner, who holds it.
+    The party's ``editor`` may merge (``write`` on the party) while holding none of the person's own grants.
+    Each column is read through the resource that declares it, as its record read does: the person's columns
+    through the person (``people_by_pk``), whose gates hide them from this editor, and the party's columns
+    through the party (``parties_by_pk``), whose ``read_private`` the editor holds. In the preview of a set the
+    editor may merge, a field its record read shows as null has neither values nor a disagreement, and every
+    field it shows is compared.
     """
 
     del db
-    owner, viewer = create_user("duplicates-gate-owner"), create_user("duplicates-gate-viewer")
-    pair = _private_pair(owner, viewer)
-    ids = (tuple(person.public_id for person in pair),)
+    from angee.graphql.testing.documents import execute_schema, result_data
+    from tests.test_parties_graphql import _schema
 
-    def disagreements(actor: Any) -> dict[str, tuple[str | None, ...]]:
-        members = Party.objects._readable_members(actor, ids)
-        rows = [members[pk] for pk in ids[0]]
-        people, _organizations = Party.objects.party_kinds([row.pk for row in rows])
-        (shown,) = Party.objects._disagreements(actor, [rows], people)
-        return {row.field: row.values for row in shown}
+    owner, editor = create_user("duplicates-gate-owner"), create_user("duplicates-gate-editor")
+    pair = _private_pair(owner, editor)
+    with system_context(reason="duplicates party editor"):
+        write_relationships([
+            RelationshipTuple(
+                resource=to_object_ref(Party._base_manager.get(pk=person.pk)), relation="editor",
+                subject=to_subject_ref(editor),
+            )
+            for person in pair
+        ])
 
-    hidden = {field for field, value in _direct_read(viewer, pair[0]).items() if value is None}
-    assert hidden == set(PRIVATE_FIELDS)
-    assert disagreements(viewer) == {"given_name": ("Zoe", "Zoey")}
-    assert set(disagreements(owner)) == {"given_name", *PRIVATE_FIELDS}
-    (owned,) = Party.objects.preview_duplicates(actor=owner, sets=[list(ids[0])])
+    (preview,) = Party.objects.preview_duplicates(actor=editor, sets=[[person.public_id for person in pair]])
+
+    person_read = _direct_read(editor, pair[0])
+    party_read = result_data(execute_schema(
+        _schema("console"), "query($id: String!) { parties_by_pk(id: $id) { notes first_met_note } }",
+        {"id": pair[0].sqid}, user=editor,
+    ))["parties_by_pk"]
+    party_columns = {"notes", "first_met_note"}
+    hidden = {field for field in PRIVATE_FIELDS.keys() - party_columns if person_read[field] is None}
+    hidden |= {field for field in party_columns if party_read[field] is None}
+    assert {"birthday", "anniversary"} <= hidden
+    assert preview.outcome is None
+    assert {row.field for row in preview.disagreements} == {"given_name", *PRIVATE_FIELDS} - hidden
+    (owned,) = Party.objects.preview_duplicates(actor=owner, sets=[[person.public_id for person in pair]])
     assert {row.field for row in owned.disagreements} == {"given_name", *PRIVATE_FIELDS}
 
 

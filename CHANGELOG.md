@@ -812,8 +812,10 @@ live in code docstrings.
   holding a record the person may not read, or one the person may not merge in a
   batch is refused before anything is read further or locked; a set merges exactly as confirmed, judged again under
   one lock pass of its members, their same-person partners and their handles; the oldest record survives and the others fold into it in
-  key order; a lock conflict (deadlock, lock not granted) is that set's
-  `stopped`, any other database error stops the call. A batch records no value
+  key order; each set runs in its own transaction: a lock conflict (deadlock,
+  lock not granted) is that set's `stopped`, and any other database failure (a
+  statement timeout, a lost connection) its `failed`, with a reason for the
+  person and the error in the log, and the next set still runs. A batch records no value
   as the person's choice (`PartyManager.BATCH_CONFIRMED_FIELDS`): statements move
   as their sources' own and an empty survivor field takes a merged record's
   value as a plain value (`Party.merge_values`). A pair is certain when both are
@@ -894,7 +896,10 @@ live in code docstrings.
   and gives each of its lists its own pager (the claims list embedded in its
   section, the pairs under their cards); "Merge certain pairs (50 of 180)" names
   the batch and the dialog says the next batch follows; the overview counts every
-  pair instead of a capped read.
+  pair instead of a capped read. In the dialog each set that may merge has its
+  own Include toggle, off by default when the set carries a warning (a
+  disagreement, a member that no longer matches its group), and the mutation
+  sends only the included sets.
 
 - Parties: a handle's holder is always the projection of a statement. A holder
   written onto the row with no statement behind it lost its address the moment
