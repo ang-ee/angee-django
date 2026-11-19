@@ -5264,14 +5264,15 @@ class SyncStream(ImmutableFieldsMixin, SyncStateMixin, AuditMixin, AngeeDataMode
     A plain declaration's version, or the one the manager gave the contributions
     this generation ran; unknown until seeded by :meth:`SyncStreamManager.current`.
     """
-    mapping_contributions = models.JSONField(default=dict, blank=True)
+    mapping_contributions = models.JSONField(default=dict, db_default={}, blank=True)
     """The composed mapping this generation ran, ``{"version": V, "parts": [[key, version], ...]}``.
 
     ``parts`` are in applied order and ``version`` is the mapping version the
     manager assigned them. Stored JSON-native, so a fresh and a reloaded row hold
     the same value; read it through :attr:`retained_contributions`. Empty for a
     stream that never composed, which is also what a stream written before this
-    column holds, so it keeps the plain rule.
+    column holds, so it keeps the plain rule. The database default is that empty
+    mapping, so a release before this column still creates stream generations.
     """
     phase = StateField(choices_enum=StreamPhase, default=StreamPhase.BASELINE)
     state = StateField(choices_enum=StreamState, default=StreamState.OPEN)

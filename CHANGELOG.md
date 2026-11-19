@@ -27,10 +27,12 @@ live in code docstrings.
   contributions leaves `mapping_version` at its default, and a malformed
   declaration is refused with `ValidationError`.
   Upgrade: a host runs `makemigrations integrate` for the `mapping_contributions`
-  column (one `AddField`, `JSONField(default=dict, blank=True)`), then `migrate`.
-  Existing streams hold the empty mapping and keep their generation, cursor and
-  version; nothing is read again until a stream first declares contributions,
-  which replays its records once.
+  column (one `AddField`, `JSONField(blank=True, db_default={}, default=dict)`),
+  then `migrate`. Existing streams hold the empty mapping and keep their
+  generation, cursor and version; nothing is read again until a stream first
+  declares contributions, which replays its records once. The database default
+  lets a release before the column, rolled back onto the migrated database,
+  still create stream generations.
 
 - Addons require django-compose 0.1.0.dev13, whose snapshot digest covers each
   addon's resolved path. A host that changes its sync from `--no-editable` to
