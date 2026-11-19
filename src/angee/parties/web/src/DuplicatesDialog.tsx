@@ -1,5 +1,5 @@
 import * as React from "react";
-import { useAuthoredMutation, useAuthoredQuery } from "@angee/refine";
+import { useAuthoredMutation, useAuthoredQuery, useInvalidateAuthoredModels } from "@angee/refine";
 import {
   Alert, Button, Checkbox, Chip, Dialog, ErrorBanner, LoadingPanel, NavLink, RowsListView, defaultWidgets, optionLabel,
   useEnumOptions, useRouteHref, type ListColumn,
@@ -18,6 +18,13 @@ import { usePartiesT } from "./i18n";
 const DateTimeRead = defaultWidgets.datetime.read;
 
 /**
+ * How many sets one merge request carries. A run sends the confirmed sets this
+ * many at a time, in order, so no request lasts long and the person sees each
+ * chunk's outcomes as it answers; each set still merges in its own transaction.
+ */
+export const MERGE_CHUNK = 5;
+
+/**
  * One set of records a person says are one: its member ids, and what its list
  * grouping said of it at selection, the heading and each level's field and value.
  * Only the ids are sent; the grouping marks a member that no longer matches it.
@@ -28,9 +35,12 @@ export interface DuplicateSetInput {
   grouping?: readonly { field: string; key: string | null }[];
 }
 
-interface MergeResult {
+/** One confirmed run: the sets as confirmed, their outcomes as the chunks answer, and how it ended. */
+interface MergeRun {
   shown: readonly DuplicateSetPreview[];
+  queue: readonly DuplicateSetPreview[];
   outcomes: ReadonlyMap<DuplicateSetPreview, DuplicateSetOutcome>;
+  status: "running" | "done" | "stopped" | "failed";
 }
 
 export interface DuplicatesDialogProps {
@@ -54,10 +64,16 @@ export interface DuplicatesDialogProps {
  * warning (its records disagree, or one no longer matches its group), and off
  * again whenever the set changes from the state the person saw or ticked it in
  * (a refreshed preview, a refused set that becomes mergeable), so nothing is
- * included in a state the person did not see; one confirm merges exactly the
- * included sets and the dialog then shows each set's outcome.
- * The server judges and merges (`duplicate_set_previews`, `merge_duplicates`); the
- * dialog only shows.
+ * included in a state the person did not see. One confirm merges exactly the
+ * included sets, sent :data:`MERGE_CHUNK` at a time in order, each chunk with its
+ * digests and groupings: each set's outcome shows as its chunk answers, with how
+ * many are done. Stop ends the run after the chunk in flight; a failed request
+ * ends it with what answered kept and nothing sent twice; closing the dialog or
+ * leaving the page mid-run, after the dialog asks, sends nothing more. The sets
+ * not sent are shown as left out and nothing is queued behind the person's back.
+ * While a run is in flight the preview is held, and the models are invalidated
+ * once, when it ends. The server judges and merges (`duplicate_set_previews`,
+ * `merge_duplicates`); the dialog only shows.
  */
 export function DuplicatesDialog({ sets: opened, certain = false, notes = [], onClose }: DuplicatesDialogProps): React.ReactElement {
   const t = usePartiesT();
@@ -72,15 +88,29 @@ export function DuplicatesDialog({ sets: opened, certain = false, notes = [], on
     () => ({ sets: sets.map((set) => [...set.members]), certain, groupings }),
     [certain, groupings, sets],
   );
-  // After the merge the dialog keeps showing the sets as they were confirmed, each with its outcome.
-  const [result, setResult] = React.useState<MergeResult | null>(null);
+  // Once confirmed the dialog keeps showing the sets as they were confirmed, each with its outcome; the preview is
+  // held so the merges in flight do not refetch it.
+  const [run, setRun] = React.useState<MergeRun | null>(null);
   const preview = useAuthoredQuery(DuplicateSetPreviews, variables, {
-    enabled: sets.length > 0 && result === null,
+    enabled: sets.length > 0 && run === null,
     models: PARTY_MERGE_INVALIDATES,
   });
-  const [merge, mergeState] = useAuthoredMutation(MergeDuplicates, { invalidateModels: PARTY_MERGE_INVALIDATES });
+  const [merge] = useAuthoredMutation(MergeDuplicates);
+  const invalidate = useInvalidateAuthoredModels();
+  const stopping = React.useRef(false);
+  const mounted = React.useRef(true);
+  // Leaving the page mid-run sends nothing more: the chunk in flight answers and the run ends there.
+  React.useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+      stopping.current = true;
+    };
+  }, []);
+  const [closing, setClosing] = React.useState(false);
+  const running = run?.status === "running";
   const live = preview.data?.duplicate_set_previews ?? [];
-  const previews = result?.shown ?? live;
+  const previews = run?.shown ?? live;
   // Each set's state when the person first saw it, and the person's ticks with the state each was made in.
   const [firstSeen, setFirstSeen] = React.useState<ReadonlyMap<number, string>>(new Map());
   React.useEffect(() => {
@@ -105,31 +135,58 @@ export function DuplicatesDialog({ sets: opened, certain = false, notes = [], on
     return tick ? tick.checked : firstSeen.get(index) === stateOf(row) && !warned(row, sets[index]?.grouping);
   };
   const sending = live.filter((_row, index) => included(index));
-  const merged = result ? [...result.outcomes.values()].some((row) => row.outcome === "MERGED") : false;
+  const merged = run ? [...run.outcomes.values()].some((row) => row.outcome === "MERGED") : false;
 
   const submit = React.useCallback(async () => {
-    const sent = sending;
-    // Each set's digest of what the person saw, judged with the same grouping fields: a set that changed since
-    // is refused, to be looked at again.
-    const response = await merge({
-      sets: sent.map((row) => row.members.map((member) => member.id)),
-      digests: sent.map((row) => row.digest),
-      certain,
-      groupings: groupings && sent.map((row) => groupings[live.indexOf(row)] ?? []),
-    });
-    const answered = response?.merge_duplicates;
-    if (!answered) return;
-    // One outcome answers each sent set, in the order sent.
-    const outcomes = new Map<DuplicateSetPreview, DuplicateSetOutcome>();
-    sent.forEach((row, index) => {
-      const outcome = answered[index];
-      if (outcome) outcomes.set(row, outcome);
-    });
-    setResult({ shown: live, outcomes });
-  }, [certain, groupings, live, merge, sending]);
+    const queue = sending;
+    stopping.current = false;
+    let outcomes: ReadonlyMap<DuplicateSetPreview, DuplicateSetOutcome> = new Map();
+    let status: MergeRun["status"] = "done";
+    setRun({ shown: live, queue, outcomes, status: "running" });
+    for (let start = 0; start < queue.length; start += MERGE_CHUNK) {
+      if (stopping.current) {
+        status = "stopped";
+        break;
+      }
+      const chunk = queue.slice(start, start + MERGE_CHUNK);
+      let answered: readonly DuplicateSetOutcome[] | undefined;
+      try {
+        // Each set's digest of what the person saw, judged with the same grouping fields: a set that changed
+        // since is refused, to be looked at again.
+        const response = await merge({
+          sets: chunk.map((row) => row.members.map((member) => member.id)),
+          digests: chunk.map((row) => row.digest),
+          certain,
+          groupings: groupings && chunk.map((row) => groupings[live.indexOf(row)] ?? []),
+        }, { errorNotification: false });
+        answered = response?.merge_duplicates;
+      } catch {
+        answered = undefined;
+      }
+      if (!answered) {
+        status = "failed";
+        break;
+      }
+      // One outcome answers each sent set, in the order sent.
+      const next = new Map(outcomes);
+      chunk.forEach((row, index) => {
+        const outcome = answered[index];
+        if (outcome) next.set(row, outcome);
+      });
+      outcomes = next;
+      if (mounted.current) setRun({ shown: live, queue, outcomes, status: "running" });
+    }
+    // Once, when the run ends or stops: the pages behind read the merges' result together.
+    invalidate(PARTY_MERGE_INVALIDATES);
+    if (mounted.current) setRun({ shown: live, queue, outcomes, status });
+  }, [certain, groupings, invalidate, live, merge, sending]);
+  const close = (): void => {
+    if (running) setClosing(true);
+    else onClose(merged);
+  };
 
   return (
-    <Dialog.Root open onOpenChange={(open) => { if (!open && !mergeState.fetching) onClose(merged); }}>
+    <Dialog.Root open onOpenChange={(open) => { if (!open) close(); }}>
       <Dialog.Portal>
         <Dialog.Backdrop />
         <Dialog.Content size="lg" placement="center">
@@ -141,7 +198,7 @@ export function DuplicatesDialog({ sets: opened, certain = false, notes = [], on
             <Alert tone="info">{t("duplicates.valueRule")} {t("duplicates.undo")}</Alert>
             {notes.map((note) => <Alert key={note} tone="info">{note}</Alert>)}
             {preview.error ? <ErrorBanner description={t("duplicates.error")} /> : null}
-            {mergeState.error ? <ErrorBanner description={t("duplicates.mergeError")} /> : null}
+            {run ? <RunLine run={run} /> : null}
             {preview.isFetching && previews.length === 0 ? <LoadingPanel loadingLabel={t("duplicates.loading")} /> : null}
             {previews.map((row, index) => (
               <DuplicateSetSection
@@ -149,29 +206,55 @@ export function DuplicatesDialog({ sets: opened, certain = false, notes = [], on
                 preview={row}
                 heading={sets[index]?.heading}
                 grouping={sets[index]?.grouping}
-                outcome={result?.outcomes.get(row)}
-                include={result || row.outcome != null ? undefined : {
+                outcome={run?.outcomes.get(row)}
+                include={run || row.outcome != null ? undefined : {
                   checked: included(index),
                   changed: changed(index),
                   onChange: (checked) => setTicks((current) => new Map(current).set(index, { checked, state: stateOf(row) })),
                 }}
-                left={result !== null && row.outcome == null && !result.outcomes.has(row)}
+                left={run !== null && !running && row.outcome == null && !run.outcomes.has(row)}
               />
             ))}
           </Dialog.Body>
           <Dialog.Footer>
-            {result ? (
+            {running && closing ? (
+              <>
+                <span className="mr-auto text-13 text-fg-muted">{t("duplicates.closeRunning")}</span>
+                <Button type="button" variant="secondary" onClick={() => setClosing(false)}>{t("duplicates.keepMerging")}</Button>
+                <Button
+                  type="button"
+                  variant="danger"
+                  onClick={() => {
+                    stopping.current = true;
+                    onClose(merged);
+                  }}
+                >
+                  {t("duplicates.stopAndClose")}
+                </Button>
+              </>
+            ) : running ? (
+              <Button
+                type="button"
+                variant="secondary"
+                disabled={stopping.current}
+                onClick={() => {
+                  stopping.current = true;
+                  setRun((current) => current && { ...current });
+                }}
+              >
+                {t(stopping.current ? "duplicates.stopping" : "duplicates.stop")}
+              </Button>
+            ) : run ? (
               <Button type="button" variant="secondary" onClick={() => onClose(merged)}>{t("duplicates.done")}</Button>
             ) : (
               <>
-                <Button type="button" variant="secondary" disabled={mergeState.fetching} onClick={() => onClose(false)}>
+                <Button type="button" variant="secondary" onClick={() => onClose(false)}>
                   {t("duplicates.cancel")}
                 </Button>
                 <Button
                   type="button"
                   variant="primary"
-                  pending={mergeState.fetching}
-                  disabled={sending.length === 0 || mergeState.fetching || preview.isFetching}
+                  disabled={sending.length === 0 || preview.isFetching}
                   onClick={() => void submit()}
                 >
                   {t("duplicates.confirm", { count: sending.length })}
@@ -292,6 +375,15 @@ function DuplicateSetSection({
       ) : null}
     </section>
   );
+}
+
+/** How far a run has come, and, once it ended early, why the rest was not sent. */
+function RunLine({ run }: { run: MergeRun }): React.ReactElement {
+  const t = usePartiesT();
+  const counts = { done: String(run.outcomes.size), total: String(run.queue.length) };
+  if (run.status === "failed") return <Alert tone="danger">{t("duplicates.runFailed", counts)}</Alert>;
+  if (run.status === "stopped") return <Alert tone="warning">{t("duplicates.runStopped", counts)}</Alert>;
+  return <Alert tone={run.status === "done" ? "success" : "info"}>{t("duplicates.progress", counts)}</Alert>;
 }
 
 function OutcomeLine({ outcome }: { outcome: DuplicateSetOutcome }): React.ReactElement {

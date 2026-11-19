@@ -8,7 +8,9 @@ import { AppRuntimeProvider, InAppLinkProvider, createRouteHref, routerNavigator
 import { createUiTestProviders } from "@angee/ui/testing";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
-const mocks = vi.hoisted(() => ({ merge: vi.fn(), previews: [] as readonly unknown[], variables: [] as unknown[] }));
+const mocks = vi.hoisted(() => ({
+  merge: vi.fn(), invalidate: vi.fn(), previews: [] as readonly unknown[], variables: [] as unknown[],
+}));
 vi.mock("@angee/refine", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@angee/refine")>()),
   useAuthoredQuery: (_document: unknown, variables: unknown) => {
@@ -16,6 +18,7 @@ vi.mock("@angee/refine", async (importOriginal) => ({
     return { data: { duplicate_set_previews: mocks.previews }, isFetching: false, error: null };
   },
   useAuthoredMutation: () => [mocks.merge, { fetching: false, error: null, reset: () => undefined }],
+  useInvalidateAuthoredModels: () => mocks.invalidate,
 }));
 
 import { DuplicatesDialog, type DuplicateSetInput } from "./DuplicatesDialog";
@@ -25,6 +28,7 @@ import parties from "./index";
 const { Provider, clearClients } = createUiTestProviders({ apiUrl: "test://parties-duplicates" });
 beforeEach(() => {
   mocks.merge.mockReset();
+  mocks.invalidate.mockReset();
   mocks.previews = PREVIEWS;
   mocks.variables = [];
 });
@@ -148,7 +152,7 @@ describe("the batch merge dialog", () => {
     expect(await screen.findByText(message("duplicates.outcome.merged", { name: "Joan Clarke" }))).toBeTruthy();
     expect(mocks.merge).toHaveBeenCalledWith({
       sets: [["joan", "joan-2"]], digests: ["digest-joan"], certain: false, groupings: null,
-    });
+    }, { errorNotification: false });
     expect(screen.getByText(message("duplicates.outcome.left"))).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: message("duplicates.done") }));
     expect(onClose).toHaveBeenCalledWith(true);
@@ -165,7 +169,7 @@ describe("the batch merge dialog", () => {
 
     await waitFor(() => expect(mocks.merge).toHaveBeenCalledWith({
       sets: [["ada", "augusta"]], digests: ["digest-ada"], certain: false, groupings: null,
-    }));
+    }, { errorNotification: false }));
   });
 
   test("a disagreement's compare link opens the pair's comparison in the same app", async () => {
@@ -235,7 +239,7 @@ describe("the batch merge dialog", () => {
 
     await waitFor(() => expect(mocks.merge).toHaveBeenCalledWith({
       sets: [["grace", "amazing-grace"]], digests: ["digest-grace"], certain: false, groupings: null,
-    }));
+    }, { errorNotification: false }));
   });
 
   test("a certain pair from Review whose only difference is a fill carries no warning, starts ticked and is counted", async () => {
@@ -337,6 +341,88 @@ describe("the batch merge dialog", () => {
     expect(set!.getAttribute("aria-checked")).toBe("true");
     expect(screen.queryByText(message("duplicates.moved"))).toBeNull();
     expect(mocks.variables).toContainEqual({ sets: [["joan", "joan-2"]], certain: true, groupings: null });
+  });
+
+  describe("a confirmed run", () => {
+    const clean = (number: number) => ({
+      outcome: null, reason: "", digest: `digest-${number}`, survivor: { id: `p${number}` },
+      members: [
+        member(`p${number}`, `Person ${number}`, `p${number}@example.test`, "2020-01-01T00:00:00Z"),
+        member(`q${number}`, `Person ${number}`, `p${number}@example.test`, "2021-01-01T00:00:00Z"),
+      ],
+      disagreements: [], fills: [], grouping: [],
+    });
+    const twelve = Array.from({ length: 12 }, (_value, index) => clean(index));
+    const twelveSets = twelve.map((row) => ({ members: row.members.map((item) => item.id) }));
+    const answer = (variables: { sets: string[][] }) => ({
+      merge_duplicates: variables.sets.map((ids) => merged(ids[0]!, `Person ${ids[0]!.slice(1)}`)),
+    });
+    const deferred = () => {
+      let resolve: (value: unknown) => void = () => undefined;
+      const promise = new Promise((done) => { resolve = done; });
+      return { promise, resolve };
+    };
+
+    test("sends the sets five at a time in order, shows its progress, and invalidates once", async () => {
+      mocks.previews = twelve;
+      mocks.merge.mockImplementation(async (variables: { sets: string[][] }) => answer(variables));
+      renderDialog(vi.fn(), twelveSets);
+
+      fireEvent.click(await screen.findByRole("button", { name: message("duplicates.confirm", { count: "12" }) }));
+
+      expect(await screen.findByText(message("duplicates.progress", { done: "12", total: "12" }))).toBeTruthy();
+      expect(mocks.merge.mock.calls.map(([variables]) => (variables as { sets: string[][] }).sets.map((ids) => ids[0])))
+        .toEqual([["p0", "p1", "p2", "p3", "p4"], ["p5", "p6", "p7", "p8", "p9"], ["p10", "p11"]]);
+      expect(mocks.invalidate).toHaveBeenCalledTimes(1);
+    });
+
+    test("Stop ends the run after the chunk in flight and shows the rest as left out", async () => {
+      mocks.previews = twelve;
+      const first = deferred();
+      mocks.merge.mockImplementationOnce(() => first.promise).mockImplementation(async (variables: { sets: string[][] }) => answer(variables));
+      renderDialog(vi.fn(), twelveSets);
+      fireEvent.click(await screen.findByRole("button", { name: message("duplicates.confirm", { count: "12" }) }));
+
+      fireEvent.click(await screen.findByRole("button", { name: message("duplicates.stop") }));
+      first.resolve(answer({ sets: twelveSets.slice(0, 5).map((set) => [...set.members]) }));
+
+      expect(await screen.findByText(message("duplicates.runStopped", { done: "5", total: "12" }))).toBeTruthy();
+      expect(mocks.merge).toHaveBeenCalledTimes(1);
+      expect(screen.getAllByText(message("duplicates.outcome.left"))).toHaveLength(7);
+      expect(mocks.invalidate).toHaveBeenCalledTimes(1);
+    });
+
+    test("a failed request stops the run with what answered kept and nothing sent twice", async () => {
+      mocks.previews = twelve;
+      mocks.merge
+        .mockImplementationOnce(async (variables: { sets: string[][] }) => answer(variables))
+        .mockImplementationOnce(async () => { throw new Error("502"); });
+      renderDialog(vi.fn(), twelveSets);
+
+      fireEvent.click(await screen.findByRole("button", { name: message("duplicates.confirm", { count: "12" }) }));
+
+      expect(await screen.findByText(message("duplicates.runFailed", { done: "5", total: "12" }))).toBeTruthy();
+      expect(mocks.merge).toHaveBeenCalledTimes(2);
+      expect(screen.getAllByText(message("duplicates.outcome.left"))).toHaveLength(7);
+    });
+
+    test("closing mid-run asks first, and stopping there sends nothing more", async () => {
+      mocks.previews = twelve;
+      const first = deferred();
+      mocks.merge.mockImplementationOnce(() => first.promise).mockImplementation(async (variables: { sets: string[][] }) => answer(variables));
+      const { onClose } = renderDialog(vi.fn(), twelveSets);
+      fireEvent.click(await screen.findByRole("button", { name: message("duplicates.confirm", { count: "12" }) }));
+
+      fireEvent.keyDown(document.activeElement ?? document.body, { key: "Escape" });
+      expect(await screen.findByText(message("duplicates.closeRunning"))).toBeTruthy();
+      expect(onClose).not.toHaveBeenCalled();
+      fireEvent.click(screen.getByRole("button", { name: message("duplicates.stopAndClose") }));
+      first.resolve(answer({ sets: twelveSets.slice(0, 5).map((set) => [...set.members]) }));
+
+      await waitFor(() => expect(onClose).toHaveBeenCalledWith(false));
+      await waitFor(() => expect(mocks.invalidate).toHaveBeenCalledTimes(1));
+      expect(mocks.merge).toHaveBeenCalledTimes(1);
+    });
   });
 });
 
