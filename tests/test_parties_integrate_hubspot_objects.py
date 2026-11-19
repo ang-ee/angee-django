@@ -250,7 +250,6 @@ def test_with_no_object_mapping_a_directory_declares_and_reads_only_its_contacts
         ("addressbooks", ""),
         ("contacts", "contacts"),
     ]
-    assert hubspot.discover()["ok"]
     hubspot.server.requests.clear()
     assert hubspot.directory.run_sync(now=timezone.now()) == 1
     assert hubspot.server.requests
@@ -374,7 +373,6 @@ def test_a_record_whose_contact_has_not_landed_waits_and_lands_once_it_has(hubsp
     ada = hubspot.server.add("contacts", ADA, modified=ago(days=2))
     deal = hubspot.server.add("deals", {"dealname": "green"}, modified=ago(days=1))
     hubspot.server.associate("deals", deal, "contacts", ada)
-    assert hubspot.discover()["ok"]
 
     hubspot.directory.run_sync(now=timezone.now())
 
