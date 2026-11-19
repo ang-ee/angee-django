@@ -1360,6 +1360,7 @@ dependencies = [
     { name = "angee-base" },
     { name = "angee-integrate" },
     { name = "angee-parties" },
+    { name = "angee-web" },
 ]
 
 [package.metadata]
@@ -1367,6 +1368,7 @@ requires-dist = [
     { name = "angee-base", editable = "src/angee/base" },
     { name = "angee-integrate", editable = "src/angee/integrate" },
     { name = "angee-parties", editable = "src/angee/parties" },
+    { name = "angee-web", editable = "src/angee/web" },
 ]
 
 [[package]]

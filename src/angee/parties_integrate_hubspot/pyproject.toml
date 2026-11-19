@@ -5,7 +5,7 @@ name = "angee-parties-integrate-hubspot"
 version = "3.0.0"
 description = "HubSpot CRM contacts read one way into parties over HubSpot's date-versioned REST API"
 keywords = ["hubspot", "crm", "contacts", "sync"]
-dependencies = ["angee-parties>=3,<4", "angee-integrate>=3,<4", "angee-base>=3,<4"]
+dependencies = ["angee-parties>=3,<4", "angee-integrate>=3,<4", "angee-web>=3,<4", "angee-base>=3,<4"]
 dynamic = ["entry-points"]
 
 [tool.angee]

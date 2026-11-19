@@ -30,7 +30,12 @@ live in code docstrings.
   starts a new baseline, and a transient refusal inside one page keeps what that
   page read. A merge's survivor lands on a replaced record's person, the replaced
   records leave with the absence sweeps, and an archived or deleted contact is
-  withdrawn by the second absence sweep. It ships no connect action yet.
+  withdrawn by the second absence sweep. A platform admin connects an account
+  from the console: `@angee/parties-integrate-hubspot` adds a "HubSpot account"
+  entry to `parties.directories#toolbar`, whose dialog sends a name and the key
+  (masked, as entered) to `connect_hubspot_directory(name, token)`, which runs
+  `Directory.objects.connect`; discovery then arms the first sync. The `full`
+  project profile enables the addon.
 
 - Sharing a directory shares its contacts. `parties/directory` has a stored,
   grantable `contact_reader` relation (shared through the record-access surface

@@ -20,9 +20,16 @@ discovery has finished, and its source links open each contact in HubSpot when
 HubSpot states the account's web host. Once a directory has learned its account,
 discovery refuses a key of another account. The connection test asks HubSpot for
 one contact, and it refuses a rejected key and a key without the scope with
-separate messages. The addon ships no connect action yet; until it does, a host
-creates the credential and a `Directory` with `backend_class="hubspot"` that
-attaches it.
+separate messages.
+
+A platform admin connects an account from the console's Directories page: the
+addon's web fragment adds "HubSpot account" to the Connect menu
+(`parties.directories#toolbar`), a dialog that takes a name and the service key
+in a masked field and sends the key as entered. Its `connect_hubspot_directory`
+mutation calls `Directory.objects.connect`, which tests the key with HubSpot
+before it saves the credential and the directory, so a rejected key saves
+nothing and shows HubSpot's refusal. Each directory gets a credential of its own.
+Discovery then learns the account, and the first sync follows.
 
 The backend speaks HubSpot's date-versioned REST API through integrate's typed
 request (`HttpClient.request_model`), with no HubSpot SDK;
