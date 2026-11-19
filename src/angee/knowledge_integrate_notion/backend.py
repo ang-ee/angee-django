@@ -112,27 +112,35 @@ class NotionMarkdown(BaseModel):
     unknown_block_ids: list[UUID]
 
 
+_CONTENT_REFUSED = {
+    "oversized": "Notion returned more content for this page than one sync reads.",
+    "unreadable": "Notion returned content for this page that the sync cannot read.",
+}
+"""What an observation whose content integrate refused (``HttpRefusal.cause``) tells the operator."""
+
+
 class NotionSnapshot(BaseModel):
     """One source observation retained by RecordLink, including database properties."""
 
     node: NotionNode
     content: NotionMarkdown | None = None
     unavailable: bool = False
-    oversized: bool = Field(default=False, exclude_if=lambda value: not value)
-    """Notion answered this page's content over the byte cap; left out of an observation without it."""
+    content_refused: Literal["oversized", "unreadable"] | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+    """Why integrate refused Notion's answer for this page's content; left out of an observation without it."""
 
     @property
     def failure(self) -> SemanticError | None:
-        """Incomplete, inaccessible or oversized observations must never replace a good body."""
+        """Incomplete, inaccessible, oversized or unreadable observations must never replace a good body."""
         if self.unavailable:
             return SemanticError(
                 "notion_page_unavailable",
                 details={"message": "Notion could not return this page. Check that it is shared with the connection."},
             )
-        if self.oversized:
+        if self.content_refused is not None:
             return SemanticError(
-                "notion_page_oversized",
-                details={"message": "Notion returned more content for this page than one sync reads."},
+                f"notion_page_{self.content_refused}", details={"message": _CONTENT_REFUSED[self.content_refused]}
             )
         if self.content is not None and (self.content.truncated or self.content.unknown_block_ids):
             return SemanticError(
@@ -303,9 +311,9 @@ class NotionBackend(BridgeImpl, HttpClientMixin):
             try:
                 content = self._request(NotionMarkdown, f"pages/{node.id}/markdown")
             except NotionResponseError as error:
-                # An oversized page, like an unavailable one, is that page's refusal: its neighbours continue.
-                if error.refusal.cause == "oversized":
-                    return NotionSnapshot(node=node, oversized=True)
+                # A page whose content is refused, like an unavailable one, is its own refusal: its neighbours go on.
+                if (cause := error.refusal.cause) in ("oversized", "unreadable"):
+                    return NotionSnapshot(node=node, content_refused=cause)
                 if error.refusal.status not in {403, 404}:
                     raise
                 return NotionSnapshot(node=node, unavailable=True)

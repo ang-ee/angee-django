@@ -8,9 +8,9 @@ import httpx2
 import pytest
 
 from angee.integrate.errors import IntegrationError, RequestNotSentError
-from angee.integrate.http import ResponseTooLargeError
 from angee.integrate.net import AddressNotAllowedError
 from angee.integrate.streams import CursorInvalid, SemanticError
+from angee.integrate.testing.http import mock_transport
 from angee.messaging.backends import DeliveryUncertain
 from angee.posts.backends import FeedBackend
 
@@ -27,7 +27,6 @@ def provider() -> FeedBackend:
 @pytest.mark.parametrize("method", ["GET", "POST"])
 @pytest.mark.parametrize("error", [
     OSError("transport"), httpx2.ReadTimeout("transport"), httpx2.WriteError("transport"),
-    ResponseTooLargeError("oversized"),
 ])
 def test_transport_outcome_depends_on_method(provider, method, error):
     provider.http.request.side_effect = error
@@ -58,9 +57,36 @@ def test_not_sent_error_is_never_uncertain(provider, method):
 
 
 @pytest.mark.parametrize("method", ["GET", "POST"])
+@pytest.mark.parametrize(("content", "cause"), [
+    pytest.param(b"x" * 65, "oversized", id="oversized"),
+    pytest.param(b"{", "unreadable", id="not-json"),
+    pytest.param(b"[]", "unreadable", id="not-an-object"),
+    pytest.param(b"null", "unreadable", id="null"),
+])
+def test_a_reads_oversized_or_unreadable_answer_is_permanent_and_a_writes_is_uncertain(method, content, cause):
+    """Integrate's rule for a read: the same request brings the same answer. A write may have taken effect."""
+
+    transient, refusal = Mock(), Mock()
+    with mock_transport(lambda request: httpx2.Response(200, content=content, headers={"Retry-After": "45"})):
+        with pytest.raises(IntegrationError) as raised:
+            FeedBackend(SimpleNamespace(config={})).request_json(
+                method, URL, max_bytes=64, is_transient=transient, refusal=refusal,
+            )
+
+    if method == "POST":
+        assert isinstance(raised.value, DeliveryUncertain)
+    else:
+        assert not isinstance(raised.value, DeliveryUncertain)
+        assert (raised.value.transient, raised.value.retry_after, str(raised.value)) == (
+            False, None, f"The feed returned an {cause} response.",
+        )
+    transient.assert_not_called()
+    refusal.assert_not_called()
+
+
+@pytest.mark.parametrize("method", ["GET", "POST"])
 @pytest.mark.parametrize("status,content,marker", [
-    (503, b"{}", False), (200, b"{", False), (503, b"unreadable", False),
-    (200, b"[]", False), (200, b"null", False), (403, b'{"error":{}}', True),
+    (503, b"{}", False), (503, b"unreadable", False), (403, b'{"error":{}}', True),
 ])
 def test_uncertain_http_outcomes_precede_refusals(provider, method, status, content, marker):
     response = httpx2.Response(status, content=content, headers={"Retry-After": "45"})

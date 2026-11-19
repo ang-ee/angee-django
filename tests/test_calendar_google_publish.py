@@ -17,6 +17,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from time import monotonic
+from types import SimpleNamespace
 from typing import Any, cast
 from urllib.parse import parse_qs, unquote, urlsplit
 from zoneinfo import ZoneInfo
@@ -44,6 +45,7 @@ from angee.calendar_integrate_google.backend import (
     _published,
     event_id,
 )
+from angee.calendar_integrate_google.client import EventRefused, GoogleCalendarClient
 from angee.calendar_integrate_google.connect import connect_google_calendar_publishing
 from angee.graphql.deletion import DeletePreview
 from angee.graphql.testing.documents import execute_schema, result_data
@@ -620,6 +622,40 @@ def test_an_event_google_refuses_is_set_aside_and_the_events_after_it_still_push
     assert sorted(published.remote()) == keys[1:]
     assert published.open_failures(keys[0]) == [(SyncFailureKind.REMOTE_REJECTED, "event_refused")]
     assert all(published.open_failures(key) == [] for key in keys[1:])
+    # The held refusal states its status in the addon's words, never Google's reason ("invalid").
+    with system_context(reason="tests.google.publish.failures"):
+        [held] = RecordLink.objects.get(pk=published.links()[keys[0]].pk).failures(open_only=True)
+    assert (held.message, held.details["status"], "invalid" in json.dumps(held.details)) == (
+        "Google Calendar refused this event (HTTP 400).", 400, False,
+    )
+
+
+def _calendar_client() -> GoogleCalendarClient:
+    """A Calendar client on a credential that needs no refresh and is never renewed."""
+
+    credential = SimpleNamespace(
+        refreshable=False, ensure_fresh=lambda: None, auth_headers=lambda scopes=(): {"Authorization": "Bearer x"},
+    )
+    return GoogleCalendarClient(credential, (CALENDAR_EVENTS,))
+
+
+@pytest.mark.parametrize(("status", "reason", "message"), [
+    pytest.param(
+        403, "forbiddenForNonOrganizer", "Only this event's organizer may make this change in Google Calendar.",
+        id="a-known-reason-in-our-words",
+    ),
+    pytest.param(
+        400, "someReasonGoogleMayAdd", "Google Calendar refused this event (HTTP 400).",
+        id="any-other-reason-one-phrase",
+    ),
+])
+def test_an_event_refusal_names_the_event_in_the_addons_words_never_googles(
+    status: int, reason: str, message: str,
+) -> None:
+    with mock_transport(lambda request: _refusal(status, reason)), pytest.raises(EventRefused) as refused:
+        _calendar_client().insert(ROOM, {"id": "event1"})
+
+    assert (str(refused.value), refused.value.status) == (message, status)
 
 
 def test_keeping_google_accepts_its_version_and_pushes_again_only_after_a_local_edit(published: Published) -> None:

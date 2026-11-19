@@ -50,15 +50,14 @@ _PROBE = {"maxResults": "1", "fields": "kind"}
 _STAMPED_PAGE = 10
 """How many stamped events one lookup reads: a stamp names one event, so more is already a conflict."""
 
-_EVENT_REFUSALS = frozenset(
-    {
-        "forbiddenForNonOrganizer",
-        "forbiddenForServiceAccounts",
-        "cannotChangeOrganizer",
-        "cannotChangeOrganizerOfInstance",
-    }
-)
-"""The ``403`` reasons that refuse one event (its organizer, its attendees), not the calendar or the account."""
+_EVENT_REASONS = {
+    "forbiddenForNonOrganizer": "Only this event's organizer may make this change in Google Calendar.",
+    "forbiddenForServiceAccounts": "Google Calendar does not let this service account invite the event's attendees.",
+    "cannotChangeOrganizer": "Google Calendar does not allow changing this event's organizer.",
+    "cannotChangeOrganizerOfInstance": "Google Calendar does not allow changing the organizer of one occurrence.",
+}
+"""The ``403`` reasons that refuse one event (its organizer, its attendees), not the calendar or the account,
+each in this addon's words; any other event refusal names only its status."""
 
 
 class GoogleCalendarError(GoogleApiError):
@@ -88,10 +87,10 @@ class EventRefused(GoogleCalendarError):
     """
 
     def __init__(self, status: int, reason: str) -> None:
-        """Keep the HTTP status and Google's reason, both safe to show an operator."""
+        """Word Google's ``reason`` in this addon's phrase (:data:`_EVENT_REASONS`) and keep the HTTP status."""
 
-        super().__init__(f"Google Calendar refused this event (HTTP {status}{f', {reason}' if reason else ''}).")
-        self.status, self.reason = status, reason
+        super().__init__(_EVENT_REASONS.get(reason, f"Google Calendar refused this event (HTTP {status})."))
+        self.status = status
 
 
 class GoogleCalendarClient:
@@ -264,7 +263,7 @@ class GoogleCalendarClient:
             return
         refusal = HttpRefusal.of(response)
         status, reason = response.status_code, error_reason(refusal.body)
-        if self.api.account_error(refusal) is None and (status == 400 or (status == 403 and reason in _EVENT_REFUSALS)):
+        if self.api.account_error(refusal) is None and (status == 400 or (status == 403 and reason in _EVENT_REASONS)):
             raise EventRefused(status, reason)
         self._raise_for_status(response)
 
