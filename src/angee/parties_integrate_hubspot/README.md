@@ -80,6 +80,14 @@ backend gives it and never reads a credential, `HubSpotCursor` holds a stream's 
 or delta pass, and `contact_from_properties` maps HubSpot's standard contact
 properties onto the parties neutral contact. Their docstrings own the contracts.
 
+A contact's person carries the time HubSpot says the record was created (its
+`createdAt`, which every read states): a person the contact makes takes it as its
+`created_at`, and a contact landing on a person that exists moves the person's
+earlier when it is earlier, never later (`Party.backdate_creation`). A record read
+before a contact carried that time has none in its stored payload; provision's
+`backdate_parties_from_sources` counts it, and the record's next read from HubSpot
+stores it.
+
 ## Mapping custom properties
 
 A consumer addon fills its own person columns from HubSpot contact properties,
@@ -262,6 +270,13 @@ or one its projection hides, applies nothing. Raising or lowering `version`
 replays every record once. When HubSpot says the record is gone, on a read of it
 or after two absence sweeps, `withdraw_record(link)` runs. A service key reads
 deals with `crm.objects.deals.read`.
+
+A page a mapping makes from a record carries the record's own time as its
+creation time: pass the parsed time as `created_at` to the page's creating verb,
+`Page.objects.create_in(vault, ..., created_at=at)` or
+`RecordBinding.objects.write_sourced_page(..., created_at=at)`, where `at` is the
+note's `hs_timestamp` (or HubSpot's `hs_createdate`, when the mapping asks for it).
+A later write of the page keeps it.
 
 ## Tests
 

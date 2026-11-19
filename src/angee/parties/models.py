@@ -693,10 +693,7 @@ class Party(
 
         So a batch merge's "oldest" (``PartyManager.merge_duplicates``) is the
         source-oldest record. No reader of a party's ``created_at`` means "arrived
-        here since": none filters a window on it (``created_at__gt``, ``__gte``,
-        ``__lt``, ``__lte``, ``__range``) or pages a cursor, slice or limit
-        ordered by it, in the framework, the product and bridge addons or a
-        consumer's; the lists sort and group by it as the record's age.
+        here since" (``CreatedAtField`` names what was searched).
         """
 
         if at is None:

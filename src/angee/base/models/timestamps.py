@@ -27,11 +27,21 @@ class CreatedAtField(models.DateTimeField):
     registration or an order states none until its owner reads an arrival stamp of
     its own; an owner that then restates the stamp of such a row sets the arrival
     stamp from the old ``created_at`` first, in the same statement. Handles,
-    statements and record links keep the moment they were recorded. A stamp that
-    starts, or an owner's writer later moves, into the past never enters a
-    "created since" window or a cursor ordered by it (``created_at__gt``, a keyset
-    page over it): a reader that means "arrived here since" reads an arrival fact,
-    never this stamp.
+    statements and record links keep the moment they were recorded.
+
+    An owner may also move its stamp earlier after the insert, through one writer
+    of its own: a party's is the earliest its provenance states
+    (``Party.backdate_creation``), so a merge's survivor takes the earliest of
+    what it folds in and a batch merge's "oldest" is the source-oldest. A stamp
+    that starts, or is moved, into the past never enters a "created since" window
+    or a cursor ordered by it: a reader that means "arrived here since" reads an
+    arrival fact, never this stamp. None reads a party's, a person's, an
+    organization's, a handle's or a knowledge page's that way today (searched:
+    ``created_at__gt``, ``__gte``, ``__lt``, ``__lte``, ``__range`` and the date
+    lookups, and orderings by ``created_at`` under a keyset cursor, a slice,
+    ``first()``/``last()`` or a limit, in the framework, its product, bridge and
+    consumer addons, and the web layer); lists sort and group by it as a record's
+    age.
 
     It deconstructs as ``django.db.models.DateTimeField``: it adds no persisted
     option, so a host's migration state and historical models hold the field Django

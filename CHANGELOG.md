@@ -10,16 +10,35 @@ live in code docstrings.
 
 ## Unreleased — shared addon contracts, native embeddings and graph retrieval
 
-- `angee.parties`, `angee.parties_integrate_hubspot`: a contact carries the
-  time its source says the record was created. `ParsedContact.created_at` is a
-  fact about the record, not a contact field: no projection compares it, the
-  ingest states nothing of it, and a mapping may not change it. The directory
-  payload keeps it beside the compared projection (`CREATED_AT`), so it is never
-  a change to apply, and `contact_from_payload` hands it to the ingest with the
-  contact. The HubSpot backend fills it from each record's `createdAt`
-  (`HubSpotObject.created_at`, unset when unreadable, which never makes the
-  record unreadable). Upgrade: none; a link's stored payload gains the time on
-  the record's next read.
+- `angee.base`, `angee.parties`, `angee.knowledge`, `angee.parties_integrate_hubspot`:
+  a record a bridge creates carries its source's creation date. `created_at` is a
+  `CreatedAtField` (`angee.base.models.timestamps`): Django's `auto_now_add`, except
+  that an insert keeps a time its creating owner states (a future one clamped to
+  now). It deconstructs as Django's `DateTimeField`, so no host migrates, and its
+  column types as one in expressions. What changes, in plain words:
+  - A person a directory contact makes is dated by the source (HubSpot's
+    `createdAt`), and a party's date is the earliest its provenance states: a
+    contact landing on a younger person, or a merge folding an older record into a
+    younger survivor, moves it earlier, never later (`Party.backdate_creation`).
+  - A batch merge's "oldest record survives" now means the record its sources have
+    known longest, not the one imported here first.
+  - The People and Organizations lists' Created column, its sort and its grouping
+    by month show the sources' dates for imported records; a record made here
+    shows when it was made here.
+  - History's `+` snapshot carries the stated date, while its `history_date` stays
+    the moment the row was recorded here.
+  - A note page a mapping makes from a source's text carries the text's own time
+    when the mapping passes it (`Page.objects.create_in(..., created_at=)`,
+    `RecordBinding.objects.write_sourced_page(..., created_at=)`).
+  - Handles, statements and record links keep the moment they were recorded;
+    registrations and orders state no date until their owner reads an arrival
+    stamp of its own.
+  Upgrade: no migration. Every provision runs `backdate_parties_from_sources`,
+  moving each party back to the earliest creation time its directory records'
+  stored payloads state; a record stored before a contact carried its time is
+  counted and gains it on its next read from the source. Requires a
+  `strawberry-django-aggregates` that reads a field's internal type rather than
+  its class name: with 0.14.1 a grouping by `created_at` loses its date buckets.
 
 - `angee.parties`: roles of its own, `parties/role` (`PartiesRole`):
   `contact_reader`, `contact_manager` and `contact_admin` hold on every party,
