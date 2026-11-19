@@ -8,7 +8,9 @@ from typing import Any
 import pytest
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ImproperlyConfigured
-from rebac import RelationshipTuple, system_context, to_object_ref, to_subject_ref, write_relationships
+from django.db import connection
+from django.test.utils import CaptureQueriesContext
+from rebac import RelationshipTuple, actor_context, system_context, to_object_ref, to_subject_ref, write_relationships
 
 from angee.base.identity import public_subject_ref
 from angee.graphql.publishing import change_feed
@@ -544,6 +546,84 @@ def test_repeated_name_groups_count_only_the_rows_the_actor_reads(db: None) -> N
     assert repeated(reader) == ({"Grace Hopper": 2}, 1)
 
 
+def test_a_merged_away_party_is_no_row_group_count_or_candidate_and_its_id_names_its_survivor(db: None) -> None:
+    """Merged-away people and organizations leave every enumeration; a by-id read for the redirect resolves them.
+
+    The lists, aggregates, groups (and their repeated-values HAVING), ``search_parties``,
+    the People workbench's count and the parties picker read the same canonical rows,
+    so the pager and "All people" agree. A trashed party that was never merged leaves
+    them too, as the canonical scope's untrashed half says. ``party_record`` answers
+    a merged-away id with its survivor, which the record redirect follows; handles,
+    addresses and relationships keep their own canonical reads.
+    """
+
+    admin = _platform_admin("people-merged-away-admin")
+    with system_context(reason="test.parties.merged_away.seed"):
+        survivor = Person.objects.create(display_name="Ada Lovelace", created_by_id=admin.pk)
+        merged = Person.objects.create(display_name="Ada Lovelace", created_by_id=admin.pk)
+        other = Person.objects.create(display_name="Grace Hopper", created_by_id=admin.pk)
+        trashed = Person.objects.create(display_name="Grace Hopper", created_by_id=admin.pk)
+        kept = Organization.objects.create(display_name="Example Ltd", created_by_id=admin.pk)
+        folded = Organization.objects.create(display_name="Example Ltd", created_by_id=admin.pk)
+        address = Address.objects.create(party_id=merged.pk, city="Springfield", country="US", created_by_id=admin.pk)
+        messaging_models.Party.objects.get(pk=trashed.pk).trash(reason="Entered twice.")
+    with actor_context(admin):
+        messaging_models.Party.objects.get(pk=survivor.pk).merge(records=[merged.public_id])
+        messaging_models.Party.objects.get(pk=kept.pk).merge(records=[folded.public_id])
+
+    result = _data(
+        execute_schema(
+            _schema("public"),
+            """
+            query MergedAway($merged: String!, $folded: String!, $other: String!) {
+              people { id }
+              people_aggregate { aggregate { count } }
+              groups: people_groups(group_by: [{field: DISPLAY_NAME}], limit: 10) {
+                key { display_name }
+                aggregate { count }
+              }
+              repeated: people_groups(group_by: [{field: DISPLAY_NAME}], having: {count_gt: 1}, limit: 10) {
+                key { display_name }
+              }
+              repeated_count: people_groups_count(group_by: [{field: DISPLAY_NAME}], having: {count_gt: 1})
+              search: search_parties(query: "a") { id }
+              workbench: people_workbench { all_count }
+              organizations { id }
+              organizations_aggregate { aggregate { count } }
+              parties { id }
+              merged_person: people_by_pk(id: $merged) { id }
+              merged_record: party_record(id: $merged) { id concrete_kind }
+              folded_record: party_record(id: $folded) { id concrete_kind }
+              live_record: party_record(id: $other) { id concrete_kind }
+              addresses { id party { id } }
+            }
+            """,
+            variables={"merged": merged.sqid, "folded": folded.sqid, "other": other.sqid},
+            user=admin,
+        )
+    )
+
+    live_people = {survivor.sqid, other.sqid}
+    assert {row["id"] for row in result["people"]} == live_people
+    assert result["people_aggregate"]["aggregate"]["count"] == 2
+    assert result["workbench"]["all_count"] == 2
+    assert {group["key"]["display_name"]: group["aggregate"]["count"] for group in result["groups"]} == {
+        "Ada Lovelace": 1,
+        "Grace Hopper": 1,
+    }
+    assert result["repeated"] == [] and result["repeated_count"] == 0
+    assert {row["id"] for row in result["search"]} == live_people
+    assert {row["id"] for row in result["organizations"]} == {kept.sqid}
+    assert result["organizations_aggregate"]["aggregate"]["count"] == 1
+    assert {row["id"] for row in result["parties"]} == {*live_people, kept.sqid}
+    # The concrete record roots read the same rows; the redirect reads its own field.
+    assert result["merged_person"] is None
+    assert result["merged_record"] == {"id": survivor.sqid, "concrete_kind": "PERSON"}
+    assert result["folded_record"] == {"id": kept.sqid, "concrete_kind": "ORGANIZATION"}
+    assert result["live_record"] == {"id": other.sqid, "concrete_kind": "PERSON"}
+    assert result["addresses"] == [{"id": address.sqid, "party": {"id": survivor.sqid}}]
+
+
 def test_circle_console_insert_establishes_private_creator_access(
     db: None,
 ) -> None:
@@ -896,13 +976,27 @@ def test_merge_scalar_fields_follow_the_party_and_person_projections(db: None) -
     assert set(person.merge_common_scalar_fields) < set(person.merge_scalar_fields)
 
 
-_MERGE_CERTAIN = """mutation MergeCertain {
-  merge_certain_same_as_pairs(limit: 10) { outcome normalized_value left { id } right { id } survivor { id } }
+_CERTAIN = """query Certain {
+  certain_same_as_pairs(limit: 10) { normalized_value left { id } right { id } survivor { id } }
+}"""
+
+_PREVIEW = """query Preview($sets: [[ID!]!]!) {
+  duplicate_set_previews(sets: $sets, certain: true) {
+    members { id display_name created_at statements { source_kind handle { value } } }
+    survivor { id }
+    outcome
+    reason
+    disagreements { field values shown }
+  }
+}"""
+
+_MERGE = """mutation Merge($sets: [[ID!]!]!) {
+  merge_duplicates(sets: $sets, certain: true) { members outcome reason survivor { id } }
 }"""
 
 
-def test_merge_certain_same_as_pairs_merges_as_the_signed_in_person(db: None) -> None:
-    """A non-admin owner merges their certain pair through the schema; an anonymous request is refused."""
+def test_a_person_lists_previews_and_merges_a_certain_pair_through_the_schema(db: None) -> None:
+    """A non-admin owner reads the certain pair, its preview and merges it; an anonymous request is refused."""
 
     del db
     owner = User.objects.create_user(username="certain-pair-owner")
@@ -915,17 +1009,73 @@ def test_merge_certain_same_as_pairs_merges_as_the_signed_in_person(db: None) ->
             newer, handle, evidence=handle, reason="tests.claim",
         )
         messaging_models.Party.objects.reconcile_same_as()
+    console = _schema("console")
+    sets = {"sets": [[older.sqid, newer.sqid]]}
 
-    anonymous = execute_schema(_schema("console"), _MERGE_CERTAIN)
+    anonymous = execute_schema(console, _MERGE, sets)
     assert [error.message for error in anonymous.errors or ()] == ["Authentication required."]
 
-    data = _data(execute_schema(_schema("console"), _MERGE_CERTAIN, user=owner))
-    assert data["merge_certain_same_as_pairs"] == [
-        {
-            "outcome": "MERGED",
-            "normalized_value": "zoe@example.com",
-            "left": {"id": older.sqid},
-            "right": {"id": newer.sqid},
-            "survivor": {"id": older.sqid},
-        }
+    assert _data(execute_schema(console, _CERTAIN, user=owner))["certain_same_as_pairs"] == [
+        {"normalized_value": "zoe@example.com", "left": {"id": older.sqid}, "right": {"id": newer.sqid},
+         "survivor": {"id": older.sqid}},
+    ]
+    (preview,) = _data(execute_schema(console, _PREVIEW, sets, user=owner))["duplicate_set_previews"]
+    assert ([member["id"] for member in preview["members"]], preview["survivor"], preview["outcome"]) == (
+        [older.sqid, newer.sqid], {"id": older.sqid}, None,
+    )
+    assert preview["disagreements"] == [
+        {"field": "display_name", "values": ["Zoë Example", "Zoe Example"], "shown": "Zoë Example"},
+    ]
+    assert {row["source_kind"] for row in preview["members"][1]["statements"]} == {"RULE"}
+    assert _data(execute_schema(console, _MERGE, sets, user=owner))["merge_duplicates"] == [
+        {"members": [older.sqid, newer.sqid], "outcome": "MERGED", "reason": "", "survivor": {"id": older.sqid}},
+    ]
+
+
+# What the batch merge dialog selects of each set (the web fragment's ``DuplicateSetPreviews``).
+_DIALOG = """query DuplicateSetPreviews($sets: [[ID!]!]!) {
+  duplicate_set_previews(sets: $sets) {
+    outcome
+    reason
+    survivor { id }
+    members {
+      id display_name concrete_kind created_at first_met_note
+      statements { id source_kind handle { id platform value } }
+    }
+    disagreements { field values shown }
+  }
+}"""
+
+
+def test_the_dialog_read_costs_the_same_for_one_set_as_for_many_through_the_schema(db: None) -> None:
+    """The whole dialog document costs as much for one pair as for fifty pairs or fifty sets of ten.
+
+    The members reach the schema outside the optimizer: their kind and their
+    statements' handles are batched, and every field gate is asked for the batch.
+    """
+
+    del db
+    from tests.test_parties_duplicates import _people
+
+    owner = User.objects.create_user(username="dialog-read-owner")
+    sets = [_people(owner, *(f"Zoe Example {index}" for _ in range(10)), value=f"zoe{index}@example.com")
+            for index in range(50)]
+    console = _schema("console")
+
+    def read(chosen: list[list[Any]]) -> tuple[int, Any]:
+        with CaptureQueriesContext(connection) as queries:
+            data = _data(execute_schema(console, _DIALOG, {"sets": [[p.sqid for p in members] for members in chosen]},
+                                        user=owner))
+        return len(queries.captured_queries), data["duplicate_set_previews"]
+
+    one, _previews = read([sets[0][:2]])
+    pairs, previews = read([members[:2] for members in sets])
+    tens, ten_previews = read(sets)
+
+    assert one == pairs == tens
+    assert [row["outcome"] for row in previews + ten_previews] == [None] * 100
+    first = previews[0]
+    assert [member["concrete_kind"] for member in first["members"]] == ["PERSON", "PERSON"]
+    assert [{row["handle"]["value"] for row in member["statements"]} for member in first["members"]] == [
+        {"zoe0@example.com"}, {"zoe0@example.com"},
     ]

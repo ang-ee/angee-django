@@ -1,6 +1,7 @@
 """Bridge paging and split coverage use real workflow and integration owners."""
 
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
 from datetime import timedelta
 from threading import Event
 from types import SimpleNamespace
@@ -748,3 +749,28 @@ def test_same_cursor_with_changed_replica_hashes_makes_progress(cycle, step):
         "first",
         "second",
     ]
+
+
+def test_a_secret_re_entered_while_the_step_waits_for_the_bridge_lock_holds_its_io_back(cycle, monkeypatch):
+    monkeypatch.setattr(ConnectionBridge, "capability_impl", property(cycle.adapter_class))
+    cycle.transport.parallelism = 1
+    with system_context(reason="test a secret re-entered under a waiting step"):
+        bridge = make_integration("re-entered-under-lock", model=ConnectionBridge)
+        assert bridge.finish_discovery(credential_pk=bridge.credential_id, generation=bridge.discovery_generation)
+    sync_lock = ConnectionBridge.sync_lock
+
+    @contextmanager
+    def re_entered_while_waiting(self):
+        with system_context(reason="test the secret re-entered meanwhile"):
+            self.credential.replace_material({"api_key": "re-entered"})
+        with sync_lock(self) as acquired:
+            yield acquired
+
+    monkeypatch.setattr(ConnectionBridge, "sync_lock", re_entered_while_waiting)
+    ctx = SimpleNamespace(
+        now=timezone.now(), state={}, heartbeat=Mock(), begin_effect=Mock(), wait=lambda **values: Wait(**values),
+    )
+    with steps.bridge_io(ctx, bridge) as result:
+        # Admitted on the row as loaded, asked again under the lock: no IO on the re-entered secret.
+        assert isinstance(result, Wait)
+    ctx.begin_effect.assert_not_called()

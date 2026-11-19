@@ -61,8 +61,10 @@ from rebac import (
     system_context,
 )
 from rebac.actors import is_sudo, to_subject_ref
+from rebac.field_visibility import redacted_fields
 from rebac.resources import model_resource_type
 
+from angee.base.fields.identity import SqidField
 from angee.base.hooks import resolve_hooks
 from angee.base.lineage import concrete_child
 from angee.base.models.hierarchy import HierarchyQuerySet
@@ -216,6 +218,13 @@ class _HandleSenderName(TypedDict):
     _sender_name: str
 
 
+class SameAsReviewCounts(NamedTuple):
+    """How many pairs a reader may review, and how many are certain (:meth:`PartyManager.same_as_review_counts`)."""
+
+    pairs: int
+    certain: int
+
+
 class HolderRepair(NamedTuple):
     """What a holder repair did (:meth:`HandleManager.resolve_stale_owners`)."""
 
@@ -227,6 +236,8 @@ class HolderRepair(NamedTuple):
     """Handles whose holder was left as it is because another party's applied statement stands on the row."""
     resolved: int = 0
     """Holders whose statements no longer decided them, re-resolved."""
+    remaining: int = 0
+    """Holders a capped run left for the next one, at most this many (``limit``)."""
 
 
 class HandleQuerySet[HandleT: Handle](MergeableQuerySet[HandleT], AngeeHistoryQuerySet[HandleT]):
@@ -332,6 +343,9 @@ _HandleManagerBase = AngeeHistoryManager.from_queryset(HandleQuerySet)
 
 class HandleManager[HandleT: Handle](_HandleManagerBase[HandleT]):
     """Factory + upsert for handles (the contact-point write path)."""
+
+    REPAIR_LIMIT: ClassVar[int] = 500
+    """The most holders one holder repair writes by default (``resolve_stale_owners``); the next run continues."""
 
     def for_user(self, user: Any) -> Any:
         """Return the account's self-claimed handle for internal attribution."""
@@ -638,22 +652,23 @@ class HandleManager[HandleT: Handle](_HandleManagerBase[HandleT]):
             )
         return handle
 
-    def state_stored_holders(self, handles: Iterable[Any] | None = None) -> HolderRepair:
+    def state_stored_holders(self, handles: Iterable[Any] | None = None, *, limit: int | None = None) -> HolderRepair:
         """State each stored holder's link as the ``stored_holder`` rule, so resolution keeps it; return what it did.
 
         A holder no current statement names (:meth:`HandleQuerySet.stored_holders`)
         gains that rule's normal statement at full confidence, with the handle as its
-        evidence, as named system work rechecked under the identity locks: a
-        merged-away holder for its survivor, a trashed one for itself (resolution
-        ignores a trashed party, so its row is unheld until the handle resolves
-        after a restore). Two holders are left as they are and reported, so the
-        repair moves no address and clears no confirmation. A confirmed one: only a
-        person or a seed states the preferred link that keeps the flag, and the
-        rule's normal statement would clear it. A contested one, on a row where
-        another live party's applied statement stands: the rule is the last kind
-        the handle aspect ranks (below a person, a system of record, a directory and
-        an import, above kinds it does not list), so that party would take the
-        address.
+        evidence, as named system work rechecked under the identity locks; a
+        merged-away holder is stated for its survivor. Three holders are left as
+        they are, so the repair moves no address and clears no confirmation. A
+        trashed one: resolution ignores a trashed party, so stating its link would
+        clear the row; the repair after a restore states it. A confirmed one,
+        reported: only a person or a seed states the preferred link that keeps the
+        flag, and the rule's normal statement would clear it. A contested one,
+        reported, on a row where another live party's applied statement stands: the
+        rule is the last kind the handle aspect ranks (below a person, a system of
+        record, a directory and an import, above kinds it does not list), so that
+        party would take the address. A run states at most ``limit`` holders and
+        counts the ones it did not reach as ``remaining``.
 
         ``handles`` are resource rows a load just wrote, and the holder each names
         is the seed's word. What an earlier load stated for a holder a row no
@@ -665,6 +680,7 @@ class HandleManager[HandleT: Handle](_HandleManagerBase[HandleT]):
         party_model = apps.get_model("parties", "Party")
         statements = party_model.objects.handle_statements()
         stated = 0
+        remaining = 0
         confirmed: list[Any] = []
         contested: list[Any] = []
         with system_context(reason="parties.handle.state_stored_holders"):
@@ -679,13 +695,19 @@ class HandleManager[HandleT: Handle](_HandleManagerBase[HandleT]):
             survivors = party_model.canonical_ids({party_id for _pk, party_id in pending})
             competing = statements.applied().filter(subject__is_trashed=False)
             source = None
-            for pk, party_id in pending:
+            for index, (pk, party_id) in enumerate(pending):
+                if limit is not None and stated >= limit:
+                    remaining = len(pending) - index
+                    break
                 holder = survivors.get(party_id, party_id)
                 with transaction.atomic():
                     locked, parties = party_model.objects.lock_identity_rows(party_ids=(holder,), handle_ids=(pk,))
                     row = locked.get(pk)
+                    party = parties.get(holder)
                     if (
                         row is None
+                        or party is None
+                        or party.is_trashed
                         or (handles is None and row.party_id != party_id)
                         or naming.filter(handle_id=pk, subject_id=holder).exists()
                     ):
@@ -697,9 +719,9 @@ class HandleManager[HandleT: Handle](_HandleManagerBase[HandleT]):
                         contested.append(pk)
                         continue
                     source = source or party_model.objects.rule_source("stored_holder")
-                    party_model.objects.assert_handle(parties[holder], row, asserted_by=source, evidence=[row])
+                    party_model.objects.assert_handle(party, row, asserted_by=source, evidence=[row])
                 stated += 1
-        return HolderRepair(stated, tuple(confirmed), tuple(contested))
+        return HolderRepair(stated, tuple(confirmed), tuple(contested), remaining=remaining)
 
     @staticmethod
     def _withdraw_moved_holders(holders: Mapping[Any, Any]) -> int:
@@ -732,30 +754,40 @@ class HandleManager[HandleT: Handle](_HandleManagerBase[HandleT]):
         ]
         return int(party_model.statements.withdraw_unsupported(source, kept, aspect="handle"))
 
-    def resolve_stale_owners(self) -> HolderRepair:
+    def resolve_stale_owners(self, *, limit: int | None = None) -> HolderRepair:
         """Make every holder the projection of its statements again; return what was stated, left and re-resolved.
 
         Stored holders are stated first (:meth:`state_stored_holders`); the ones it
-        leaves (confirmed, contested) keep their row as it is for a person to
-        decide. A holder whose statements no longer decide it (a withdrawn link, a
-        suggestion below review confidence) re-resolves. Idempotent: a second run
-        states and re-resolves nothing.
+        leaves (trashed, confirmed, contested) keep their row as it is. A holder
+        whose statements no longer decide it (a withdrawn link, a suggestion below
+        review confidence) re-resolves, unless it is trashed: resolution ignores a
+        trashed party and would clear its address. A run writes at most ``limit``
+        holders, stated and re-resolved together, and reports the rest as
+        ``remaining`` for the next run, which continues where it stopped.
+        Idempotent: a second complete run states and re-resolves nothing.
         """
 
-        repair = self.state_stored_holders()
+        repair = self.state_stored_holders(limit=limit)
+        budget = None if limit is None else limit - repair.stated
         statements = apps.get_model("parties", "Party").objects.handle_statements()
         decisive = statements.applied().filter(handle_id=OuterRef("pk"), subject_id=OuterRef("party_id"))
         stale = (
             self.filter(party__isnull=False)
+            .exclude(party__is_trashed=True, party__merged_into__isnull=True)
             .exclude(Exists(decisive))
             .exclude(pk__in=self.stored_holders().values("pk"))
             .order_by("pk")
         )
         resolved = 0
         for handle in stale.iterator():
+            if budget is not None and resolved >= budget:
+                break
             handle.resolve()
             resolved += 1
-        return repair._replace(resolved=resolved)
+        remaining = repair.remaining
+        if budget is not None and resolved >= budget:
+            remaining += stale.count()
+        return repair._replace(resolved=resolved, remaining=remaining)
 
     def fill_avatar(self, report: AvatarReport) -> bool:
         """Set the avatar a source reports on its handle; return whether it changed.
@@ -913,37 +945,74 @@ class SameAsPair:
     right: Any
     normalized_value: str
     handles: tuple[Any, ...]
-
-
-class SameAsMergeOutcome(StrEnum):
-    """What :meth:`PartyManager.merge_certain_same_as_pairs` did with one pair awaiting review."""
-
-    MERGED = "merged"
-    NOT_PEOPLE = "not_people"
-    """Either party is not a person."""
-    ACCOUNT_PERSON = "account_person"
-    """Either party is a user account's own person."""
-    SHARED_ADDRESS = "shared_address"
-    """No address the pair cites links exactly these two parties."""
-    NAMES_DIFFER = "names_differ"
-    """A name is missing, or the names differ beyond case, accents and hyphens."""
-    NOT_PERMITTED = "not_permitted"
-    """The account is not an active person writing both parties (``merge_certain``), or the merge refused it."""
-    REFUSED = "refused"
-    """The merge's guards refused it (a party kept apart, merged meanwhile, held by an addon)."""
-    BUSY = "busy"
-    """The database stopped the merge for a concurrent write (a deadlock, a lock timeout); nothing merged, try again."""
+    id: str = ""
+    """The pair's public id: its place in the review list, where the next page continues (``after``)."""
 
 
 @dataclass(frozen=True, slots=True)
-class SameAsPairOutcome:
-    """One pair the bulk merge read, and what it did: merged into ``survivor``, or left, and why."""
+class CertainSameAsPair:
+    """A pair awaiting review that one confirm would merge now (:meth:`PartyManager.certain_same_as_pairs`)."""
 
     left: Any
     right: Any
     normalized_value: str
-    outcome: SameAsMergeOutcome
+    survivor: Any
+    """The older record, which the merge keeps."""
+    id: str = ""
+    """The pair's public id, where the next batch continues (``after``)."""
+
+
+class DuplicateMergeOutcome(StrEnum):
+    """What :meth:`PartyManager.merge_duplicates` did with one confirmed set of records."""
+
+    MERGED = "merged"
+    REFUSED = "refused"
+    """A guard or the merge refused the set as confirmed; ``reason`` says why and nothing merged."""
+    NOT_CERTAIN = "not_certain"
+    """A set confirmed as a certain pair is no longer one; nothing merged."""
+    STOPPED = "stopped"
+    """The database stopped the merge for a concurrent write (a deadlock, a lock timeout); nothing merged."""
+
+
+@dataclass(frozen=True, slots=True)
+class FieldDisagreement:
+    """A merge field the members of a set disagree on, and what the merged record will show."""
+
+    field: str
+    values: tuple[str | None, ...]
+    """Each member's value as text, in the set's member order."""
+    shown: str | None
+    """The value the survivor shows after the merge: the provenance ranking's winner among every member's statement
+    of the field, or, when no member states it, the survivor's value, else the first member's that has one."""
+
+
+@dataclass(frozen=True, slots=True)
+class DuplicateSetPreview:
+    """One set of records a person says are one, as :meth:`PartyManager.merge_duplicates` would merge it now."""
+
+    members: tuple[Any, ...]
+    """The readable members, oldest first: the first survives and the others fold into it in key order."""
+    outcome: DuplicateMergeOutcome | None
+    """``None`` when the set merges as listed; else why it would not."""
+    reason: str = ""
+    disagreements: tuple[FieldDisagreement, ...] = ()
+    """The merge fields the members disagree on, only for a set that merges; a field the actor's
+    ``read__<field>`` gate hides on any member is left out."""
+
+    @property
+    def survivor(self) -> Any:
+        return self.members[0] if self.members and self.outcome is None else None
+
+
+@dataclass(frozen=True, slots=True)
+class DuplicateSetOutcome:
+    """What one confirmed set came to: merged into ``survivor``, or left, and why."""
+
+    members: tuple[str, ...]
+    """The member ids as the person confirmed them."""
+    outcome: DuplicateMergeOutcome
     survivor: Any = None
+    reason: str = ""
 
 
 class SamePersonLink(NamedTuple):
@@ -958,6 +1027,36 @@ class SamePersonLink(NamedTuple):
     states on a record's behalf (any source's claim, a holder found on its row),
     name no single source: each such link is a source of its own.
     """
+
+
+def _age(party: Any) -> tuple[Any, Any]:
+    """A party's place in a merge: the oldest record survives, then key order."""
+
+    return party.created_at, party.pk
+
+
+_LOCK_CONFLICT_SQLSTATES = frozenset({"40P01", "55P03"})
+"""PostgreSQL's deadlock_detected and lock_not_available: a concurrent write held a row this transaction needed."""
+
+_LOCK_CONFLICT_SQLITE_CODES = frozenset({5, 6})
+"""SQLite's SQLITE_BUSY and SQLITE_LOCKED primary result codes: its lock timeout (it has no deadlock)."""
+
+
+def _lock_conflict(error: Exception) -> bool:
+    """Whether the driver error behind a Django ``OperationalError`` is a lock conflict worth retrying."""
+
+    cause = error.__cause__
+    if getattr(cause, "sqlstate", None) in _LOCK_CONFLICT_SQLSTATES:
+        return True
+    code = getattr(cause, "sqlite_errorcode", None)
+    return isinstance(code, int) and code & 0xFF in _LOCK_CONFLICT_SQLITE_CODES
+
+
+def _refusal(error: Exception) -> str:
+    """The person-facing message of a refused merge."""
+
+    messages = getattr(error, "messages", None)
+    return "; ".join(str(message) for message in messages) if messages else str(error)
 
 
 class PartyQuerySet[PartyT: Party](MergeableQuerySet[PartyT], StatementSubjectQuerySet[PartyT]):
@@ -1097,66 +1196,93 @@ class PartyQuerySet[PartyT: Party](MergeableQuerySet[PartyT], StatementSubjectQu
         person = person_model._base_manager.select_related("user").filter(pk=party_id).first()
         return person.user if person is not None and person.user_id is not None else None
 
-    def same_as_pairs(self, *, limit: int = 50) -> list[SameAsPair]:
-        """Read up to ``limit`` resolved value pairs through both endpoints and each evidence row.
+    def same_as_pairs(
+        self, *, limit: int | None = 50, parties: Collection[Any] | None = None, after: str | None = None,
+    ) -> list[SameAsPair]:
+        """The resolved value pairs the reader may review, in key order: at most ``limit`` after ``after``.
 
-        A pair whose evidence the reader cannot read in full is dropped before the
-        page fills, so a page holds every readable pair up to its limit; the read
-        walks the ordered pairs one page at a time until it does.
+        A pair is the reader's to review when they read both endpoints and every
+        handle its evidence cites. Which pairs those are is decided for every pair
+        at once, in a fixed number of queries whatever their number, and only the
+        page's pairs are then read in full. The order is the pair rows' own key, so
+        ``after`` (a pair's ``id``, the last of the previous page) continues past it
+        however many pairs left the list meanwhile, a merged or kept-apart pair
+        included: no page skips or repeats a pair. A caller's page is at most 101;
+        ``limit=None`` reads every pair, for the owners that judge them all.
+        ``parties`` narrows the read to pairs whose both endpoints are among those keys.
         """
 
-        limit = max(0, min(int(limit), 101))
-        if not limit:
+        if limit is not None:
+            limit = max(0, min(int(limit), 101))
+            if not limit:
+                return []
+        pair_model = self.model.same_as.model
+        start = None
+        if after is not None:
+            start = cast(SqidField, pair_model._meta.get_field("sqid")).public_id_to_value(after)
+            if start is None:
+                raise ValidationError({"after": "No such pair."})
+        reviewable = [entry for entry in self._reviewable_pairs(parties) if start is None or entry[0] > start]
+        page = reviewable if limit is None else reviewable[:limit]
+        if not page:
             return []
         actor, unscoped = self.effective_actor(strict=True)
+        endpoints = self.canonical() if unscoped else self.canonical().with_display_avatars(actor)
+        rows = pair_model._base_manager.prefetch_related(
+            *(Prefetch(side, queryset=endpoints) for side in ("left", "right")),
+        ).in_bulk([pk for pk, _cited in page])
+        return [
+            SameAsPair(
+                rows[pk].left, rows[pk].right, cited[0].normalized_value if cited else "", cited,
+                id=pair_model.public_id_from_pk(pk),
+            )
+            for pk, cited in page
+            if pk in rows
+        ]
+
+    def _reviewable_pairs(self, parties: Collection[Any] | None) -> list[tuple[Any, tuple[Any, ...]]]:
+        """Every pair the reader may review, in key order, with the handles its evidence cites (:meth:`same_as_pairs`).
+
+        Three reads whatever the number of pairs: the first applied statement of each
+        pair whose endpoints the reader reads, and every handle those statements
+        cite, through the reader. A pair citing a handle the reader may not read is
+        left out.
+        """
+
+        actor, unscoped = self.effective_actor(strict=True)
+        pair_model = self.model.same_as.model
         visible = self.canonical().scoped_for_aggregate().values("pk")
-        statements = self.model.same_as.model.statements.applied()
-        statements = (
-            statements.sudo(reason="parties.same_as_pairs") if unscoped else statements.with_actor(actor)
-        )
-        endpoints = self.canonical()
-        if not unscoped:
-            endpoints = endpoints.with_display_avatars(actor)
+        statements = pair_model.statements.applied()
+        statements = statements.sudo(reason="parties.same_as_pairs") if unscoped else statements.with_actor(actor)
         pairs = (
-            self.model.same_as.model._base_manager.filter(
-                left_id__in=Subquery(visible),
-                right_id__in=Subquery(visible),
-            )
+            pair_model._base_manager.filter(left_id__in=Subquery(visible), right_id__in=Subquery(visible))
             .untrashed()
-            .filter(Exists(statements.filter(subject_id=OuterRef("pk"))))
-            .prefetch_related(
-                Prefetch("partysameaspairstatement_set", queryset=statements, to_attr="_resolved_statements"),
-                *(Prefetch(side, queryset=endpoints) for side in ("left", "right")),
-            )
-            .order_by("left_id", "right_id")
+            .filter(Q() if parties is None else Q(left_id__in=list(parties), right_id__in=list(parties)))
         )
+        cited: dict[Any, list[EvidenceReference]] = {}
+        for subject_id, evidence in (
+            statements.filter(subject_id__in=Subquery(pairs.values("pk")))
+            .order_by("subject_id", "pk")
+            .values_list("subject_id", "evidence")
+        ):
+            cited.setdefault(subject_id, [
+                ref for value in evidence
+                if (ref := EvidenceReference.model_validate(value)).model.lower() == "parties.handle"
+            ])
         handle_model = apps.get_model("parties", "Handle")
         handles = (
             handle_model.objects.sudo(reason="parties.same_as_pairs")
             if unscoped
             else handle_model.objects.with_actor(actor)
         )
-        result: list[SameAsPair] = []
-        start = 0
-        while len(result) < limit and (page := list(pairs[start : start + limit])):
-            start += limit
-            refs_by_pair = {
-                pair: [
-                    ref
-                    for value in pair._resolved_statements[0].evidence
-                    if (ref := EvidenceReference.model_validate(value)).model.lower() == "parties.handle"
-                ]
-                for pair in page
-            }
-            readable = instances_from_public_ids(
-                handle_model, (ref.id for refs in refs_by_pair.values() for ref in refs), queryset=handles,
-            )
-            for pair, refs in refs_by_pair.items():
-                cited = [readable[ref.id] for ref in refs if ref.id in readable]
-                if len(cited) == len(refs):
-                    normalized_value = cited[0].normalized_value if cited else ""
-                    result.append(SameAsPair(pair.left, pair.right, normalized_value, tuple(cited)))
-        return result[:limit]
+        readable = instances_from_public_ids(
+            handle_model, {ref.id for refs in cited.values() for ref in refs}, queryset=handles,
+        )
+        return [
+            (pk, tuple(readable[ref.id] for ref in refs))
+            for pk, refs in sorted(cited.items(), key=lambda item: item[0])
+            if all(ref.id in readable for ref in refs)
+        ]
 
 
 _PartyManagerBase = AngeeHistoryManager.from_queryset(PartyQuerySet)
@@ -1280,9 +1406,18 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
         return [str(to_subject_ref(rule)) for rule in rules.order_by("pk")]
 
     def same_person_links(
-        self, *, addresses: Collection[tuple[str, str]] | None = None, shared: Collection[Any] = ()
+        self,
+        *,
+        addresses: Collection[tuple[str, str]] | None = None,
+        shared: Collection[Any] = (),
+        every_address: bool = False,
     ) -> dict[tuple[str, str], list[SamePersonLink]]:
         """Each address two to :attr:`SHARED_ADDRESS_LIMIT` live parties are linked to, with its links.
+
+        With ``every_address`` (and ``addresses``), every requested address any
+        live party is linked to, whatever their number: who is linked to an
+        address, for a source deciding whether it may only claim it
+        (:meth:`_contested_addresses`); a shared one is still no pair.
 
         A link is a holding or a standing statement (asserted, current, a value, not
         dismissed by a person), whatever its confidence, by a source that states its
@@ -1350,7 +1485,7 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
         candidates = set(
             links.values("handle__platform", "handle__normalized_value")
             .annotate(parties=Count("subject_id", distinct=True))
-            .filter(parties__gte=2, parties__lte=self.SHARED_ADDRESS_LIMIT)
+            .filter(**({} if every_address else {"parties__gte": 2, "parties__lte": self.SHARED_ADDRESS_LIMIT}))
             .values_list("handle__platform", "handle__normalized_value")
         )
         held = list(bare.values_list("platform", "normalized_value", "party_id", "pk"))
@@ -1382,7 +1517,7 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
         return {
             address: address_links
             for address, address_links in sorted(found.items())
-            if 2 <= len({link.party for link in address_links}) <= self.SHARED_ADDRESS_LIMIT
+            if every_address or 2 <= len({link.party for link in address_links}) <= self.SHARED_ADDRESS_LIMIT
         }
 
     @staticmethod
@@ -1865,20 +2000,21 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
     def propose_directory_match(self, person: Any, other: Any, *, evidence: Sequence[Any]) -> Any | None:
         """Propose, as the ``directory_match`` rule, that a directory's ``person`` and ``other`` are one person.
 
-        A directory proposes it for each other person a contact's address names,
-        whoever holds, claims or signs in with it, whether or not the directory
-        adopts (:meth:`ingest_contact`, the one call site for an address), and for
-        the person of another record the source merged into it
-        (``DirectoryBackend.apply_record``).
-        ``evidence`` names what ties them (the contact's link, then the handle its
-        email found ``other`` by, or the merged record's link). The
-        pair joins the same-as review (:meth:`PartyQuerySet.same_as_pairs`), where a
-        person merges or dismisses it. A pair kept separate is not proposed again,
-        and proposing an unchanged pair again changes nothing (``StatementManager.set``).
-        The ``same_as`` rule's reconciler withdraws only its own rule's pairs
-        (:meth:`reconcile_same_as`), so it leaves these, which no shared handle row
-        supports, standing. Returns the rule's statement, ``None`` when nothing is
-        proposed.
+        Only for what no address links, which the one same-person verb
+        (:meth:`propose_same_person_as_system`) cannot cite and its job would
+        withdraw as unsupported: the person of another record the source merged
+        into the contact (``DirectoryBackend.apply_record``), and an account whose
+        sign-in address the contact states while no handle of theirs carries it
+        (:meth:`ingest_contact`). A pair two people's links to one address tie is
+        the verb's. ``evidence`` names what ties them (the contact's link, then
+        the merged record's link). The pair joins the same-as review
+        (:meth:`PartyQuerySet.same_as_pairs`), where a person merges or dismisses
+        it. A pair kept separate is not proposed again, and proposing an unchanged
+        pair again changes nothing (``StatementManager.set``). The ``same_as``
+        rule's reconciler withdraws only its own rule's pairs
+        (:meth:`reconcile_same_as`), so it leaves these standing; the rule's
+        earlier proposals of an address pair stay reviewable as they are. Returns
+        the rule's statement, ``None`` when nothing is proposed.
         """
 
         party = apps.get_model("parties", "Party")
@@ -2214,81 +2350,359 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
             into.merge(records=[source.public_id])
             return "already_merged" if already_merged else "merged"
 
-    def merge_certain_same_as_pairs(self, *, actor: Any, limit: int = 50) -> list[SameAsPairOutcome]:
-        """Merge, as ``actor``'s own merges, each certain pair awaiting ``actor``'s review; return every outcome.
+    BATCH_SETS: ClassVar[int] = 50
+    """The most sets of records one batch merge takes."""
 
-        It reads at most ``limit`` pairs ``actor`` may review
-        (:meth:`PartyQuerySet.same_as_pairs`), so one call is bounded. A pair is
-        certain when both are people and neither is an account's own person,
-        exactly these two parties are linked to an address the pair cites
-        (:meth:`same_person_links`, the shared-sender providers consulted), and both
-        bear a real name and the names agree but for case, accents and hyphens
-        (``Party.comparable_name``); a pair someone kept apart awaits no review.
-        A merge the database stops (an ``OperationalError``: a deadlock, a lock or
-        statement timeout, a serialization failure) is reported as ``busy`` and the
-        pairs after it still run; any other database error propagates.
-        Only an active person account merges, and only parties it writes (the
-        party's ``merge_certain`` permission); a service or agent account merges
-        nothing. Each certain pair merges into the older record through
-        ``Party.merge`` as ``actor``, so the merge's own permission and guards decide. It loses no
-        value: a merge field the survivor leaves empty takes the newer record's
-        value (``Party.merge_values``), the survivor's stands where both have one,
-        and each kept value is recorded as ``actor``'s choice, as choosing those
-        sides on the Merge page does. Nothing merges without ``actor``.
+    SET_MEMBERS: ClassVar[int] = 10
+    """The most records one set of a batch merge holds."""
+
+    BATCH_CONFIRMED_FIELDS: ClassVar[tuple[str, ...]] = ()
+    """The merge fields a batch merge records as the person's choice: none.
+
+    Each record's statements move to the survivor as their sources' own and the
+    provenance ranking decides what shows; an empty survivor field takes a merged
+    record's value as a plain value no one states. ``("display_name",)`` would pin
+    the survivor's name, which the dialog shows.
+    """
+
+    def certain_same_as_pairs(
+        self, *, actor: Any, limit: int = 50, after: str | None = None,
+    ) -> list[CertainSameAsPair]:
+        """The certain pairs awaiting ``actor``'s review that ``actor`` may merge in a batch, at most ``limit``.
+
+        The batch is the first certain pairs (:meth:`certain_pairs`) of ``actor``'s
+        review list (:meth:`PartyQuerySet.same_as_pairs`) after ``after`` (the last
+        pair of the previous batch), in its order, at most :attr:`BATCH_SETS`: the
+        Review page's source for a batch merge, whose sets :meth:`merge_duplicates`
+        re-checks. The next batch continues past the last one, so a pair a batch
+        left unmerged is offered again only once the list starts over.
         """
 
-        pairs = self.with_actor(actor).same_as_pairs(limit=limit)
-        if not pairs:
+        limit = max(0, min(int(limit), self.BATCH_SETS))
+        if not limit:
             return []
-        people, _organizations = self.party_kinds(party.pk for pair in pairs for party in (pair.left, pair.right))
-        with system_context(reason="parties.merge_certain_same_as_pairs"):
+        review = apps.get_model("parties", "Party")._default_manager.with_actor(actor).same_as_pairs(
+            limit=None, after=after,
+        )
+        return self.certain_pairs(review, actor=actor)[:limit]
+
+    def same_as_review_counts(self, *, actor: Any) -> SameAsReviewCounts:
+        """How many pairs ``actor`` may review and how many of those are certain, in a fixed number of reads."""
+
+        review = apps.get_model("parties", "Party")._default_manager.with_actor(actor).same_as_pairs(limit=None)
+        return SameAsReviewCounts(len(review), len(self.certain_pairs(review, actor=actor)))
+
+    def certain_pairs(self, review: Sequence[SameAsPair], *, actor: Any) -> list[CertainSameAsPair]:
+        """The certain pairs among these review pairs, each with its survivor: the one definition of certain.
+
+        A pair is certain when both are people and neither is an account's own
+        person, ``actor`` may merge both in a batch (``batch_merge``: an active
+        person account that writes them), both bear a real name that is none of the
+        pair's cited addresses (``Party.names_an_address``) and equals the other's
+        but for case, accents and hyphens (``Party.comparable_name``), and exactly
+        these two parties are linked to an address the pair cites
+        (:meth:`same_person_links`, the shared-sender providers consulted, read only
+        when a pair passes the rest). The older record survives.
+        """
+
+        if not review:
+            return []
+        ids = {party.pk for pair in review for party in (pair.left, pair.right)}
+        people, _organizations = self.party_kinds(ids)
+        permitted = self.batch_mergeable(actor, ids)
+
+        def mergeable(party: Any, handles: Sequence[Any]) -> bool:
+            return (
+                party.pk in permitted
+                and party.pk in people
+                and people[party.pk] is None
+                and bool(party.has_real_name)
+                and not party.names_an_address(handles)
+            )
+
+        candidates = [
+            pair
+            for pair in review
+            if mergeable(pair.left, pair.handles)
+            and mergeable(pair.right, pair.handles)
+            and pair.left.comparable_name == pair.right.comparable_name
+        ]
+        if not candidates:
+            return []
+        with system_context(reason="parties.certain_pairs"):
             links = self.same_person_links(
-                addresses={(handle.platform, handle.normalized_value) for pair in pairs for handle in pair.handles},
+                addresses={(row.platform, row.normalized_value) for pair in candidates for row in pair.handles},
                 shared=self.shared_sender_ids(),
             )
         linked = {address: {link.party for link in address_links} for address, address_links in links.items()}
-        permitted = set(
-            self.with_actor(actor).with_action("merge_certain").filter(pk__in=list(people)).values_list("pk", flat=True)
-        )
+        return [
+            CertainSameAsPair(
+                pair.left, pair.right, pair.normalized_value, min((pair.left, pair.right), key=_age), id=pair.id,
+            )
+            for pair in candidates
+            if any(
+                linked.get((row.platform, row.normalized_value)) == {pair.left.pk, pair.right.pk}
+                for row in pair.handles
+            )
+        ]
+
+    def batch_mergeable(self, actor: Any, ids: Iterable[Any]) -> set[Any]:
+        """The parties among ``ids`` that ``actor`` may merge in a batch: an active person who writes them.
+
+        The party's ``batch_merge`` permission (``write & person->active_member``),
+        so a service or agent account may merge none.
+        """
+
+        # Read on the party, the owner of the permission, whichever model's manager the caller used.
+        parties = apps.get_model("parties", "Party")._default_manager
+        rows = parties.with_actor(actor).with_action("batch_merge").filter(pk__in=sorted(set(ids)))
+        return set(rows.values_list("pk", flat=True))
+
+    def preview_duplicates(
+        self, *, actor: Any, sets: Sequence[Sequence[str]], certain: bool = False,
+    ) -> list[DuplicateSetPreview]:
+        """Each set of records ``actor`` confirms are one, as :meth:`merge_duplicates` would merge it now.
+
+        Read in a fixed number of queries whatever the number of sets and members.
+        A set merges when it holds two to :attr:`SET_MEMBERS` records, every one
+        readable, live (neither trashed nor merged away) and of one kind (all
+        people or all organizations); none is an account's own person, which a
+        person merges by hand on the compare page; ``actor`` may merge every one in
+        a batch (:meth:`batch_mergeable`); and no two of them were kept apart by a
+        person. With ``certain`` each set must also be a certain pair
+        (:meth:`certain_pairs`). The oldest member survives and the others fold
+        into it in key order. More than :attr:`BATCH_SETS` sets refuse the batch.
+        """
+
+        confirmed = self._confirmed_sets(sets)
+        return self._judge_sets(actor, confirmed, certain=certain)
+
+    def merge_duplicates(
+        self, *, actor: Any, sets: Sequence[Sequence[str]], certain: bool = False,
+    ) -> list[DuplicateSetOutcome]:
+        """Merge each confirmed set of records into its oldest member as ``actor``'s merge; return every outcome.
+
+        A set merges exactly as confirmed. Its size, the actor's read of every
+        member and the actor's batch permission (:meth:`batch_mergeable`) are
+        checked first, for every set in one batch of reads (:meth:`_admission`), so
+        a set the actor may not merge takes no lock and is not read further.
+        Then, in its own transaction, its members, their same-person partners and
+        every Handle any of them holds or names are locked in one pass
+        (``Party.lock_merge_records``), the set is judged again under those locks
+        (:meth:`preview_duplicates`), and a member that changed
+        since the person looked (merged elsewhere, trashed, kept apart from another)
+        refuses the set rather than shrinking it. Then the others fold into the
+        oldest in key order through ``Party.merge``, whose own permission and guards
+        decide, under the person's confirmation of each pair. Values: each record's
+        statements move as their sources' own and the provenance ranking decides
+        what shows; an empty survivor field takes a merged record's value as a plain
+        value the sources may still replace; no value is recorded as the person's
+        choice (:attr:`BATCH_CONFIRMED_FIELDS`). A refusal is reported with its reason, and a merge a lock
+        conflict stops (a deadlock, a lock that was not granted in time) as
+        ``stopped``; each set stands alone and the next one still runs. Only a
+        lock conflict is a set's outcome (:func:`_lock_conflict`); any other
+        database error, a lost connection included, stops the call. More than
+        :attr:`BATCH_SETS` sets refuse the batch.
+        """
+
+        party_model = apps.get_model("parties", "Party")
+        confirmed = self._confirmed_sets(sets)
+        readable = self._readable_members(actor, confirmed)
+        permitted = self.batch_mergeable(actor, sorted({row.pk for row in readable.values()}))
         outcomes = []
-        for pair in pairs:
-            ids = {pair.left.pk, pair.right.pk}
-            if not ids <= set(people):
-                outcome = SameAsMergeOutcome.NOT_PEOPLE
-            elif any(people[pk] is not None for pk in ids):
-                outcome = SameAsMergeOutcome.ACCOUNT_PERSON
-            elif all(linked.get((handle.platform, handle.normalized_value)) != ids for handle in pair.handles):
-                outcome = SameAsMergeOutcome.SHARED_ADDRESS
-            elif not (
-                pair.left.has_real_name
-                and pair.right.has_real_name
-                and pair.left.comparable_name == pair.right.comparable_name
-            ):
-                outcome = SameAsMergeOutcome.NAMES_DIFFER
-            elif not ids <= permitted:
-                outcome = SameAsMergeOutcome.NOT_PERMITTED
+        for ids in confirmed:
+            if refusal := self._admission(ids, readable, permitted):
+                outcomes.append(DuplicateSetOutcome(ids, DuplicateMergeOutcome.REFUSED, reason=refusal))
+                continue
+            try:
+                with transaction.atomic():
+                    rows = instances_from_public_ids(party_model, ids, queryset=party_model._base_manager.all())
+                    if rows:
+                        party_model.lock_merge_records(sorted(rows.values(), key=lambda row: row.pk))
+                    (preview,) = self._judge_sets(actor, [ids], certain=certain)
+                    if preview.outcome is not None:
+                        outcomes.append(DuplicateSetOutcome(ids, preview.outcome, reason=preview.reason))
+                        continue
+                    survivor, *merged = preview.members
+                    kept = survivor.with_actor(actor).merge(
+                        records=[row.public_id for row in merged],
+                        fill_empty=True,
+                        confirmed_fields=self.BATCH_CONFIRMED_FIELDS,
+                    )
+            except (PermissionDenied, ValidationError) as error:
+                outcomes.append(DuplicateSetOutcome(ids, DuplicateMergeOutcome.REFUSED, reason=_refusal(error)))
+            except OperationalError as error:
+                if not _lock_conflict(error):
+                    raise
+                outcomes.append(
+                    DuplicateSetOutcome(
+                        ids, DuplicateMergeOutcome.STOPPED,
+                        reason="The database stopped this merge for a concurrent change; nothing merged, try again.",
+                    )
+                )
             else:
-                survivor, merged = sorted((pair.left, pair.right), key=lambda party: (party.created_at, party.pk))
-                try:
-                    survivor = survivor.with_actor(actor).merge(
-                        records=[merged.public_id], field_overrides=survivor.merge_values([merged]),
-                    )
-                except PermissionDenied:
-                    outcome = SameAsMergeOutcome.NOT_PERMITTED
-                except ValidationError:
-                    outcome = SameAsMergeOutcome.REFUSED
-                except OperationalError:
-                    # The merge's own transaction rolled back; the pairs after it still run.
-                    outcome = SameAsMergeOutcome.BUSY
-                else:
-                    outcomes.append(
-                        SameAsPairOutcome(
-                            pair.left, pair.right, pair.normalized_value, SameAsMergeOutcome.MERGED, survivor,
-                        )
-                    )
-                    continue
-            outcomes.append(SameAsPairOutcome(pair.left, pair.right, pair.normalized_value, outcome))
+                outcomes.append(DuplicateSetOutcome(ids, DuplicateMergeOutcome.MERGED, survivor=kept))
         return outcomes
+
+    def _readable_members(self, actor: Any, confirmed: Sequence[tuple[str, ...]]) -> Mapping[str, Any]:
+        """The members of the sets within the size cap that ``actor`` reads, by the public id given, in one read."""
+
+        party_model = apps.get_model("parties", "Party")
+        named = {pk for ids in confirmed if len(ids) <= self.SET_MEMBERS for pk in ids}
+        return instances_from_public_ids(party_model, named, queryset=party_model._default_manager.with_actor(actor))
+
+    def _admission(self, ids: Sequence[str], readable: Mapping[str, Any], permitted: Collection[Any]) -> str:
+        """Why a set is refused before it is locked or read further, or ``""``.
+
+        Its size, the actor's read of every member, then the actor's batch
+        permission on every member (``permitted``, from :meth:`batch_mergeable`).
+        """
+
+        if not 2 <= len(ids) <= self.SET_MEMBERS:
+            return f"Choose two to {self.SET_MEMBERS} records to merge as one."
+        if any(pk not in readable for pk in ids):
+            return "A record is gone or you may not read it."
+        if any(readable[pk].pk not in permitted for pk in ids):
+            return "Only an active person who may change every one of these records merges them in a batch."
+        return ""
+
+    def _confirmed_sets(self, sets: Sequence[Sequence[str]]) -> list[tuple[str, ...]]:
+        confirmed = [tuple(dict.fromkeys(str(pk) for pk in ids)) for ids in sets]
+        if len(confirmed) > self.BATCH_SETS:
+            raise ValidationError({"sets": f"Merge at most {self.BATCH_SETS} sets of records in one batch."})
+        return confirmed
+
+    def _judge_sets(
+        self, actor: Any, confirmed: Sequence[tuple[str, ...]], *, certain: bool,
+    ) -> list[DuplicateSetPreview]:
+        """Judge every confirmed set against the live records in one batch of reads (:meth:`preview_duplicates`)."""
+
+        party_model = apps.get_model("parties", "Party")
+        readable = party_model._default_manager.with_actor(actor)
+        found = self._readable_members(actor, confirmed)
+        pks = sorted({row.pk for row in found.values()})
+        people, organizations = self.party_kinds(pks)
+        permitted = self.batch_mergeable(actor, pks)
+        stance = party_model.same_as.model.statements.model
+        # The same keep-apart decision ``StatementPairManager.kept_separate`` reads, for every pair of the sets at once.
+        kept_apart = set(
+            stance._base_manager.filter(
+                superseded__isnull=True,
+                subject__left_id__in=pks,
+                subject__right_id__in=pks,
+                aspect=party_model.same_as.model.pair_name,
+                applied=True,
+                snak=stance.StatementSnak.NO_VALUE,
+            ).values_list("subject__left_id", "subject__right_id")
+        )
+        review = readable.same_as_pairs(limit=101, parties=pks) if certain and pks else []
+        sure = {(pair.left.pk, pair.right.pk) for pair in self.certain_pairs(review, actor=actor)}
+        previews = []
+        for ids in confirmed:
+            members = sorted((found[pk] for pk in ids if pk in found), key=_age)
+            keys = [row.pk for row in members]
+            if admission := self._admission(ids, found, permitted):
+                reason = admission
+            elif any(row.is_trashed or row.merged_into_id is not None for row in members):
+                reason = "A record is trashed or already merged into another."
+            elif not (set(keys) <= people.keys() or set(keys) <= organizations):
+                reason = "Only people, or only organizations, merge together."
+            elif any(people.get(pk) is not None for pk in keys):
+                reason = "An account's own person is merged by hand, on the compare page."
+            elif any((left, right) in kept_apart for left, right in combinations(sorted(keys), 2)):
+                reason = "A person kept two of these records apart."
+            else:
+                reason = ""
+            if reason:
+                previews.append(DuplicateSetPreview(tuple(members), DuplicateMergeOutcome.REFUSED, reason))
+            elif certain and (len(keys) != 2 or (min(keys), max(keys)) not in sure):
+                previews.append(
+                    DuplicateSetPreview(tuple(members), DuplicateMergeOutcome.NOT_CERTAIN, "No longer a certain pair.")
+                )
+            else:
+                previews.append(DuplicateSetPreview(tuple(members), None))
+        # Only a set the actor may merge discloses its members' values.
+        shown = self._disagreements(
+            actor, [preview.members if preview.outcome is None else () for preview in previews], people,
+        )
+        return [
+            replace(preview, disagreements=shown[index]) for index, preview in enumerate(previews)
+        ]
+
+    @staticmethod
+    def _disagreements(
+        actor: Any, sets: Sequence[Sequence[Any]], people: Mapping[Any, Any],
+    ) -> list[tuple[FieldDisagreement, ...]]:
+        """For each set, the merge fields its members disagree on and what the survivor will show, in fixed reads.
+
+        ``sets`` hold members read through ``actor`` and the person rows are read
+        through it too, so each field's own ``read__<field>`` gate has hidden what
+        the actor may not read, as on the record read, for the whole batch at
+        once. A field hidden on any member of a set is not compared there: the
+        actor sees neither its values nor whether they differ.
+        """
+
+        party_model = apps.get_model("parties", "Party")
+        person_model = apps.get_model("parties", "Person")
+        pks = sorted({row.pk for members in sets for row in members})
+        if not pks:
+            return [() for _members in sets]
+        persons = person_model._default_manager.with_actor(actor).in_bulk([pk for pk in pks if pk in people])
+        owners: dict[str, tuple[Any, str]] = {}
+        stated: defaultdict[tuple[str, Any], list[Any]] = defaultdict(list)
+        for statements in (party_model.statements, person_model.statements):
+            aspects = {
+                aspect: declaration
+                for aspect, declaration in statements.model.statement_aspects.items()
+                if declaration.fields and not declaration.members
+            }
+            for aspect, declaration in aspects.items():
+                for name in declaration.fields:
+                    owners[name] = (statements.model, aspect)
+            rows = (
+                statements.model._base_manager.filter(subject_id__in=pks, aspect__in=list(aspects))
+                .filter(superseded__isnull=True, status=statements.model.StatementStatus.ASSERTED, applied=True)
+                .filter(snak=statements.model.StatementSnak.VALUE)
+                .select_related("subject", "link")
+            )
+            for row in rows:
+                stated[row.aspect, row.subject_id].append(row)
+
+        def text(value: Any) -> str | None:
+            if value in (None, ""):
+                return None
+            return value.isoformat() if hasattr(value, "isoformat") else str(value)
+
+        personal = set(party_model.merge_scalar_fields_of("person")) - set(party_model.merge_scalar_fields_of(None))
+
+        def source_of(row: Any, name: str) -> Any:
+            return persons.get(row.pk, row) if name in personal else row
+
+        result: list[tuple[FieldDisagreement, ...]] = []
+        for members in sets:
+            if len(members) < 2:
+                result.append(())
+                continue
+            kind = "person" if all(row.pk in people for row in members) else None
+            fields = party_model.merge_scalar_fields_of(kind)
+            disagreements = []
+            for name in fields:
+                sources = [source_of(row, name) for row in members]
+                if any(name in redacted_fields(source) for source in sources):
+                    continue
+                values = tuple(text(getattr(source, name, None)) for source in sources)
+                if len(set(values)) < 2:
+                    continue
+                _model, aspect = owners.get(name, (None, ""))
+                candidates = [statement for row in members for statement in stated.get((aspect, row.pk), ())]
+                if candidates:
+                    winner = min(candidates, key=lambda statement: statement.sort_key())
+                    shown = text(winner.stated_value(name))
+                else:
+                    shown = next((value for value in values if value is not None), None)
+                disagreements.append(FieldDisagreement(name, values, shown))
+            result.append(tuple(disagreements))
+        return result
 
     def for_user(self, user: Any, *, adopt: Any = None) -> Any:
         """Return the :class:`Person` linked to ``user``, get-or-created on the ``user`` O2O.
@@ -3256,7 +3670,7 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
         created_by_id: Any,
         replaces: Sequence[Any] = (),
         through: Handle | None = None,
-        claims: Collection[str] = (),
+        claims: Collection[tuple[str, str]] = (),
     ) -> set[str]:
         """Assert the emails and phones ``link`` names for ``party``; withdraw the others it or ``replaces`` asserted.
 
@@ -3265,8 +3679,8 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
         a blank one keeps the handle's); the Party row is the assertion's evidence.
         An email spelling ``through``'s address lands on that handle, the one an
         adoption found ``party`` by, never on a second row of another spelling.
-        An email whose normalized value is in ``claims`` is someone else's
-        (:meth:`_contested_emails`): it is stated as a claim for review, below
+        An email or phone whose ``(platform, normalized value)`` is in ``claims``
+        is someone else's (:meth:`_contested_addresses`): it is stated as a claim for review, below
         ``Party.REVIEW_CONFIDENCE``, so it never resolves the handle, and the
         handle's display fields stay its holder's. ``replaces`` are the links of
         records a merge at the source folded into this one: a handle only they
@@ -3292,7 +3706,7 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
                 normalized = handle_model.normalize_value(platform, value)
                 if through is not None and platform == through.platform and normalized == through.normalized_value:
                     value = through.value
-                claim = platform == handle_model.Platform.EMAIL and normalized in claims
+                claim = (platform, normalized) in claims
                 shown = {} if claim else {"display_name": display_name, "label": label, "is_preferred": preferred}
                 handle = handles.upsert(platform=platform, value=value, created_by_id=created_by_id, **shown)
                 mapped = {} if claim else {"label": label, "is_preferred": preferred}
@@ -3312,12 +3726,20 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
             party.statements.withdraw_unsupported(source, supported, aspect="handle", link=stating)
         return landed
 
-    def _contested_emails(
+    def _contested_addresses(
         self, person: Person, parsed: ParsedContact, *, source: Any, lookup: EmailLookup
-    ) -> tuple[set[str], list[tuple[Person, Handle | None]]]:
-        """Return the contact's emails ``source`` may only claim for ``person``, and the people they name instead.
+    ) -> tuple[set[tuple[str, str]], list[tuple[Any, Handle | None]]]:
+        """Return the contact's addresses ``source`` may only claim for ``person``, and the parties they name instead.
 
-        What a contact may state about an address depends on whom ``lookup``
+        Claims are ``(platform, normalized value)`` pairs. A phone number names one
+        account as an email does (``Handle.identifies_account``): one another live
+        party is linked to (:meth:`same_person_links` with ``every_address``: a
+        holding, or a standing statement by a source that states its own record)
+        is theirs unless ``person`` holds it, so it is a claim and each such party
+        comes back with its handle; a number four or more parties are linked to
+        is still only claimed, and pairs nobody.
+
+        What a contact may state about an email depends on whom ``lookup``
         (:meth:`lookup_emails`: :meth:`people_for_emails` on any basis, and the
         addresses a person account signs in with) finds by it. One that names a
         person other than ``person`` is theirs, unless ``person`` holds it too:
@@ -3332,12 +3754,12 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
         until ``person`` holds it through another statement or a person confirms
         the claim (either makes ``person`` its holder), so no lapse of its holder
         (trashed, or its statement withdrawn) and no second claimant turns the
-        claim into a holding. Any other address is stated in full. Values are
-        normalized email addresses (``Handle.normalize_value``).
+        claim into a holding; the same holds for a number. Any other address is
+        stated in full. Values are normalized (``Handle.normalize_value``).
         """
 
         handle_model = apps.get_model("parties", "Handle")
-        email = handle_model.Platform.EMAIL
+        email, phone = handle_model.Platform.EMAIL, handle_model.Platform.PHONE
         claimed = set(
             self.handle_statements()
             .filter(
@@ -3345,12 +3767,12 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
                 asserted_by=str(to_subject_ref(source)),
                 status=self.handle_statements().model.StatementStatus.ASSERTED,
                 confidence__lt=self.model.REVIEW_CONFIDENCE,
-                handle__platform=email,
+                handle__platform__in=(email, phone),
             )
-            .values_list("handle__normalized_value", flat=True)
+            .values_list("handle__platform", "handle__normalized_value")
         )
-        claims: set[str] = set()
-        others: dict[Any, tuple[Person, Handle | None]] = {}
+        claims: set[tuple[str, str]] = set()
+        others: dict[Any, tuple[Any, Handle | None]] = {}
         for value, _label, _preferred in parsed.emails:
             normalized = handle_model.normalize_value(email, value)
             found = lookup.named(value)
@@ -3360,10 +3782,38 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
             account = normalized in lookup.sign_in and not any(
                 holder.basis == EmailBasis.ACCOUNT and holder.person.pk == person.pk for holder in found
             )
-            if rivals or account or lookup.lapsed.get(normalized) or normalized in claimed:
-                claims.add(normalized)
+            if rivals or account or lookup.lapsed.get(normalized) or (email, normalized) in claimed:
+                claims.add((email, normalized))
             for holder in rivals:
                 others.setdefault(holder.person.pk, (holder.person, holder.handle))
+        numbers = {(phone, handle_model.normalize_value(phone, value)) for value, _label, _preferred in parsed.phones}
+        numbers = {address for address in numbers if address[1]}
+        if numbers:
+            linked = self.same_person_links(addresses=numbers, every_address=True)
+            held = set(
+                handle_model._base_manager.filter(
+                    platform=phone,
+                    normalized_value__in=sorted(value for _platform, value in numbers),
+                    party_id=person.pk,
+                ).values_list("platform", "normalized_value")
+            )
+            rivals_by_address = {
+                address: [link for link in links if link.party != person.pk] for address, links in linked.items()
+            }
+            parties = apps.get_model("parties", "Party")._base_manager.in_bulk(
+                sorted({link.party for links in rivals_by_address.values() for link in links})
+            )
+            handles = handle_model._base_manager.in_bulk(
+                sorted({link.handle for links in rivals_by_address.values() for link in links})
+            )
+            for address in sorted(numbers):
+                linked_others = rivals_by_address.get(address, [])
+                if address in held:
+                    continue
+                if linked_others or address in claimed:
+                    claims.add(address)
+                for link in linked_others:
+                    others.setdefault(link.party, (parties[link.party], handles[link.handle]))
         return claims, list(others.values())
 
     def ingest_contact(
@@ -3397,8 +3847,12 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
         who each address names: an email another person is linked to (holds it,
         claims it, keeps it as a lapsed holder, or signs in with it) is only
         claimed, for review, and each such live person is proposed here as the
-        contact's same person, the directory's one proposal for an address
-        (:meth:`_contested_emails`, :meth:`propose_directory_match`), so a
+        contact's same person (:meth:`_contested_addresses`; a phone number
+        another live party is linked to likewise): through the one
+        same-person verb, citing the handle that names them
+        (:meth:`propose_same_person_as_system`, once the page commits), or, for an
+        account's sign-in address no handle of theirs carries, which links no
+        one to it, through :meth:`propose_directory_match`; so a
         contact never moves an address away from anyone; the addresses it lands
         are marked changed in the lookup. A link leaving a person
         withdraws what it stated on them before it binds its new person (the
@@ -3488,7 +3942,7 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
                 # What the link withdrew from the person it left may have been all that held an address.
                 lookup = self.lookup_emails((value for value, _label, _preferred in parsed.emails), lookup=lookup)
             claims, others = (
-                self._contested_emails(person, parsed, source=source, lookup=lookup)
+                self._contested_addresses(person, parsed, source=source, lookup=lookup)
                 if pull and lookup is not None
                 else (set(), [])
             )
@@ -3506,7 +3960,14 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
             if lookup is not None:
                 lookup.changed.update(landed)
             for other, handle in others:
-                self.propose_directory_match(person, other, evidence=[link, *([handle] if handle is not None else [])])
+                if handle is not None:
+                    # Linked to one address: the same-person verb proposes the pair once this page commits.
+                    self.propose_same_person_as_system(
+                        person, other, evidence=[handle], reason="parties.directory.contact_claim"
+                    )
+                else:
+                    # An account's sign-in address that no handle of theirs carries links no one to it.
+                    self.propose_directory_match(person, other, evidence=[link])
             if gone:
                 # What the link proposed for the trashed person it left is moot: its new person is, or is
                 # proposed as, them. A live person it left (refused on its return) stays proposed.
@@ -3839,7 +4300,8 @@ class DirectoryManager[DirectoryT: Directory](IntegrationManager[DirectoryT]):
         its own, named after the backend, ``display_name`` and the directory's id
         so no connection or reconnect ever reuses one, connects the directory
         with it (``Integration.attach_connection``, which enters connection
-        discovery) and claims the address the account signs in as as the owner's
+        discovery), grants the owner the read of its contacts
+        (``Directory.grant_owner_contact_read``) and claims the address the account signs in as as the owner's
         own handle (``DirectoryBackend.account_address``); held by someone the
         owner may not take it from, it is only claimed for review, and the
         connection stands. Once that commits, the
@@ -3897,6 +4359,7 @@ class DirectoryManager[DirectoryT: Directory](IntegrationManager[DirectoryT]):
                 owner, kind=credential_kind, name=f"{name[:limit]}{suffix}", material=material
             )
             directory.attach_connection(credential)
+            directory.grant_owner_contact_read()
             if address := directory.backend.account_address():
                 handles = apps.get_model("parties", "Handle").objects
                 handles.claim_control(
@@ -3913,6 +4376,23 @@ class DirectoryManager[DirectoryT: Directory](IntegrationManager[DirectoryT]):
             except Exception:  # noqa: BLE001 -- the committed directory stays connected; its next scheduled sync runs.
                 logger.warning("The first sync of directory %s could not be queued.", directory.pk, exc_info=True)
         return directory
+
+    def grant_owner_contact_reads(self) -> tuple[int, int]:
+        """Grant every directory's owner the read of its contacts where missing; return ``(granted, held)``.
+
+        The provision repair for directories connected before connecting granted
+        it (``Directory.grant_owner_contact_read``, the one writer). Idempotent:
+        a second run grants nothing. A directory without an owner is skipped.
+        """
+
+        granted = held = 0
+        with system_context(reason="parties.directory.owner_contact_reads"):
+            for directory in self.model._base_manager.filter(owner__isnull=False).order_by("pk"):
+                if directory.grant_owner_contact_read():
+                    granted += 1
+                else:
+                    held += 1
+        return granted, held
 
     def _vendor_loaded(self, impl: Any) -> bool:
         """Whether the seeded vendor row the backend ``impl``'s defaults name is loaded (or it names none)."""

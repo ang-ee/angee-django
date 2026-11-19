@@ -6,6 +6,9 @@ cycling back through model discovery.
 
 from __future__ import annotations
 
+from collections.abc import Iterator
+from contextlib import contextmanager
+from contextvars import ContextVar
 from copy import deepcopy
 from dataclasses import dataclass, field, fields
 from datetime import datetime, timedelta
@@ -23,6 +26,34 @@ if TYPE_CHECKING:
 
 UNSET = object()
 """Omitted record binding; ``None`` explicitly clears the target."""
+
+_discovery_exempt: ContextVar[bool] = ContextVar("angee_integrate_discovery_exempt", default=False)
+
+
+@contextmanager
+def exempt_from_discovery() -> Iterator[None]:
+    """Let the stream commits inside commit while the stream's integration is not discovery-ready.
+
+    The one way past ``SyncStreamManager.lock_current``'s discovery check, for a
+    commit that rests on no remote fact discovery confirms: local state (a pin, a
+    dismissed failure, a conflict reopened after its follow-through was refused)
+    and the reflection of a write already sent, whose remote effect has landed, so
+    leaving it unrecorded would write it again or conflict. Each caller names it
+    where it commits; everything else stays fenced. It is a context of the running
+    code, so a caller needs no stream row to declare it.
+    """
+
+    token = _discovery_exempt.set(True)
+    try:
+        yield
+    finally:
+        _discovery_exempt.reset(token)
+
+
+def discovery_exempt() -> bool:
+    """Whether the stream commits running here were declared exempt (:func:`exempt_from_discovery`)."""
+
+    return _discovery_exempt.get()
 
 EXTERNAL_KEY_LENGTH = 512
 """The longest remote identity: a ``RecordLink.external_key``, and so a ``SyncStream.partition``.
@@ -156,10 +187,13 @@ class StreamDefinition:
     declarers declares ``mapping_contributions`` instead and leaves this at its
     default; any other version beside them is refused.
     """
+    # No stream column holds this declaration, so the mark keeps it out of the copy into a stream; dropping
+    # the mark would mean probing the model's fields instead, which fails silently on a missing column.
     mapping_contributions: tuple[MappingContribution, ...] = field(default=(), metadata={"stream_field": False})
     """A mapping composed from several declarers, one :class:`MappingContribution` each.
 
-    The stream then owns the version (``SyncStreamManager.current``): any change
+    :meth:`mapping_parts` validates and orders them. The stream then owns the
+    version (``SyncStreamManager.current``): any change
     of the ordered keys and versions replays every record once, under a version
     none of its records was applied with. The stream retains the ordered keys and
     versions, not this declaration.
@@ -187,6 +221,40 @@ class StreamDefinition:
         """Return independent values suitable for creating a stream generation."""
 
         return {name: _independent(getattr(self, name)) for name in _stream_facts(self)}
+
+    def mapping_parts(self) -> tuple[tuple[str, int], ...]:
+        """Validate the declared mapping; return its contributions as ``(key, version)`` parts in applied order.
+
+        Integrate owns the order, by sequence then key, so a list collected in
+        registration order never depends on load order, and renumbering that
+        keeps the order is no change. A version is an integer of at least 1,
+        never a boolean or a float. Beside contributions only the default plain
+        version passes; an explicit 1 is indistinguishable from it.
+        """
+
+        def is_version(value: Any) -> bool:
+            return isinstance(value, int) and not isinstance(value, bool) and value >= 1
+
+        if not is_version(self.mapping_version):
+            raise ValidationError("A stream mapping version must be a positive integer.")
+        parts = self.mapping_contributions
+        if not isinstance(parts, tuple | list) or not all(
+            isinstance(part, MappingContribution)
+            and isinstance(part.key, str)
+            and part.key
+            and is_version(part.version)
+            and isinstance(part.sequence, int)
+            for part in parts
+        ):
+            raise ValidationError(
+                "Mapping contributions are MappingContribution parts with a nonempty key, a positive integer "
+                "version and an integer sequence."
+            )
+        if len({part.key for part in parts}) != len(parts):
+            raise ValidationError("Mapping contribution keys must be distinct.")
+        if parts and self.mapping_version != 1:
+            raise ValidationError("A stream declares a mapping version or mapping contributions, not both.")
+        return tuple((part.key, part.version) for part in sorted(parts, key=lambda part: (part.sequence, part.key)))
 
 
 def _stream_facts(definition: StreamDefinition | type[StreamDefinition]) -> tuple[str, ...]:

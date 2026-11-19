@@ -1,6 +1,6 @@
 """Delivery and feed contracts against the actual composed model graph."""
 
-from contextlib import nullcontext
+from contextlib import contextmanager, nullcontext
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from smtplib import SMTPDataError, SMTPServerDisconnected
@@ -468,6 +468,53 @@ class DeliveryContracts(DeliveryFixtures):
             self.assertEqual(self.run_delivery(row)["status"], "failed")
             row.refresh_from_db()
         self.assertEqual(row.local_metadata["delivery_error"], "This key reads another account.")
+        self.backend.deliver.assert_not_called()
+
+    def test_a_key_re_entered_on_a_disconnected_channel_defers_delivery_until_it_reconnects(self):
+        row = self.outbound()
+        self.enterContext(patch.object(ManualFeedBackend, "requires_connection_discovery", True))
+        with system_context(reason="delivery while the channel is disconnected"):
+            credential = apps.get_model("integrate", "Credential").objects.create_local_credential(
+                self.operator, kind="static_token", name="Feed key", material={"api_key": "feed-key"},
+            )
+            self.feed.attach_connection(credential)
+            self.assertTrue(self.feed.finish_discovery(
+                credential_pk=credential.pk, generation=self.feed.discovery_generation,
+            ))
+            self.feed.set_lifecycle("disconnected")
+            # Discovery for the new key runs when the channel is connected again; until then it is not a failure.
+            credential.replace_material({"api_key": "re-entered"})
+            row.deliver()
+            self.assertEqual(self.run_delivery(row)["status"], "retry")
+            row.refresh_from_db()
+        self.assertEqual(row.status, "queued")
+        self.assertNotIn("delivery_attempts", row.local_metadata)
+        self.backend.deliver.assert_not_called()
+
+    def test_a_key_re_entered_while_the_send_waits_for_its_lock_holds_the_send_back(self):
+        row = self.outbound()
+        self.enterContext(patch.object(ManualFeedBackend, "requires_connection_discovery", True))
+        with system_context(reason="delivery while a key is re-entered"):
+            credential = apps.get_model("integrate", "Credential").objects.create_local_credential(
+                self.operator, kind="static_token", name="Feed key", material={"api_key": "feed-key"},
+            )
+            self.feed.attach_connection(credential)
+            self.assertTrue(self.feed.finish_discovery(
+                credential_pk=credential.pk, generation=self.feed.discovery_generation,
+            ))
+
+            @contextmanager
+            def re_entered_while_waiting():
+                credential.replace_material({"api_key": "re-entered"})
+                yield True
+
+            self.backend.delivery_lock = re_entered_while_waiting
+            row.deliver()
+            # Admitted on the channel as loaded, asked again under the lock: nothing is sent on the new key.
+            self.assertEqual(self.run_delivery(row)["status"], "retry")
+            row.refresh_from_db()
+        self.assertEqual(row.status, "queued")
+        self.assertNotIn("delivery_attempts", row.local_metadata)
         self.backend.deliver.assert_not_called()
 
     def test_bad_due_row_does_not_abort_batch_and_invalid_claim_fails(self):

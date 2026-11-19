@@ -4,11 +4,11 @@ import { RouterProvider, createMemoryHistory, createRootRoute, createRoute, crea
 import { AppRuntimeProvider, createRouteHref } from "@angee/ui";
 import { expect, test, vi } from "vitest";
 
-const query = vi.hoisted(() => ({ kind: "PERSON" }));
+const query = vi.hoisted(() => ({ kind: "PERSON", survivor: "party-1" }));
 vi.mock("@angee/refine", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@angee/refine")>()),
   useAuthoredQuery: () => ({ data: {
-    parties_by_pk: { id: "party-1", concrete_kind: query.kind },
+    party_record: { id: query.survivor, concrete_kind: query.kind },
     party_statements_by_pk: { id: "handle-1", subject: { id: "party-1" } },
   }, isFetching: false, error: null }),
 }));
@@ -57,6 +57,18 @@ test.each([
   expect(router.state.location.search).toEqual({ recordTab: "identity" });
   router.history.back();
   await waitFor(() => expect(router.state.location.pathname).toBe("/start"));
+});
+
+test("a merged-away party's record redirects to its survivor", async () => {
+  query.kind = "PERSON";
+  query.survivor = "party-2";
+  try {
+    const router = renderRedirects();
+    await router.navigate({ href: routeHref("parties.records.record", { id: "party-1" }) });
+    await waitFor(() => expect(router.state.location.pathname).toBe(routeHref("parties.people.record", { id: "party-2" })));
+  } finally {
+    query.survivor = "party-1";
+  }
 });
 
 test("the handle-to-party redirect chain keeps the trail and identity selection", async () => {

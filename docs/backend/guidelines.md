@@ -938,9 +938,14 @@ data through REBAC, never a queryset bypass.
   - A model's own system verb folding a duplicate (no actor to authorize) calls
     the system entry [`MergeableMixin.fold`](../../src/angee/base/models/merge.py),
     which joins the open changeset and runs the same hooks under a system
-    boundary. Before core row locks, both entries call `lock_merge_records()`
-    (by default each record's `lock_for_merge()`; a domain whose earlier locks
-    span the batch overrides it) so a domain can acquire its earlier lock class. Querysets use
+    boundary. Before core row locks, both entries call the model's
+    `lock_merge_records(records)` once for the whole batch, so a domain can
+    acquire its earlier lock class for every record in one pass; the default
+    calls each record's `lock_for_merge()` in key order. A model whose merge
+    also locks related rows overrides the classmethod and takes them all
+    before any record row, as [`Party`](../../src/angee/parties/models.py)
+    takes the records' same-person partners and every handle they state or
+    hold. Querysets use
     `redirect_group(survivor)` for the survivor plus its flattened one-hop
     redirects.
 - Native REBAC `create`/`insert` evaluates the unsaved candidate's field- and
@@ -1984,7 +1989,13 @@ lock both current and proposed scopes without invoking guarded transitions.
 This candidate is only for lock selection; it never becomes the write target.
 Callers reload through their original actor and surface scope and recheck write
 permission after waiting. Statement-member identity remains the hook's optional
-`members` argument. Plain Django models retain native row locking.
+`members` argument. A write spanning several subjects of one model, such as a
+statement pair's two endpoints, locks them through
+[`StatementsMixin.lock_subjects`](../../src/angee/provenance/statements.py): the
+default locks each subject in key order, and an owner whose subject lock takes
+prerequisite rows overrides it to take every subject's prerequisites before any
+subject row, so two subjects never interleave their lock order. Plain Django
+models retain native row locking.
 
 ### Direct record access
 

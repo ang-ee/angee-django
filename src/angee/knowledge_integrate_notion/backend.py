@@ -234,21 +234,31 @@ class NotionBackend(BridgeImpl, HttpClientMixin):
         return self._request(NotionUser, "users/me", credential=credential)
 
     def discover_connection(self, credential: Any) -> ConnectionDiscovery:
-        """Read the workspace the token belongs to; Integration owns validation, retries and completion."""
+        """Read the workspace the token's bot belongs to; :meth:`apply_discovery` judges it."""
         bot = self.probe(credential).bot
-        if bot is None or not bot.workspace_id:
+        return ConnectionDiscovery(data={"workspace_id": bot.workspace_id if bot is not None else ""})
+
+    def apply_discovery(self, discovery: ConnectionDiscovery) -> None:
+        """Keep the connection's workspace; refuse a token of another, or one that names none.
+
+        The kept workspace is the first one discovery recorded or, before that,
+        the one the connection's Notion account was authorized for: Notion's OAuth
+        token answer names it, and connect keeps it in the account's
+        ``identity_claims``. A connection with neither (an API token connected
+        before discovery kept a workspace) records the workspace it reads.
+        """
+        workspace = discovery.data.get("workspace_id")
+        if not workspace:
             raise IntegrationError(
                 "Notion did not say which workspace this token belongs to; "
                 "reconnect Notion or attach an internal integration's API token."
             )
-        return ConnectionDiscovery(data={"workspace_id": bot.workspace_id})
-
-    def apply_discovery(self, discovery: ConnectionDiscovery) -> None:
-        """Keep the workspace the connection first discovered; a token of another is refused."""
-        workspace, kept = discovery.data["workspace_id"], self.bridge.subscription_state.get("workspace_id")
+        recorded = self.bridge.subscription_state.get("workspace_id")
+        account = None if recorded else self.bridge.account
+        kept = recorded or (account.identity_claims.get("workspace_id") if account is not None else None)
         if kept and kept != workspace:
             raise IntegrationError("This connection belongs to another Notion workspace; create a separate connection.")
-        if not kept:
+        if not recorded:
             self.bridge.merge_subscription_state(workspace_id=workspace)
 
     def streams(self, *, deadline: float | None = None) -> Iterable[StreamDefinition]:

@@ -23,7 +23,7 @@ is a typed, directed party↔party edge whose vocabulary
 from __future__ import annotations
 
 import unicodedata
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Collection, Iterable, Mapping, Sequence
 from dataclasses import asdict, replace
 from typing import Any, ClassVar, cast
 
@@ -40,7 +40,7 @@ from phonenumbers import (
     is_valid_number,
     parse,
 )
-from rebac import PermissionDenied, SubjectRef, actor_context, system_context
+from rebac import PermissionDenied, SubjectRef, actor_context, backend, system_context, to_object_ref, to_subject_ref
 from rebac.mixins import RebacModelBase
 
 from angee.base.fields.implementation import ImplClassField
@@ -301,18 +301,29 @@ class Party(
         The fold re-keys each merged party's other pairs onto the survivor
         (``StatementPairManager.merge``), which locks the partner's Handles; taken
         then, after party rows, they would invert the Handle, Party order, so the
-        partners join this pass.
+        partners join this pass, read again under its lock in case a pair committed
+        meanwhile.
         """
 
         ids = {row.pk for row in records}
+        wanted = ids | cls._same_as_partners(ids)
+        cls._lock_identities(wanted)
+        # Under the lock no new pair of these parties can start (``for_pair`` locks both endpoints first),
+        # but one committed while this pass waited may be missing: read again and top the set up.
+        if missing := cls._same_as_partners(ids) - wanted:
+            cls._lock_identities(wanted | missing)
+
+    @classmethod
+    def _same_as_partners(cls, ids: set[Any]) -> set[Any]:
         pairs = cls.same_as.model._base_manager.filter(models.Q(left_id__in=ids) | models.Q(right_id__in=ids))
-        cls._lock_identities(ids | {pk for pair in pairs.untrashed().values_list("left_id", "right_id") for pk in pair})
+        return {pk for pair in pairs.untrashed().values_list("left_id", "right_id") for pk in pair}
 
     @staticmethod
     def _lock_identities(party_ids: set[Any]) -> None:
         owner = apps.get_model("parties", "Party").objects
         ids = sorted(party_ids)
-        stated = owner.handle_statements().filter(subject_id__in=ids).values_list("handle_id", flat=True)
+        with system_context(reason="parties.party.lock_identities"):
+            stated = set(owner.handle_statements().filter(subject_id__in=ids).values_list("handle_id", flat=True))
         held = apps.get_model("parties", "Handle")._base_manager.filter(party_id__in=ids).values_list("pk", flat=True)
         owner.lock_identity_rows(party_ids=ids, handle_ids={*stated, *held})
 
@@ -338,6 +349,18 @@ class Party(
         if not name or name == self.PLACEHOLDER_NAME:
             return False
         return any(character.isalpha() for character in name)
+
+    def names_an_address(self, handles: Iterable[Any]) -> bool:
+        """Whether ``display_name`` is one of these addresses, read as each one's platform normalizes it.
+
+        A party a source named after its e-mail address carries no name of its
+        own: two such records bear equal names because their addresses are equal.
+        """
+
+        handle_model = apps.get_model("parties", "Handle")
+        return any(
+            handle_model.normalize_value(row.platform, self.display_name) == row.normalized_value for row in handles
+        )
 
     @property
     def comparable_name(self) -> str:
@@ -377,9 +400,15 @@ class Party(
     def merge_scalar_fields(self) -> tuple[str, ...]:
         """Scalar merge choices this party's native subtype admits; a person adds its name parts and dates."""
 
-        if self.concrete_kind == "person":
-            return self._merge_scalar_fields + self._person_merge_scalar_fields
-        return self._merge_scalar_fields
+        return self.merge_scalar_fields_of(self.concrete_kind)
+
+    @classmethod
+    def merge_scalar_fields_of(cls, kind: str | None) -> tuple[str, ...]:
+        """The scalar merge choices of a party of ``kind`` (``"person"`` adds its name parts and dates)."""
+
+        if kind == "person":
+            return cls._merge_scalar_fields + cls._person_merge_scalar_fields
+        return cls._merge_scalar_fields
 
     def merge_values(self, merged: Sequence[Any]) -> dict[str, Any]:
         """The merge choices that keep every value: ``merged``'s value of each merge scalar this survivor leaves empty.
@@ -398,24 +427,36 @@ class Party(
                     values[name] = getattr(other, name)
         return values
 
-    def keep_merge_fields(self, source: Party, field_overrides: Any) -> None:
-        """Keep this survivor's merge scalars against ``source``: each chosen override, else its own value.
+    def keep_merge_fields(
+        self,
+        source: Party,
+        field_overrides: Any,
+        *,
+        fills: Mapping[str, Any] | None = None,
+        confirmed: Collection[str] | None = None,
+    ) -> None:
+        """Keep this survivor's merge scalars against ``source``: each override, else each fill, else its own value.
 
-        Both endpoints must admit an override; a person's name parts and birthday
-        are admitted only between people. The fold then moves ``source``'s
-        statements here, where survivorship could select their values, so the
-        merging person confirms the kept values of every aspect an override or a
-        differing ``source`` value decides: a preferred statement precedes each
-        moved one, at this resolve and every later one. Aspects both records agree
-        on keep resolving over their sources; an override that no person-stated
-        aspect holds saves as an ordinary edit.
+        Both endpoints must admit an override; a person's name parts and dates are
+        admitted only between people. The fold then moves ``source``'s statements
+        here, where survivorship could select their values, so the merging person
+        confirms the kept values of every aspect an override or a differing value
+        decides: a preferred statement precedes each moved one, at this resolve and
+        every later one. Aspects both records agree on keep resolving over their
+        sources; an override that no person-stated aspect holds saves as an
+        ordinary edit. ``confirmed`` narrows what is recorded as the person's choice
+        to those fields and the overrides (a batch merge confirms only what the
+        person saw); a ``fills`` value outside them (``merge_values``) is written as
+        a plain value, no one's statement, so a source that states the field may
+        still replace it. ``None`` confirms every decided field (the Merge page).
         """
 
         overrides = {} if field_overrides is None else field_overrides
         if not isinstance(overrides, Mapping):
             raise ValidationError({"field_overrides": "Expected an object of field values."})
+        filled = {name: value for name, value in (fills or {}).items() if name not in overrides}
         allowed = set(self.merge_scalar_fields).intersection(source.merge_scalar_fields)
-        if unknown := set(overrides) - allowed:
+        if unknown := (set(overrides) | set(filled)) - allowed:
             names = ", ".join(sorted(str(name) for name in unknown))
             raise ValidationError({"field_overrides": f"Unsupported merge field(s): {names}."})
         survivor = most_derived_concrete(self).with_actor(instance_actor(self))
@@ -424,20 +465,35 @@ class Party(
         for name in sorted(allowed):
             field = survivor._meta.get_field(name)
             assert isinstance(field, models.Field)
-            kept[name] = field.clean(overrides[name], survivor) if name in overrides else getattr(survivor, name)
-        decided = {name for name, value in kept.items() if name in overrides or value != getattr(other, name)}
+            chosen = overrides if name in overrides else filled if name in filled else None
+            kept[name] = field.clean(chosen[name], survivor) if chosen is not None else getattr(survivor, name)
+        decided = {
+            name for name, value in kept.items() if name in overrides or name in filled or value != getattr(other, name)
+        }
+        pinned = set(decided) if confirmed is None else (decided & set(confirmed)) | set(overrides)
         for manager in survivor.statement_managers():
             for aspect, declaration in manager.model.statement_aspects.items():
-                if declaration.members or not declaration.admits_person or decided.isdisjoint(declaration.fields):
+                if declaration.members or not declaration.admits_person or pinned.isdisjoint(declaration.fields):
                     continue
                 values = {name: kept[name] if name in kept else getattr(survivor, name) for name in declaration.fields}
                 survivor.confirm_statement(aspect=aspect, values=values)
                 decided.difference_update(declaration.fields)
-        edits = [name for name in sorted(decided.intersection(overrides)) if getattr(survivor, name) != kept[name]]
+                pinned.difference_update(declaration.fields)
+        edits = [name for name in sorted(pinned.intersection(overrides)) if getattr(survivor, name) != kept[name]]
         for name in edits:
             setattr(survivor, name, kept[name])
         if edits:
             survivor.save(update_fields=[*edits, "updated_at"])
+        plain = {
+            name: kept[name]
+            for name in sorted(decided - pinned)
+            if name in filled and getattr(survivor, name) != kept[name]
+        }
+        if plain:
+            # No one's statement: a plain write, which survivorship keeps until a source states the field.
+            type(survivor)._base_manager.filter(pk=survivor.pk).update(**plain)
+            for name, value in plain.items():
+                setattr(survivor, name, value)
 
     def apply_identity(
         self,
@@ -612,18 +668,40 @@ class Party(
             super().apply_pair(aspect=aspect, other=other, statement=statement)
 
     def validate_merge(self, merged: Sequence[Any]) -> None:
+        """Refuse a pair a person kept apart, and records of different kinds (a person and an organization)."""
+
         super().validate_merge(merged)
+        kind = self.concrete_kind
         for row in merged:
+            if row.concrete_kind != kind:
+                raise ValidationError("Only people, or only organizations, merge together.")
             if self.same_as.kept_separate(self, row):
                 raise ValidationError("These parties have been marked to stay separate.")
         # The survivor takes every merged record's links: never two live contacts of one pull-only directory.
         if refusal := apps.get_model("parties", "Party").objects.directory_merge_blocker(self, merged):
             raise ValidationError(refusal)
 
-    def merge_fields(self, merged: Sequence[Any], *, field_overrides: Any = None, **options: Any) -> None:
+    def merge_fields(
+        self,
+        merged: Sequence[Any],
+        *,
+        field_overrides: Any = None,
+        fill_empty: bool = False,
+        confirmed_fields: Collection[str] | None = None,
+        **options: Any,
+    ) -> None:
+        """Keep the survivor's merge scalars against each merged record and confirm each pair as the actor's.
+
+        ``fill_empty`` keeps a merged record's value of each field this survivor
+        leaves empty (:meth:`merge_values`, read here, under the merge's locks);
+        ``confirmed_fields`` names the fields the merging person saw, the only ones
+        recorded as their choice beside the overrides (:meth:`keep_merge_fields`).
+        """
+
         super().merge_fields(merged, **options)
+        fills = self.merge_values(merged) if fill_empty else {}
         for row in merged:
-            self.keep_merge_fields(row, field_overrides)
+            self.keep_merge_fields(row, field_overrides, fills=fills, confirmed=confirmed_fields)
             pair = self.same_as.for_pair(self, row).with_actor(instance_actor(self))
             pair.confirm_statement(aspect="same_as", values={})
             # The merge decides the pair, so a directory's proposal of it is moot.
@@ -830,7 +908,8 @@ class Handle(
     (``HandleManager.state_stored_holders``) after a resource load and by the
     ``resolve_stale_owners`` repair that provisioning runs, except a confirmed one
     or one another party's applied statement contests, which the repair leaves for
-    a person; until then a resolution of the handle clears it.
+    a person, and a trashed one, left until a restore; until then a resolution of
+    the handle clears it.
     """
     party_link_confirmed = models.BooleanField(default=False, editable=False)
     """Whether the winning link materialised into ``party`` is human-confirmed."""
@@ -1864,3 +1943,28 @@ class Directory(Bridge, inherits="integrate.Integration"):
         """
 
         return self.backend.credential_blocker(credential)
+
+    def grant_owner_contact_read(self) -> bool:
+        """Grant this directory's owner ``contact_reader``, the read of its contacts; return whether it was missing.
+
+        The one writer of that grant, a decision made when the directory is
+        connected: ``Directory.objects.connect`` calls it for the connecting
+        owner, and the provision repair (``DirectoryManager.grant_owner_contact_reads``)
+        for every existing directory. It is system work and idempotent: an owner
+        who already reads the contacts (granted, or through a group) is granted
+        nothing. A transfer does not move it: a person grants a later owner
+        through the record-access surface, and the previous owner keeps the
+        grant until someone removes it. A grant that follows ownership would be
+        written by the transfer's owner, a ``transfer_ownership`` override on
+        the directory calling this for the new owner and revoking the previous
+        one in the transfer's transaction.
+        """
+
+        if self.owner_id is None:
+            return False
+        owner = to_subject_ref(self.owner)
+        with system_context(reason="parties.directory.owner_contact_read"):
+            if backend().check_access(subject=owner, action="contact_read", resource=to_object_ref(self)).allowed:
+                return False
+            self.system_grant_record_access("contact_reader", owner)
+        return True

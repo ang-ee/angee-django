@@ -3,12 +3,16 @@
 import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, expect, test, vi } from "vitest";
 
-const state = vi.hoisted(() => ({ kind: "ORGANIZATION" as "ORGANIZATION" | "PERSON" | null, fetching: false }));
+const state = vi.hoisted(() => ({
+  kind: "ORGANIZATION" as "ORGANIZATION" | "PERSON" | null,
+  fetching: false,
+  survivor: "party-1",
+}));
 
 vi.mock("@angee/refine", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@angee/refine")>()),
   useAuthoredQuery: () => ({
-    data: state.kind ? { parties_by_pk: { id: "party-1", concrete_kind: state.kind } } : { parties_by_pk: null },
+    data: state.kind ? { party_record: { id: state.survivor, concrete_kind: state.kind } } : { party_record: null },
     isFetching: state.fetching,
   }),
 }));
@@ -27,6 +31,7 @@ afterEach(() => {
   cleanup();
   state.kind = "ORGANIZATION";
   state.fetching = false;
+  state.survivor = "party-1";
 });
 
 test.each([
@@ -37,6 +42,13 @@ test.each([
   render(<PartyForm resource="parties.Party" id="party-1" readOnly />);
   expect(screen.getByTestId(testId).textContent).toBe(`${resource}:party-1:true`);
   expect(partyForm.resource).toBe("parties.Party");
+});
+
+test("opens a merged-away Party's survivor in its concrete form", () => {
+  state.kind = "PERSON";
+  state.survivor = "party-2";
+  render(<PartyForm resource="parties.Party" id="party-1" readOnly />);
+  expect(screen.getByTestId("person-form").textContent).toBe("parties.Person:party-2:true");
 });
 
 test("does not invent a form for a missing or non-concrete Party", () => {

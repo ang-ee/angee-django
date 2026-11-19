@@ -10,6 +10,7 @@ from threading import Barrier, Lock
 from typing import Any, ClassVar
 
 import pytest
+from django.apps import apps
 from django.core.exceptions import ValidationError
 from django.db import (
     DataError,
@@ -20,7 +21,9 @@ from django.db import (
     models,
     transaction,
 )
+from django.db.migrations.state import ProjectState
 from django.db.models.signals import pre_delete
+from django.test.utils import CaptureQueriesContext
 from django.utils import timezone
 from hypothesis import example, given, settings
 from hypothesis import strategies as st
@@ -1037,15 +1040,22 @@ def test_a_retained_list_that_no_longer_names_the_stream_version_replays_once(
 
 
 def test_a_stream_written_before_retained_contributions_keeps_its_generation(stream_bridge: Channel) -> None:
-    """A row the previous release wrote has no contribution column; ``AddField`` fills it with the column's default."""
+    """A row the previous release wrote has no contribution column; ``AddField`` fills it with the column's default.
+
+    ``AddField`` adds the column to the model of the migration state before it,
+    which has no such field, so the test adds it the same way.
+    """
 
     adapter = composed_adapter(stream_bridge, mapping_version=3)
     initial, landed = drain_records(stream_bridge, adapter)
     assert landed == 2
     column = SyncStream._meta.get_field("mapping_contributions")
+    state = ProjectState.from_apps(apps)
+    del state.models[SyncStream._meta.app_label, SyncStream._meta.model_name].fields[column.name]
+    previous = state.apps.get_model(SyncStream._meta.app_label, SyncStream._meta.model_name)
     with connection.schema_editor() as editor:
         editor.remove_field(SyncStream, column)
-        editor.add_field(SyncStream, column)
+        editor.add_field(previous, column)
 
     upgraded, landed = drain_records(stream_bridge, adapter)
     assert (upgraded.pk, upgraded.generation, upgraded.mapping_version, upgraded.cursor, landed) == (
@@ -1057,6 +1067,52 @@ def test_a_stream_written_before_retained_contributions_keeps_its_generation(str
     adapter.contributions, adapter.mapping_version = parts(("base", 1)), 1
     composed, landed = drain_records(stream_bridge, adapter)
     assert (composed.generation, composed.mapping_version, landed) == (initial.generation + 1, 4, 2)
+
+
+def insert_as_an_earlier_release(row: models.Model, omitted: str, **expressions: str) -> None:
+    """Copy ``row`` with an INSERT that names no ``omitted`` column, as a release whose model lacks it writes.
+
+    ``expressions`` replace columns by SQL over the copied row, so the copy keeps its unique constraints.
+    """
+
+    quote = connection.ops.quote_name
+    meta = type(row)._meta
+    columns = [field.column for field in meta.concrete_fields if not field.primary_key and field.name != omitted]
+    values = ", ".join(expressions.get(column, quote(column)) for column in columns)
+    table = quote(meta.db_table)
+    with connection.cursor() as cursor:
+        cursor.execute(
+            f"INSERT INTO {table} ({', '.join(map(quote, columns))}) SELECT {values} FROM {table}"
+            f" WHERE {quote(meta.pk.column)} = %s",
+            [row.pk],
+        )
+
+
+def test_a_release_before_the_retained_list_still_creates_stream_generations(stream_bridge: Channel) -> None:
+    """Its model has no such column, so its insert takes the database default: a stream that never composed."""
+
+    adapter = composed_adapter(stream_bridge, contributions=parts(("base", 1)))
+    composed, landed = drain_records(stream_bridge, adapter)
+    assert (composed.mapping_version, landed) == (1, 2)
+    insert_as_an_earlier_release(composed, "mapping_contributions", generation="generation + 1")
+    successor = SyncStream.objects.order_by("-generation").first()
+    RecordLink.objects.filter(stream=composed).update(stream=successor)
+    assert successor.generation == composed.generation + 1
+    assert (successor.mapping_contributions, successor.retained_contributions) == ({}, ())
+
+    returned, landed = drain_records(stream_bridge, adapter)
+    assert (returned.generation, returned.mapping_version, landed) == (successor.generation + 1, 2, 2)
+
+
+def test_a_release_before_the_local_version_still_creates_links(stream_bridge: Channel) -> None:
+    """Its model has no ``local_version``, so its insert takes the database default: an unknown local version."""
+
+    _stream, landed = drain_records(stream_bridge, composed_adapter(stream_bridge))
+    assert landed == 2
+    insert_as_an_earlier_release(
+        RecordLink.objects.get(external_key="person:1"), "local_version", external_key="external_key || ':copy'"
+    )
+    assert RecordLink.objects.get(external_key="person:1:copy").local_version == ""
 
 
 @pytest.mark.parametrize("composed", [False, True])
@@ -3277,6 +3333,60 @@ def test_a_push_writes_and_reflects_nothing_while_discovery_is_pending(discovere
     link = RecordLink.objects.with_sync_evidence().get(stream=stream, external_key="one")
     assert (link.remote_version, link.applied_base.source_hash) == ("v1", "base")
     assert not RecordLink.objects.filter(stream=stream, external_key="new").exists()
+
+
+def _integration_reads(queries: CaptureQueriesContext) -> list[str]:
+    """The statements that read the integration row on its own (a stream lock reads it joined)."""
+
+    table = SyncStream._meta.get_field("integration").related_model._meta.db_table
+    return [query["sql"] for query in queries.captured_queries if f'FROM "{table}"' in query["sql"]]
+
+
+def test_a_push_asks_discovery_once_per_write_and_reads_only_its_columns(
+    discovered_bridge: ConnectionBridge,
+) -> None:
+    stream = _two_way(discovered_bridge, "a", "b", "c")
+    with system_context(reason="test pinned candidates"):
+        for key in ("b", "c"):
+            RecordLink.objects.get(stream=stream, external_key=key).pin()
+    adapter = MemoryAdapter(candidates=tuple(LocalChange(key, {"n": 1}) for key in ("a", "b", "c")))
+
+    with CaptureQueriesContext(connection) as queries:
+        push_stream(stream, adapter)
+
+    # Two pinned candidates are skipped before the check; the one write asks once.
+    reads = _integration_reads(queries)
+    assert [written[0] for written in adapter.written] == ["a"] and len(reads) == 1
+    assert "use_count_24h" not in reads[0]
+
+
+def test_the_stream_lock_reads_only_the_readiness_columns_of_its_integration(
+    discovered_bridge: ConnectionBridge,
+) -> None:
+    stream = _two_way(discovered_bridge, "a")
+    table = SyncStream._meta.get_field("integration").related_model._meta.db_table
+    with system_context(reason="test the stream lock's read"), CaptureQueriesContext(connection) as queries:
+        with transaction.atomic():
+            SyncStream.objects.lock_current(stream)
+    (joined,) = [query["sql"] for query in queries.captured_queries if f'JOIN "{table}"' in query["sql"]]
+    assert "discovery_retry_at" in joined and "use_count_24h" not in joined
+
+
+@pytest.mark.parametrize(("verb", "statements"), [("pin", 21), ("resolve_failure", 22)])
+def test_a_local_link_verb_reads_no_stream_row_to_pass_the_discovery_check(
+    discovered_bridge: ConnectionBridge, verb: str, statements: int,
+) -> None:
+    stream = _two_way(discovered_bridge, "a")
+    with system_context(reason="test a local verb on a link"):
+        link = RecordLink.objects.get(stream=stream, external_key="a")
+        if verb == "resolve_failure":
+            link.record_failure(kind=SyncFailureKind.SEMANTIC, code="invalid_record", source_hash="base")
+            link = RecordLink.objects.get(pk=link.pk)
+        assert not RecordLink._meta.get_field("stream").is_cached(link)
+        with CaptureQueriesContext(connection) as queries:
+            link.pin() if verb == "pin" else link.resolve_failure(0)
+    # The exemption is a context, not a manager reached through a stream row loaded for it.
+    assert len(queries.captured_queries) == statements
 
 
 def test_a_two_way_page_sends_no_write_back_while_discovery_is_pending(discovered_bridge: ConnectionBridge) -> None:

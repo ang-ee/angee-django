@@ -2,14 +2,13 @@
 
 from __future__ import annotations
 
-from datetime import date, timedelta
+from datetime import timedelta
 from typing import Any
 
 import pytest
-from django.apps import apps
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
-from django.db import OperationalError, connection, transaction
+from django.db import connection, transaction
 from django.test import override_settings
 from django.test.utils import CaptureQueriesContext
 from django.utils import timezone
@@ -402,6 +401,96 @@ def test_the_review_list_fills_its_page_with_pairs_the_reader_can_read(db: None)
     assert [{pair.left.pk, pair.right.pk} for pair in page] == readable
 
 
+def _review_pairs(reader: Any, count: int, *, hidden: int = 0, other: Any = None) -> list[frozenset[Any]]:
+    """``count`` pairs ``reader`` may review, in creation order, with ``hidden`` more interleaved whose cited
+    address only ``other`` reads; return the reviewable ones."""
+
+    reviewable = []
+    concealed = {index * (count + hidden) // hidden for index in range(hidden)} if hidden else set()
+    for index in range(count + hidden):
+        handle = _address(other if index in concealed else reader, f"pair{index}@example.com")
+        pair = frozenset({_holder(reader, handle).pk, _claimant(reader, handle).pk})
+        if index not in concealed:
+            reviewable.append(pair)
+    assert _reconcile() == count + hidden
+    return reviewable
+
+
+def _walk(reader: Any, *, size: int, after: str | None = None) -> list[list[frozenset[Any]]]:
+    """Every page of ``reader``'s review list from ``after``, each page continuing after the last pair seen."""
+
+    pages = []
+    while page := Party.objects.with_actor(reader).same_as_pairs(limit=size, after=after):
+        pages.append([frozenset({pair.left.pk, pair.right.pk}) for pair in page])
+        after = page[-1].id
+    return pages
+
+
+@pytest.mark.parametrize(
+    "hidden", [pytest.param(0, id="reads-every-cited-handle"), pytest.param(12, id="cannot-read-some")],
+)
+def test_every_review_pair_is_reachable_in_pages_with_none_skipped_or_repeated(db: None, hidden: int) -> None:
+    """120 pairs in pages of 50: three pages, each pair once; a pair whose cited address the reader cannot read
+    is never listed and never ends a page early."""
+
+    del db
+    reader, other = create_user("same-as-pages-reader"), create_user("same-as-pages-other")
+    reviewable = _review_pairs(reader, 120, hidden=hidden, other=other)
+
+    pages = _walk(reader, size=50)
+
+    assert [len(page) for page in pages] == [50, 50, 20]
+    seen = [pair for page in pages for pair in page]
+    assert len(set(seen)) == len(seen) == 120
+    assert set(seen) == set(reviewable)
+
+
+def test_a_pair_that_leaves_while_a_person_pages_moves_no_other_pair(db: None) -> None:
+    """The next page continues after the last pair seen, so pairs kept apart before or after it skip nothing."""
+
+    del db
+    reader = create_user("same-as-pages-leave")
+    _review_pairs(reader, 30)
+    first = Party.objects.with_actor(reader).same_as_pairs(limit=10)
+    remaining = Party.objects.with_actor(reader).same_as_pairs(limit=101)
+    # Two pairs on the page already seen and two on the next one leave the list.
+    for pair in [*first[:2], *remaining[10:12]]:
+        _kept_separate(reader, pair.left, pair.right)
+
+    pages = _walk(reader, size=10, after=first[-1].id)
+
+    after_first = [frozenset({pair.left.pk, pair.right.pk}) for pair in remaining[10:]]
+    seen = [pair for page in pages for pair in page]
+    assert seen == after_first[2:]
+
+
+def test_the_review_list_costs_the_same_however_many_pairs_the_reader_cannot_read(db: None) -> None:
+    """Pairs whose cited addresses the reader cannot read are filtered in one batch, not page by page: one
+    or nine of them ahead of the reader's own pair cost the same, and the reader's pair is on the first page."""
+
+    del db
+    other = create_user("same-as-review-cost-other")
+
+    def cost(hidden: int) -> tuple[int, int]:
+        reader = create_user(f"same-as-review-cost-{hidden}")
+        for index in range(hidden):
+            handle = _address(other, f"hidden{hidden}-{index}@example.com")
+            _holder(reader, handle)
+            _claimant(reader, handle)
+        _reconcile()
+        handle = _address(reader, f"own{hidden}@example.com")
+        _holder(reader, handle)
+        _claimant(reader, handle)
+        _reconcile()
+        with CaptureQueriesContext(connection) as queries:
+            page = Party.objects.with_actor(reader).same_as_pairs(limit=1)
+        return len(queries.captured_queries), len(page)
+
+    one = cost(1)
+
+    assert cost(9) == one == (one[0], 1)
+
+
 def test_a_link_a_person_dismissed_pairs_nobody(db: None) -> None:
     del db
     owner = create_user("same-as-dismissed-link")
@@ -712,175 +801,6 @@ def test_a_proposal_cites_the_handles_that_link_the_two(db: None, evidence: str)
     assert _rule_pair_statements(holder, claimant) == []
 
 
-def _people(owner: Any, left: str, right: str, *, value: str = "zoe@example.com") -> tuple[Any, Any, Any]:
-    """Two people one address links: the older states it, the newer's source claims it."""
-
-    handle = _address(owner, value)
-    with system_context(reason="same_as two people"):
-        older = Person._base_manager.create(display_name=left, created_by=owner)
-        Party.objects.assert_handle(older, handle, asserted_by=owner)
-        newer = Person._base_manager.create(display_name=right, created_by=owner)
-        Party.objects.propose_claimed_handle_as_system(newer, handle, evidence=handle, reason="tests.claim")
-    return older, newer, handle
-
-
-def _merge_certain(actor: Any, *, limit: int = 50) -> list[tuple[str, set[Any], Any]]:
-    outcomes = Party.objects.merge_certain_same_as_pairs(actor=actor, limit=limit)
-    return [
-        (str(row.outcome), {row.left.pk, row.right.pk}, row.survivor.pk if row.survivor else None) for row in outcomes
-    ]
-
-
-def test_a_certain_pair_merges_into_the_older_record_as_the_acting_persons_merge(db: None) -> None:
-    """The survivor keeps its spelling of the name, recorded as the acting person's choice, and holds the address."""
-
-    del db
-    owner = create_user("same-as-certain-owner")
-    older, newer, handle = _people(owner, "Zoë Example-Smith", "zoe example smith")
-    assert _reconcile() == 1
-
-    assert _merge_certain(owner) == [("merged", {older.pk, newer.pk}, older.pk)]
-
-    with system_context(reason="same_as certain readback"):
-        assert Party._base_manager.get(pk=newer.pk).merged_into_id == older.pk
-        assert Party._base_manager.get(pk=older.pk).display_name == "Zoë Example-Smith"
-        kept = Party.statements.model._base_manager.get(subject_id=older.pk, aspect="identity", rank="preferred")
-        assert (kept.asserted_by, kept.stated_value("display_name")) == (
-            str(to_subject_ref(owner)), "Zoë Example-Smith",
-        )
-        assert set(Party.objects.handle_statements().filter(handle=handle).values_list("subject_id", flat=True)) == {
-            older.pk,
-        }
-    assert _pairs() == []
-
-
-def _not_people(owner: Any) -> tuple[Any, Any]:
-    handle = _address(owner, "zoe@example.com")
-    return _holder(owner, handle, "Zoë Example"), _claimant(owner, handle, "Zoe Example")
-
-
-def _an_account_person(owner: Any) -> tuple[Any, Any]:
-    handle = _address(owner, "zoe@example.com")
-    with system_context(reason="same_as an account's person"):
-        person = Person.objects.for_user(owner)
-        Party.objects.assert_handle(person, handle, asserted_by=owner)
-        contact = Person._base_manager.create(display_name=person.display_name, created_by=owner)
-        Party.objects.propose_claimed_handle_as_system(contact, handle, evidence=handle, reason="tests.claim")
-    return person, contact
-
-
-def _a_third_party_linked(owner: Any) -> tuple[Any, Any]:
-    older, newer, handle = _people(owner, "Zoë Example", "Zoe Example")
-    with system_context(reason="same_as a third party"):
-        third = Person._base_manager.create(display_name="Zoe Example", created_by=owner)
-        Party.objects.propose_claimed_handle_as_system(third, handle, evidence=handle, reason="tests.claim")
-    return older, newer
-
-
-def _names_differ(owner: Any) -> tuple[Any, Any]:
-    older, newer, _handle = _people(owner, "Zoë Example", "Zoe B. Example")
-    return older, newer
-
-
-def _a_name_missing(owner: Any) -> tuple[Any, Any]:
-    older, newer, _handle = _people(owner, "Zoë Example", Party.PLACEHOLDER_NAME)
-    return older, newer
-
-
-@pytest.mark.parametrize(
-    ("arrange", "outcome"),
-    [
-        pytest.param(_not_people, "not_people", id="not-both-people"),
-        pytest.param(_an_account_person, "account_person", id="an-accounts-own-person"),
-        pytest.param(_a_third_party_linked, "shared_address", id="a-third-party-on-the-address"),
-        pytest.param(_names_differ, "names_differ", id="names-differ"),
-        pytest.param(_a_name_missing, "names_differ", id="a-name-missing"),
-    ],
-)
-def test_a_pair_that_is_not_certain_is_left_for_review_with_its_reason(db: None, arrange: Any, outcome: str) -> None:
-    del db
-    owner = create_user("same-as-uncertain")
-    left, right = arrange(owner)
-    _reconcile()
-    pairs = {frozenset(pair) for pair, _handles in _pairs()}
-    assert frozenset({left.pk, right.pk}) in pairs
-
-    assert (outcome, {left.pk, right.pk}, None) in _merge_certain(owner)
-    assert {frozenset(pair) for pair, _handles in _pairs()} == pairs
-
-
-def test_a_person_the_merge_does_not_permit_leaves_the_pair(db: None) -> None:
-    """Reading a pair is not merging it: the merge's own permission decides."""
-
-    del db
-    owner, reviewer = create_user("same-as-certain-writer"), create_user("same-as-certain-reader")
-    older, newer, handle = _people(owner, "Zoë Example", "Zoe Example")
-    assert _reconcile() == 1
-    with actor_context(owner):
-        for record in (*Party.objects.filter(pk__in=(older.pk, newer.pk)), Handle.objects.get(pk=handle.pk)):
-            record.grant_record_access("reader", reviewer)
-
-    assert _merge_certain(reviewer) == [("not_permitted", {older.pk, newer.pk}, None)]
-    assert len(_pairs()) == 1
-
-
-def refuse_merges(record: Any) -> str:
-    """A merge guard an addon contributes to hold its records."""
-
-    del record
-    return "Held by a test addon."
-
-
-def test_a_merge_the_guards_refuse_leaves_the_pair(db: None) -> None:
-    del db
-    owner = create_user("same-as-certain-guarded")
-    older, newer, _handle = _people(owner, "Zoë Example", "Zoe Example")
-    assert _reconcile() == 1
-
-    with override_settings(ANGEE_MERGE_GUARDS=[f"{__name__}.refuse_merges"]):
-        assert _merge_certain(owner) == [("refused", {older.pk, newer.pk}, None)]
-    assert len(_pairs()) == 1
-
-
-def test_one_call_merges_a_bounded_number_of_pairs(db: None) -> None:
-    del db
-    owner = create_user("same-as-certain-bounded")
-    first = _people(owner, "Zoë Example", "Zoe Example", value="zoe@example.com")
-    second = _people(owner, "Yan Example", "yan example", value="yan@example.com")
-    assert _reconcile() == 2
-
-    assert _merge_certain(owner, limit=1) == [("merged", {first[0].pk, first[1].pk}, first[0].pk)]
-    assert _merge_certain(owner, limit=1) == [("merged", {second[0].pk, second[1].pk}, second[0].pk)]
-    assert _merge_certain(owner) == []
-
-
-def test_a_certain_merge_loses_no_value_the_survivor_leaves_empty(db: None) -> None:
-    """The newer record fills each merge field the older leaves empty; where both have a value, the older's stands."""
-
-    del db
-    owner = create_user("same-as-certain-fill")
-    older, newer, _handle = _people(owner, "Zoë Example", "Zoe Example")
-    with system_context(reason="same_as values on the two records"):
-        Person._base_manager.filter(pk=older.pk).update(nickname="Zo")
-        Person._base_manager.filter(pk=newer.pk).update(
-            nickname="Zozo", given_name="Zoe", notes="Met at the gallery",
-            birthday=date(1990, 2, 3), anniversary=date(2015, 6, 7),
-        )
-    assert _reconcile() == 1
-
-    assert _merge_certain(owner) == [("merged", {older.pk, newer.pk}, older.pk)]
-
-    with system_context(reason="same_as fill readback"):
-        survivor = Person._base_manager.get(pk=older.pk)
-        for statements in survivor.statement_managers():
-            statements.resolve()
-        survivor.refresh_from_db()
-    assert (
-        survivor.display_name, survivor.nickname, survivor.given_name, survivor.notes, survivor.birthday,
-        survivor.anniversary,
-    ) == ("Zoë Example", "Zo", "Zoe", "Met at the gallery", date(1990, 2, 3), date(2015, 6, 7))
-
-
 def _record_link(name: str, key: str) -> Any:
     """An importer's record link: a claim's evidence names the source record, not the handle."""
 
@@ -953,80 +873,6 @@ def test_a_claim_restated_with_more_evidence_changes_no_pair(
     with system_context(reason="same_as decision readback"):
         assert Party.same_as.kept_separate(holder, claimant) is (decision == "kept")
     assert _pairs() == ([({holder.pk, claimant.pk}, (handle,))] if decision == "asserted" else [])
-
-
-def _claimed_people(account: Any) -> tuple[Any, Any]:
-    """Two people ``account`` owns, each claimed for one address by a source: a certain pair ``account`` reviews."""
-
-    handle = _address(account, "zoe@example.com")
-    with system_context(reason="same_as an account's two people"):
-        older, newer = (
-            Person._base_manager.create(display_name=name, created_by=account)
-            for name in ("Zoë Example", "Zoe Example")
-        )
-        for person in (older, newer):
-            Party.objects.propose_claimed_handle_as_system(person, handle, evidence=handle, reason="tests.claim")
-    return older, newer
-
-
-def _account(kind: str) -> Any:
-    if kind == "person":
-        return create_user("same-as-certain-person")
-    if kind == "service":
-        return get_user_model().objects.create_user(username="same-as-certain-service", kind="service")
-    with system_context(reason="same_as an agent's account"):
-        agent = apps.get_model("agents", "Agent").objects.create(
-            name="Reviewer", owner=create_user("same-as-agent-owner"), runtime_class="pydantic",
-        )
-    return agent.user
-
-
-@pytest.mark.parametrize(
-    ("kind", "outcome"),
-    [
-        pytest.param("person", "merged", id="an-active-person"),
-        pytest.param("service", "not_permitted", id="a-service-account"),
-        pytest.param("agent", "not_permitted", id="an-agents-account"),
-    ],
-)
-def test_only_an_active_person_merges_certain_pairs(db: None, kind: str, outcome: str) -> None:
-    """The bulk merge is a person's action: an account that is not an active person merges nothing, even its own."""
-
-    del db
-    account = _account(kind)
-    older, newer = _claimed_people(account)
-    assert _reconcile() == 1
-
-    assert _merge_certain(account) == [(outcome, {older.pk, newer.pk}, older.pk if outcome == "merged" else None)]
-    with system_context(reason="same_as person-only readback"):
-        assert (Party._base_manager.get(pk=newer.pk).merged_into_id == older.pk) is (outcome == "merged")
-
-
-def test_a_merge_the_database_stops_is_reported_and_the_next_pair_still_merges(db: None) -> None:
-    """A deadlock in one merge rolls that merge back and is its outcome; earlier and later merges stand."""
-
-    del db
-    owner = create_user("same-as-certain-busy")
-    first = _people(owner, "Zoë Example", "Zoe Example", value="zoe@example.com")
-    second = _people(owner, "Yan Example", "yan example", value="yan@example.com")
-    assert _reconcile() == 2
-    stopped: list[str] = []
-
-    def deadlock_once(execute: Any, sql: str, params: Any, many: bool, context: Any) -> Any:
-        if not stopped and sql.lstrip().upper().startswith("UPDATE") and '"merged_into_id"' in sql:
-            stopped.append(sql)
-            raise OperationalError("deadlock detected")
-        return execute(sql, params, many, context)
-
-    with connection.execute_wrapper(deadlock_once):
-        outcomes = _merge_certain(owner)
-
-    assert outcomes == [
-        ("busy", {first[0].pk, first[1].pk}, None),
-        ("merged", {second[0].pk, second[1].pk}, second[0].pk),
-    ]
-    with system_context(reason="same_as busy readback"):
-        assert Party._base_manager.get(pk=first[1].pk).merged_into_id is None
 
 
 def _decided_pair_citing_a_deleted_handle(owner: Any, decide: Any) -> tuple[Any, Any]:

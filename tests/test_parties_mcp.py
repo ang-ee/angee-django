@@ -44,4 +44,4 @@ def test_every_parties_tool_compiles_and_no_agent_merges_certain_pairs() -> None
     tools = _registered_tools()
 
     assert "merge_parties" in tools
-    assert "merge_certain_same_as_pairs" not in tools
+    assert not {"merge_certain_same_as_pairs", "merge_duplicates"} & set(tools)

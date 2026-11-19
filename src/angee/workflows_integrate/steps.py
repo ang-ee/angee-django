@@ -267,7 +267,9 @@ def bridge_io(ctx: StepContext, bridge: Bridge) -> Iterator[BridgeImpl | Wait]:
     waits the same way, until discovery's next attempt is due, and notes the
     discovery message once per discovery attempt. While that attempt is already
     due (its worker has it) the step checks back after a wait that doubles from
-    one second. One whose discovery failed fails with that message.
+    one second. One whose discovery failed fails with that message. Once the
+    lock is held, readiness is asked again on the bridge as stored now; a refusal
+    there waits like contention, and the next attempt's check decides.
     """
     try:
         bridge.require_discovery_ready()
@@ -288,6 +290,13 @@ def bridge_io(ctx: StepContext, bridge: Bridge) -> Iterator[BridgeImpl | Wait]:
         with closing(bridge.capability_impl) as adapter:
             lock = bridge.sync_lock() if adapter.sync_parallelism == 1 else nullcontext(True)
             with lock as acquired:
+                if acquired:
+                    try:
+                        # Asked again under the lock on the bridge as stored now: a secret re-entered while
+                        # the step waited for the lock holds its IO back, and the next attempt's check decides.
+                        type(bridge).require_stored_discovery_ready(bridge.pk)
+                    except IntegrationError:
+                        acquired = False
                 if not acquired:
                     yield ctx.wait(until=ctx.now + timedelta(seconds=1), state=ctx.state)
                     return
