@@ -189,6 +189,13 @@ def hubspot(db: None) -> Iterator[HubSpot]:
             slug="employee", name="Employee", inverse_name="Employer", category="professional",
             other_party_kind="organization",
         )
+        # The stream driver commits nothing while discovery is pending, so the directory is discovered first, as
+        # connecting leaves it; the discovery's requests are not part of what a test reads from the server.
+        assert directory.run_discovery(credential_pk=directory.credential_id, generation=directory.discovery_generation)[
+            "ok"
+        ]
+        directory.refresh_from_db()
+        server.requests.clear()
         backend = directory.backend
         assert isinstance(backend, HubSpotDirectoryBackend)
         (books,) = backend.streams()
