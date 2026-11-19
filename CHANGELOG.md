@@ -775,8 +775,14 @@ live in code docstrings.
   keeps a provider's 5xx or 429 transient instead of a permanent configuration
   error; Google's oversized and unreadable answers are no longer retried; a
   Notion page over the cap or unreadable is quarantined instead of stalling its
-  stream. The posts feed's `request_json` reads a GET's oversized answer, and
-  a GET success that is not a JSON object, as permanent instead of transient.
+  stream. The posts feed's `request_json` sends through the refusal hook and
+  leaves integrate the status rule and the wait: a refused answer its adapter
+  does not name is integrate's refusal, so an unnamed 429 is transient and
+  waits (it was a permanent "refused" that ignored `Retry-After`), and a 3xx a
+  read did not follow is refused instead of returned as data; a GET's oversized
+  answer, and a GET success that is not a JSON object or that httpx2 cannot
+  decode, are permanent; a POST's 3xx is uncertain. A refusal factory that
+  returns the failure it was handed has it raised unchanged.
   Google Drive and Google Calendar word a file's or an event's refusal in their
   own phrases, never Google's reason. Capped JSON requests, GitHub's and
   OAuth's included, ask for an unencoded answer, and `is_transient_status`

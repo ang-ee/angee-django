@@ -929,6 +929,17 @@ def test_a_request_with_an_error_factory_returns_any_status_and_refuses_what_it_
     assert causes == {"unreachable": (True, True), "not_sent": (True, True)}
 
 
+def test_a_failure_the_factory_returns_is_raised_unchanged() -> None:
+    """A caller that passes a request not sent on returns its failure; the owner re-raises it, its chain intact."""
+
+    failure = RequestNotSentError()
+    failure.__cause__ = ConnectionRefusedError("refused")
+    with mock_transport(_answer(failure)), pytest.raises(RequestNotSentError) as raised:
+        HttpClient().request("POST", URL, error=lambda refusal: refusal.failure or _VendorError())
+
+    assert raised.value is failure and isinstance(raised.value.__cause__, ConnectionRefusedError)
+
+
 _KEY = "example-key-5f3a"
 """An invented credential: no refusal may carry it in its message, its ``repr`` or its exception chain."""
 
