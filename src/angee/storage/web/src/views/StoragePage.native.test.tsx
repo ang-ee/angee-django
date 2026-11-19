@@ -474,7 +474,10 @@ test.each(["blocked", "cancel", "success"] as const)("the open file asks once th
     expect(custom).toHaveBeenCalledWith(expect.objectContaining({
       payload: { target_type: "storage/file", target_id: "file-a", reason: "" },
     }));
-    await screen.findByText(outcome === "success" ? "Moved." : "Still in use.");
+    // Count the toast itself, excluding Base UI's hidden accessibility announcement.
+    expect(await screen.findAllByText(outcome === "success" ? "Moved." : "Still in use.", {
+      selector: `[data-type='${outcome === "success" ? "success" : "danger"}']`,
+    })).toHaveLength(1);
   }
   if (outcome === "success") await waitFor(() => expect(close).toHaveBeenCalledOnce());
   else expect(close).not.toHaveBeenCalled();

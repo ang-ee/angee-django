@@ -57,12 +57,7 @@ test("steps always offer their scoped Decisions tab", async () => {
 });
 
 async function action(label: string, scope: HTMLElement = document.body) {
-  if (label === "Reprocess run") {
-    fireEvent.click((await within(scope).findAllByRole("button", { name: "Actions" })).at(-1)!);
-    fireEvent.click(await screen.findByRole("menuitem", { name: label }));
-  } else {
-    fireEvent.click(await within(scope).findByRole("button", { name: label }));
-  }
+  fireEvent.click(await within(scope).findByRole("button", { name: label }));
   return screen.findByRole(label === "Retry accepting a possible duplicate" ? "dialog" : "alertdialog", { name: label });
 }
 
@@ -72,13 +67,13 @@ async function openStep() {
   return screen.findByRole("dialog", { name: "Step Run" });
 }
 
-test("routed record uses the framework action menu, facts and retained JSON", async () => {
+test("routed record uses the framework action buttons, facts and retained JSON", async () => {
   render(<RunStory />);
   expect(await screen.findByText("Operator")).toBeTruthy();
   expect(await screen.findByText("Review notes")).toBeTruthy();
   expect(screen.getByRole("tab", { name: "Step runs" })).toBeTruthy();
   expect(screen.queryByRole("button", { name: /Save|Delete|New/ })).toBeNull();
-  expect(screen.queryByRole("button", { name: "Reprocess run" })).toBeNull();
+  expect(screen.getByRole("button", { name: "Reprocess run" })).toBeTruthy();
   expect(screen.queryByText("Retained error")).toBeNull();
   await waitFor(() => expect(document.body.textContent).toContain("R-7"));
 });
@@ -354,7 +349,7 @@ test("rejected actions show failure without navigation or success", async () => 
 test("unavailable run details show the shared missing-record state", async () => {
   render(<RunStory unavailable />);
   expect(await screen.findByRole("heading", { name: "Record unavailable" })).toBeTruthy();
-  expect(screen.queryByRole("button", { name: "Actions" })).toBeNull();
+  expect(screen.queryByRole("button", { name: "Reprocess run" })).toBeNull();
   expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
 });
 
@@ -362,7 +357,7 @@ test("run query failures retain the shared retry action", async () => {
   render(<RunStory queryError />);
   expect(await screen.findByRole("alert", undefined, { timeout: 10000 })).toBeTruthy();
   expect(screen.getByRole("button", { name: "Retry" })).toBeTruthy();
-  expect(screen.queryByRole("button", { name: "Actions" })).toBeNull();
+  expect(screen.queryByRole("button", { name: "Reprocess run" })).toBeNull();
 }, 15000);
 
 test("backend capability facts hide operator actions and retain complete error evidence", async () => {
@@ -370,5 +365,5 @@ test("backend capability facts hide operator actions and retain complete error e
   render(<RunStory run={runFixture({ can_reprocess: false, outcome: "error", failure_reason: error })} />);
   await screen.findByRole("heading", { name: "Record review" });
   expect(await screen.findByText(error.trim())).toBeTruthy();
-  expect(screen.queryByRole("button", { name: "Actions" })).toBeNull();
+  expect(screen.queryByRole("button", { name: "Reprocess run" })).toBeNull();
 });

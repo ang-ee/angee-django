@@ -63,7 +63,7 @@ function dataProvider({ count = 2, limit = 100, fail = false, transportFailure =
   const rows: MessageListRow[] = Array.from({ length: count }, (_, index) => ({
     id: String(index + 1), title: `Message ${index + 1}`, preview: "A held reply",
     created_at: "2026-10-01T00:00:00Z", channel: { id: "channel", display_name: "Discussion" }, sender: SENDER,
-    revision: index + 3, permissions: ["read", "delete", "send_held"],
+    revision: index + 3, permissions: ["read", "delete", "send_held"], is_trashed: false,
   }));
   const custom = vi.fn(async ({ meta }: { meta?: Record<string, unknown> }) => {
     if (meta?.gqlQuery === ActionSelectionLimit) {
@@ -121,10 +121,11 @@ async function fixture({ held = false, ...data }: { held?: boolean } & Parameter
   return { ...provider, router, showFilter };
 }
 
-test("the ordinary grouped route retains selection and the shared delete action", async () => {
+test("the ordinary grouped route retains selection and the shared removal action", async () => {
   await fixture();
   fireEvent.click(screen.getAllByRole("checkbox", { name: "Select row" })[0]!);
-  expect(await screen.findByRole("button", { name: /Delete/ })).toBeTruthy();
+  expect(await screen.findByRole("button", { name: "Move to trash" })).toBeTruthy();
+  expect(screen.queryByRole("button", { name: "Delete" })).toBeNull();
   expect(screen.queryByRole("button", { name: "Send now" })).toBeNull();
 });
 
