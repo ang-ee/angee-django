@@ -460,3 +460,15 @@ person who wants to choose merges that pair on the compare page instead. A merge
 batch or not, reverts from its changeset. A person's `anniversary` is a merge
 choice like their birthday; a party's `avatar` is not one yet. Merging a person
 with an organization is refused by every merge.
+
+The `people`, `organizations` and `parties` resources read canonical parties
+(`PartyQuerySet.canonical()`: outside the trash, not retracted by every source,
+and not merged away into a survivor the reader sees), as handles, addresses and
+relationships do. A merged-away or trashed party is no list row, group,
+repeated-values group, count, search result or picker candidate, and the People
+workbench's count is the list's. Their by-id roots read the same rows; a party
+id resolves through `party_record(id)`, which answers a merged-away id with its
+survivor, and the record redirect and the Party form follow it. A trashed party
+leaves the lists as every canonical read leaves it: finding and restoring it
+waits for the framework's trash surface (the shared `restore_record` verb takes
+its id).

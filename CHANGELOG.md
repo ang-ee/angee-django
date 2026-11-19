@@ -10,6 +10,16 @@ live in code docstrings.
 
 ## Unreleased — shared addon contracts, native embeddings and graph retrieval
 
+- `angee.parties`: a merged-away party is no longer a row. The `people`,
+  `organizations` and `parties` resources read `canonical()` parties, as
+  handles, addresses and relationships already did, so a party merged into
+  another (or trashed) leaves the lists, their counts and groups, the
+  repeated-values groups and the pickers, and the People list's pager agrees
+  with the workbench's "All people" count. The new `party_record(id)` root
+  resolves a party id, a merged-away one included, to the live party it names
+  now; the record redirect and the Party form read it, so an old link to a
+  merged-away record opens its survivor. Fixes the merged record appearing
+  beside its survivor (and the batch merge refusing that group).
 - `angee.parties`: a list's Merge reads the list's grouping
   (`collection.selectedGroups`). One ticked record opens "Merge into…" and two
   open the compare page, whatever the grouping. Three or more on an ungrouped

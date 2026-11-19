@@ -568,6 +568,23 @@ class PartiesReviewQuery:
         return cast("list[PersonType]", Person.objects.search_display_name(query, limit=limit))
 
     @strawberry.field
+    def party_record(self, id: str) -> PartyType | None:
+        """Return the live party a party id names now: itself, or the survivor its merge folded it into.
+
+        The record roots read canonical parties only, so a merged-away id resolves
+        here: the id's row is read in the actor's scope, its redirect is identity
+        (``canonical_ids``), and the survivor is read in the actor's canonical scope.
+        """
+
+        party = Party.objects.all().from_public_id(id)
+        if party is None:
+            return None
+        survivor = Party.canonical_ids((party.pk,)).get(party.pk)
+        if survivor is None:
+            return None
+        return cast("PartyType | None", Party.objects.canonical().filter(pk=survivor).first())
+
+    @strawberry.field
     def people_workbench(
         self,
         scope: PeopleWorkbenchScope = PeopleWorkbenchScope.ALL,
@@ -745,6 +762,8 @@ _PARTY_RESOURCE = hasura_model_resource(
     insert=False,
     updatable=["display_name", "notes", *_PARTY_EXTENSION_UPDATE_FIELDS],
     write_backend=AngeeHasuraWriteBackend(Party, public_id_fields=_PARTY_EXTENSION_PUBLIC_ID_FIELDS),
+    # Canonical parties only: a merged-away or trashed party is no row, count, group or candidate.
+    get_queryset=lambda info: Party.objects.canonical(),
 )
 _PERSON_RESOURCE = hasura_model_resource(
     PersonType,
@@ -818,7 +837,7 @@ _PERSON_RESOURCE = hasura_model_resource(
         Person,
         public_id_fields=_PERSON_EXTENSION_PUBLIC_ID_FIELDS,
     ),
-    get_queryset=lambda info: Person.objects.all().with_circle_names(),
+    get_queryset=lambda info: Person.objects.canonical().with_circle_names(),
 )
 _ORGANIZATION_RESOURCE = hasura_model_resource(
     OrganizationType,
@@ -876,6 +895,7 @@ _ORGANIZATION_RESOURCE = hasura_model_resource(
         Organization,
         public_id_fields=_ORGANIZATION_EXTENSION_PUBLIC_ID_FIELDS,
     ),
+    get_queryset=lambda info: Organization.objects.canonical(),
 )
 _HANDLE_RESOURCE = hasura_model_resource(
     HandleType,

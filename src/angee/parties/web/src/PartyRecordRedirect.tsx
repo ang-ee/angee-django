@@ -12,7 +12,8 @@ export function PartyRecordRedirect(): React.ReactElement {
   const query = useAuthoredQuery(PartyRecordRedirectDocument, { id }, { models: ["parties.Party"], enabled: Boolean(id) });
   const navigate = useNavigate();
   const routeHref = useRouteHref();
-  const party = query.data?.parties_by_pk;
+  // The live party the id names now: itself, or the survivor a merge folded it into.
+  const party = query.data?.party_record;
   const route = party?.concrete_kind === "PERSON"
     ? "parties.people.record"
     : party?.concrete_kind === "ORGANIZATION"

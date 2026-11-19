@@ -7,7 +7,7 @@ import { graphql, type DocumentType } from "@angee/gql/console";
 
 export const PartyRecordRedirectDocument = graphql(`
   query PartyRecordRedirect($id: String!) {
-    parties_by_pk(id: $id) { id concrete_kind }
+    party_record(id: $id) { id concrete_kind }
   }
 `);
 

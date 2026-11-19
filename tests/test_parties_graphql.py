@@ -10,7 +10,7 @@ from django.contrib.auth import get_user_model
 from django.core.exceptions import ImproperlyConfigured
 from django.db import connection
 from django.test.utils import CaptureQueriesContext
-from rebac import RelationshipTuple, system_context, to_object_ref, to_subject_ref, write_relationships
+from rebac import RelationshipTuple, actor_context, system_context, to_object_ref, to_subject_ref, write_relationships
 
 from angee.base.identity import public_subject_ref
 from angee.graphql.publishing import change_feed
@@ -477,6 +477,84 @@ def test_repeated_name_groups_count_only_the_rows_the_actor_reads(db: None) -> N
 
     assert repeated(admin) == ({"Ada Lovelace": 2, "Grace Hopper": 2}, 2)
     assert repeated(reader) == ({"Grace Hopper": 2}, 1)
+
+
+def test_a_merged_away_party_is_no_row_group_count_or_candidate_and_its_id_names_its_survivor(db: None) -> None:
+    """Merged-away people and organizations leave every enumeration; a by-id read for the redirect resolves them.
+
+    The lists, aggregates, groups (and their repeated-values HAVING), ``search_parties``,
+    the People workbench's count and the parties picker read the same canonical rows,
+    so the pager and "All people" agree. A trashed party that was never merged leaves
+    them too, as the canonical scope's untrashed half says. ``party_record`` answers
+    a merged-away id with its survivor, which the record redirect follows; handles,
+    addresses and relationships keep their own canonical reads.
+    """
+
+    admin = _platform_admin("people-merged-away-admin")
+    with system_context(reason="test.parties.merged_away.seed"):
+        survivor = Person.objects.create(display_name="Ada Lovelace", created_by_id=admin.pk)
+        merged = Person.objects.create(display_name="Ada Lovelace", created_by_id=admin.pk)
+        other = Person.objects.create(display_name="Grace Hopper", created_by_id=admin.pk)
+        trashed = Person.objects.create(display_name="Grace Hopper", created_by_id=admin.pk)
+        kept = Organization.objects.create(display_name="Example Ltd", created_by_id=admin.pk)
+        folded = Organization.objects.create(display_name="Example Ltd", created_by_id=admin.pk)
+        address = Address.objects.create(party_id=merged.pk, city="Springfield", country="US", created_by_id=admin.pk)
+        messaging_models.Party.objects.get(pk=trashed.pk).trash(reason="Entered twice.")
+    with actor_context(admin):
+        messaging_models.Party.objects.get(pk=survivor.pk).merge(records=[merged.public_id])
+        messaging_models.Party.objects.get(pk=kept.pk).merge(records=[folded.public_id])
+
+    result = _data(
+        execute_schema(
+            _schema("public"),
+            """
+            query MergedAway($merged: String!, $folded: String!, $other: String!) {
+              people { id }
+              people_aggregate { aggregate { count } }
+              groups: people_groups(group_by: [{field: DISPLAY_NAME}], limit: 10) {
+                key { display_name }
+                aggregate { count }
+              }
+              repeated: people_groups(group_by: [{field: DISPLAY_NAME}], having: {count_gt: 1}, limit: 10) {
+                key { display_name }
+              }
+              repeated_count: people_groups_count(group_by: [{field: DISPLAY_NAME}], having: {count_gt: 1})
+              search: search_parties(query: "a") { id }
+              workbench: people_workbench { all_count }
+              organizations { id }
+              organizations_aggregate { aggregate { count } }
+              parties { id }
+              merged_person: people_by_pk(id: $merged) { id }
+              merged_record: party_record(id: $merged) { id concrete_kind }
+              folded_record: party_record(id: $folded) { id concrete_kind }
+              live_record: party_record(id: $other) { id concrete_kind }
+              addresses { id party { id } }
+            }
+            """,
+            variables={"merged": merged.sqid, "folded": folded.sqid, "other": other.sqid},
+            user=admin,
+        )
+    )
+
+    live_people = {survivor.sqid, other.sqid}
+    assert {row["id"] for row in result["people"]} == live_people
+    assert result["people_aggregate"]["aggregate"]["count"] == 2
+    assert result["workbench"]["all_count"] == 2
+    assert {group["key"]["display_name"]: group["aggregate"]["count"] for group in result["groups"]} == {
+        "Ada Lovelace": 1,
+        "Grace Hopper": 1,
+    }
+    assert result["repeated"] == [] and result["repeated_count"] == 0
+    assert {row["id"] for row in result["search"]} == live_people
+    assert {row["id"] for row in result["organizations"]} == {kept.sqid}
+    assert result["organizations_aggregate"]["aggregate"]["count"] == 1
+    assert {row["id"] for row in result["parties"]} == {*live_people, kept.sqid}
+    # The concrete record roots read the same rows; the redirect reads its own field.
+    assert result["merged_person"] is None
+    assert result["merged_record"] == {"id": survivor.sqid, "concrete_kind": "PERSON"}
+    assert result["folded_record"] == {"id": kept.sqid, "concrete_kind": "ORGANIZATION"}
+    assert result["live_record"] == {"id": other.sqid, "concrete_kind": "PERSON"}
+    assert result["addresses"] == [{"id": address.sqid, "party": {"id": survivor.sqid}}]
 
 
 def test_circle_console_insert_establishes_private_creator_access(
