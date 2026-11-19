@@ -347,6 +347,47 @@ def test_a_contact_hands_the_ingest_hubspots_creation_time_and_a_later_edit_at_t
     assert not failures(hubspot)
 
 
+def test_a_new_contacts_person_carries_hubspots_creation_time_and_a_later_edit_moves_nothing(
+    hubspot: HubSpot,
+) -> None:
+    created = datetime(2024, 3, 1, 8, 30, tzinfo=UTC)
+    ada = hubspot.server.add("contacts", ADA, modified=ago(days=2), created=created)
+    hubspot.drain()
+
+    assert hubspot.person(ada).created_at == created
+
+    hubspot.server.update("contacts", ada, {"jobtitle": "Director"}, modified=timezone.now())
+    hubspot.drain()
+
+    assert hubspot.contact(ada).title == "Director"
+    assert hubspot.person(ada).created_at == created
+    assert not failures(hubspot)
+
+
+def test_a_contact_landing_on_a_younger_person_moves_them_earlier_and_on_an_older_one_moves_nothing(
+    hubspot: HubSpot,
+) -> None:
+    """A record lands on a person that exists: its own link's, or a replaced record's after a merge at the source."""
+
+    ada_created, grace_created = datetime(2021, 6, 1, tzinfo=UTC), datetime(2024, 3, 1, tzinfo=UTC)
+    ada = hubspot.server.add("contacts", ADA, modified=ago(days=3), created=ada_created)
+    ada_again = hubspot.server.add("contacts", {**ADA, "email": "ada.lovelace@example.com"}, modified=ago(days=2))
+    grace = hubspot.server.add("contacts", GRACE, modified=ago(days=1), created=grace_created)
+    hubspot.drain()
+    # Grace was imported before a contact carried its creation time: stamped at the import.
+    imported = timezone.now()
+    Party._base_manager.filter(pk=hubspot.person(grace).pk).update(created_at=imported)
+
+    hubspot.server.update("contacts", grace, {"jobtitle": "Admiral"}, modified=timezone.now())
+    # HubSpot's survivor of a merge is a record of its own, created at the merge: later than Ada's person.
+    survivor = hubspot.server.merge("contacts", ada, ada_again, modified=timezone.now())
+    hubspot.drain()
+
+    assert hubspot.person(grace).created_at == grace_created
+    assert hubspot.person(survivor).created_at == ada_created
+    assert not failures(hubspot)
+
+
 def modified_after(search: dict[str, Any]) -> datetime:
     """Return the time a delta search reads changes strictly after."""
 

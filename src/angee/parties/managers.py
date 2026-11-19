@@ -1212,7 +1212,12 @@ class SamePersonLink(NamedTuple):
 
 
 def _age(party: Any) -> tuple[Any, Any]:
-    """A party's place in a merge: the oldest record survives, then key order."""
+    """A party's place in a merge: the oldest record survives, then key order.
+
+    Its age is its ``created_at``: the earliest time its provenance states, a
+    source's creation time included (``Party.backdate_creation``), so the record
+    its sources have known longest survives, not the one imported here first.
+    """
 
     return party.created_at, party.pk
 
@@ -2979,10 +2984,12 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
         person merges by hand on the compare page; ``actor`` may merge every one in
         a batch (:meth:`batch_mergeable`); and no two of them were kept apart by a
         person. With ``certain`` each set must also be a certain pair
-        (:meth:`certain_pairs`). The oldest member survives and the others fold
-        into it in key order. More than :attr:`BATCH_SETS` sets refuse the batch.
-        ``groupings`` names, per set, the fields a list grouped it by (names only):
-        each that is a text merge field gets a row (:attr:`DuplicateSetPreview.grouping`).
+        (:meth:`certain_pairs`). The oldest member survives (the earliest
+        ``created_at``, a source's creation time included: :func:`_age`) and the
+        others fold into it in key order. More than :attr:`BATCH_SETS` sets refuse
+        the batch. ``groupings`` names, per set, the fields a list grouped it by
+        (names only): each that is a text merge field gets a row
+        (:attr:`DuplicateSetPreview.grouping`).
         """
 
         confirmed = self._confirmed_sets(sets, groupings)
@@ -4505,7 +4512,9 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
         employers. Addresses land through :meth:`AddressManager.land_addresses`
         and the employer through :meth:`RelationshipManager.land_employment`;
         removed members withdraw only this source's statements instead of
-        deleting rows.
+        deleting rows. The contact's creation time (``ParsedContact.created_at``)
+        is a minted person's own; on a person that exists it moves their creation
+        time earlier when it is earlier (``Party.backdate_creation``), never later.
         """
         container = stream.container if stream.container_id is not None else None
         folder = container.target if container is not None else None
@@ -4536,10 +4545,14 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
                 blocker = self.adoption_blocker(target, link=link, parsed=parsed, lookup=lookup, replaces=replaces)
                 if blocker is not None:
                     raise ValidationError(blocker)
+            stated = {"created_at": parsed.created_at} if parsed.created_at is not None else {}
             person = target or people.create(
                 display_name=(parsed.display_name or parsed.family_name or people.model.PLACEHOLDER_NAME),
                 created_by_id=created_by_id,
+                **stated,
             )
+            if target is not None:
+                person.backdate_creation(parsed.created_at)
             parent = apps.get_model("parties", "Party")._base_manager.get(pk=person.pk)
             through = through.canonical() if through is not None else self._adopted_through(parent, source=source)
             left = link.target if link.target_object_id and link.target_object_id != str(parent.pk) else None
