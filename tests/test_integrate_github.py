@@ -153,7 +153,7 @@ _EXHAUSTED = {"x-ratelimit-remaining": "0", "x-ratelimit-reset": str(int(_NOW.ti
         httpx2.Response(429, headers={"Retry-After": "30"}), True, timedelta(seconds=30),
         "GitHub is rate limiting requests (HTTP 429).", id="a-rate-limit-is-transient-and-waits",
     ),
-    pytest.param(httpx2.ReadTimeout("slow"), True, None, "GitHub could not be reached.", id="a-transport-failure"),
+    pytest.param(httpx2.ReadTimeout("slow"), True, None, "GitHub did not answer.", id="a-transport-failure"),
     pytest.param(
         httpx2.Response(200, text="not json"), False, None, "GitHub returned an unreadable response.",
         id="an-unreadable-answer-is-permanent",

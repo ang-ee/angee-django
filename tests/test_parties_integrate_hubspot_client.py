@@ -593,8 +593,10 @@ def unavailable(status: int) -> str:
         ),
         *(
             pytest.param(status, {}, True, None, unavailable(status), id=f"{status}-transient")
-            for status in (500, 501, 502, 503, 504, 521, 523, 524, 599)
+            for status in (500, 502, 503, 504, 521, 523, 524, 599)
         ),
+        # Integrate's status rule: a 501 refuses the request itself, so the same request brings the same answer.
+        pytest.param(501, {}, False, None, "HubSpot refused the request (HTTP 501).", id="501-permanent"),
         pytest.param(
             503,
             {"headers": {"Retry-After": "120"}},

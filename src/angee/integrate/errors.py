@@ -113,9 +113,13 @@ class IntegrationFailure:
 
 
 def is_transient_status(status: int) -> bool:
-    """Whether a later attempt can outlive an HTTP answer with ``status``: a 429 rate limit or any 5xx."""
+    """Whether a later attempt can outlive an HTTP answer with ``status`` (RFC 9110 §15).
 
-    return status == 429 or 500 <= status < 600
+    A 408 request timeout, which the client may repeat, a 429 rate limit, and a 5xx server error can; a 501 or a
+    505 cannot, since they refuse the request itself (a method or an HTTP version the server does not implement).
+    """
+
+    return status in (408, 429) or (500 <= status < 600 and status not in (501, 505))
 
 
 def is_transient_failure(error: BaseException) -> bool:
