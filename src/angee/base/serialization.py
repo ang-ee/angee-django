@@ -1,4 +1,4 @@
-"""Canonical JSON serialization and JSON-safe coercion for runtime subsystems."""
+"""Canonical JSON serialization, JSON value comparison and JSON-safe coercion for runtime subsystems."""
 
 from __future__ import annotations
 
@@ -41,6 +41,29 @@ def canonical_json(value: Any) -> str:
         ensure_ascii=False,
         allow_nan=False,
     )
+
+
+def json_equal(left: Any, right: Any) -> bool:
+    """Return whether two values are one JSON value, as JSON Schema and PostgreSQL ``jsonb`` compare them.
+
+    A bool or ``null`` equals only itself, never a number, although Python's
+    ``False == 0`` holds. A number is the value its spelling denotes, so ``1`` and
+    ``1.0`` are one number, as are the ``1e+16`` a projection writes and the
+    ``10000000000000000`` a ``jsonb`` column reads back. Arrays compare in order,
+    however Python spells them, and objects compare by key. Both values serialize
+    through :func:`canonical_json`, which refuses a non-JSON value.
+    """
+
+    def value(item: Any) -> Any:
+        return json.loads(canonical_json(item), parse_int=_json_number, parse_float=_json_number)
+
+    return bool(value(left) == value(right))
+
+
+def _json_number(spelling: str) -> tuple[str, Decimal]:
+    """Tag a JSON number with the exact decimal it spells, so it equals only a number of that value."""
+
+    return ("number", Decimal(spelling))
 
 
 def canonical_json_sha256(value: Any = None, *, chunks: Iterable[str] | None = None) -> str:
