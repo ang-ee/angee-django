@@ -139,7 +139,14 @@ person a replaced record was linked to is proposed as the landed person's same
 person by parties' `directory_match` rule
 (`PartyManager.propose_directory_match`), citing the contact's link and the
 handle or the replaced link, and joins the same-as review. A pair kept separate
-is not proposed again; merging the two withdraws the proposal. The `same_as`
+is not proposed again; merging the two withdraws the proposal. The survivor of a
+merge takes every link of the merged person, so a person who writes both may
+merge a pair an adoption limit refused (the deliberate override of `adopt`), but
+the merge still refuses to bring together two contacts of one pull-only
+directory, a pull-only directory's contact and an account's own person, or such a
+contact and a person a stream that writes back names
+(`PartyManager.directory_merge_blocker`, from `Party.validate_merge`; default
+pending ruling O16). The `same_as`
 rule's reconciler withdraws only its own rule's pairs, so it leaves these
 standing, though no shared handle row supports them. A trashed person is
 nobody's target (`PartyManager.contact_people`), so its record lands on a new

@@ -2159,6 +2159,56 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
             .select_related("stream")
         )
 
+    def directory_merge_blocker(self, survivor: Party, merged: Sequence[Party]) -> str | None:
+        """Return why merging ``merged`` into ``survivor`` would break a pull-only directory's limits, else ``None``.
+
+        A survivor takes every link its merged records had (a link follows its
+        record's survivor), so a person's merge of a proposed pair binds a
+        directory's contact to someone its adoption limits may have refused.
+        Writing both records is the deliberate, one-pair override of the
+        ``adopt`` permission, but not of the limits that keep a directory's
+        statements truthful (default pending ruling O16). The merge may not bring
+        together, from different records, two contacts of one pull-only
+        directory, whose statements are keyed by integration and would overwrite
+        each other; a pull-only directory's contact and a user account's own
+        person; or a pull-only directory's contact and a person a stream that
+        writes back names, which would publish what the directory states. A link
+        counts as the adoption rule counts it (:meth:`_naming_links`). The
+        refusal is an operator message that says what to do instead.
+        """
+
+        ids = [survivor.pk, *(row.pk for row in merged)]
+        directory = apps.get_model("parties", "Directory")
+        links = list(self._naming_links(ids).select_related("stream__integration"))
+        contacts: defaultdict[Any, set[str]] = defaultdict(set)
+        for row in links:
+            kind = row.stream.integration.declared_concrete_model()
+            if row.stream.direction == StreamDirection.PULL and kind is not None and issubclass(kind, directory):
+                contacts[row.stream.integration_id].add(row.target_object_id)
+        if not contacts:
+            return None
+        if any(len(records) > 1 for records in contacts.values()):
+            return (
+                "These are two contacts of one directory: merged, their statements would overwrite each other. "
+                "Keep them separate, or merge the two contacts at their source."
+            )
+        named = set().union(*contacts.values())
+        people = apps.get_model("parties", "Person")._base_manager.filter(pk__in=ids, user__isnull=False)
+        accounts = {str(pk) for pk in people.values_list("pk", flat=True)}
+        writing = {row.target_object_id for row in self._naming_links(ids).observing() if row.stream.writes_back}
+        if any(account != contact for account in accounts for contact in named):
+            return (
+                "One of these is a user account's own person and the other a directory's contact: a directory "
+                "never states facts about an account's person. Keep them separate, or remove the contact at its "
+                "source first."
+            )
+        if any(written != contact for written in writing for contact in named):
+            return (
+                "One of these is a contact of a directory that writes back and the other a contact of a pull-only "
+                "directory: merged, the pull-only directory's facts would be published. Keep them separate."
+            )
+        return None
+
     def adoption_blocker(
         self,
         person: Person,

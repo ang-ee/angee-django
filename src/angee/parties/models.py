@@ -540,6 +540,9 @@ class Party(
         for row in merged:
             if self.same_as.kept_separate(self, row):
                 raise ValidationError("These parties have been marked to stay separate.")
+        # The survivor takes every merged record's links: the merge keeps a pull-only directory's limits.
+        if refusal := apps.get_model("parties", "Party").objects.directory_merge_blocker(self, merged):
+            raise ValidationError(refusal)
 
     def merge_fields(self, merged: Sequence[Any], *, field_overrides: Any = None, **options: Any) -> None:
         super().merge_fields(merged, **options)
