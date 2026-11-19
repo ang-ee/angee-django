@@ -40,10 +40,18 @@ tombstones its link. A two-way stream compares the person's own projection and
 keeps a vanished contact's statements.
 
 One function decides a contact's target (`DirectoryBackend._contact_target`),
-once, under the contact locks: its own link's person, then a replaced link's.
-A trashed person is nobody's target (`PartyManager.contact_people`), so its
-record lands on a new person. The ingest verbs decide nothing: they land on the
-target they are given or mint one, and refuse to move a link off a live party.
+once, under the contact locks: its own link's person, then a replaced link's,
+then, on a pull-only stream, an existing person one of its emails names
+(`PartyManager.people_for_emails`, the preferred email first). That person is
+adopted only when every limit holds: they are no account's own person, the
+directory's owner already has `write` on them (checked for that user, though
+sync runs as system work), and no other live link of the same integration names
+them. Otherwise the contact mints its own person; a two-way directory never
+adopts. The handle an adoption found the person by is the link's
+`adopted_through` metadata. A trashed person is nobody's target
+(`PartyManager.contact_people`), so its record lands on a new person. The ingest
+verbs decide nothing: they land on the target they are given or mint one, and
+refuse to move a link off a live party.
 
 [PartyManager.ingest_contact](managers.py) asserts directory facts; Address and
 Relationship keep their own identities and statements. Missing members withdraw

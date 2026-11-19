@@ -25,11 +25,14 @@ from angee.integrate.http import HttpClientMixin
 from angee.integrate.impl import BridgeImpl
 from angee.integrate.states import LinkStatus, StreamDefinition, StreamDirection, StreamKind, StreamPhase
 from angee.integrate.streams import ApplyResult, LocalChange, RecordChange, SemanticError, StreamPage
+from angee.provenance.evidence import EvidenceReference
 
 ADDRESSBOOKS = "addressbooks"
 """The stream whose records are a directory's address books; each targets its folder."""
 CONTACTS = "contacts"
 """One address book's contacts; its stream's container is the book's link."""
+ADOPTED_THROUGH = "adopted_through"
+"""A contact link's metadata key: the ``EvidenceReference`` of the handle its record adopted an existing person by."""
 
 
 @dataclass(frozen=True)
@@ -532,17 +535,64 @@ class DirectoryBackend(BridgeImpl, HttpClientMixin):
             states[key] = person, projections.get(person.pk) if person is not None else None
         return states
 
-    def _contact_target(self, stream: Any, link: Any, replaced: Sequence[Any]) -> Any | None:
-        """Return the person a contact lands on, ``None`` to mint one: the one place its target is decided.
+    def _contact_target(
+        self, stream: Any, link: Any, replaced: Sequence[Any], parsed: ParsedContact | None = None
+    ) -> tuple[Any | None, Any | None]:
+        """Return the person a contact lands on (``None`` to mint one) and the handle an adoption found them by.
 
-        In order: its own link's person; then, for a merge at the source, the
-        person of the first link it ``replaced``, in the source's order. A trashed
-        person is nobody's target (``PartyManager.contact_people``). Call it once,
-        under the contact locks (:meth:`apply_record`).
+        The one place a contact's target is decided, in order: its own link's
+        person; then, for a merge at the source, the person of the first link it
+        ``replaced``, in the source's order; then, for ``parsed`` on a pull-only
+        stream, an existing person one of its emails names
+        (``PartyManager.people_for_emails``, the preferred email first), the first
+        :meth:`_adoptable` admits. A trashed person is nobody's target
+        (``PartyManager.contact_people``), and a two-way stream never adopts. Call
+        it once, under the contact locks (:meth:`apply_record`).
         """
 
-        people = apps.get_model("parties", "Party").objects.contact_people([link, *replaced])
-        return next((people[row.pk] for row in (link, *replaced) if people[row.pk] is not None), None)
+        parties = apps.get_model("parties", "Party").objects
+        people = parties.contact_people([link, *replaced])
+        for row in (link, *replaced):
+            if people[row.pk] is not None:
+                return people[row.pk], None
+        if parsed is None or stream.direction != StreamDirection.PULL:
+            return None, None
+        emails = [value for value, _label, _preferred in sorted(parsed.emails, key=lambda email: not email[2])]
+        tried: set[Any] = set()
+        for holder in parties.people_for_emails(emails):
+            if holder.person.pk not in tried:
+                tried.add(holder.person.pk)
+                if self._adoptable(holder, link):
+                    return holder.person, holder.handle
+        return None, None
+
+    def _adoptable(self, holder: Any, link: Any) -> bool:
+        """Whether this directory adopts the existing person an email names (rulings R2 and R9).
+
+        Every limit must hold. The person is no account's own (the account basis
+        names only such a person). The directory's owner already has
+        ``write`` on them, evaluated for that user although sync runs as system
+        work, since adopting makes this source a statement source of the person. No
+        other live link of this integration names them: its statements are keyed
+        by integration, not by link, so two records would share and overwrite them.
+        The caller adopts only on a pull-only stream.
+        """
+
+        person = holder.person
+        if person.user_id is not None:
+            return False
+        owner = self.bridge.owner
+        candidate = apps.get_model("parties", "Person")._base_manager.get(pk=person.pk)
+        if owner is None or not candidate.with_actor(owner).has_access("write"):
+            return False
+        others = (
+            apps.get_model("integrate", "RecordLink")
+            .objects.filter(stream__integration_id=self.bridge.pk)
+            .observing()
+            .exclude(pk=link.pk)
+        )
+        parties = apps.get_model("parties", "Party")._base_manager
+        return not parties.filter(pk=person.pk, record_links__pk__in=others.values("pk")).exists()
 
     def apply_record(self, stream: Any, record: RecordChange) -> ApplyResult:
         """Revalidate under domain locks, then use the single folder or contact ingest verb.
@@ -572,7 +622,7 @@ class DirectoryBackend(BridgeImpl, HttpClientMixin):
             return ApplyResult(target=folder, mapped_payload={"name": name})
         parties = apps.get_model("parties", "Party").objects
         if record.tombstone:
-            target = self._contact_target(stream, link, ())
+            target, _adopted = self._contact_target(stream, link, ())
             parties.lock_contact(target)
             link.withdraw_statements()
         else:
@@ -583,14 +633,18 @@ class DirectoryBackend(BridgeImpl, HttpClientMixin):
                 key=lambda row: order.index(row.external_key),
             )
             parties.lock_contact(*(row.target for row in (link, *replaced)), parsed=parsed)
+            target, adopted = self._contact_target(stream, link, replaced, parsed)
             target = parties.ingest_contact(
                 parsed,
                 stream=stream,
                 link=link,
                 replaces=replaced,
-                target=self._contact_target(stream, link, replaced),
+                target=target,
                 created_by_id=self.bridge.owner_id,
             )
+            if adopted is not None:
+                evidence = EvidenceReference.of(adopted).model_dump(mode="json")
+                links.observe(stream, link.external_key, metadata={**link.metadata, ADOPTED_THROUGH: evidence})
         if stream.direction == StreamDirection.PULL:
             return ApplyResult(target=target, mapped_payload=None if record.tombstone else record.mapped_payload)
         return ApplyResult(
