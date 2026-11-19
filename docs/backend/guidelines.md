@@ -2174,8 +2174,9 @@ bridge advisory lock as polling and delivery settlement.
   before its commit. Its stream's sweep (`SyncStream.sweep_due`) still compares
   every row, so what no version names converges.
 - **Applied evidence has one promoter.** Adapters return the actual mapped
-  payload and dependency digest in `ApplyResult`; the driver takes the declared
-  mapping version from the stream, promotes the primary link and pins the history
+  payload and dependency digest in `ApplyResult`; the driver takes the mapping
+  version of the stream's generation (a plain declaration's, or the one the stream
+  assigned its composed mapping), promotes the primary link and pins the history
   row written for that application. Observation saves the source on the link without changing that
   protected pointer. History is the observation log; inbound state retains
   simultaneous and closed failures, and refused writes retain link outbox state.
