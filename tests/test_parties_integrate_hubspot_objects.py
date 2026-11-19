@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 from collections.abc import Iterator
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
@@ -19,6 +20,7 @@ from typing import Any
 
 import httpx2
 import pytest
+from django.db import transaction
 from django.utils import timezone
 from rebac import to_subject_ref
 
@@ -26,13 +28,14 @@ from angee.integrate.states import LinkStatus, StreamPhase, SyncFailureKind
 from angee.integrate.streams import begin_stream_cycle, open_stream
 from angee.integrate.testing.integration import Integration
 from angee.integrate.testing.models import RecordLink
-from angee.messaging.testing.models import Person
+from angee.messaging.testing.models import Directory, Person
 from angee.parties.backends import MAPPING_REFUSED
 from angee.parties_integrate_hubspot.backends import (
     OBJECTS,
     ContactNotLanded,
     HubSpotObjectMapping,
     HubSpotObjectRecord,
+    PropertiesNotRead,
 )
 from angee.parties_integrate_hubspot.checks import check_object_mappings
 from angee.parties_integrate_hubspot.client import parse_number, parse_string
@@ -119,6 +122,39 @@ class DigestNoteMapping(HubSpotObjectMapping):
     def apply_record(self, record: HubSpotObjectRecord, *, link: Any) -> Any:
         RECEIVED.append((record, str(link.asserting_source())))
         return None
+
+
+class TextNoteMapping(HubSpotObjectMapping):
+    """Keeps only a digest of a note's body on its link, and writes the full body as its first contact's colour."""
+
+    key = "example_note_texts"
+    object_type = "notes"
+    properties = ("hs_note_body",)
+    contacts = True
+
+    def project(self, record: HubSpotObjectRecord) -> dict[str, Any]:
+        return {"body": _digest(parse_string(record.properties.get("hs_note_body")))}
+
+    def apply_record(self, record: HubSpotObjectRecord, *, link: Any) -> Any:
+        RECEIVED.append((record, str(link.asserting_source())))
+        if not record.contacts:
+            return None
+        person = record.person(record.contacts[0])
+        if person is None:
+            raise ContactNotLanded(record.contacts[0])
+        person.statements_for("colour").set(
+            aspect="colour",
+            values={"favourite_colour": parse_string(record.properties.get("hs_note_body"))},
+            asserted_by=link.asserting_source(),
+            link=link,
+        )
+        return None
+
+
+class RevisedTextNoteMapping(TextNoteMapping):
+    """The same mapping at its next version."""
+
+    version = 2
 
 
 class ProjectedAmountMapping(HubSpotObjectMapping):
@@ -249,7 +285,7 @@ def test_a_record_lands_through_apply_record_with_exactly_its_mapped_properties_
     link = deals.link(deal)
     assert (link.status, link.source_payload) == (
         LinkStatus.CURRENT,
-        {"properties": {"dealname": "green", "dealstage": "won"}, "contacts": [ada, grace]},
+        {"values": {"dealname": "green", "dealstage": "won"}, "contacts": [ada, grace]},
     )
     assert (_colour(hubspot, ada), _colour(hubspot, grace)) == ("green", "")
     (statement,) = _stated(hubspot, ada)
@@ -525,7 +561,7 @@ def _retained(link: Any) -> str:
     return json.dumps(rows, default=str)
 
 
-def test_a_projection_is_what_the_mapping_is_handed_and_all_its_link_keeps_and_compares(
+def test_a_projection_is_all_the_link_keeps_and_compares_and_the_mapping_is_handed_it_beside_what_was_sent(
     hubspot: HubSpot, settings: Any
 ) -> None:
     """The default keeps the properties as sent (the landing test above); this projection keeps a digest alone."""
@@ -537,10 +573,11 @@ def test_a_projection_is_what_the_mapping_is_handed_and_all_its_link_keeps_and_c
     assert [page.count for page in notes.drain()] == [1]
     (read,) = hubspot.backend.read_keys(notes.stream, [note])
 
-    kept = {"properties": {"body": _digest(SECRET)}, "contacts": []}
+    kept = {"values": {"body": _digest(SECRET)}, "contacts": []}
     ((record, _source),) = RECEIVED
     link = notes.link(note)
-    assert dict(record.properties) == kept["properties"]
+    assert dict(record.values) == kept["values"]
+    assert dict(record.properties) == {"hs_note_body": SECRET, "hs_timestamp": NOTED_AT}
     assert (link.source_payload, link.applied_base.mapped_payload, read.mapped_payload) == (kept, kept, kept)
     assert read.source_hash == link.source_hash
     retained = _retained(link)
@@ -563,7 +600,7 @@ def test_a_change_the_projection_hides_applies_nothing_and_one_it_shows_replays(
     hubspot.server.update("notes", note, {"hs_note_body": "Another remark."}, modified=timezone.now())
     assert [page.count for page in notes.drain()] == [1]
     ((record, _source),) = RECEIVED
-    assert dict(record.properties) == {"body": _digest("Another remark.")}
+    assert dict(record.values) == {"body": _digest("Another remark.")}
 
 
 def test_a_projection_that_cannot_read_a_value_refuses_that_record_alone_and_keeps_nothing_of_it(
@@ -578,10 +615,114 @@ def test_a_projection_that_cannot_read_a_value_refuses_that_record_alone_and_kee
 
     assert [page.count for page in amounts.drain()] == [1]
 
-    assert [dict(record.properties) for record, _source in RECEIVED] == [{"amount": "12"}]
+    assert [dict(record.values) for record, _source in RECEIVED] == [{"amount": "12"}]
     (refusal,) = amounts.link(words).failures()
     assert (refusal.code, refusal.details["mapping"]) == (MAPPING_REFUSED, ProjectedAmountMapping.key)
     assert "seven" not in _retained(amounts.link(words))
+
+
+def _text_note(hubspot: HubSpot, settings: Any, *, landed: bool = True) -> tuple[HubSpot, str, str]:
+    """Ada's contact (landed unless ``landed`` is false) and a note on her whose body is :data:`SECRET`."""
+
+    _register(settings, TextNoteMapping)
+    ada = hubspot.server.add("contacts", ADA, modified=ago(days=2))
+    if landed:
+        hubspot.drain()
+    note = hubspot.server.add("notes", {"hs_note_body": SECRET}, modified=ago(days=1))
+    hubspot.server.associate("notes", note, "contacts", ada)
+    return _objects(hubspot, TextNoteMapping), ada, note
+
+
+def test_a_mapping_that_keeps_a_digest_writes_from_the_full_text_and_no_link_row_or_log_keeps_it(
+    hubspot: HubSpot, settings: Any, caplog: pytest.LogCaptureFixture
+) -> None:
+    """The text HubSpot sent reaches ``apply_record`` beside the projection; the link keeps only its digest."""
+
+    caplog.set_level(logging.DEBUG)
+    notes, ada, note = _text_note(hubspot, settings)
+
+    assert [page.count for page in notes.drain()] == [1]
+
+    ((record, _source),) = RECEIVED
+    assert (record.has_properties, dict(record.properties), dict(record.values)) == (
+        True,
+        {"hs_note_body": SECRET},
+        {"body": _digest(SECRET)},
+    )
+    assert _colour(hubspot, ada) == SECRET
+    link = notes.link(note)
+    assert link.source_payload == {"values": {"body": _digest(SECRET)}, "contacts": [ada]}
+    retained = _retained(link)
+    assert (SECRET in retained, "hs_note_body" in retained, SECRET in repr(record)) == (False, False, False)
+    assert SECRET not in caplog.text
+
+
+def test_a_record_that_waited_for_its_contact_is_applied_with_the_full_text(
+    hubspot: HubSpot, settings: Any, caplog: pytest.LogCaptureFixture
+) -> None:
+    """The rescan reads the record again (``read_keys``), so the text is there when its contact has landed."""
+
+    caplog.set_level(logging.DEBUG)
+    notes, ada, note = _text_note(hubspot, settings, landed=False)
+    assert [page.count for page in notes.drain()] == [0]
+    (waiting,) = notes.link(note).failures()
+    assert waiting.code == "contact_not_landed"
+
+    hubspot.drain()
+    notes.link(note).retry_failure(waiting.slot)
+    begin_stream_cycle(notes.stream, hubspot.backend)
+
+    assert (notes.link(note).status, _colour(hubspot, ada)) == (LinkStatus.CURRENT, SECRET)
+    assert RECEIVED[-1][0].properties == {"hs_note_body": SECRET}
+    assert SECRET not in _retained(notes.link(note))
+    assert SECRET not in caplog.text
+
+
+def test_a_new_version_of_the_mapping_replays_every_record_with_the_full_text(
+    hubspot: HubSpot, settings: Any
+) -> None:
+    """A changed mapping opens a new baseline, which reads every record again."""
+
+    notes, ada, note = _text_note(hubspot, settings)
+    assert [page.count for page in notes.drain()] == [1]
+    RECEIVED.clear()
+
+    _register(settings, RevisedTextNoteMapping)
+    revised = _objects(hubspot, RevisedTextNoteMapping)
+
+    assert sum(page.count for page in revised.drain()) == 1
+    ((record, _source),) = RECEIVED
+    assert (record.id, record.has_properties, record.properties) == (note, True, {"hs_note_body": SECRET})
+    assert SECRET not in _retained(revised.link(note))
+
+
+def test_a_record_applied_without_what_hubspot_sent_has_only_its_values_and_reading_them_asks_for_a_new_read(
+    hubspot: HubSpot, settings: Any
+) -> None:
+    """Every apply the driver makes follows its adapter's own read; an adapter that read nothing has no properties.
+
+    A mapping that needs them raises the missing-dependency refusal, which the rescan answers with a new read; a
+    mapping that needs only its values applies.
+    """
+
+    notes, _ada, note = _text_note(hubspot, settings)
+    assert [page.count for page in notes.drain()] == [1]
+    _register(settings, TextNoteMapping, DigestNoteMapping)
+    other = hubspot.server.add("notes", {"hs_note_body": "B", "hs_timestamp": NOTED_AT}, modified=ago(days=1))
+    digests = _objects(hubspot, DigestNoteMapping)
+    assert sum(page.count for page in digests.drain()) == 2
+    (text,) = hubspot.backend.read_keys(notes.stream, [note])
+    (digest,) = hubspot.backend.read_keys(digests.stream, [other])
+    elsewhere = Directory.objects.get(pk=hubspot.directory.pk).backend
+    RECEIVED.clear()
+
+    with pytest.raises(PropertiesNotRead) as unread, transaction.atomic():
+        elsewhere.apply_record(notes.stream, text)
+    elsewhere.apply_record(digests.stream, digest)
+
+    assert (unread.value.kind, unread.value.code) == (SyncFailureKind.MISSING_DEPENDENCY, "properties_not_read")
+    assert [(record.id, record.has_properties) for record, _source in RECEIVED] == [(note, False), (other, False)]
+    assert dict(RECEIVED[1][0].values) == {"body": _digest("B")}
 
 
 def test_object_mappings_pass_the_startup_check_and_a_key_is_registered_once(settings: Any) -> None:

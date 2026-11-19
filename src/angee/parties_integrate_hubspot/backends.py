@@ -294,26 +294,62 @@ class ContactNotLanded(SemanticError):
         )
 
 
+class PropertiesNotRead(SemanticError):
+    """A mapping needed the properties HubSpot sent for a record this pass did not read: the record is read again.
+
+    The stream driver's missing-dependency refusal (``SyncFailureKind.MISSING_DEPENDENCY``):
+    the record waits under its id, and the stream's rescan reads it again
+    (``read_keys``) and applies it with what HubSpot sends then. Reading
+    :attr:`HubSpotObjectRecord.properties` without them raises it, so a mapping
+    never writes from its projection what it needed from the source.
+    """
+
+    def __init__(self) -> None:
+        super().__init__("properties_not_read", kind=SyncFailureKind.MISSING_DEPENDENCY)
+
+
 @dataclass(frozen=True)
 class HubSpotObjectRecord:
     """One HubSpot record of another object type as its mapping receives it, neutral of what it means.
 
     ``id`` is HubSpot's record id, its link's external key. ``contacts`` names the
     contacts HubSpot associates with it, in id order, when the mapping asks for
-    them (:attr:`HubSpotObjectMapping.contacts`). ``properties`` is what the
-    mapping reads: handed to :meth:`HubSpotObjectMapping.project`, HubSpot's values
-    of the mapping's properties as it sent them, each a nullable string (read them
-    with the ``parse_*`` functions of ``angee.parties_integrate_hubspot.client``),
-    a property the account does not define absent; handed to
-    :meth:`HubSpotObjectMapping.apply_record`, the values the projection kept,
-    which by default are those same properties.
+    them (:attr:`HubSpotObjectMapping.contacts`). ``values`` is what
+    :meth:`HubSpotObjectMapping.project` kept, which its link holds and compares
+    (handed to ``project`` itself, the properties as sent). :attr:`properties` is
+    what HubSpot sent for the mapping's properties, held in memory for the pass
+    that read the record and never stored, repeated or logged.
     """
 
     id: str
-    properties: Mapping[str, Any]
+    values: Mapping[str, Any]
     contacts: tuple[str, ...]
     directory: Any = field(repr=False, compare=False)
     """The HubSpot directory the record was read for."""
+    sent: Mapping[str, str | None] | None = field(default=None, repr=False, compare=False)
+    """What HubSpot sent, when this pass read the record; read it through :attr:`properties`."""
+
+    @property
+    def has_properties(self) -> bool:
+        """Whether this pass read the record from HubSpot, so :attr:`properties` holds what it sent."""
+
+        return self.sent is not None
+
+    @property
+    def properties(self) -> Mapping[str, str | None]:
+        """HubSpot's values of the mapping's properties as it sent them; :class:`PropertiesNotRead` without them.
+
+        Each is a nullable string (read them with the ``parse_*`` functions of
+        ``angee.parties_integrate_hubspot.client``); a property the account does not
+        define is absent. Every apply the stream driver makes follows its own read
+        of the record, so they are there; a record applied from what its link holds
+        alone has only :attr:`values`, and reading this raises the refusal that has
+        the driver read it again.
+        """
+
+        if self.sent is None:
+            raise PropertiesNotRead()
+        return self.sent
 
     def person(self, contact_id: str) -> Any | None:
         """Return the person this directory's contact ``contact_id`` landed on, ``None`` until it has.
@@ -355,10 +391,13 @@ class HubSpotObjectMapping(ImplBase):
     ids are kept on the link, in its history without limit, and compared, so a
     change the projection hides applies nothing; it drops what must not be kept
     (a long text replaced by its digest, say). :meth:`apply_record` lands one
-    record, carrying those values, inside the page transaction, database work
-    only, and runs again whenever they, its contacts or the mapping change. Whatever it states, it states
-    through ``link`` as the integration (``link.asserting_source()``), so
-    :meth:`withdraw_record` can withdraw it. A record whose contact has not landed
+    record inside the page transaction, database work only, and runs again
+    whenever those values, its contacts or the mapping change. It receives the
+    values and, from the read that applies it, what HubSpot sent
+    (:attr:`HubSpotObjectRecord.properties`), so it can write the full text whose
+    digest alone is kept. Whatever it states, it states through ``link`` as the
+    integration (``link.asserting_source()``), so :meth:`withdraw_record` can
+    withdraw it. A record whose contact has not landed
     raises :class:`ContactNotLanded` and waits. A ``ValueError`` from either step
     refuses that record alone (``MAPPING_REFUSED``, naming the mapping, never the
     value), the rest of its page lands, and the rescan retries it; any other error
@@ -380,7 +419,8 @@ class HubSpotObjectMapping(ImplBase):
         """Return the JSON values to keep and compare of ``record``, whose ``properties`` are as HubSpot sent them.
 
         The default keeps the requested properties as sent. Drop here whatever must
-        not be kept: nothing else of the properties survives on the link.
+        not be kept: nothing else of the properties survives on the link, and
+        ``apply_record`` still receives them, from the read that applies it.
         """
 
         return dict(record.properties)
@@ -443,6 +483,16 @@ class HubSpotDirectoryBackend(DirectoryBackend):
     oauth_client: ClassVar[str] = ""
     requires_connection_discovery: ClassVar[bool] = True
     sync_parallelism: ClassVar[int | None] = 1
+
+    def __init__(self, integration: Any) -> None:
+        super().__init__(integration)
+        self._sent: dict[str, tuple[str, Mapping[str, str | None]]] = {}
+        """What HubSpot sent for each object record of the last read, by id, beside the hash of its payload.
+
+        Filled by the read (:meth:`_object_payloads`), handed to the mapping when that
+        read's own record is applied, and dropped when its page finishes
+        (:meth:`finish_page`) or the next read begins; never given to the driver.
+        """
 
     def credential_blocker(self, credential: Any) -> str | None:
         """Refuse anything but a static token holding a key, and one that needs reconnecting.
@@ -586,9 +636,11 @@ class HubSpotDirectoryBackend(DirectoryBackend):
 
         A record gone at the source reaches :meth:`HubSpotObjectMapping.withdraw_record`.
         Any other is handed to :meth:`HubSpotObjectMapping.apply_record` as a
-        :class:`HubSpotObjectRecord`, and its link holds the row the mapping
-        returns. The mapping's ``ValueError`` refuses the record alone
-        (``MAPPING_REFUSED``, naming the mapping).
+        :class:`HubSpotObjectRecord` carrying the values its payload holds and,
+        when this backend's last read produced exactly this payload, what HubSpot
+        sent; its link holds the row the mapping returns. The mapping's
+        ``ValueError`` refuses the record alone (``MAPPING_REFUSED``, naming the
+        mapping).
         """
 
         if stream.key != OBJECTS:
@@ -599,8 +651,13 @@ class HubSpotDirectoryBackend(DirectoryBackend):
             mapping.withdraw_record(link)
             return ApplyResult(mapped_payload=None)
         payload = record.mapped_payload
+        read = self._sent.get(record.external_key)
         neutral = HubSpotObjectRecord(
-            record.external_key, payload["properties"], tuple(payload["contacts"]), directory=self.bridge
+            record.external_key,
+            payload["values"],
+            tuple(payload["contacts"]),
+            directory=self.bridge,
+            sent=read[1] if read is not None and read[0] == record.source_hash else None,
         )
         try:
             target = mapping.apply_record(neutral, link=link)
@@ -610,6 +667,12 @@ class HubSpotDirectoryBackend(DirectoryBackend):
             # An explicit ``None`` target would withdraw the link: a record on no row of its own binds nothing.
             return ApplyResult(mapped_payload=payload)
         return ApplyResult(target=target, mapped_payload=payload)
+
+    def finish_page(self, stream: Any, page: StreamPage, outcomes: Sequence[ApplyResult]) -> None:
+        """Drop what HubSpot sent for the page's records, once the page is applied: nothing outlives its pass."""
+
+        self._sent = {}
+        super().finish_page(stream, page, outcomes)
 
     def on_absent(self, stream: Any, links: Sequence[Any]) -> dict[Any, ApplyResult] | None:
         """Hand each object record the absence sweeps found gone to its mapping's gone hook; the base handles others.
@@ -757,9 +820,11 @@ class HubSpotDirectoryBackend(DirectoryBackend):
         The associated contacts are read in one association read when the mapping
         asks for them. The mapping projects the record as HubSpot sent it
         (:meth:`HubSpotObjectMapping.project`), and only the projection enters the
-        payload. A record HubSpot stated unreadably, or whose value the projection
-        cannot read (``ValueError``), is an error payload the driver quarantines
-        under its id; the projection's refusal names the mapping, never the value.
+        payload; what HubSpot sent is held in memory for this read's own apply
+        (``_sent``), in place of the last read's. A record HubSpot stated
+        unreadably, or whose value the projection cannot read (``ValueError``), is
+        an error payload the driver quarantines under its id; the projection's
+        refusal names the mapping, never the value.
         """
 
         readable = [key for key, record in records.items() if not record.unreadable]
@@ -767,22 +832,21 @@ class HubSpotDirectoryBackend(DirectoryBackend):
         if mapping.contacts and readable:
             associated = client.associations(mapping.object_type, _CONTACT_TYPE, readable)
         payloads: dict[str, dict[str, Any]] = {}
+        self._sent = {}
         for key, record in records.items():
             if record.unreadable:
                 payloads[key] = {"error": "unreadable_record"}
                 continue
             stated = record.properties
+            sent = {name: stated[name] for name in mapping.properties if name in stated}
             contacts = sorted(associated.get(key, ()), key=int)
-            sent = HubSpotObjectRecord(
-                key,
-                {name: stated[name] for name in mapping.properties if name in stated},
-                tuple(contacts),
-                directory=self.bridge,
-            )
             try:
-                payloads[key] = {"properties": mapping.project(sent), "contacts": contacts}
+                values = mapping.project(HubSpotObjectRecord(key, sent, tuple(contacts), self.bridge, sent=sent))
             except ValueError:
                 payloads[key] = {"error": MAPPING_REFUSED, "mapping": mapping.key}
+                continue
+            payloads[key] = {"values": values, "contacts": contacts}
+            self._sent[key] = (canonical_json_sha256(payloads[key]), sent)
         return payloads
 
     def _object_changes(self, stream: Any, payloads: Mapping[str, Mapping[str, Any] | None]) -> list[RecordChange]:

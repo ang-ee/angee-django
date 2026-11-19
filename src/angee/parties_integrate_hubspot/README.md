@@ -210,7 +210,8 @@ the record with its properties as HubSpot sent them and returns the JSON values
 to keep; only those and the contact ids are kept on the record's link, in its
 history without limit, and compared, so a change the projection hides applies
 nothing. The default keeps the requested properties as sent. A notes mapping
-that must not keep each note's body keeps its digest instead:
+that writes each note's full text elsewhere and must not keep it on the link
+keeps its digest:
 
 ```python
 import hashlib
@@ -225,15 +226,27 @@ class ExampleNoteMapping(HubSpotObjectMapping):
         digest = hashlib.sha256(body.encode()).hexdigest()
         return {"body_sha256": digest, "at": record.properties.get("hs_timestamp")}
 
-    def apply_record(self, record, *, link):   # record.properties: what project returned
+    def apply_record(self, record, *, link):
+        record.values                      # what project kept: on the link, compared
+        record.properties["hs_note_body"]  # the full text, from the read that applies it
         ...
 ```
 
-`apply_record` receives a `HubSpotObjectRecord`: `id`, `properties` (what the
-projection kept: by default the mapping's properties as HubSpot sent them,
-nullable strings for the `parse_*` helpers, one the account does not define
-absent) and `contacts` (associated contact ids, in id order). It sees no more of
-the record than the projection kept. `record.person(contact_id)` is the person that contact
+`apply_record` receives a `HubSpotObjectRecord`: `id`, `values` (what the
+projection kept), `contacts` (associated contact ids, in id order) and
+`properties` (the mapping's properties as HubSpot sent them, nullable strings for
+the `parse_*` helpers, one the account does not define absent). The backend holds
+`properties` in memory from the read to that read's own apply and drops them when
+the page is applied; they are never stored on the link or in its history, never
+repeated in a refusal and never logged. Every apply the stream driver makes
+follows its own read of the record (a page, a rescan of a record that waited, a
+sweep, a new baseline after a version change), so they are there.
+`record.has_properties` says so; a record applied from what its link holds alone
+would have only `values`, and reading `properties` then raises
+`PropertiesNotRead`, the driver's missing-dependency refusal: the record waits and
+the stream's rescan reads it again, so a mapping never writes from its projection
+what it needed from HubSpot. A mapping without `project` reads `properties` as
+before. `record.person(contact_id)` is the person that contact
 landed on in this directory, or `None` until it has; raising
 `ContactNotLanded(contact_id)` makes the record wait and be read again on the
 stream's backoff, so it lands once the contact has, whichever stream ran first.

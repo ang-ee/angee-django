@@ -284,8 +284,13 @@ live in code docstrings.
   is gone; its `version` is the stream's mapping, so a change replays every record
   once. An optional `project(record)` turns the record as HubSpot sent it into the
   values the link keeps and compares (by default the requested properties as
-  sent), and `apply_record` receives those, so a note's body can be kept as its
-  digest and a change the projection hides applies nothing. An association read
+  sent), so a note's body can be kept as its digest and a change the projection
+  hides applies nothing; `apply_record` receives those `values` and, held in
+  memory from the read that applies it and never stored or logged, the
+  `properties` HubSpot sent, so it can write the full text. Without them (an apply
+  that did not follow its own read, which no driver path makes today), reading
+  `properties` raises `PropertiesNotRead`, a missing-dependency refusal the rescan
+  answers with a new read. An association read
   takes an id HubSpot names in its `NO_ASSOCIATIONS_FOUND` error as having no
   contacts, and refuses any other error or an id neither answered nor named, for a
   later retry. With no object mapping a directory reads only contacts. Operator messages
