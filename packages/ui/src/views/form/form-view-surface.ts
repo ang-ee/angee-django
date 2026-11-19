@@ -742,8 +742,10 @@ export function useFormViewSurface({
   const declaredActions = React.useMemo(
     () => [
       ...pageActions,
-      ...contributedActions.flatMap(({ action, containerChild }) =>
-        containerChild === undefined || sectionAdmits(containerChild, save.displayRecord) ? [action] : []),
+      // Section contributions belong to the subject's menu unless explicitly placed.
+      ...contributedActions.flatMap<RecordActionDescriptor>(({ action, containerChild }) =>
+        containerChild === undefined || sectionAdmits(containerChild, save.displayRecord)
+          ? [{ ...action, placement: action.placement ?? "menu" }] : []),
     ],
     [contributedActions, pageActions, save.displayRecord, sectionAdmits],
   );

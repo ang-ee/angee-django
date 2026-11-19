@@ -69,7 +69,7 @@ export function RecordActionBar({
   blocked?: boolean;
   /** Where the Actions menu sits: an icon-only `⋮` before the verbs (the command band), or a labeled menu after them. */
   menuPlacement?: "leading" | "trailing";
-  /** Show the only visible, unplaced non-danger verb as a secondary button when no verb is already on the toolbar. Off by default; ignored inside an Actions menu. */
+  /** On a saved record, show the only visible, unplaced non-danger declared verb as a secondary button when no declared verb is already on the toolbar. Off by default; ignored inside an Actions menu. */
   promoteLoneAction?: boolean;
 }): React.ReactElement | null {
   const preview = useRuntimeViewAs();
@@ -134,48 +134,45 @@ export function RecordActionBar({
       (!action.permission || holdsPermission(record, action.permission))
       && (!action.visibleWhen || (record != null && action.visibleWhen(record))),
   );
-  const placements = effectiveActionPlacements(visibleActions, promoteLoneAction, menu !== null);
+  const placements = effectiveActionPlacements(visibleActions, recordId, promoteLoneAction, menu !== null);
   const toolbarActions = visibleActions.filter((action) => placements.get(action) === "toolbar");
   const menuActions = visibleActions.filter((action) => placements.get(action) === "menu" && !genericActions.includes(action));
   const genericMenuActions = visibleActions.filter((action) => placements.get(action) === "menu" && genericActions.includes(action));
   const primaryAction = toolbarActions.find((action) => action.primary);
 
-  const runAction = React.useCallback(
-    async (action: RecordActionDescriptor): Promise<void> => {
-      if (blockedRef.current || action.disabled || disabledReason(action) || (action.permission && !holdsPermission(record, action.permission))) return;
-      const confirmation = actionConfirmation(action, record, t("action.confirmDanger"));
-      if (confirmation === null) return;
-      if (confirmation) {
-        const confirmed = await confirm({
-          title: confirmation.title,
-          ...(confirmation.body !== undefined
-            ? { body: confirmation.body }
-            : {}),
-          danger: confirmation.danger ?? Boolean(action.danger),
-          confirm: action.label,
-        });
-        if (!confirmed || blockedRef.current) return;
-      }
-      // A `submit` verb runs through its action form, as on a list row: the dialog
-      // collects any args (none when undeclared), merges the record/selection
-      // context and fires `submit` — never a record patch or the string-only prompt.
-      if (action.submit) {
-        setFormAction({ action, fromMenu: placements.get(action) === "menu" });
-        return;
-      }
-      let values: Record<string, string> = {};
-      if (action.prompt) {
-        const result = await prompt(action.prompt);
-        if (result === null) return;
-        values = result;
-      }
+  const runAction = async (action: RecordActionDescriptor): Promise<void> => {
+    if (blockedRef.current || action.disabled || disabledReason(action) || (action.permission && !holdsPermission(record, action.permission))) return;
+    const confirmation = actionConfirmation(action, record, t("action.confirmDanger"));
+    if (confirmation === null) return;
+    if (confirmation) {
+      const confirmed = await confirm({
+        title: confirmation.title,
+        ...(confirmation.body !== undefined
+          ? { body: confirmation.body }
+          : {}),
+        danger: confirmation.danger ?? Boolean(action.danger),
+        confirm: action.label,
+      });
+      if (!confirmed || blockedRef.current) return;
+    }
+    // A `submit` verb runs through its action form, as on a list row: the dialog
+    // collects any args (none when undeclared), merges the record/selection
+    // context and fires `submit` — never a record patch or the string-only prompt.
+    if (action.submit) {
+      setFormAction({ action, fromMenu: placements.get(action) === "menu" });
+      return;
+    }
+    let values: Record<string, string> = {};
+    if (action.prompt) {
+      const result = await prompt(action.prompt);
+      if (result === null) return;
+      values = result;
+    }
 
-      await actionMutation
-        .mutateAsync({ action, values })
-        .catch(() => undefined);
-    },
-    [actionMutation, blockedRef, confirm, prompt, record, placements, t],
-  );
+    await actionMutation
+      .mutateAsync({ action, values })
+      .catch(() => undefined);
+  };
 
   const visibleDeleteAction = deleteAction?.canDelete ? deleteAction : undefined;
   const disabled = (action: ActionDescriptor) =>
@@ -271,6 +268,7 @@ export function RecordActionBar({
 /** Resolve placement once, after permission and visibility filtering. A parent menu keeps every verb. */
 function effectiveActionPlacements(
   actions: readonly RecordActionDescriptor[],
+  recordId: string | null,
   promoteLoneAction: boolean,
   inMenu: boolean,
 ): Map<RecordActionDescriptor, "toolbar" | "menu"> {
@@ -278,7 +276,7 @@ function effectiveActionPlacements(
     action,
     inMenu ? "menu" : action.placement ?? (action.primary ? "toolbar" : "menu"),
   ] as const));
-  if (promoteLoneAction && !inMenu && ![...placements.values()].includes("toolbar")) {
+  if (recordId !== null && promoteLoneAction && !inMenu && ![...placements.values()].includes("toolbar")) {
     const candidates = actions.filter((action) => action.placement === undefined && !action.danger);
     const [candidate] = candidates;
     if (candidates.length === 1 && candidate) placements.set(candidate, "toolbar");

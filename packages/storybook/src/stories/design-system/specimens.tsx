@@ -141,7 +141,7 @@ export function RecordVerbs() {
   const fixtureRuntime = useMemo(() => ({ ...runtime, containers: recordContainers }), [runtime]);
   return <U.AppRuntimeProvider runtime={fixtureRuntime}><U.ControlBand>
     <U.SaveDiscardActions isDirty onDiscard={noop} onSave={noop} />
-    <U.RecordActionBar record={row} actions={[{ id: "publish", label: "Publish", primary: true, run: async () => undefined }]} />
+    <U.RecordActionBar record={row} blocked actions={[{ id: "publish", label: "Publish", primary: true, run: async () => undefined }]} />
     <U.RecordChrome value={{ resource: "notes.Note", canonicalResource: "notes.Note", dataProviderName: "public", recordId: row.id, record: row, formReadOnly: false }} />
     <U.ActionMenu><U.ActionTrigger onClick={noop}>Download</U.ActionTrigger></U.ActionMenu>
   </U.ControlBand></U.AppRuntimeProvider>;

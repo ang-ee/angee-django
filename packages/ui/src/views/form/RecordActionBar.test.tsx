@@ -50,6 +50,23 @@ describe("RecordActionBar", () => {
     expect(await screen.findByRole("menuitem", { name: "Review" })).toBeTruthy();
   });
 
+  test.each([null, { title: "Draft" }])("a record without a public id does not promote a bare run verb (%j)", async (draft) => {
+    renderActionBar(<RecordActionBar record={draft} promoteLoneAction actions={[
+      { id: "refresh", label: "Refresh skills", run: vi.fn() },
+    ]} />);
+    expect(screen.queryByRole("button", { name: "Refresh skills" })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Actions" }));
+    expect(await screen.findByRole("menuitem", { name: "Refresh skills" })).toBeTruthy();
+  });
+
+  test.each<ActionDescriptor>([
+    { id: "primary", label: "Review", primary: true, run: vi.fn() },
+    { id: "toolbar", label: "Review", placement: "toolbar", run: vi.fn() },
+  ])("create mode preserves $id toolbar placement", (action) => {
+    renderActionBar(<RecordActionBar record={null} promoteLoneAction actions={[action]} />);
+    expect(screen.getByRole<HTMLButtonElement>("button", { name: "Review" }).disabled).toBe(false);
+  });
+
   test.each<{
     name: string;
     promote: boolean;
@@ -414,17 +431,21 @@ describe("RecordActionBar", () => {
     expect(run).not.toHaveBeenCalled();
   });
 
-  test.each(["primary", "lone"] as const)("a %s action mounts its typed-args dialog outside the menu", async (kind) => {
+  test.each(["primary", "lone"] as const)("a %s action's typed-args dialog returns focus to its toolbar button", async (kind) => {
     const submit = vi.fn(async () => ({ ok: true, message: "Review recorded." }));
     renderActionBar(<RecordActionBar record={record} applyPatch={vi.fn()} reload={vi.fn()} promoteLoneAction={kind === "lone"}
+      genericActions={[{ id: "archive", label: "Archive", placement: "menu", set: { is_archived: true } }]}
       actions={[{ id: "review", label: "Review", primary: kind === "primary", args: [], submit }]} />);
-    fireEvent.click(screen.getByRole("button", { name: "Review" }));
+    const trigger = screen.getByRole("button", { name: "Review" });
+    act(() => trigger.focus());
+    fireEvent.click(trigger);
     const dialog = await screen.findByRole("dialog", { name: "Review" });
-    expect(screen.queryByRole("button", { name: "Actions" })).toBeNull();
+    await waitFor(() => expect(dialog.contains(document.activeElement)).toBe(true));
     fireEvent.click(within(dialog).getByRole("button", { name: "Review" }));
     await waitFor(() => expect(submit).toHaveBeenCalledWith({}, expect.objectContaining({ record, selectedIds: [record.id] })));
     expect(await screen.findByText("Review recorded.")).toBeTruthy();
-    expect(screen.queryByRole("dialog", { name: "Review" })).toBeNull();
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Review" })).toBeNull());
+    await waitFor(() => expect(document.activeElement).toBe(trigger));
   });
 
   test("keeps a schema draft across refresh and submits with the latest record revision", async () => {

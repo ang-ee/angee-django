@@ -950,16 +950,26 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
   [FormView](../../packages/ui/src/views/form/form-view-surface.ts) selects
   required fields from the resolved children; authored fields and passive chrome
   remain host-owned.
-- **Record verbs compose the shared action owner.** A form's only visible,
-  unplaced non-danger verb is a secondary button when no declared verb is already
-  on the toolbar; among several, the toolbar holds verbs marked `primary` or
-  explicitly placed there, and the rest live in the overflow menu (`primary`
-  needs no `placement`, while an explicit `placement="menu"` wins).
-  `#actions` and `#actions-menu` container children are unchanged: lone-verb
-  promotion is enabled only for the form's declared actions in its command band,
-  and everything inside an `ActionMenu` stays in the menu.
-  Visibility and permission are checked before counting; danger verbs and
-  explicitly placed verbs never count toward lone-verb promotion. A contributed
+- **Record verbs compose the shared action owner.** On a saved record, a form's
+  only visible, unplaced non-danger verb of its own is a secondary button when no
+  declared verb is already on the toolbar. Among several verbs, mark `primary`
+  the subject model's lifecycle transition that its statusbar explains (post,
+  confirm, cancel); leave secondary lifecycle verbs and model-owned utilities
+  (pay, reverse, send, PDF, merge, download) unmarked so they live in the overflow
+  menu. `primary` needs no `placement`; explicit placement wins, including
+  `placement="menu"` on a primary verb.
+  Lone-verb promotion counts only the form's own declared verbs in its command
+  band on a saved record. Visibility and permission are checked before counting;
+  danger verbs, explicitly placed verbs and generic Archive/Trash actions never
+  count. `#sections` action contributions default to `placement="menu"`, so they
+  neither promote themselves nor demote the form's own lone verb. `#actions`
+  and `#actions-menu` container children do not count, and everything inside an
+  `ActionMenu` stays in the menu.
+  A capability contributed to another model (run a workflow, rate, generate a
+  delivery, read a file again) uses that model's overflow menu, never its
+  toolbar. Classify an action by the subject it changes and its semantic owner:
+  a bridge addon implementing an inherited lifecycle (connect a channel) is not
+  a foreign capability because it lives in another package. A contributed
   capability uses its subject model's declared container. Process drill-ins
   expose the verbs of the inspected run, decision or changeset (answer, stop,
   retry, revert); collection controls stay with their collection. Every

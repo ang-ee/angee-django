@@ -219,6 +219,35 @@ describe("FormView", () => {
     expect(screen.queryByRole("button", { name: "Actions" })).toBeNull();
   });
 
+  test("a create form keeps a bare record verb in the menu beside Create", async () => {
+    sdkMocks.record = null;
+    renderWithProviders(<FormView resource="notes.Note">
+      <Field name="title" label="Title" title />
+      <Action id="refresh" label="Refresh skills" run={vi.fn()} />
+    </FormView>);
+
+    expect(screen.getByRole("button", { name: "Create" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Refresh skills" })).toBeNull();
+    fireEvent.click(await screen.findByRole("button", { name: "Actions" }));
+    expect(await screen.findByRole("menuitem", { name: "Refresh skills" })).toBeTruthy();
+  });
+
+  test.each([false, true])("a section verb stays in the menu without demoting the host's lone verb (primary: %s)", async (primary) => {
+    renderWithProviders(<FormView resource="notes.Note" id="note-1">
+      <Field name="title" label="Title" title />
+      <Action id="publish" label="Publish" run={vi.fn()} />
+    </FormView>, undefined, undefined, formChildren({ "notes.Note#sections": {
+      "imap.reindex": { content: <Action id="reindex" label="Reindex IMAP" primary={primary} run={vi.fn()} /> },
+    } }));
+
+    const publish = await screen.findByRole("button", { name: "Publish" });
+    expect(publish.classList.contains("bg-inset")).toBe(true);
+    expect(screen.queryByRole("button", { name: "Reindex IMAP" })).toBeNull();
+    fireEvent.click(await screen.findByRole("button", { name: "Actions" }));
+    expect(await screen.findByRole("menuitem", { name: "Reindex IMAP" })).toBeTruthy();
+    expect(screen.queryByRole("menuitem", { name: "Publish" })).toBeNull();
+  });
+
   test("a section contribution with a permission is absent for a reader without it", async () => {
     sdkMocks.record = { ...sdkMocks.record, permissions: ["read"] };
     const renderSections = () => renderWithProviders(<FormView resource="notes.Note" id="note-1">
@@ -2539,12 +2568,14 @@ describe("FormView", () => {
     // The original and its variant may reuse a tab id: only one reaches the row, as its one pane.
     expect(screen.getByRole("heading", { name: kind === "WHATSAPP" ? "WhatsApp sync" : "Sync" })).toBeTruthy();
     expect(screen.queryByRole("heading", { name: kind === "WHATSAPP" ? "Sync" : "WhatsApp sync" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Reindex IMAP" })).toBeNull();
     if (kind === "IMAP") {
-      expect(await screen.findByRole("button", { name: "Reindex IMAP" })).toBeTruthy();
+      fireEvent.click(await screen.findByRole("button", { name: "Actions" }));
+      expect(await screen.findByRole("menuitem", { name: "Reindex IMAP" })).toBeTruthy();
     } else {
-      expect(screen.queryByRole("button", { name: "Reindex IMAP" })).toBeNull();
+      expect(screen.queryByRole("button", { name: "Actions" })).toBeNull();
+      expect(screen.queryByRole("menuitem", { name: "Reindex IMAP" })).toBeNull();
     }
-    expect(screen.queryByRole("button", { name: "Actions" })).toBeNull();
   });
 
   test("a create form knows no implementation: originals stand, row-decided children stay out, fields and all", async () => {
@@ -3653,12 +3684,15 @@ describe("FormView", () => {
     expect(screen.queryByRole("button", { name: "Rename" })).toBeNull();
     const review = screen.getByRole("button", { name: "Review" });
     expect(review.classList.contains("bg-inset")).toBe(true);
+    act(() => review.focus());
     fireEvent.click(review);
     if (binding === "submit") {
       const dialog = await screen.findByRole("dialog", { name: "Review" });
-      expect(screen.queryByRole("button", { name: "Actions" })).toBeNull();
+      await waitFor(() => expect(dialog.contains(document.activeElement)).toBe(true));
       fireEvent.click(within(dialog).getByRole("button", { name: "Record review" }));
       await waitFor(() => expect(submit).toHaveBeenCalledWith({}, expect.objectContaining({ record: sdkMocks.record })));
+      await waitFor(() => expect(screen.queryByRole("dialog", { name: "Review" })).toBeNull());
+      await waitFor(() => expect(document.activeElement).toBe(review));
       expect(run).not.toHaveBeenCalled();
     } else {
       await waitFor(() => expect(run).toHaveBeenCalledOnce());
