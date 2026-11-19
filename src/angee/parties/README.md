@@ -140,9 +140,16 @@ so the contact only claims it, and a claim names nobody to adopt by it. The
 lookup carries them beside `people_for_emails`' answers, which stay as they are.
 A claim stays a claim until the contact's person holds the address through another
 statement or a person confirms the claim: a holder that lapses (trashed, or its
-statement withdrawn) and returns finds its address still its own. Confirming a
-claim moves the address, so it needs write on its live holder as well as on the
-claimant (`Party.confirm_statement`), and a claim lends the directory's contact
+statement withdrawn) and returns finds its address still its own. A person's
+stance that wins a handle moves the address: confirming a claim, taking control
+of an address (`HandleManager.claim_control`) and a confirmation a history revert
+restores all end in the handle's resolution (`Party.apply_handle`), where its
+author needs write on every other holder of the address as the page lookup reads
+them (`PartyManager.holding_blocker`): each live party any spelling of it
+resolves to, a lapsed holder, and an account's person when it is an account's
+sign-in address. An account takes its own sign-in address whoever holds it, and
+nobody may while the account has no person. The refusal is one message whoever
+holds the address. A claim lends the directory's contact
 readers nothing of the holder's handle (`stating_directory` reads current claims
 at `Party.REVIEW_CONFIDENCE` or above). A refused or colliding contact therefore
 never moves an address, and what is attributed to it, away from its holder. A

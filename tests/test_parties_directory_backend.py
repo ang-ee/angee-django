@@ -20,7 +20,15 @@ from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
 from django.db import connection, transaction
 from django.utils import timezone
-from rebac import PermissionDenied, RelationshipTuple, SubjectRef, system_context, to_object_ref, write_relationships
+from rebac import (
+    PermissionDenied,
+    RelationshipTuple,
+    SubjectRef,
+    actor_context,
+    system_context,
+    to_object_ref,
+    write_relationships,
+)
 from rebac.actors import to_subject_ref
 from rebac.roles import grant as grant_role
 
@@ -36,6 +44,7 @@ from angee.parties.backends import (
     ParsedAddressbook,
     ParsedContact,
 )
+from angee.provenance.context import changeset
 from angee.provenance.evidence import EvidenceReference
 from tests.conftest import File, current_stream, make_integration
 from tests.iam_models import Group
@@ -1392,7 +1401,7 @@ def test_confirming_a_claim_needs_write_on_the_person_who_holds_the_address(pull
     minted = pull.link("ada").target_object_id
     claim = _claim(pull, "ada", "ada@example.com")
 
-    with pytest.raises(PermissionDenied, match="holds the address"):
+    with pytest.raises(PermissionDenied, match=_HOLDING_REFUSAL):
         claim.with_actor(pull.directory.owner).confirm()
     assert _held_by("ada@example.com") == person.pk
 
@@ -1401,6 +1410,100 @@ def test_confirming_a_claim_needs_write_on_the_person_who_holds_the_address(pull
         write_relationships([RelationshipTuple(claimant, "editor", to_subject_ref(holder_owner))])
     claim.with_actor(holder_owner).confirm()
     assert _held_by("ada@example.com") == int(minted)
+
+
+_HOLDING_REFUSAL = "This address cannot be given to this party."
+"""The one refusal of a stance that would move an address off a holder its author cannot write, whoever holds it."""
+
+
+def test_confirming_a_claim_spelled_otherwise_needs_write_on_the_holder_of_the_address(pull: Pull) -> None:
+    """The contact's spelling is a row of its own that nobody holds; the address is still its holder's."""
+
+    person, handle = _existing(_user("someone-else"), email="Ada@Example.COM")
+    pull.sync()
+    claim = _claim(pull, "ada", "ada@example.com")
+    assert claim.handle_id != handle.pk
+
+    with pytest.raises(PermissionDenied, match=_HOLDING_REFUSAL):
+        claim.with_actor(pull.directory.owner).confirm()
+
+    assert Handle.objects.get(pk=claim.handle_id).party_id is None
+    handle.refresh_from_db()
+    assert handle.party_id == person.pk
+
+
+def test_confirming_a_claim_needs_write_on_a_trashed_holder_of_the_address(pull: Pull) -> None:
+    person, handle = _existing(_user("someone-else"))
+    pull.sync()
+    claim = _claim(pull, "ada", "ada@example.com")
+    Person._base_manager.get(pk=person.pk).trash(reason="Removed by its holder")
+
+    with pytest.raises(PermissionDenied, match=_HOLDING_REFUSAL):
+        claim.with_actor(pull.directory.owner).confirm()
+
+    _restore(person, handle)
+    assert _held_by("ada@example.com") == person.pk
+
+
+def test_confirming_a_claim_of_an_accounts_sign_in_address_needs_write_on_the_accounts_person(pull: Pull) -> None:
+    """Nobody holds the handle, yet the address is the account's: its person, whom the account owns, must agree."""
+
+    account = get_user_model().objects.create_user(username="ada-signin", email="ada@example.com")
+    with system_context(reason="tests.directory_claim.account"):
+        Person.objects.for_user(account)
+    pull.sync()
+    claim = _claim(pull, "ada", "ada@example.com")
+    assert _held_by("ada@example.com") is None
+
+    with pytest.raises(PermissionDenied, match=_HOLDING_REFUSAL):
+        claim.with_actor(pull.directory.owner).confirm()
+
+    assert _held_by("ada@example.com") is None
+
+
+def test_taking_control_of_an_address_needs_write_on_its_holder_unless_it_is_the_accounts_sign_in_address(
+    pull: Pull,
+) -> None:
+    """Taking control states the address as the taker's own person's: it moves the address like a confirmation."""
+
+    person, handle = _existing(_user("someone-else"))
+    taker = get_user_model().objects.create_user(username="taker", email="taker@example.com")
+
+    with pytest.raises(PermissionDenied, match=_HOLDING_REFUSAL):
+        Handle.objects.claim_control(taker, platform="email", value="ada@example.com")
+
+    handle.refresh_from_db()
+    assert (handle.party_id, handle.controller_id) == (person.pk, None)
+    # An account's sign-in address is its own: the account takes it whoever holds it.
+    account = get_user_model().objects.create_user(username="ada-signin", email="ada@example.com")
+    Handle.objects.claim_control(account, platform="email", value="ada@example.com")
+    handle.refresh_from_db()
+    assert (handle.party_id, handle.controller_id) == (Person.objects.get(user=account).pk, account.pk)
+
+
+def test_reverting_a_dismissal_needs_write_on_whoever_holds_the_address_now(pull: Pull) -> None:
+    """The restored confirmation would make the contact's person hold an address someone else holds since.
+
+    The holder holds another spelling, so nothing wrote the dismissed handle row
+    after the dismissal and history can replay it.
+    """
+
+    pull.sync()
+    owner = pull.directory.owner
+    with actor_context(owner), changeset(fresh=True):
+        confirmed = _claim(pull, "ada", "ada@example.com").with_actor(owner).confirm()
+    with actor_context(owner), changeset(fresh=True):
+        confirmed.with_actor(owner).dismiss()
+    dismissal = Party.statements.model.history.filter(id=confirmed.pk).latest("history_id").changeset
+    person, handle = _existing(_user("someone-else"), email="Ada@Example.COM")
+
+    with actor_context(owner), pytest.raises(PermissionDenied, match=_HOLDING_REFUSAL):
+        dismissal.with_actor(owner).revert()
+
+    assert Party.statements.model._base_manager.get(pk=confirmed.pk).is_dismissed
+    assert Handle.objects.get(pk=confirmed.handle_id).party_id is None
+    handle.refresh_from_db()
+    assert handle.party_id == person.pk
 
 
 def test_a_directorys_contact_reader_reads_no_handle_its_contact_only_claims(pull: Pull) -> None:
