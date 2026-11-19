@@ -172,11 +172,12 @@ class CardDavDirectoryBackend(DirectoryBackend):
         parts = urlsplit(base)
         return f"Connected to {parts.hostname}{f':{parts.port}' if parts.port else ''}."
 
-    def admit_credential(self, credential: Any) -> None:
-        """Admit only Basic-auth material, the username and password this backend signs in with."""
+    def credential_blocker(self, credential: Any) -> str | None:
+        """Refuse anything but Basic-auth material, the username and password this backend signs in with."""
 
-        if credential.kind != CredentialKind.BASIC_AUTH:
-            raise ValidationError({"credential": "A CardDAV directory signs in with a username and password."})
+        if credential.kind == CredentialKind.BASIC_AUTH:
+            return None
+        return "A CardDAV directory signs in with a username and password."
 
     def account_address(self) -> str:
         """Return the Basic-auth username: the account's own login address."""

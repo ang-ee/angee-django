@@ -18,7 +18,9 @@ external key (`DirectoryBackend.observe`, `read_contacts`, `contact_keys`); the
 base turns them into records, compares the shared contact projection on both
 sides and applies each through the ingest owners. The backend's `direction`
 decides which way contacts sync, pull-only unless it declares otherwise.
-`Directory` forwards its connection test and credential admission to the backend.
+`Directory` forwards its connection test and its credential rule to the backend:
+`DirectoryBackend.credential_blocker` is the one rule integrate raises on every
+attachment and the connect picker shows beside each account.
 Connecting a directory is one verb, `Directory.objects.connect`, which a vendor's
 connect mutation calls: it builds the credential and the directory unsaved, has
 the backend admit the credential and test the connection outside any

@@ -1631,8 +1631,8 @@ class Directory(Bridge, inherits="integrate.Integration"):
     ``syncIntegration`` mutation drive it). ``backend_class`` selects the protocol
     (``carddav`` from ``parties_integrate_carddav``), and ``config`` carries what
     that backend needs to reach its source (CardDAV's server URL). The backend tests
-    the connection (:meth:`test_connection`), admits the credential it uses
-    (:meth:`admit_credential`) and declares which way the contacts sync
+    the connection (:meth:`test_connection`), refuses a credential it does not use
+    (:meth:`credential_blocker`) and declares which way the contacts sync
     (``DirectoryBackend.direction``); every vendor connects through
     ``Directory.objects.connect`` (:class:`DirectoryManager`). The inherited
     ``Bridge.sync()`` drives the backend streams; the parties managers own the
@@ -1677,12 +1677,13 @@ class Directory(Bridge, inherits="integrate.Integration"):
 
         return self.backend.test_connection()
 
-    def admit_credential(self, credential: Any) -> None:
-        """Admit only a credential this directory's backend uses (``DirectoryBackend.admit_credential``).
+    def credential_blocker(self, credential: Any) -> str | None:
+        """Refuse a credential this directory's backend does not use (``DirectoryBackend.credential_blocker``).
 
-        Integrate asks on every attachment, so neither a connect, the console's
-        credential patch nor a reconnect points a directory at a credential its
-        backend would send elsewhere.
+        Integrate raises it on every attachment (``Integration.admit_credential``),
+        so neither a connect, the console's credential patch nor a reconnect points
+        a directory at a credential its backend would send elsewhere; the connect
+        picker shows it beside each account.
         """
 
-        self.backend.admit_credential(credential)
+        return self.backend.credential_blocker(credential)

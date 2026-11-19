@@ -682,20 +682,28 @@ def test_two_contacts_that_would_adopt_one_person_adopt_it_once(pull: Pull) -> N
     assert _proposals() == [(frozenset({copy.target_object_id, str(person.pk)}), "asserted", _refs(copy, handle))]
 
 
-def test_a_directory_forwards_its_connection_test_and_credential_admission(
+def test_a_directory_forwards_its_connection_test_and_credential_rule(
     pull: Pull, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """``Directory`` asks its backend; the base's connection test proves only the credential."""
+    """``Directory`` asks its backend: the base's connection test proves only the credential, and its rule admits any.
 
+    A backend's refusal is the one rule: the directory answers it to the connect
+    picker (``Integration.credential_blocker``) and attaching raises it.
+    """
+
+    credential = pull.directory.credential
     assert pull.directory.test_connection() == "Credential is usable."
+    assert pull.directory.credential_blocker(credential) is None
     asked: list[Any] = []
 
-    def refuse(backend: DirectoryBackend, credential: Any) -> None:
+    def refuse(backend: DirectoryBackend, credential: Any) -> str:
         del backend
         asked.append(credential)
-        raise ValidationError({"credential": "This directory cannot read with that credential."})
+        return "This directory cannot read with that credential."
 
-    monkeypatch.setattr(ManualDirectoryBackend, "admit_credential", refuse)
-    with pytest.raises(ValidationError):
-        pull.directory.attach_connection(pull.directory.credential)
-    assert asked == [pull.directory.credential]
+    monkeypatch.setattr(ManualDirectoryBackend, "credential_blocker", refuse)
+    assert pull.directory.credential_blocker(credential) == "This directory cannot read with that credential."
+    with pytest.raises(ValidationError) as refused:
+        pull.directory.attach_connection(credential)
+    assert refused.value.message_dict == {"credential": ["This directory cannot read with that credential."]}
+    assert asked == [credential, credential]
