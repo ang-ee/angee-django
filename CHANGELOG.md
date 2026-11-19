@@ -47,8 +47,10 @@ live in code docstrings.
   `Bridge.subscription_state`. Another workspace fails discovery with "This
   connection belongs to another Notion workspace; create a separate connection.",
   and an answer that names no workspace is refused rather than matched. A
-  connection discovered before it kept a workspace records the one its next
-  discovery reads.
+  connection discovered before it kept a workspace is checked against the
+  workspace its Notion account was authorized for (the OAuth token answer that
+  connect keeps in `ExternalAccount.identity_claims`); only one with no such
+  account, made with an API token, records the workspace its next discovery reads.
 
 - A deployment declares its static page head in `ANGEE_UI.shell.site` (`title`,
   `description`, `icon`, `touchIcon`, `image`), selecting files addons name in

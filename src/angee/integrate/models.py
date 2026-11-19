@@ -3504,6 +3504,11 @@ class Integration(StatementSourceMixin, ImplDefaultsMixin, OwnerMixin, AngeeData
             self.discovery_generation == 0 or self.discovery_completed_at is not None
         )
 
+    discovery_readiness_fields: ClassVar[tuple[str, ...]] = (
+        "discovery_retry_at", "discovery_generation", "discovery_completed_at", "lifecycle", "last_error",
+    )
+    """The columns :meth:`require_discovery_ready` reads, so a check loads only them."""
+
     def require_discovery_ready(self) -> None:
         """Stop work already admitted once :attr:`discovery_ready` no longer holds.
 

@@ -27,9 +27,12 @@ The connection keeps the workspace its first discovery read: a token or grant of
 another workspace fails discovery with "This connection belongs to another
 Notion workspace; create a separate connection.", and its imported pages, cursor
 and links stay as they were. An answer that names no workspace is refused. A
-connection discovered before it kept a workspace records the one its next
-discovery reads. Give an internal Notion connection read-content capability and
-access to the pages that will be imported.
+connection discovered before it kept a workspace is checked against the
+workspace its Notion account was authorized for, which Notion's OAuth token
+answer names and Connect keeps on the account. Only a connection with no such
+account, one made with an API token, trusts the workspace its next discovery
+reads, and records it. Give an internal Notion connection read-content
+capability and access to the pages that will be imported.
 
 Use **Sync now** to import the pages shared with that token into the connection's
 private Knowledge vault. Connected, discovered bridges also use Integrate's

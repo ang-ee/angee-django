@@ -23,6 +23,7 @@ from django.db import (
 )
 from django.db.migrations.state import ProjectState
 from django.db.models.signals import pre_delete
+from django.test.utils import CaptureQueriesContext
 from django.utils import timezone
 from hypothesis import example, given, settings
 from hypothesis import strategies as st
@@ -3312,6 +3313,31 @@ def test_a_push_writes_and_reflects_nothing_while_discovery_is_pending(discovere
     link = RecordLink.objects.with_sync_evidence().get(stream=stream, external_key="one")
     assert (link.remote_version, link.applied_base.source_hash) == ("v1", "base")
     assert not RecordLink.objects.filter(stream=stream, external_key="new").exists()
+
+
+def _integration_reads(queries: CaptureQueriesContext) -> list[str]:
+    """The statements that read the integration row on its own (a stream lock reads it joined)."""
+
+    table = SyncStream._meta.get_field("integration").related_model._meta.db_table
+    return [query["sql"] for query in queries.captured_queries if f'FROM "{table}"' in query["sql"]]
+
+
+def test_a_push_asks_discovery_once_per_write_and_reads_only_its_columns(
+    discovered_bridge: ConnectionBridge,
+) -> None:
+    stream = _two_way(discovered_bridge, "a", "b", "c")
+    with system_context(reason="test pinned candidates"):
+        for key in ("b", "c"):
+            RecordLink.objects.get(stream=stream, external_key=key).pin()
+    adapter = MemoryAdapter(candidates=tuple(LocalChange(key, {"n": 1}) for key in ("a", "b", "c")))
+
+    with CaptureQueriesContext(connection) as queries:
+        push_stream(stream, adapter)
+
+    # Two pinned candidates are skipped before the check; the one write asks once.
+    reads = _integration_reads(queries)
+    assert [written[0] for written in adapter.written] == ["a"] and len(reads) == 1
+    assert "use_count_24h" not in reads[0]
 
 
 def test_a_two_way_page_sends_no_write_back_while_discovery_is_pending(discovered_bridge: ConnectionBridge) -> None:
