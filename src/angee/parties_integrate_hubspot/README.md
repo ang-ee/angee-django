@@ -21,6 +21,12 @@ contact at all is believed only when HubSpot's search counts none either. A walk
 cut short part-way cannot be told from a complete one, so a contact it misses
 waits for the second sweep. In every case the person stays.
 
+A contact HubSpot states in a shape the backend cannot read (a property value that
+is not a string, say) is that contact's failure alone: it waits under its id
+while the rest of its page lands, and lands once HubSpot states it readably. A
+record without a usable id cannot be told apart from any other, so it is logged
+and skipped.
+
 A directory reads with a static-token credential holding a HubSpot service key
 that has the `crm.objects.contacts.read` scope. The backend admits no other kind
 and no empty token, and connects through no OAuth client. Connection discovery

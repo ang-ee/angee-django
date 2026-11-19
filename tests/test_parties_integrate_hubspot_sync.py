@@ -562,6 +562,37 @@ def test_a_server_error_mid_pass_fails_its_page_and_the_pass_goes_on_from_where_
     assert all(hubspot.link(key).status == LinkStatus.CURRENT for key in ids)
 
 
+def test_one_unreadable_contact_is_quarantined_by_its_id_and_one_without_an_id_is_reported_and_the_page_lands(
+    hubspot: HubSpot, caplog: pytest.LogCaptureFixture
+) -> None:
+    ada, grace, mary = (
+        hubspot.server.add("contacts", properties, modified=ago(days=days))
+        for days, properties in zip((3, 2, 1), (ADA, GRACE, MARY), strict=True)
+    )
+    stated = {key: record["properties"] for key, record in hubspot.server.records["contacts"].items()}
+    listed = [
+        {"id": ada, "properties": stated[ada]},
+        {"id": grace, "properties": {**stated[grace], "mobilephone": 15555550101}},
+        {"properties": {"email": "unkeyed@example.com"}},
+        {"id": mary, "properties": stated[mary]},
+    ]
+    hubspot.server.queue(httpx2.Response(200, json={"results": listed}))
+
+    with caplog.at_level("WARNING", logger="angee.parties_integrate_hubspot.backends"):
+        assert [page.count for page in hubspot.drain()] == [2]
+
+    assert (hubspot.contact(ada).display_name, hubspot.contact(mary).display_name) == ("Ada Example", "Mary Example")
+    (failure,) = failures(hubspot)
+    assert (failure, failure.code) == (*hubspot.link(grace).failures(), "unreadable_record")
+    assert "1 contact without a usable record id" in caplog.text
+    assert "unkeyed@example.com" not in caplog.text
+
+    # Once HubSpot states the contact readably again, the next delta lands it.
+    hubspot.server.update("contacts", grace, {"lastname": "Hopper"}, modified=timezone.now())
+    assert [page.count for page in hubspot.drain()] == [1]
+    assert hubspot.contact(grace).display_name == "Grace Hopper"
+
+
 def test_an_unreadable_stored_cursor_starts_a_new_baseline(hubspot: HubSpot) -> None:
     ada = hubspot.server.add("contacts", ADA, modified=ago(days=1))
     hubspot.drain()

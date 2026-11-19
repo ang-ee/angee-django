@@ -188,6 +188,42 @@ def test_an_id_a_batch_read_leaves_unanswered_without_hubspot_naming_it_gone_is_
     )
 
 
+MALFORMED: tuple[Any, ...] = (
+    {"id": "205", "properties": {"email": "person205@example.com", "phone": 5550100}},
+    {"id": "206", "properties": ["not", "a", "mapping"]},
+    {"properties": {"email": "unkeyed@example.com"}},
+    {"id": None, "properties": {}},
+    {"id": "not a record id", "properties": {}},
+    "not a record",
+)
+"""Records as HubSpot never states them: a number where it states strings, no properties object, no usable id."""
+
+
+def test_one_bad_record_never_fails_its_page_it_is_kept_by_its_id_or_counted_without_one(
+    hubspot_server: HubSpotServer, client: HubSpotClient
+) -> None:
+    good = contact(hubspot_server, 1)
+    stated = {"email": "person1@example.com", "lastmodifieddate": "2026-11-02T12:01:00.000Z"}
+    records = [{"id": good, "properties": stated}, *MALFORMED]
+    hubspot_server.queue(
+        httpx2.Response(200, json={"results": records, "paging": {"next": {"after": "207"}}}),
+        httpx2.Response(207, json={"status": "COMPLETE", "results": records[:3]}),
+    )
+
+    page = client.list_page("contacts", after="", limit=10, properties=())
+    read = client.batch_read("contacts", [good, "205", "206"], ())
+
+    assert [(record.id, record.unreadable) for record in page.results] == [
+        (good, False),
+        ("205", True),
+        ("206", True),
+    ]
+    assert (page.results[0].properties, page.results[1].properties) == (stated, {})
+    assert (page.unkeyed, page.next_after) == (4, "207")
+    assert [(record.id, record.unreadable) for record in read.found] == [(good, False), ("205", True), ("206", True)]
+    assert read.missing == ()
+
+
 def test_a_batch_read_splits_ids_into_hubspots_batch_size(
     hubspot_server: HubSpotServer, client: HubSpotClient
 ) -> None:

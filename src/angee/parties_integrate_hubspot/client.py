@@ -5,7 +5,8 @@ integrate's pinned, byte-capped request (``HttpClient.request``) with the
 authorization headers the caller supplies; the client never reads a credential.
 Every answer is validated into a pydantic model that ignores the fields it does
 not name, so a new HubSpot field never breaks a sync and a missing required one
-is a :class:`HubSpotError`; a page also states HubSpot's time from the answer's
+is a :class:`HubSpotError`; its records are validated one by one, so one bad
+record is that record's alone. A page also states HubSpot's time from the answer's
 ``Date`` header (:attr:`HubSpotPage.sent_at`), which is why the client reads the
 response itself rather than through ``HttpClient.request_model``. No HubSpot
 client library is involved.
@@ -175,11 +176,21 @@ class HubSpotAccount(_HubSpotModel):
         return value if isinstance(value, str) and _HOST_NAME.fullmatch(value) else None
 
 
-class HubSpotObject(_HubSpotModel):
-    """One CRM record; HubSpot states every property value as a nullable string."""
+class _HubSpotKey(_HubSpotModel):
+    """A record's id as HubSpot states it: a string of digits."""
 
-    id: str
+    id: str = Field(pattern=r"^[0-9]+$")
+
+
+class HubSpotObject(_HubSpotKey):
+    """One CRM record; HubSpot states every property value as a nullable string.
+
+    ``unreadable`` marks a record HubSpot stated in another shape (a property value
+    that is not a string, say): only its id was read, and ``properties`` is empty.
+    """
+
     properties: dict[str, str | None] = Field(default_factory=dict)
+    unreadable: bool = False
 
     def modified_at(self, object_type: str) -> datetime | None:
         """Return the record's last-modified time, or ``None`` when it was not read or cannot be parsed."""
@@ -209,7 +220,35 @@ class HubSpotPaging(_HubSpotModel):
     next: HubSpotNext | None = None
 
 
-class HubSpotPage(_HubSpotModel):
+class _HubSpotRecords(_HubSpotModel):
+    """An answer's records, each validated on its own, so one bad record never fails the rest.
+
+    A record that does not validate is kept by its id as an ``unreadable`` one; one
+    without a usable id is only counted in ``unkeyed``.
+    """
+
+    results: tuple[HubSpotObject, ...] = ()
+    unkeyed: int = 0
+
+    @model_validator(mode="before")
+    @classmethod
+    def _records_one_by_one(cls, data: Any) -> Any:
+        if not isinstance(data, dict) or not isinstance(stated := data.get("results"), list):
+            return data
+        results: list[HubSpotObject] = []
+        unkeyed = 0
+        for item in stated:
+            try:
+                results.append(HubSpotObject.model_validate(item))
+            except ValidationError:
+                try:
+                    results.append(HubSpotObject(id=_HubSpotKey.model_validate(item).id, unreadable=True))
+                except ValidationError:
+                    unkeyed += 1
+        return {**data, "results": results, "unkeyed": unkeyed}
+
+
+class HubSpotPage(_HubSpotRecords):
     """One page of a list walk or a search, and HubSpot's time when it answered.
 
     A list page's following position is the id of the record it starts at; a
@@ -221,7 +260,6 @@ class HubSpotPage(_HubSpotModel):
     HubSpot's clock to the second; ``None`` when it states none that can be read.
     """
 
-    results: tuple[HubSpotObject, ...] = ()
     paging: HubSpotPaging | None = None
     total: int | None = None
     sent_at: datetime | None = None
@@ -270,8 +308,7 @@ class _HubSpotBatchError(_HubSpotModel):
         return self.context.ids if self.context is not None else ()
 
 
-class _HubSpotBatchAnswer(_HubSpotModel):
-    results: tuple[HubSpotObject, ...] = ()
+class _HubSpotBatchAnswer(_HubSpotRecords):
     errors: tuple[_HubSpotBatchError, ...] = ()
 
 

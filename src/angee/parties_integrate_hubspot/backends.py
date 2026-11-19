@@ -36,6 +36,7 @@ the parties neutral contact.
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Iterator, Mapping, Sequence
 from datetime import datetime, timedelta
 from time import monotonic
@@ -62,6 +63,8 @@ from angee.parties_integrate_hubspot.client import (
     parse_options,
     parse_string,
 )
+
+logger = logging.getLogger(__name__)
 
 OVERLAP = timedelta(minutes=5)
 """The longest HubSpot's search index takes to show a change, and so how far an unsettled delta reaches back.
@@ -352,7 +355,9 @@ class HubSpotDirectoryBackend(DirectoryBackend):
         Once one has answered, none starts after ``deadline``, and a transient
         refusal ends the page with what was read, its cursor where the refused
         request would have gone on; the next page meets the refusal. A merge's
-        survivor is one record (``DirectoryBackend.record_changes``).
+        survivor is one record (``DirectoryBackend.record_changes``). A record
+        HubSpot states unreadably is that record's refusal, under its id; one
+        without a usable id cannot be a record, and is logged and skipped.
         """
 
         client = self._client(self.bridge.fresh_credential())
@@ -364,7 +369,7 @@ class HubSpotDirectoryBackend(DirectoryBackend):
         mapped = self.mapped_fields()
         properties = _read_properties(mapped)
         payloads: dict[str, Mapping[str, Any] | None] = {}
-        room, answered = page_bound, False
+        room, answered, unkeyed = page_bound, False, 0
         while room > 0 and (cursor.is_open or not answered):
             if answered and deadline is not None and monotonic() >= deadline:
                 break
@@ -374,10 +379,15 @@ class HubSpotDirectoryBackend(DirectoryBackend):
                 if answered and error.transient:
                     break
                 raise
-            answered = True
+            answered, unkeyed = True, unkeyed + page.unkeyed
             payloads.update((record.id, self._payload(record, mapped)) for record in page.results)
             cursor = cursor.advance(page, object_type=_OBJECT_TYPE)
             room -= len(page.results)
+        if unkeyed:
+            noun = "contact" if unkeyed == 1 else "contacts"
+            logger.warning(
+                "HubSpot directory %s skipped %d %s without a usable record id.", self.bridge.pk, unkeyed, noun
+            )
         records = self.record_changes(stream, payloads)
         return StreamPage(records, cursor.model_dump(mode="json"), exhausted=not cursor.is_open)
 
@@ -450,9 +460,12 @@ class HubSpotDirectoryBackend(DirectoryBackend):
 
         HubSpot's values of the ``mapped`` properties go to the base as the row its
         mappings project, as HubSpot sent them: one the account does not define is
-        absent, an unset one is ``None``.
+        absent, an unset one is ``None``. A record HubSpot stated unreadably is the
+        base's error payload, which the driver quarantines under its id.
         """
 
+        if record.unreadable:
+            return {"error": "unreadable_record"}
         properties = record.properties
         row = {name: properties[name] for name in mapped if name in properties}
         return self.observe(contact_from_properties(properties), replaces=record.merged_ids(), row=row)

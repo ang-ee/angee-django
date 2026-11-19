@@ -75,7 +75,10 @@ live in code docstrings.
   the second absence sweep; a read of the contact withdraws it at once only when
   HubSpot names it not found or a survivor names it replaced, and an id HubSpot
   merely leaves unanswered is a transient refusal; an empty id walk is believed
-  only when HubSpot's search counts no contact either. A platform admin connects an account
+  only when HubSpot's search counts no contact either. Each record of an answer is
+  validated alone: one HubSpot states unreadably is quarantined under its id
+  (`unreadable_record`) while its page lands, and one without a usable id is
+  logged and skipped. A platform admin connects an account
   from the console: `@angee/parties-integrate-hubspot` adds a "HubSpot account"
   entry to `parties.directories#toolbar`, whose dialog sends a name and the key
   (masked, as entered) to `connect_hubspot_directory(name, token)`, which runs
