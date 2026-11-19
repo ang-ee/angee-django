@@ -205,21 +205,22 @@ export function MutationDialog<
 
 /**
  * Run a dialog's one submission, its `onSubmit` or its authored `mutation`, with the
- * generic error notification off (the dialog renders the refusal). A mutation that
- * returns no data does not acknowledge the dialog: it fails with `fallback`.
+ * generic error notification off (the dialog renders the refusal). The submission's
+ * result is awaited, so every outcome, a throw included, settles the returned promise.
+ * A mutation that resolves no data does not acknowledge the dialog: it fails with `fallback`.
  * @kind null
  * @reason Runtime infrastructure: the dialog's submission contract, shared with its test double.
  */
-export function submitMutationDialog<TValues, TResult, TData>(
+export async function submitMutationDialog<TValues, TResult, TData>(
   submission: MutationDialogSubmission<TValues, TResult, TData>,
   values: TValues,
   fallback: string,
-): FormSubmitResult<TResult> | Promise<FormSubmitResult<TResult>> {
+): Promise<FormSubmitResult<TResult>> {
   if (!submission.mutation) return submission.onSubmit(values, SURFACE_RENDERS_FAILURE);
   const { mutation, mutationResult } = submission;
-  return mutation(values, SURFACE_RENDERS_FAILURE).then((data) => data == null
-    ? savedFormSubmitResult<TResult>(null, fallback)
-    : mutationResult ? mutationResult(data) : { status: "ok", data: data as unknown as TResult });
+  const data = await mutation(values, SURFACE_RENDERS_FAILURE);
+  if (data == null) return savedFormSubmitResult<TResult>(null, fallback);
+  return mutationResult ? mutationResult(data) : { status: "ok", data: data as unknown as TResult };
 }
 
 function MutationDialogInstance<TValues extends Record<string, unknown>, TResult, TData>({
