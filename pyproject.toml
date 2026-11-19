@@ -97,7 +97,7 @@ postgres = ["psycopg[binary,pool]>=3.2"]
 dev = [
     "angee-base[testing]==3.0.0",
     "daphne>=4.0",
-    "django-zed-rebac[caveats]>=0.36.1,<0.37",
+    "django-zed-rebac[caveats]>=0.37.0,<0.38",
     "faker>=30.0",
     "hypothesis>=6.100",
     "import-linter>=2.1",
@@ -131,6 +131,8 @@ default-groups = ["dev"]
 members = ["src/angee/*", "examples/src/example/*", "tests/blankchoices"]
 
 [tool.uv.sources]
+# CI probe only (not for merge): django-zed-rebac 0.37.0 release branch.
+django-zed-rebac = { git = "https://github.com/ang-ee/django-zed-rebac.git", rev = "e722385a6c7c" }
 angee-agents = {workspace = true}
 angee-agents-integrate-anthropic = {workspace = true}
 angee-agents-integrate-ollama = {workspace = true}

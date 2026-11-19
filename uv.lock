@@ -337,7 +337,7 @@ dev = [
     { name = "angee-mypy", specifier = "==2.1.0" },
     { name = "angee-server", extras = ["profiling"], editable = "src/angee/server" },
     { name = "daphne", specifier = ">=4.0" },
-    { name = "django-zed-rebac", extras = ["caveats"], specifier = ">=0.36.1,<0.37" },
+    { name = "django-zed-rebac", extras = ["caveats"], git = "https://github.com/ang-ee/django-zed-rebac.git?rev=e722385a6c7c" },
     { name = "example-notes", editable = "examples/src/example/notes" },
     { name = "example-theme", editable = "examples/src/example/theme" },
     { name = "faker", specifier = ">=30.0" },
@@ -551,7 +551,7 @@ requires-dist = [
     { name = "django-environ", specifier = ">=0.12" },
     { name = "django-sqids", specifier = ">=0.1" },
     { name = "django-yamlconf", specifier = ">=1.5.0" },
-    { name = "django-zed-rebac", specifier = ">=0.36.1,<0.37" },
+    { name = "django-zed-rebac", git = "https://github.com/ang-ee/django-zed-rebac.git?rev=e722385a6c7c" },
     { name = "jsonschema", extras = ["format-nongpl"], specifier = ">=4.26" },
     { name = "packaging", marker = "extra == 'testing'", specifier = ">=24" },
     { name = "psycopg", extras = ["binary", "pool"], specifier = ">=3.2" },
@@ -817,7 +817,7 @@ requires-dist = [
     { name = "channels", specifier = ">=4.0" },
     { name = "channels-redis", specifier = ">=4.2" },
     { name = "django-compose", specifier = ">=0.1.0.dev13,<0.2" },
-    { name = "django-zed-rebac", extras = ["strawberry-django"], specifier = ">=0.36.1,<0.37" },
+    { name = "django-zed-rebac", extras = ["strawberry-django"], git = "https://github.com/ang-ee/django-zed-rebac.git?rev=e722385a6c7c" },
     { name = "graphql-core", specifier = ">=3.3.1,<3.4" },
     { name = "pydantic", specifier = ">=2.14" },
     { name = "sentry-sdk", specifier = ">=2.71.0" },
@@ -3093,15 +3093,11 @@ wheels = [
 
 [[package]]
 name = "django-zed-rebac"
-version = "0.36.1"
-source = { registry = "https://pypi.org/simple" }
+version = "0.37.0"
+source = { git = "https://github.com/ang-ee/django-zed-rebac.git?rev=e722385a6c7c#e722385a6c7ca707b360ac46a09adaae1463a8f4" }
 dependencies = [
     { name = "django" },
     { name = "django-cte" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/69/22/24ee3a43e39b553e52066c878ee25b436a2b442c8a0c15a9b1095239c3ad/django_zed_rebac-0.36.1.tar.gz", hash = "sha256:c4ca94394b1168f00daa9b3786c5ac1d9f3ff8ab1add747dbfb78319065a51d0", size = 760312, upload-time = "2026-11-19T15:48:44.913Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/69/b8/015f2b97b2e0fba2c3275d6eaf83ea9a7f4633679b62786616cfb258cb64/django_zed_rebac-0.36.1-py3-none-any.whl", hash = "sha256:03f46129f78fb30858e660672640268deb9cbcfd260cfc75228b700cc349a6b2", size = 376343, upload-time = "2026-11-19T15:48:43.735Z" },
 ]
 
 [package.optional-dependencies]
