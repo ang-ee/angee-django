@@ -10,6 +10,17 @@ live in code docstrings.
 
 ## Unreleased — shared addon contracts, native embeddings and graph retrieval
 
+- Addons require django-zed-rebac 0.36.1. With none of its new settings set,
+  statements, statement counts and decisions are 0.35.2's, so nothing changes for a
+  host. (0.36.0 cannot be imported before app population, which Angee's pytest
+  plugins and permission modules need; 0.36.1 restores it, and the floor keeps hosts
+  off 0.36.0.) It adds `REBAC_ENABLED` (default `True`): a private single-user
+  project may set `REBAC_ENABLED: false` in `settings.yaml` to enforce nothing,
+  which is also the baseline for profiling a document's own queries without REBAC.
+  The library still stores relationships and syncs the policy, so `rebac sync` and
+  provisioning are unchanged, and it emits the system check `rebac.W011` and one
+  startup warning while unenforced. Its experimental read settings stay unset here.
+
 - Parties: a person merges the certain same-person pairs awaiting their review in
   one action, `Party.objects.merge_certain_same_as_pairs(actor=, limit=)`,
   exposed as the `merge_certain_same_as_pairs(limit)` mutation and the agent
