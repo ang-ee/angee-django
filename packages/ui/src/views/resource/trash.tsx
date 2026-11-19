@@ -10,6 +10,7 @@ import {
   allowsRecordPermission,
   refineResourceName,
   rowPublicId,
+  resourceLifecycle,
   trashFlagField,
   type DataResourceMetadata,
   type Row,
@@ -27,8 +28,7 @@ import type { ActionDescriptor } from "../page/Action";
 import { useActionResultRun } from "./action-result-run";
 import { useAuthoredResourceMutation } from "./authored-resource-mutation";
 import { RestoreRecord, TrashRecord } from "./documents";
-import { defineRowAction, type RowActionDeclaration } from "./RowActions";
-import { BULK_ACTION_LIMIT, type BulkSelectionProps } from "./bulk-action";
+import { BULK_ACTION_FANOUT_LIMIT, type BulkSelectionProps } from "./bulk-action";
 
 /** The record permission that offers trash and restore — the shared verbs' authority.
  * @kind null
@@ -92,7 +92,7 @@ export interface UseTrashRecordResult {
 }
 
 function trashTargetType(resource: DataResourceMetadata | null | undefined): string | null {
-  return resource && trashFlagField(resource) ? resource.resourceType ?? null : null;
+  return resourceLifecycle(resource).trashFlag ? resource?.resourceType ?? null : null;
 }
 
 /**
@@ -149,7 +149,7 @@ export function useTrashRecord(resource: DataResourceMetadata | null | undefined
  */
 export function BulkTrashActions(props: BulkSelectionProps): React.ReactElement | null {
   const targetType = trashTargetType(props.modelMetadata.resource);
-  const flag = trashFlagField(props.modelMetadata.resource);
+  const flag = resourceLifecycle(props.modelMetadata.resource).trashFlag;
   return targetType && flag ? <TrashSelectionActions {...props} targetType={targetType} flag={flag} /> : null;
 }
 
@@ -168,7 +168,7 @@ function TrashSelectionActions({ modelMetadata, selectedRows, unprocessedCount, 
       return id && row[flag] === restore ? [id] : [];
     }),
   }));
-  const askTrash = useTrashPrompt(Math.min(selections[0]!.ids.length, BULK_ACTION_LIMIT));
+  const askTrash = useTrashPrompt(Math.min(selections[0]!.ids.length, BULK_ACTION_FANOUT_LIMIT));
   // No per-row cache invalidation or toast: the bulk owner settles the whole run.
   const options = { dataProviderName: resource.schemaName, errorNotification: false as const };
   const [trashRecord] = useAuthoredResourceMutation(TrashRecord, options);
@@ -224,8 +224,7 @@ export function useTrashActions(
 ): readonly ActionDescriptor[] {
   const t = useUiT();
   const { available, trash, restore } = useTrashRecord(resource);
-  const flag = trashFlagField(resource);
-  const declaresPermissions = Boolean(resource?.fields?.some((field) => field.name === "permissions"));
+  const flag = resourceLifecycle(resource).trashFlag;
   const { name } = options;
   return React.useMemo<readonly ActionDescriptor[]>(() => {
     if (!available || flag === null) return [];
@@ -235,7 +234,7 @@ export function useTrashActions(
         label: t("trash.action"),
         icon: "trash",
         placement: "menu",
-        visibleWhen: (record) => allowsRecordPermission(record, TRASH_PERMISSION, declaresPermissions) && record[flag] === false,
+        visibleWhen: (record) => allowsRecordPermission(record, TRASH_PERMISSION, resource) && record[flag] === false,
         run: async (context) => {
           const id = rowPublicId(context.record);
           if (id && context.record && await trash(id, name?.(context.record))) context.refresh();
@@ -246,60 +245,14 @@ export function useTrashActions(
         label: t("trash.restore"),
         icon: "undo-2",
         placement: "menu",
-        visibleWhen: (record) => allowsRecordPermission(record, TRASH_PERMISSION, declaresPermissions) && record[flag] === true,
+        visibleWhen: (record) => allowsRecordPermission(record, TRASH_PERMISSION, resource) && record[flag] === true,
         run: async (context) => {
           const id = rowPublicId(context.record);
           if (id && await restore(id)) context.refresh();
         },
       },
     ];
-  }, [available, declaresPermissions, flag, name, restore, t, trash]);
-}
-
-/** List-row verbs matching {@link useTrashActions}, for `ListView` `rowActions`.
- * @owner Action
- */
-export function useTrashRowActions<TRow extends Row>(
-  resource: DataResourceMetadata | null | undefined,
-  options: TrashActionOptions<TRow> = {},
-): readonly RowActionDeclaration<TRow>[] {
-  const t = useUiT();
-  const { available, trash, restore } = useTrashRecord(resource);
-  const flag = trashFlagField(resource);
-  const declaresPermissions = Boolean(resource?.fields?.some((field) => field.name === "permissions"));
-  const { name } = options;
-  return React.useMemo<readonly RowActionDeclaration<TRow>[]>(() => {
-    if (!available || flag === null) return [];
-    return [
-      defineRowAction<TRow>({
-        kind: "page",
-        id: "trash",
-        label: t("trash.action"),
-        icon: "trash",
-        variant: "ghost",
-        placement: "menu",
-        pendingPolicy: "disable-actions",
-        visible: (row) => allowsRecordPermission(row, TRASH_PERMISSION, declaresPermissions) && row[flag] === false,
-        onSelect: async (row) => {
-          const id = rowPublicId(row);
-          if (id) await trash(id, name?.(row));
-        },
-      }),
-      defineRowAction<TRow>({
-        kind: "page",
-        id: "restore",
-        label: t("trash.restore"),
-        icon: "undo-2",
-        variant: "ghost",
-        pendingPolicy: "disable-actions",
-        visible: (row) => allowsRecordPermission(row, TRASH_PERMISSION, declaresPermissions) && row[flag] === true,
-        onSelect: async (row) => {
-          const id = rowPublicId(row);
-          if (id) await restore(id);
-        },
-      }),
-    ];
-  }, [available, declaresPermissions, flag, name, restore, t, trash]);
+  }, [available, resource, flag, name, restore, t, trash]);
 }
 
 export interface RemovedDisclosureProps {
@@ -421,7 +374,6 @@ export function RemovedList<TRow extends Row = Row>({
   className,
 }: RemovedListProps<TRow>): React.ReactElement | null {
   const t = useUiT();
-  const declaresPermissions = Boolean(resource?.fields?.some((field) => field.name === "permissions"));
   if (error) return <ErrorBanner description={t("trash.loadFailed")} />;
   return (
     <RemovedDisclosure count={total ?? rows.length} className={className}>
@@ -431,7 +383,7 @@ export function RemovedList<TRow extends Row = Row>({
           trashedByLabel: typeof row.trashed_by_label === "string" ? row.trashed_by_label : null,
           trashReason: typeof row.trash_reason === "string" ? row.trash_reason : null,
         };
-        const restorable = restore && (canRestore ? canRestore(row) : Boolean(id) && allowsRecordPermission(row, TRASH_PERMISSION, declaresPermissions));
+        const restorable = restore && (canRestore ? canRestore(row) : Boolean(id) && Boolean(resource) && allowsRecordPermission(row, TRASH_PERMISSION, resource));
         return (
           <RemovedItem
             key={id ?? label(row)}
@@ -475,7 +427,7 @@ export function RemovedRecords<TRow extends Row = Row>({
   className,
 }: RemovedRecordsProps<TRow>): React.ReactElement | null {
   const flag = trashFlagField(resource);
-  const declaresPermissions = Boolean(resource?.fields?.some((field) => field.name === "permissions"));
+  const declaresPermissions = !allowsRecordPermission(null, TRASH_PERMISSION, resource);
   const { restore, busy } = useTrashRecord(resource);
   const scope = stableSerialize([resource?.modelLabel, filters, pageSize]);
   const [pagination, setPagination] = React.useState({ scope, page: 1 });

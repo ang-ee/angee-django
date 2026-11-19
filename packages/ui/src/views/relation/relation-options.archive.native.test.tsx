@@ -41,17 +41,17 @@ test("an undecodable caller condition passes through without breaking an archiva
   expect(getList.mock.calls.at(-1)?.[0].meta?.gqlVariables?.where).toEqual(where);
 });
 
-test.each([false, true])("picker catalogue=%s chooses whether archived options are offered", async (catalogue) => {
+test.each([false, true])("picker includeArchived=%s chooses whether archived options are offered", async (includeArchived) => {
   const getList = vi.fn(async ({ meta }: GetListParams) => ({
     data: meta?.gqlVariables?.where ? [{ id: "active", name: "Active" }] : [{ id: "archived", name: "Archived" }], total: 1,
   }));
-  const { result } = renderHook(() => useRelationPickerOptions(relation, { catalogue }), {
+  const { result } = renderHook(() => useRelationPickerOptions(relation, { includeArchived }), {
     wrapper: ({ children }) => <Provider dataProvider={{ getList }}>{children}</Provider>,
   });
   act(() => result.current.onOpenChange(true));
-  await waitFor(() => expect(result.current.options).toEqual(catalogue
+  await waitFor(() => expect(result.current.options).toEqual(includeArchived
     ? [{ value: "archived", label: "Archived" }] : [{ value: "active", label: "Active" }]));
-  expect(getList.mock.calls.at(-1)?.[0].meta?.gqlVariables?.where).toEqual(catalogue
+  expect(getList.mock.calls.at(-1)?.[0].meta?.gqlVariables?.where).toEqual(includeArchived
     ? undefined : { is_archived: { _eq: false } });
 });
 

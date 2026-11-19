@@ -1,7 +1,7 @@
 import * as React from "react";
 import {
   ResourceQuery,
-  unarchivedFilter,
+  resourceLifecycle,
   isClientRowModel,
   modelMetadataForLabel,
   useModelMetadata,
@@ -14,7 +14,7 @@ import { modelChain, useAppRuntime, useContainer, useResourceRecordMatchFields, 
 import { useContainerAdmission } from "../../form/container-admission";
 import type { CardFrame } from "../../../ui/card";
 import { withResourceViewScope, useResourceViewMaybe, type ResourceViewContextValue } from "../resource-view-context";
-import { ResourceViewArchiveScopeContext } from "../surface/archive-scope";
+import { ResourceViewArchiveScopeContext, useArchiveScopeFilter } from "../surface/archive-scope";
 import { useRecordChromeContextMaybe } from "../record-chrome-context";
 import { DEFAULT_TEXT_FILTER_FIELD, Filter, isBuiltInResourceViewKind } from "../resource-view-model";
 import { ResourceViewKindsProvider, useOfferedResourceViewKinds, useResourceViewKindContent } from "../resource-view-kinds";
@@ -278,7 +278,6 @@ function ListViewBody<TRow extends Row = Row>({
   resourceView: ResourceViewContextValue;
 }): React.ReactElement {
   const t = useUiT();
-  const archiveScope = React.useContext(ResourceViewArchiveScopeContext);
   const rowActionSurface = useRowActionsSurface(rowActions);
   const filtered = Object.keys(resourceView.state.filter).length > 0;
   const resolvedEmptyContent = filtered
@@ -391,11 +390,12 @@ function ListViewBody<TRow extends Row = Row>({
     () => Filter.combineOptional(resourceView.baseFilter, resourceView.state.filter),
     [resourceView.state.filter, resourceView.baseFilter],
   );
-  const facetFilter = React.useMemo(
-    () => archiveScope ? unarchivedFilter(modelMetadata?.resource, mergedFilter ?? {}) : mergedFilter,
-    [archiveScope, modelMetadata, mergedFilter],
-  );
-  const selectable = declaredSelectable ?? presentation !== "embedded";
+  const facetFilter = useArchiveScopeFilter(modelMetadata?.resource, mergedFilter);
+  const lifecycle = resourceLifecycle(modelMetadata?.resource, modelMetadata);
+  const hasSelectionAction = Boolean(bulkActions) || (!source && Boolean(
+    lifecycle.archiveFlag || lifecycle.trashFlag || lifecycle.canDelete || modelMetadata?.resource.grantable?.length,
+  ));
+  const selectable = declaredSelectable ?? (presentation !== "embedded" && hasSelectionAction);
   const declaredFacets = useRelationFacets(
     source ? "" : resource,
     facets,

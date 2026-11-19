@@ -54,13 +54,24 @@ live in code docstrings.
     longer replace Delete. Every bulk action is gated by the resource's roots
     and flag contract, without projected row permissions; the server authorizes
     each write. Bulk is a client fan-out over the single verb, bounded at 25 rows
-    a click.
-  - **Public additions.** Metadata exports `archiveFlagField`,
-    `unarchivedFilter` (owned by `packages/metadata/src/fields.ts`) and
-    `allowsRecordPermission`. UI exports `useBulkAction` and `BulkActionRunner`;
-    `RecordActionBar` adds `fillBand` and `genericActions`. `useBulkDelete` takes
-    the shared runner; `useTrashPrompt` accepts a count, and `RemovedList` accepts
-    resource metadata for its permission contract.
+    a click (`BULK_ACTION_FANOUT_LIMIT`, distinct from the server selection limit).
+    Outside embedded presentation, selection defaults on only for lifecycle
+    actions, page `bulkActions` or a grantable model. A `source` list counts only
+    page `bulkActions`; explicit `selectable` wins.
+  - **Shared owners and API changes.** Metadata exports `resourceLifecycle` and
+    `canDeleteRecord` beside `archiveFlagField` and `unarchivedFilter` in
+    `packages/metadata/src/fields.ts`. Archive scope and the Archived filter
+    (stable id `archived`) share filterability independently of update support;
+    collection reads use one internal `useArchiveScopeFilter` hook.
+    `allowsRecordPermission(record, permission, metadata)` derives the permission
+    contract from resource or model metadata. Authored form Delete actions keep
+    their own admission while sharing the generic trash-state rule. `RemovedList` refuses its default Restore
+    without a resource; a domain may supply `canRestore`.
+    The relation picker option `catalogue` becomes `includeArchived`.
+    `useBulkAction` and `BulkActionRunner` are internal, and the unused
+    `useTrashRowActions` is removed. `RecordActionBar` adds `fillBand` and
+    `genericActions`; `useBulkDelete` takes the shared runner and optional row
+    snapshots, and `useTrashPrompt` accepts a count.
   - Deferred: permanent delete in `RemovedRecords`, a transactional bulk verb,
     `permissions` on master-data nodes, and a delete of their own for
     `parties.Directory`, `posts.Feed` and `calendar.CalendarSource`, which were

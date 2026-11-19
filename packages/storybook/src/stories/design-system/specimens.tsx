@@ -312,5 +312,4 @@ export const specimens = {
   useImplCategory: Hooks, useImplChoices: Hooks, useImplConfigFields: Hooks, useImplPrefill: Hooks,
   useListIdentities: Hooks, useRecordAction: Hooks, useRecordActionMutation: Hooks,
   useRecordChromeActionMutation: Hooks, useRecordChromeActionOutcome: Hooks, useRouteRecordId: Hooks,
-  useTrashRowActions: Hooks,
 } satisfies Partial<Record<CatalogExportName, () => ReactNode>>;

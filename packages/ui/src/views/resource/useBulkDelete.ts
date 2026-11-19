@@ -6,14 +6,14 @@ import {
   type DeletePreviewGroup,
   type DeletePreviewNode,
 } from "@angee/refine";
-import { refineResourceName, useModelMetadata, useModelRootFields, type Row } from "@angee/metadata";
+import { refineResourceName, useModelMetadata, resourceLifecycle, type Row } from "@angee/metadata";
 
 import { errorMessage, useToast } from "../../feedback";
 import { useUiT } from "../../i18n";
 import { useDeletePreviewOperation } from "./resource-operations";
 import { useRuntimeViewAs } from "../../runtime";
 import { useLatestRef } from "../../lib/use-latest-ref";
-import { BULK_ACTION_LIMIT, settleBulkRows, type BulkActionRunner } from "./bulk-action";
+import { BULK_ACTION_FANOUT_LIMIT, settleBulkRows, type BulkActionRunner } from "./bulk-action";
 
 interface BulkPreviewState {
   preview: DeletePreview;
@@ -51,7 +51,6 @@ export function useBulkDelete(
   const viewAs = useLatestRef(useRuntimeViewAs());
   const t = useUiT();
   const toast = useToast();
-  const rootFields = useModelRootFields(resource);
   const metadata = useModelMetadata(resource);
   const dataResource = metadata?.resource ?? null;
   // Delete is gated by the resource's delete-preview root; the server authorizes each
@@ -66,7 +65,7 @@ export function useBulkDelete(
     queryOptions: { enabled: Boolean(dataResource) },
   });
   const canDelete =
-    (rootFields === null || Boolean(rootFields.deletePreview))
+    resourceLifecycle(dataResource, metadata).canDelete
     && (deleteAccess.data?.can ?? true)
     && (selectedRows === undefined || selectedIdList.length > 0);
   const deletePreview = useAngeeDeletePreview(deletePreviewOperation.target, {
@@ -113,7 +112,7 @@ export function useBulkDelete(
     if (viewAs.current.viewAs || viewAs.current.pending) return;
     if (!canDelete || selectedIdList.length === 0 || bulk.pending) return;
     let requestId: number | undefined;
-    const previewedIds = selectedIdList.slice(0, BULK_ACTION_LIMIT);
+    const previewedIds = selectedIdList.slice(0, BULK_ACTION_FANOUT_LIMIT);
     const overflowCount = Math.max(
       0,
       selectedIdList.length - previewedIds.length,
@@ -187,7 +186,7 @@ export function useBulkDelete(
   const onConfirm = React.useCallback(() => {
     const state = previewState;
     if (!canDelete || !state || deletePending || viewAs.current.viewAs || viewAs.current.pending) return;
-    if (state.blockedCount >= Math.min(state.selectedIds.length, BULK_ACTION_LIMIT) || !confirmation.current) return;
+    if (state.blockedCount >= Math.min(state.selectedIds.length, BULK_ACTION_FANOUT_LIMIT) || !confirmation.current) return;
     setDeletePending(true);
     confirmation.current(true);
     confirmation.current = null;
@@ -195,7 +194,7 @@ export function useBulkDelete(
 
   return {
     previewState: previewState?.preview ?? null,
-    previewRecordCount: Math.min(previewState?.selectedIds.length ?? 0, BULK_ACTION_LIMIT),
+    previewRecordCount: Math.min(previewState?.selectedIds.length ?? 0, BULK_ACTION_FANOUT_LIMIT),
     previewOverflowCount: previewState?.overflowCount ?? 0,
     previewBlockedRecordCount: previewState?.blockedCount ?? 0,
     isPreviewOpen: previewState !== null,

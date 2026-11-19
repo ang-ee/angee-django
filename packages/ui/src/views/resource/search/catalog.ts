@@ -1,5 +1,5 @@
 import * as React from "react";
-import { archiveFlagField, Filter, isClientRowModel, useSchemaFieldMetadata, type ModelMetadata, type ResourceQuery, type Row } from "@angee/metadata";
+import { resourceLifecycle, Filter, isClientRowModel, useSchemaFieldMetadata, type ModelMetadata, type ResourceQuery, type Row } from "@angee/metadata";
 import { useUiT } from "../../../i18n";
 import type { FilterClauseField, ResourceToolbarFilterOption, ResourceToolbarGroupOption } from "../../../toolbars";
 import type { ColumnDescriptor } from "../../page";
@@ -66,13 +66,13 @@ export function useSearchCatalog<TRow extends Row>(input: UseSearchCatalogInput<
       mergeFilterFields(contributedFacets.filter((facet) => facet.source === "relation" || facet.options.length > 0).map(facetField), inferredFields)))
     .filter((field) => Boolean(query.fields[field.field ?? field.id]?.filter?.operators.length)),
   [input.customFilterFields, input.contributedCustomFilterFields, contributedFacets, inferredFields, query]);
-  const archiveFlag = archiveFlagField(modelMetadata?.resource);
+  const archiveFlag = resourceLifecycle(modelMetadata ? { ...modelMetadata.resource, query: query.contract } : null, modelMetadata).archiveFilter?.flag;
   const contributedFilterOptions = React.useMemo(() => [
     ...(input.contributedFilterOptions ?? EMPTY),
-    ...(archiveFlag && query.fields[archiveFlag]?.filter?.operators.includes("exact") ? [{
-      id: "record.archive.archived", label: t("record.archive.archived"), filter: { [archiveFlag]: { exact: true } },
+    ...(archiveFlag ? [{
+      id: "archived", label: t("record.archive.archived"), filter: { [archiveFlag]: { exact: true } },
     }] : EMPTY),
-  ], [input.contributedFilterOptions, archiveFlag, query, t]);
+  ], [input.contributedFilterOptions, archiveFlag, t]);
   const filters = React.useMemo(() => mergeFilterOptions(input.filterOptions, contributedFilterOptions, query, reported), [input.filterOptions, contributedFilterOptions, query, reported]);
   const facets = React.useMemo(() => {
     const choices = buildFilterOptions(columns, inferOptions ? rows : EMPTY, fields);

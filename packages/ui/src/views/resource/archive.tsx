@@ -1,5 +1,5 @@
 import * as React from "react";
-import { archiveFlagField, fieldUpdatable, refineResourceName, rowPublicId, type ModelMetadata, type Row } from "@angee/metadata";
+import { allowsRecordPermission, resourceLifecycle, refineResourceName, rowPublicId, type ModelMetadata, type Row } from "@angee/metadata";
 import { useUpdate, type BaseRecord, type HttpError } from "@refinedev/core";
 
 import { Glyph } from "../../chrome/Glyph";
@@ -17,18 +17,18 @@ export function useArchiveActions(
   metadata: ModelMetadata | null | undefined,
 ): readonly ActionDescriptor[] {
   const t = useUiT();
-  const flag = archiveFlagField(metadata?.resource);
-  const available = flag !== null && fieldUpdatable(metadata, flag);
-  const declaresPermissions = Boolean(metadata?.fields.permissions);
+  const flag = resourceLifecycle(metadata?.resource, metadata).archiveFlag;
+  // Without a projection, only resources that declare no permissions admit write.
+  const requiresWrite = !allowsRecordPermission(null, "write", metadata);
   return React.useMemo<readonly ActionDescriptor[]>(() => {
-    if (!available || flag === null) return [];
+    if (flag === null) return [];
     return [
       {
         id: "archive",
         label: t("record.archive.action"),
         icon: "archive",
         placement: "menu",
-        permission: declaresPermissions ? "write" : undefined,
+        permission: requiresWrite ? "write" : undefined,
         set: { [flag]: true },
         visibleWhen: (record) => record[flag] === false,
       },
@@ -37,12 +37,12 @@ export function useArchiveActions(
         label: t("record.archive.unarchive"),
         icon: "undo-2",
         placement: "menu",
-        permission: declaresPermissions ? "write" : undefined,
+        permission: requiresWrite ? "write" : undefined,
         set: { [flag]: false },
         visibleWhen: (record) => record[flag] === true,
       },
     ];
-  }, [available, declaresPermissions, flag, t]);
+  }, [requiresWrite, flag, t]);
 }
 
 /** The selection composes resource admission, flag patches and state predicates;

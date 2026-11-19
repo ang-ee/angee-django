@@ -178,7 +178,7 @@ describe("Gantt collection over native list data", () => {
     const router = createRouter({ routeTree: createRootRoute(), history: createMemoryHistory({ initialEntries: ["/"] }) });
     render(<RouterContextProvider router={router}><Provider resources={ganttResources} dataProvider={{ getList }}>
       <ResourceViewProvider resource={ganttLane.modelLabel} scope="local" initialState={{ view: "gantt", anchor: "2026-09-01" }}>
-        <ListView resource={ganttLane.modelLabel} columns={[{ field: "name" }]}
+        <ListView selectable resource={ganttLane.modelLabel} columns={[{ field: "name" }]}
           gantt={{ linked: { resource: ganttRecord.modelLabel, lane: "lane" }, start: "start", end: "end", label: "name" }}
           onRowClick={onRowClick} rowHref={(row) => `/lanes/${String(row.id)}`} />
       </ResourceViewProvider>

@@ -1,10 +1,10 @@
 import * as React from "react";
-import { ResourceQuery, unarchivedFilter, useModelMetadata } from "@angee/metadata";
+import { ResourceQuery, useModelMetadata } from "@angee/metadata";
 import { useAngeeAggregate, useAngeeGroupBy, type AggregateBucket, type AggregateMeasure } from "@angee/refine";
 import { useAggregateOperation, useGroupOperation } from "../views/resource/resource-operations";
 import { Filter, type ResourceViewFilter } from "../views/resource/resource-view-model";
 import { useResourceListQuery } from "../views/resource/surface/resource-list-query";
-import { ResourceViewArchiveScopeContext } from "../views/resource/surface/archive-scope";
+import { useArchiveScopeFilter } from "../views/resource/surface/archive-scope";
 import { useResourceRecordMatchFields } from "../runtime/runtime";
 import type { DashboardPageScope, DashboardWidgetData, WidgetSpec } from "./headless";
 
@@ -44,12 +44,16 @@ export function useDashboardWidgetData(
   spec: Pick<WidgetSpec, "kind" | "data" | "options">,
   pageScope?: DashboardPageScope,
 ): DashboardWidgetData {
-  const archiveScope = React.useContext(ResourceViewArchiveScopeContext);
   const source = spec.data.shape === "none" || spec.data.shape === "resourceView" ? null : spec.data.source;
   const metadata = useModelMetadata(source?.resource ?? "");
   const resource = metadata?.resource ?? null;
   const recordMatchFields = useResourceRecordMatchFields(spec.data.shape === "rows" ? spec.data.source.resource : "");
   const visible = useVisible();
+  const mergedFilter = React.useMemo(() => Filter.combine(
+    source?.filter as ResourceViewFilter | undefined,
+    pageScope?.resource === source?.resource ? pageScope?.filter : undefined,
+  ), [source, pageScope?.resource, pageScope?.filter]);
+  const filter = useArchiveScopeFilter(resource, mergedFilter);
   const prepared = React.useMemo(() => {
     if (!resource || !source) {
       return {
@@ -65,9 +69,6 @@ export function useDashboardWidgetData(
     }
     try {
       const query = ResourceQuery.from(resource);
-      const pageFilter = pageScope?.resource === source.resource ? pageScope.filter : undefined;
-      const merged = Filter.combine(source.filter as ResourceViewFilter | undefined, pageFilter);
-      const filter = archiveScope ? unarchivedFilter(resource, merged) : merged;
       const where = query.toWhere(filter);
       const groups = query.groupsFrom(source.groups ?? []);
       const sort = query.sortFrom(source.sort);
@@ -114,7 +115,7 @@ export function useDashboardWidgetData(
         filter: undefined,
       };
     }
-  }, [archiveScope, pageScope?.filter, pageScope?.resource, resource, source, spec.data.shape, recordMatchFields]);
+  }, [filter, resource, source, spec.data.shape, recordMatchFields]);
 
   const refresh = source ? source.refresh ?? { mode: "live" as const } : { mode: "manual" as const };
   const enabled = visible && prepared.query !== null;

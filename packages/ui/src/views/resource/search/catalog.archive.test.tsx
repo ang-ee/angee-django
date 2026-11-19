@@ -35,7 +35,7 @@ function catalog(resource: DataResourceMetadata, input: Partial<UseSearchCatalog
 test("an archivable collection offers Archived without a column, update root or inferred options", () => {
   const result = catalog({ ...record, roots: { list: "records" } }, { inferOptions: false });
   expect(result.filters).toEqual([{
-    id: "record.archive.archived", label: "Archived", filter: { is_archived: { exact: true } },
+    id: "archived", label: "Archived", filter: { is_archived: { exact: true } },
   }]);
 });
 

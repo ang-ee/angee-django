@@ -66,6 +66,9 @@ export {
 
 export {
   archiveFlagField,
+  resourceLifecycle,
+  canDeleteRecord,
+  type ResourceLifecycle,
   defaultWidgetForModelField,
   fieldUpdatable,
   filterFieldType,

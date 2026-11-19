@@ -725,6 +725,12 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
   authorizes each write. Generic bulk actions share the bounded single-verb
   fan-out in [the bulk owner](../../packages/ui/src/views/resource/bulk-action.ts),
   including the view-as write guard; they introduce no server bulk verb.
+  `BULK_ACTION_FANOUT_LIMIT` caps the separate requests at 25 rows per click;
+  the server's `action_selection_limit` bounds a different, server-owned verb.
+  The shared runner is internal; pages add `bulkActions` to the list.
+  Outside embedded presentation, selection defaults on only for a lifecycle
+  action, page `bulkActions`, or a grantable model's Share utility. A `source`
+  list counts only page `bulkActions`. An explicit `selectable` always wins.
 - Editable lines are the data view in edit mode; compose `RowsListView` and its column, visibility, action, reorder and footer seams, never form-local tables.
 - A list route declares its shipped `presetIds`, `search` shortcuts, `createAction`,
   and `boardCard` fields on `ResourceList`/`List`. Undeclared search shows the full
@@ -1019,7 +1025,8 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
   first one, an edit's Save and Discard included. Collection and transcript controls remain in their owning pane toolbar.
 - **The form supplies generic record actions from metadata.** Pages declare
   nothing for Archive / Unarchive, Move to trash / Restore, or Delete. Archive
-  patches the `archivable` flag only when the resource's update root accepts it
+  availability comes from [resourceLifecycle](../../packages/metadata/src/fields.ts),
+  shared by record forms, lists and search. Archive patches the `archivable` flag only when the resource's update root accepts it
   and the form is writable and saves through that update root, without a custom
   `submit`; an archived record carries an Archived header chip. Archive and Trash
   require their flag to be selected as `false`; Unarchive and Restore require `true`.
@@ -1029,7 +1036,8 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
   flag, including multi-table children; trash verbs act on the model storing it.
   Delete requires the `deletePreview` root. On a trashable resource it is offered
   only for records whose trash flag is `true`; bulk Delete previews and deletes
-  only those selected records. A resource without a trash flag keeps its existing
+  only those selected records. An authored form Delete action keeps its own
+  admission and shares the same trash-state rule. A resource without a trash flag keeps its existing
   Delete rule. Delete is gated by the resource's roots, including a resource with
   only a delete-preview root, without requiring projected row permissions.
   Record Trash / Restore use `allowsRecordPermission`: `delete` is required
@@ -1038,8 +1046,9 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
   resource-gated, and the server authorizes each write. These verbs
   stay in the form's overflow menu after page and container verbs, with Delete
   last. Removed-record lists compose `RemovedRecords` (or `RemovedDisclosure`
-  + `RemovedItem` over rows already held); list-row declarations compose
-  `useTrashRowActions`. A domain verb with its own transport, such as record
+  + `RemovedItem` over rows already held). `RemovedList` requires resource
+  metadata for its default Restore admission, or an explicit domain `canRestore`.
+  A domain verb with its own transport, such as record
   chatter moderation, still asks through `useTrashPrompt`.
 - **Archived rows leave default collections; "Archived" is a shared filter.** A
   resource whose metadata marks a field `archivable`, and whose query contract
@@ -1047,7 +1056,10 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
   resource lists (tables, grouped lists, boards, gantt collections, aggregate
   footers and facets), dashboard data and the relation picker's option search
   apply [unarchivedFilter](../../packages/metadata/src/fields.ts) after combining their
-  filters. Any predicate on the resource's own archive flag, in any `AND`, `OR`
+  filters. Collection reads compose the internal
+  [useArchiveScopeFilter](../../packages/ui/src/views/resource/surface/archive-scope.ts)
+  hook to carry the saved-record exemption. The scope and the Archived option
+  use the same lifecycle filterability fact, independently of update permission. Any predicate on the resource's own archive flag, in any `AND`, `OR`
   or `NOT` branch of the base, preset or editable filter, keeps the authored
   filter instead; a relation path ending in the same field name does not. The
   [search catalog](../../packages/ui/src/views/resource/search/catalog.ts)
@@ -1055,7 +1067,7 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
   editable filter as a removable chip, and removing it restores the default. A
   page declares no archive grouping, option or checkbox. The scope never
   reaches identity reads, selected-relation labels, lane and facet catalogues, a
-  filter editor's value picker (`catalogue`), caller-supplied `RowsListView`
+  filter editor's value picker (`includeArchived: true`), caller-supplied `RowsListView`
   rows, the data provider, or a related list inside a saved record's chrome,
   whose rows and count are the record's. The injected predicate is never a
   chip, URL state or a saved favorite.

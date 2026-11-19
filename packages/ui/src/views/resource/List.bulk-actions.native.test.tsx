@@ -16,6 +16,7 @@ import { createUiTestProviders } from "../../testing";
 import { Column } from "../page";
 import { collectionQuery } from "./collection-source";
 import { List } from "./List";
+import type { ListViewProps } from "./resource-view-types";
 import { ResourceViewProvider, useResourceView, type ResourceViewContextValue } from "./resource-view-context";
 
 const flags: DataResourceFieldMetadata[] = [
@@ -46,10 +47,12 @@ const sourceDocument: TypedDocumentNode<{ rows: Row[] }, Record<string, never>> 
 const note = (id: string, archived = false, removed = false): Row => ({ id, title: `Note ${id}`, archived, removed });
 
 async function fixture({ rows = [note("one"), note("two")], metadata = resource, source = false,
-  preview, update: write, custom: authored }: {
+  preview, update: write, custom: authored, selectable = true, bulkActions }: {
   rows?: Row[];
   metadata?: DataResourceMetadata;
   source?: boolean;
+  selectable?: boolean | "default";
+  bulkActions?: ListViewProps["bulkActions"];
   preview?: RuntimeViewAs;
   update?: (id: BaseKey | undefined, values: unknown) => Promise<{ data: Row }>;
   custom?: (variables: Record<string, unknown>) => Promise<unknown>;
@@ -72,7 +75,7 @@ async function fixture({ rows = [note("one"), note("two")], metadata = resource,
       }}><ModalsHost><ToastProvider>
         <ResourceViewProvider resource={metadata.modelLabel} scope="local">
           <Probe />
-          <List resource={metadata.modelLabel} scope="inherit" selectable source={sourceRows}>
+          <List resource={metadata.modelLabel} scope="inherit" selectable={selectable === "default" ? undefined : selectable} bulkActions={bulkActions} source={sourceRows}>
             <Column field="title" />
           </List>
         </ResourceViewProvider>
@@ -369,4 +372,30 @@ test("entering view-as while the trash prompt is open blocks its confirmed write
   await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
   expect(f.custom).not.toHaveBeenCalled();
   expect(f.view().selectedRows).toHaveLength(2);
+});
+
+
+const readOnlyResource = { ...resource, fields: [], resourceType: undefined,
+  roots: { list: "notes", detail: "notes_by_pk", aggregate: "notes_aggregate" }, grantable: [] };
+
+test.each([
+  { name: "read-only resource", metadata: readOnlyResource, expected: false },
+  { name: "page bulk actions", metadata: readOnlyResource, bulkActions: () => "Export", expected: true },
+  { name: "grantable resource", metadata: { ...readOnlyResource, grantable: [
+    { relation: "reader", permission: "share", subjects: [] },
+  ] }, expected: true },
+  { name: "lifecycle actions", metadata: resource, expected: true },
+  { name: "source ignores lifecycle", metadata: resource, source: true, expected: false },
+  { name: "source ignores grants", metadata: { ...readOnlyResource, grantable: [
+    { relation: "reader", permission: "share", subjects: [] },
+  ] }, source: true, expected: false },
+  { name: "source page bulk actions", metadata: resource, source: true, bulkActions: () => "Export", expected: true },
+])("selection default: $name", async ({ expected, ...options }) => {
+  await fixture({ ...options, selectable: "default" });
+  expect(screen.queryAllByRole("checkbox", { name: "Select row" })).toHaveLength(expected ? 2 : 0);
+});
+
+test.each([true, false])("explicit selectable=%s wins over resource capabilities", async (selectable) => {
+  await fixture({ metadata: selectable ? readOnlyResource : resource, selectable });
+  expect(screen.queryAllByRole("checkbox", { name: "Select row" })).toHaveLength(selectable ? 2 : 0);
 });

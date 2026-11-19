@@ -276,8 +276,9 @@ export interface ListViewProps<TRow extends Row = Row> {
   tableLayout?: ResourceTableLayout;
   /** Keep column headers visible or accessible-only. Defaults to visible. */
   headerVisibility?: ResourceTableHeaderVisibility;
-  /** Enable row selection and the bulk-selection column. Defaults to true except
-   * in embedded presentation. Selection survives pagination, page-size and view
+  /** Enable row selection and the bulk-selection column. Outside embedded lists,
+   * defaults on for lifecycle actions, page bulkActions or a grantable model.
+   * A source list counts only page bulkActions; an explicit value always wins. Selection survives pagination, page-size and view
    * changes that keep the same grouping. setView can replace groupStack with the
    * new view's defaults, clearing selection if the grouping changes. Filter, sort,
    * group, preset query/fixed-filter, base-filter, resource and Router-history

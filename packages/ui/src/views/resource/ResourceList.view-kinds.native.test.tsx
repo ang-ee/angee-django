@@ -11,6 +11,8 @@ import { AppRuntimeProvider, containersFromChildren, type ComposedContainers, ty
 import { createUiTestProviders } from "../../testing";
 import { defaultWidgets } from "../../widgets";
 import { ResourceList } from "./ResourceList";
+import { List } from "./List";
+import { Column } from "../page";
 import { useResourceView } from "./resource-view-context";
 import { RESOURCE_CONTAINERS } from "./resource-view-kinds";
 
@@ -118,7 +120,7 @@ test("a page card or the model's registered card offers the gallery beside list 
 
 test("the gallery kind pages the records as cards with one renderer and the shared selection", async () => {
   renderCollection(composed(), {
-    defaultView: "gallery",
+    defaultView: "gallery", columns: undefined, children: <List selectable><Column field="title" /></List>,
     renderCard: (row, context) => <span>{String(row.title)} · {context.kind}</span>,
   });
   expect(await screen.findByText("First note · gallery")).toBeTruthy();

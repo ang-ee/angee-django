@@ -173,7 +173,7 @@ describe("bulk delete flow", () => {
     render(
       <TestUrlState>
         <NoDeleteMetadata>
-          <ListView resource="example.Record" columns={columns} />
+          <ListView selectable resource="example.Record" columns={columns} />
         </NoDeleteMetadata>
       </TestUrlState>,
     );

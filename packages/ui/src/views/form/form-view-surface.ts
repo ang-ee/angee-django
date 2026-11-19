@@ -3,12 +3,12 @@ import { useWatch } from "react-hook-form";
 import { developmentMode } from "../../lib/development-mode";
 import { useLatestRef } from "../../lib/use-latest-ref";
 import {
-  archiveFlagField,
+  resourceLifecycle,
+  canDeleteRecord,
   lineReadSelectionPaths,
   modelFieldForPath,
   refineResourceName,
   relationRepresentationForPath,
-  trashFlagField,
   useModelMetadata,
   useSchemaFieldMetadata,
   type DataResourceMetadata,
@@ -563,7 +563,7 @@ export function useFormViewSurface({
       paths.add("permissions");
     }
     if (!isCreate) {
-      for (const flag of [archiveFlagField(dataResource), trashFlagField(dataResource)]) {
+      for (const flag of resourceLifecycle(dataResource, modelMetadata).flagFields) {
         if (flag) paths.add(flag);
       }
     }
@@ -832,10 +832,9 @@ export function useFormViewSurface({
   );
   const linesLabel = linesTabLabel ?? t("lines.section");
   const linesTrailing = save.linesActive && !linesDeclared;
-  const trashFlag = trashFlagField(dataResource);
   const visibleDeleteAction =
     readOnly || deleteAction === undefined ||
-    (trashFlag !== null && save.displayRecord?.[trashFlag] !== true) ||
+    !canDeleteRecord(dataResource, save.displayRecord, deleteAction.canDelete) ||
     (deleteVisibleWhen !== undefined &&
       (save.displayRecord == null || !deleteVisibleWhen(save.displayRecord)))
       ? undefined

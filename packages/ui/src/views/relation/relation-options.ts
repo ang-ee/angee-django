@@ -91,7 +91,7 @@ export interface RelationOptionsResult {
 export interface RelationPickerOptionsConfig
   extends Omit<RelationOptionsConfig, "enabled" | "searchText" | "page"> {
   /** Read the full catalogue, including archived rows, when choosing a filter value. */
-  catalogue?: boolean;
+  includeArchived?: boolean;
   value?: string | null;
   /** Folded selected row supplied by a parent record read, when available. */
   selectedOption?: RelationOption;
@@ -231,13 +231,13 @@ export function useRelationPickerOptions(
  */
 export function useRelationPickerSearch(
   relation: RelationFieldInfo | null,
-  config: RelationOptionsConfig & Pick<RelationPickerOptionsConfig, "catalogue"> = {},
+  config: RelationOptionsConfig & Pick<RelationPickerOptionsConfig, "includeArchived"> = {},
 ): RelationOptionsResult {
   const resource = useModelMetadata(relation?.resource ?? "")?.resource;
-  const { catalogue = false, ...options } = config;
+  const { includeArchived = false, ...options } = config;
   const { filters, where } = options;
   const scopedWhere = React.useMemo(() => {
-    if (catalogue) return where;
+    if (includeArchived) return where;
     const empty = {};
     const defaultFilter = unarchivedFilter(resource, empty, filters);
     // Preserve raw conditions when metadata or a native predicate disables scope.
@@ -253,7 +253,7 @@ export function useRelationPickerSearch(
     }
     const scoped = unarchivedFilter(resource, filter, filters);
     return scoped === filter ? where : query.toWhere(scoped);
-  }, [catalogue, resource, filters, where]);
+  }, [includeArchived, resource, filters, where]);
   return useRelationOptions(relation, { ...options, where: scopedWhere });
 }
 

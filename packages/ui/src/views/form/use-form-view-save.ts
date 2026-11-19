@@ -374,7 +374,7 @@ export function useFormViewSave({
     () =>
       readOnly ||
       recordUnavailable ||
-      (!isCreate && !allowsRecordPermission(record, "write", Boolean(modelMetadata?.fields.permissions))) ||
+      (!isCreate && !allowsRecordPermission(record, "write", modelMetadata)) ||
       (!isCreate && record !== null && Boolean(readOnlyWhen?.(record))) ||
       (!submitOwner &&
         !Boolean(isCreate ? dataResource?.roots.create : dataResource?.roots.update)) ||

@@ -1,3 +1,4 @@
+import type { DataResourceMetadata, ModelMetadata } from "./artifact";
 import type { Row } from "./rows";
 
 /** Test a permission projected on a readable record by the server. */
@@ -13,7 +14,8 @@ export function holdsPermission(record: Row | null | undefined, permission: stri
 export function allowsRecordPermission(
   record: Row | null | undefined,
   permission: string,
-  declaresPermissions: boolean,
+  metadata: DataResourceMetadata | ModelMetadata | null | undefined,
 ): boolean {
+  const declaresPermissions = Object.values(metadata?.fields ?? {}).some((field) => field.name === "permissions");
   return !declaresPermissions || holdsPermission(record, permission);
 }

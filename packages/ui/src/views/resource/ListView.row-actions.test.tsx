@@ -147,11 +147,11 @@ describe("ListView row actions", () => {
     })).toBeTruthy();
 
     const table = screen.getByRole("table");
-    expect(table.querySelectorAll("thead th")).toHaveLength(3);
+    expect(table.querySelectorAll("thead th")).toHaveLength(2);
     for (const row of table.querySelectorAll("tbody tr")) {
-      expect(row.querySelectorAll("td")).toHaveLength(3);
+      expect(row.querySelectorAll("td")).toHaveLength(2);
     }
-    expect(table.querySelectorAll("tfoot tr td")).toHaveLength(3);
+    expect(table.querySelectorAll("tfoot tr td")).toHaveLength(2);
   });
 
   test("keeps action-column colSpans aligned while the first page is loading", () => {
@@ -161,11 +161,11 @@ describe("ListView row actions", () => {
     renderList();
 
     const table = screen.getByRole("table");
-    expect(table.querySelectorAll("thead th")).toHaveLength(3);
+    expect(table.querySelectorAll("thead th")).toHaveLength(2);
     const status = table.querySelector("tbody td[role='status']");
-    expect(status?.getAttribute("colspan")).toBe("3");
+    expect(status?.getAttribute("colspan")).toBe("2");
     for (const row of table.querySelectorAll("tbody tr[aria-hidden='true']")) {
-      expect(row.querySelectorAll("td")).toHaveLength(3);
+      expect(row.querySelectorAll("td")).toHaveLength(2);
     }
   });
 });

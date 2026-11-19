@@ -351,7 +351,6 @@ export {
   useBulkDelete,
   type UseBulkDeleteResult,
 } from "./resource/useBulkDelete";
-export { useBulkAction, type BulkActionRunner } from "./resource/bulk-action";
 export {
   useDeletePreviewOperation,
   useDeleteWithPreview,
@@ -368,7 +367,6 @@ export {
   TRASH_STAMP_FIELDS,
   useTrashPrompt,
   useTrashRecord,
-  useTrashRowActions,
   type RemovedDisclosureProps,
   type RemovedItemProps,
   type RemovedListProps,

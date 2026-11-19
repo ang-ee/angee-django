@@ -40,7 +40,7 @@ vi.mock("@refinedev/core", async (importOriginal) => ({
 }));
 
 import { RestoreRecord, TrashRecord } from "./documents";
-import { RemovedList, RemovedRecords, useTrashActions, useTrashRecord, useTrashRowActions } from "./trash";
+import { RemovedList, RemovedRecords, useTrashActions, useTrashRecord } from "./trash";
 
 const flag: DataResourceFieldMetadata = {
   name: "is_trashed",
@@ -144,11 +144,10 @@ describe("shared trash verbs", () => {
   });
 
   test("an untrashable resource offers no verbs", () => {
-    const { result } = renderHook(() => ({ record: useTrashRecord(TAGS), actions: useTrashActions(TAGS), rows: useTrashRowActions(TAGS) }));
+    const { result } = renderHook(() => ({ record: useTrashRecord(TAGS), actions: useTrashActions(TAGS) }));
 
     expect(result.current.record.available).toBe(false);
     expect(result.current.actions).toEqual([]);
-    expect(result.current.rows).toEqual([]);
     expect(mocks.mutationOptions.mock.calls.every(([, options]) => Object.keys(options).length === 0)).toBe(true);
   });
 
@@ -176,20 +175,18 @@ describe("shared trash verbs", () => {
     }
   });
 
-  test.each([false, true])("row and record verbs share the declared permission contract (%s)", (declaresPermissions) => {
+  test.each([false, true])("record verbs use the declared permission contract (%s)", (declaresPermissions) => {
     const resource = declaresPermissions ? PAGES : UNPROJECTED_PAGES;
-    const { result } = renderHook(() => ({ rows: useTrashRowActions(resource), record: useTrashActions(resource) }));
+    const { result } = renderHook(() => ({ record: useTrashActions(resource) }));
     for (const is_trashed of [undefined, null, false, true]) {
       for (const permissions of [undefined, null, [], ["write"], ["delete"]]) {
         const row = { id: "pg_1", is_trashed, ...(permissions === undefined ? {} : { permissions }) };
         const manages = !declaresPermissions || Boolean(permissions?.includes("delete"));
         const expected = [manages && is_trashed === false, manages && is_trashed === true];
-        expect(result.current.rows.map((action) => action.visible(row))).toEqual(expected);
         expect(result.current.record.map((action) => action.visibleWhen!(row))).toEqual(expected);
       }
     }
     const unselected = { id: "pg_1", permissions: ["delete"] };
-    expect(result.current.rows.map((action) => action.visible(unselected))).toEqual([false, false]);
     expect(result.current.record.map((action) => action.visibleWhen!(unselected))).toEqual([false, false]);
   });
 
@@ -211,4 +208,19 @@ describe("shared trash verbs", () => {
     fireEvent.click(screen.getByRole("button", { name: "Removed (1)" }));
     expect(screen.getByRole("button", { name: "Restore" })).toBeTruthy();
   });
+});
+
+
+test("RemovedList without resource metadata refuses the default Restore", () => {
+  render(<RemovedList rows={[{ id: "one", title: "Plan", permissions: ["delete"] }]}
+    label={(row) => row.title} restore={vi.fn()} />);
+  fireEvent.click(screen.getByRole("button", { name: "Removed (1)" }));
+  expect(screen.queryByRole("button", { name: "Restore" })).toBeNull();
+});
+
+test("RemovedList admits a domain-owned restore predicate without resource metadata", () => {
+  render(<RemovedList rows={[{ id: "one", title: "Plan" }]}
+    label={(row) => row.title} restore={vi.fn()} canRestore={() => true} />);
+  fireEvent.click(screen.getByRole("button", { name: "Removed (1)" }));
+  expect(screen.getByRole("button", { name: "Restore" })).toBeTruthy();
 });

@@ -9,11 +9,13 @@ import { useUiT } from "../../i18n";
 import { useLatestRef } from "../../lib/use-latest-ref";
 import { useRuntimeViewAs } from "../../runtime";
 
-/** Maximum rows previewed or written by one generic selection action.
+/** Maximum rows previewed or written by one client fan-out per click.
+ * Kept below the server action_selection_limit (100): each row sends a separate
+ * request, and Delete sends both a preview and a confirmed request.
  * @kind null
  * @reason Runtime infrastructure: bounds the selection's client fan-out.
  */
-export const BULK_ACTION_LIMIT = 25;
+export const BULK_ACTION_FANOUT_LIMIT = 25;
 const BULK_ACTION_CONCURRENCY = 5;
 
 export interface BulkSelectionProps {
@@ -39,7 +41,7 @@ export async function settleBulkRows<T>(
   ids: readonly string[],
   perform: (id: string) => Promise<T>,
 ): Promise<{ id: string; result: PromiseSettledResult<T> }[]> {
-  const bounded = ids.slice(0, BULK_ACTION_LIMIT);
+  const bounded = ids.slice(0, BULK_ACTION_FANOUT_LIMIT);
   const entries: { id: string; result: PromiseSettledResult<T> }[] = [];
   for (let start = 0; start < bounded.length; start += BULK_ACTION_CONCURRENCY) {
     const batch = bounded.slice(start, start + BULK_ACTION_CONCURRENCY);

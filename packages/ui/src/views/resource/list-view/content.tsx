@@ -1,6 +1,6 @@
 import * as React from "react";
 import { MAX_PAGE_SIZE, useAngeeAggregate } from "@angee/refine";
-import { ResourceQuery, modelLabelSegment, rowPublicId, trashFlagField, useModelMetadata } from "@angee/metadata";
+import { ResourceQuery, modelLabelSegment, rowPublicId, canDeleteRecord, useModelMetadata } from "@angee/metadata";
 import type { ModelFieldMetadata, Row } from "@angee/metadata";
 import { useUiT } from "../../../i18n";
 import { titleCase } from "../../../lib/titleCase";
@@ -173,10 +173,9 @@ export function ListViewContent<TRow extends Row = Row>({
   const bulk = useBulkAction(source ? null : modelMetadata?.resource, deselectSucceeded);
   const selectedRowsById = React.useMemo(() => new Map(resourceView.selectedRows.map((row) => [rowPublicId(row), row])),
     [resourceView.selectedRows]);
-  const trashFlag = trashFlagField(modelMetadata?.resource);
-  const deleteIds = React.useMemo(() => trashFlag
-    ? new Set([...selectedIds].filter((id) => selectedRowsById.get(id)?.[trashFlag] === true))
-    : selectedIds, [selectedIds, selectedRowsById, trashFlag]);
+  const deleteIds = React.useMemo(() => new Set([...selectedIds].filter((id) =>
+    canDeleteRecord(modelMetadata?.resource, selectedRowsById.get(id)))),
+  [selectedIds, selectedRowsById, modelMetadata]);
   const bulkDelete = useBulkDelete(
     source ? "" : resource,
     deleteIds,

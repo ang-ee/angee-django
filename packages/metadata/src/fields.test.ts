@@ -1,5 +1,5 @@
 import { testDataResource, testQueryField, testResourceQuery } from "./testing";
-import { archiveFlagField, resourceOrderFieldForPath, trashFlagField } from "./fields";
+import { canDeleteRecord, resourceLifecycle, archiveFlagField, resourceOrderFieldForPath, trashFlagField } from "./fields";
 import { describe, expect, test } from "vitest";
 
 import {
@@ -199,4 +199,54 @@ test("the archive facet names the declared flag without guessing from names or t
   expect(archiveFlagField(testDataResource("example.Plain"))).toBeNull();
   expect(archiveFlagField(null)).toBeNull();
   expect(archiveFlagField(undefined)).toBeNull();
+});
+
+
+describe("resource lifecycle", () => {
+  const resource = testDataResource("test.Record", {
+    resourceType: "test/record", roots: { deletePreview: "records_delete" }, updateFields: ["retired"],
+    fields: [resourceField({ name: "retired", kind: "scalar", archivable: true, updatable: true }),
+      resourceField({ name: "removed", kind: "scalar", trashable: true })],
+    query: testResourceQuery({ fields: { retired: testQueryField("archived_wire") } }),
+  });
+
+  test("offers actions from their roots and flags and retains the filter wire path", () => {
+    expect(resourceLifecycle(resource)).toEqual({ archiveFlag: "retired", trashFlag: "removed", canDelete: true,
+      archiveFilter: { flag: "retired", field: "archived_wire" }, flagFields: ["retired", "removed"] });
+  });
+
+  test("read-only resources retain flag projections and archive filtering", () => {
+    expect(resourceLifecycle({ ...resource, roots: { list: "records" }, resourceType: undefined })).toEqual({
+      archiveFlag: null, trashFlag: null, canDelete: false,
+      archiveFilter: { flag: "retired", field: "archived_wire" }, flagFields: ["retired", "removed"],
+    });
+  });
+
+  test("Archive requires both the update input and the model field to accept the flag", () => {
+    expect(resourceLifecycle({ ...resource, updateFields: ["title"] }).archiveFlag).toBeNull();
+    const model = schemaFieldMetadataFromDataResources([resource]).labels[resource.modelLabel]!;
+    expect(resourceLifecycle(resource, { ...model, fields: {
+      ...model.fields, retired: { ...model.fields.retired!, updatable: false },
+    } }).archiveFlag).toBeNull();
+  });
+
+  test("an unfilterable archive flag can still offer Archive", () => {
+    expect(resourceLifecycle({ ...resource, query: testResourceQuery() })).toMatchObject({
+      archiveFlag: "retired", archiveFilter: null,
+    });
+  });
+
+  test.each([undefined, null, false, true])("Delete on a trashable resource needs a true flag (%s)", (removed) => {
+    expect(canDeleteRecord(resource, { removed })).toBe(removed === true);
+    expect(canDeleteRecord({ ...resource, resourceType: undefined }, { removed })).toBe(removed === true);
+  });
+
+  test("Delete requires a preview root and leaves non-trashable rows unrestricted", () => {
+    expect(canDeleteRecord({ ...resource, fields: [] }, undefined)).toBe(true);
+    expect(canDeleteRecord({ ...resource, roots: { delete: "delete_records" } }, { removed: true })).toBe(false);
+    expect(canDeleteRecord(undefined, { removed: true })).toBe(false);
+    expect(canDeleteRecord({ ...resource, roots: {} }, { removed: true }, true)).toBe(true);
+    expect(canDeleteRecord(resource, { removed: false }, true)).toBe(false);
+    expect(canDeleteRecord(resource, { removed: true }, false)).toBe(false);
+  });
 });

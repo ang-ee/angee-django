@@ -7925,15 +7925,6 @@
   },
   {
     "package": "@angee/ui",
-    "name": "useBulkAction",
-    "source": "packages/ui/src/views/resource/bulk-action.ts",
-    "kind": "surface",
-    "owner": "@angee/ui:ListView",
-    "status": "stable",
-    "storyId": null
-  },
-  {
-    "package": "@angee/ui",
     "name": "useBulkDelete",
     "source": "packages/ui/src/views/resource/useBulkDelete.ts",
     "kind": "surface",
@@ -8915,15 +8906,6 @@
     "owner": "@angee/ui:DeletePreviewDialog",
     "status": "stable",
     "storyId": null
-  },
-  {
-    "package": "@angee/ui",
-    "name": "useTrashRowActions",
-    "source": "packages/ui/src/views/resource/trash.tsx",
-    "kind": "contribution",
-    "owner": "@angee/ui:Action",
-    "status": "stable",
-    "storyId": "library-owners--hooks"
   },
   {
     "package": "@angee/ui",
