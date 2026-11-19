@@ -10,8 +10,8 @@ from angee.graphql.schema import AngeeSchema
 from angee.messaging.testing.models import Organization, Party, Person
 
 
-def test_multi_table_child_does_not_advertise_its_parents_trash_capability() -> None:
-    """Only the model storing the trash flag exposes its resource capability."""
+def test_multi_table_child_advertises_its_parents_trash_capability() -> None:
+    """Shared trash verbs dispatch a child's type to the model storing its flag."""
 
     schema = build_schema("type ResourceNode { is_trashed: Boolean! } type Query { record: ResourceNode }")
     fields = {
@@ -28,7 +28,7 @@ def test_multi_table_child_does_not_advertise_its_parents_trash_capability() -> 
     assert fields[Party]["is_trashed"].trashable is True
     for child in (Person, Organization):
         assert child._meta.get_field("is_trashed").model is Party
-        assert fields[child]["is_trashed"].trashable is False
+        assert fields[child]["is_trashed"].trashable is True
 
 
 def test_input_policy_preserves_wire_aliases_and_complete_relation_paths() -> None:

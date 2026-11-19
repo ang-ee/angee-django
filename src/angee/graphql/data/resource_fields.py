@@ -197,15 +197,11 @@ def is_trash_field(
     *,
     model: type[models.Model] | None,
 ) -> bool:
-    """Recognize trash only on the resource model that stores the flag.
-
-    Django returns the parent's field for a multi-table child, so classification
-    requires the resource model rather than the field's declaring model.
-    """
+    """Recognize trash on every resource composing it, including multi-table children."""
 
     if model is None or not isinstance(field, models.Field) or field.name != TRASH_FLAG_FIELD:
         return False
-    return issubclass(model, TrashMixin) and model.stores_trash()
+    return issubclass(model, TrashMixin)
 
 
 #: Backend-owned display-field precedence, shared by record representation and

@@ -170,10 +170,19 @@ class TrashMixin(PersistenceMixin, models.Model):
         """Return whether this concrete model stores its own trash flag.
 
         A multi-table child inherits its parent's flag; the parent owns trash
-        for both, so shared verbs address the parent only.
+        for both, including shared verbs addressed with the child's type.
         """
 
-        return cls._meta.get_field(TRASH_FLAG_FIELD).model is cls
+        return cls.trash_model() is cls
+
+    @classmethod
+    def trash_model(cls) -> type[TrashMixin]:
+        """Return the model storing the trash state shared by this model's row."""
+
+        owner = cls._meta.get_field(TRASH_FLAG_FIELD).model
+        if not issubclass(owner, TrashMixin):
+            raise ImproperlyConfigured("The trash flag must be declared by TrashMixin.")
+        return owner
 
     def trash(self, *, reason: str = "") -> None:
         """Move this row to the trash, stamping the acting user, time and reason."""
@@ -203,9 +212,7 @@ class TrashMixin(PersistenceMixin, models.Model):
     def revert_removal(self, previous: Any = None, *, reason: str = "") -> None:
         """Replay removal through the trash owner shared by MTI descendants."""
 
-        owner = self._meta.get_field(TRASH_FLAG_FIELD).model
-        if not issubclass(owner, TrashMixin):
-            raise ImproperlyConfigured("The trash flag must be declared by TrashMixin.")
+        owner = self.trash_model()
         target = owner._base_manager.get(pk=self.pk)
         if (actor := instance_actor(self)) is not None:
             if not isinstance(target, RebacMixin):
@@ -223,9 +230,7 @@ class TrashMixin(PersistenceMixin, models.Model):
     def _require_trash_state(self, *, trashed: bool) -> None:
         """Lock the stored row and refuse a trash verb that would change nothing."""
 
-        owner = self._meta.get_field(TRASH_FLAG_FIELD).model
-        if not issubclass(owner, TrashMixin):
-            raise ImproperlyConfigured("The trash flag must be declared by TrashMixin.")
+        owner = self.trash_model()
         stored = (
             owner.system_queryset(lock=("self",))
             .filter(pk=self.pk)

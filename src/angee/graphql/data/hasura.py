@@ -62,6 +62,7 @@ from angee.base.models.inputs import InputExtensionsMixin
 from angee.base.models.locks import OptimisticLockMixin, RowLockMixin
 from angee.base.models.persistence import PersistenceMixin
 from angee.base.models.refs import RecordRefMixin
+from angee.base.models.trash import ARCHIVE_FLAG_FIELD, TRASH_FLAG_FIELD, ArchiveMixin, TrashMixin
 from angee.base.pagination import MAX_PAGE_SIZE, valid_page_size
 from angee.base.permissions import declared_rebac_definition, relation_read_queryset
 from angee.base.querysets import AngeeQuerySet, row_lock_paths
@@ -1621,6 +1622,11 @@ def hasura_model_resource(  # noqa: PLR0913 - mirrors the upstream declarative b
     ``delete_preview``; an override of ``delete`` must define it as well, keeping
     both roots on the same deletion policy.
 
+    Models composing ``TrashMixin`` or ``ArchiveMixin`` contribute their flag
+    through a native node type extension when it is not already declared.
+    The archive flag is also filterable. These read capabilities do not change
+    the resource's explicit write fields; field-gated automatic reads fail closed.
+
     ``lines=HasuraLines(field="lines", model=...)`` (F6) declares an editable
     child-lines relation: the insert surface rides the upstream nested-insert
     shape (``insert_<res>_one(object: {..., lines: {data: [...]}})``) and an
@@ -1669,6 +1675,23 @@ def hasura_model_resource(  # noqa: PLR0913 - mirrors the upstream declarative b
     seams must use new names, distinct from existing resource filters and Hasura
     boolean combinators.
     """
+
+    node_definition = get_object_definition(node, strict=True)
+    node_fields = {field.python_name for field in node_definition.fields}
+    lifecycle_fields = [
+        name
+        for mixin, name in ((TrashMixin, TRASH_FLAG_FIELD), (ArchiveMixin, ARCHIVE_FLAG_FIELD))
+        if issubclass(model, mixin) and name not in node_fields
+    ]
+    assert_no_gated_read_fields(
+        model,
+        lifecycle_fields,
+        "hasura_model_resource lifecycle fields",
+        "automatic lifecycle projections cannot expose field-gated reads",
+        definition_for=declared_rebac_definition,
+    )
+    if issubclass(model, ArchiveMixin):
+        filterable = tuple(dict.fromkeys((*filterable, ARCHIVE_FLAG_FIELD)))
 
     model_aliases, model_filter_aliases = _declared_aliases(cast(Hashable, model))
     expressions = dict(filter_expressions or {})
@@ -1946,6 +1969,12 @@ def hasura_model_resource(  # noqa: PLR0913 - mirrors the upstream declarative b
         id_decode=id_decode,
         id_column=id_column,
     )
+    if lifecycle_fields:
+        resource.types.append(
+            strawberry_django.type(model, name=node_definition.name, extend=True, fields=lifecycle_fields)(
+                type(f"{node_definition.name}ResourceLifecycle", (), {}),
+            )
+        )
     if contributed_filters:
         resource.types.append(
             _resource_filter_projection(
