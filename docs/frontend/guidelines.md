@@ -364,10 +364,12 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
   `<title>` and refuses a host head tag for any other fact the site writes, or
   any Open Graph tag. The web build reads the public origin only from the stack's
   `ANGEE_PUBLIC_ORIGIN` environment variable, so an origin authored only in a
-  settings file is not seen; without one, or under a `base` that is not a root
-  path, `og:url` is left out and `og:image` is not absolute. Asset declarations
-  are compose inputs; changing only image bytes needs no compose, and Vite
-  rereads them on build or dev reload.
+  settings file is not seen. `og:url` is written only with an origin and a
+  root-path `base`, which together also make `og:image` absolute. Otherwise
+  `og:image` is the asset's URL under the `base`: absolute under a full-URL
+  `base`, relative under a relative `base` or a root-path one without an origin.
+  Asset declarations are compose inputs; changing only image bytes needs no
+  compose, and Vite rereads them on build or dev reload.
 
   [`selectApp`](../../packages/app/src/boot-app.tsx) takes `?app=<root id |
   apps name>`, else the hostname's `hosts` entry, else `shell.app`, else

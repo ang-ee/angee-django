@@ -28,6 +28,14 @@ on:
         required: false
         type: boolean
         default: false
+      pr-checks-enabled:
+        description: >-
+          Run the lanes a pull request's own run already ran on the tree a merge commit gives main
+          (the SQLite shards, the packages and the composed stack). A caller passes false on a push
+          to main, where only the PostgreSQL selection is new work.
+        required: false
+        type: boolean
+        default: true
       addons-profile:
         description: Addon composition profile; full is the only lane that checks out bridges.
         required: false
@@ -126,7 +134,7 @@ jobs:
   # (scripts/changed_path_selection.py); every other event runs the whole suite.
   uv-shard:
     name: uv ${{ matrix.group }}/6
-    if: ${{ inputs.uv-enabled }}
+    if: ${{ inputs.uv-enabled && inputs.pr-checks-enabled }}
     runs-on: ubuntu-latest
     timeout-minutes: 60
     strategy:
@@ -328,11 +336,12 @@ jobs:
       - run: |
           echo "quality=${{ needs.python-quality.result }} shards=${{ needs.uv-shard.result }} postgres=${{ needs.uv-postgres.result }}"
           test "${{ needs.python-quality.result }}" = success
-          test "${{ needs.uv-shard.result }}" = success
+          # The shards are skipped where a caller turned the pull-request lanes off.
+          test "${{ needs.uv-shard.result }}" = success || { test "${{ inputs.pr-checks-enabled }}" = false && test "${{ needs.uv-shard.result }}" = skipped; }
           test "${{ needs.uv-postgres.result }}" = success
 
   pnpm:
-    if: ${{ inputs.pnpm-enabled }}
+    if: ${{ inputs.pnpm-enabled && inputs.pr-checks-enabled }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -364,7 +373,7 @@ jobs:
   # Python collection, each on its own PostgreSQL host. The stack job keeps one verdict.
   stack-shard:
     name: stack ${{ matrix.group }}/${{ strategy.job-total }}
-    if: ${{ inputs.stack-enabled }}
+    if: ${{ inputs.stack-enabled && inputs.pr-checks-enabled }}
     runs-on: ubuntu-latest
     timeout-minutes: 60
     strategy:
@@ -707,4 +716,4 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - run: test "${{ needs.stack-shard.result }}" = success
+      - run: test "${{ needs.stack-shard.result }}" = success || { test "${{ inputs.pr-checks-enabled }}" = false && test "${{ needs.stack-shard.result }}" = skipped; }
