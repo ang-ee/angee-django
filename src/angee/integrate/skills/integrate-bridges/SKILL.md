@@ -149,8 +149,9 @@ source addon contributes one adapter class, its registry key and its tests. Refe
    (`as_error(error, service, *, public_message=None, transient=None, retry_after=None)`: its words, a refusing status
    it knows to be transient, and a wait its body or headers name, used instead of the answer's `Retry-After`), reading
    their signals from the refusal's `status`, `body` and `headers` (a copy without credentials or cookies). A refused
-   answer keeps its status even when its body is over the cap or cannot be decoded; one record's oversized or
-   unreadable answer is that record's refusal.
+   answer keeps its status even when its body is over the cap or cannot be decoded. If the adapter reads one record
+   per request → it raises that record's oversized or unreadable answer as the record's `SemanticError` (the
+   `NotionSnapshot.content_refused` path in `src/angee/knowledge_integrate_notion/backend.py`); integrate does not.
    Record-level refusals raise `SemanticError` (quarantined, page continues); infrastructure errors propagate
    (page rolls back) (`BridgeImpl.apply_record` in `src/angee/integrate/impl.py`). **Owner rule:** [Integration and worker contracts](../../../../../docs/backend/guidelines.md#integration-and-worker-contracts)
    "An integration failure reaches the operator only as an IntegrationError".

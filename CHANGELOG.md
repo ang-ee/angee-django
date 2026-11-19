@@ -14,8 +14,9 @@ live in code docstrings.
   (`HttpClient.request_model`) and one rule for a refused answer
   (`HttpRefusal`): a transport failure, a 429 or a 5xx is transient and waits
   for `Retry-After`; a success that is oversized or unreadable, a body httpx2
-  cannot decode included, is permanent, and one record's oversized or
-  unreadable answer is that record's refusal. The status decides before the
+  cannot decode included, is permanent; an adapter that reads one record per
+  request makes that record's oversized or unreadable answer the record's
+  refusal (Notion does). The status decides before the
   body: `HttpClient.request` keeps a refused answer's status, with no body,
   when its body is over the cap or httpx2 cannot decode it, never reading past
   the cap, and still follows a redirect hop whose body is over the cap.

@@ -318,9 +318,11 @@ a success that is over the cap, cannot be decoded or does not validate, are
 permanent, because the same request brings the same answer. The status decides
 before the body does: a refused answer whose body is over the cap or cannot be
 decoded keeps its status, with no body, and is never read past the cap. A
-whole-resource poll reads a permanent answer again on its next run, a pager
-shrinks its page, and one record's oversized or unreadable answer is that
-record's refusal, quarantined while the page of results continues. The vendor's
+whole-resource poll reads a permanent answer again on its next run. The rest is
+the adapter's to state: a pager shrinks its page, and an adapter that reads one
+record per request raises that record's oversized or unreadable answer as the
+record's `SemanticError`, so the driver quarantines it while the page of results
+continues (Notion's page content does). The vendor's
 `error=` factory turns the refusal into its `IntegrationError` with
 `HttpRefusal.as_error(error, service, *, public_message=None, transient=None, retry_after=None)`,
 whose default message names the service and nothing the answer said. The vendor
