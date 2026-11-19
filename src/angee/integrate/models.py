@@ -5123,13 +5123,20 @@ class SyncStreamManager[SyncStreamT: SyncStream](_SyncStreamManagerBase[SyncStre
         discovery-ready (:meth:`Integration.require_discovery_ready`), unless
         the caller declared its commit exempt (:func:`~angee.integrate.states.exempt_from_discovery`).
         The integration is read with the stream in one statement, never locked:
-        epoch changes lock it before the stream.
+        epoch changes lock it before the stream. Only the columns the check
+        uses are read (``Integration.discovery_readiness_fields``).
         """
 
         if not connection.in_atomic_block:
             raise RuntimeError("Locking a stream requires the page transaction.")
+        integration = self.model._meta.get_field("integration").related_model
+        unread = [
+            f"integration__{field.name}"
+            for field in integration._meta.concrete_fields
+            if not field.primary_key and field.name not in integration.discovery_readiness_fields
+        ]
         with system_context(reason="integrate.stream.lock_current"):
-            locked = self.filter(pk=stream.pk).select_related("integration").lock_if_supported().get()
+            locked = self.filter(pk=stream.pk).select_related("integration").defer(*unread).lock_if_supported().get()
             if self.filter(
                 integration_id=locked.integration_id,
                 key=locked.key,

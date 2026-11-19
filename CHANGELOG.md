@@ -14,8 +14,9 @@ live in code docstrings.
   asked about discovery for each candidate before its pinned, held, unchanged and
   released skips, each time reading the whole integration row; it now asks once
   per write, after the skips, reading only the columns
-  `Integration.require_discovery_ready` uses (`Integration.discovery_readiness_fields`).
-  The exemption from the stream lock's discovery check is a module-level context,
+  `Integration.require_discovery_ready` uses (`Integration.discovery_readiness_fields`),
+  and every stream lock (`SyncStreamManager.lock_current`) joins only those
+  columns of its integration instead of the whole row. The exemption from the stream lock's discovery check is a module-level context,
   `angee.integrate.states.exempt_from_discovery()`, instead of a stream manager
   method that ignored its manager, so pinning a record and dismissing a failure
   no longer read the stream row only to reach it.
