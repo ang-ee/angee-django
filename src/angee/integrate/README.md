@@ -105,17 +105,22 @@ quarantines do not lower it. Only a newer declaration starts a baseline.
 a declaration never changes an existing stream.
 
 A mapping composed from several declarers (a capability's base and the consumer
-addons that map more source fields) declares `mapping_contributions` instead: its
-`(key, version)` parts in the order they apply, which the declarer sorts by its own
-explicit sequence, then key. The stream then owns the version. Its generation
-retains the list it ran (`SyncStream.mapping_contributions`), and any other list
-(a part added, removed, exchanged, reordered or re-versioned) opens one baseline
-under a version strictly above the retained one and at least the parts' sum, so
-every record replays once and a version never stamps two lists' output. The
-retained list keeps its version, and a composed stream's version never lowers: a
-plain version declared on it later reads as the one part under the stream's key. A
-declaration names a version or contributions, never both. Streams written before
-the column hold the empty list and keep the plain rule.
+addons that map more source fields) declares `mapping_contributions` instead: one
+`MappingContribution(key, version, sequence=...)` per part. Integrate applies the
+parts in sequence order, ties broken by key, whatever order they were collected
+in. The stream then owns the version. Its generation retains the ordered keys and
+versions it ran (`SyncStream.mapping_contributions`), and any other list (a part
+added, removed, exchanged, reordered or re-versioned) opens one baseline under a
+version above the retained one, above every version its records were applied
+with and at least the parts' sum, so every record replays once and a version
+never stamps two lists' output. A renumbering that keeps the order changes
+nothing. The retained list keeps its version, and a composed stream's version
+never lowers: a plain version declared on it later reads as one part under the
+empty key, which no declared part may use. A declaration with contributions
+leaves `mapping_version` at its default; any other version beside them is
+refused. The list is a deployment-wide fact: workers declaring different lists
+for one stream open a new baseline on every open. Streams written before the
+column hold the empty list and keep the plain rule.
 
 A declared snapshot with no reconciliation interval closes after its baseline;
 explicit resync opens a new generation. Missing cadence alone never means read-once.
