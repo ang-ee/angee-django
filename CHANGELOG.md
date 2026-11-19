@@ -126,7 +126,13 @@ live in code docstrings.
   contact's spelling of that address lands on that handle row. The link's
   `adopted_through` metadata and `angee.parties.backends.ADOPTED_THROUGH` are
   removed: the driver replaces link metadata wholesale. Schema revision 25:
-  `rebac sync` after compose.
+  `rebac sync` after compose. Deferred, open with the architect: a source states
+  whole aspects, and survivorship applies a winning empty value, so a field of an
+  adopted person that no statement holds (written as system work, or stated by a
+  lower-ranked source) is cleared by a contact that lacks it. Provenance has no
+  option that keeps such a value for an adopted person without changing
+  survivorship for every source; the expected behaviour is a strict expected
+  failure in the pull-only directory tests.
 
 - A pull-only contact never moves an address away from its holder. An email the
   lookup answers with a person other than the contact's own, who does not hold it

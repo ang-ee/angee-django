@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass, field, replace
+from datetime import date
 from typing import Any
 
 import pytest
@@ -34,8 +35,9 @@ from angee.parties.backends import (
     ParsedContact,
 )
 from angee.provenance.evidence import EvidenceReference
-from tests.conftest import current_stream, make_integration
+from tests.conftest import File, current_stream, make_integration
 from tests.stream_adapters import applied_history
+from tests.test_storage import PNG_BYTES, drive, image_drive  # noqa: F401 -- the image drive avatars land on
 
 pytestmark = pytest.mark.django_db(transaction=True)
 
@@ -647,6 +649,30 @@ def test_an_adopted_person_keeps_their_own_edits_and_private_fields(pull: Pull) 
     )
     # What the person never stated arrives from the source.
     assert (person.given_name, person.family_name) == ("Ada", "Lovelace")
+
+
+@pytest.mark.usefixtures("image_drive")
+@pytest.mark.xfail(
+    strict=True,
+    reason=(
+        "Open for the architect's ruling: a source states whole aspects, and survivorship applies a winning "
+        "empty value over a column no statement holds; no provenance option keeps it for an adopted person alone."
+    ),
+)
+def test_an_adopted_person_keeps_the_values_no_statement_holds_when_the_contact_has_none(pull: Pull) -> None:
+    """Notes, an avatar and a birthday written without a statement survive a contact that carries none of them."""
+
+    avatar = File.objects.ingest_image(PNG_BYTES)
+    person, _handle = _existing(
+        pull.directory.owner, notes="Prefers letters.", avatar=avatar, birthday=date(1815, 12, 10)
+    )
+    pull.source.put("ada", replace(_ADA, notes=""))
+
+    pull.sync()
+
+    assert pull.link("ada").target_object_id == str(person.pk)
+    person.refresh_from_db()
+    assert (person.notes, person.avatar_id, person.birthday) == ("Prefers letters.", avatar.pk, date(1815, 12, 10))
 
 
 def _refused_owner(pull: Pull) -> Any:
