@@ -238,10 +238,15 @@ live in code docstrings.
 - `angee.integrate.http` owns a vendor's typed JSON request
   (`HttpClient.request_model`) and one rule for a refused answer
   (`HttpRefusal`): a transport failure, a 429 or a 5xx is transient and waits
-  for `Retry-After`; an oversized or unreadable answer, a body httpx2 cannot
-  decode included, is permanent, and one record's oversized or unreadable
-  answer is that record's refusal. `HttpRefusal.as_error`
-  builds the vendor's `IntegrationError`, and a refusal's `cause` tells a
+  for `Retry-After`; a success that is oversized or unreadable, a body httpx2
+  cannot decode included, is permanent, and one record's oversized or
+  unreadable answer is that record's refusal. The status decides before the
+  body: `HttpClient.request` keeps a refused answer's status, with no body,
+  when its body is over the cap or httpx2 cannot decode it, never reading past
+  the cap, and still follows a redirect hop whose body is over the cap.
+  `HttpRefusal.as_error` builds the
+  vendor's `IntegrationError`, with the vendor's own words and wait when it
+  states them, and a refusal's `cause` tells a
   request not sent from one whose outcome is uncertain. Notion, the Google
   client (Drive and Calendar), ICS, GitHub and OAuth's JSON reads (discovery,
   userinfo, JWKS) moved onto it, and `HttpClient.get_json` is removed. GitHub's
