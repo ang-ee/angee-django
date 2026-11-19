@@ -40,7 +40,7 @@ live in code docstrings.
   compares what its source last applied, withdraws a confirmed-absent contact's
   statements and lets a payload name the keys a source merge replaced.
   `DirectoryBackend.probe()` is folded into `test_connection()`, which
-  `Directory.test_connection` forwards to with `admit_credential`; the
+  `Directory.test_connection` forwards to; the
   `remote_delete` stream option, validated and never read, is removed. CardDAV
   links need no migration and no re-download.
 
@@ -74,6 +74,16 @@ live in code docstrings.
   connection test now reaches the client as a `VALIDATION` error carrying the
   server's refusal instead of `INTERNAL`. The `carddav` vendor is a master
   resource adopted by slug: load resources before connecting the first one.
+
+- A directory's credential rule is integrate's one admission rule:
+  `DirectoryBackend.credential_blocker(credential)` returns a public-safe
+  refusal or `None` (the base admits any credential), `Directory.credential_blocker`
+  forwards to it, and `Integration.admit_credential` raises it on every
+  attachment, so the connect picker lists a credential the backend refuses as
+  refused instead of refusing it only once attached. `DirectoryBackend.admit_credential`
+  and `Directory.admit_credential` are removed: a vendor backend implements
+  `credential_blocker` (CardDAV's Basic-auth rule moved there), and an
+  `admit_credential` override on a directory backend is no longer called.
 
 - A pull-only directory adopts an existing person (rulings R2 and R9): a contact
   with no person of its own or of a record it replaced lands on the first person

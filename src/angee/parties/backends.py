@@ -276,14 +276,18 @@ class DirectoryBackend(BridgeImpl, HttpClientMixin):
 
         return self.bridge.probe_credential()
 
-    def admit_credential(self, credential: Any) -> None:
-        """Refuse a credential this backend cannot use, raising ``ValidationError`` on ``credential``.
+    def credential_blocker(self, credential: Any) -> str | None:
+        """Return a public-safe refusal of a credential this backend cannot use, or ``None`` when it admits it.
 
-        ``Directory.admit_credential`` asks on every attachment. The base admits
-        any credential.
+        The directory's one admission rule (``Directory.credential_blocker``):
+        integrate raises it on every attachment (``Integration.admit_credential``),
+        so no path points a directory at a credential its backend would send
+        elsewhere, and the connect picker shows it beside each account. The base
+        admits any credential.
         """
 
         del credential
+        return None
 
     def account_address(self) -> str:
         """Return the address the connected account signs in as, ``""`` for none (the base's answer).

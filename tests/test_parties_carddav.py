@@ -304,10 +304,12 @@ def test_the_connection_message_names_the_host_and_port_never_the_credentials_in
 
 @pytest.mark.parametrize(("kind", "admitted"), [("basic_auth", True), ("static_token", False)])
 def test_carddav_admits_only_basic_auth_credentials(kind: str, admitted: bool) -> None:
-    """``Directory.admit_credential`` asks the backend, which signs in with a username and password only."""
+    """The backend signs in with a username and password only: one rule, the picker's answer and the attach refusal."""
 
     directory = Directory(credential=None, backend_class="carddav", config={"server_url": "https://dav.example/"})
     credential = Credential(kind=kind)
+    refusal = "A CardDAV directory signs in with a username and password."
+    assert directory.credential_blocker(credential) == (None if admitted else refusal)
     if admitted:
         directory.admit_credential(credential)
     else:
