@@ -10,6 +10,22 @@ live in code docstrings.
 
 ## Unreleased — shared addon contracts, native embeddings and graph retrieval
 
+- `angee.parties`: the directory mapping seam's loose ends. A mapping refuses a
+  record by raising `ValueError` only: a `TypeError` (or any other error) from
+  `project` or `apply_record` is a bug and fails the page with its traceback,
+  where it refused every record with no trace. A refusal is logged as a warning
+  with the mapping's key and the record's key, never the value. A refused record
+  is retried by the stream's rescan on its backoff, so a mapping fixed in code
+  applies it without a source change (it was documented as applying once its
+  source changes). A mapping may not declare a group the contact ingest states
+  (`parties.E004`, which would overwrite the ingest's statement); a mapping that
+  states a group no registered mapping declares fails the page with
+  `ImproperlyConfigured` (it used to be stated and withdrawn at once). The
+  ingest's groups are read from parties' own declarations,
+  `Person.contact_aspects()`, which replaces the hand-kept
+  `PartyManager.contact_aspects`; the base withdraws the groups nobody states
+  before the mappings apply.
+
 - `angee.parties`: locks and stale reads. `DirectoryBackend.prepare_page`'s one
   lock call also takes the people its tombstones' links name and the person of
   an account a page address signs in with (the new

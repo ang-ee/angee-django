@@ -616,6 +616,19 @@ class Person(Composable, metaclass=RebacModelBase, inherits="parties.Party"):
         ordering = ("-updated_at", "display_name", "sqid")
         rebac_resource_type = "parties/person"
 
+    @classmethod
+    def contact_aspects(cls) -> frozenset[str]:
+        """Return the statement groups parties itself declares on a person, its party's and its own.
+
+        They are the groups ``PartyManager.ingest_contact`` states through a
+        contact's link, read from parties' declarations rather than the
+        composed tables, so a consumer donor's groups are never among them.
+        """
+
+        # On parties' abstract source models the attribute is still the declaration: StatementRecords keeps it there.
+        declarations = (cast(StatementRecords, Party.statements), cast(StatementRecords, Person.statements))
+        return frozenset(aspect for declaration in declarations for aspect in declaration.aspects)
+
 
 class Organization(Composable, metaclass=RebacModelBase, inherits="parties.Party"):
     """An organisation party — carries its legal name and primary domain."""

@@ -9,15 +9,18 @@ runs through the real driver, the stream owner and the parties ingest.
 from __future__ import annotations
 
 import json
+import logging
 from collections.abc import Mapping
 from typing import Any
 
 import pytest
 from django.core.checks import Error
+from django.core.exceptions import ImproperlyConfigured
 
 from angee.integrate.states import LinkStatus
+from angee.integrate.streams import begin_stream_cycle
 from angee.integrate.testing.models import RecordLink
-from angee.messaging.testing.models import Person
+from angee.messaging.testing.models import Party, Person
 from angee.parties.backends import MAPPINGS, DirectoryMapping
 from angee.parties.checks import check_directory_mappings
 from tests.stream_adapters import applied_history
@@ -98,6 +101,38 @@ class RefusingNumberMapping(NumberMapping):
         if (values["favourite_number"] or 0) > 100:
             raise ValueError(f"{values['favourite_number']} is out of range")
         super().apply_record(person, values, link=link)
+
+
+class BrokenProjectionMapping(NumberMapping):
+    """A projection with a bug: it measures a number, a programming error rather than a value it cannot read."""
+
+    key = "broken_projection"
+
+    def project(self, row: Mapping[str, Any]) -> dict[str, Any]:
+        return {"favourite_number": len(row.get("fav_number"))}  # type: ignore[arg-type]
+
+
+class BrokenApplyMapping(NumberMapping):
+    """An ``apply_record`` with a bug: it calls its base without the link."""
+
+    key = "broken_apply"
+
+    def apply_record(self, person: Any, values: Mapping[str, Any], *, link: Any) -> None:
+        super().apply_record(person, values)  # type: ignore[call-arg]
+
+
+class MislabelledMapping(ColourMapping):
+    """States the colour group while declaring the number group."""
+
+    key = "mislabelled"
+    aspects = ("number",)
+
+
+class NameMapping(ColourMapping):
+    """Declares a group the contact ingest itself states."""
+
+    key = "name_mapping"
+    aspects = ("name",)
 
 
 class UndeclaredMapping(ColourMapping):
@@ -405,15 +440,19 @@ def _refusals(pull: Pull, key: str) -> list[Any]:
 
 
 def test_a_value_a_projection_cannot_read_refuses_its_record_alone_until_the_source_changes_it(
-    pull: Pull, settings: Any
+    pull: Pull, settings: Any, caplog: pytest.LogCaptureFixture
 ) -> None:
-    """The refusal names the mapping and never the value; the rest of the page lands, and a fixed value applies."""
+    """The refusal names the mapping and never the value; the rest of the page lands, and a fixed value applies.
+
+    The refusal is logged with the mapping's key and the record's key, never the value.
+    """
 
     pull.source.fields.update(ada={"fav_number": "seven"}, grace={"fav_number": "7"})
     _register(settings, CountedNumberMapping)
     pull.reopen()
 
-    result = pull.sync()
+    with caplog.at_level(logging.WARNING, logger="angee.parties.backends"):
+        result = pull.sync()
 
     assert len(result.failure_ids) == 1
     assert _person(pull, "grace").favourite_number == 7
@@ -421,11 +460,90 @@ def test_a_value_a_projection_cannot_read_refuses_its_record_alone_until_the_sou
     (refusal,) = _refusals(pull, "ada")
     assert "counted_number" in json.dumps(refusal.model_dump(mode="json"), default=str)
     assert "seven" not in json.dumps([refusal.model_dump(mode="json"), pull.link("ada").source_payload], default=str)
+    (logged,) = [record for record in caplog.records if record.name == "angee.parties.backends"]
+    assert "counted_number" in logged.getMessage() and "ada" in logged.getMessage()
+    assert "seven" not in logged.getMessage() and logged.exc_info is None
 
     pull.source.put("ada", _ADA, fields={"fav_number": "8"})
     assert pull.sync().count == 1
     assert _person(pull, "ada").favourite_number == 8
     assert not _refusals(pull, "ada")
+
+
+def test_a_refused_record_applies_on_its_rescan_once_its_mapping_reads_the_value(
+    pull: Pull, settings: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A code fix needs no source change: the rescan reads the record again and the fixed mapping applies it.
+
+    The rescan retries a refusal on the stream's backoff; an operator's retry
+    makes it due at once.
+    """
+
+    pull.source.fields.update(ada={"fav_number": "seven"})
+    _register(settings, CountedNumberMapping)
+    pull.reopen()
+    assert len(pull.sync().failure_ids) == 1
+    (refusal,) = _refusals(pull, "ada")
+
+    def reads_words(self: Any, row: Mapping[str, Any]) -> dict[str, Any]:
+        return {"favourite_number": {"seven": 7}.get(row.get("fav_number"), row.get("fav_number"))}
+
+    monkeypatch.setattr(CountedNumberMapping, "project", reads_words)
+    pull.link("ada").retry_failure(refusal.slot)
+    begin_stream_cycle(pull.stream, pull.backend)
+
+    assert _person(pull, "ada").favourite_number == 7
+    assert not _refusals(pull, "ada")
+
+
+def test_a_mapping_bug_in_its_projection_fails_the_page_with_its_error(pull: Pull, settings: Any) -> None:
+    """Only ``ValueError`` refuses a record; any other error is a bug, raised with its traceback."""
+
+    pull.source.fields.update(ada={"fav_number": 7})
+    _register(settings, BrokenProjectionMapping)
+    pull.reopen()
+
+    with pytest.raises(TypeError):
+        pull.sync()
+
+
+def test_a_mapping_bug_in_its_apply_record_fails_the_page_with_its_error(pull: Pull, settings: Any) -> None:
+    pull.source.fields.update(ada={"fav_number": 7})
+    _register(settings, BrokenApplyMapping)
+    pull.reopen()
+
+    with pytest.raises(TypeError):
+        pull.sync()
+
+    # The page rolled back whole: no record of it landed.
+    assert not RecordLink.objects.filter(stream=pull.stream).exists()
+
+
+def test_a_mapping_stating_a_group_it_does_not_declare_fails_the_page(pull: Pull, settings: Any) -> None:
+    """Withdrawing the undeclared group at once would hide the mislabel: the apply raises instead."""
+
+    _colours(pull, ada="green")
+    _register(settings, MislabelledMapping)
+    pull.reopen()
+
+    with pytest.raises(ImproperlyConfigured, match="colour"):
+        pull.sync()
+
+
+def test_the_ingest_states_exactly_the_groups_parties_declares_on_a_person(pull: Pull) -> None:
+    """The ingest's groups are read from parties' own declarations, so the list cannot drift from the ingest."""
+
+    pull.sync()
+
+    link = pull.link("ada")
+    stated = {
+        aspect
+        for model in (Party, Person)
+        for aspect in model.statements.filter(subject_id=link.target_object_id, link=link)
+        .current()
+        .values_list("aspect", flat=True)
+    }
+    assert stated == Person.contact_aspects()
 
 
 def test_a_value_a_mapping_cannot_state_refuses_its_record_alone_and_lands_nothing_of_it(
@@ -472,6 +590,8 @@ def test_a_mapping_of_a_backend_that_writes_back_or_of_no_backend_fails_the_syst
     # A mapping declares the person groups it states, so its removal can withdraw them.
     assert ids(UndeclaredMapping) == ["parties.E003"]
     assert ids(UnknownGroupMapping) == ["parties.E003"]
+    # The contact ingest's own groups are its; a mapping stating one would overwrite the ingest's statement.
+    assert ids(NameMapping) == ["parties.E004"]
     # A mapping claims the one key it is registered under, so one mapping registered twice fails.
     settings.ANGEE_DIRECTORY_MAPPING_CLASSES = {"colour": _path(ColourMapping), "colour_again": _path(ColourMapping)}
     assert [error.id for error in check_directory_mappings()] == ["angee.E004"]
