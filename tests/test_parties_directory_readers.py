@@ -32,7 +32,7 @@ from rebac.backends import backend
 from rebac.models import active_relationship_model
 
 from angee.graphql.testing.documents import execute_schema, result_data
-from angee.integrate.states import StreamKind
+from angee.integrate.states import StreamDirection, StreamKind
 from angee.integrate.testing.models import RecordLink
 from angee.messaging.testing.models import (
     Address,
@@ -385,15 +385,25 @@ def test_a_contact_reader_reads_the_person_page_nested(contacts: SimpleNamespace
     assert len(owner["statements"]) == 3
 
 
-def _duplicate(c: SimpleNamespace) -> tuple[Any, Any, Any]:
-    """A second person the same directory links, owned like the shared one: its Person, Party and link."""
+def _duplicate(c: SimpleNamespace, stream: Any, key: str = "ada-duplicate") -> tuple[Any, Any, Any]:
+    """A second person ``stream``'s directory links, owned like the shared one: its Person, Party and link."""
 
     with system_context(reason="tests.directory_readers.duplicate"):
         duplicate = Person.objects.create(display_name="Ada E.", created_by=c.owner)
         party = Party.objects.get(pk=duplicate.pk)
-        link = RecordLink.objects.observe(c.stream, "ada-duplicate", target=party)
-        _state(party, "identity", source=c.source, link=link)
+        link = RecordLink.objects.observe(stream, key, target=party)
+        _state(party, "identity", source=stream.integration, link=link)
     return duplicate, party, link
+
+
+def _shared_directory(c: SimpleNamespace, name: str, **stream: Any) -> Any:
+    """Another directory's contacts stream, whose contacts the shared directory's readers read too."""
+
+    with system_context(reason="tests.directory_readers.shared"):
+        directory = make_integration(name, model=Directory)
+        _grant(directory, "contact_reader", c.reader)
+        _grant(directory, "contact_reader", c.member)
+        return current_stream(directory, "contacts", kind=StreamKind.RECORD_REPLICA, **stream)
 
 
 def _merge_into_person(c: SimpleNamespace, duplicate: Any) -> None:
@@ -402,13 +412,18 @@ def _merge_into_person(c: SimpleNamespace, duplicate: Any) -> None:
 
 
 def test_a_merged_contact_reads_through_its_survivor(contacts: SimpleNamespace) -> None:
-    """A duplicate merged into the shared person takes its link and rows along; the retired row lends nothing."""
+    """A duplicate merged into the shared person takes its link and rows along; the retired row lends nothing.
+
+    The duplicate is another directory's contact: two contacts of one pull-only
+    directory never merge (``PartyManager.directory_merge_blocker``).
+    """
 
     c = contacts
-    duplicate, duplicate_party, link = _duplicate(c)
+    stream = _shared_directory(c, "duplicate-contacts")
+    duplicate, duplicate_party, link = _duplicate(c, stream)
     with system_context(reason="tests.directory_readers.duplicate_address"):
         moved = Address.objects.create(party_id=duplicate.pk, street="3 Duplicate Lane", created_by=c.owner)
-        _state(moved, "address", source=c.source, link=link)
+        _state(moved, "address", source=stream.integration, link=link)
     assert all(_allowed(row, c.reader) for row in (duplicate, duplicate_party, moved))
     _merge_into_person(c, duplicate)
     with system_context(reason="tests.directory_readers.merged"):
@@ -439,26 +454,37 @@ def test_a_trashed_contact_keeps_its_readers(contacts: SimpleNamespace) -> None:
 
 
 def test_a_superseded_claim_lends_nothing(contacts: SimpleNamespace) -> None:
-    """A merge collision supersedes one of two equal claims; a live link keeps lending only the current one."""
+    """A merge collision supersedes one of two equal claims; a live link keeps lending only the current one.
+
+    Two equal claims are one source's, so the merge is of a two-way directory's
+    two contacts: a pull-only directory's never merge
+    (``PartyManager.directory_merge_blocker``).
+    """
 
     c = contacts
-    duplicate, duplicate_party, link = _duplicate(c)
+    stream = _shared_directory(c, "two-way-contacts", direction=StreamDirection.BIDIRECTIONAL)
+    source = stream.integration
+    kept, kept_party, kept_link = _duplicate(c, stream, "grace")
+    duplicate, duplicate_party, link = _duplicate(c, stream)
     with system_context(reason="tests.directory_readers.colliding_claim"):
-        Party.objects.assert_handle(duplicate_party, c.stated_handle, asserted_by=c.source, link=link)
-    _merge_into_person(c, duplicate)
+        handle = Handle.objects.create(platform="email", value="grace@example.com", created_by=c.owner)
+        Party.objects.assert_handle(kept_party, handle, asserted_by=source, link=kept_link)
+        Party.objects.assert_handle(duplicate_party, handle, asserted_by=source, link=link)
+    with actor_context(c.owner):
+        Party.objects.get(pk=kept.pk).with_actor(c.owner).merge(records=[duplicate.public_id])
     with system_context(reason="tests.directory_readers.claims"):
         claims = Party.statements.model._base_manager.filter(
-            subject_id=c.person.pk, aspect="handle", handle=c.stated_handle, asserted_by=str(to_subject_ref(c.source))
+            subject_id=kept.pk, aspect="handle", handle=handle, asserted_by=str(to_subject_ref(source))
         )
         current, superseded = claims.get(superseded__isnull=True), claims.get(superseded__isnull=False)
-        assert {current.link_id, superseded.link_id} == {c.person_link.pk, link.pk}
+        assert {current.link_id, superseded.link_id} == {kept_link.pk, link.pk}
         assert superseded.status == "asserted"
         # The current claim's link goes; the superseded claim's link still names the person.
         RecordLink.objects.tombstone(RecordLink.objects.get(pk=current.link_id))
         assert RecordLink.objects.get(pk=superseded.link_id).tombstoned_at is None
     for actor in (c.reader, c.member):
-        assert not _allowed(c.stated_handle, actor) and not _scoped(c.stated_handle, actor), actor.username
-    assert _allowed(c.stated_handle, c.owner)
+        assert not _allowed(handle, actor) and not _scoped(handle, actor), actor.username
+    assert _allowed(handle, c.owner)
 
 
 def test_a_transferred_directory_lends_its_contacts_to_the_new_owner(contacts: SimpleNamespace) -> None:

@@ -895,11 +895,14 @@ def test_merging_a_proposed_pair_withdraws_it_and_the_same_as_reconciler_leaves_
 
     That rule's reconciler withdraws its own pair of them and leaves the
     directory's, which the review lists by the address; merging the two through
-    the review's verb withdraws the directory's proposal.
+    the review's verb withdraws the directory's proposal. The merging person writes
+    both (the platform admin who owns the directory), the deliberate override of
+    the ``adopt`` permission the limit refused; the merge leaves the directory one
+    contact on the survivor.
     """
 
     owner = pull.directory.owner
-    person = _refused_linked(pull)
+    person = _refused_admin_owner(pull)
     pull.sync()
     minted = pull.link("ada").target_object_id
     reviewed = Party.objects.with_actor(owner).same_as_pairs()
@@ -927,6 +930,43 @@ def test_merging_a_proposed_pair_withdraws_it_and_the_same_as_reconciler_leaves_
     ) == "merged"
 
     assert [status for _pair, status, _evidence in _proposals()] == ["withdrawn"]
+
+
+@pytest.mark.parametrize(
+    ("refusal", "why"),
+    [
+        (_refused_linked, "two contacts of one directory"),
+        (_refused_account_holder, "user account's own person"),
+        (_refused_write_back, "writes back"),
+    ],
+)
+def test_a_merge_of_a_proposed_pair_never_breaks_a_pull_only_directorys_limits(
+    pull: Pull, refusal: Any, why: str
+) -> None:
+    """Writing both people overrides ``adopt`` only: the survivor takes every link, so some merges stay refused.
+
+    Two contacts of one pull-only directory would overwrite each other's
+    statements, a directory states nothing about an account's own person, and a
+    stream that writes back would publish what the directory states. The
+    refusal says why and what to do instead; nothing merges.
+    """
+
+    person = refusal(pull)
+    pull.sync()
+    minted = pull.link("ada").target_object_id
+
+    with pytest.raises(ValidationError, match=why):
+        Party.objects.apply_same_as_pair(
+            left_id=public_id_of(Party.objects.get(pk=person.pk)),
+            right_id=public_id_of(Party.objects.get(pk=minted)),
+            survivor="left",
+            action="merge",
+            actor=pull.directory.owner,
+        )
+
+    assert Party._base_manager.filter(pk__in=[person.pk, minted], merged_into__isnull=True).count() == 2
+    assert pull.link("ada").target_object_id == minted
+    assert [status for _pair, status, _evidence in _proposals()] == ["asserted"]
 
 
 def test_adopting_a_person_once_refused_withdraws_the_proposal_its_refusal_made(pull: Pull) -> None:
