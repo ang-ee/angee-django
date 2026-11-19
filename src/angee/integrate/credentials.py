@@ -65,6 +65,17 @@ class CredentialKindHandler:
 
         return self.material_fields or (self.material_field,)
 
+    def secret_material_fields(self) -> tuple[str, ...]:
+        """Return the stored material keys that hold this kind's own secret.
+
+        ``Credential.update_material`` refuses them: the secret is re-entered
+        through ``Credential.replace_material``, so the integrations it serves
+        discover again. By default the input fields are stored as given; a kind
+        whose :meth:`clean` reads a document names what the document becomes.
+        """
+
+        return self.input_material_fields()
+
     def validate(self, material: dict[str, Any]) -> None:
         """Require the kind's secret material before it is stored."""
 
@@ -376,6 +387,11 @@ class JwtBearerCredentialHandler(CredentialKindHandler):
         if not https:
             raise ValidationError({"key_file": f"The key file's {endpoint} must be an https URL with a host."})
         return {**signing, "scope_placement": "claim" if google else "parameter"}
+
+    def secret_material_fields(self) -> tuple[str, ...]:
+        """Return what the key file becomes (:meth:`clean`): the signing identity and its scope placement."""
+
+        return (*self.signing_fields, "scope_placement")
 
     def upsert_fields(self, material: dict[str, Any]) -> dict[str, Any]:
         """Clear the mint outcome: a re-entered key file has not been refused yet."""

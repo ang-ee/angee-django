@@ -283,7 +283,8 @@ through `CredentialManager.reenter_secret`, which locks the integrations the
 credential serves before the credential, as an attach does, and in the same
 transaction sends each whose capability requires discovery to await it again, so
 none syncs on facts found with the old secret. `update_material` refuses the
-kind's own input fields. No-op discovery settles synchronously.
+fields the kind stores as its own secret (`CredentialKindHandler.secret_material_fields`:
+its input fields, or what a `jwt_bearer` key file becomes). No-op discovery settles synchronously.
 The worker runs
 `IntegrationImpl.discover_connection(credential) -> ConnectionDiscovery` outside
 transactions under the sync advisory lock. The result contains adapter-owned

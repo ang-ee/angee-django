@@ -32,10 +32,10 @@ live in code docstrings.
   one owner, `CredentialManager.reenter_secret`. Discovery stores the material it
   derived through `CredentialManager.store_derived` instead, which sends no
   integration to discover again, so two that derive a credential of one name do
-  not loop. `Credential.update_material` refuses the kind's own input fields
-  (`api_key`, `password`, …) and points to `replace_material`. Known gap: a
-  `jwt_bearer` credential's stored signing fields are not its input field
-  (`key_file`), so `update_material` still accepts them.
+  not loop. `Credential.update_material` refuses the fields the kind stores as
+  its own secret (`CredentialKindHandler.secret_material_fields`: `api_key`,
+  `password`, …, and for `jwt_bearer` the signing fields its key file becomes)
+  and points to `replace_material`.
 
 - `angee.integrate`: an owner can transfer their own integration.
   `Integration.transfer_ownership` released the previous owner's connection on

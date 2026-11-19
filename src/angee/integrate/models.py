@@ -1685,13 +1685,13 @@ class Credential(AuditMixin, AngeeDataModel, concrete=True):
         Kind handlers validate required keys at credential creation; transient
         extra keys remain permitted here. A transient key (an answer a live
         session consumes) is not the kind's secret, so the integrations this
-        credential serves keep their discovery. The kind's own input fields
-        (:meth:`CredentialKindHandler.input_material_fields`) are refused: the
-        secret is re-entered through :meth:`replace_material`, which sends them
-        to discover again.
+        credential serves keep their discovery. The fields the kind stores as its
+        own secret (:meth:`CredentialKindHandler.secret_material_fields`) are
+        refused: the secret is re-entered through :meth:`replace_material`, which
+        sends them to discover again.
         """
 
-        if secret := sorted(changes.keys() & set(self.handler.input_material_fields())):
+        if secret := sorted(changes.keys() & set(self.handler.secret_material_fields())):
             raise ValueError(f"Re-enter {', '.join(secret)} through replace_material(), not update_material().")
         self._merge_material(changes)
 

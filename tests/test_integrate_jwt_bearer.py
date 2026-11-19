@@ -99,6 +99,16 @@ def set_status(credential: Any, status: str) -> None:
         row.save(update_fields=["status", "updated_at"])
 
 
+def store_unloadable_key(credential: Any) -> None:
+    """Hold a private key that no longer loads, as a damaged row would; no credential verb stores one."""
+
+    with system_context(reason="test jwt bearer damaged key"):
+        row = Credential.objects.sudo(reason="test jwt bearer damaged key load").get(pk=credential.pk)
+        row.material = row.encode_material({**row.reveal(), "private_key": "no longer a key"})
+        row.save(update_fields=["material", "updated_at"])
+    credential.refresh_from_db()
+
+
 @dataclass
 class TokenEndpoint:
     """A JWT bearer token endpoint that verifies each assertion and answers with ``status``.
@@ -511,7 +521,7 @@ def test_the_connection_test_signs_locally_without_a_request() -> None:
         system_context(reason="test jwt bearer probe"),
     ):
         assert integration.probe_credential() == "Credential is usable."
-        credential.update_material(private_key="no longer a key")
+        store_unloadable_key(credential)
         integration.refresh_from_db()
         with pytest.raises(IntegrationError) as refused:
             integration.probe_credential()
@@ -543,11 +553,25 @@ def test_the_connection_test_fails_closed_for_a_refused_or_inactive_credential(s
 
 
 @pytest.mark.django_db(transaction=True)
+def test_update_material_refuses_what_the_key_file_became_and_merges_transient_material() -> None:
+    """The stored signing fields are the kind's own secret: re-entered through replace_material, never merged."""
+
+    credential = create_jwt_bearer()
+    signing = credential.reveal()
+    for signing_field in ("private_key", "issuer"):
+        with pytest.raises(ValueError, match="replace_material"):
+            credential.update_material(**{signing_field: "another"})
+    credential.update_material(password="transient-answer")
+    credential.refresh_from_db()
+    assert credential.reveal() == {**signing, "password": "transient-answer"}
+
+
+@pytest.mark.django_db(transaction=True)
 def test_a_key_that_does_not_load_is_a_recorded_refusal_before_any_request() -> None:
     """An unloadable stored key condemns the key file: refused permanently, recorded, never sent."""
 
     credential = create_jwt_bearer()
-    credential.update_material(private_key="no longer a key")
+    store_unloadable_key(credential)
 
     with mock_transport(lambda request: pytest.fail("an unloadable key must not reach the endpoint")):
         with pytest.raises(OAuthFlowError) as raised:
