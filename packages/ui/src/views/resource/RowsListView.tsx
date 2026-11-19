@@ -15,7 +15,7 @@ import {
   useResourceViewMaybe,
   type ResourceViewContextValue,
 } from "./resource-view-context";
-import { DEFAULT_TEXT_FILTER_FIELD, type ResourceViewGroup, type ResourceViewKind } from "./resource-view-model";
+import { DEFAULT_TEXT_FILTER_FIELD, resourceViewKindCapabilities, type ResourceViewGroup, type ResourceViewKind } from "./resource-view-model";
 import { EMPTY_SELECTED_IDS } from "./resource-view-codecs";
 import { validateResourceViewState } from "./model/state";
 import { filterForTextSearch, queryForColumns } from "./resource-query";
@@ -102,6 +102,7 @@ export interface RowsListViewProps<TRow extends StringIdRow = StringIdRow> {
 
 /** The kinds an in-memory list with a gallery offers. */
 const ROWS_GALLERY_KINDS: readonly ResourceViewKind[] = ["list", "gallery"];
+const NO_GROUPS: readonly ResourceViewGroup[] = [];
 
 /** Card presentation for {@link RowsListViewProps.gallery}; mirrors GalleryView. */
 export interface RowsGalleryConfig<TRow extends StringIdRow = StringIdRow> {
@@ -153,10 +154,11 @@ function ValidatedRowsListView<TRow extends StringIdRow>(
   }
   try {
     query.groupsFrom(defaults.groupStack);
+    // Local rows group in the browser, which cannot apply `GroupSpec.repeated`.
     state = validateResourceViewState({
       ...state,
       filter: filterForTextSearch(query, state.filter, "title", props.columns.map(({ field }) => field)),
-    }, query);
+    }, query, { appliesRepeated: false });
   } catch (error) {
     state = { ...state, queryError: error instanceof Error ? error : new Error("Invalid query.") };
   }
@@ -203,7 +205,9 @@ function RowsListViewBody<TRow extends StringIdRow = StringIdRow>({
   // `subline` into its cell column, as the list frame does for a resource.
   const columns = React.useMemo(() => columnsWithMetadataDefaults(declaredColumns, null), [declaredColumns]);
   const rowActionSurface = useRowActionsSurface(rowActions);
-  const effectiveGroupStack = resourceView.state.groupStack;
+  // The gallery never groups (its kind's capability), as in `ListView`.
+  const effectiveGroupStack = resourceViewKindCapabilities(resourceView.state.view).grouping
+    ? resourceView.state.groupStack : NO_GROUPS;
 
   const surface = useRowsResourceViewSurface({
     rows,
@@ -269,7 +273,8 @@ function RowsListViewBody<TRow extends StringIdRow = StringIdRow>({
                   filter: surface.mergedFilter,
                   // Scope snapshots are shared Rows; narrow to the declared row type (see bulkActions).
                   selectedRows: resourceView.selectedRows as readonly TRow[],
-                  selectedGroups: resourceView.selectedGroups(effectiveGroupStack),
+                  // Rows grouped in the browser are never placed: a grouped list reports null.
+                  selectedGroups: resourceView.selectedGroups(effectiveGroupStack, null),
                 })
                 : undefined,
             }

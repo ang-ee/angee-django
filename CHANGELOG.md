@@ -18,11 +18,19 @@ live in code docstrings.
   makes the server group read keep only groups of more than one record the actor
   reads (`having: {count_gt: 1}`) and leave out the records with no value (null,
   and blank text), so counts and group pages are the repeated groups'; an axis
-  whose drill cannot tell its empty group apart refuses it. A page's
-  `bulkActions` receives `collection.selectedGroups`: absent on a flat list,
-  `null` when a selected id cannot be placed, else the selection split by its
-  innermost groups with their parents. `SelectionBarAction` takes a
-  `disabledReason`, shown beside the verb in the bar as its description.
+  whose drill cannot tell its empty group apart refuses it, as does a list that
+  groups without the native server read (client row model, authored `source`,
+  `RowsListView`), and a repeated grouping shows no footer totals.
+  `ResourceQuery.toGroupRead` assembles a level's read; `groupAxisId` and
+  `groupSpecsFrom` (`@angee/metadata`) own a level's axis identity and the stack
+  decoder. A page's `bulkActions` receives `collection.selectedGroups`: absent
+  on an ungrouped list, `null` when a selected row cannot be placed (selected
+  without its group, loaded now under another group or several, or on a surface
+  that places no rows: browser grouping, lane boards), else the selection split
+  by its innermost groups with their parents; a hint the server never trusts.
+  `Button` and `SelectionBarAction` take a `disabledReason`: the verb's tooltip
+  and accessible description, focusable while disabled; the record action bar's
+  band verbs compose it.
 
 - `angee.knowledge_integrate_notion`: a token of another workspace fails
   discovery. Notion's discovery called `GET /v1/users/me` and recorded nothing,

@@ -22,10 +22,31 @@ export interface GroupProjection {
   orderBy: readonly { field: string; direction: "ASC"; nulls: "LAST" }[];
   valueKey: string;
   labelKey?: string;
-  /** A `repeated` group's HAVING: only groups of more than one record. */
+}
+/** One level's server group read (`ResourceQuery.toGroupRead`). */
+export interface GroupRead {
+  dimensions: GroupProjection["dimensions"];
+  orderBy: GroupProjection["orderBy"];
+  where: Record<string, unknown>;
+  /** A `repeated` level's HAVING: only groups of more than one record. */
   having?: { readonly count_gt: number };
-  /** A `repeated` group's records: those with a value on the axis, combined with the read's filter. */
-  filter?: QueryFilter;
+}
+
+/** A group level's axis identity, its field and granularity: a stack names each axis once. */
+export function groupAxisId(spec: Pick<GroupSpec, "field" | "granularity">): string {
+  return spec.granularity ? `${spec.field}:${spec.granularity}` : spec.field;
+}
+
+/** Decode a group stack: valid level specs, each axis once (`groupAxisId`). */
+export function groupSpecsFrom(value: unknown): GroupSpec[] {
+  const specs = parse(GroupSpecsSchema, value, "groups");
+  const seen = new Set<string>();
+  for (const spec of specs) {
+    const id = groupAxisId(spec);
+    if (seen.has(id)) fail("groups", `duplicate group "${id}"`);
+    seen.add(id);
+  }
+  return specs;
 }
 
 const TEXT_OPERATORS: readonly FilterOperator[] = [
@@ -160,13 +181,9 @@ export class ResourceQuery {
   }
 
   groupsFrom(value: unknown = []): GroupAxis[] {
-    const specs = parse(GroupSpecsSchema, value, "groups");
-    const axes = specs.map((spec) => this.group(spec));
-    const seen = new Set<string>();
-    for (const axis of axes) {
-      if (seen.has(axis.id)) throw new QueryParseError("groups", `duplicate group "${axis.id}"`);
-      seen.add(axis.id);
-    }
+    const axes = parse(GroupSpecsSchema, value, "groups").map((spec) => this.group(spec));
+    // Canonical specs, so an identity path and its axis are one level.
+    groupSpecsFrom(axes.map((axis) => axis.spec));
     return axes;
   }
 
@@ -273,6 +290,18 @@ export class ResourceQuery {
 
   toFacet(field: string, filter: unknown = {}): GroupProjection & { where: Record<string, unknown> } {
     return { ...this.axis(field).groupBy(), where: this.toWhere(this.withoutFields(filter, [field])) };
+  }
+
+  /**
+   * One level's server group read over `filter`. A `repeated` level reads only the
+   * records with a value on its axis and keeps its groups of more than one record,
+   * both on the server, so its counts and group pages are the repeated groups'.
+   */
+  toGroupRead(group: GroupSpec | GroupAxis, filter?: unknown): GroupRead {
+    const axis = this.resolveAxis(group);
+    const { dimensions, orderBy } = axis.groupBy();
+    const repeated = axis.spec.repeated ? axis.valued() : undefined;
+    return { dimensions, orderBy, where: this.toWhere(filter, repeated), ...(repeated ? { having: { count_gt: 1 } } : {}) };
   }
 
   sortFrom(value: unknown = this.contract.sort.default): QuerySort[] {
@@ -474,7 +503,7 @@ export class GroupAxis {
   readonly id: string;
   readonly extraction: QueryExtraction | undefined;
   constructor(private readonly query: ResourceQuery, readonly declaration: QueryAxis, readonly spec: GroupSpec) {
-    this.id = spec.granularity ? `${spec.field}:${spec.granularity}` : spec.field;
+    this.id = groupAxisId(spec);
     this.extraction = spec.granularity ? declaration.extractions.find((item) => item.name === spec.granularity) : undefined;
     if (spec.granularity && !this.extraction) throw new QueryParseError(`groups.${spec.field}.granularity`, `unsupported extraction "${spec.granularity}"`);
     if (spec.repeated && !this.repeatable) throw new QueryParseError(`groups.${spec.field}.repeated`, "axis cannot list only its repeated values");
@@ -488,18 +517,14 @@ export class GroupAxis {
    * group, left out, since a missing value is not a repeated one. Undefined when the
    * axis has no server read or its drill cannot tell those groups apart.
    */
-  private valued(): QueryFilter | undefined {
+  valued(): QueryFilter | undefined {
     const drill = this.extraction ? this.extraction.drill : this.declaration.drill;
     if (!this.declaration.server || !drill || drill.nullMode !== "isNull") return undefined;
     const filter = this.query.fields[drill.field]?.filter;
-    if (!filter) return undefined;
+    if (!filter?.operators.includes("isNull")) return undefined;
     const blank = filter.scalar === "String" || filter.values.some(({ value }) => value === "");
     if (blank && !filter.operators.includes("ne")) return undefined;
-    const comparisons = {
-      ...(filter.operators.includes("isNull") ? { isNull: false } : {}),
-      ...(blank ? { ne: "" } : {}),
-    };
-    return Object.keys(comparisons).length ? this.query.filterFrom({ [drill.field]: comparisons }) : {};
+    return this.query.filterFrom({ [drill.field]: { isNull: false, ...(blank ? { ne: "" } : {}) } });
   }
   get selection(): string[] {
     if (!this.declaration.identityPath) throw new QueryParseError(`groups.${this.field}`, "axis does not support client grouping");
@@ -538,12 +563,7 @@ export class GroupAxis {
     const label = server.labelInput && server.labelKey ? { input: server.labelInput, key: server.labelKey } : undefined;
     // Labels are not unique: identity breaks ties so bucket pages remain stable.
     const order = label ? [label, identity] : [identity];
-    return {
-      dimensions: label ? [identity, label] : [identity], valueKey: identity.key, ...(label ? { labelKey: label.key } : {}),
-      orderBy: order.map(({ key }) => ({ field: key, direction: "ASC", nulls: "LAST" })),
-      // The server owns both, so counts and group pages are those of the repeated groups.
-      ...(this.spec.repeated ? { having: { count_gt: 1 }, filter: this.valued()! } : {}),
-    };
+    return { dimensions: label ? [identity, label] : [identity], valueKey: identity.key, ...(label ? { labelKey: label.key } : {}), orderBy: order.map(({ key }) => ({ field: key, direction: "ASC", nulls: "LAST" })) };
   }
   bucketIdentity(bucket: GroupBucket): FilterPrimitive {
     const key = this.groupBy().valueKey;

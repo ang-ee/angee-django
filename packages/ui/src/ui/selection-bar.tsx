@@ -20,7 +20,6 @@ export const selectionBarVariants = tv({
     actions: "flex min-w-0 max-w-full flex-wrap items-center gap-1",
     action:
       "h-8 border-transparent px-2 text-13 focus-visible:focus-ring [&_.glyph]:size-4 [&_svg]:size-4",
-    reason: "min-w-0 text-12",
   },
   variants: {
     surface: {
@@ -32,7 +31,6 @@ export const selectionBarVariants = tv({
         separator: "bg-on-brand-divider",
         action:
           "text-on-brand hover:bg-on-brand-soft-hover hover:text-on-brand",
-        reason: "text-on-brand",
       },
       sheet: {
         root: "border border-border-subtle bg-sheet text-fg",
@@ -40,7 +38,6 @@ export const selectionBarVariants = tv({
         summary: "text-fg-muted",
         separator: "bg-border-subtle",
         action: "text-fg-2 hover:bg-inset hover:text-fg",
-        reason: "text-fg-muted",
       },
     },
     position: {
@@ -73,61 +70,30 @@ export type SelectionBarActionProps = Omit<
   Pick<SelectionBarRecipeProps, "surface"> & {
     className?: string;
     tone?: SelectionBarActionTone;
-    /**
-     * Why the verb cannot run for this selection (implies `disabled`). The bar
-     * shows it as text beside the verb and it is the verb's accessible
-     * description; the verb stays focusable so keyboard users reach it too.
-     */
-    disabledReason?: React.ReactNode;
   };
 
 /**
+ * A selection verb. Its `disabledReason` is the standard one (`Button`): the
+ * verb's tooltip and accessible description, focusable while disabled.
  * @owner SelectionBar
  */
 export const SelectionBarAction = React.forwardRef<
   HTMLElement,
   SelectionBarActionProps
 >(function SelectionBarAction(
-  {
-    surface = "brand",
-    tone = "default",
-    className,
-    type = "button",
-    disabledReason,
-    disabled,
-    focusableWhenDisabled,
-    "aria-describedby": describedBy,
-    ...props
-  },
+  { surface = "brand", tone = "default", className, type = "button", ...props },
   ref,
 ) {
   const styles = selectionBarVariants({ actionTone: tone, surface });
-  const reasonId = React.useId();
-  const reason =
-    disabledReason !== undefined && disabledReason !== null && disabledReason !== false
-      ? disabledReason
-      : null;
-  const action = (
+  return (
     <Button
       ref={ref}
       type={type}
       variant="ghost"
       size="sm"
       className={styles.action({ className })}
-      disabled={disabled || reason !== null}
-      focusableWhenDisabled={focusableWhenDisabled || reason !== null}
-      aria-describedby={reason === null ? describedBy : describedBy ? `${describedBy} ${reasonId}` : reasonId}
       {...props}
     />
-  );
-  if (reason === null) return action;
-  return (
-    <>
-      {action}
-      <span id={reasonId} className={styles.reason()}>
-        {reason}
-      </span>
-    </>
   );
 });
 SelectionBarAction.displayName = "SelectionBarAction";

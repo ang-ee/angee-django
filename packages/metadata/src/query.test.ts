@@ -1,8 +1,8 @@
 import { describe, expect, test } from "vitest";
 import { Filter } from "./filter";
-import { ResourceQuery, QueryParseError } from "./query";
+import { ResourceQuery, QueryParseError, groupSpecsFrom } from "./query";
 import type { QueryAxis, QueryField, QueryDrill, FilterOperator } from "./query-schema";
-import { testDataResource, testQueryField, testResourceQuery } from "./testing";
+import { testDataResource, testQueryAxis, testQueryField, testResourceQuery } from "./testing";
 
 const channel: QueryAxis = {
   field: "channel", kind: "relation", identityPath: "channel.id", labelPath: "channel.display_name",
@@ -219,10 +219,8 @@ describe("ResourceQuery", () => {
   });
   test("a repeated group asks the server only for groups of more than one record with a value", () => {
     const valueDrill = (name: string): QueryDrill => ({ kind: "value", field: name, valueKey: name, nullMode: "isNull", valueMap: [] });
-    const column = (name: string, extra: Partial<QueryAxis> = {}): QueryAxis => ({
-      field: name, kind: "column", identityPath: name, paths: [name], server: { input: name.toUpperCase(), key: name },
-      drill: valueDrill(name), extractions: [], ...extra,
-    });
+    const column = (name: string, extra: Partial<QueryAxis> = {}): QueryAxis =>
+      testQueryAxis(name, { server: { input: name.toUpperCase(), key: name }, drill: valueDrill(name), ...extra });
     const query = ResourceQuery.from(testDataResource("messaging.Message", { query: testResourceQuery({
       fields: {
         channel: field("channel", "ID", ["exact", "inList", "isNull"], { kind: "relation" }),
@@ -245,18 +243,27 @@ describe("ResourceQuery", () => {
     const [body] = query.groupsFrom([{ field: "body", repeated: true }]);
     expect(body!.spec).toEqual({ field: "body", repeated: true });
     expect(body!.id).toBe("body");
-    const projection = body!.groupBy();
-    expect(projection.having).toEqual({ count_gt: 1 });
+    // The query owner assembles the level's read: its dimensions and order, the read's
+    // filter with only the valued records, and the HAVING that keeps repeated groups.
+    expect(query.toGroupRead(body!, { channel: { exact: "c1" } })).toEqual({
+      dimensions: body!.groupBy().dimensions, orderBy: body!.groupBy().orderBy,
+      where: { _and: [{ channel: { _eq: "c1" } }, { body: { _is_null: false, _neq: "" } }] },
+      having: { count_gt: 1 },
+    });
     // Null and the blank string are no value: the server leaves both groups out.
-    expect(query.toWhere(projection.filter)).toEqual({ body: { _is_null: false, _neq: "" } });
-    expect(query.toWhere(query.group({ field: "channel", repeated: true }).groupBy().filter)).toEqual({ channel: { _is_null: false } });
-    expect(query.toWhere(query.group({ field: "sent_at", granularity: "month", repeated: true }).groupBy().filter))
+    expect(query.toGroupRead({ field: "channel", repeated: true }).where).toEqual({ channel: { _is_null: false } });
+    expect(query.toGroupRead({ field: "sent_at", granularity: "month", repeated: true }).where)
       .toEqual({ sent_at: { _is_null: false } });
-    // Without the flag the read lists every group.
-    expect(query.axis("body").groupBy()).not.toHaveProperty("having");
-    expect(query.axis("body").groupBy()).not.toHaveProperty("filter");
+    // Without the flag the read lists every group, and the axis projection is wire-level only.
+    expect(query.toGroupRead({ field: "body" }, { channel: { exact: "c1" } })).toEqual({
+      dimensions: body!.groupBy().dimensions, orderBy: body!.groupBy().orderBy, where: { channel: { _eq: "c1" } },
+    });
+    expect(Object.keys(body!.groupBy()).sort()).toEqual(["dimensions", "orderBy", "valueKey"]);
     // One axis per level whatever its flag; the flag is `true` or absent.
     expect(() => query.groupsFrom([{ field: "body" }, { field: "body", repeated: true }])).toThrow(/duplicate/);
+    // The stack decoder without a resource applies the same one-axis rule.
+    expect(() => groupSpecsFrom([{ field: "body" }, { field: "body", repeated: true }])).toThrow('duplicate group "body"');
+    expect(groupSpecsFrom([{ field: "sent_at", granularity: "month" }, { field: "sent_at", granularity: "year" }])).toHaveLength(2);
     expect(() => query.groupsFrom([{ field: "body", repeated: false }])).toThrow(QueryParseError);
     expect(() => query.groupsFrom([{ field: "body", having: { count_gt: 1 } }])).toThrow(QueryParseError);
     // An axis whose drill cannot tell its empty group apart cannot list repeated values.

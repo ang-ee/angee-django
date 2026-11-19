@@ -54,8 +54,9 @@ const AxisSchema = v.object({
   extractions: v.optional(v.pipe(v.array(ExtractionSchema), v.readonly()), []),
   drill: v.nullish(DrillSchema),
 });
-/** One grouping level. `repeated` lists only the groups of more than one record, without
- * the group of records that have no value: a server group read option (`GroupAxis.repeatable`). */
+/** One grouping level. `repeated` lists only the groups of more than one record within its
+ * parent group, without the group of records that have no value: a server group read option
+ * (`GroupAxis.repeatable`, `ResourceQuery.toGroupRead`). */
 export const GroupSpecSchema = v.strictObject({
   field: v.string(), granularity: v.optional(v.string()), repeated: v.optional(v.literal(true)),
 });

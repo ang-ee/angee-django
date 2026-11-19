@@ -309,3 +309,20 @@ test("declared local fields support aliases and text search beside a virtual ren
   expect(screen.getByText("↑1")).toBeTruthy();
   expect(screen.queryByRole("button", { name: /Drift.*sort/i })).toBeNull();
 });
+
+test("grouped local rows are never placed, and their gallery never groups, as ListView's gallery does not", () => {
+  const seen: unknown[] = [];
+  let view!: ResourceViewContextValue;
+  function Probe() { view = useResourceView(); return null; }
+  render(<ToastProvider><ResourceViewProvider scope="local" initialState={{ groupStack: [{ field: "status" }], selectedIds: ["1"] }}>
+    <Probe />
+    <RowsListView rows={rows} columns={columns} selectable gallery={{ title: "name" }}
+      bulkActions={(_ids, _clear, collection) => { seen.push(collection.selectedGroups); return null; }} />
+  </ResourceViewProvider></ToastProvider>);
+  // Rows grouped in the browser carry no group: a grouped selection offers no split.
+  expect(seen.at(-1)).toBeNull();
+  act(() => view.setView("gallery"));
+  expect(view.state.rowSelection).toEqual({ "1": true });
+  // The gallery pages records as cards: an ungrouped list, whatever group stack it keeps.
+  expect(seen.at(-1)).toBeUndefined();
+});

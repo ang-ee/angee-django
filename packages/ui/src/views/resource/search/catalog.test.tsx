@@ -217,7 +217,7 @@ function repeatedGroupsFixture(url = "/") {
   let view!: ReturnType<typeof useResourceView>;
   function Panel() {
     view = useResourceView();
-    const result = useSearchCatalog({ resourceView: view, query: resourceQuery, serverGrouping: true, repeatable: true,
+    const result = useSearchCatalog({ resourceView: view, query: resourceQuery, serverGrouping: true, appliesRepeated: true,
       columns: [{ field: "status", header: "Status" }, { field: "payload", header: "Payload" }], rows: [], modelMetadata: null });
     return <GroupStackPanel search={useResourceSearch({ resourceView: view, catalog: result })} />;
   }
@@ -232,25 +232,25 @@ test("Repeated values only is a level's toggle while it groups, kept in the URL 
   const first = repeatedGroupsFixture();
   const status = await screen.findByRole("button", { name: "Status" });
   // Ungrouped, there is no level to toggle.
-  expect(screen.queryByRole("switch", { name: "Repeated values only" })).toBeNull();
+  expect(screen.queryByRole("switch", { name: "Repeated values only for Status" })).toBeNull();
   fireEvent.click(status);
   await waitFor(() => expect(first.view.state.groupStack).toEqual([{ field: "status" }]));
-  fireEvent.click(screen.getByRole("switch", { name: "Repeated values only" }));
+  fireEvent.click(screen.getByRole("switch", { name: "Repeated values only for Status" }));
   await waitFor(() => expect(first.router.state.location.search).toMatchObject({ group: "status:repeated" }));
   expect(first.view.state.groupStack).toEqual([{ field: "status", repeated: true }]);
   // An axis that cannot leave its empty group out offers no toggle.
   fireEvent.click(screen.getByRole("button", { name: "Payload" }));
   await waitFor(() => expect(screen.getAllByRole("listitem")).toHaveLength(2));
-  expect(screen.getAllByRole("switch", { name: "Repeated values only" })).toHaveLength(1);
+  expect(screen.getAllByRole("switch").map((toggle) => toggle.getAttribute("aria-label"))).toEqual(["Repeated values only for Status"]);
   cleanup();
 
   // A reload reads it back; clearing the grouping clears it.
   const reloaded = repeatedGroupsFixture("/?group=status%3Arepeated");
-  const toggle = await screen.findByRole("switch", { name: "Repeated values only" });
+  const toggle = await screen.findByRole("switch", { name: "Repeated values only for Status" });
   expect(toggle.getAttribute("aria-checked")).toBe("true");
   expect(reloaded.view.state.groupStack).toEqual([{ field: "status", repeated: true }]);
   fireEvent.click(screen.getByRole("button", { name: "Clear grouping" }));
   await waitFor(() => expect(reloaded.view.state.groupStack).toEqual([]));
   expect(reloaded.router.state.location.search).not.toHaveProperty("group");
-  expect(screen.queryByRole("switch", { name: "Repeated values only" })).toBeNull();
+  expect(screen.queryByRole("switch", { name: "Repeated values only for Status" })).toBeNull();
 });

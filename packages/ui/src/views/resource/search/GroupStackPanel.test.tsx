@@ -114,3 +114,20 @@ test("Clear grouping clears the stack and leaves Add available", () => {
   expect(screen.queryByRole("button", { name: "Clear grouping" })).toBeNull();
   expect(screen.getByRole("button", { name: "More axes…" }).hasAttribute("disabled")).toBe(false);
 });
+
+test("each level's Repeated values only switch is named by its level, and a set flag names the level", () => {
+  const repeatable = searchFixture({ catalog: { groups: [{ ...project, repeatable: true }, { ...status, repeatable: true }],
+    curatedGroups: [project, status] } }).catalog;
+  function Content() {
+    const search = useResourceSearch({ resourceView: useResourceView(), catalog: repeatable, groupingEnabled: true });
+    return <GroupStackPanel search={search} />;
+  }
+  render(<ResourceViewProvider scope="local" initialState={{ groupStack: [project.group, { ...status.group, repeated: true }] }}>
+    <Content /></ResourceViewProvider>);
+  expect(screen.getAllByRole("switch").map((toggle) => toggle.getAttribute("aria-label")))
+    .toEqual(["Repeated values only for Project", "Repeated values only for Status"]);
+  expect(screen.getByRole("switch", { name: "Repeated values only for Status" }).getAttribute("aria-checked")).toBe("true");
+  // The level's own controls keep its axis name; its text names the flag, as its chip does.
+  expect(levels()).toEqual(["Project", "Status"]);
+  expect(screen.getByRole("listitem", { name: "Status" }).textContent).toContain("Status · Repeated values only");
+});

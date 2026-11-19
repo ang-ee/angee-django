@@ -17,7 +17,8 @@ import { validateResourceViewState } from "./model/state";
 import { normaliseGroupStack, normaliseSourceKeys } from "./model/search";
 import { normalisePageSize } from "./page-size";
 import { idsFromRowSelectionState } from "./resource-view-codecs";
-import type { ResourceCollectionPresentation, SelectedGroup } from "./resource-view-types";
+import type { ResourceCollectionPresentation, SelectedGroup, SelectionGroupPath } from "./resource-view-types";
+import { groupPathId } from "./resource-view-grouped-model";
 
 import {
   createResourceViewState,
@@ -31,7 +32,6 @@ import {
   type ResourceViewGroup,
   type ResourceViewInitialState,
   type ResourceViewKind,
-  resourceViewGroupsEqual,
 } from "./resource-view-model";
 import { useAppRuntime } from "../../runtime";
 import { useValueStable } from "../../lib/use-value-stable";
@@ -68,28 +68,16 @@ function groupsForQuery(current: ResourceViewGroups, query: string, order: strin
   };
 }
 
-/**
- * Where a grouped surface showed a row when it was selected: one entry per
- * grouping level, outermost first, each with the group's ordinal among its level's
- * groups so a split keeps display order after the row's page unloads.
- */
-export type SelectionGroupPath = readonly {
-  group: ResourceViewGroup;
-  key: string | null;
-  label: string;
-  position: number;
-}[];
-
 interface SelectionState {
   collection: string;
   scope: string;
   rowSelection: RowSelectionState;
   rows: Readonly<Record<string, Row>>;
   /** The group path captured with each snapshot; absent for a row selected without one. */
-  groups: Readonly<Record<string, SelectionGroupPath>>;
+  paths: Readonly<Record<string, SelectionGroupPath>>;
 }
 
-type SelectionRead = Pick<SelectionState, "rowSelection" | "rows" | "groups">;
+type SelectionRead = Pick<SelectionState, "rowSelection" | "rows" | "paths">;
 interface SelectionOwner {
   read: (scope: string) => SelectionRead;
   update: (
@@ -100,14 +88,14 @@ interface SelectionOwner {
   ) => void;
   enter: (scope: string) => void;
 }
-const EMPTY_SELECTION: SelectionRead = { rowSelection: {}, rows: {}, groups: {} };
+const EMPTY_SELECTION: SelectionRead = { rowSelection: {}, rows: {}, paths: {} };
 const SelectionOwnerContext = createContext<SelectionOwner | null>(null);
 /** The selection scope of the nearest inherited view; the owner's own collection is "". */
 const SelectionScopeContext = createContext("");
 
 /** One public selection projection for the owning collection and inherited scopes. */
 function useSelectionValue(scope: string, owner: SelectionOwner) {
-  const { rowSelection, rows, groups } = owner.read(scope);
+  const { rowSelection, rows, paths } = owner.read(scope);
   const selectedRows = useMemo(() => [...idsFromRowSelectionState(rowSelection)]
     .flatMap((id) => {
       const row = rows[id];
@@ -125,35 +113,49 @@ function useSelectionValue(scope: string, owner: SelectionOwner) {
   );
   const clearSelectedIds = useCallback(() => setRowSelection({}), [setRowSelection]);
   const selectedGroups = useCallback<ResourceViewContextValue["selectedGroups"]>(
-    (grouping) => selectedGroupsOf(rowSelection, groups, grouping), [rowSelection, groups],
+    (grouping, placed) => selectedGroupsOf(rowSelection, paths, grouping, placed), [rowSelection, paths],
   );
   const value = useMemo(() => ({ selectedRows, setRowSelection, toggleSelectedId, clearSelectedIds, selectedGroups }),
     [selectedRows, setRowSelection, toggleSelectedId, clearSelectedIds, selectedGroups]);
   return { rowSelection, value };
 }
 
-/** Split the selection by the captured group paths; see `bulkActions` for the three states. */
+/**
+ * Split the selection by `grouping`, the levels the surface renders, from the paths
+ * captured with the snapshots checked against `placed`, where the surface shows its
+ * loaded rows now (null: it places none). See `bulkActions` for the three states.
+ */
 function selectedGroupsOf(
   rowSelection: RowSelectionState,
   paths: Readonly<Record<string, SelectionGroupPath>>,
   grouping: readonly ResourceViewGroup[],
+  placed: ReadonlyMap<string, SelectionGroupPath | null> | null,
 ): readonly SelectedGroup[] | null | undefined {
   if (grouping.length === 0) return undefined;
+  if (placed === null) return null;
+  // Whole level specs in order: field, granularity and `repeated`.
+  const levels = stableSerialize(grouping);
   const entries = new Map<string, { path: SelectionGroupPath; ids: string[] }>();
   for (const id of idsFromRowSelectionState(rowSelection)) {
-    const path = paths[id];
-    // A row selected flat, under another grouping or without its row has no place: never a partial split.
-    if (path?.length !== grouping.length
-      || path.some((level, index) => !resourceViewGroupsEqual(level.group, grouping[index]!))) return null;
-    const identity = JSON.stringify(path.map(({ key }) => key));
+    const captured = paths[id];
+    const current = placed.get(id);
+    // Never a partial or stale split: a row selected without a path or under other
+    // levels, or loaded now under another group or under several, has no place.
+    if (!captured || current === null || stableSerialize(captured.map(({ group }) => group)) !== levels) return null;
+    const identity = groupPathId(captured);
+    if (current !== undefined && groupPathId(current) !== identity) return null;
     const entry = entries.get(identity);
-    if (entry) entry.ids.push(id);
-    else entries.set(identity, { path, ids: [id] });
+    if (!entry) entries.set(identity, { path: current ?? captured, ids: [id] });
+    else {
+      entry.ids.push(id);
+      // A loaded row carries the group's current label and position.
+      if (current) entry.path = current;
+    }
   }
   return [...entries.values()]
     .sort((left, right) => {
-      const index = left.path.findIndex((level, depth) => level.position !== right.path[depth]!.position);
-      return index < 0 ? 0 : left.path[index]!.position - right.path[index]!.position;
+      const depth = left.path.findIndex((level, index) => level.key !== right.path[index]!.key);
+      return depth < 0 ? 0 : left.path[depth]!.position - right.path[depth]!.position;
     })
     .map(({ path, ids }) => {
       const levels = path.map(({ group, key, label }) => ({ field: group.field, key, label }));
@@ -204,10 +206,14 @@ export interface ResourceViewContextValue {
    * shares these snapshots, so a row may carry the fields of whichever surface
    * selected it. */
   selectedRows: readonly Row[];
-  /** The selection split by `grouping`, the list's active grouping, from the group
-   * paths captured with the snapshots: undefined when `grouping` is empty, null
-   * when a selected id has no path under it (`bulkActions` → `selectedGroups`). */
-  selectedGroups: (grouping: readonly ResourceViewGroup[]) => readonly SelectedGroup[] | null | undefined;
+  /** The selection split by `grouping`, the levels the surface renders, from the
+   * group paths captured with the snapshots and checked against `placed`, where it
+   * shows its loaded rows now; null when the surface places no rows
+   * (`bulkActions` → `selectedGroups`). */
+  selectedGroups: (
+    grouping: readonly ResourceViewGroup[],
+    placed: ReadonlyMap<string, SelectionGroupPath | null> | null,
+  ) => readonly SelectedGroup[] | null | undefined;
   setFilter: OnChangeFn<ResourceViewFilter>;
   resetQuery: () => void;
   /** Whether editable query state differs from this collection's default view. */
@@ -630,7 +636,7 @@ function useResourceViewContextValue({
 
   const collection = stableSerialize([groupQuery, groupOrder]);
   const [selection, setSelection] = useState<SelectionState>(() => ({
-    collection, scope: "", rowSelection: createResourceViewState(initialState).rowSelection, rows: {}, groups: {},
+    collection, scope: "", rowSelection: createResourceViewState(initialState).rowSelection, rows: {}, paths: {},
   }));
   const activeSelection = selection.collection === collection ? selection : {
     collection, scope: "", ...EMPTY_SELECTION,
@@ -653,15 +659,15 @@ function useResourceViewContextValue({
       if (selectedIds.size === 0 && (current.scope !== scope
         || !previousIds.some((id) => base.rowSelection[id]))) return current;
       const rows: Record<string, Row> = {};
-      const groups: Record<string, SelectionGroupPath> = {};
+      const paths: Record<string, SelectionGroupPath> = {};
       for (const id of selectedIds) {
         const kept = Boolean(base.rowSelection[id]);
         const row = kept ? base.rows[id] : observed?.(id);
         if (row !== undefined) rows[id] = row;
-        const path = kept ? base.groups[id] : placed?.(id);
-        if (path !== undefined) groups[id] = path;
+        const path = kept ? base.paths[id] : placed?.(id);
+        if (path !== undefined) paths[id] = path;
       }
-      return { ...current, scope, rowSelection, rows, groups };
+      return { ...current, scope, rowSelection, rows, paths };
     });
   }, []);
   const enter = useCallback<SelectionOwner["enter"]>((scope) => {

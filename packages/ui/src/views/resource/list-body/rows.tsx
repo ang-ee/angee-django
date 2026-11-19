@@ -144,9 +144,9 @@ function RecordRowInner<TRow extends Row>({
 }
 
 // Memoised so a selection toggle re-renders only the affected row: `selected` is
-// the sole per-row-changing prop, `onToggleSelected` is the stable
-// `toggleSelectedId`, and the rest (row, callbacks) are stable across toggles
-// because they originate above the selection-context boundary.
+// the sole per-row-changing prop. Callers keep the row and its callbacks stable
+// across toggles: the flat list passes `toggleSelectedId` and page callbacks, the
+// grouped list memoises each row's own (`GroupedRecordRow`).
 export const RecordRow = React.memo(RecordRowInner) as typeof RecordRowInner;
 
 function LinkedRecordRow<TRow extends Row>({

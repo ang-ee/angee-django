@@ -3,7 +3,7 @@ import { stableSerialize } from "@angee/refine";
 import { CALENDAR_ANCHOR_FORMAT, defaultResourceViewPageSize, CALENDAR_VIEW_MODES, isResourceViewKind } from "./capabilities";
 import type { CalendarViewMode, ResourceViewKind } from "./capabilities";
 import { Filter, isResourceViewFilter } from "./filter";
-import { QueryParseError, GroupSpecsSchema } from "@angee/metadata";
+import { QueryParseError, groupAxisId, groupSpecsFrom } from "@angee/metadata";
 import * as v from "valibot";
 import type { ResourceViewFilter, ResourceViewGroup, ResourceViewInitialState, ResourceViewSort } from "./filter";
 import { createResourceViewState, type ResourceViewState } from "./state";
@@ -122,11 +122,7 @@ export function resourceViewSearchToState(
 }
 
 export function normaliseGroupStack(groups: unknown): readonly ResourceViewGroup[] {
-  const parsed = v.parse(GroupSpecsSchema, groups);
-  // A level's axis is its field and granularity; `repeated` only filters its groups.
-  const keys = parsed.map(({ field, granularity }) => `${field}:${granularity ?? ""}`);
-  if (new Set(keys).size !== keys.length) throw new QueryParseError("groups", "duplicate group axis");
-  return parsed;
+  return groupSpecsFrom(groups);
 }
 
 /**
@@ -285,8 +281,7 @@ export function resourceViewGroupsEqual(
   left: ResourceViewGroup,
   right: ResourceViewGroup,
 ): boolean {
-  return left.field === right.field
-    && left.granularity === right.granularity;
+  return groupAxisId(left) === groupAxisId(right);
 }
 
 function isCalendarViewMode(value: string): value is CalendarViewMode {

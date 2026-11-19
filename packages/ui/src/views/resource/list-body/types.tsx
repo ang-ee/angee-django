@@ -3,7 +3,7 @@ import { type Row as TableRowModel } from "@tanstack/react-table";
 import type { AggregateBucket, AggregateMeasure } from "@angee/refine";
 import type { Row } from "@angee/metadata";
 import type { ResourceListOrder, ResourceViewFilter } from "../resource-view-model";
-import type { SelectionGroupPath } from "../resource-view-context";
+import type { SelectionGroupPath } from "../resource-view-types";
 import type { ColumnDescriptor, PageColumnAlign } from "../../page";
 export type ColumnAlign = PageColumnAlign;
 export type ListColumn<TRow extends Row = Row> = ColumnDescriptor<TRow>;
