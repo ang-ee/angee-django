@@ -536,6 +536,12 @@ app, whose **rail** of roots the rail, palette and menus follow; nothing
 selected, or a named app without a rail, shows every root.
 It shapes navigation and identity, never which routes open.
 
+**Site** — the deployment's static page head (`ANGEE_UI.shell.site`): title,
+description, icon, touch icon and link-preview image, one for every ingress
+alias, written by the web build before JavaScript runs and independent of the
+selection. Its files are **named assets** an addon declares in its
+`web/package.json` `angee.assets`.
+
 **Aggregator** — an addon that places other addons' apps under its own menu root
 (`include`), like the `angee.pm` suite. A **flattened** include shows the app's
 items as the aggregator's own while the app keeps its routes and words.
@@ -559,8 +565,9 @@ component.
 than passing color props or one-off variants.
 
 **Theme** — a named visual implementation contributed by an installed addon.
-It may provide semantic token layers, bounded options, scoped CSS and bundled
-assets. Its stable ID is stored as an appearance preference.
+It may provide semantic token layers, bounded options, scoped CSS and the images
+and fonts that CSS references (theme assets, not a site's named assets). Its
+stable ID is stored as an appearance preference.
 
 **Theme addon** — the ordinary Angee addon that distributes one or more themes.
 Installing it adds choices to the composed catalogue; installation does not

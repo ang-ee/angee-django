@@ -626,6 +626,7 @@ def _render_staging_stack(
     celery_queues: str = "",
     enable_celery: bool = True,
     operator_home: str = "",
+    sentry_web_dsn: str = "",
 ) -> dict[str, Any]:
     """Render the staging stack with the inputs its copier.yml declares, and no others."""
 
@@ -653,7 +654,7 @@ def _render_staging_stack(
         "project_name": "app",
         "repositories": json.dumps(list(repositories)),
         "sentry_dsn": "",
-        "sentry_web_dsn": "",
+        "sentry_web_dsn": sentry_web_dsn,
         "serve_workers": "0",
         "settings_file": settings_file,
         "ui_port": "5173",
@@ -2123,7 +2124,7 @@ def test_serve_modes_cover_both_flavors_and_runtimes() -> None:
             assert "/operator/*" not in caddyfile
             assert frontend["after"][0] == "frontend-build"
             assert django["after"] == ["provision", "frontend" if flavor == "framework" else "caddy"]
-            assert "--allowed-origin" in " ".join(stack["services"]["operator"]["command"])
+            assert "--allowed-origin http://localhost:5173" in " ".join(stack["services"]["operator"]["command"])
             assert '--forwarded-allow-ips "$$TRUSTED_PROXY_CIDR"' in command
             if flavor == "framework":
                 assert stack["jobs"]["frontend-build"]["depends_on"] == ["deps", "compose", "operator-schema"]
@@ -2502,6 +2503,55 @@ def test_empty_sentry_dsns_render_no_error_reporting(stack: Any) -> None:
     rendered = json.dumps(stack())
 
     assert "SENTRY" not in rendered
+
+
+_PUBLIC_INGRESS = "site.example.test"
+
+
+@pytest.mark.parametrize("sentry", ["", _WEB_DSN])
+@pytest.mark.parametrize(
+    ("render", "section", "service", "origin"),
+    [
+        pytest.param(lambda **inputs: _render_dev_stack(**inputs), "services", "frontend", None, id="dev-process"),
+        pytest.param(
+            lambda **inputs: _render_dev_stack(ingress_domain=_PUBLIC_INGRESS, **inputs),
+            "services", "frontend", f"https://{_PUBLIC_INGRESS}", id="dev-process-public",
+        ),
+        pytest.param(
+            lambda **inputs: _render_dev_stack(_runtime_mode="docker", **inputs),
+            "services", "frontend", None, id="dev-docker",
+        ),
+        pytest.param(
+            lambda **inputs: _render_dev_stack(_runtime_mode="docker", ingress_domain=_PUBLIC_INGRESS, **inputs),
+            "services", "frontend", f"https://{_PUBLIC_INGRESS}", id="dev-docker-public",
+        ),
+        pytest.param(
+            lambda **inputs: _render_dev_stack(_runtime_mode="docker", serve_mode="production", **inputs),
+            "jobs", "frontend-build", None, id="framework-build",
+        ),
+        pytest.param(
+            lambda **inputs: _render_staging_stack(ingress_domain=_PUBLIC_INGRESS, **inputs),
+            "jobs", "frontend-build", f"https://{_PUBLIC_INGRESS}", id="framework-build-staging",
+        ),
+        # No shipped instance wrapper renders a public ingress: local pins localhost.
+        pytest.param(
+            lambda **inputs: _render_local_stack(serve_mode="production", **inputs),
+            "jobs", "frontend-build", None, id="instance-build-local",
+        ),
+    ],
+)
+def test_public_origin_reaches_python_and_one_frontend_independently_of_sentry(
+    render: Any, section: str, service: str, origin: str | None, sentry: str,
+) -> None:
+    stack = render(sentry_web_dsn=sentry)
+    assert ("VITE_SENTRY_DSN" in (stack[section][service].get("env") or {})) == bool(sentry)
+    carriers = _env_nodes(stack, "ANGEE_PUBLIC_ORIGIN")
+    if origin is None:
+        assert not carriers
+    else:
+        # Python and the frontend that writes the static head; never the operator, storybook or static frontend.
+        assert set(carriers) == {*_env_nodes(stack, "DATABASE_URL"), service}
+        assert {environment["ANGEE_PUBLIC_ORIGIN"] for environment in carriers.values()} == {origin}
 
 
 @pytest.mark.parametrize(

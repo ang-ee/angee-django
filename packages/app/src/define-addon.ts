@@ -131,6 +131,21 @@ export interface AppDeclaration {
  */
 export interface ShellSettings {
   brand?: RuntimeBrand;
+  /**
+   * The deployment's static HTML head, shared by every ingress alias. The runtime
+   * never reads it: it travels in the deployment layer, boot validates it, and only
+   * the web build writes it. Every value is a non-empty string; `icon` (.svg, .png
+   * or .ico), `touchIcon` (.png) and `image` (.png, .jpg or .jpeg) name an
+   * `angee.assets` entry an addon declares in its `web/package.json`.
+   */
+  site?: {
+    /** Defaults to `shell.brand.name`; required without a shell brand. */
+    title?: string;
+    description?: string;
+    icon?: string;
+    touchIcon?: string;
+    image?: string;
+  };
   /** An installed theme id; it also backs a selected app that names none. */
   theme?: string;
   /** Named rails; a name must not be a menu root id. */

@@ -26,6 +26,7 @@ from graphql import concat_ast, specified_rules, validate
 from angee.base.build import PermissionIntegration, composed_grants
 from angee.base.models.base import AngeeModel
 from angee.base.models.roles import role_anchor
+from angee.base.testing.packages import write_addon_distribution
 from angee.graphql.schema import GraphQLSchemas
 from angee.graphql.testing.documents import authored_documents
 from angee.web.build import WebRuntime
@@ -407,6 +408,31 @@ def test_if_stale_recomposes_when_only_the_deployment_ui_layer_changes(tmp_path:
     deploy({"new.example.test": "payables"})
     assert "Composition generated." in host.compose("--if-stale")
     assert deployed_hosts() == {"new.example.test": "payables"}
+    assert "Composition is current." in host.compose("--check")
+
+
+def test_if_stale_tracks_asset_declarations_but_not_image_bytes(tmp_path: Path) -> None:
+    host = _TemplateHost(tmp_path / "host", "site_probe")
+    addon = host.root / "site_probe"
+    addon.mkdir()
+    (addon / "__init__.py").touch()
+    write_addon_distribution(addon, "site_probe", depends_on=("angee.web",))
+    web = addon / "web"
+    web.mkdir()
+    package = {"name": "@example/site", "angee": {"assets": {"site.image": "./preview.png"}}}
+    (web / "package.json").write_text(json.dumps(package))
+    (web / "preview.png").write_bytes(b"first image")
+    host.write_settings()
+    assert "Composition generated." in host.compose()
+    assert "Composition is current." in host.compose("--if-stale")
+    (web / "preview.png").write_bytes(b"changed image")
+    assert "Composition is current." in host.compose("--if-stale")
+    package["angee"]["assets"]["site.image"] = "./replacement.png"
+    (web / "package.json").write_text(json.dumps(package))
+    assert "Composition generated." in host.compose("--if-stale")
+    manifest = json.loads((host.root / "runtime/web/manifest.json").read_text())
+    entry = next(entry for entry in manifest["addonPackages"] if entry["app"] == "site_probe")
+    assert entry["assets"] == {"site.image": "./replacement.png"}
     assert "Composition is current." in host.compose("--check")
 
 

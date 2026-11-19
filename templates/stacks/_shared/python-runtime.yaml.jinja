@@ -25,7 +25,7 @@
       REDIS_URL: "{{ redis_url }}"
       CACHE_URL: "{{ redis_url }}"
       CELERY_BROKER_URL: "{{ celery_broker_url }}"
-{% if ingress_domain_value == "localhost" %}{% else %}      ANGEE_PUBLIC_ORIGIN: "https://{{ ingress_domain_value }}"
+{% if public_origin %}      ANGEE_PUBLIC_ORIGIN: "{{ public_origin }}"
 {% if effective_serve_mode == "production" %}      # A public production host overrides the project's development defaults: no
       # debug pages, and only its own names (plus the compose-internal ones the MCP
       # endpoint and the readiness probe use) are accepted as Host.
