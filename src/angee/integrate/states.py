@@ -134,7 +134,20 @@ class StreamDefinition:
     snapshot: bool = False
     authoritative: bool = False
     mapping_version: int = 1
-    """Increase when mapping changes require a fresh baseline of existing records."""
+    """The version of a mapping one declarer owns; increase it to replay existing records.
+
+    A lower version is a rollback that keeps progress, on a stream that never
+    composed its mapping. A stream whose mapping is composed from several
+    declarers declares ``mapping_contributions`` instead.
+    """
+    mapping_contributions: tuple[tuple[str, int], ...] = ()
+    """A mapping composed from several declarers, as ``(key, version)`` pairs in the order they apply.
+
+    The declarer orders them by its explicit sequence, then key; the order is part
+    of the mapping's identity. The stream then owns the version
+    (``SyncStreamManager.current``): any change of the list replays every record
+    once, under a version above every one the stream used before.
+    """
     holds_containers: bool = False
     """Whether this stream's records are containers of other partitions; a changed value updates the stream."""
     container: RecordLink | None = None
