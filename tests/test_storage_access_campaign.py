@@ -1,10 +1,12 @@
 """The storage decision table, its enforcement points, and the verbs that write file audiences."""
 
+from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, urlsplit
 
 import pytest
 from asgiref.sync import async_to_sync
+from django.apps import AppConfig
 from django.contrib.auth import get_user_model
 from django.contrib.auth.models import AnonymousUser
 from django.contrib.contenttypes.models import ContentType
@@ -32,11 +34,13 @@ from rebac.testing import assert_decisions
 
 from angee.base.exceptions import RecordAccessSubjectRefused
 from angee.base.identity import public_subject_ref
+from angee.base.permissions import bind_rebac_schema, declared_schema_path
 from angee.base.testing.queries import statement_startswith
 from angee.graphql.relations import actor_scoped_public_id, actor_scoped_to_one
 from angee.graphql.testing.documents import execute_schema, result_data
 from angee.storage import exceptions, views
 from angee.storage import schema as storage_schema
+from angee.storage.checks import check_derived_permissions
 from angee.storage.models import FileAttachmentManager, FileVisibility, UploadState
 from angee.storage.uploads import DOWNLOAD_TOKEN_MAX_AGE, DOWNLOAD_TOKEN_SALT, DOWNLOAD_TOKEN_WINDOW
 from angee.tags.testing.models import Tag, TagAssignment
@@ -531,17 +535,44 @@ def test_file_owner_cannot_widen_without_drive_share_and_drive_editor_can_grant(
     assert not row.with_actor(editor).has_access("inherit_visibility")
     assert row.with_actor(drive.alice).has_access("inherit_visibility")
     schema = addon_schema(storage_schema.schemas, "public")
+    query = "query($id: String!) { files_by_pk(id: $id) { permissions } }"
     with actor_context(editor):
-        projected = result_data(execute_schema(schema, """
-            query($id: String!) { files_by_pk(id: $id) { permissions } }
-        """, {"id": row.sqid}, user=editor))["files_by_pk"]["permissions"]
+        projected = result_data(execute_schema(schema, query, {"id": row.sqid}, user=editor))[
+            "files_by_pk"
+        ]["permissions"]
+        refused = result_data(execute_schema(schema, """
+            mutation($id: ID!) { set_file_visibility(id: $id, visibility: INHERITED) { ok } }
+        """, {"id": row.sqid}, user=editor))["set_file_visibility"]
+        assert not refused["ok"]
+        row.refresh_from_db()
+        assert row.visibility == FileVisibility.RECORD
     assert "write" in projected
     assert "inherit_visibility" not in projected
     with actor_context(editor), pytest.raises(PermissionDenied):
         row.with_actor(editor).set_visibility(FileVisibility.INHERITED)
     with actor_context(drive.alice):
         row.with_actor(drive.alice).set_visibility(FileVisibility.INHERITED)
+        projected = result_data(execute_schema(schema, query, {"id": row.sqid}, user=drive.alice))[
+            "files_by_pk"
+        ]["permissions"]
+        assert "inherit_visibility" in projected
     assert row.visibility == FileVisibility.INHERITED
+
+
+def test_a_fragment_cannot_extend_inherit_visibility(tmp_path: Path) -> None:
+    config = AppConfig.create("angee.storage")
+    source = declared_schema_path(config)
+    assert source is not None
+    assert check_derived_permissions([config]) == []
+    extended = tmp_path / "storage.zed"
+    extended.write_text(source.read_text().replace(
+        "permission inherit_visibility = drive->share",
+        "permission inherit_visibility = drive->share + owner",
+    ))
+    bind_rebac_schema(config, extended)
+    [error] = check_derived_permissions([config])
+    assert error.id == "storage.E001"
+    assert "storage/file#inherit_visibility" in error.msg
 
 
 def test_container_owned_upload_loses_uploader_reach_after_narrowing(drive: Any) -> None:

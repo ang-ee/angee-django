@@ -144,20 +144,27 @@ class RecordTaskGraphQLTests(WorkCase):
         values = {"id": self.record_row.sqid}
         own = self.graphql(query, values, bucket="console")["projects_by_pk"]
         reader = self.graphql(query, values, user=self.reader, bucket="console")["projects_by_pk"]
+        self.share(self.record_row, self.assignee, "editor")
+        editor = self.graphql(query, values, user=self.assignee, bucket="console")["projects_by_pk"]
         self.assertIn("transfer", own["permissions"])
         self.assertNotIn("transfer", reader["permissions"])
+        self.assertTrue({"write", "share"} <= set(editor["permissions"]))
+        self.assertNotIn("transfer", editor["permissions"])
         task = self.task()
         task_row = self.graphql(
             """query($id: String!) { project_tasks_by_pk(id: $id) { permissions } }""",
             {"id": task.sqid}, bucket="console",
         )["project_tasks_by_pk"]
-        self.assertIn("transfer", task_row["permissions"])
+        self.assertNotIn("transfer", task_row["permissions"])
         created_by = self.record_row.created_by_id
         mutation = """mutation($id: ID!, $owner: ID) {
             transfer_project_ownership(id: $id, owner: $owner) { ok }
         }"""
-        refused = self.graphql(mutation, {**values, "owner": self.reader.sqid}, user=self.reader, bucket="console")
-        self.assertFalse(refused["transfer_project_ownership"]["ok"])
+        for user in (self.reader, self.assignee):
+            refused = self.graphql(mutation, {**values, "owner": self.reader.sqid}, user=user, bucket="console")
+            self.assertFalse(refused["transfer_project_ownership"]["ok"])
+            self.record_row.refresh_from_db()
+            self.assertEqual(self.record_row.owner_id, self.owner.pk)
         accepted = self.graphql(mutation, {**values, "owner": self.reader.sqid}, bucket="console")
         self.assertTrue(accepted["transfer_project_ownership"]["ok"])
         self.record_row.refresh_from_db()

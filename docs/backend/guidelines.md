@@ -622,6 +622,9 @@ data through REBAC, never a queryset bypass.
   (`check_sealed_permissions`), which refuses a fragment that changes one:
   messaging's [`check_derived_reads`](../../src/angee/messaging/checks.py)
   (`messaging.E003`) seals the thread and message `read` and `read_inbox`.
+  Storage's [`check_derived_permissions`](../../src/angee/storage/checks.py)
+  (`storage.E001`) also seals `inherit_visibility`, so only the drive's sharers
+  can restore file inheritance.
 - **One user identity for authorization and attribution.** Every person and
   agent acts as its own `AUTH_USER_MODEL` row. Workflows also act as their linked
   `kind=service` user for trigger admission and triggered runs; source-declared

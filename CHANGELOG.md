@@ -16,8 +16,8 @@ live in code docstrings.
   report the right outcome.
 - Message delivery recovery controls consume `delivery_actions`, projected from
   the same retained-state admission check as Retry and Mark as sent. Task Wake
-  joins `task_actions`. Project and Task permissions now expose `transfer`;
-  files expose `inherit_visibility = drive->share` for the existing widening rule.
+  joins `task_actions`. Project permissions expose `transfer`; files expose the
+  sealed `inherit_visibility = drive->share` for the existing widening rule.
 - Record verbs, Delete, Archive and Trash are supplied by the shared views
   instead of each page.
   - **Toolbar.** Explicit placement wins; `primary` implies the toolbar. On a

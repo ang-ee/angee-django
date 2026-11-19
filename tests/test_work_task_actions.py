@@ -7,6 +7,7 @@ from django.utils import timezone
 from rebac import PermissionDenied, actor_context, system_context
 
 from tests.native_work import WorkCase
+from tests.test_work_task_holds import WAKE
 
 ACTIONS = """query($id: String!) { project_tasks_by_pk(id: $id) { task_actions } }"""
 ARGUMENTS = {"drop": ("obsolete",)}
@@ -122,6 +123,12 @@ class TaskActionTests(WorkCase):
             self.assertIn("wake", self.offered(task))
             self.share(task, self.reader)
             self.assertNotIn("wake", self.offered(task, user=self.reader))
-            with actor_context(self.owner):
-                self.as_user(task).wake()
+            task.refresh_from_db()
+            values = {"task": task.sqid, "revision": task.revision}
+            refused = self.graphql(WAKE, values, user=self.reader)["wake_task"]
+            self.assertFalse(refused["ok"], refused)
+            task.refresh_from_db()
+            self.assertIsNotNone(task.snoozed_at)
+            accepted = self.graphql(WAKE, values)["wake_task"]
+            self.assertTrue(accepted["ok"], accepted)
             self.assertNotIn("wake", self.offered(task))

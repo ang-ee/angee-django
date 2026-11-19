@@ -362,19 +362,18 @@ class MessageType(TrashedRefMixin, TaggedNode, AngeeNode):
         return cast(Any, self).is_held
 
     @strawberry_django.field(
-        only=["status", "scheduled_at", "delivery_lease_until", "is_trashed", "delivery_possibly_accepted", "metadata"],
-        extensions=[PermissionsExtension(("send_held",))],
+        only=[
+            "status", "scheduled_at", "delivery_lease_until", "is_trashed", "delivery_possibly_accepted",
+            "direction", "channel", "external_id",
+        ],
+        annotate={"_delivery_conflict": models.F("metadata__local__delivery_conflict")},
+        extensions=[PermissionsExtension((Message.delivery_action_permission,))],
     )
     def delivery_actions(self) -> list[str]:
         """Operator verbs admitted by the same retained-state check as their locked mutation."""
 
         row = cast(Any, self)
-        if "send_held" not in held_permissions(row, ("send_held",)):
-            return []
-        return [
-            action for action in ("retry", "acknowledge")
-            if row.delivery_resolution_error(retry=action == "retry") is None
-        ]
+        return row.delivery_actions(held_permissions(row, (Message.delivery_action_permission,)))
 
     platform: auto
     direction: auto
@@ -387,7 +386,7 @@ class MessageType(TrashedRefMixin, TaggedNode, AngeeNode):
     scheduled_at: auto
     revision: auto
     is_trashed: auto
-    permissions = permissions_field(("write", "delete", "send_held"))
+    permissions = permissions_field(("write", "delete", Message.delivery_action_permission))
     sender: HandleType | None = actor_scoped_to_one("sender")
 
     @strawberry_django.field(
@@ -1361,7 +1360,7 @@ class MessagingMutation:
     def acknowledge_message_delivery(self, info: strawberry.Info, id: PublicID, expected_revision: int) -> ActionResult:
         """Operator confirmation without another provider effect."""
 
-        row = authorized_permission_target(info, Message, id, "send_held")
+        row = authorized_permission_target(info, Message, id, Message.delivery_action_permission)
         row.acknowledge_delivery(actor=_request_user(info), expected_revision=expected_revision)
         return ActionResult(ok=True, message="Delivery acknowledged as sent.")
 
@@ -1370,7 +1369,7 @@ class MessagingMutation:
     def retry_message_delivery(self, info: strawberry.Info, id: PublicID, expected_revision: int) -> ActionResult:
         """Explicit retry of FAILED, or acceptance of repeat-effect risk for UNCERTAIN."""
 
-        row = authorized_permission_target(info, Message, id, "send_held")
+        row = authorized_permission_target(info, Message, id, Message.delivery_action_permission)
         row.retry_delivery(actor=_request_user(info), expected_revision=expected_revision)
         return ActionResult(ok=True, message="Delivery retry queued.")
 

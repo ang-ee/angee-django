@@ -1653,7 +1653,6 @@ class TaskWork(StagedModelMixin[Stage], StateTransitionsMixin, Composable, exten
         self._require_work_action(expected_revision)
         if self.snoozed_at is None:
             return self
-        self.validate_action("wake")
         for name in self.HOLD_FIELDS:
             setattr(self, name, None)
         self.save(update_fields=(*self.HOLD_FIELDS, "updated_at"))
