@@ -3,8 +3,11 @@ import {
   type DataResourceMetadata,
   type ModelFieldMetadata,
   type ModelMetadata,
-} from "./artifact";
-import type { QueryField } from "./query-schema";
+} from "./artifact.js";
+import type { CrudFilter } from "@refinedev/core";
+import { Filter } from "./filter.js";
+import { ResourceQuery, type QueryFilter } from "./query.js";
+import type { QueryField } from "./query-schema.js";
 
 /** A to-one relation explicitly projected by the node as a scalar identity. */
 export function isScalarIdRelation(
@@ -126,6 +129,26 @@ export function archiveFlagField(
   resource: DataResourceMetadata | null | undefined,
 ): string | null {
   return resource?.fields?.find((field) => field.archivable === true)?.name ?? null;
+}
+
+/**
+ * Narrow a collection to unarchived rows only when metadata declares the flag,
+ * its query contract supports exact filtering, and no supplied predicate names it.
+ * Picker transports may also supply native Refine filters, whose field names are
+ * wire paths; these stay native while this owner scopes the canonical filter.
+ */
+export function unarchivedFilter(
+  resource: DataResourceMetadata | null | undefined,
+  filter: QueryFilter,
+  nativeFilters?: readonly CrudFilter[],
+): QueryFilter {
+  const flag = archiveFlagField(resource);
+  if (!resource || !flag) return filter;
+  const capability = ResourceQuery.from(resource).fields[flag]?.filter;
+  if (!capability?.operators.includes("exact")
+    || Filter.references(filter, flag)
+    || Filter.references(nativeFilters, capability.field)) return filter;
+  return Filter.combine(filter, { [flag]: { exact: false } });
 }
 
 export function supportsChoiceFacet(support: ChoiceFacetSupport): boolean {

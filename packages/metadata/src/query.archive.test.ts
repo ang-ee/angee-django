@@ -1,6 +1,7 @@
 import type { CrudFilter } from "@refinedev/core";
 import { expect, test } from "vitest";
-import { ResourceQuery, unarchivedFilter, type QueryFilter } from "./query";
+import { unarchivedFilter } from "./fields";
+import { ResourceQuery, type QueryFilter } from "./query";
 import type { DataResourceQuery } from "./query-schema";
 import { testDataResource, testQueryField, testResourceQuery } from "./testing";
 

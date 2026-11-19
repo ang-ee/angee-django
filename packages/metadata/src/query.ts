@@ -1,7 +1,5 @@
 import * as v from "valibot";
-import type { CrudFilter } from "@refinedev/core";
 import { Filter, filterValueFromUnknown as jsonValue, isFilterObject as isRecord } from "./filter.js";
-import { archiveFlagField } from "./fields.js";
 import { QueryParseError } from "./query-error.js";
 export { QueryParseError } from "./query-error.js";
 import type { DataResourceMetadata, ModelMetadata } from "./artifact.js";
@@ -15,26 +13,6 @@ export type FilterPrimitive = string | number | boolean | null;
 export type FilterValue = FilterPrimitive | readonly FilterValue[] | { readonly [key: string]: FilterValue };
 export type QueryFilter = { readonly [field: string]: FilterValue };
 export type FilterRecord = QueryFilter;
-
-/**
- * Narrow a collection to unarchived rows only when metadata declares the flag,
- * its query contract supports exact filtering, and no supplied predicate names it.
- * Picker transports may also supply native Refine filters, whose field names are
- * wire paths; these stay native while this owner scopes the canonical filter.
- */
-export function unarchivedFilter(
-  resource: DataResourceMetadata | null | undefined,
-  filter: QueryFilter,
-  nativeFilters?: readonly CrudFilter[],
-): QueryFilter {
-  const flag = archiveFlagField(resource);
-  if (!resource || !flag) return filter;
-  const capability = ResourceQuery.from(resource).fields[flag]?.filter;
-  if (!capability?.operators.includes("exact")
-    || Filter.references(filter, flag)
-    || Filter.references(nativeFilters, capability.field)) return filter;
-  return Filter.combine(filter, { [flag]: { exact: false } });
-}
 
 export interface FilterChoice { value: FilterPrimitive; description?: string | null }
 export interface GroupBucket { key?: Readonly<Record<string, unknown>> | null }
