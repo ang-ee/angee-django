@@ -10,6 +10,15 @@ live in code docstrings.
 
 ## Unreleased — shared addon contracts, native embeddings and graph retrieval
 
+- Addons require django-zed-rebac 0.36.0. With none of its new settings set,
+  statements, statement counts and decisions are 0.35.2's, so nothing changes for a
+  host. It adds `REBAC_ENABLED` (default `True`): a private single-user project may
+  set `REBAC_ENABLED: false` in `settings.yaml` to enforce nothing, which is also the
+  baseline for profiling a document's own queries without REBAC. The library still
+  stores relationships and syncs the policy, so `rebac sync` and provisioning are
+  unchanged, and it emits the system check `rebac.W011` and one startup warning while
+  unenforced. Its experimental read settings stay unset here.
+
 - The UX guard accepts manifest `vocabulary` field tones by structure while rejecting local tone maps and switches.
 
 - Integrate compares synchronized JSON as JSON values (`json_equal` in
