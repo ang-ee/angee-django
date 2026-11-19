@@ -1,12 +1,15 @@
 import * as React from "react";
 import {
+  QueryParseError,
   ResourceQuery,
   modelFieldForPath,
   refineResourceName,
   rowPublicId,
   rowValueAtPath,
+  unarchivedFilter,
   useModelMetadata,
   useSchemaFieldMetadata,
+  type QueryFilter,
   type Row,
 } from "@angee/metadata";
 import {
@@ -63,8 +66,8 @@ export interface RelationOptionsConfig {
   /**
    * Server-side filters narrowing which related rows are offered — for a
    * relation whose target holds more kinds of row than the field accepts (e.g.
-   * only `app_keys` credentials). Omitted, the picker offers every row the
-   * resource's own queryset exposes.
+   * only `app_keys` credentials). Picker searches also apply the resource's
+   * default archive scope unless an authored filter references its archive flag.
    */
   filters?: readonly CrudFilter[];
   where?: Record<string, unknown>;
@@ -87,6 +90,8 @@ export interface RelationOptionsResult {
 
 export interface RelationPickerOptionsConfig
   extends Omit<RelationOptionsConfig, "enabled" | "searchText" | "page"> {
+  /** Read the full catalogue, including archived rows, when choosing a filter value. */
+  catalogue?: boolean;
   value?: string | null;
   /** Folded selected row supplied by a parent record read, when available. */
   selectedOption?: RelationOption;
@@ -175,7 +180,7 @@ export function useRelationPickerOptions(
   );
   const selected = React.useMemo(() => suppliedSelected ?? (resolved?.value === value ? resolved : undefined)
     ?? (value ? { value, label: value } : undefined), [resolved, suppliedSelected, value]);
-  const result = useRelationOptions(relation, {
+  const result = useRelationPickerSearch(relation, {
     ...optionsConfig, page,
     enabled: opened,
     searchText,
@@ -218,6 +223,38 @@ export function useRelationPickerOptions(
     }),
     [activate, onOpenChange, options, result, searchState],
   );
+}
+
+/** Collection search shared by the single and multi pickers. Catalogue searches
+ * and conditions the query contract cannot decode retain their unscoped reads.
+ * @owner RelationFieldWidget
+ */
+export function useRelationPickerSearch(
+  relation: RelationFieldInfo | null,
+  config: RelationOptionsConfig & Pick<RelationPickerOptionsConfig, "catalogue"> = {},
+): RelationOptionsResult {
+  const resource = useModelMetadata(relation?.resource ?? "")?.resource;
+  const { catalogue = false, ...options } = config;
+  const { filters, where } = options;
+  const scopedWhere = React.useMemo(() => {
+    if (catalogue) return where;
+    const empty = {};
+    const defaultFilter = unarchivedFilter(resource, empty, filters);
+    // Preserve raw conditions when metadata or a native predicate disables scope.
+    if (!resource || defaultFilter === empty) return where;
+    const query = ResourceQuery.from(resource);
+    if (!where) return query.toWhere(defaultFilter);
+    let filter: QueryFilter;
+    try {
+      filter = query.fromWhere(where);
+    } catch (error) {
+      if (error instanceof QueryParseError) return where;
+      throw error;
+    }
+    const scoped = unarchivedFilter(resource, filter, filters);
+    return scoped === filter ? where : query.toWhere(scoped);
+  }, [catalogue, resource, filters, where]);
+  return useRelationOptions(relation, { ...options, where: scopedWhere });
 }
 
 /** Search executable text fields on the server, otherwise labels in the loaded page.

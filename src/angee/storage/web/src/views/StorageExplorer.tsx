@@ -4,7 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ReactElement, t
 import {
   CollectionTreeView, EmptyState, ErrorBanner, InlineTextAction, LoadingPanel, PaneToolbar, PaneToolbarMenu,
   ResourceViewProvider, ScopedExplorerPane, TreeView, useConfirm, useFilePicker, useLatestRef,
-  relationFieldInfoForResource, useRelationOptions, useScopedTreeExplorer,
+  relationFieldInfoForResource, useRelationPickerSearch, useScopedTreeExplorer,
   type FieldDescriptor, type ListViewProps, type ScopedExplorerController,
 } from "@angee/ui";
 import { StorageFolderById, StorageDriveById, type StorageDrive, type StorageFile } from "../data/documents";
@@ -54,7 +54,7 @@ export function StorageExplorer({ openFile: receivedOpenFile, openFileId, folder
   const folder = folderRead.data?.folders_by_pk?.id === requestedFolder ? folderRead.data.folders_by_pk : null;
   const driveMetadata = useModelMetadata("storage.Drive");
   const driveRelation = useMemo(() => relationFieldInfoForResource("storage.Drive", driveMetadata ?? null), [driveMetadata]);
-  const initialDrives = useRelationOptions(driveRelation, { enabled: !openFileId && !requestedFolder, pageSize: 1, sort: true });
+  const initialDrives = useRelationPickerSearch(driveRelation, { enabled: !openFileId && !requestedFolder, pageSize: 1, sort: true });
   const invalidateAuthoredModels = useInvalidateAuthoredModels();
   const handleFolderMutation = useCallback(() => {
     invalidateAuthoredModels(FOLDER_MODELS);

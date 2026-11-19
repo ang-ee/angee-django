@@ -19,12 +19,14 @@ import { afterEach, expect, test, vi } from "vitest";
 import storage from "../index";
 import { StorageFileById, StorageFoldersPage, StorageFolderById, StorageDriveById } from "../data/documents";
 import { ALL_SCOPE, TRASH_SCOPE } from "../data/file-rows";
+import { useFileActions } from "../data/use-file-actions";
 import { FilePreviewFrame } from "./FilePreviewFrame";
 import type { StorageExplorerController } from "./StorageExplorer";
 import { StorageListContent } from "./StorageListContent";
 import { StoragePage } from "./StoragePage";
 
 const fileResource = testDataResource("storage.File", {
+  resourceType: "storage/file",
   query: testResourceQuery({ fields: {
     id: testQueryField("id", { scalar: "ID" }),
     drive: testQueryField("drive", { scalar: "ID", filter: { field: "drive", scalar: "ID", values: [], operators: ["exact"] } }),
@@ -33,9 +35,11 @@ const fileResource = testDataResource("storage.File", {
     updated_at: testQueryField("updated_at", { scalar: "DateTime", filter: null, sort: { field: "updated_at" } }),
   } }),
   typeNames: { filter: "files_bool_exp", order: "files_order_by" },
-  recordRepresentation: "title", updateFields: ["title"], roots: { deletePreview: "delete_files_preview", aggregate: "files_aggregate" },
-  fields: ["title", "filename", "content_hash", "created_by_label", "upload_state", "visibility", "created_at", "updated_at"].map((name) => ({
-    name, kind: "scalar", scalar: "String", readable: true,
+  recordRepresentation: "title", updateFields: ["title"], roots: { delete: undefined, aggregate: "files_aggregate" },
+  capabilities: ["detail", "list", "update"],
+  fields: ["title", "filename", "content_hash", "created_by_label", "upload_state", "visibility", "created_at", "updated_at", "is_trashed"].map((name) => ({
+    name, kind: "scalar", scalar: name === "is_trashed" ? "Boolean" : "String", readable: true,
+    trashable: name === "is_trashed",
     aggregatable: false, creatable: false,
     updatable: name === "title", requiredOnCreate: false,
   })),
@@ -107,7 +111,7 @@ test("cold Files navigation preserves the real shell, tree, pager and the detail
   });
   const view = render(
     <Provider resources={resources} dataProvider={provider} options={{ reactQuery: { clientConfig: { defaultOptions: { queries: { retry: false, gcTime: 0 }, mutations: { retry: false } } } } }}>
-      <OperationDocumentsProvider documents={{ console: { deletePreviews: { "storage.File": "mutation DeleteFiles($id: ID!) { delete_files_preview(id: $id) { deleted } }", "storage.Folder": "mutation DeleteFolders($id: ID!) { delete_folders_preview(id: $id) { deleted } }" } } }}>
+      <OperationDocumentsProvider documents={{ console: { deletePreviews: { "storage.Folder": "mutation DeleteFolders($id: ID!) { delete_folders_preview(id: $id) { deleted } }" } } }}>
       <AppRuntimeProvider runtime={{ icons: baseIcons, widgets: defaultWidgets, routeHref: createRouteHref(storage.routes ?? []),
         // The composed containers: the record aside and its Related groups.
         containers: composeAddons([storage], { canonicalModelLabel: (model) => model }).containers }}>
@@ -135,9 +139,9 @@ test("cold Files navigation preserves the real shell, tree, pager and the detail
   const tree = screen.getAllByRole("tree")[0];
   const pager = screen.getByRole("navigation", { name: "Record navigation" });
   // The lifecycle verbs reach the control band once the desktop shell has mounted its host.
-  await waitFor(() => expect(view.container.querySelector(".area-control")?.contains(screen.getByRole("button", { name: "Trash" }))).toBe(true));
+  await waitFor(() => expect(view.container.querySelector(".area-control")?.contains(screen.getByRole("button", { name: "Move to trash" }))).toBe(true));
   const control = view.container.querySelector(".area-control");
-  const trash = screen.getByRole("button", { name: "Trash" }) as HTMLButtonElement;
+  const trash = screen.getByRole("button", { name: "Move to trash" }) as HTMLButtonElement;
   await waitFor(() => expect((screen.getByRole("button", { name: "Next record" }) as HTMLButtonElement).disabled).toBe(false));
   fireEvent.click(screen.getByRole("button", { name: "Next record" }));
   await waitFor(() => expect(forms.has("file-b") && previews.has("file-b")).toBe(true));
@@ -147,7 +151,7 @@ test("cold Files navigation preserves the real shell, tree, pager and the detail
   expect(screen.getByRole("navigation", { name: "Record navigation" })).toBe(pager);
   expect(screen.getByRole("heading", { level: 1, name: "Loading file" })).toBe(header);
   expect(frame.isConnected).toBe(true);
-  expect(screen.getByRole("button", { name: "Trash" })).toBe(trash);
+  expect(screen.getByRole("button", { name: "Move to trash" })).toBe(trash);
   expect(trash.disabled).toBe(true);
   expect(control?.contains(trash)).toBe(true);
   expect(screen.queryByRole("textbox", { name: "Title" })).toBeNull();
@@ -426,7 +430,7 @@ test("a directly shared file opens when no drive is visible", async () => {
 });
 
 /** Mount a storage view outside the shell, acting through the given file verbs. */
-function renderView(view: ReactElement, rows: readonly Row[]) {
+function renderView(view: ReactElement, rows: readonly Row[], dataProvider: RefineTestDataProvider = {}) {
   const root = createRootRoute();
   const page = createRoute({ getParentRoute: () => root, path: "/storage", component: () => view });
   const router = createRouter({ routeTree: root.addChildren([page]), history: createMemoryHistory({ initialEntries: ["/storage"] }),
@@ -435,6 +439,7 @@ function renderView(view: ReactElement, rows: readonly Row[]) {
     custom: vi.fn(async () => ({ data: { files_by_pk: rows[0] ?? null } })),
     getOne: vi.fn(async () => ({ data: rows[0] ?? null })),
     getList: vi.fn(async () => ({ data: [...rows], total: rows.length })),
+    ...dataProvider,
   }} options={{ reactQuery: { clientConfig: { defaultOptions: { queries: { retry: false, gcTime: 0 } } } } }}>
     <AppRuntimeProvider runtime={{ icons: baseIcons, widgets: defaultWidgets, routeHref: createRouteHref(storage.routes ?? []) }}>
       <ModalsHost><ToastProvider><RouterProvider router={router} /></ToastProvider></ModalsHost>
@@ -442,42 +447,68 @@ function renderView(view: ReactElement, rows: readonly Row[]) {
   </Provider>);
 }
 
-function fileActions(completed: boolean) {
-  const settle = vi.fn(async () => completed);
-  return { busy: false, trash: settle, restore: settle, move: settle, trashMany: settle, restoreMany: settle };
-}
-
-// The file verbs settle their own refusals (data/actions.test.tsx); the views act on the resolved outcome.
-test.each(["blocked", "cancel", "success"] as const)("the open file closes only after its confirmed trash completes (%s)", async (outcome) => {
-  const actions = fileActions(outcome === "success");
+test.each(["blocked", "cancel", "success"] as const)("the open file asks once through shared trash and closes only after success (%s)", async (outcome) => {
   const close = vi.fn();
-  renderView(<FilePreviewFrame id="file-a" fileNavigation={null} closeDetail={close} fileActions={actions} />, [file("file-a", "Alpha")]);
-  const trash = await screen.findByRole("button", { name: "Trash" }) as HTMLButtonElement;
+  const row = file("file-a", "Alpha");
+  const trashMutation = vi.fn(async () => ({ data: { trash_record: {
+    ok: outcome === "success", message: outcome === "success" ? "Moved." : "Still in use.",
+  } } }));
+  const custom = vi.fn(async ({ meta }: { meta?: Record<string, unknown> }) =>
+    meta?.gqlQuery === StorageFileById ? { data: { files_by_pk: row } } : trashMutation());
+  function OpenFile() {
+    const actions = useFileActions();
+    return <FilePreviewFrame id="file-a" fileNavigation={null} closeDetail={close} fileActions={actions} />;
+  }
+  renderView(<OpenFile />, [row], { custom });
+  const trash = await screen.findByRole<HTMLButtonElement>("button", { name: "Move to trash" });
   await waitFor(() => expect(trash.disabled).toBe(false));
+  expect(screen.queryByRole("button", { name: "Delete" })).toBeNull();
   fireEvent.click(trash);
-  fireEvent.click(within(await screen.findByRole("alertdialog")).getByRole("button", { name: outcome === "cancel" ? "Cancel" : "Trash" }));
-  if (outcome === "cancel") await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
-  else await waitFor(() => expect(actions.trash).toHaveBeenCalledWith("file-a"));
+  const dialog = await screen.findByRole("alertdialog", { name: "Move “Alpha” to the trash?" });
+  expect(screen.getAllByRole("alertdialog")).toHaveLength(1);
+  fireEvent.click(within(dialog).getByRole("button", { name: outcome === "cancel" ? "Keep “Alpha”" : "Move to trash" }));
+  await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+  if (outcome === "cancel") expect(trashMutation).not.toHaveBeenCalled();
+  else {
+    await waitFor(() => expect(trashMutation).toHaveBeenCalledOnce());
+    expect(custom).toHaveBeenCalledWith(expect.objectContaining({
+      payload: { target_type: "storage/file", target_id: "file-a", reason: "" },
+    }));
+    await screen.findByText(outcome === "success" ? "Moved." : "Still in use.");
+  }
   if (outcome === "success") await waitFor(() => expect(close).toHaveBeenCalledOnce());
   else expect(close).not.toHaveBeenCalled();
-  if (outcome === "cancel") expect(actions.trash).not.toHaveBeenCalled();
 });
 
 test.each([
-  { scope: ALL_SCOPE, verb: "Trash", completed: true },
-  { scope: ALL_SCOPE, verb: "Trash", completed: false },
+  { scope: ALL_SCOPE, verb: "Move to trash", completed: true },
+  { scope: ALL_SCOPE, verb: "Move to trash", completed: false },
+  { scope: TRASH_SCOPE, verb: "Restore", completed: true },
   { scope: TRASH_SCOPE, verb: "Restore", completed: false },
-])("a bulk $verb keeps the selection unless it completed (completed=$completed)", async ({ scope, verb, completed }) => {
-  const actions = fileActions(completed);
+])("one generic bulk $verb keeps the selection unless it completed (completed=$completed)", async ({ scope, verb, completed }) => {
+  const custom = vi.fn(async () => ({ data: {
+    [scope === TRASH_SCOPE ? "restore_record" : "trash_record"]: { ok: completed, message: completed ? "Done." : "Refused." },
+  } }));
   const controller = { rootId: "drive-a", selectedId: scope, uploadTarget: null } as StorageExplorerController;
   renderView(<ResourceViewProvider resource="storage.File">
-    <StorageListContent controller={controller} fileResource={undefined} navigationScope={null} fileActions={actions}
+    <StorageListContent controller={controller} fileResource={fileResource} navigationScope={null}
       uploads={{ tasks: [], upload: vi.fn(), retry: vi.fn(), clearFinished: vi.fn() }} onListStateChange={() => undefined} />
-  </ResourceViewProvider>, [{ ...file("file-a", "Alpha"), is_trashed: scope === TRASH_SCOPE }]);
+  </ResourceViewProvider>, [{ ...file("file-a", "Alpha"), is_trashed: scope === TRASH_SCOPE }], { custom });
   const select = () => within(screen.getByText("Alpha").closest("tr")!).getByRole("checkbox", { name: "Select row" });
   await screen.findByText("Alpha");
   fireEvent.click(select());
-  fireEvent.click(await screen.findByRole("button", { name: verb }));
-  await waitFor(() => expect(scope === TRASH_SCOPE ? actions.restoreMany : actions.trashMany).toHaveBeenCalledWith(new Set(["file-a"])));
+  expect(screen.getAllByRole("button", { name: verb })).toHaveLength(1);
+  expect(screen.queryByRole("button", { name: "Delete" })).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: verb }));
+  if (scope === ALL_SCOPE) {
+    const dialog = await screen.findByRole("alertdialog");
+    fireEvent.click(within(dialog).getByRole("button", { name: "Move to trash" }));
+  }
+  await waitFor(() => expect(custom).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+    payload: expect.objectContaining({ target_type: "storage/file", target_id: "file-a" }),
+  })));
+  await screen.findByText(completed
+    ? scope === TRASH_SCOPE ? "Restored 1 record from the trash." : "Moved 1 record to the trash."
+    : "1 record was refused.");
   await waitFor(() => expect(select().getAttribute("aria-checked")).toBe(String(!completed)));
 });

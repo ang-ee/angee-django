@@ -2,7 +2,6 @@
 
 import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
 import {
-  ModelMetadataProvider,
   ResourceQuery,
   refineResourceName,
   schemaFieldMetadataFromDataResources,
@@ -10,7 +9,9 @@ import {
   type Row,
 } from "@angee/metadata";
 import type { ReactNode } from "react";
-import { beforeEach, describe, expect, test, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
+
+import { createUiTestProviders } from "../../testing";
 
 import type { BoardViewProps } from "./BoardView";
 import type { ColumnDescriptor } from "../page";
@@ -100,6 +101,9 @@ vi.mock("./useBulkDelete", () => ({
 }));
 
 import { ListView } from "./ListView";
+
+const { Provider, clearClients } = createUiTestProviders({ apiUrl: "test://board-lanes" });
+afterEach(() => { cleanup(); clearClients(); });
 
 beforeEach(() => {
   harness.boardProps = null;
@@ -492,7 +496,7 @@ function renderLeadBoard(options: {
     : { field: "stage" };
   const metadata = options.metadata ?? leadMetadata();
   return render(
-    <ModelMetadataProvider metadata={metadata}>
+    <Provider metadata={metadata}>
       <ListView<LeadRow>
         resource="crm.Lead"
         columns={options.columns ?? COLUMNS}
@@ -503,7 +507,7 @@ function renderLeadBoard(options: {
         cardActions={options.cardActions}
         scope="local"
       />
-    </ModelMetadataProvider>,
+    </Provider>,
   );
 }
 

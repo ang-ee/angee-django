@@ -1,41 +1,24 @@
 import * as React from "react";
-import {
-  useCan,
-  useInvalidate,
-} from "@refinedev/core";
+import { useCan } from "@refinedev/core";
 import {
   useAngeeDeletePreview,
   type DeletePreview,
   type DeletePreviewGroup,
   type DeletePreviewNode,
 } from "@angee/refine";
-import {
-  refineResourceName,
-} from "@angee/metadata";
-import {
-  useModelMetadata,
-} from "@angee/metadata";
-import {
-  useModelRootFields,
-} from "@angee/metadata";
+import { allowsRecordPermission, refineResourceName, rowPublicId, useModelMetadata, useModelRootFields, type Row } from "@angee/metadata";
 
 import { errorMessage, useToast } from "../../feedback";
 import { useUiT } from "../../i18n";
 import { useDeletePreviewOperation } from "./resource-operations";
 import { useRuntimeViewAs } from "../../runtime";
 import { useLatestRef } from "../../lib/use-latest-ref";
-
-const BULK_DELETE_PREVIEW_LIMIT = 25;
-
-interface PreviewEntry {
-  id: string;
-  preview: DeletePreview;
-}
+import { BULK_ACTION_LIMIT, settleBulkRows, type BulkActionRunner } from "./bulk-action";
 
 interface BulkPreviewState {
   preview: DeletePreview;
   selectedIds: readonly string[];
-  blockedIds: readonly string[];
+  blockedCount: number;
   overflowCount: number;
 }
 
@@ -53,12 +36,17 @@ export interface UseBulkDeleteResult {
 }
 
 /**
+ * Preview and confirm only the bounded selection through the surface's shared
+ * runner. Its completion callback receives successful ids; refused, failed and
+ * overflow rows remain selected. The runner stays reserved through confirmation.
  * @owner ListView
  */
 export function useBulkDelete(
   resource: string,
   selectedIds: ReadonlySet<string>,
-  clearSelectedIds: () => void,
+  bulk: BulkActionRunner,
+  /** Selection snapshots; a record form checks its own loaded row before exposing Delete. */
+  selectedRows?: readonly Row[],
 ): UseBulkDeleteResult {
   const viewAs = useLatestRef(useRuntimeViewAs());
   const t = useUiT();
@@ -66,6 +54,12 @@ export function useBulkDelete(
   const rootFields = useModelRootFields(resource);
   const metadata = useModelMetadata(resource);
   const dataResource = metadata?.resource ?? null;
+  const declaresPermissions = Boolean(metadata?.fields.permissions);
+  const selectedIdList = React.useMemo(() => {
+    if (!selectedRows) return [...selectedIds];
+    const rows = new Map(selectedRows.map((row) => [rowPublicId(row), row]));
+    return [...selectedIds].filter((id) => allowsRecordPermission(rows.get(id), "delete", declaresPermissions));
+  }, [declaresPermissions, selectedIds, selectedRows]);
   const deletePreviewOperation = useDeletePreviewOperation(dataResource);
   const refineResource = refineResourceName(dataResource);
   const deleteAccess = useCan({
@@ -75,96 +69,100 @@ export function useBulkDelete(
   });
   const canDelete =
     (rootFields === null || Boolean(rootFields.deletePreview))
-    && (deleteAccess.data?.can ?? true);
+    && (deleteAccess.data?.can ?? true)
+    && (selectedRows === undefined || selectedIdList.length > 0);
   const deletePreview = useAngeeDeletePreview(deletePreviewOperation.target, {
     document: deletePreviewOperation.document,
   });
-  const invalidate = useInvalidate();
   const mutate = React.useCallback(
     async ({ id, confirm }: { id: string; confirm?: boolean }) => {
-      if (viewAs.current.viewAs || viewAs.current.pending) return null;
+      if (viewAs.current.viewAs || viewAs.current.pending) throw new Error(t("viewAs.readOnly"));
       if (!canDelete) {
         throw new Error(`Delete mutation for "${resource}" is disabled.`);
       }
       if (!dataResource) {
         throw new Error(`Resource metadata for "${resource}" is not available.`);
       }
-      const preview = await deletePreview.mutate({ id, confirm });
-      if (confirm === true) {
-        await invalidate({
-          resource: refineResourceName(dataResource),
-          dataProviderName: dataResource.schemaName,
-          id,
-          invalidates: ["list", "many", "detail"],
-        });
-      }
+      const preview = await deletePreview.mutate({ id, confirm }, { errorNotification: false });
+      if (!preview) throw new Error(t("deletePreview.emptyPreview"));
       return preview;
     },
     [
       canDelete,
       dataResource,
       deletePreview.mutate,
-      invalidate,
       viewAs,
       resource,
+      t,
     ],
-  );
-  const selectedIdList = React.useMemo(
-    () => [...selectedIds],
-    [selectedIds],
   );
   const [previewState, setPreviewState] =
     React.useState<BulkPreviewState | null>(null);
   const [previewPending, setPreviewPending] = React.useState(false);
   const [deletePending, setDeletePending] = React.useState(false);
   const requestIdRef = React.useRef(0);
+  const confirmation = React.useRef<((confirmed: boolean) => void) | null>(null);
 
   React.useEffect(() => {
     return () => {
       requestIdRef.current += 1;
+      confirmation.current?.(false);
+      confirmation.current = null;
     };
   }, []);
 
   const deleteInitiate = React.useCallback(() => {
     if (viewAs.current.viewAs || viewAs.current.pending) return;
-    if (!canDelete || selectedIdList.length === 0) return;
-    const requestId = requestIdRef.current + 1;
-    requestIdRef.current = requestId;
-    const previewedIds = selectedIdList.slice(0, BULK_DELETE_PREVIEW_LIMIT);
+    if (!canDelete || selectedIdList.length === 0 || bulk.pending) return;
+    let requestId: number | undefined;
+    const previewedIds = selectedIdList.slice(0, BULK_ACTION_LIMIT);
     const overflowCount = Math.max(
       0,
       selectedIdList.length - previewedIds.length,
     );
-    setPreviewPending(true);
-    void Promise.all(
-      previewedIds.map(async (id): Promise<PreviewEntry | null> => {
-        const preview = await mutate({ id, confirm: false });
-        return preview ? { id, preview } : null;
-      }),
-    )
-      .then((entries) => {
-        if (requestIdRef.current !== requestId) return;
-        const previews = entries.filter(
-          (entry): entry is PreviewEntry => entry !== null,
-        );
-        if (previews.length === 0) {
-          toast.danger({
-            title: t("deletePreview.failedTitle"),
-            description: t("deletePreview.emptyPreview"),
-          });
-          return;
+    const refusals = new Map<string, string>();
+    const failures = new Map<string, string>();
+    void bulk.run({
+      ids: selectedIdList,
+      confirm: async () => {
+        requestId = ++requestIdRef.current;
+        setPreviewPending(true);
+        const entries = await settleBulkRows(previewedIds, (id) => mutate({ id, confirm: false }));
+        if (requestIdRef.current !== requestId) return false;
+        const previews: DeletePreview[] = [];
+        for (const { id, result } of entries) {
+          if (result.status === "rejected") {
+            failures.set(id, errorMessage(result.reason, t("deletePreview.loadError")));
+          } else {
+            previews.push(result.value);
+            if (result.value.hasBlockers) refusals.set(id, deleteRefusal(result.value, t));
+          }
         }
-        const blockedIds = previews
-          .filter((entry) => entry.preview.hasBlockers)
-          .map((entry) => entry.id);
+        const preview = aggregatePreviews(previews, overflowCount, t);
+        const blockedCount = refusals.size + failures.size;
         setPreviewState({
-          preview: aggregatePreviews(previews, overflowCount, t),
+          preview: { ...preview, hasBlockers: blockedCount > 0,
+            refusals: [...new Set([...preview.refusals, ...refusals.values(), ...failures.values()])] },
           selectedIds: selectedIdList,
-          blockedIds,
+          blockedCount,
           overflowCount,
         });
-      })
+        setPreviewPending(false);
+        return new Promise<boolean>((resolve) => { confirmation.current = resolve; });
+      },
+      perform: async (id) => {
+        const failure = failures.get(id);
+        if (failure) throw new Error(failure);
+        const refusal = refusals.get(id);
+        if (refusal) return { status: "refused", reason: refusal };
+        const preview = await mutate({ id, confirm: true });
+        if (preview.hasBlockers) return { status: "refused", reason: deleteRefusal(preview, t) };
+      },
+      done: (count) => t("deletePreview.recordsDeleted", { count }),
+      failed: () => t("deletePreview.noRecordsDeleted"),
+    })
       .catch((error: unknown) => {
+        if (requestIdRef.current !== requestId) return;
         toast.danger({
           title: t("deletePreview.failedTitle"),
           description: errorMessage(
@@ -174,64 +172,34 @@ export function useBulkDelete(
         });
       })
       .finally(() => {
-        if (requestIdRef.current === requestId) setPreviewPending(false);
+        if (requestIdRef.current !== requestId) return;
+        confirmation.current = null;
+        setPreviewState(null);
+        setPreviewPending(false);
+        setDeletePending(false);
       });
-  }, [canDelete, mutate, viewAs, selectedIdList, toast, t]);
+  }, [bulk.pending, bulk.run, canDelete, mutate, viewAs, selectedIdList, toast, t]);
 
   const onCancel = React.useCallback(() => {
     if (deletePending) return;
-    requestIdRef.current += 1;
-    setPreviewState(null);
-    setPreviewPending(false);
+    confirmation.current?.(false);
+    confirmation.current = null;
   }, [deletePending]);
 
   const onConfirm = React.useCallback(() => {
     const state = previewState;
     if (!canDelete || !state || deletePending || viewAs.current.viewAs || viewAs.current.pending) return;
-    const blocked = new Set(state.blockedIds);
-    const idsToDelete = state.selectedIds.filter((id) => !blocked.has(id));
-    if (idsToDelete.length === 0) return;
-    const requestId = requestIdRef.current + 1;
-    requestIdRef.current = requestId;
+    if (state.blockedCount >= Math.min(state.selectedIds.length, BULK_ACTION_LIMIT) || !confirmation.current) return;
     setDeletePending(true);
-    void Promise.all(
-      idsToDelete.map(async (id) => {
-        try {
-          const preview = await mutate({ id, confirm: true });
-          return { id, preview, error: null };
-        } catch (error: unknown) {
-          return { id, preview: null, error };
-        }
-      }),
-    )
-      .then((results) => {
-        if (requestIdRef.current !== requestId) return;
-        const blockedByDelete = results.filter(
-          (result) => result.preview?.hasBlockers,
-        ).length;
-        const failed = results.filter((result) => result.error).length;
-        const deleted = results.length - blockedByDelete - failed;
-        clearSelectedIds();
-        setPreviewState(null);
-        toastDeleteOutcome({
-          toast,
-          deleted,
-          blocked: state.blockedIds.length + blockedByDelete,
-          failed,
-          overflowCount: state.overflowCount,
-          t,
-        });
-      })
-      .finally(() => {
-        if (requestIdRef.current === requestId) setDeletePending(false);
-      });
-  }, [canDelete, clearSelectedIds, deletePending, mutate, viewAs, previewState, toast, t]);
+    confirmation.current(true);
+    confirmation.current = null;
+  }, [canDelete, deletePending, viewAs, previewState]);
 
   return {
     previewState: previewState?.preview ?? null,
-    previewRecordCount: previewState?.selectedIds.length ?? 0,
+    previewRecordCount: Math.min(previewState?.selectedIds.length ?? 0, BULK_ACTION_LIMIT),
     previewOverflowCount: previewState?.overflowCount ?? 0,
-    previewBlockedRecordCount: previewState?.blockedIds.length ?? 0,
+    previewBlockedRecordCount: previewState?.blockedCount ?? 0,
     isPreviewOpen: previewState !== null,
     isPending: previewPending || deletePending,
     canDelete,
@@ -242,21 +210,21 @@ export function useBulkDelete(
 }
 
 function aggregatePreviews(
-  entries: readonly PreviewEntry[],
+  entries: readonly DeletePreview[],
   overflowCount: number,
   t: ReturnType<typeof useUiT>,
 ): DeletePreview {
-  const roots = entries.map((entry) => entry.preview.root);
+  const roots = entries.map((entry) => entry.root);
   return {
     totalDeletedCount: entries.reduce(
-      (total, entry) => total + entry.preview.totalDeletedCount,
+      (total, entry) => total + entry.totalDeletedCount,
       0,
     ),
-    deleted: aggregateGroups(entries.flatMap((entry) => entry.preview.deleted)),
-    updated: aggregateGroups(entries.flatMap((entry) => entry.preview.updated)),
-    blocked: aggregateGroups(entries.flatMap((entry) => entry.preview.blocked)),
-    refusals: [...new Set(entries.flatMap((entry) => entry.preview.refusals))],
-    hasBlockers: entries.some((entry) => entry.preview.hasBlockers),
+    deleted: aggregateGroups(entries.flatMap((entry) => entry.deleted)),
+    updated: aggregateGroups(entries.flatMap((entry) => entry.updated)),
+    blocked: aggregateGroups(entries.flatMap((entry) => entry.blocked)),
+    refusals: [...new Set(entries.flatMap((entry) => entry.refusals))],
+    hasBlockers: entries.some((entry) => entry.hasBlockers),
     root: aggregateRoot(roots, overflowCount, t),
   };
 }
@@ -297,37 +265,6 @@ function aggregateGroups(
     .map(([label, count]) => ({ label, count }));
 }
 
-function toastDeleteOutcome({
-  toast,
-  deleted,
-  blocked,
-  failed,
-  overflowCount,
-  t,
-}: {
-  toast: ReturnType<typeof useToast>;
-  deleted: number;
-  blocked: number;
-  failed: number;
-  overflowCount: number;
-  t: ReturnType<typeof useUiT>;
-}) {
-  const details = [
-    blocked > 0 ? t("deletePreview.blockedDetail", { count: blocked }) : "",
-    failed > 0 ? t("deletePreview.failedDetail", { count: failed }) : "",
-    overflowCount > 0
-      ? t("deletePreview.notPreviewedDetail", { count: overflowCount })
-      : "",
-  ].filter(Boolean);
-  const options = {
-    title: deleted === 0
-      ? t("deletePreview.noRecordsDeleted")
-      : t("deletePreview.recordsDeleted", { count: deleted }),
-    ...(details.length > 0 ? { description: details.join(". ") } : {}),
-  };
-  if (deleted > 0 && details.length === 0) {
-    toast.success(options);
-    return;
-  }
-  toast.warning(options);
+function deleteRefusal(preview: DeletePreview, t: ReturnType<typeof useUiT>): string {
+  return preview.refusals[0] || preview.blocked[0]?.label || t("deletePreview.blockedGeneric");
 }

@@ -3,6 +3,19 @@ import { describe, expect, test } from "vitest";
 import { defineAngeeSchemaMetadata, resourceOperationTarget, schemaFieldMetadataFromDataResources, schemaFieldMetadataWithVocabulary } from "./artifact";
 import { testDataResource } from "./testing";
 
+test("archive classification is a validated Boolean preserved in model field metadata", () => {
+  const resource = testDataResource("example.Record", { fields: [{
+    name: "is_archived", kind: "scalar", scalar: "Boolean", archivable: true,
+    readable: true, aggregatable: false, creatable: false, updatable: false, requiredOnCreate: false,
+  }] });
+  const parsed = defineAngeeSchemaMetadata({ angee: { resources: [resource] } });
+  const resources = parsed.angee?.resources ?? [];
+  expect(schemaFieldMetadataFromDataResources(resources).labels[resource.modelLabel]?.fields.is_archived?.archivable).toBe(true);
+  expect(() => defineAngeeSchemaMetadata({ angee: { resources: [{ ...resource,
+    fields: resource.fields?.map((field) => ({ ...field, archivable: "yes" })),
+  }] } })).toThrow(/archivable/);
+});
+
 test("scoped vocabulary projects labels without altering resource or query identity", () => {
   const resource = testDataResource("notes.Note", { fields: [{ name: "title", kind: "scalar", scalar: "String", readable: true,
     aggregatable: false, creatable: false, updatable: false, requiredOnCreate: false }] });

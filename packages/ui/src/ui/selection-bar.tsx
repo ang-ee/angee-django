@@ -11,13 +11,13 @@ import { CountBadge } from "./count-badge";
  */
 export const selectionBarVariants = tv({
   slots: {
-    root: "inline-flex h-10 max-w-full items-center gap-3 rounded-8 px-3 shadow-popover",
+    root: "inline-flex min-h-10 max-w-full shrink-0 flex-wrap items-center gap-x-3 gap-y-1 rounded-8 px-3 py-1 shadow-popover",
     count:
       "inline-flex shrink-0 items-center gap-1.5 text-13 font-semibold tabular-nums",
     countBadge: "",
     summary: "min-w-0 truncate text-13 font-medium",
     separator: "h-4 w-px shrink-0",
-    actions: "flex shrink-0 items-center gap-1",
+    actions: "flex min-w-0 max-w-full flex-wrap items-center gap-1",
     action:
       "h-8 border-transparent px-2 text-13 focus-visible:focus-ring [&_.glyph]:size-4 [&_svg]:size-4",
   },

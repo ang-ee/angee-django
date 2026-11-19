@@ -1,5 +1,5 @@
 import * as React from "react";
-import { ResourceQuery, rowPublicId, useModelMetadata, type Row } from "@angee/metadata";
+import { ResourceQuery, rowPublicId, unarchivedFilter, useModelMetadata, type Row } from "@angee/metadata";
 import { MAX_PAGE_SIZE } from "@angee/refine";
 import { useNavigate } from "@tanstack/react-router";
 import { useInAppNavigator } from "../../lib/in-app-link";
@@ -9,6 +9,7 @@ import { useStatusTone } from "../../widgets/use-status-tone";
 import { relationValueId } from "../../widgets/types";
 import { errorFromUnknown } from "../../data/errors";
 import { ResourceListFrame } from "../resource/ResourceListFrame";
+import { ResourceViewArchiveScopeContext } from "../resource/surface/archive-scope";
 import { useResourceSearch } from "../resource/search/use-resource-search";
 import { useSearchCatalog, type UseSearchCatalogInput } from "../resource/search/catalog";
 import type { ResourceToolbarProps } from "../../toolbars";
@@ -37,6 +38,7 @@ export function LinkedGanttCollectionSurface<TRow extends Row>({
   toolbarActions, className, presentation, toolbarWrap, maxGroupDepth, onRowClick, rowHref, selectable,
 }: LinkedGanttCollectionSurfaceProps<TRow>) {
   const t = useUiT();
+  const archiveScope = React.useContext(ResourceViewArchiveScopeContext);
   const navigate = useNavigate();
   const navigateInApp = useInAppNavigator();
   const resolveTone = useStatusTone();
@@ -71,15 +73,16 @@ export function LinkedGanttCollectionSurface<TRow extends Row>({
       if (barQuery.relation(linked.lane)?.model !== laneResource?.modelLabel) {
         throw new Error(`Gantt linked field "${linked.lane}" must reference "${laneResource?.modelLabel}".`);
       }
+      const filter = ganttLaneFilter(barQuery, linked.lane, laneIds, linked.filter);
       return {
         fields: [barQuery.contract.identity.field, gantt.start, gantt.end, barLabel, ...(gantt.tone ? [gantt.tone] : []), ...barQuery.selection([{ field: linked.lane }])],
-        filter: laneIds.length ? ganttLaneFilter(barQuery, linked.lane, laneIds, linked.filter) : undefined,
+        filter: archiveScope ? unarchivedFilter(barResource, filter) : filter,
         error: null,
       };
     } catch (cause) {
       return { fields: [], filter: undefined, error: errorFromUnknown(cause) };
     }
-  }, [barQuery, laneQuery, linked, gantt.start, gantt.end, gantt.tone, barLabel, laneIds, laneResource?.modelLabel]);
+  }, [barQuery, barResource, laneQuery, linked, gantt.start, gantt.end, gantt.tone, barLabel, laneIds, laneResource?.modelLabel, archiveScope]);
   const barFields = useValueStable(barSource.fields);
   const bars = useGanttRecords({ resource: barResource, fields: barFields, filter: barSource.filter,
     enabled: Boolean(barResource && laneIds.length && !barSource.error) });

@@ -18,7 +18,7 @@ const query = ResourceQuery.forRows({ fields: {
   id: { scalar: "ID" }, title: { scalar: "String" }, preview: { scalar: "String" },
   created_at: { scalar: "DateTime" }, sent_at: { scalar: "DateTime" }, starred: { scalar: "Boolean" },
   revision: { scalar: "Int" }, permissions: { scalar: "String" },
-  is_held: { scalar: "Boolean" },
+  is_held: { scalar: "Boolean" }, is_trashed: { scalar: "Boolean" },
   channel: { kind: "relation", identityPath: "channel.id", labelPath: "channel.display_name" },
 } }).contract;
 query.fields.channel!.relation = { model: "messaging.Channel", identityPath: "channel.id", labelPath: "channel.display_name" };
@@ -29,8 +29,10 @@ const fields: DataResourceFieldMetadata[] = Object.entries(query.fields).map(([n
   name, kind: field.kind === "relation" ? "relation" : "scalar", scalar: field.scalar,
   readable: true, creatable: false, updatable: false, aggregatable: false, requiredOnCreate: false,
   ...(name === "channel" ? { relationModelLabel: "messaging.Channel", relationObject: true } : {}),
+  ...(name === "is_trashed" ? { trashable: true } : {}),
 }));
 const resource = testDataResource("messaging.Message", {
+  resourceType: "messaging/message",
   roots: { groups: "messages_groups", aggregate: "messages_aggregate", deletePreview: "preview_delete_message", update: undefined, create: undefined },
   capabilities: ["list", "detail", "delete"], fields, query, recordRepresentation: "title",
   typeNames: { filter: "MessageBoolExp", order: "MessageOrderBy" },
@@ -263,7 +265,7 @@ test("while the action limit loads both verbs are busy, with no reason copy", as
   expect(f.mutations()).toHaveLength(0);
 });
 
-test("a Message record reads like an email, previews an attachment beside the body and stars it for its reader", async () => {
+test.each([false, true])("a Message record reads like an email, offers shared moderation unless readOnly=%s, and stars for its reader", async (readOnly) => {
   const message = {
     id: "msg-1", platform: null, thread: null, parent: null, channel: { id: "channel", display_name: "AP mailbox" },
     title: "Invoice 42", preview: "Please find the invoice attached.", starred: false, sender: SENDER,
@@ -277,10 +279,23 @@ test("a Message record reads like an email, previews an attachment beside the bo
   const custom = vi.fn(async ({ meta }: { meta?: Record<string, unknown> }) => meta?.gqlMutation
     ? { data: { set_inbox_message_starred: { id: message.id, starred: true } } }
     : { data: { messages: [message] } });
-  mount(() => <messageForm.Component resource="messaging.Message" id="msg-1" readOnly />, {
-    getOne: vi.fn(async () => ({ data: { id: message.id, title: message.title } })), custom,
-  });
+  const getOne = vi.fn(async () => ({ data: {
+    id: message.id, title: message.title, is_trashed: false, permissions: ["read", "delete"],
+  } }));
+  mount(() => <messageForm.Component resource="messaging.Message" id="msg-1" readOnly={readOnly} />, { getOne, custom });
   expect(await screen.findByText("The complete retained message body.")).toBeTruthy();
+  expect(getOne).toHaveBeenCalledWith(expect.objectContaining({ meta: expect.objectContaining({
+    fields: expect.arrayContaining(["is_trashed", "permissions"]),
+  }) }));
+  if (readOnly) {
+    expect(screen.queryByRole("button", { name: "Actions" })).toBeNull();
+  } else {
+    fireEvent.click(await screen.findByRole("button", { name: "Actions" }));
+    await screen.findByRole("menuitem", { name: "Move to trash" });
+    expect(screen.getAllByRole("menuitem", { name: "Move to trash" })).toHaveLength(1);
+    fireEvent.keyDown(screen.getByRole("menu"), { key: "Escape" });
+    await waitFor(() => expect(screen.queryByRole("menu")).toBeNull());
+  }
   for (const text of ["Billing Desk", "billing@example.test", "To Accounts"]) expect(screen.getByText(text)).toBeTruthy();
   expect(screen.queryByRole("complementary", { name: "Attachment preview" })).toBeNull();
   fireEvent.click(screen.getByRole("button", { name: "invoice.pdf" }));

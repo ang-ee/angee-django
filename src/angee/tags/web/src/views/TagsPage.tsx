@@ -17,7 +17,7 @@ export function TagsPage(): React.ReactElement {
   const scopeColumnEntries = useContainer("tags.tags#columns");
   return (
     <ResourceList resource={TAG_MODEL} form={tagForm} placement="inline" routed>
-      <List resource={TAG_MODEL} defaultGroup={{ field: "is_archived" }}>
+      <List resource={TAG_MODEL}>
         <Facet field="category" label={t("col.category")} />
         {containerContents(scopeFacetEntries)}
         <Column field="name" header={t("col.name")} />

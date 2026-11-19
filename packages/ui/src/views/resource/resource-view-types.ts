@@ -372,7 +372,8 @@ export interface ListViewProps<TRow extends Row = Row> {
    * must validate them, for example by revision. Surfaces sharing a selection
    * scope share its snapshots: a row selected through a sibling surface carries
    * that surface's fields, so actions must check the fields they need.
-   * Rendered content replaces generic delete; null, undefined or false keeps it. */
+   * Rendered content precedes the generic metadata-driven Archive, Trash/Restore
+   * and Delete actions. A source list receives only these page-owned actions. */
   bulkActions?: (
     selectedIds: ReadonlySet<string>,
     clear: () => void,

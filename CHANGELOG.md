@@ -10,6 +10,51 @@ live in code docstrings.
 
 ## Unreleased — shared addon contracts, native embeddings and graph retrieval
 
+- Record verbs, Delete, Archive and Trash are supplied by the shared views
+  instead of each page.
+  - **Toolbar.** A form's verb is a button when it declares `primary` (which now
+    implies the toolbar; `placement="toolbar"` beside it is redundant) or is the
+    form's only visible, unplaced, non-danger verb on a saved record. The
+    2026-10-01 rule put every unplaced verb in `⋮`, which left most single-verb
+    forms with a bare menu. A verb contributed through `#sections` stays in the
+    menu unless it declares a placement.
+  - **Delete.** `hasura_model_resource(delete=True)` generates
+    `<res>_delete(id, confirm): DeletePreview`, served by the write backend's
+    `delete_preview`, which `delete` composes; a `delete=True` resource whose
+    backend lacks it fails at composition. The shared UI therefore offers Delete
+    on every deletable resource. **Upgrade:** authored previews are removed and
+    their roots renamed (`delete_calendar` → `calendars_delete`,
+    `delete_calendar_event` → `calendar_events_delete`, `delete_agent` →
+    `agents_delete`, `delete_user` → `users_delete`, `delete_vault` →
+    `vaults_delete`, `delete_page` → `pages_delete`, `delete_folder` →
+    `folders_delete`, `delete_channel` → `channels_delete`, `delete_note` →
+    `notes_delete`, `delete_external_account` → `external_accounts_delete`,
+    `delete_credential` → `credentials_delete`); a consumer's authored preview on
+    a `delete=True` resource collides with the generated one and is deleted; a
+    custom delete moves into its write backend's `delete_preview`.
+  - **Not delete surfaces.** The `integrations` inventory and the storage
+    `files` resource are `delete=False`: deleting a channel's inventory row
+    skipped its purge, and a file's delete was already the move to trash.
+    `delete_integrations_by_pk`, `delete_files_by_pk` and `delete_file` are gone;
+    a file is removed through `trash_record`.
+  - **Archive.** A resource whose update root accepts its `archivable` flag gets
+    Archive / Unarchive on the record and the selection bar, and an Archived
+    header chip. Archived rows leave default lists, dashboards and relation
+    pickers unless a filter names the flag; every such list offers an
+    "Archived" filter. Pages drop their `is_archived` checkbox, grouping and
+    picker filter.
+  - **Trash.** A trashable resource gets Move to trash / Restore the same way,
+    and its Delete is offered only for a row already in the trash.
+    `useTrashActions` is no longer exported: the form supplies it. `trashable`
+    is advertised only by the resource whose model stores the flag.
+  - **Bulk.** A page's `bulkActions` are added to the generic actions and no
+    longer replace Delete. Bulk is a client fan-out over the single verb,
+    bounded at 25 rows a click.
+  - Deferred: permanent delete from the trash, a transactional bulk verb,
+    `permissions` on master-data nodes, and a delete of their own for
+    `parties.Directory`, `posts.Feed` and `calendar.CalendarSource`, which were
+    deletable only through the inventory root.
+
 - Addons require django-compose 0.1.0.dev13, whose snapshot digest covers each
   addon's resolved path. A host that changes its sync from `--no-editable` to
   editable, or moves a source checkout, now recomposes on `compose --if-stale`;

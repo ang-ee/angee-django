@@ -1,10 +1,11 @@
 import * as React from "react";
-import { type QueryFilter, type ResourceQuery, type ModelMetadata, type Row } from "@angee/metadata";
+import { unarchivedFilter, type QueryFilter, type ResourceQuery, type ModelMetadata, type Row } from "@angee/metadata";
 import { stableKey } from "@angee/refine";
 import { functionalUpdate, type ColumnDef, type OnChangeFn, type PaginationState, type RowSelectionState, type SortingState, type Table, type VisibilityState } from "@tanstack/react-table";
 import { filterForResourceTextSearch, queryForColumns } from "../resource-query";
 import { errorFromUnknown } from "../../../data/errors";
 import type { ResourceViewContextValue } from "../resource-view-context";
+import { ResourceViewArchiveScopeContext } from "./archive-scope";
 import { Filter, type ResourceListOrder, type ResourceViewGroup } from "../resource-view-model";
 import { buildColumns, withQueryOnlyColumnsHidden } from "../resource-view-list-body";
 import type { ColumnDescriptor } from "../../page";
@@ -152,16 +153,20 @@ export function useResourceViewQueryFacts<TRow extends Row>({
   mergedFilter: QueryFilter;
   sortOrder: ResourceListOrder | undefined;
 } {
+  const archiveScope = React.useContext(ResourceViewArchiveScopeContext);
   const requestedFields = React.useMemo(
     () => requestedFieldPaths(columns, fields, modelMetadata, laneSource, groupStack),
     [columns, fields, laneSource, modelMetadata, groupStack],
   );
   const mergedFilter = React.useMemo(
-    () => filterForResourceTextSearch(
-      modelMetadata,
-      Filter.combineOptional(filter, Filter.combineOptional(resourceView.baseFilter, resourceView.state.filter)),
-    ),
-    [filter, resourceView.state.filter, resourceView.baseFilter, modelMetadata],
+    () => {
+      const merged = filterForResourceTextSearch(
+        modelMetadata,
+        Filter.combineOptional(filter, Filter.combineOptional(resourceView.baseFilter, resourceView.state.filter)),
+      );
+      return archiveScope ? unarchivedFilter(modelMetadata?.resource, merged) : merged;
+    },
+    [archiveScope, filter, resourceView.state.filter, resourceView.baseFilter, modelMetadata],
   );
   const sortOrder = React.useMemo(
     () => {

@@ -295,7 +295,12 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
   holds selection: entering another inherited scope or selecting at the owner
   clears the previous scope. Collection changes clear them before children
   render; returning to an inherited base-filter scope after entering another
-  never revives its old selection. See the
+  never revives its old selection. Resource metadata supplies the selection bar's
+  generic Archive/Unarchive, Move to trash/Restore and Delete actions. Bulk is a
+  bounded client fan-out over each single-record verb: successful rows leave the
+  selection, refused, failed, unobserved and overflow rows stay, and one refresh
+  and toast settle the run. One runner belongs to the list; generic actions and
+  Clear stay disabled through its preview, confirmation and writes. See the
   [selection and bulk-action contracts](../../packages/ui/src/views/resource/resource-view-context.tsx)
   and [list declarations](../../packages/ui/src/views/resource/resource-view-types.ts).
 - **Derive during render.** Do not store `filteredRows`, selected records,
@@ -704,14 +709,20 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
   or local copies of shared resource-view state.
 - **A list selects only declared fields.** The selection owner
   (`requestedFieldPaths`) fetches the paths its columns declare plus the
-  `ListView fields={[…]}` extras and nothing else; a render callback reads only
-  those fields.
+  `ListView fields={[…]}` extras and shared resource requirements, including the
+  archive and trash flags used by generic actions. A render callback reads only
+  its declared fields.
 - A row verb is a `rowActions` declaration on `ListView`/`RowsListView`, never a
   hand-rolled trailing column with local `useConfirm`/`toast.danger` ceremony.
   Declare `presentation="icon"`, `"label"`, or `"both"`; labelled text is the default
   because a verb must remain understandable without recognizing its icon.
   Mark the state's next descriptor `primary`; keep infrequent descriptors at
   `placement: "menu"`. Secondary inline verbs appear on hover and focus.
+- A page's `bulkActions` render first, added to the generic actions derived from
+  resource metadata; they never replace them. A list with a `source` receives
+  only its page's actions. Generic bulk actions share the bounded single-verb
+  fan-out in [the bulk owner](../../packages/ui/src/views/resource/bulk-action.ts),
+  including the view-as write guard; they introduce no server bulk verb.
 - Editable lines are the data view in edit mode; compose `RowsListView` and its column, visibility, action, reorder and footer seams, never form-local tables.
 - A list route declares its shipped `presetIds`, `search` shortcuts, `createAction`,
   and `boardCard` fields on `ResourceList`/`List`. Undeclared search shows the full
@@ -950,15 +961,27 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
   [FormView](../../packages/ui/src/views/form/form-view-surface.ts) selects
   required fields from the resolved children; authored fields and passive chrome
   remain host-owned.
-- **Record verbs compose the shared action owner.** The primary toolbar is
-  reserved for the subject model's lifecycle transitions, the ones its statusbar
-  explains (post, cancel); secondary lifecycle verbs and model-owned utilities
-  (pay, reverse, send, PDF, merge, download) live in the overflow menu; a
-  capability contributed to another model (run a workflow, rate, generate a
+- **Record verbs compose the shared action owner.** On a saved record, a form's
+  only visible, unplaced non-danger verb of its own is a secondary button when no
+  declared verb is already on the toolbar. Among several verbs, mark `primary`
+  the subject model's lifecycle transition that its statusbar explains (post,
+  confirm, cancel); leave secondary lifecycle verbs and model-owned utilities
+  (pay, reverse, send, PDF, merge, download) unmarked so they live in the overflow
+  menu. `primary` needs no `placement`; explicit placement wins, including
+  `placement="menu"` on a primary verb.
+  Lone-verb promotion counts only the form's own declared verbs in its command
+  band on a saved record. Visibility and permission are checked before counting;
+  danger verbs, explicitly placed verbs and generic Archive/Trash actions never
+  count. `#sections` action contributions default to `placement="menu"`, so they
+  neither promote themselves nor demote the form's own lone verb. `#actions`
+  and `#actions-menu` container children do not count, and everything inside an
+  `ActionMenu` stays in the menu.
+  A capability contributed to another model (run a workflow, rate, generate a
   delivery, read a file again) uses that model's overflow menu, never its
   toolbar. Classify an action by the subject it changes and its semantic owner:
   a bridge addon implementing an inherited lifecycle (connect a channel) is not
-  a foreign capability because it lives in another package. Process drill-ins
+  a foreign capability because it lives in another package. A contributed
+  capability uses its subject model's declared container. Process drill-ins
   expose the verbs of the inspected run, decision or changeset (answer, stop,
   retry, revert); collection controls stay with their collection. Every
   placement composes the shared action owner, projected permission/admission,
@@ -971,9 +994,8 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
   not effective access, a reader is not a subscriber, and following or being
   made a recipient never grants access. There is no Access aside tab and
   grants are not a Related group; a model's own audience and role adapters
-  (visibility, responders, rosters) compose the same Share owner. A verb
-  in the toolbar is a
-  `#actions` child and one in the overflow menu a `#actions-menu` child; either
+  (visibility, responders, rosters) compose the same Share owner. Contributed
+  toolbar verbs use `#actions` and overflow verbs use `#actions-menu`; either
   may render [RecordActionBar](../../packages/ui/src/views/form/RecordActionBar.tsx)
   with server-gated descriptors. [Record chrome](../../packages/ui/src/views/form/use-form-view-record-chrome.ts)
   carries the form's dirty/pending gate to toolbar and menu verbs. `<Action>`
@@ -990,13 +1012,44 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
   band. The command band itself takes no row while none of its items renders
   (a contribution that offers nothing renders `null`), and returns with the
   first one, an edit's Save and Discard included. Collection and transcript controls remain in their owning pane toolbar.
-- **Trash composes the shared owner.** A resource whose metadata marks a field
-  `trashable` gets Trash and Restore from [the trash module](../../packages/ui/src/views/resource/trash.tsx):
-  `useTrashActions` for record forms, `useTrashRowActions` for lists, and
-  `RemovedRecords` (or `RemovedDisclosure` + `RemovedItem` over rows a surface
-  already holds) for its "Removed (n)" list. Each offers its control by the
-  row's projected `delete`. A domain verb with its own transport, such as record
+- **The form supplies generic record actions from metadata.** Pages declare
+  nothing for Archive / Unarchive, Move to trash / Restore, or Delete. Archive
+  patches the `archivable` flag only when the resource's update root accepts it
+  and the form is writable and saves through that update root, without a custom
+  `submit`; an archived record carries an Archived header chip. Archive and Trash
+  require their flag to be selected as `false`; Unarchive and Restore require `true`.
+  Trash requires a `trashable` flag and a resource type and composes
+  [the shared trash verbs](../../packages/ui/src/views/resource/trash.tsx).
+  Delete requires the `deletePreview` root. On a trashable resource it is offered
+  only for records whose trash flag is `true`; bulk Delete previews and deletes
+  only those selected records. A resource without a trash flag keeps its existing
+  Delete rule. Trash and Delete require `delete`
+  when the model declares a `permissions` field, including when the read omits it;
+  for models without that field, the resource
+  capability gates the control and the server authorizes the write. These verbs
+  stay in the form's overflow menu after page and container verbs, with Delete
+  last. Removed-record lists compose `RemovedRecords` (or `RemovedDisclosure`
+  + `RemovedItem` over rows already held); list-row declarations compose
+  `useTrashRowActions`. A domain verb with its own transport, such as record
   chatter moderation, still asks through `useTrashPrompt`.
+- **Archived rows leave default collections; "Archived" is a shared filter.** A
+  resource whose metadata marks a field `archivable`, and whose query contract
+  supports an `exact` comparison on it, defaults to unarchived rows: shared
+  resource lists (tables, grouped lists, boards, gantt collections, aggregate
+  footers and facets), dashboard data and the relation picker's option search
+  apply [the scope](../../packages/metadata/src/query.ts) after combining their
+  filters. Any predicate on the resource's own archive flag, in any `AND`, `OR`
+  or `NOT` branch of the base, preset or editable filter, keeps the authored
+  filter instead; a relation path ending in the same field name does not. The
+  [search catalog](../../packages/ui/src/views/resource/search/catalog.ts)
+  offers "Archived" on every such list: it adds the true predicate to the
+  editable filter as a removable chip, and removing it restores the default. A
+  page declares no archive grouping, option or checkbox. The scope never
+  reaches identity reads, selected-relation labels, lane and facet catalogues, a
+  filter editor's value picker (`catalogue`), caller-supplied `RowsListView`
+  rows, the data provider, or a related list inside a saved record's chrome,
+  whose rows and count are the record's. The injected predicate is never a
+  chip, URL state or a saved favorite.
 - **Record rails reuse form fields.** Contribute a `FormView.RailGroup` as a
   `<model>#rail` child with standard field descriptors and optional
   group/row permissions. The form selects those fields and binds them to its
@@ -1302,9 +1355,11 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
 - **`ResourceList` owns the record surface.** Use a `<Form>` child or `formFields`
   for generated forms, including read-only records; use `renderRecord` for a
   domain-owned transcript or detail surface. An all-read-only form never assembles
-  an update mutation. Delete affordances are
-  schema-capability gated: if the resource has no `delete` root, `ResourceList`/`ListView`
-  omit record and bulk delete instead of requiring a delete-only `crud(...)`.
+  an update mutation. The form supplies metadata-driven Archive and Trash;
+  `ResourceList` binds its Delete through the shared preview owner. Delete
+  affordances require the `deletePreview` root, and record Delete also requires
+  `delete` when the model declares a `permissions` field. Pages declare no generic actions
+  and need no delete-only `crud(...)`.
 - **An addon contributes one menu root.** The app rail renders apps and their
   included, non-flattened sub-apps, at most two levels. The selected app's own
   items live in [`AppMenu`](../../packages/ui/src/chrome/AppMenu.tsx) in the top
