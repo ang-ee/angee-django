@@ -22,8 +22,8 @@ is a typed, directed party↔party edge whose vocabulary
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
-from dataclasses import replace
+from collections.abc import Iterable, Mapping, Sequence
+from dataclasses import asdict, replace
 from typing import Any, ClassVar, cast
 
 from django.apps import apps
@@ -941,6 +941,41 @@ class AddressManager[AddressT: Address](StatementSubjectManager[AddressT]):
 
         normalized = self._normalize_components(values)
         return tuple(normalized[field].casefold() for field in self.components)
+
+    def land_addresses(
+        self, party: Any, addresses: Iterable[Any], *, asserted_by: Any, link: Any, created_by_id: Any
+    ) -> list[AddressT]:
+        """State the addresses ``link`` names for ``party``; withdraw the link's others.
+
+        Each parsed address takes its stored form (:meth:`as_stored`) and matches a
+        row of the party by its identity (:meth:`identity_key`), repeated equal
+        addresses included, so a respelled address updates its row and keeps what
+        the source does not carry; an unmatched one is created. Only this link's
+        statements are withdrawn; rows are never deleted.
+        """
+
+        stored = list(self.model._base_manager.filter(party_id=party.pk).order_by("pk"))
+        landed: list[AddressT] = []
+        for parsed in addresses:
+            values = asdict(self.as_stored(parsed))
+            key = self.identity_key(values)
+            address = next(
+                (
+                    row
+                    for row in stored
+                    if row not in landed
+                    and self.identity_key({name: getattr(row, name) for name in self.components}) == key
+                ),
+                None,
+            )
+            if address is None:
+                address = self.create(party_id=party.pk, created_by_id=created_by_id, **values)
+            address.statements.set(aspect="address", values=values, asserted_by=asserted_by, link=link)
+            landed.append(address)
+        statements = self.model.statements
+        removed = statements.filter(link=link).exclude(subject_id__in=[row.pk for row in landed])
+        statements.withdraw(asserted_by, list(removed.values_list("subject_id", flat=True)), link=link)
+        return landed
 
     def lock_party(self, party_id: Any) -> None:
         """Serialize address writes for one party, including its first address."""

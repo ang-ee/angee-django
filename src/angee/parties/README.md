@@ -24,6 +24,17 @@ wholly withdrawn rows. [Handle sources](managers.py) compose `Party.statements`
 through the shared Handle, Party lock order; resolution owns the cross-party
 winner and derived counters outside Party history.
 
+[PartyManager.ingest_organization](managers.py) lands a `ParsedOrganization`
+from a directory stream the same way: it binds the link, mints an Organization
+for an unbound link (matching an existing one is not decided yet), and states the
+identity, the whole legal identity (legal name and domain together), handles and
+addresses; `organization_projection` is its comparison shape. Both verbs land
+addresses through `AddressManager.land_addresses`. Employment has one verb,
+[RelationshipManager.land_employment](managers.py): an employer is a tracked
+Organization or a free-text name, a link may name several, and the link's edges
+it no longer names lose its statement. Contact ingest and the social connections
+import both call it.
+
 A card's `PHOTO` is stored as the person's avatar through storage's idempotent
 `File.objects.ingest_image` before the page transaction; a photo storage refuses
 (not a raster image, or over `ANGEE_STORAGE_IMAGE_MAX_BYTES`) quarantines its
