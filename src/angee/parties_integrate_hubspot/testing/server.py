@@ -98,7 +98,8 @@ class HubSpotServer:
     account defines, ``None`` when the record states none, and leaves out a name
     it does not define, as HubSpot ignores one. The account answers token
     introspection, account details, list pages (by id, ``archived`` lists the
-    soft-deleted), searches and batch reads (207 with an error per category). A
+    soft-deleted), searches (with their ``total``) and batch reads (207 with one
+    error per category, naming its ids in ``context.ids``, and ``numErrors``). A
     search takes ``EQ`` and ``GT`` filters on the modified time (epoch
     milliseconds) or the record id, requires every filter of its one group, and
     sorts ascending on one of them; HubSpot states no order for records with one

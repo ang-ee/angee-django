@@ -50,6 +50,8 @@ UNAVAILABLE = "HubSpot is temporarily unavailable (HTTP 503)."
 RATE_LIMITED = "HubSpot is rate limiting requests (HTTP 429)."
 DAILY_LIMIT = "This HubSpot account has used its daily API request limit."
 NOT_A_SERVICE_KEY = "A HubSpot directory reads with a HubSpot service key: attach a static token that holds one."
+UNANSWERED = "HubSpot did not answer for some records."
+EMPTY_WALK = "HubSpot listed no contacts, but its search still counts some; retrying later."
 IMPORTED = datetime(2026, 11, 2, 9, 0, tzinfo=UTC)
 """When the scripted contacts of a test that keeps HubSpot's time were created."""
 
@@ -412,6 +414,61 @@ def test_a_contact_hubspot_removes_is_withdrawn_by_the_second_sweep_and_the_pers
         assert (link.status, asserted(person.pk, link).exists()) == (status, stated)
     assert Person.objects.filter(pk=person.pk).exists()
     assert hubspot.link(ada).status == LinkStatus.CURRENT
+
+
+def test_a_contact_an_answer_merely_omits_is_withdrawn_by_nothing_and_read_again(hubspot: HubSpot) -> None:
+    """A batch read that leaves an id unanswered without naming it gone, on an identity read or a sweep's read."""
+
+    ada, grace = (
+        hubspot.server.add("contacts", properties, modified=ago(days=days))
+        for days, properties in zip((2, 1), (ADA, GRACE), strict=True)
+    )
+    hubspot.drain()
+    person = hubspot.person(ada)
+    omitted = httpx2.Response(207, json={"status": "COMPLETE", "results": []})
+
+    hubspot.server.queue(omitted)
+    with pytest.raises(HubSpotError) as unanswered:
+        hubspot.backend.read_keys(hubspot.stream, [ada])
+    assert (unanswered.value.public_message, unanswered.value.transient) == (UNANSWERED, True)
+
+    # The sweep's id walk is answered and its read of those ids is not: the pulse fails and nothing is absent.
+    hubspot.server.queue(None, omitted)
+    with pytest.raises(HubSpotError):
+        hubspot.sweep()
+    assert {hubspot.link(key).status for key in (ada, grace)} == {LinkStatus.CURRENT}
+    assert asserted(person.pk, hubspot.link(ada)).exists()
+    assert hubspot.sweep() == 0
+
+    # HubSpot's own word, a not-found error naming the id, makes it gone.
+    hubspot.server.delete("contacts", ada)
+    (gone,) = hubspot.backend.read_keys(hubspot.stream, [ada])
+    assert (gone.external_key, gone.tombstone) == (ada, True)
+
+
+def test_an_empty_id_walk_is_believed_only_when_hubspots_search_counts_no_contact_either(hubspot: HubSpot) -> None:
+    ada, grace = (
+        hubspot.server.add("contacts", properties, modified=ago(days=days))
+        for days, properties in zip((2, 1), (ADA, GRACE), strict=True)
+    )
+    hubspot.drain()
+    hubspot.server.queue(httpx2.Response(200, json={"results": []}))
+    hubspot.server.requests.clear()
+
+    with pytest.raises(HubSpotError) as unconfirmed:
+        hubspot.sweep()
+
+    assert (unconfirmed.value.public_message, unconfirmed.value.transient) == (EMPTY_WALK, True)
+    (counted,) = hubspot.searches()
+    assert (counted["limit"], modified_after(counted)) == (1, EPOCH)
+    assert [(hubspot.link(key).status, hubspot.link(key).absence_count) for key in (ada, grace)] == [
+        (LinkStatus.CURRENT, 0)
+    ] * 2
+
+    for key in (ada, grace):
+        hubspot.server.delete("contacts", key)
+    assert hubspot.sweep() == 2
+    assert {hubspot.link(key).status for key in (ada, grace)} == {LinkStatus.UNAVAILABLE}
 
 
 def test_a_sweep_pulse_sends_one_list_request_per_page_of_ids(hubspot: HubSpot) -> None:

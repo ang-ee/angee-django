@@ -7,10 +7,19 @@ holding every contact. Each contact lands as a person with its names, emails,
 phones, employer and postal address, and HubSpot's later edits follow on each
 sync. A job title lands only beside a company, because parties keeps a title on
 the employment. A person's own edits outrank HubSpot's. A contact HubSpot merges
-lands on the person of a record it replaced, and the replaced records leave with
-the absence sweeps. A contact HubSpot archives or
-deletes is withdrawn after two daily absence sweeps: the first marks its link
-unavailable, the second withdraws what it stated. The person stays.
+lands on the person of a record it replaced.
+
+A contact HubSpot archives, deletes or merges away leaves HubSpot's list of
+contact ids, which the daily absence sweep walks: the first sweep that misses it
+marks its link unavailable, the second withdraws what it stated. A read of the
+contact itself withdraws it at once, but only on HubSpot's word: a batch read
+that names it not found, or answers a merge's survivor that names it replaced.
+That read happens when a contact whose sync failed is read again, and when a
+sweep reads the contacts its walk listed. A read that merely leaves a contact
+unanswered withdraws nothing; it fails and is tried again. A walk that lists no
+contact at all is believed only when HubSpot's search counts none either. A walk
+cut short part-way cannot be told from a complete one, so a contact it misses
+waits for the second sweep. In every case the person stays.
 
 A directory reads with a static-token credential holding a HubSpot service key
 that has the `crm.objects.contacts.read` scope. The backend admits no other kind

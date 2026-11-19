@@ -36,7 +36,7 @@ the parties neutral contact.
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Iterator, Mapping, Sequence
 from datetime import datetime, timedelta
 from time import monotonic
 from typing import Any, ClassVar
@@ -51,6 +51,7 @@ from angee.parties.backends import CONTACTS, DirectoryBackend, ParsedAddress, Pa
 from angee.parties_integrate_hubspot.client import (
     EPOCH,
     LIST_PAGE_LIMIT,
+    MERGED_PROPERTY,
     MISSING_SCOPES,
     SEARCH_PAGE_LIMIT,
     SERVICE_KEY_SHAPE,
@@ -87,8 +88,7 @@ CONTACT_PROPERTIES = (
 """The standard HubSpot contact properties :func:`contact_from_properties` reads."""
 
 _OBJECT_TYPE = "contacts"
-_MERGED_PROPERTY = "hs_merged_object_ids"
-_READ_PROPERTIES = (*CONTACT_PROPERTIES, _MERGED_PROPERTY)
+_READ_PROPERTIES = (*CONTACT_PROPERTIES, MERGED_PROPERTY)
 _BOOK = ParsedAddressbook(key="contacts", name="HubSpot contacts")
 
 
@@ -382,10 +382,11 @@ class HubSpotDirectoryBackend(DirectoryBackend):
         return StreamPage(records, cursor.model_dump(mode="json"), exhausted=not cursor.is_open)
 
     def read_contacts(self, stream: Any, keys: Sequence[str]) -> Mapping[str, Mapping[str, Any] | None]:
-        """Read ``keys`` in HubSpot's batch read; an id it has no record under, or answers under another, is gone.
+        """Read ``keys`` in HubSpot's batch read; an id is gone only on HubSpot's word (``HubSpotClient.batch_read``).
 
-        Any other error HubSpot states for a record fails the read
-        (``HubSpotClient.batch_read``).
+        HubSpot names it not found, or a record it answers names it among those its
+        merge replaced. Any other id HubSpot leaves unanswered, and any other error
+        it states, fails the read as transient, so the driver reads it again later.
         """
 
         del stream
@@ -395,11 +396,27 @@ class HubSpotDirectoryBackend(DirectoryBackend):
         found = {record.id: record for record in answer.found}
         return {key: None if key in answer.missing else self._payload(found[key], mapped) for key in keys}
 
-    def contact_keys(self, stream: Any, *, after: str | None) -> Iterable[str]:
-        """Walk the account's live contact ids past ``after``; an archived or deleted contact is not among them."""
+    def contact_keys(self, stream: Any, *, after: str | None) -> Iterator[str]:
+        """Walk the account's live contact ids past ``after``; an archived or deleted contact is not among them.
 
-        del stream
-        return self._client(self.bridge.fresh_credential()).record_ids(_OBJECT_TYPE, after=after)
+        A walk from the start that lists no contact while the stream holds live
+        links is believed only when HubSpot's search counts none either; otherwise
+        it is a transient refusal and the sweep tries again. A walk cut short
+        part-way cannot be told from a complete one: the contacts it misses wait
+        for the absence threshold, two sweeps.
+        """
+
+        client = self._client(self.bridge.fresh_credential())
+        keys = client.record_ids(_OBJECT_TYPE, after=after)
+        first = next(keys, None)
+        if first is None and after is None and stream.links.observing().exists():
+            if client.search_modified(_OBJECT_TYPE, since=EPOCH, limit=1, properties=()).total != 0:
+                raise HubSpotError(
+                    "HubSpot listed no contacts, but its search still counts some; retrying later.", transient=True
+                )
+        if first is not None:
+            yield first
+            yield from keys
 
     def source_url(self, link: Any) -> str | None:
         """Return a contact's page in the account's HubSpot web app, once discovery has learned the account."""
@@ -437,9 +454,8 @@ class HubSpotDirectoryBackend(DirectoryBackend):
         """
 
         properties = record.properties
-        replaced = parse_options(properties.get(_MERGED_PROPERTY))
         row = {name: properties[name] for name in mapped if name in properties}
-        return self.observe(contact_from_properties(properties), replaces=replaced, row=row)
+        return self.observe(contact_from_properties(properties), replaces=record.merged_ids(), row=row)
 
 
 def _read_properties(mapped: Sequence[str]) -> tuple[str, ...]:

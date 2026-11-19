@@ -70,9 +70,12 @@ live in code docstrings.
   per poll; every pass keeps HubSpot's time (the `Date` of its first answer),
   never the local clock; an unreadable stored cursor
   starts a new baseline, and a transient refusal inside one page keeps what that
-  page read. A merge's survivor lands on a replaced record's person, the replaced
-  records leave with the absence sweeps, and an archived or deleted contact is
-  withdrawn by the second absence sweep. A platform admin connects an account
+  page read. A merge's survivor lands on a replaced record's person. A contact
+  that leaves HubSpot's id walk (archived, deleted or merged away) is withdrawn by
+  the second absence sweep; a read of the contact withdraws it at once only when
+  HubSpot names it not found or a survivor names it replaced, and an id HubSpot
+  merely leaves unanswered is a transient refusal; an empty id walk is believed
+  only when HubSpot's search counts no contact either. A platform admin connects an account
   from the console: `@angee/parties-integrate-hubspot` adds a "HubSpot account"
   entry to `parties.directories#toolbar`, whose dialog sends a name and the key
   (masked, as entered) to `connect_hubspot_directory(name, token)`, which runs

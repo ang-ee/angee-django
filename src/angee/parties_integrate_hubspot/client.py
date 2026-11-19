@@ -64,6 +64,9 @@ HubSpot publishes no key format, so the shape never refuses a key; it only adds
 a hint to HubSpot's rejection of one that lacks it (:meth:`HubSpotError.of`).
 """
 
+MERGED_PROPERTY = "hs_merged_object_ids"
+"""The property in which a merge's surviving record names the records it replaced, joined with ``;``."""
+
 _MODIFIED_PROPERTY = {"contacts": "lastmodifieddate"}
 _RECORD_ID = "hs_object_id"
 _NOT_FOUND = "OBJECT_NOT_FOUND"
@@ -186,6 +189,11 @@ class HubSpotObject(_HubSpotModel):
         except ValueError:
             return None
 
+    def merged_ids(self) -> tuple[str, ...]:
+        """Return the ids of the records a merge folded into this one, in HubSpot's order (:data:`MERGED_PROPERTY`)."""
+
+        return parse_options(self.properties.get(MERGED_PROPERTY))
+
 
 class HubSpotNext(_HubSpotModel):
     """The position a following page starts from."""
@@ -208,12 +216,14 @@ class HubSpotPage(_HubSpotModel):
     search page's is an offset into the query's results, which this client reads
     only as a sign that more results follow. A page with no records that names a
     following one is refused: no walk, search or drain could move past it.
-    ``sent_at`` is the time the answer's ``Date`` header states, HubSpot's clock to
-    the second; ``None`` when it states none that can be read.
+    ``total`` is the number of records a search counts for its query, ``None`` on
+    a list page. ``sent_at`` is the time the answer's ``Date`` header states,
+    HubSpot's clock to the second; ``None`` when it states none that can be read.
     """
 
     results: tuple[HubSpotObject, ...] = ()
     paging: HubSpotPaging | None = None
+    total: int | None = None
     sent_at: datetime | None = None
 
     @model_validator(mode="before")
@@ -241,10 +251,23 @@ class HubSpotPage(_HubSpotModel):
         return self.paging.next.after if self.paging is not None and self.paging.next is not None else ""
 
 
+class _HubSpotErrorContext(_HubSpotModel):
+    model_config = ConfigDict(coerce_numbers_to_str=True)
+
+    ids: tuple[str, ...] = ()
+
+
 class _HubSpotBatchError(_HubSpotModel):
-    """One error a partial (207) batch answer states for some of its records."""
+    """One error a partial (207) batch answer states for some of its records, naming them in its context."""
 
     category: str | None = None
+    context: _HubSpotErrorContext | None = None
+
+    @property
+    def ids(self) -> tuple[str, ...]:
+        """Return the record ids the error names."""
+
+        return self.context.ids if self.context is not None else ()
 
 
 class _HubSpotBatchAnswer(_HubSpotModel):
@@ -254,11 +277,11 @@ class _HubSpotBatchAnswer(_HubSpotModel):
 
 @dataclass(frozen=True, slots=True)
 class HubSpotBatchRead:
-    """The records a batch read found, and the requested ids HubSpot has no record under.
+    """The records a batch read found, and the requested ids HubSpot says it has no record under.
 
     A found record may carry another id than the one requested: a merge replaces
     the merged ids with its surviving record's, so a merged id is missing beside
-    its survivor.
+    the survivor that names it.
     """
 
     found: tuple[HubSpotObject, ...]
@@ -370,21 +393,23 @@ class HubSpotClient:
         return self._search(object_type, filters, sort=_RECORD_ID, limit=limit, properties=properties)
 
     def batch_read(self, object_type: str, ids: Sequence[str], properties: Sequence[str]) -> HubSpotBatchRead:
-        """Read ``ids`` in batches of :data:`BATCH_READ_LIMIT`.
+        """Read ``ids`` in batches of :data:`BATCH_READ_LIMIT`; ``properties`` come back with :data:`MERGED_PROPERTY`.
 
-        An id is missing when HubSpot states it has no such record, or answers it
-        under another id: a merge's survivor. Any other error HubSpot states for a
-        record is a transient :class:`HubSpotError`, so a record HubSpot failed to
+        Only HubSpot's word makes an id missing: a not-found error that names it,
+        or a found record that names it among the records its merge replaced. Any
+        other id HubSpot leaves unanswered, and any other error it states for a
+        record, is a transient :class:`HubSpotError`, so a record HubSpot did not
         read is never reported missing.
         """
 
         path = f"/crm/objects/{API_VERSION}/{object_type}/batch/read"
         requested = tuple(dict.fromkeys(ids))
         found: list[HubSpotObject] = []
+        gone: set[str] = set()
         for chunk in batched(requested, BATCH_READ_LIMIT):
             payload = {
                 "inputs": [{"id": key} for key in chunk],
-                "properties": list(properties),
+                "properties": list(dict.fromkeys((*properties, MERGED_PROPERTY))),
                 "propertiesWithHistory": [],
             }
             answer = self._request(
@@ -394,7 +419,11 @@ class HubSpotClient:
                 stated = f" ({failed.category})" if failed.category else ""
                 raise HubSpotError(f"HubSpot could not read some records{stated}.", transient=True)
             found.extend(answer.results)
+            gone.update(key for error in answer.errors for key in error.ids)
         answered = {record.id for record in found}
+        gone.update(key for record in found for key in record.merged_ids())
+        if any(key not in answered and key not in gone for key in requested):
+            raise HubSpotError("HubSpot did not answer for some records.", transient=True)
         return HubSpotBatchRead(found=tuple(found), missing=tuple(key for key in requested if key not in answered))
 
     def _search(

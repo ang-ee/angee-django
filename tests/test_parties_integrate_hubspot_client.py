@@ -156,9 +156,36 @@ def test_a_batch_read_reports_the_ids_hubspot_has_no_record_under(
     assert read.missing == (archived, "999")
     assert request_fields(hubspot_server.requests[0]) == {
         "inputs": [{"id": first}, {"id": archived}, {"id": "999"}, {"id": last}],
-        "properties": ["email"],
+        "properties": ["email", "hs_merged_object_ids"],
         "propertiesWithHistory": [],
     }
+
+
+@pytest.mark.parametrize(
+    "answer",
+    [
+        pytest.param({"status": "COMPLETE", "results": []}, id="omitted"),
+        pytest.param(
+            {"status": "COMPLETE", "results": [], "numErrors": 1, "errors": [{"category": "OBJECT_NOT_FOUND"}]},
+            id="not-found-naming-no-id",
+        ),
+    ],
+)
+def test_an_id_a_batch_read_leaves_unanswered_without_hubspot_naming_it_gone_is_a_transient_refusal(
+    hubspot_server: HubSpotServer, client: HubSpotClient, answer: dict[str, Any]
+) -> None:
+    """Only HubSpot's word makes a record gone: a not-found error naming its id, or a survivor naming it merged."""
+
+    kept = contact(hubspot_server, 1)
+    hubspot_server.queue(httpx2.Response(207, json=answer))
+
+    with pytest.raises(HubSpotError) as unanswered:
+        client.batch_read("contacts", [kept], ())
+
+    assert (unanswered.value.public_message, unanswered.value.transient) == (
+        "HubSpot did not answer for some records.",
+        True,
+    )
 
 
 def test_a_batch_read_splits_ids_into_hubspots_batch_size(
@@ -200,10 +227,11 @@ def test_a_batch_read_of_a_merged_id_reports_it_missing_beside_the_survivor(
     kept, folded = contact(hubspot_server, 1), contact(hubspot_server, 2)
     survivor = hubspot_server.merge("contacts", kept, folded, modified=MODIFIED + timedelta(hours=1))
 
-    read = client.batch_read("contacts", [kept], ("hs_merged_object_ids",))
+    read = client.batch_read("contacts", [kept], ())
 
     assert [record.id for record in read.found] == [survivor] and read.missing == (kept,)
     assert parse_options(read.found[0].properties["hs_merged_object_ids"]) == (kept, folded)
+    assert request_fields(hubspot_server.requests[0])["properties"] == ["hs_merged_object_ids"]
 
     hubspot_server.resolves_merged = False
     read = client.batch_read("contacts", [folded, survivor], ())
