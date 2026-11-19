@@ -953,6 +953,9 @@ def _refusal(error: Exception) -> str:
 class PartyQuerySet[PartyT: Party](MergeableQuerySet[PartyT], StatementSubjectQuerySet[PartyT]):
     """Party read scopes: canonical (unmerged) rows and organisation membership."""
 
+    SAME_AS_REVIEW_PAGES: ClassVar[int] = 4
+    """The most pages of pairs one review read walks to fill its page (:meth:`same_as_pairs`)."""
+
     def with_display_avatars(self, actor: Any) -> Self:
         """Batch :meth:`PartyManager.display_avatar` for these parties, through ``actor``'s readable files.
 
@@ -1091,9 +1094,11 @@ class PartyQuerySet[PartyT: Party](MergeableQuerySet[PartyT], StatementSubjectQu
         """Read up to ``limit`` resolved value pairs through both endpoints and each evidence row.
 
         A pair whose evidence the reader cannot read in full is dropped before the
-        page fills, so a page holds every readable pair up to its limit; the read
-        walks the ordered pairs one page at a time until it does. ``parties``
-        narrows the read to pairs whose both endpoints are among those keys.
+        page fills; the read walks the ordered pairs one page at a time until the
+        page is full or it has read :attr:`SAME_AS_REVIEW_PAGES` pages, so a reader
+        who sees many pairs but little of their evidence gets a short page, never a
+        scan of every pair. ``parties`` narrows the read to pairs whose both
+        endpoints are among those keys.
         """
 
         limit = max(0, min(int(limit), 101))
@@ -1132,7 +1137,11 @@ class PartyQuerySet[PartyT: Party](MergeableQuerySet[PartyT], StatementSubjectQu
         )
         result: list[SameAsPair] = []
         start = 0
-        while len(result) < limit and (page := list(pairs[start : start + limit])):
+        while (
+            len(result) < limit
+            and start < limit * self.SAME_AS_REVIEW_PAGES
+            and (page := list(pairs[start : start + limit]))
+        ):
             start += limit
             refs_by_pair = {
                 pair: [
