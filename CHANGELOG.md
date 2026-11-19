@@ -10,6 +10,16 @@ live in code docstrings.
 
 ## Unreleased — shared addon contracts, native embeddings and graph retrieval
 
+- A deployment declares its static page head in `ANGEE_UI.shell.site` (`title`,
+  `description`, `icon`, `touchIcon`, `image`), selecting files addons name in
+  their `web/package.json` `angee.assets`; Vite emits them and writes the title,
+  description, Open Graph, `twitter:card` and icon tags. Behaviour change: a
+  deployment with `shell.brand` now gets the brand's name as its static
+  `<title>`, and nothing else without `shell.site`. Absolute preview URLs use the
+  stack's `ANGEE_PUBLIC_ORIGIN` environment variable, the only origin the web
+  build reads: one authored only in a settings file leaves `og:url` out and
+  `og:image` relative.
+
 - Addons require django-zed-rebac 0.36.1. With none of its new settings set,
   statements, statement counts and decisions are 0.35.2's, so nothing changes for a
   host. (0.36.0 cannot be imported before app population, which Angee's pytest

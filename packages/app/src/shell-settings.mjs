@@ -25,8 +25,15 @@ export function assertShellSettings(shell) {
       if (value[key] !== undefined && typeof value[key] !== "boolean") throw new Error(`${where}.${key} must be true or false.`);
     }
   };
-  const settings = mapping(shell, "ANGEE_UI.shell", ["brand", "theme", "apps", "hosts", "app"]);
+  const settings = mapping(shell, "ANGEE_UI.shell", ["brand", "site", "theme", "apps", "hosts", "app"]);
   facts(settings, "ANGEE_UI.shell");
+  if (settings.site !== undefined) {
+    const site = mapping(settings.site, "ANGEE_UI.shell.site", ["title", "description", "icon", "touchIcon", "image"]);
+    for (const key of Object.keys(site).sort()) text(site[key], `ANGEE_UI.shell.site.${key}`);
+    if (site.title === undefined && settings.brand === undefined) {
+      throw new Error("ANGEE_UI.shell.site needs a title or shell.brand to supply it.");
+    }
+  }
   if (settings.app !== undefined) text(settings.app, "ANGEE_UI.shell.app");
   for (const [name, value] of Object.entries(mapping(settings.apps ?? {}, "ANGEE_UI.shell.apps"))) {
     const where = `ANGEE_UI.shell.apps.${name}`;
@@ -47,4 +54,11 @@ export function assertShellSettings(shell) {
     if (host !== host.toLowerCase()) throw new Error(`ANGEE_UI.shell.hosts["${host}"] must be a lower-case hostname.`);
     text(key, `ANGEE_UI.shell.hosts["${host}"]`);
   }
+}
+
+/** The static head validated shell settings ask for: a brand alone gives only the title. */
+export function shellSiteHead({ site, brand }) {
+  if (site === undefined) return brand && { title: brand.name };
+  const { title = brand.name, ...facts } = site;
+  return { title, site: { ...facts, ...(brand ? { siteName: brand.name } : {}) } };
 }

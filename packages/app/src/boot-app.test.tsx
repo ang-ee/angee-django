@@ -296,6 +296,26 @@ describe("selectApp", () => {
 });
 
 describe("assertShellSettings", () => {
+  test("accepts deployment site facts while keeping brand strictly name and mark", () => {
+    expect(() => assertShellSettings({ ...shell, site: {
+      description: "Suite tools", icon: "suite.icon", touchIcon: "suite.touch", image: "suite.preview",
+    } })).not.toThrow();
+    expect(() => assertShellSettings({ site: { title: "Standalone" } })).not.toThrow();
+    expect(() => assertShellSettings({ site: { description: "No title" } })).toThrow("needs a title or shell.brand");
+    expect(() => assertShellSettings({ ...shell, site: { themeColor: "red" } })).toThrow('unknown key "themeColor"');
+    expect(() => assertShellSettings({ brand: { name: "Suite", mark: "suite", title: "Site" } }))
+      .toThrow("brand must be { name, mark }");
+    for (const key of ["title", "description", "icon", "touchIcon", "image"]) {
+      for (const value of ["", "  ", null, false, 5]) {
+        expect(() => assertShellSettings({ ...shell, site: { [key]: value } }))
+          .toThrow(`ANGEE_UI.shell.site.${key} must be a non-empty string`);
+      }
+    }
+    for (const site of [null, [], "Site"]) {
+      expect(() => assertShellSettings({ ...shell, site })).toThrow("site must be a mapping");
+    }
+  });
+
   test("accepts ANGEE_UI.shell and refuses what would select the wrong app silently", () => {
     expect(() => assertShellSettings(shell)).not.toThrow();
     expect(() => assertShellSettings({})).not.toThrow();

@@ -272,6 +272,10 @@ stylesheets: ["./theme.css"]
 }
 ```
 
+The page icon and link-preview image are not theme assets: an addon names them in
+`web/package.json` `angee.assets` and the deployment selects them through
+[`ANGEE_UI.shell.site`](guidelines.md#rules), whatever theme is selected.
+
 Options declare one current version, defaults, a strict parser and a resolver
 that returns token layers. Inputs must be a closed, bounded set such as approved
 enums, numeric ranges or six-digit hex colors. User-provided CSS, URLs, classes
