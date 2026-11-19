@@ -1216,13 +1216,6 @@ class CredentialManager[CredentialT: Credential](_CredentialManagerBase[Credenti
             .order_by("pk")
         )
 
-    def derived_attachments(self, credential_pk: int) -> models.QuerySet[Any]:
-        """Return the integrations attaching ``credential_pk`` as material discovery derived from another grant."""
-
-        return self.served_integrations(credential_pk).filter(credential_id=credential_pk).exclude(
-            Q(discovery_credential_id__isnull=True) | Q(discovery_credential_id=credential_pk),
-        )
-
     def lock_with_served_integrations(self, credential_pk: int) -> tuple[Any, list[Any]]:
         """Lock the integrations ``credential_pk`` serves, then the credential; return both, locked.
 
@@ -1262,11 +1255,13 @@ class CredentialManager[CredentialT: Credential](_CredentialManagerBase[Credenti
 
         Runs inside the caller's transaction, the integrations the credential
         serves locked before it (:meth:`lock_with_served_integrations`). A
-        credential an integration attaches as material its discovery derived
-        (:meth:`derived_attachments`) is refused: its own grant is re-entered
-        instead. Once the caller's write is done, a re-entry that changed the
-        row's kind or decrypted material is admitted again by every integration
-        it serves (:meth:`Integration.admit_credential`, the rule attachment and
+        credential one of them attaches as material its discovery derived
+        (:attr:`Integration.derived_credential_id`, read on the locked rows) is
+        refused: its own grant is re-entered instead, or the integration is
+        connected again once that grant is gone. Once the caller's write is
+        done, a re-entry that changed the row's kind or decrypted material is
+        admitted again by every integration it serves
+        (:meth:`Integration.admit_credential`, the rule attachment and
         the connect picker use; a refusal rolls the re-entry back), and each
         whose capability requires connection discovery awaits it again
         (:meth:`Integration.await_discovery`): a new secret may read another
@@ -1281,8 +1276,11 @@ class CredentialManager[CredentialT: Credential](_CredentialManagerBase[Credenti
             return row.kind, material
 
         credential, integrations = self.lock_with_served_integrations(credential_pk)
-        if self.derived_attachments(credential_pk).exists():
-            raise ValidationError("Connection discovery derived this credential; re-enter its source credential.")
+        if any(integration.derived_credential_id == credential_pk for integration in integrations):
+            raise ValidationError(
+                "Connection discovery derived this credential; re-enter the credential it was derived from, "
+                "or connect the integration again if that one is gone."
+            )
         before = entered(credential)
         yield credential
         credential.refresh_from_db()
@@ -1469,8 +1467,8 @@ class CredentialManager[CredentialT: Credential](_CredentialManagerBase[Credenti
         discover again (two that derive one name would rediscover each other).
         It overwrites a credential of that name that nothing holds (one left from
         before integrations removed theirs on delete, say) or that another
-        integration attaches as derived (:meth:`derived_attachments`), decided on
-        the locked row; one something else holds (an integration's direct
+        integration attaches as derived (:attr:`Integration.derived_credential_id`),
+        decided on the locked row; one something else holds (an integration's direct
         attachment, an account, an agent) is refused, so the discovery fails with
         a message naming the credential to rename.
         """
@@ -1484,7 +1482,7 @@ class CredentialManager[CredentialT: Credential](_CredentialManagerBase[Credenti
             if not created:
                 instance = self.lock_if_supported().get(pk=instance.pk)
                 if not (
-                    self.derived_attachments(instance.pk).exists()
+                    any(row.derived_credential_id == instance.pk for row in self.served_integrations(instance.pk))
                     or self.unattached().filter(pk=instance.pk).exists()
                 ):
                     raise IntegrationError(
@@ -3476,7 +3474,9 @@ class Integration(StatementSourceMixin, ImplDefaultsMixin, OwnerMixin, AngeeData
         (``discovery_credential``). A row whose grant was deleted still attaches
         it: every attachment since discovery existed records its grant, so a
         discovered generation with no grant left holds derived material. A row
-        attached before then holds its credential directly.
+        attached before then holds its credential directly. The one rule for
+        derived material: the credential manager's re-entry refusal and
+        ``store_derived``'s overwrite read it on the rows a credential serves.
         """
 
         if self.credential_id is None or self.discovery_credential_id == self.credential_id:

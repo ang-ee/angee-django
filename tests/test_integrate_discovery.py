@@ -1221,6 +1221,33 @@ def test_a_derived_credential_whose_grant_was_lost_leaves_with_its_integration(b
         assert not Credential.objects.filter(pk=derived_pk).exists()
 
 
+def test_a_derived_credential_whose_grant_was_lost_is_still_derived(bridge, sent_tasks):
+    with system_context(reason="test a derived credential after its grant went"):
+        bridge.config = {"derived": True, "derived_name": "Shared resource"}
+        bridge.save(update_fields=["config"])
+        assert settle(bridge)["ok"]
+        derived, generation = bridge.credential, bridge.discovery_generation
+        # The grant removed by a path that skips its disconnect: the integration keeps the material.
+        Credential.objects.filter(pk=bridge.discovery_credential_id).delete()
+        bridge.refresh_from_db()
+        assert bridge.discovery_credential_id is None and bridge.derived_credential_id == derived.pk
+        sent_tasks.clear()
+        # Re-entering it is refused as derived material is, not accepted into a discovery that cannot run.
+        with pytest.raises(ValidationError, match="derived this credential"):
+            derived.replace_material({"api_key": "re-entered"})
+        bridge.refresh_from_db()
+        assert bridge.discovery_ready and bridge.discovery_generation == generation and sent_tasks == []
+        # Another integration's discovery deriving that name overwrites it, as any derived attachment.
+        grant = Credential.objects.create_local_credential(
+            bridge.owner, kind="static_token", name="Sibling grant", material={"api_key": "sibling"},
+        )
+        sibling = ConnectionBridge.objects.create(
+            vendor=bridge.vendor, owner=bridge.owner, credential=grant, lifecycle="paused",
+            config={"derived": True, "derived_name": "Shared resource"},
+        )
+        assert settle(sibling)["ok"] and sibling.credential_id == derived.pk
+
+
 def test_an_integration_deleted_through_a_stale_instance_takes_the_credential_it_derived_since(bridge):
     with system_context(reason="test a delete through an instance read before discovery derived"):
         stale = ConnectionBridge.objects.get(pk=bridge.pk)
