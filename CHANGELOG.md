@@ -128,16 +128,16 @@ live in code docstrings.
   longer produces authorization headers: it fails closed through
   `Credential.require_active`, as the scoped-token path does.
 
-- `angee.graphql`, `angee.base`, `angee.integrate`: an integration's refusal
-  reaches the operator as its message. An action guarded by `action_guard` let
-  an `IntegrationError` propagate, so resolving or retrying a sync failure,
-  choosing a side of a conflict or publishing a calendar while discovery was
-  pending showed the console a raw "An unexpected error occurred." The
-  transport-independent `angee.base.exceptions.PublicRefusal` (a message safe to
-  show, and whether a retry can succeed) is now one of the guard's baseline
-  errors, and `ActionResult.from_error` presents its `public_message`, adding
-  that a transient one can be retried. `IntegrationError` is one, so every
-  guarded action presents it in band, with no catch per mutation.
+- `angee.integrate`: an integration's refusal reaches the operator as its
+  message on integrate's own console actions. Retrying a sync failure, choosing a
+  side of a conflict, retrying discovery or resuming an integration let an
+  `IntegrationError` propagate, so the console showed a raw "An unexpected error
+  occurred." Those actions are now guarded by
+  `angee.integrate.schema.integration_action_guard`, `action_guard` with the
+  integration error expected: it answers in band with the error's public message,
+  keeps an `OAuthFlowError`'s code, and logs a permanent refusal at warning
+  level. The shared guard, `ActionResult.from_error` and `angee.base.exceptions`
+  are unchanged, so no other addon's guarded action changes behaviour.
 
 - `angee.integrate`: a derived credential leaves with its integration. Deleting
   an integration left the credential its discovery derived, which
