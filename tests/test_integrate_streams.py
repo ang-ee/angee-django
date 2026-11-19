@@ -3360,6 +3360,35 @@ def test_a_push_asks_discovery_once_per_write_and_reads_only_its_columns(
     assert "use_count_24h" not in reads[0]
 
 
+def test_the_stream_lock_reads_only_the_readiness_columns_of_its_integration(
+    discovered_bridge: ConnectionBridge,
+) -> None:
+    stream = _two_way(discovered_bridge, "a")
+    table = SyncStream._meta.get_field("integration").related_model._meta.db_table
+    with system_context(reason="test the stream lock's read"), CaptureQueriesContext(connection) as queries:
+        with transaction.atomic():
+            SyncStream.objects.lock_current(stream)
+    (joined,) = [query["sql"] for query in queries.captured_queries if f'JOIN "{table}"' in query["sql"]]
+    assert "discovery_retry_at" in joined and "use_count_24h" not in joined
+
+
+@pytest.mark.parametrize(("verb", "statements"), [("pin", 21), ("resolve_failure", 22)])
+def test_a_local_link_verb_reads_no_stream_row_to_pass_the_discovery_check(
+    discovered_bridge: ConnectionBridge, verb: str, statements: int,
+) -> None:
+    stream = _two_way(discovered_bridge, "a")
+    with system_context(reason="test a local verb on a link"):
+        link = RecordLink.objects.get(stream=stream, external_key="a")
+        if verb == "resolve_failure":
+            link.record_failure(kind=SyncFailureKind.SEMANTIC, code="invalid_record", source_hash="base")
+            link = RecordLink.objects.get(pk=link.pk)
+        assert not RecordLink._meta.get_field("stream").is_cached(link)
+        with CaptureQueriesContext(connection) as queries:
+            link.pin() if verb == "pin" else link.resolve_failure(0)
+    # The exemption is a context, not a manager reached through a stream row loaded for it.
+    assert len(queries.captured_queries) == statements
+
+
 def test_a_two_way_page_sends_no_write_back_while_discovery_is_pending(discovered_bridge: ConnectionBridge) -> None:
     stream = _two_way(discovered_bridge, "one")
     local_edit = RecordChange("one", {}, "base", "v1", mapped_payload={}, projection={"value": "local"})
