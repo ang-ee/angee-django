@@ -125,7 +125,9 @@ Nothing merges unattended. A person may also merge in a batch: confirmed sets of
 two to ten records each (`PartyManager.merge_duplicates`, the `merge_duplicates`
 mutation; at most 50 sets), either the certain pairs the Review page lists
 (`certain_same_as_pairs`) or a selection from the People or Organizations list.
-Only an active person account that writes every record may (the party's
+There, two selected records of an ungrouped list open their compare page; three
+or more are one set, and a grouped list gives one set per group of two or more
+selected (a group without a value is never a set). Only an active person account that writes every record may (the party's
 `batch_merge` permission, `write & person->active_member`); a service or agent
 account merges nothing, and no agent tool offers it. A set never holds an account's
 own person (merged by hand, on the compare page), records of two kinds, a trashed

@@ -1,7 +1,8 @@
 import * as React from "react";
 import { useAuthoredQuery } from "@angee/refine";
-import { Alert, Avatar, EmptyState, ErrorBanner, Glyph, ListView, LoadingPanel, NavLink, Page, PageBody, PageHeader, RailPanel, Chip, avatarInitials, type ListColumn, useRouteHref } from "@angee/ui";
-import { SameAsPairs, PartyReviewCounts } from "./documents";
+import { Alert, Avatar, Button, EmptyState, ErrorBanner, Glyph, ListView, LoadingPanel, NavLink, Page, PageBody, PageHeader, RailPanel, Chip, avatarInitials, type ListColumn, useRouteHref } from "@angee/ui";
+import { CertainSameAsPairs, PARTY_MERGE_INVALIDATES, SameAsPairs, PartyReviewCounts } from "./documents";
+import { DuplicatesDialog, type DuplicateSetInput } from "./DuplicatesDialog";
 import { usePartiesT } from "./i18n";
 import { useIdentityClaimColumns, type IdentityClaimRow } from "./identity-columns";
 import { usePartyStatementRowActions } from "./party-statement-row-actions";
@@ -10,7 +11,8 @@ type SuggestionRow = IdentityClaimRow & { source_kind?: string };
 
 /**
  * Human identity review, split between uncertain party↔handle claims and
- * deterministic same_as statements that share a normalized handle.
+ * deterministic same_as statements that share a normalized handle. The certain
+ * pairs among them merge together from one dialog (`DuplicatesDialog`).
  */
 export function ReviewPage(): React.ReactElement {
   const t = usePartiesT();
@@ -23,6 +25,19 @@ export function ReviewPage(): React.ReactElement {
     models: ["parties.Party", "parties.Handle", "parties.PartySameAsPairStatement"],
   });
   const rowActions = usePartyStatementRowActions<SuggestionRow>("all");
+  const certain = useAuthoredQuery(CertainSameAsPairs, { limit: 50 }, { models: PARTY_MERGE_INVALIDATES });
+  const [mergingCertain, setMergingCertain] = React.useState(false);
+  const certainSets = React.useMemo<readonly DuplicateSetInput[]>(
+    () => (certain.data?.certain_same_as_pairs ?? []).map((pair) => ({
+      members: [pair.left.id, pair.right.id],
+      heading: t("review.sameAs.certainHeading", {
+        left: pair.left.display_name,
+        right: pair.right.display_name,
+        address: pair.normalized_value,
+      }),
+    })),
+    [certain.data, t],
+  );
 
   const columns = React.useMemo<readonly ListColumn<SuggestionRow>[]>(
     () => [
@@ -85,6 +100,11 @@ export function ReviewPage(): React.ReactElement {
             title={t("review.sameAs")}
             count={sameAsCandidates.length}
             fetching={sameAs.isFetching && sameAsCandidates.length > 0}
+            actions={certainSets.length > 0 ? (
+              <Button type="button" size="sm" variant="secondary" onClick={() => setMergingCertain(true)}>
+                {t("review.sameAs.mergeCertain", { count: certainSets.length })}
+              </Button>
+            ) : undefined}
           >
             {sameAs.isFetching && sameAsCandidates.length === 0 ? (
               <LoadingPanel density="inline" />
@@ -125,6 +145,9 @@ export function ReviewPage(): React.ReactElement {
             )}
           </RailPanel>
         </div>
+        {mergingCertain ? (
+          <DuplicatesDialog sets={certainSets} certain onClose={() => setMergingCertain(false)} />
+        ) : null}
       </PageBody>
     </Page>
   );
