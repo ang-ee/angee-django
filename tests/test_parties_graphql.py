@@ -624,6 +624,54 @@ def test_a_merged_away_party_is_no_row_group_count_or_candidate_and_its_id_names
     assert result["addresses"] == [{"id": address.sqid, "party": {"id": survivor.sqid}}]
 
 
+def test_a_repeated_name_counts_its_live_records_beside_a_merged_away_one(db: None) -> None:
+    """A name stays repeated through a merge exactly while two live records share it.
+
+    The grouped People list's "Repeated values only" must offer a survivor with its
+    remaining namesake and never the record that was merged into it: of three people
+    sharing a name, one merged away, the group holds the two live ones.
+    """
+
+    admin = _platform_admin("people-repeated-survivor-admin")
+    with system_context(reason="test.parties.repeated_survivor.seed"):
+        survivor = Person.objects.create(display_name="Ada Lovelace", created_by_id=admin.pk)
+        merged = Person.objects.create(display_name="Ada Lovelace", created_by_id=admin.pk)
+        namesake = Person.objects.create(display_name="Ada Lovelace", created_by_id=admin.pk)
+    with actor_context(admin):
+        messaging_models.Party.objects.get(pk=survivor.pk).merge(records=[merged.public_id])
+
+    result = _data(
+        execute_schema(
+            _schema("public"),
+            """
+            query RepeatedSurvivor($name: String!) {
+              repeated: people_groups(
+                group_by: [{field: DISPLAY_NAME}]
+                where: {display_name: {_is_null: false, _neq: ""}}
+                having: {count_gt: 1}
+                limit: 10
+              ) {
+                key { display_name }
+                aggregate { count }
+              }
+              repeated_count: people_groups_count(
+                group_by: [{field: DISPLAY_NAME}]
+                where: {display_name: {_is_null: false, _neq: ""}}
+                having: {count_gt: 1}
+              )
+              members: people(where: {display_name: {_eq: $name}}) { id }
+            }
+            """,
+            variables={"name": "Ada Lovelace"},
+            user=admin,
+        )
+    )
+
+    assert result["repeated"] == [{"key": {"display_name": "Ada Lovelace"}, "aggregate": {"count": 2}}]
+    assert result["repeated_count"] == 1
+    assert {row["id"] for row in result["members"]} == {survivor.sqid, namesake.sqid}
+
+
 @pytest.mark.parametrize(
     ("reads", "resolves"),
     [
