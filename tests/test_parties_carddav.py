@@ -285,6 +285,24 @@ def test_each_connection_of_one_name_gets_a_credential_of_its_own(monkeypatch: p
         assert credential.reveal() == {"username": "ada@example.com", "password": "carddav-password"}
 
 
+def test_connecting_grants_the_owner_the_read_of_the_directorys_contacts(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The read of a directory's contacts is one stored grant; connecting writes it for the connecting owner."""
+
+    from rebac import backend, to_object_ref, to_subject_ref
+
+    _load_vendor()
+    monkeypatch.setattr(CardDavDirectoryBackend, "test_connection", lambda backend: "Connected.")
+    admin = parties_graphql._platform_admin("carddav-contact-read-admin")
+    directory = _connect(admin)
+
+    with system_context(reason="test.parties.carddav.contact_read.verify"):
+        granted = [access for access in directory.direct_record_access() if access.relation == "contact_reader"]
+    assert [access.subject for access in granted] == [to_subject_ref(admin)]
+    assert backend().check_access(
+        subject=to_subject_ref(admin), action="contact_read", resource=to_object_ref(directory)
+    ).allowed
+
+
 def test_connecting_inside_a_callers_transaction_is_refused_before_the_connection_test(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

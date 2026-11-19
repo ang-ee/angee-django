@@ -10,6 +10,18 @@ live in code docstrings.
 
 ## Unreleased — shared addon contracts, native embeddings and graph retrieval
 
+- `angee.parties`: the read of a directory's contacts is a stored grant alone.
+  `parties/directory#contact_read` is `contact_reader` (revision 31); the
+  integration owner's column arm is gone, because a column arm is never folded
+  away by an actor's grant profile and kept the chain from a party to a
+  directory in every read of a party, for every actor (a member's person
+  document planned about 17.9 MiB more). `Directory.objects.connect` grants the
+  connecting owner `contact_reader` (`Directory.grant_owner_contact_read`, the
+  one writer), and provision grants each existing directory's owner where
+  missing (`grant_directory_owner_contact_reads`, beside
+  `resolve_stale_owners`). A transfer moves no grant: a person grants a later
+  owner. Upgrade: `rebac sync`; provision runs the repair.
+
 - `angee.integrate`: re-entering exactly what is stored changes nothing, even
   beside a transient answer. `CredentialManager.reenter_secret` compared the
   whole decrypted material, so the identical secret re-entered while a pairing

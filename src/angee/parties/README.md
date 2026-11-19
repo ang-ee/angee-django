@@ -353,9 +353,15 @@ the row changes the party's projection, which a two-way directory writes to its
 card, so no read grant attaches anything.
 
 Sharing a directory shares its contacts: `contact_reader`, granted on the
-directory row through its share surface, and the directory's owner read the
-people and organizations its live links name and the handles, addresses and
-relationships those links state (`contact_read` in [permissions.zed](permissions.zed)).
+directory row through its share surface, reads the people and organizations its
+live links name and the handles, addresses and relationships those links state
+(`contact_read` in [permissions.zed](permissions.zed)). Connecting a directory
+grants its owner `contact_reader` (`Directory.grant_owner_contact_read`, the one
+writer), and every provision grants it to an existing directory's owner where
+missing (`grant_directory_owner_contact_reads`). A transfer does not move it: a
+person grants a later owner, and the previous owner keeps the grant until
+someone removes it. The read is a stored grant alone, so a party's read plans
+the directory chain only for an actor who holds one.
 Each statement arm walks from the row to the statements naming it by the
 statement model's name (`addressstatement`, `relationshipstatement`, and
 `partystatement`, which the handle member declares as its reverse name). A

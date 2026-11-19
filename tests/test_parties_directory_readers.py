@@ -491,14 +491,22 @@ def test_a_superseded_claim_lends_nothing(contacts: SimpleNamespace) -> None:
     assert _allowed(handle, c.owner)
 
 
-def test_a_transferred_directory_lends_its_contacts_to_the_new_owner(contacts: SimpleNamespace) -> None:
-    """The integration's owner reads the contacts it synced before, without private fields or writes."""
+def test_a_directorys_new_owner_reads_its_contacts_once_granted(contacts: SimpleNamespace) -> None:
+    """Owning the integration lends no contact read: a person grants it, then the owner reads as a contact reader.
+
+    The read is a stored grant alone (``contact_read = contact_reader``): connecting grants the connecting
+    owner, a transfer moves nothing, and the new owner, who manages the directory's shares, grants it.
+    """
 
     c = contacts
     successor = get_user_model().objects.create_user(username="contacts-successor")
     with actor_context(c.admin):
         Directory.objects.with_actor(c.admin).get(pk=c.directory.pk).transfer_ownership(successor)
     assert _allowed(c.directory, successor, "write")
+    for row in (c.person, c.person_party, c.organization, c.address, c.edge, c.stated_handle):
+        assert not _allowed(row, successor) and not _scoped(row, successor), type(row).__name__
+    with actor_context(successor):
+        Directory.objects.with_actor(successor).get(pk=c.directory.pk).grant_record_access("contact_reader", successor)
     for row in (c.person, c.person_party, c.organization, c.address, c.edge, c.stated_handle):
         assert _allowed(row, successor) and _scoped(row, successor), type(row).__name__
         for action in ("write", "delete"):
@@ -508,6 +516,24 @@ def test_a_transferred_directory_lends_its_contacts_to_the_new_owner(contacts: S
     # The handle only the former owner asserted, and a person no link names, stay theirs.
     for row in (c.own_handle, c.unlinked):
         assert not _allowed(row, successor) and _allowed(row, c.owner), type(row).__name__
+
+
+def test_the_repair_grants_each_directorys_owner_the_read_of_its_contacts_once(contacts: SimpleNamespace) -> None:
+    """Directories connected before connecting granted it: provision grants their owners, and a second run nothing."""
+
+    from io import StringIO
+
+    from django.core.management import call_command
+
+    c = contacts
+    assert not _allowed(c.directory, c.owner, "contact_read")
+    out = StringIO()
+    call_command("grant_directory_owner_contact_reads", stdout=out)
+    assert "Granted 2 directory owner(s)" in out.getvalue() and "0 already held it" in out.getvalue()
+    assert _allowed(c.directory, c.owner, "contact_read") and _allowed(c.other, c.other.owner, "contact_read")
+    again = StringIO()
+    call_command("grant_directory_owner_contact_reads", stdout=again)
+    assert "Granted 0 directory owner(s)" in again.getvalue() and "2 already held it" in again.getvalue()
 
 
 def test_the_share_surface_grants_contact_reader_under_the_directory_write(contacts: SimpleNamespace) -> None:

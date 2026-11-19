@@ -40,7 +40,7 @@ from phonenumbers import (
     is_valid_number,
     parse,
 )
-from rebac import PermissionDenied, SubjectRef, actor_context, system_context
+from rebac import PermissionDenied, SubjectRef, actor_context, backend, system_context, to_object_ref, to_subject_ref
 from rebac.mixins import RebacModelBase
 
 from angee.base.fields.implementation import ImplClassField
@@ -1942,3 +1942,28 @@ class Directory(Bridge, inherits="integrate.Integration"):
         """
 
         return self.backend.credential_blocker(credential)
+
+    def grant_owner_contact_read(self) -> bool:
+        """Grant this directory's owner ``contact_reader``, the read of its contacts; return whether it was missing.
+
+        The one writer of that grant, a decision made when the directory is
+        connected: ``Directory.objects.connect`` calls it for the connecting
+        owner, and the provision repair (``DirectoryManager.grant_owner_contact_reads``)
+        for every existing directory. It is system work and idempotent: an owner
+        who already reads the contacts (granted, or through a group) is granted
+        nothing. A transfer does not move it: a person grants a later owner
+        through the record-access surface, and the previous owner keeps the
+        grant until someone removes it. A grant that follows ownership would be
+        written by the transfer's owner, a ``transfer_ownership`` override on
+        the directory calling this for the new owner and revoking the previous
+        one in the transfer's transaction.
+        """
+
+        if self.owner_id is None:
+            return False
+        owner = to_subject_ref(self.owner)
+        with system_context(reason="parties.directory.owner_contact_read"):
+            if backend().check_access(subject=owner, action="contact_read", resource=to_object_ref(self)).allowed:
+                return False
+            self.system_grant_record_access("contact_reader", owner)
+        return True

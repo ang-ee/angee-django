@@ -4135,7 +4135,8 @@ class DirectoryManager[DirectoryT: Directory](IntegrationManager[DirectoryT]):
         its own, named after the backend, ``display_name`` and the directory's id
         so no connection or reconnect ever reuses one, connects the directory
         with it (``Integration.attach_connection``, which enters connection
-        discovery) and claims the address the account signs in as as the owner's
+        discovery), grants the owner the read of its contacts
+        (``Directory.grant_owner_contact_read``) and claims the address the account signs in as as the owner's
         own handle (``DirectoryBackend.account_address``); held by someone the
         owner may not take it from, it is only claimed for review, and the
         connection stands. Once that commits, the
@@ -4193,6 +4194,7 @@ class DirectoryManager[DirectoryT: Directory](IntegrationManager[DirectoryT]):
                 owner, kind=credential_kind, name=f"{name[:limit]}{suffix}", material=material
             )
             directory.attach_connection(credential)
+            directory.grant_owner_contact_read()
             if address := directory.backend.account_address():
                 handles = apps.get_model("parties", "Handle").objects
                 handles.claim_control(
@@ -4209,6 +4211,23 @@ class DirectoryManager[DirectoryT: Directory](IntegrationManager[DirectoryT]):
             except Exception:  # noqa: BLE001 -- the committed directory stays connected; its next scheduled sync runs.
                 logger.warning("The first sync of directory %s could not be queued.", directory.pk, exc_info=True)
         return directory
+
+    def grant_owner_contact_reads(self) -> tuple[int, int]:
+        """Grant every directory's owner the read of its contacts where missing; return ``(granted, held)``.
+
+        The provision repair for directories connected before connecting granted
+        it (``Directory.grant_owner_contact_read``, the one writer). Idempotent:
+        a second run grants nothing. A directory without an owner is skipped.
+        """
+
+        granted = held = 0
+        with system_context(reason="parties.directory.owner_contact_reads"):
+            for directory in self.model._base_manager.filter(owner__isnull=False).order_by("pk"):
+                if directory.grant_owner_contact_read():
+                    granted += 1
+                else:
+                    held += 1
+        return granted, held
 
     def _vendor_loaded(self, impl: Any) -> bool:
         """Whether the seeded vendor row the backend ``impl``'s defaults name is loaded (or it names none)."""
