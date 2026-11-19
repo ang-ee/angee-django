@@ -139,3 +139,42 @@ def test_a_reader_who_may_not_merge_is_refused_before_any_lock() -> None:
     assert outcomes == [
         ("refused", "Only an active person who may change every one of these records merges them in a batch."),
     ]
+
+
+def test_a_set_a_statement_timeout_stops_is_its_own_outcome_and_the_next_set_merges() -> None:
+    """A real statement timeout on rows held elsewhere fails that set alone; the free set after it merges."""
+
+    from angee.messaging.testing.models import Person
+
+    owner = create_user("timeout-batch-owner")
+    with system_context(reason="tests.parties.timeout_batch"):
+        sets = []
+        for tag in ("held", "free"):
+            pair = []
+            for index in range(2):
+                person = Person._base_manager.create(display_name="Zoe Example", created_by=owner)
+                handle = Handle._base_manager.create(
+                    platform="email", value=f"{tag}{index}@example.com", created_by=owner,
+                )
+                Party.objects.assert_handle(person, handle, asserted_by=owner)
+                pair.append(person)
+            sets.append(pair)
+
+    def merge() -> list[str]:
+        with connection.cursor() as cursor:
+            cursor.execute("SET statement_timeout = '500ms'")
+        outcomes = Party.objects.merge_duplicates(
+            actor=owner, sets=[[person.public_id for person in pair] for pair in sets],
+        )
+        return [str(row.outcome) for row in outcomes]
+
+    held = [person.pk for person in sets[0]]
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        with transaction.atomic(), system_context(reason="tests.parties.timeout_batch_holder"):
+            list(Party._base_manager.filter(pk__in=held).select_for_update())
+            list(Handle._base_manager.filter(party_id__in=held).select_for_update())
+            future, pid = submit(pool, merge)
+            wait_for_lock(pid, future)
+            outcomes = future.result(timeout=10)
+
+    assert outcomes == ["failed", "merged"]

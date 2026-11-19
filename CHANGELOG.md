@@ -28,8 +28,10 @@ live in code docstrings.
   holding a record the person may not read, or one the person may not merge in a
   batch is refused before anything is read further or locked; a set merges exactly as confirmed, judged again under
   one lock pass of its members, their same-person partners and their handles; the oldest record survives and the others fold into it in
-  key order; a lock conflict (deadlock, lock not granted) is that set's
-  `stopped`, any other database error stops the call. A batch records no value
+  key order; each set runs in its own transaction: a lock conflict (deadlock,
+  lock not granted) is that set's `stopped`, and any other database failure (a
+  statement timeout, a lost connection) its `failed`, with a reason for the
+  person and the error in the log, and the next set still runs. A batch records no value
   as the person's choice (`PartyManager.BATCH_CONFIRMED_FIELDS`): statements move
   as their sources' own and an empty survivor field takes a merged record's
   value as a plain value (`Party.merge_values`). A pair is certain when both are

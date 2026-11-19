@@ -28,7 +28,7 @@ from typing import TYPE_CHECKING, Any, ClassVar, NamedTuple, Self, TypedDict, ca
 from django.apps import apps
 from django.conf import settings
 from django.core.exceptions import ObjectDoesNotExist, ValidationError
-from django.db import IntegrityError, OperationalError, models, transaction
+from django.db import DatabaseError, IntegrityError, models, transaction
 from django.db.models import (
     Case,
     Count,
@@ -877,6 +877,8 @@ class DuplicateMergeOutcome(StrEnum):
     """A set confirmed as a certain pair is no longer one; nothing merged."""
     STOPPED = "stopped"
     """The database stopped the merge for a concurrent write (a deadlock, a lock timeout); nothing merged."""
+    FAILED = "failed"
+    """Any other database failure (a statement timeout, a lost connection) rolled the set back; nothing merged."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -948,7 +950,7 @@ _LOCK_CONFLICT_SQLITE_CODES = frozenset({5, 6})
 
 
 def _lock_conflict(error: Exception) -> bool:
-    """Whether the driver error behind a Django ``OperationalError`` is a lock conflict worth retrying."""
+    """Whether the driver error behind a Django database error is a lock conflict worth retrying."""
 
     cause = error.__cause__
     if getattr(cause, "sqlstate", None) in _LOCK_CONFLICT_SQLSTATES:
@@ -2201,6 +2203,14 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
     SET_MEMBERS: ClassVar[int] = 10
     """The most records one set of a batch merge holds."""
 
+    STOPPED_REASON: ClassVar[str] = (
+        "The database stopped this merge for a concurrent change; nothing merged, try again."
+    )
+    """What a person reads of a set a lock conflict stopped."""
+    FAILED_REASON: ClassVar[str] = (
+        "The database could not complete this merge; nothing merged. Try again, or ask an operator to read the log."
+    )
+    """What a person reads of a set a database failure stopped; the error itself goes to the log."""
     BATCH_CONFIRMED_FIELDS: ClassVar[tuple[str, ...]] = ()
     """The merge fields a batch merge records as the person's choice: none.
 
@@ -2342,12 +2352,13 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
         statements move as their sources' own and the provenance ranking decides
         what shows; an empty survivor field takes a merged record's value as a plain
         value the sources may still replace; no value is recorded as the person's
-        choice (:attr:`BATCH_CONFIRMED_FIELDS`). A refusal is reported with its reason, and a merge a lock
-        conflict stops (a deadlock, a lock that was not granted in time) as
-        ``stopped``; each set stands alone and the next one still runs. Only a
-        lock conflict is a set's outcome (:func:`_lock_conflict`); any other
-        database error, a lost connection included, stops the call. More than
-        :attr:`BATCH_SETS` sets refuse the batch.
+        choice (:attr:`BATCH_CONFIRMED_FIELDS`). Each set runs in its own
+        transaction and stands alone: a refusal is reported with its reason, a merge
+        a lock conflict stops (a deadlock, a lock that was not granted in time,
+        :func:`_lock_conflict`) as ``stopped``, and any other database failure (a
+        statement timeout, a lost connection) as ``failed`` with
+        :attr:`FAILED_REASON`, its error logged for an operator; the next set still
+        runs. More than :attr:`BATCH_SETS` sets refuse the batch.
         """
 
         party_model = apps.get_model("parties", "Party")
@@ -2376,15 +2387,12 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
                     )
             except (PermissionDenied, ValidationError) as error:
                 outcomes.append(DuplicateSetOutcome(ids, DuplicateMergeOutcome.REFUSED, reason=_refusal(error)))
-            except OperationalError as error:
-                if not _lock_conflict(error):
-                    raise
-                outcomes.append(
-                    DuplicateSetOutcome(
-                        ids, DuplicateMergeOutcome.STOPPED,
-                        reason="The database stopped this merge for a concurrent change; nothing merged, try again.",
-                    )
-                )
+            except DatabaseError as error:
+                if _lock_conflict(error):
+                    outcomes.append(DuplicateSetOutcome(ids, DuplicateMergeOutcome.STOPPED, reason=self.STOPPED_REASON))
+                else:
+                    logger.exception("parties.merge_duplicates: the database failed one set; nothing of it merged")
+                    outcomes.append(DuplicateSetOutcome(ids, DuplicateMergeOutcome.FAILED, reason=self.FAILED_REASON))
             else:
                 outcomes.append(DuplicateSetOutcome(ids, DuplicateMergeOutcome.MERGED, survivor=kept))
         return outcomes

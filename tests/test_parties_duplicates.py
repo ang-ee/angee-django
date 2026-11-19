@@ -345,20 +345,32 @@ def test_a_set_a_lock_conflict_stops_is_reported_and_the_next_set_still_merges(d
     assert _merged_into(first[1], second[1]) == [None, second[0].pk]
 
 
-def test_a_database_error_other_than_a_lock_conflict_stops_the_call(db: None) -> None:
-    """A lost connection is no set's outcome: it reaches the caller."""
+def test_a_set_the_database_fails_is_its_own_outcome_and_the_next_set_still_merges(
+    db: None, caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Any other database failure (here a statement timeout) rolls that set back and reports it; the batch goes on."""
 
     del db
-    owner = create_user("duplicates-lost")
-    pair = _people(owner, "Zoë Example", "Zoe Example")
+    owner = create_user("duplicates-failed")
+    first = _people(owner, "Zoë Example", "Zoe Example", value="zoe@example.com")
+    second = _people(owner, "Yan Example", "yan example", value="yan@example.com")
+    failed: list[str] = []
 
-    def lost(execute: Any, sql: str, params: Any, many: bool, context: Any) -> Any:
-        if sql.lstrip().upper().startswith("UPDATE") and '"merged_into_id"' in sql:
-            raise _lock_conflict("08006")
+    def time_out_once(execute: Any, sql: str, params: Any, many: bool, context: Any) -> Any:
+        if not failed and sql.lstrip().upper().startswith("UPDATE") and '"merged_into_id"' in sql:
+            failed.append(sql)
+            raise _lock_conflict("57014")
         return execute(sql, params, many, context)
 
-    with connection.execute_wrapper(lost), pytest.raises(OperationalError):
-        _merge(owner, pair)
+    with connection.execute_wrapper(time_out_once), caplog.at_level("ERROR", logger="angee.parties.managers"):
+        outcomes = _merge(owner, first, second)
+
+    assert outcomes[0] == ("failed", None, Party.objects.FAILED_REASON)
+    assert [outcome for outcome, _survivor, _reason in outcomes] == ["failed", "merged"]
+    assert _merged_into(first[1], second[1]) == [None, second[0].pk]
+    # The reason is for the person; the error itself is for an operator, in the log.
+    assert "deadlock detected" not in outcomes[0][2]
+    assert any(record.exc_info for record in caplog.records)
 
 
 def test_a_batch_takes_at_most_fifty_sets_and_a_set_at_most_ten_records(db: None) -> None:
