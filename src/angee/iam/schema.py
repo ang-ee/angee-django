@@ -212,6 +212,12 @@ class CurrentUserType(AngeeNode):
     is_staff: auto
     is_active: auto
 
+    @strawberry_django.field(only=["password"])
+    def has_usable_password(self) -> bool:
+        """Disclose only whether this session user can change a password."""
+
+        return bool(cast(Any, self).has_usable_password())
+
     @strawberry_django.field(only=["first_name", "last_name", "username"])
     def display_name(self) -> str:
         """Return the user's human label, overriding the username Node default."""
@@ -1012,7 +1018,7 @@ class IAMMutation:
         """Change the signed-in user's own password and keep this session signed in; takes no target id."""
 
         user = session_user(info)
-        user.change_password(current_password=current_password, new_password=new_password)
+        user.change_password(get_request(info), current_password=current_password, new_password=new_password)
         update_session_auth_hash(get_request(info), user)
         return ActionResult(ok=True, message="Password changed.")
 
@@ -1032,6 +1038,18 @@ class IAMMutation:
 @strawberry.type
 class IAMUserAccountMutation:
     """Account verbs gated by the target user's zed permissions and protection."""
+
+    @strawberry.mutation
+    @action_guard("Setting the password failed.", camel_case_keys=False)
+    @sensitive_variables("password")
+    def set_user_password(
+        self, info: strawberry.Info, id: PublicID, password: str, expected_revision: int,
+    ) -> ActionResult:
+        """Set an unprotected person's password without disclosing it."""
+
+        user = authorized_permission_target(info, User, id, str(UserAccountAction.SET_PASSWORD))
+        user.set_account_password(password, expected_revision=expected_revision)
+        return ActionResult(ok=True, message="Password set.")
 
     @strawberry.mutation
     def issue_user_password(self, info: strawberry.Info, id: PublicID) -> IssuedUserPassword:

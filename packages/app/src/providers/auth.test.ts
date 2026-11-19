@@ -26,6 +26,16 @@ const currentUser = {
 };
 
 describe("Angee app auth provider", () => {
+  test.each([true, false, undefined])("preserves the usable-password fact (%s) through the existing identity read", async (hasUsablePassword) => {
+    const request = vi.fn(async (document: unknown) => {
+      expect(document).toBe(AngeeCurrentUserDocument);
+      return { current_user: { ...currentUser, hasUsablePassword } };
+    });
+    const provider = createAngeeAuthProviderFromRequest(request as never);
+    await expect(provider.getIdentity?.()).resolves.toMatchObject({ hasUsablePassword });
+    expect(request).toHaveBeenCalledOnce();
+  });
+
   test("route checks reuse the resolved session while an invalidated observer refreshes it", async () => {
     const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     const request = vi.fn(async () => ({ current_user: currentUser }));

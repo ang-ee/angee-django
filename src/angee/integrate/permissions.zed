@@ -1,7 +1,7 @@
 // Authorization schema for the integrate addon.
 // @rebac_package: integrate
 // @rebac_package_version: 0.1.0
-// @rebac_schema_revision: 12
+// @rebac_schema_revision: 13
 
 definition integrate/oauth_client {
     relation admin: angee/role // rebac:const=admin
@@ -40,6 +40,7 @@ definition integrate/credential {
     permission read = user + admin->member
     permission write = user + admin->member
     permission delete = user + admin->member
+    permission replace_secret = admin->member
 }
 
 definition integrate/vendor {

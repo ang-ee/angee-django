@@ -194,10 +194,11 @@ clears that, and the signing key is never its generic secret.
 material; it is never stored as a copy of client policy. Ordinary access-token
 expiry with a refresh grant does not ask for new consent.
 
-The credential form edits **name** and **expiry** for non-OAuth kinds through
+The credential form edits **name** for non-OAuth kinds through
 the existing `update_credentials_by_pk` resource. `Credential.editable_fields`
 projects that ownership and `validate_details` enforces it on writes: OAuth
-exchanges retain control of both fields. The existing credential `write` and
+exchanges retain control of their name. Expiry is read-only; it reports provider
+metadata and does not promise an expiry-at-use gate. The existing credential `write` and
 field gates still apply; this resource admits the credential's user or a
 platform administrator, subject to its guarded related reads.
 
@@ -205,14 +206,20 @@ platform administrator, subject to its guarded related reads.
 administrators. `replace_credential_secret` takes the handler's write-only
 `CredentialMaterialInput` and delegates to `Credential.replace_secret` and
 `replace_material`. The handler selects the token, Basic-auth pair, application
-keys, SSH key or JWT key file and validates it just as at creation. OAuth must
-use its connection flow instead. Static-token placeholders still accept an empty
-key, as their handler allows. Inputs use password controls and transient mutation
-handling; responses contain no secret.
+keys, SSH key or JWT key file and requires all replacement fields to be nonempty.
+Only static-token creation allows an empty placeholder. OAuth must use its
+connection flow instead. The model requires the Zed `replace_secret` permission
+(`admin->member`) as well as the existing `write` gate; `replacement_fields`
+projects eligibility per actor. Owners without that permission can rename a
+manual credential but are neither offered nor allowed to replace its secret.
+Creation and replacement share field presentation: PEM and JSON use textareas,
+public identifiers use text, and single-line secrets use masked inputs. Secret
+inputs declare `autoComplete="new-password"` and transient mutation handling;
+responses contain no secret.
 
 Replacement keeps the credential id, owner and integration attachments. The
-existing locked merge replaces the supplied material fields, preserves unrelated
-material, discards cached scoped tokens and applies handler-derived metadata.
+locked replacement uses the handler's `carry_forward` to decide what survives,
+discards stale material and cached scoped tokens, and applies handler-derived metadata.
 Attached integrations read the new material on their next credential load; this
 does not revoke a remote key or restart an already authenticated connection.
 

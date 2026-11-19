@@ -207,7 +207,7 @@ class UserKind(models.TextChoices):
 
 
 class UserAccountAction(models.TextChoices):
-    """Account controls; set-password composes the existing administrative update gates."""
+    """Account verbs, each named by its Zed permission and sharing protected-account blockers."""
 
     SET_ACTIVE = "set_active", "Set active"
     RENAME = "rename", "Rename"
@@ -340,12 +340,6 @@ class UserQuerySet[UserT: User](AngeeQuerySet[UserT]):
         """Exclude the accounts :meth:`protection_condition` protects from ``actor``."""
 
         return cast(Self, self.exclude(self.protection_condition(actor)))
-
-    def protected_update_condition(self, actor: Any) -> Q:
-        """Match protected accounts whose administrative updates ``actor`` cannot perform."""
-
-        administered = self.model._default_manager.with_actor(actor).with_action("administer")
-        return self.protection_condition(actor) & ~Q(pk__in=administered.values("pk"))
 
     def preview_candidates(self, actor: Any) -> Self:
         """Return the active, unprotected people ``actor`` may assume in a preview."""
@@ -541,7 +535,10 @@ class UserManager[UserT: User](_UserManagerBase[UserT], BaseUserManager[UserT]):
                 is_superuser=False,
                 is_active=True,
             )
-            user.set_password(password)
+            if actor is not None and password is not None:
+                user._set_validated_password(password)
+            else:
+                user.set_password(password)
             try:
                 with transaction.atomic():
                     with system_context(reason="iam.person.validate"):
@@ -884,16 +881,10 @@ class User(AbstractBaseUser, RebacPermissionsMixin, OptimisticLockMixin, AngeeDa
         inactive = cls.objects.inactive_condition(actor)
         annotations: dict[str, models.expressions.BaseExpression] = {}
         for action in UserAccountAction.values:
-            if action == UserAccountAction.SET_PASSWORD:
-                password_rows = cls.objects.with_actor(actor).with_action("write__password")
-                rows = (
-                    cls.objects.with_actor(actor).with_action("write").scoped_for_aggregate()
-                    .filter(kind=UserKind.PERSON, pk__in=password_rows.values("pk"))
-                    .exclude(cls.objects.protected_update_condition(actor))
-                )
-                annotations[action] = models.Exists(rows.filter(pk=models.OuterRef("pk")))
-                continue
             rows = cls.objects.with_actor(actor).with_action(action).scoped_for_aggregate()
+            if action == UserAccountAction.SET_PASSWORD:
+                for permission in ("write", "write__password"):
+                    rows = rows.filter(pk__in=cls.objects.with_actor(actor).with_action(permission).values("pk"))
             for condition, _error in cls.account_action_blockers(action, protection, inactive):
                 rows = rows.exclude(condition)
             annotations[action] = models.Exists(rows.filter(pk=models.OuterRef("pk")))
@@ -1062,35 +1053,67 @@ class User(AbstractBaseUser, RebacPermissionsMixin, OptimisticLockMixin, AngeeDa
             self.account_revision = user.account_revision
 
     @sensitive_variables("current_password", "new_password")
-    def change_password(self, *, current_password: str, new_password: str) -> None:
-        """Change only the actor's own usable password, checking the current secret under a lock.
+    def change_password(self, request: Any, *, current_password: str, new_password: str) -> None:
+        """Change the actor's password after the request's one throttled authentication attempt.
 
-        Django owns validation, hashing and password-change hooks. Only the hash
-        and normal audit/revision stamps are saved. The session caller refreshes
-        its auth hash with Django's ``update_session_auth_hash`` after this succeeds.
+        Authentication precedes the row lock. The locked hash must still match
+        the authenticated one, so concurrent password changes cannot be overwritten.
+        The session caller refreshes its auth hash after this succeeds.
         """
+
+        # Django's backend module resolves AUTH_USER_MODEL at import time.
+        from angee.iam.auth import authenticate_once
 
         actor, _bypass = self.effective_actor(strict=True)
         if actor is None or to_subject_ref(actor) != to_subject_ref(self):
             raise PermissionDenied("You can change only your own password.")
+        if not self.has_usable_password():
+            raise ValidationError({"current_password": "This account has no password; use its sign-in method."})
+        with system_context(reason="iam.password.authenticate"):
+            authenticated = authenticate_once(request, username=self.username, password=current_password)
+        if authenticated is None or to_subject_ref(authenticated) != actor:
+            raise ValidationError({"current_password": "The current password could not be verified."})
         with transaction.atomic(), system_context(reason="iam.password.change"):
             user = type(self).objects.lock_if_supported().get(pk=self.pk)
-            if not user.has_usable_password():
-                raise ValidationError({"current_password": "This account has no password; use its sign-in method."})
-            if not user.check_password(current_password):
-                raise ValidationError({"current_password": "The current password is incorrect."})
+            if not constant_time_compare(user.password, authenticated.password):
+                raise ValidationError({"current_password": "The password changed; try again."})
             if current_password == new_password:
                 raise ValidationError({"new_password": "Choose a password different from the current password."})
-            try:
-                # This source class composes into django-stubs' configured runtime user.
-                validate_password(new_password, cast(Any, user))
-            except ValidationError as error:
-                raise ValidationError({"new_password": error.messages}) from None
-            user.set_password(new_password)
+            user._set_validated_password(new_password, field="new_password")
             user.save(update_fields=["password", "updated_at"])
             self.password, self.account_revision = user.password, user.account_revision
 
     @sensitive_variables("password")
+    def _set_validated_password(self, password: str, *, field: str = "password") -> None:
+        """Validate and hash an actor-typed password after its caller's admission; do not save."""
+
+        try:
+            if not password:
+                raise ValidationError("A password is required.")
+            # This source class composes into django-stubs' configured runtime user.
+            validate_password(password, cast(Any, self))
+        except ValidationError as error:
+            raise ValidationError({field: error.messages}) from None
+        self.set_password(password)
+
+    @sensitive_variables("password")
+    def set_account_password(self, password: str, *, expected_revision: int | None) -> None:
+        """Set a typed password for an unprotected person through the verb and existing write gates."""
+
+        with transaction.atomic():
+            user = self._lock_for_account_action(
+                str(UserAccountAction.SET_PASSWORD), expected_revision=expected_revision,
+            )
+            user.require_access("write")
+            user.require_access("write__password")
+            user._set_validated_password(password)
+            user.sudo(reason="iam.password.set").save(
+                update_fields=["password", "updated_at"], expected_revision=expected_revision,
+            )
+            self.password, self.account_revision = user.password, user.account_revision
+
+    @sensitive_variables("password")
+    @transaction.atomic
     def update_account(
         self,
         changes: Mapping[str, Any],
@@ -1103,26 +1126,24 @@ class User(AbstractBaseUser, RebacPermissionsMixin, OptimisticLockMixin, AngeeDa
         Only changed fields are saved, so each ``write__<field>`` gate guards a
         real change. A protected account accepts the patch only from an actor
         holding ``administer`` on it: a consumer's ``write`` grant never edits
-        an elevated account, the actor's own included.
+        an elevated account, the actor's own included. A password patch delegates
+        to the account verb, which refuses protected and non-person accounts.
+        Mixed patches are atomic; each saved change advances the native revision.
         """
 
         actor, _bypass = self.effective_actor(strict=True)
+        self.require_access("write")
         if expected_revision is not None:
             self.require_revision(expected_revision)
-        if actor is not None and type(self)._base_manager.filter(
-            pk=self.pk,
-        ).filter(type(self).objects.protected_update_condition(actor)).exists():
+        if actor is not None and self.protected_against(actor) and not self.has_access("administer"):
             raise ValidationError(PROTECTED_ACCOUNT_MESSAGE)
+        if password is not None:
+            # Admit against the stored account, before a metadata patch can alter its protection.
+            self.set_account_password(password, expected_revision=expected_revision)
+            expected_revision = self.account_revision
         update_fields = {field for field, value in changes.items() if getattr(self, field) != value}
         for field in update_fields:
             setattr(self, field, changes[field])
-        if password:
-            try:
-                validate_password(password, cast(Any, self))
-            except ValidationError as error:
-                raise ValidationError({"password": error.messages}) from None
-            self.set_password(password)
-            update_fields.add("password")
         self.full_clean()
         if update_fields:
             self.save(update_fields=[*sorted(update_fields), "updated_at"], expected_revision=expected_revision)

@@ -12,12 +12,16 @@ live in code docstrings.
 
 - Record verbs, Delete, Archive and Trash are supplied by the shared views
   instead of each page.
-  - **Passwords and credentials.** The user menu offers Change password while
-    retaining the current session; administrators Set password through the
-    existing revision-checked users update. Non-OAuth credentials expose name
-    and expiry edits plus a confirmed Replace secret action that preserves
-    integration attachments. Existing permissions remain in force, and secret
-    inputs use transient mutation handling.
+  - **Passwords and credentials.** Change password uses the login throttle and
+    retains the requesting session. Administrators Set password through a
+    revision-checked account verb that refuses protected accounts; raw password
+    updates delegate to that same rule. Typed creation, set and change share
+    Django validation. Non-OAuth credentials expose name editing and an
+    administrator-only Replace secret verb that requires nonempty material,
+    removes stale keys and preserves attachments; expiry stays read-only.
+    Shared forms preserve multiline keys, declare autocomplete and use transient
+    mutation handling. The user menu preserves dialog lifetime and focus and
+    hides Change password when the session has no usable password.
   - **Toolbar.** Explicit placement wins; `primary` implies the toolbar. On a
     saved record, the form's own band then fills to two buttons with its visible,
     unplaced, non-danger verbs in declaration order, counting verbs already on

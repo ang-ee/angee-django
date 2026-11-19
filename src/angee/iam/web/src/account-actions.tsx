@@ -1,12 +1,11 @@
 import * as React from "react";
 import type { ActionFieldName } from "@angee/gql/console/actions";
-import { actionDocuments as publicActions } from "@angee/gql/public/actions";
+import type { ActionFieldName as PublicActionFieldName } from "@angee/gql/public/actions";
 import type { Row } from "@angee/metadata";
-import { extractActionOutcome, useAuthoredMutation } from "@angee/refine";
+import { useAuthoredMutation } from "@angee/refine";
 import {
   RecordActionBar,
   invalidFormSubmit,
-  useAuthoredResourceMutation,
   useActionOutcomeMutation,
   useActionResultMutation,
   useRecordAction,
@@ -16,12 +15,12 @@ import {
   type ActionDescriptor,
 } from "@angee/ui";
 
-import { IamIssueUserPassword, IamResetUserPassword, IamSetUserPassword } from "./documents";
+import { IamIssueUserPassword, IamResetUserPassword } from "./documents";
 import { useIamT } from "./i18n";
 
 const USER_MODEL = "iam.User";
 
-/** Account controls the server projects per user row, including the administrative password update. */
+/** Account verbs the server projects per user row, all refusing protected accounts. */
 export type UserAccountAction = "set_active" | "rename" | "reset_password" | "issue_password" | "issue_sign_in_link" | "set_password";
 
 /** Fields every account verb reads from the open user record. */
@@ -38,48 +37,59 @@ function expectedRevision(record: Row | null): number {
   return Number(record?.revision);
 }
 
+/** The typed new-password pair and its local confirmation rule, shared by both password forms. */
+function newPasswordForm(name: "password" | "new_password", t: ReturnType<typeof useIamT>) {
+  const args: readonly ActionArg[] = [
+    { name, label: t("password.new"), widget: "password", autoComplete: "new-password" },
+    { name: "confirmation", label: t("password.confirm"), widget: "password", autoComplete: "new-password" },
+  ];
+  return {
+    args,
+    validate: (values: Record<string, unknown>) => values[name] === values.confirmation ? undefined
+      : invalidFormSubmit({ fieldErrors: { confirmation: [t("password.mismatch")] }, formErrors: [] }),
+  };
+}
+
 /** Change the signed-in user's password; confirmation remains solely in the shared action form. */
 export function useChangePasswordAction(): ActionDescriptor {
   const t = useIamT();
-  const [changePassword] = useAuthoredMutation(publicActions.change_password, {
-    dataProviderName: "public", transient: true, errorNotification: false,
+  const passwordForm = newPasswordForm("new_password", t);
+  const [changePassword] = useActionOutcomeMutation<PublicActionFieldName>("change_password", {
+    dataProviderName: "public", idArgument: null, transient: true, errorNotification: false,
   });
   return {
     id: "change-password", label: t("password.change"),
     args: [
-      { name: "current_password", label: t("password.current"), widget: "password" },
-      { name: "new_password", label: t("password.new"), widget: "password" },
-      { name: "confirmation", label: t("password.confirm"), widget: "password" },
+      { name: "current_password", label: t("password.current"), widget: "password", autoComplete: "current-password" },
+      ...passwordForm.args,
     ],
     submit: async (values) => {
-      if (values.new_password !== values.confirmation) {
-        return invalidFormSubmit({ fieldErrors: { confirmation: [t("password.mismatch")] }, formErrors: [] });
-      }
-      return extractActionOutcome(await changePassword({
+      const invalid = passwordForm.validate(values);
+      if (invalid) return invalid;
+      return changePassword("", {
         current_password: values.current_password, new_password: values.new_password,
-      }), "change_password");
+      });
     },
   };
 }
 
-/** Set a chosen password through the existing users update, including its observed revision. */
+/** Set a chosen password through the account verb, including its observed revision. */
 export function useSetPasswordAction(): ActionDescriptor {
   const t = useIamT();
-  const [setPassword] = useAuthoredResourceMutation(IamSetUserPassword, {
-    dataProviderName: "console", transient: true, errorNotification: false, invalidateModels: [USER_MODEL],
+  const passwordForm = newPasswordForm("password", t);
+  const [setPassword] = useActionOutcomeMutation<ActionFieldName>("set_user_password", {
+    transient: true, errorNotification: false, invalidateModels: [USER_MODEL],
   });
   return {
-    id: "set-password", label: t("users.setPassword"),
-    args: [{ name: "password", label: t("password.new"), widget: "password" }],
+    id: "set-password", label: t("users.setPassword"), danger: true,
+    args: passwordForm.args,
     visibleWhen: (record) => offersAccountAction(record, "set_password"),
     submit: async (values, context) => {
-      const result = await setPassword({
-        id: String(context.record?.id ?? ""), password: String(values.password ?? ""),
-        expectedRevision: expectedRevision(context.record),
+      const invalid = passwordForm.validate(values);
+      if (invalid) return invalid;
+      return setPassword(String(context.record?.id ?? ""), {
+        password: String(values.password ?? ""), expected_revision: expectedRevision(context.record),
       });
-      return result?.update_users_by_pk
-        ? { ok: true, message: t("users.setPassword.done") }
-        : { ok: false, message: t("users.setPassword.error") };
     },
   };
 }

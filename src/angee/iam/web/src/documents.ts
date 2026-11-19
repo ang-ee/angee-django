@@ -87,17 +87,6 @@ export const IamResetUserPassword = graphql(`
   }
 `);
 
-// The administrator's chosen password uses the existing resource update. Its
-// action adapter executes this generated typed document transiently.
-export const IamSetUserPassword = graphql(`
-  mutation IamSetUserPassword($id: String!, $password: String!, $expectedRevision: Int!) {
-    update_users_by_pk(pk_columns: {id: $id}, _set: {password: $password}, expected_revision: $expectedRevision) {
-      id
-      revision
-    }
-  }
-`);
-
 export const IamAssignmentSubjects = graphql(`
   query IamAssignmentSubjects($limit: Int = 500, $subjects: [String!]! = []) {
     iam_assignment_subject_labels(subjects: $subjects) { subject label }

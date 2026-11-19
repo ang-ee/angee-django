@@ -14,8 +14,6 @@ export const enIamMessages: Record<string, string> = {
   "password.confirm": "Confirm new password",
   "password.mismatch": "The passwords do not match.",
   "users.setPassword": "Set password",
-  "users.setPassword.done": "Password set. Existing sessions will end.",
-  "users.setPassword.error": "The password could not be set.",
 
   // Typed assignment subjects shared by workflow and approval controls.
   "assignmentSubjects.users": "Users",

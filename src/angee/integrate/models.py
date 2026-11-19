@@ -1558,9 +1558,9 @@ class Credential(AuditMixin, AngeeDataModel, concrete=True):
 
     @property
     def editable_fields(self) -> list[str]:
-        """Metadata operators own; OAuth's name and expiry belong to its exchange."""
+        """The manual label; expiry is reported health, never a manual validity limit."""
 
-        return [] if self.kind == CredentialKind.OAUTH else ["name", "expires_at"]
+        return [] if self.kind == CredentialKind.OAUTH else ["name"]
 
     @property
     def replacement_fields(self) -> list[str]:
@@ -1571,7 +1571,7 @@ class Credential(AuditMixin, AngeeDataModel, concrete=True):
     def validate_details(self, changes: Mapping[str, Any]) -> None:
         """Refuse manual edits of exchange-owned metadata before the native resource update."""
 
-        if refused := (changes.keys() & {"name", "expires_at"}) - set(self.editable_fields):
+        if refused := (changes.keys() & {"name"}) - set(self.editable_fields):
             raise ValidationError({field: "OAuth manages this field; reconnect the account instead."
                                    for field in sorted(refused)})
 
@@ -1579,17 +1579,18 @@ class Credential(AuditMixin, AngeeDataModel, concrete=True):
     def replace_secret(self, material: Mapping[str, Any], *, confirmed: bool) -> None:
         """Confirm a non-OAuth manual replacement, preserving write gates and kind validation.
 
-        The console additionally requires its platform-admin permission. Other
+        The Zed permission and existing write gate admit administrators. Other
         capability owners continue to compose ``replace_material`` after their
         own admission, such as the IMAP connection's credential edit.
         """
 
+        self.require_access("replace_secret")
         self.require_access("write")
         if confirmed is not True:
             raise ValidationError({"confirmed": "Confirm replacing this credential's secret."})
         if not self.replacement_fields:
             raise ValidationError("OAuth secrets are managed by the connection flow; reconnect the account instead.")
-        self.replace_material({field: material.get(field, "") for field in self.replacement_fields})
+        self.replace_material(material)
 
     def reveal(self) -> dict[str, Any]:
         """Decode this row's decrypted JSON material."""
@@ -1642,16 +1643,25 @@ class Credential(AuditMixin, AngeeDataModel, concrete=True):
 
         The operator's "the password changed" path: ``material`` carries the
         kind's own input fields (the handler names them), is cleaned exactly
-        as at creation, then merges under the row lock with the fields the handler
+        as at creation, then replaces under the row lock with the fields the handler
         derives from it (:meth:`CredentialKindHandler.upsert_fields`) in the same
         save — the row, its kind, and its owner stay as they are, so every
-        integration attached to it keeps working without re-attachment. Tokens
-        minted from the replaced material are dropped with it.
+        integration attached to it keeps working without re-attachment. Only
+        material the handler explicitly carries forward survives replacement.
         """
 
         handler = self.handler
+        handler.validate_replacement(material)
         replacement = handler.clean(material)
-        self._merge_material({**replacement, _SCOPED_TOKENS: None}, fields=handler.upsert_fields(replacement))
+        assigned = handler.upsert_fields(replacement)
+        updated = ["material", *assigned, "updated_at"]
+        with system_context(reason="integrate.credential.replace"), transaction.atomic():
+            row = type(self).objects.lock_if_supported().get(pk=self.pk)
+            row.material = self.encode_material(handler.carry_forward(replacement, row.reveal()))
+            for name, value in assigned.items():
+                setattr(row, name, value)
+            row.save(update_fields=updated)
+            self.refresh_from_db(fields=updated)
 
     def auth_headers(self, *, scopes: Collection[str] = ()) -> dict[str, str]:
         """Return authorization headers through the kind handler.

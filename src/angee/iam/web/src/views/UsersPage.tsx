@@ -37,7 +37,7 @@ export function UsersPage(): React.ReactElement {
           <Field name="last_login" editOnly readOnly />
         </Group>
         {/* Write-only on create; chosen replacements use the Set password action. */}
-        <Field name="password" widget="password" kind="string" createOnly />
+        <Field name="password" widget="password" kind="string" autoComplete="new-password" createOnly />
       </Form>
     </ResourceList>
   );

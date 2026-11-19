@@ -14,7 +14,7 @@ import {
 
 const mocks = vi.hoisted(() => ({
   authored: vi.fn(), prompt: vi.fn(), reveal: vi.fn(), options: vi.fn(), setActive: vi.fn(), rename: vi.fn(),
-  setPassword: vi.fn(), resourceOptions: vi.fn(),
+  setPassword: vi.fn(), changePassword: vi.fn(), actionOptions: vi.fn(),
 }));
 vi.mock("@angee/refine", async (original) => ({
   ...await original<object>(),
@@ -26,9 +26,9 @@ vi.mock("@angee/ui", async (original) => ({
   ...await original<object>(),
   useSecretReveal: () => mocks.reveal,
   useActionResultMutation: () => [mocks.setActive, {}],
-  useActionOutcomeMutation: () => [mocks.rename, {}],
-  useAuthoredResourceMutation: (_document: unknown, options: unknown) => {
-    mocks.resourceOptions(options); return [mocks.setPassword, {}];
+  useActionOutcomeMutation: (field: string, options: unknown) => {
+    mocks.actionOptions(field, options);
+    return [field === "change_password" ? mocks.changePassword : field === "set_user_password" ? mocks.setPassword : mocks.rename, {}];
   },
 }));
 beforeEach(() => vi.clearAllMocks());
@@ -42,50 +42,62 @@ describe("chosen passwords are write-only action inputs", () => {
   test("self-service masks all inputs and refuses a mismatched confirmation locally", async () => {
     const { result } = renderHook(useChangePasswordAction);
     const args = result.current.args;
-    expect(Array.isArray(args) ? args.map(({ name, widget }) => [name, widget]) : []).toEqual([
-      ["current_password", "password"], ["new_password", "password"], ["confirmation", "password"],
+    expect(Array.isArray(args) ? args.map(({ name, widget, autoComplete }) => [name, widget, autoComplete]) : []).toEqual([
+      ["current_password", "password", "current-password"], ["new_password", "password", "new-password"],
+      ["confirmation", "password", "new-password"],
     ]);
     expect(await result.current.submit?.({ current_password: "current", new_password: "new", confirmation: "other" },
       { record: null, selectedIds: [] })).toEqual({
       status: "invalid", issues: { fieldErrors: { confirmation: ["The passwords do not match."] }, formErrors: [] },
     });
-    expect(mocks.authored).not.toHaveBeenCalled();
+    expect(mocks.changePassword).not.toHaveBeenCalled();
   });
 
   test("self-service sends only the two passwords through the transient public mutation", async () => {
-    mocks.authored.mockResolvedValue({ change_password: { ok: true, message: "Password changed." } });
+    mocks.changePassword.mockResolvedValue({ ok: true, message: "Password changed." });
     const { result } = renderHook(useChangePasswordAction);
-    expect(mocks.options).toHaveBeenCalledWith({ dataProviderName: "public", transient: true, errorNotification: false });
+    expect(mocks.actionOptions).toHaveBeenCalledWith("change_password", {
+      dataProviderName: "public", idArgument: null, transient: true, errorNotification: false,
+    });
     expect(await result.current.submit?.({ current_password: "current", new_password: "new", confirmation: "new", id: "ignored" },
       { record: null, selectedIds: [] })).toEqual({ ok: true, message: "Password changed." });
-    expect(mocks.authored).toHaveBeenCalledExactlyOnceWith({ current_password: "current", new_password: "new" });
+    expect(mocks.changePassword).toHaveBeenCalledExactlyOnceWith("", { current_password: "current", new_password: "new" });
   });
 
   test("self-service preserves server field errors in the shared action form", async () => {
-    mocks.authored.mockResolvedValue({ change_password: {
-      ok: false, message: "Incorrect current password.", validation_errors: { current_password: ["Try again."] },
-    } });
+    mocks.changePassword.mockResolvedValue({
+      ok: false, message: "Incorrect current password.", validationErrors: { current_password: ["Try again."] },
+    });
     const { result } = renderHook(useChangePasswordAction);
     expect(await result.current.submit?.({ current_password: "wrong", new_password: "new", confirmation: "new" },
       { record: null, selectedIds: [] })).toMatchObject({ ok: false, validationErrors: { current_password: ["Try again."] } });
   });
 
-  test("set-password follows server eligibility and the existing revision-checked update", async () => {
-    mocks.setPassword.mockResolvedValue({ update_users_by_pk: { id: "user-1", revision: 5 } });
+  test("set-password confirms matching inputs and calls the projected verb with the observed revision", async () => {
+    mocks.setPassword.mockResolvedValue({ ok: true, message: "Password set." });
     const { result } = renderHook(useSetPasswordAction);
     expect(result.current.visibleWhen?.(record)).toBe(false);
-    expect(result.current.visibleWhen?.({ ...record, account_actions: ["SET_PASSWORD"], is_staff: true })).toBe(true);
+    expect(result.current.visibleWhen?.({ ...record, account_actions: ["SET_PASSWORD"] })).toBe(true);
+    expect(result.current.visibleWhen?.({ id: "protected", account_actions: [] })).toBe(false);
+    expect(result.current.danger).toBe(true);
     const args = result.current.args;
-    expect(Array.isArray(args) ? args.map(({ name, widget }) => [name, widget]) : []).toEqual([["password", "password"]]);
-    expect(mocks.resourceOptions).toHaveBeenCalledWith({
-      dataProviderName: "console", transient: true, errorNotification: false, invalidateModels: ["iam.User"],
+    expect(Array.isArray(args) ? args.map(({ name, widget, autoComplete }) => [name, widget, autoComplete]) : []).toEqual([
+      ["password", "password", "new-password"], ["confirmation", "password", "new-password"],
+    ]);
+    expect(mocks.actionOptions).toHaveBeenCalledWith("set_user_password", {
+      transient: true, errorNotification: false, invalidateModels: ["iam.User"],
     });
-    expect(await result.current.submit?.({ password: "chosen-password", username: "ignored" },
+    expect(await result.current.submit?.({ password: "chosen-password", confirmation: "different" },
+      { record, selectedIds: [record.id] })).toMatchObject({
+      status: "invalid", issues: { fieldErrors: { confirmation: ["The passwords do not match."] } },
+    });
+    expect(mocks.setPassword).not.toHaveBeenCalled();
+    expect(await result.current.submit?.({ password: "chosen-password", confirmation: "chosen-password", username: "ignored" },
       { record, selectedIds: [record.id] })).toMatchObject({ ok: true });
-    expect(mocks.setPassword).toHaveBeenCalledExactlyOnceWith({ id: "user-1", password: "chosen-password", expectedRevision: 4 });
-    mocks.setPassword.mockResolvedValue(null);
-    expect(await result.current.submit?.({ password: "chosen-password" },
-      { record, selectedIds: [record.id] })).toMatchObject({ ok: false });
+    expect(mocks.setPassword).toHaveBeenCalledExactlyOnceWith("user-1", { password: "chosen-password", expected_revision: 4 });
+    mocks.setPassword.mockResolvedValue({ ok: false, validationErrors: { password: ["Too short."] } });
+    expect(await result.current.submit?.({ password: "weak", confirmation: "weak" },
+      { record, selectedIds: [record.id] })).toMatchObject({ ok: false, validationErrors: { password: ["Too short."] } });
   });
 });
 

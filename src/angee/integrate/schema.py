@@ -41,6 +41,7 @@ from angee.graphql.actions import (
     action_guard,
     action_target,
     authorized_action_target,
+    authorized_permission_target,
     resolve_action_target,
 )
 from angee.graphql.actions import session_user as _session_user
@@ -253,11 +254,12 @@ class CredentialType(AngeeNode):
 
         return cast(list[str], cast(Any, self).editable_fields)
 
-    @strawberry_django.field(only=["kind"])
+    @strawberry_django.field(only=["kind"], extensions=[PermissionsExtension(("replace_secret", "write"))])
     def replacement_fields(self) -> list[str]:
-        """Project the kind handler's replacement inputs without reading any material."""
+        """Project replacement inputs only to an admitted actor, without reading material."""
 
-        return cast(list[str], cast(Any, self).replacement_fields)
+        allowed = held_permissions(cast(Any, self), ("replace_secret", "write"))
+        return cast(list[str], cast(Any, self).replacement_fields) if {"replace_secret", "write"} <= allowed else []
 
     @strawberry_django.field(only=["oauth_client"])
     def oauth_client(self) -> CredentialOAuthClientType | None:
@@ -713,7 +715,7 @@ _CREDENTIAL_RESOURCE = hasura_model_resource(
     groupable=["kind", "status", "last_refresh_status"],
     insert=False,
     delete=False,
-    updatable=["status", "name", "expires_at"],
+    updatable=["status", "name"],
     write_backend=CredentialWriteBackend(Credential),
     field_id_decode={
         "oauth_client": public_pk_decoder(OAuthClient),
@@ -742,11 +744,11 @@ def _enabled_oauth_client_from_id(oauth_client_id: PublicID) -> Any:
     return oauth_client
 
 
-def _credential_material(data: CredentialInput) -> dict[str, str]:
+def _credential_material(data: CredentialMaterialInput, *, kind: str) -> dict[str, str]:
     """Read the secret(s) the kind's handler names out of the discriminated input."""
 
     try:
-        handler = CredentialKind(data.kind).handler
+        handler = CredentialKind(kind).handler
     except ValueError as error:
         raise ValidationError({"kind": "Select a supported credential kind."}) from error
     material: dict[str, str] = {}
@@ -990,8 +992,8 @@ class IntegrateCredentialMutation:
     ) -> ActionResult:
         """Replace a non-OAuth credential's material without disclosing it or changing its bindings."""
 
-        credential = authorized_action_target(info, Credential, id, "write")
-        credential.replace_secret(strawberry.asdict(data), confirmed=confirmed)
+        credential = authorized_permission_target(info, Credential, id, "replace_secret")
+        credential.replace_secret(_credential_material(data, kind=credential.kind), confirmed=confirmed)
         return ActionResult(ok=True, message="Credential secret replaced.")
 
     @strawberry.mutation(permission_classes=_ADMIN_PERMISSION_CLASSES)
@@ -1044,7 +1046,7 @@ class IntegrateCredentialMutation:
 
         user = _session_user(info) if data.user is None else _user_from_public_id(data.user)
         credential = Credential.objects.create_local_credential(
-            user, kind=data.kind, name=data.name, material=_credential_material(data)
+            user, kind=data.kind, name=data.name, material=_credential_material(data, kind=data.kind)
         )
         return cast(CredentialType, credential)
 

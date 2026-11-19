@@ -59,11 +59,13 @@ confirmed opening verb.
 Saved User records inherit IAM's account verbs as `iam.User#actions-menu`
 children: deactivate/reactivate (`set_user_active`), rename (`rename_user`,
 name fields only), give access (`issue_user_password`), reset access
-(`reset_user_password`) and send a sign-in link (`issue_user_sign_in_link`,
-below). Each takes a confirmation and the revision the client
-read (the issue verbs excepted), checks its own Zed permission on `auth/user`
+(`reset_user_password`), set a chosen password (`set_user_password`) and send a
+sign-in link (`issue_user_sign_in_link`, below). Set password confirms the new
+password locally; the other changing verbs take an explicit confirmation.
+Changing verbs take the revision the client read (the issue verbs excepted),
+check their own Zed permission on `auth/user`
 (`set_active`, `rename`, `issue_password`, `reset_password`,
-`issue_sign_in_link`; admin by default)
+`issue_sign_in_link`, `set_password`; admin by default)
 and refuses protected accounts: the actor's own, staff, superusers and effective
 members of `iam/protected:main#member`. Issue and reset return the username with
 a one-time secret, shown only in the shared `useSecretReveal` prompt with a copy
@@ -104,21 +106,35 @@ definition iam/protected {
 
 The user menu's **Change password** form calls `change_password` in the same
 session schema as preferences. `User.change_password` acts only on its actor's
-own account, requires a usable current password, rejects an unchanged password
-and runs Django's configured password validators. The mutation has no user id.
+own account and authenticates its current password through `authenticate_once`
+before locking the row: the login throttle and one-attempt-per-request rule
+apply. It rejects an unchanged password. The mutation has no user id.
 Django's `update_session_auth_hash` keeps the current session signed in and
 rotates its key; other sessions lose their valid password hash. Link-only and
-OIDC-only accounts receive a readable refusal and keep their sign-in method.
+OIDC-only accounts keep their sign-in method. The session user's boolean
+`has_usable_password` hides the menu entry when explicitly false; an identity
+payload without that fact leaves the entry visible. The server still refuses
+accounts without a usable password.
 
 The user record's **Set password** action submits a chosen password through
-`update_users_by_pk` and `User.update_account`, with the observed revision,
-Django validation and hashing. Its `set_password` eligibility uses `write` and
-`write__password`; protected accounts, including the administrator's own, also
-require `administer`. This differs deliberately from the random-password verbs,
-which refuse protected accounts. Service principals remain passwordless.
+`set_user_password(id, password, expected_revision)`, returning `ActionResult`.
+`User.set_account_password` checks `set_password`, the shared account blockers,
+the observed revision and the existing `write` and `write__password` gates
+before validation or hashing. Like its sibling verbs, it refuses the actor's
+own account, elevated role members, staff, superusers and non-person accounts.
+The raw users update delegates its `password` to this same method before
+changing any metadata, so an update cannot remove protection and set a password
+in one request. Combined metadata and password updates are atomic and advance
+the revision for each native save.
 
-Both forms use password inputs and transient mutation handling. Confirmation of
-the self-service new password is checked locally; it is never sent to the server.
+`User._set_validated_password` runs Django's configured validators with the user
+as context, then hashes the value. Actor-requested `create_person` (including
+GraphQL creation), Set password and Change password all use it. Trusted
+`create_user`/`create_superuser` bootstrap, resource and OIDC paths keep Django's
+native factory behavior; `create_person_as_system` creates passwordless people.
+
+Both forms use masked inputs with explicit autocomplete and transient mutation
+handling. Both confirm the new password locally; confirmation never reaches the server.
 The new mutations return no password, and neither the form's record nor the
 database stores a plaintext password.
 

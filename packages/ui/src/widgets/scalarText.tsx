@@ -120,6 +120,7 @@ function PasswordEdit({
       ref={controlRef}
       {...field?.controlProps}
       type="password"
+      autoComplete={field?.autoComplete}
       value={value ?? ""}
       readOnly={readOnly}
       aria-label={widgetLabel(field, "Password")}

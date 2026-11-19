@@ -7,6 +7,7 @@ import {
   type ActionArguments,
   type ActionMutate,
   type UseActionMutationState,
+  type UseActionMutationOptions,
 } from "@angee/refine";
 import {
   useCanonicalResourceModelLabels,
@@ -133,7 +134,7 @@ export function useRecordActionMutation<TField extends string = string>(
     : options), state];
 }
 
-export interface UseActionResultMutationOptions {
+export interface UseActionResultMutationOptions extends Pick<UseActionMutationOptions, "transient" | "errorNotification"> {
   /** Backend argument carrying the record id; defaults to `id`. Null sends explicit arguments only. */
   idArgument?: string | null;
   /** Angee model labels whose refine caches this verb moves. */
@@ -207,11 +208,13 @@ export function useActionOutcomeMutation<TField extends string = string>(
       ? { invalidateModels: canonicalInvalidateModels }
       : {}),
     ...(options.invalidateOnFailure ? { invalidateOnFailure: true } : {}),
+    ...(options.transient !== undefined ? { transient: options.transient } : {}),
+    ...(options.errorNotification !== undefined ? { errorNotification: options.errorNotification } : {}),
     invalidates,
   });
 }
 
-export interface UseRecordChromeActionMutationOptions {
+export interface UseRecordChromeActionMutationOptions extends Pick<UseActionMutationOptions, "transient" | "errorNotification"> {
   /** Argument carrying the targeted id when a slot acts on a related record. */
   idArgument?: string;
   /**
@@ -305,6 +308,8 @@ function useRecordChromeActionOptions(
   return {
     ...(dataProviderName !== undefined ? { dataProviderName } : {}),
     ...(options.idArgument !== undefined ? { idArgument: options.idArgument } : {}),
+    ...(options.transient !== undefined ? { transient: options.transient } : {}),
+    ...(options.errorNotification !== undefined ? { errorNotification: options.errorNotification } : {}),
     invalidateModels,
   };
 }

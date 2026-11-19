@@ -1,11 +1,14 @@
 """Self-service password changes and the existing administrative password update."""
 
 import pytest
+from axes.models import AccessAttempt
 from django.contrib.auth import HASH_SESSION_KEY, get_user, get_user_model, login
 from django.contrib.auth.models import AnonymousUser
 from rebac import PermissionDenied, actor_context, system_context, to_subject_ref
 
 from angee.graphql.testing.documents import execute_schema, graphql_request, result_data
+from angee.iam.auth import ONE_ATTEMPT_MESSAGE
+from angee.iam.autoconfig import SETTINGS as IAM_SETTINGS
 from tests.conftest import create_platform_admin
 from tests.test_iam_account_actions import UPDATE, _manager
 from tests.test_iam_graphql import _schema
@@ -15,6 +18,12 @@ CURRENT = "Old-password-unique-731!"
 NEW = "New-password-unique-942!"
 CHANGE = """mutation($current: String!, $new: String!) {
   change_password(current_password: $current, new_password: $new) { ok message validation_errors }
+}"""
+SET = """mutation($id: ID!, $password: String!, $revision: Int!) {
+  set_user_password(id: $id, password: $password, expected_revision: $revision) { ok code validation_errors }
+}"""
+CREATE = """mutation($object: users_insert_input!) {
+  insert_users_one(object: $object) { id username }
 }"""
 
 
@@ -77,7 +86,9 @@ def test_change_password_keeps_only_the_current_session(password_user, schema_na
 def test_change_password_cannot_address_another_account(password_user):
     other = User.objects.create_user("other-account", password=CURRENT)
     with actor_context(password_user), pytest.raises(PermissionDenied, match="only your own"):
-        other.with_actor(password_user).change_password(current_password=CURRENT, new_password=NEW)
+        other.with_actor(password_user).change_password(
+            graphql_request(password_user), current_password=CURRENT, new_password=NEW,
+        )
     result = execute_schema(
         _schema("public"),
         """mutation($id: ID!, $current: String!, $new: String!) {
@@ -102,25 +113,48 @@ def test_change_password_requires_sign_in_and_a_usable_password(password_user):
     assert not User._base_manager.get(pk=passwordless.pk).has_usable_password()
 
 
-def test_set_password_uses_existing_gates_for_ordinary_protected_and_self(password_user, caplog):
+@pytest.mark.parametrize("raw_update", [False, True])
+def test_set_password_admits_only_unprotected_people(password_user, raw_update, caplog, monkeypatch):
     admin = create_platform_admin("set-password-admin", password=CURRENT)
     manager = _manager("set-password-manager")
-    protected = User.objects.create_user("protected-password", password=CURRENT, is_staff=True)
+    refused_targets = (
+        admin, manager, create_platform_admin("peer-admin", password=CURRENT),
+        User.objects.create_user("staff-password", password=CURRENT, is_staff=True),
+        User.objects.create_user("super-password", password=CURRENT, is_superuser=True),
+        User.objects.create_user("service-password", kind="service"),
+    )
     schema = _schema("console")
-    for target in (password_user, protected, admin, manager):
-        assert "set_password" in target.account_actions_for(to_subject_ref(admin))
-        assert "set_password" not in target.account_actions_for(to_subject_ref(manager))
-        assert "set_password" not in target.account_actions_for(to_subject_ref(password_user))
+    document = UPDATE if raw_update else SET
+
+    def variables(target, revision):
+        return {"id": target.public_id, "revision": revision,
+                **({"set": {"password": NEW}} if raw_update else {"password": NEW})}
+
+    before = User._base_manager.get(pk=password_user.pk)
+    assert "set_password" in password_user.account_actions_for(to_subject_ref(admin))
+    result = result_data(execute_schema(
+        schema, document, variables(password_user, before.account_revision), user=admin,
+    ))
+    assert result["update_users_by_pk"] if raw_update else result["set_user_password"]["ok"]
+    assert User._base_manager.get(pk=password_user.pk).check_password(NEW)
+    assert User._base_manager.get(pk=password_user.pk).account_revision == before.account_revision + 1
+    stale = execute_schema(schema, document, variables(password_user, before.account_revision), user=admin)
+    assert stale.errors and stale.errors[0].extensions["code"] == "STALE_REVISION"
+
+    def unexpected(*args, **kwargs):
+        pytest.fail("Refused actors and targets must not validate or hash a password")
+
+    monkeypatch.setattr(User, "_set_validated_password", unexpected)
+    monkeypatch.setattr("django.contrib.auth.base_user.make_password", unexpected)
+    for actor, target in [(admin, target) for target in refused_targets] + [(manager, password_user),
+                                                                         (password_user, password_user)]:
+        assert "set_password" not in target.account_actions_for(to_subject_ref(actor))
         before = User._base_manager.get(pk=target.pk)
-        variables = {"id": target.public_id, "set": {"password": NEW}, "revision": before.account_revision}
-        assert execute_schema(schema, UPDATE, variables, user=manager).errors
+        refused = execute_schema(schema, document, variables(target, before.account_revision), user=actor)
+        assert refused.errors or not result_data(refused)["set_user_password"]["ok"]
         assert User._base_manager.get(pk=target.pk).password == before.password
-        result = result_data(execute_schema(schema, UPDATE, variables, user=admin))
-        assert result["update_users_by_pk"]["revision"] == before.account_revision + 1
-        assert User._base_manager.get(pk=target.pk).check_password(NEW)
-        assert NEW not in str(result) + caplog.text
-        stale = execute_schema(schema, UPDATE, variables, user=admin)
-        assert stale.errors and stale.errors[0].extensions["code"] == "STALE_REVISION"
+        assert User._base_manager.get(pk=target.pk).account_revision == before.account_revision
+    assert NEW not in str(result) + caplog.text
 
 
 def test_set_password_validates_at_the_existing_update_owner(password_user):
@@ -131,3 +165,122 @@ def test_set_password_validates_at_the_existing_update_owner(password_user):
     }, user=admin)
     assert result.errors and "password" in result.errors[0].extensions["validationErrors"]
     assert User._base_manager.get(pk=password_user.pk).password == before.password
+
+
+@pytest.mark.parametrize("password", ["short", "123456789012", ""])
+def test_actor_typed_creation_set_and_change_share_validation(password_user, password):
+    admin = create_platform_admin("typed-password-admin", password=None)
+    schema = _schema("console")
+    created = execute_schema(schema, CREATE, {"object": {"username": "typed-person", "password": password}}, user=admin)
+    assert created.errors and "password" in created.errors[0].extensions["validationErrors"]
+    assert not User._base_manager.filter(username="typed-person").exists()
+    result = result_data(execute_schema(schema, SET, {
+        "id": password_user.public_id, "password": password, "revision": password_user.account_revision,
+    }, user=admin))["set_user_password"]
+    assert not result["ok"] and "password" in result["validation_errors"]
+    changed = result_data(execute_schema(schema, CHANGE, {"current": CURRENT, "new": password},
+                                         user=password_user, session=True))["change_password"]
+    assert not changed["ok"] and "new_password" in changed["validation_errors"]
+    assert User._base_manager.get(pk=password_user.pk).check_password(CURRENT)
+
+
+def test_creation_validates_only_actor_typed_passwords(password_user, monkeypatch):
+    admin = create_platform_admin("create-password-admin", password=None)
+    schema = _schema("console")
+    created = result_data(execute_schema(schema, CREATE, {
+        "object": {"username": "typed-person", "password": NEW},
+    }, user=admin))["insert_users_one"]
+    assert User._base_manager.get(username=created["username"]).check_password(NEW)
+    # Install/fixture paths deliberately keep Django's trusted factory semantics.
+    assert User.objects.create_user("seeded", password="weak").check_password("weak")
+    assert User.objects.create_superuser("seeded-admin", password="weak").check_password("weak")
+    ingress = User.objects.create_person_as_system("ingress", "ingress@example.com", reason="test.ingress")
+    assert not ingress.has_usable_password()
+
+    def unexpected(*args, **kwargs):
+        pytest.fail("Creation must authorize before password validation")
+
+    monkeypatch.setattr(User, "_set_validated_password", unexpected)
+    assert execute_schema(schema, CREATE, {
+        "object": {"username": "denied", "password": "short"},
+    }, user=password_user).errors
+
+
+def test_mixed_update_rolls_back_metadata_when_password_is_refused(password_user):
+    admin = create_platform_admin("mixed-password-admin", password=None)
+    before = User._base_manager.get(pk=password_user.pk)
+    refused = execute_schema(_schema("console"), UPDATE, {
+        "id": password_user.public_id, "set": {"first_name": "Changed", "password": "short"},
+        "revision": before.account_revision,
+    }, user=admin)
+    assert refused.errors
+    stored = User._base_manager.get(pk=password_user.pk)
+    assert (stored.first_name, stored.password, stored.account_revision) == (
+        before.first_name, before.password, before.account_revision,
+    )
+
+
+def test_password_patch_cannot_remove_its_targets_protection_first(password_user):
+    admin = create_platform_admin("demotion-password-admin", password=None)
+    target = User.objects.create_user("staff-demotion", password=CURRENT, is_staff=True)
+    refused = execute_schema(_schema("console"), UPDATE, {
+        "id": target.public_id, "set": {"is_staff": False, "password": NEW},
+    }, user=admin)
+    assert refused.errors and "protected" in refused.errors[0].message
+    stored = User._base_manager.get(pk=target.pk)
+    assert stored.is_staff and stored.check_password(CURRENT)
+
+
+def test_wrong_current_passwords_lock_out_through_the_login_throttle(password_user, settings, caplog):
+    settings.AUTHENTICATION_BACKENDS = IAM_SETTINGS["AUTHENTICATION_BACKENDS:append"]
+    settings.AXES_FAILURE_LIMIT = 2
+    settings.AXES_LOCKOUT_PARAMETERS = ["username"]
+    schema = _schema("public")
+    for current in ("bad-first", "bad-second", CURRENT):
+        result = result_data(execute_schema(schema, CHANGE, {"current": current, "new": NEW},
+                                            user=password_user, session=True))["change_password"]
+        assert not result["ok"] and "current_password" in result["validation_errors"]
+    assert AccessAttempt.objects.get(username=password_user.username).failures_since_start >= 2
+    assert User._base_manager.get(pk=password_user.pk).check_password(CURRENT)
+    recorded = str(list(AccessAttempt.objects.values())) + caplog.text
+    assert all(secret not in recorded for secret in (CURRENT, NEW, "bad-first", "bad-second"))
+
+
+def test_one_password_attempt_per_request_including_aliases_and_login(password_user, settings):
+    settings.AUTHENTICATION_BACKENDS = IAM_SETTINGS["AUTHENTICATION_BACKENDS:append"]
+    request = graphql_request(password_user, session=True)
+    result = execute_schema(_schema("public"), """mutation($wrong: String!, $right: String!, $new: String!) {
+      first: change_password(current_password: $wrong, new_password: $new) { ok }
+      second: change_password(current_password: $right, new_password: $new) { ok }
+    }""", {"wrong": "wrong", "right": CURRENT, "new": NEW}, request=request)
+    assert result.errors and result.errors[0].message == ONE_ATTEMPT_MESSAGE
+    assert AccessAttempt.objects.get(username=password_user.username).failures_since_start == 1
+    again = execute_schema(_schema("public"), """mutation($name: String!, $password: String!) {
+      login(username: $name, password: $password) { ok }
+    }""", {"name": password_user.username, "password": CURRENT}, request=request)
+    assert again.errors and again.errors[0].message == ONE_ATTEMPT_MESSAGE
+    assert User._base_manager.get(pk=password_user.pk).check_password(CURRENT)
+
+
+def test_authentication_must_return_the_actor_and_match_the_locked_hash(password_user, monkeypatch):
+    another = User.objects.create_user("wrong-authenticated-user", password=CURRENT)
+    monkeypatch.setattr("angee.iam.auth.authenticate_once", lambda *args, **kwargs: another)
+    refused = result_data(execute_schema(_schema("public"), CHANGE, {"current": CURRENT, "new": NEW},
+                                         user=password_user, session=True))["change_password"]
+    assert not refused["ok"]
+    authenticated = User._base_manager.get(pk=password_user.pk)
+    # Another request changed the row between authentication and the lock.
+    User._base_manager.filter(pk=password_user.pk).update(password=another.password)
+    monkeypatch.setattr("angee.iam.auth.authenticate_once", lambda *args, **kwargs: authenticated)
+    refused = result_data(execute_schema(_schema("public"), CHANGE, {"current": CURRENT, "new": NEW},
+                                         user=password_user, session=True))["change_password"]
+    assert not refused["ok"] and "current_password" in refused["validation_errors"]
+    assert User._base_manager.get(pk=password_user.pk).password == another.password
+
+
+def test_session_user_projects_only_the_usable_password_fact(password_user):
+    passwordless = User.objects.create_user("oidc-only")
+    for user, usable in ((password_user, True), (passwordless, False)):
+        row = result_data(execute_schema(_schema("public"), "{ current_user { id has_usable_password } }", user=user))
+        assert row["current_user"]["has_usable_password"] is usable
+        assert CURRENT not in str(row) and user.password not in str(row)

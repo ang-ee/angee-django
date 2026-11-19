@@ -1,6 +1,6 @@
-import { actionDocuments, type ActionFieldName } from "@angee/gql/console/actions";
+import type { ActionFieldName } from "@angee/gql/console/actions";
 import type { Row } from "@angee/metadata";
-import { extractActionOutcome, useAuthoredMutation, type DocumentVariables } from "@angee/refine";
+import { useAuthoredMutation, type DocumentVariables } from "@angee/refine";
 import {
   savedFormSubmitResult, useUiT, Action,
   Field,
@@ -9,11 +9,13 @@ import {
   registerForm,
   useSecretReveal,
   useAuthoredResourceMutation,
+  useActionOutcomeMutation,
   useRecordAction,
   useRecordActionMutation,
   type FormSubmit,
   type FieldDescriptor,
   type ActionDescriptor,
+  type ActionScalarArg,
   type RecordActionRunner,
   type RegisteredFormProps,
 } from "@angee/ui";
@@ -28,17 +30,44 @@ import { useIntegrateT } from "../i18n";
 
 const MODEL = "integrate.Credential";
 
+interface MaterialPresentation {
+  widget: "text" | "password" | "textarea";
+  secret: boolean;
+  label: string;
+  placeholder?: string;
+  createKind?: string;
+}
+
+// Presentation only: replacement eligibility and required fields come from the server.
+const MATERIAL_FIELDS: Readonly<Record<string, MaterialPresentation>> = {
+  api_key: { widget: "password", secret: true, label: "apiToken", placeholder: "apiTokenPlaceholder", createKind: "static_token" },
+  private_key: { widget: "textarea", secret: true, label: "privateKey", placeholder: "privateKeyPlaceholder", createKind: "ssh_key" },
+  key_file: { widget: "textarea", secret: true, label: "keyFile", placeholder: "keyFilePlaceholder", createKind: "jwt_bearer" },
+  username: { widget: "text", secret: false, label: "username" },
+  password: { widget: "password", secret: true, label: "password" },
+  app_id: { widget: "text", secret: false, label: "appId" },
+  app_secret: { widget: "password", secret: true, label: "appSecret" },
+};
+
+function materialField(name: string, t: ReturnType<typeof useIntegrateT>): ActionScalarArg {
+  const field = MATERIAL_FIELDS[name];
+  if (!field) throw new Error("Unknown credential material field.");
+  return {
+    name, kind: "string", widget: field.widget, label: t(`credentials.create.${field.label}`),
+    ...(field.placeholder ? { placeholder: t(`credentials.create.${field.placeholder}`) } : {}),
+    ...(field.secret ? { autoComplete: "new-password" } : {}),
+  };
+}
+
 function replacementFields(record: Row | null): string[] {
   return Array.isArray(record?.replacement_fields)
     ? record.replacement_fields.filter((field): field is string => typeof field === "string") : [];
 }
 
 /** Resolve field editability from the credential owner's projection, never from an unsaved kind. */
-function credentialMetadataField(name: string): NonNullable<FieldDescriptor["resolve"]> {
-  return (record) => ({
-    name, readOnly: !Array.isArray(record.editable_fields) || !record.editable_fields.includes(name),
-  });
-}
+const credentialNameField: NonNullable<FieldDescriptor["resolve"]> = (record) => ({
+  name: "name", readOnly: !Array.isArray(record.editable_fields) || !record.editable_fields.includes("name"),
+});
 
 /**
  * The complete credential form used by the routed Credentials page and relation
@@ -60,21 +89,18 @@ export function CredentialForm({
     invalidateModels: INTEGRATE_CREATE_CREDENTIAL_INVALIDATES,
     transient: true, errorNotification: false,
   });
-  const [replaceSecret] = useAuthoredResourceMutation(actionDocuments.replace_credential_secret, {
-    dataProviderName: "console", transient: true, errorNotification: false, invalidateModels: [MODEL],
-    shouldInvalidate: (data) => data?.replace_credential_secret.ok === true,
+  const [replaceSecret] = useActionOutcomeMutation<ActionFieldName>("replace_credential_secret", {
+    transient: true, errorNotification: false, invalidateModels: [MODEL],
   });
   const replace: ActionDescriptor = {
     id: "replace-secret", placement: "menu", label: t("credentials.action.replaceSecret"), danger: true,
     confirm: { title: t("credentials.replace.confirmTitle"), body: t("credentials.replace.confirmBody"), danger: true },
     visibleWhen: (record) => replacementFields(record).length > 0,
-    args: ({ record }) => replacementFields(record).map((name) => ({
-      name, label: t(`credentials.material.${name}`), widget: "password", optional: name === "api_key",
-    })),
-    submit: async (values, { record }) => extractActionOutcome(await replaceSecret({
-      id: String(record?.id ?? ""), confirmed: true,
+    args: ({ record }) => replacementFields(record).map((name) => materialField(name, t)),
+    submit: async (values, { record }) => replaceSecret(String(record?.id ?? ""), {
+      confirmed: true,
       data: Object.fromEntries(replacementFields(record).map((name) => [name, String(values[name] ?? "")])),
-    }), "replace_credential_secret"),
+    }),
   };
   const revealSecret = useSecretReveal();
 
@@ -125,30 +151,9 @@ export function CredentialForm({
               { value: "jwt_bearer", label: t("credentials.create.kind.jwtBearer") },
             ]}
           />
-          <Field
-            name="api_key"
-            label={t("credentials.create.apiToken")}
-            widget="password"
-            kind="string"
-            placeholder={t("credentials.create.apiTokenPlaceholder")}
-            showWhen={(values) => values.kind === "static_token"}
-          />
-          <Field
-            name="private_key"
-            label={t("credentials.create.privateKey")}
-            widget="textarea"
-            kind="string"
-            placeholder={t("credentials.create.privateKeyPlaceholder")}
-            showWhen={(values) => values.kind === "ssh_key"}
-          />
-          <Field
-            name="key_file"
-            label={t("credentials.create.keyFile")}
-            widget="textarea"
-            kind="string"
-            placeholder={t("credentials.create.keyFilePlaceholder")}
-            showWhen={(values) => values.kind === "jwt_bearer"}
-          />
+          {Object.entries(MATERIAL_FIELDS).filter(([, field]) => field.createKind).map(([name, field]) => (
+            <Field key={name} {...materialField(name, t)} showWhen={(values) => values.kind === field.createKind} />
+          ))}
         </>
       ) : (
         <>
@@ -157,9 +162,9 @@ export function CredentialForm({
           <Field name="replacement_fields" hidden readOnly />
           <Field name="status" widget="statusbar" status />
           <Group label={t("credentials.group.health")} columns={2}>
-            <Field name="name" resolve={credentialMetadataField("name")} />
+            <Field name="name" resolve={credentialNameField} />
             <Field name="kind" readOnly />
-            <Field name="expires_at" resolve={credentialMetadataField("expires_at")} />
+            <Field name="expires_at" readOnly />
             <Field name="last_refresh_at" readOnly />
             <Field name="last_refresh_status" readOnly />
           </Group>

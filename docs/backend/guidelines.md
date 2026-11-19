@@ -764,7 +764,10 @@ data through REBAC, never a queryset bypass.
   (`token`, `key`, `secret`, `password`) before `user_login_failed` receivers
   see it, and pass the account it names unmasked so axes records the attempt
   under that account. Each request makes one attempt
-  ([`authenticate_once`](../../src/angee/iam/auth.py)). IAM's autoconfig owns
+  ([`authenticate_once`](../../src/angee/iam/auth.py)). Self-service current-password
+  verification uses the same owner: authenticate before taking
+  a row lock, require the authenticated user to be the actor, and reject a hash
+  changed between authentication and the lock. IAM's autoconfig owns
   the axes policy (the cool-off, no reset on success, the username and
   whitelist callables); a refusal of a genuine but spent credential is not a
   guess.
@@ -780,7 +783,8 @@ data through REBAC, never a queryset bypass.
   account is renamed.
   `create_user` stays the trusted bootstrap and OIDC path.
 - **Managed accounts change through IAM's account verbs.** `User.set_active`,
-  `rename`, `issue_password`, `issue_sign_in_link` and `reset_password` lock
+  `rename`, `issue_password`, `issue_sign_in_link`, `reset_password` and
+  `set_account_password` lock
   the row, check their own Zed permission, the expected revision and the shared
   `User.account_action_blockers`, then write elevated; the `account_actions`
   projection batches the same conditions. These verbs refuse a protected
@@ -789,9 +793,13 @@ data through REBAC, never a queryset bypass.
   into that permission from its fragment, never by mirroring holders; see
   [`tests/extcontrib`](../../tests/extcontrib/permissions.extends.zed). Generic
   updates pass `write` and `write__<field>` gates on changed fields only;
-  protected accounts additionally need `administer`. IAM's **Set password**
-  control projects those update gates and submits through that same update
-  owner. Its **Change password** self-service verb verifies the actor's current
+  protected accounts additionally need `administer`. A generic update's
+  `password` delegates to `set_account_password` before modifying other fields;
+  that verb also preserves `write` and `write__password`. Permission and account
+  kind are checked before password validation or hashing. Actor-requested
+  creation, Set password and Change password share `User._set_validated_password`,
+  with the user as Django's validator context; trusted bootstrap/resource
+  factories retain their native behavior. **Change password** verifies the actor's current
   password and keeps only the requesting session's auth hash current; see the
   [IAM password contract](../../src/angee/iam/README.md#chosen-passwords).
 - **Read derived facts from their owner.** Native live ORM backing exposes

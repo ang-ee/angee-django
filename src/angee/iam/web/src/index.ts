@@ -96,7 +96,7 @@ const iam = defineBaseAddon({
   i18n: { iam: enIamMessages },
   containers: {
     "shell#user-menu": {
-      "iam.change-password": { sequence: 20, content: createElement(ChangePasswordMenuItem) },
+      "iam.change-password": { sequence: 30, content: createElement(ChangePasswordMenuItem) },
     },
     // A model's access owners register their roles and visibility for the Share panel.
     "iam#access-roles": { models: true },

@@ -6,7 +6,7 @@ import pytest
 from django.contrib.auth import get_user_model
 from django.db import connection
 from django.utils import timezone
-from rebac import system_context
+from rebac import PermissionDenied, actor_context, system_context
 
 from angee.graphql.testing.documents import execute_schema, result_data
 from tests.conftest import Credential, create_platform_admin, make_integration
@@ -42,15 +42,19 @@ def test_local_metadata_updates_and_secret_replacement_preserve_bindings(kind, o
     schema = _schema("console")
     expiry = timezone.now() + timedelta(days=30)
     with system_context(reason="test.credential.cached_material"):
-        credential.update_material(scoped_tokens={"scope": {"access_token": "superseded-token"}})
+        credential.update_material(
+            stale_secret="superseded-secret", scoped_tokens={"scope": {"access_token": "superseded-token"}},
+        )
+        credential.expires_at = expiry
+        credential.save(update_fields=["expires_at"])
     before_id, before_user = credential.pk, credential.user_id
     update = result_data(execute_schema(schema, UPDATE, {
-        "id": credential.public_id, "set": {"name": "Renamed key", "expires_at": expiry.isoformat()},
+        "id": credential.public_id, "set": {"name": "Renamed key"},
     }, user=admin))["update_credentials_by_pk"]
     assert update["name"] == "Renamed key" and update["expires_at"] is not None
     stored = Credential._base_manager.get(pk=credential.pk)
     assert stored.expires_at == expiry
-    assert update["editable_fields"] == stored.editable_fields == ["name", "expires_at"]
+    assert update["editable_fields"] == stored.editable_fields == ["name"]
     assert update["replacement_fields"] == stored.replacement_fields == list(replacement)
 
     variables = {"id": credential.public_id, "data": replacement, "confirmed": True}
@@ -82,14 +86,17 @@ def test_metadata_write_remains_owner_or_admin_but_replacement_is_admin_only():
         )
     stranger = get_user_model().objects.create_user("credential-stranger")
     schema = _schema("console")
-    variables = {"id": credential.public_id, "set": {"name": "Owner's label", "expires_at": None}}
-    assert result_data(execute_schema(schema, UPDATE, variables, user=owner))["update_credentials_by_pk"]
+    variables = {"id": credential.public_id, "set": {"name": "Owner's label"}}
+    own = result_data(execute_schema(schema, UPDATE, variables, user=owner))["update_credentials_by_pk"]
+    assert own["replacement_fields"] == []
     assert execute_schema(schema, UPDATE, variables, user=stranger).errors
     for actor in (owner, stranger):
         result = execute_schema(schema, REPLACE, {
             "id": credential.public_id, "data": {"api_key": "refused-token"}, "confirmed": True,
         }, user=actor)
         assert result.errors and result.errors[0].extensions["code"] == "PERMISSION_DENIED"
+        with actor_context(actor), pytest.raises(PermissionDenied):
+            credential.with_actor(actor).replace_secret({"api_key": "refused-token"}, confirmed=True)
     assert Credential._base_manager.get(pk=credential.pk).reveal() == {"api_key": "x"}
 
 
@@ -97,13 +104,13 @@ def test_oauth_metadata_and_manual_replacement_are_refused():
     credential = make_integration("oauth-unchanged", kind="oauth", material={"access_token": "oauth-token"}).credential
     admin = create_platform_admin("oauth-edit-admin", password=None)
     schema = _schema("console")
-    for patch in ({"name": "Manual"}, {"expires_at": None}):
+    for patch in ({"name": "Manual"},):
         result = execute_schema(schema, UPDATE, {"id": credential.public_id, "set": patch}, user=admin)
         assert result.errors and next(iter(patch)) in result.errors[0].extensions["validationErrors"]
     replaced = result_data(execute_schema(schema, REPLACE, {
         "id": credential.public_id, "data": {"api_key": "manual"}, "confirmed": True,
     }, user=admin))["replace_credential_secret"]
-    assert not replaced["ok"] and "OAuth" in replaced["message"]
+    assert not replaced["ok"] and "connection flow" in replaced["message"]
     stored = Credential._base_manager.get(pk=credential.pk)
     assert stored.reveal() == {"access_token": "oauth-token"}
     assert stored.editable_fields == stored.replacement_fields == []
@@ -113,7 +120,7 @@ def test_oauth_metadata_and_manual_replacement_are_refused():
     assert update["editable_fields"] == update["replacement_fields"] == []
 
 
-@pytest.mark.parametrize(("kind", "original", "replacement"), MATERIAL[1:])
+@pytest.mark.parametrize(("kind", "original", "replacement"), MATERIAL)
 def test_replacement_uses_the_kind_handlers_field_validation(kind, original, replacement):
     credential = make_integration(f"invalid-{kind}", kind=kind, material=original).credential
     admin = create_platform_admin(f"invalid-{kind}-admin", password=None)
@@ -124,10 +131,33 @@ def test_replacement_uses_the_kind_handlers_field_validation(kind, original, rep
     assert Credential._base_manager.get(pk=credential.pk).reveal() == credential.handler.clean(original)
 
 
-def test_static_token_replacement_preserves_the_handlers_empty_placeholder_rule():
+def test_empty_static_token_is_only_a_creation_placeholder():
     credential = make_integration("empty-static-token").credential
     admin = create_platform_admin("empty-token-admin", password=None)
-    assert result_data(execute_schema(_schema("console"), REPLACE, {
+    result = result_data(execute_schema(_schema("console"), REPLACE, {
         "id": credential.public_id, "data": {"api_key": ""}, "confirmed": True,
-    }, user=admin))["replace_credential_secret"]["ok"]
-    assert Credential._base_manager.get(pk=credential.pk).reveal() == {"api_key": ""}
+    }, user=admin))["replace_credential_secret"]
+    assert not result["ok"] and "api_key" in result["validation_errors"]
+    assert Credential._base_manager.get(pk=credential.pk).reveal() == credential.reveal()
+    created = result_data(execute_schema(_schema("console"), """mutation($data: CredentialInput!) {
+      create_credential(data: $data) { id }
+    }""", {"data": {"name": "Placeholder", "kind": "static_token", "api_key": ""}}, user=admin))
+    assert created["create_credential"]["id"]
+    assert Credential._base_manager.get(name="Placeholder").reveal() == {"api_key": ""}
+
+
+@pytest.mark.parametrize("kind", ["static_token", "oauth"])
+def test_expiry_is_reported_but_not_writable_by_owner_or_admin(kind):
+    owner = get_user_model().objects.create_user(f"expiry-owner-{kind}")
+    credential = make_integration(
+        f"expiry-{kind}", kind=kind, material={"access_token": "token", "api_key": "key"},
+    ).credential
+    admin = create_platform_admin(f"expiry-admin-{kind}", password=None)
+    with system_context(reason="test.expiry.owner"):
+        credential.user = owner
+        credential.save(update_fields=["user"])
+    for actor in (owner, admin):
+        result = execute_schema(_schema("console"), UPDATE, {
+            "id": credential.public_id, "set": {"expires_at": None},
+        }, user=actor)
+        assert result.errors and "expires_at" in result.errors[0].message

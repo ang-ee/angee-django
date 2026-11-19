@@ -18,6 +18,7 @@ describe("iam addon manifest", () => {
 
   test("contributes personal Change password and the projected administrative Set password", () => {
     expect(iam.containers?.["shell#user-menu"]).toHaveProperty("iam.change-password");
+    expect(iam.containers?.["shell#user-menu"]).toHaveProperty(["iam.change-password", "sequence"], 30);
     expect(iam.containers?.["iam.User#actions-menu"]).toHaveProperty("iam.set-password");
   });
 

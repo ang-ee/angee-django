@@ -11,6 +11,7 @@ interface CurrentUserFields {
   lastName: string;
   isStaff: boolean;
   isActive: boolean;
+  hasUsablePassword?: boolean;
   roleRefs: string[];
   /** The asked `requires` refs the identity holds; identity reads select it, other user payloads do not. */
   permitted?: string[];
@@ -54,7 +55,7 @@ function authDocument<TResult, TVariables extends object>(
 
 export const currentUserSelection = `
   id username firstName: first_name lastName: last_name email
-  isStaff: is_staff isActive: is_active preferences roleRefs: role_refs
+  isStaff: is_staff isActive: is_active hasUsablePassword: has_usable_password preferences roleRefs: role_refs
 `;
 
 /** An identity read's user: the selection, and which of the asked `$refs` it holds. */

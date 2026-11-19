@@ -1,10 +1,11 @@
 // @vitest-environment happy-dom
 
-import { render } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { ActionFormDialog, AppRuntimeProvider, ToastProvider, defaultWidgets } from "@angee/ui";
+import { createUiTestProviders } from "@angee/ui/testing";
 import type { ActionContext, ActionDescriptor, FieldDescriptor, FormSubmit, RecordActionRunner, UseRecordActionOptions } from "@angee/ui";
-import { actionDocuments } from "@angee/gql/console/actions";
 import * as React from "react";
-import { beforeEach, describe, expect, test, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   fields: [] as Array<Record<string, unknown>>,
@@ -15,6 +16,7 @@ const mocks = vi.hoisted(() => ({
   createCredential: vi.fn(),
   replaceSecret: vi.fn(),
   useAuthoredResourceMutation: vi.fn(),
+  useActionOutcomeMutation: vi.fn(),
   createSubmit: undefined as FormSubmit | undefined,
   useRecordAction: vi.fn<(run: RecordActionRunner, options?: UseRecordActionOptions) => void>(),
 }));
@@ -42,12 +44,16 @@ vi.mock("@angee/ui", async (importOriginal) => ({
     Component: React.ComponentType<Record<string, unknown>>,
   ) => ({ resource, Component }),
   useAuthoredResourceMutation: mocks.useAuthoredResourceMutation,
+  useActionOutcomeMutation: mocks.useActionOutcomeMutation,
   useRecordActionMutation: () => [vi.fn(), { fetching: false, error: null }],
   useSecretReveal: () => mocks.reveal,
 }));
 
 import { credentialCreateForm } from "./credential-form";
 import { IntegrateCreateCredential, IntegrateRevealCredential } from "./documents";
+
+const { Provider, clearClients } = createUiTestProviders({ resources: [] });
+afterEach(() => { cleanup(); clearClients(); });
 
 interface FieldLike {
   name: string;
@@ -61,10 +67,9 @@ describe("credentialCreateForm", () => {
     mocks.actions = [];
     mocks.createSubmit = undefined;
     mocks.createCredential.mockReset().mockResolvedValue({ create_credential: { id: "credential-1" } });
-    mocks.replaceSecret.mockReset().mockResolvedValue({ replace_credential_secret: { ok: true, message: "Replaced." } });
-    mocks.useAuthoredResourceMutation.mockReset().mockImplementation((document) => [
-      document === IntegrateCreateCredential ? mocks.createCredential : mocks.replaceSecret, { fetching: false, error: null },
-    ]);
+    mocks.replaceSecret.mockReset().mockResolvedValue({ ok: true, message: "Replaced." });
+    mocks.useAuthoredResourceMutation.mockReset().mockReturnValue([mocks.createCredential, {}]);
+    mocks.useActionOutcomeMutation.mockReset().mockReturnValue([mocks.replaceSecret, {}]);
     mocks.revealCredential.mockClear();
     mocks.useRecordAction.mockClear();
     mocks.useAuthoredMutation.mockReset();
@@ -93,17 +98,21 @@ describe("credentialCreateForm", () => {
     expect(fields.get("private_key")?.showWhen?.({ kind: "static_token" })).toBe(false);
     expect(fields.get("key_file")?.showWhen?.({ kind: "jwt_bearer" })).toBe(true);
     expect(fields.get("key_file")?.showWhen?.({ kind: "ssh_key" })).toBe(false);
+    for (const [name, widget] of [["api_key", "password"], ["private_key", "textarea"], ["key_file", "textarea"]]) {
+      expect(fields.get(name!)).toMatchObject({ widget, autoComplete: "new-password" });
+    }
   });
 
-  test("edits name and expiry only when the saved credential projects them as editable", () => {
+  test("edits only projected name metadata, always leaving expiry read-only", () => {
     const Component = credentialCreateForm.Component;
     render(<Component resource={credentialCreateForm.resource} id="credential-1" />);
-    for (const name of ["name", "expires_at"]) {
-      const field = mocks.fields.find((field) => field.name === name) as unknown as FieldDescriptor;
-      expect(field.resolve?.({ id: "credential-1", editable_fields: ["name", "expires_at"] })).toMatchObject({ name, readOnly: false });
-      expect(field.resolve?.({ id: "credential-1", editable_fields: [] })).toMatchObject({ name, readOnly: true });
-      expect(field.resolve?.({ id: "credential-1" })).toMatchObject({ name, readOnly: true });
-    }
+    const field = mocks.fields.find((field) => field.name === "name") as unknown as FieldDescriptor;
+    expect(field.resolve?.({ id: "credential-1", editable_fields: ["name"] })).toMatchObject({ name: "name", readOnly: false });
+    expect(field.resolve?.({ id: "credential-1", editable_fields: [] })).toMatchObject({ name: "name", readOnly: true });
+    expect(field.resolve?.({ id: "credential-1" })).toMatchObject({ name: "name", readOnly: true });
+    expect(mocks.fields).toContainEqual(expect.objectContaining({ name: "expires_at", readOnly: true }));
+    render(<Component resource={credentialCreateForm.resource} id="credential-2" />);
+    expect(mocks.fields.filter((field) => field.name === "name").at(-1)?.resolve).toBe(field.resolve);
     expect(mocks.fields).toContainEqual(expect.objectContaining({ name: "editable_fields", hidden: true, readOnly: true }));
   });
 
@@ -118,19 +127,43 @@ describe("credentialCreateForm", () => {
     expect(action.visibleWhen?.(record)).toBe(true);
     expect(action.visibleWhen?.({ id: "oauth", replacement_fields: [] })).toBe(false);
     const args = typeof action.args === "function" ? action.args({ record, selectedIds: [record.id] }) : action.args;
-    expect(Array.isArray(args) ? args.map(({ name, widget }) => [name, widget]) : []).toEqual(names.map((name) => [name, "password"]));
+    const expectedWidgets: Record<string, string> = {
+      api_key: "password", username: "text", password: "password", app_id: "text", app_secret: "password",
+      private_key: "textarea", key_file: "textarea",
+    };
+    expect(Array.isArray(args) ? args.map(({ name, widget }) => [name, widget]) : []).toEqual(names.map((name) => [name, expectedWidgets[name]]));
+    for (const arg of Array.isArray(args) ? args : []) {
+      expect(arg.optional).not.toBe(true);
+      expect(arg.autoComplete).toBe(expectedWidgets[arg.name] === "text" ? undefined : "new-password");
+    }
     const material = Object.fromEntries(names.map((name) => [name, `entered-${name}`]));
     expect(await action.submit?.({ ...material, unexpected: "discarded" }, { record, selectedIds: [record.id] }))
       .toEqual({ ok: true, message: "Replaced." });
-    expect(mocks.replaceSecret).toHaveBeenCalledExactlyOnceWith({ id: record.id, confirmed: true, data: material });
-    expect(mocks.useAuthoredResourceMutation).toHaveBeenCalledWith(actionDocuments.replace_credential_secret,
-      expect.objectContaining({ transient: true, errorNotification: false, invalidateModels: ["integrate.Credential"] }));
+    expect(mocks.replaceSecret).toHaveBeenCalledExactlyOnceWith(record.id, { confirmed: true, data: material });
+    expect(mocks.useActionOutcomeMutation).toHaveBeenCalledWith("replace_credential_secret",
+      { transient: true, errorNotification: false, invalidateModels: ["integrate.Credential"] });
+  });
+
+  test.each(["private_key", "key_file"])("preserves multiline %s all the way to the mutation", async (name) => {
+    const Component = credentialCreateForm.Component;
+    render(<Component resource={credentialCreateForm.resource} id="credential-1" />);
+    const action = mocks.actions.find(({ id }) => id === "replace-secret")!;
+    const material = "first line\nsecond line\nthird line\n";
+    const record = { id: "credential-1", replacement_fields: [name] };
+    render(<Provider><AppRuntimeProvider runtime={{ widgets: defaultWidgets }}><ToastProvider>
+      <ActionFormDialog action={action} context={{ record, selectedIds: [] }} open onOpenChange={vi.fn()} />
+    </ToastProvider></AppRuntimeProvider></Provider>);
+    const input = screen.getByRole<HTMLTextAreaElement>("textbox");
+    expect(input.tagName).toBe("TEXTAREA");
+    fireEvent.change(input, { target: { value: material } });
+    fireEvent.click(screen.getByRole("button", { name: "Replace secret" }));
+    await waitFor(() => expect(mocks.replaceSecret).toHaveBeenCalledExactlyOnceWith(record.id, { confirmed: true, data: { [name]: material } }));
   });
 
   test("preserves the handler's field refusal in the replacement form", async () => {
-    mocks.replaceSecret.mockResolvedValue({ replace_credential_secret: {
-      ok: false, message: "Password required.", validation_errors: { password: ["Required."] },
-    } });
+    mocks.replaceSecret.mockResolvedValue({
+      ok: false, message: "Password required.", validationErrors: { password: ["Required."] },
+    });
     const Component = credentialCreateForm.Component;
     render(<Component resource={credentialCreateForm.resource} id="credential-1" />);
     const action = mocks.actions.find(({ id }) => id === "replace-secret")!;

@@ -1140,6 +1140,11 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
   for its body, so nested dialogs return to their own triggers. Pages supply
   domain labels through i18n and alignment through `align`; selection menus keep
   their own native controls.
+- The shared [UserMenu](../../packages/ui/src/chrome/UserMenu.tsx) gives contributed
+  dialogs the same lifetime and focus contract: its portal uses `keepMounted` and
+  provides `DialogReturnFocusContext` with the menu trigger. A dialog-opening
+  item declares `aria-haspopup="dialog"` and lets the menu close normally; it
+  does not hold the menu open with `closeOnClick={false}`.
 - Toolbar dialogs compose [MutationDialog](../../packages/ui/src/views/form/MutationDialog.tsx).
   Declare `DescriptorField`s; the shared [DescriptorFieldList](../../packages/ui/src/views/form/DescriptorFieldList.tsx)
   owns controls and requires a native RHF `FormProvider`. Decode raw controls with
@@ -1151,6 +1156,20 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
   `RecordActionBar` composes `ActionFormDialog` for their inputs. Record-specific
   schemas compose `jsonSchemaActionArgs` in the action's `args` callback; the
   shared form owns branching, validation and draft retention across record refreshes.
+- Password and credential fields declare `autoComplete` on the shared field or
+  action argument: `current-password` for verification and `new-password` for a
+  chosen password or token. The shared password widget passes it to the native
+  input. Whitespace-sensitive keys use the shared `textarea` widget, which also
+  passes autocomplete and preserves line breaks; non-secret identifiers use text.
+  Creation and replacement compose one addon-owned presentation table; the
+  server projects replacement fields and eligibility.
+- Mutations carrying secret inputs or one-time secret results use `transient`.
+  [useActionMutation](../../packages/refine/src/dialect/hooks.tsx) delegates that
+  lifecycle to `useAuthoredMutation`: native observers reset on settlement and
+  entries are collected on the next tick. Action forms use
+  `useActionOutcomeMutation` with `errorNotification: false`, so field refusals
+  stay in the form; record-chrome actions pass the same options through their
+  shared hooks. Use the ambient provider for record verbs.
 - Submit owners return [FormSubmitResult](../../packages/ui/src/views/form/validation-errors.ts):
   `ok` acknowledges saved data; `invalid` carries `ValidationErrors`; `conflict`
   preserves edits and offers reload. Typed GraphQL successes use

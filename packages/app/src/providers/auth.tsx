@@ -57,6 +57,7 @@ export interface AuthUser {
   id: string;
   name: string;
   username?: string;
+  hasUsablePassword?: boolean;
   firstName?: string;
   lastName?: string;
   email?: string;
@@ -593,6 +594,7 @@ export function currentUserToAuthState(
     email: payload.email || undefined,
     isStaff: payload.isStaff,
     isActive: payload.isActive,
+    hasUsablePassword: payload.hasUsablePassword,
     preferences: payload.preferences,
     roles: payload.roleRefs,
     permitted: payload.permitted,

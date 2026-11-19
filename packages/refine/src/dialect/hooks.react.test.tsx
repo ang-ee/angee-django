@@ -29,20 +29,26 @@ vi.mock("@tanstack/react-query", async (importOriginal) => ({
 
 vi.mock("@refinedev/core", () => ({
   useCustom: () => ({ query: {}, result: {} }),
-  useCustomMutation: () => ({
+  useCustomMutation: ({ mutationOptions }: { mutationOptions: {
+    onMutate: () => unknown;
+    onSuccess: (response: { data: unknown }, payload: { values: Record<string, unknown> }, context: unknown) => Promise<void>;
+  } }) => ({
     mutateAsync: vi.fn(
       async (payload: {
         dataProviderName: string;
         values: Record<string, unknown>;
       }) => {
+        const context = mutationOptions.onMutate();
         mutationMock.calls.push({
           dataProviderName: payload.dataProviderName,
           values: payload.values,
         });
-        return { data: { run_probe: mutationMock.response } };
+        const response = { data: { run_probe: mutationMock.response } };
+        await mutationOptions.onSuccess(response, payload, context);
+        return response;
       },
     ),
-    mutation: { isPending: false, error: null },
+    mutation: { isPending: false, error: null, reset: vi.fn() },
   }),
   useInvalidate: () => mutationMock.invalidate,
 }));
