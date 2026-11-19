@@ -97,8 +97,20 @@ live in code docstrings.
   link supports; the hourly task reads the shared-sender providers once for both
   passes (`PartyManager.shared_sender_ids`, the new `shared=` argument of
   `reconcile_suggestions` and `reconcile_same_as`). The review list
-  (`same_as_pairs`) drops a pair the reader cannot read before it fills a page,
-  and walks at most `PartyQuerySet.SAME_AS_REVIEW_PAGES` (four) pages to fill it.
+  (`same_as_pairs`) pages by cursor: `same_as_pairs(limit, after)` returns the
+  pairs after the pair `after` names, in the pair rows' key order, each with
+  its `id`, so a page continues after the last pair seen and a pair merged or
+  kept apart meanwhile moves no other one. Which pairs a reader may review
+  (both endpoints and every cited handle readable) is decided for every pair at
+  once in a fixed number of queries, and only the page is read in full; a pair
+  the reader cannot read never ends a page early. `certain_same_as_pairs(limit,
+  after)` gives the certain pairs a batch at a time the same way, and
+  `same_as_pair_counts { pairs certain }` (`PartyManager.same_as_review_counts`)
+  says how many of each the reader may review. The Review page shows both totals
+  and gives each of its lists its own pager (the claims list embedded in its
+  section, the pairs under their cards); "Merge certain pairs (50 of 180)" names
+  the batch and the dialog says the next batch follows; the overview counts every
+  pair instead of a capped read.
 
 - Parties: a handle's holder is always the projection of a statement. A holder
   written onto the row with no statement behind it lost its address the moment

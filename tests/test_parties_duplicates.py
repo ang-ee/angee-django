@@ -509,3 +509,52 @@ def test_an_oversized_or_unreadable_set_is_refused_before_anything_is_locked(
     assert [outcome for outcome, _survivor, _reason in _merge(owner, many[:2])] == ["merged"]
     # The set that passes locks its two records (the verb's pass, then the merge's own, already held).
     assert locked and set(locked) == {2}
+
+
+def test_certain_pairs_come_in_batches_each_after_the_last(db: None) -> None:
+    """The batch after a cursor starts past the last pair of the previous batch: every certain pair, once."""
+
+    del db
+    owner = create_user("duplicates-batches")
+    made = [
+        frozenset(person.pk for person in _people(owner, f"Zoe Example {index}", f"Zoe Example {index}",
+                                                   value=f"batch{index}@example.com"))
+        for index in range(5)
+    ]
+    _reconcile()
+
+    batches, after = [], None
+    while batch := Party.objects.certain_same_as_pairs(actor=owner, limit=2, after=after):
+        batches.append([frozenset({pair.left.pk, pair.right.pk}) for pair in batch])
+        after = batch[-1].id
+
+    assert [len(batch) for batch in batches] == [2, 2, 1]
+    assert sorted(pair for batch in batches for pair in batch) == sorted(made)
+
+
+def test_the_review_counts_say_how_many_pairs_and_how_many_certain_the_reader_may_review(db: None) -> None:
+    """Totals for the Review page, scoped as its reads are: every reviewable pair, and the certain among them."""
+
+    del db
+    from angee.graphql.testing.documents import execute_schema, result_data
+    from tests.test_parties_graphql import _schema
+
+    owner, other = create_user("duplicates-counts"), create_user("duplicates-counts-other")
+    for index in range(3):
+        _people(owner, f"Zoe Example {index}", f"Zoe Example {index}", value=f"sure{index}@example.com")
+    for index in range(2):
+        _people(owner, f"Zoe Example {index}", f"Zoe B. Example {index}", value=f"unsure{index}@example.com")
+    # A pair whose cited address the reader cannot read is no pair of theirs to review.
+    handle = _address(other, "concealed@example.com")
+    with system_context(reason="duplicates concealed pair"):
+        hidden = [Person._base_manager.create(display_name="Zoe Hidden", created_by=owner) for _ in range(2)]
+        Party.objects.assert_handle(hidden[0], handle, asserted_by=owner)
+        Party.objects.propose_claimed_handle_as_system(hidden[1], handle, evidence=handle, reason="tests.claim")
+    _reconcile()
+
+    counts = Party.objects.same_as_review_counts(actor=owner)
+    document = "query { same_as_pair_counts { pairs certain } }"
+    schema = result_data(execute_schema(_schema("console"), document, user=owner))["same_as_pair_counts"]
+
+    assert (counts.pairs, counts.certain) == (5, 3)
+    assert schema == {"pairs": 5, "certain": 3}
