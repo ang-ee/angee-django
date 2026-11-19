@@ -7,7 +7,8 @@ from typing import Any
 import pytest
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
-from rebac import actor_context, system_context
+from django.db import transaction
+from rebac import actor_context, system_context, to_subject_ref
 
 import tests.test_parties_circles  # noqa: F401 -- register the fixture model graph before database setup
 from angee.graphql.testing import capture_broadcasts
@@ -236,3 +237,133 @@ def test_withdrawing_the_claim_withdraws_the_pair(db: None) -> None:
     with system_context(reason="same_as readback"):
         pair = Party.same_as.model._base_manager.get(left_id=min(holder.pk, claimant.pk))
         assert [row.status for row in pair.statements.all()] == ["withdrawn"]
+
+
+def _rule_pair_statements(left: Any, right: Any) -> list[Any]:
+    """The ``parties.same_as`` rule's statements on the ordered pair of ``left`` and ``right``."""
+
+    rule = str(to_subject_ref(Party.objects.rule_source("same_as")))
+    first, second = sorted((left.pk, right.pk))
+    with system_context(reason="same_as readback"):
+        return list(
+            Party.same_as.model.statements.model._base_manager.filter(
+                subject__left_id=first, subject__right_id=second, asserted_by=rule,
+            ).order_by("pk")
+        )
+
+
+def test_an_importer_proposes_two_parties_as_one_person_as_the_job_does(db: None) -> None:
+    """The verb names no caller: the rule's pair, citing the handle, which the job keeps and never merges."""
+
+    del db
+    owner = create_user("same-person-verb")
+    handle = _address(owner)
+    holder, claimant = _holder(owner, handle), _claimant(owner, handle)
+
+    statement = Party.objects.propose_same_person(claimant, holder, evidence=[handle])
+
+    assert statement is not None
+    assert (statement.rank, statement.snak, statement.source_kind, statement.status) == (
+        "normal", "value", "rule", "asserted",
+    )
+    assert [ref["id"] for ref in statement.evidence] == [handle.public_id]
+    assert _pairs() == [({holder.pk, claimant.pk}, (handle,))]
+    assert Party.objects.propose_same_person(holder, claimant, evidence=[handle]) is None
+    assert _reconcile() == 0
+    assert [row.pk for row in _rule_pair_statements(holder, claimant)] == [statement.pk]
+    with system_context(reason="same_as readback"):
+        assert set(Party._base_manager.filter(merged_into__isnull=True).values_list("pk", flat=True)) >= {
+            holder.pk, claimant.pk,
+        }
+
+
+def test_the_job_withdraws_a_proposal_whose_link_is_gone(db: None) -> None:
+    del db
+    owner = create_user("same-person-verb-withdrawn")
+    handle = _address(owner)
+    holder, claimant = _holder(owner, handle), _claimant(owner, handle)
+    Party.objects.propose_same_person(claimant, holder, evidence=[handle])
+
+    with system_context(reason="the source drops the address"):
+        Party.statements.withdraw(Party.objects.rule_source("source_sender"), [claimant])
+
+    assert _reconcile() == 1
+    assert [row.status for row in _rule_pair_statements(holder, claimant)] == ["withdrawn"]
+
+
+def _kept_separate(owner: Any, left: Any, right: Any) -> None:
+    Party.objects.apply_same_as_pair(
+        left_id=left.public_id, right_id=right.public_id, survivor="left", action="keep_separate", actor=owner,
+    )
+
+
+def _confirmed(owner: Any, left: Any, right: Any) -> None:
+    with actor_context(owner):
+        Party.same_as.for_pair(left.with_actor(owner), right).with_actor(owner).confirm_statement(
+            aspect="same_as", values={},
+        )
+
+
+def _trashed(owner: Any, left: Any, right: Any) -> None:
+    del owner, left
+    with system_context(reason="same_as trashed endpoint"):
+        Party._base_manager.get(pk=right.pk).trash(reason="test")
+
+
+def _merged(owner: Any, left: Any, right: Any) -> None:
+    with actor_context(owner):
+        Party.objects.get(pk=left.pk).merge(records=[right.public_id])
+
+
+@pytest.mark.parametrize(
+    "decided",
+    [
+        pytest.param(_kept_separate, id="kept-separate"),
+        pytest.param(_confirmed, id="a-current-assertion"),
+        pytest.param(_trashed, id="trashed"),
+        pytest.param(_merged, id="merged-away"),
+    ],
+)
+def test_a_proposal_does_nothing_on_a_decided_or_retired_pair(db: None, decided: Any) -> None:
+    del db
+    owner = create_user("same-person-verb-decided")
+    handle = _address(owner)
+    holder, claimant = _holder(owner, handle), _claimant(owner, handle)
+    decided(owner, holder, claimant)
+
+    assert Party.objects.propose_same_person(holder, claimant, evidence=[handle]) is None
+    assert _rule_pair_statements(holder, claimant) == []
+
+
+def test_a_party_is_never_proposed_as_its_own_same_person(db: None) -> None:
+    del db
+    owner = create_user("same-person-verb-self")
+    handle = _address(owner)
+    holder = _holder(owner, handle)
+
+    assert Party.objects.propose_same_person(holder, holder, evidence=[handle]) is None
+
+
+@pytest.mark.parametrize("evidence", [pytest.param("none", id="empty"), pytest.param("party", id="not-a-handle")])
+def test_a_proposal_cites_the_handles_that_link_the_two(db: None, evidence: str) -> None:
+    del db
+    owner = create_user("same-person-verb-evidence")
+    handle = _address(owner)
+    holder, claimant = _holder(owner, handle), _claimant(owner, handle)
+
+    with pytest.raises(ValidationError, match="handle"):
+        Party.objects.propose_same_person(holder, claimant, evidence={"none": [], "party": [holder]}[evidence])
+    assert _rule_pair_statements(holder, claimant) == []
+
+
+def test_a_proposal_joins_the_callers_transaction(db: None) -> None:
+    del db
+    owner = create_user("same-person-verb-transaction")
+    handle = _address(owner)
+    holder, claimant = _holder(owner, handle), _claimant(owner, handle)
+
+    with transaction.atomic():
+        assert Party.objects.propose_same_person(holder, claimant, evidence=[handle]) is not None
+        transaction.set_rollback(True)
+
+    assert _rule_pair_statements(holder, claimant) == []

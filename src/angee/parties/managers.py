@@ -1384,15 +1384,51 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
         for left_id, right_id, handle_ids in proposals[: limit - changed]:
             left, right = (self.model._base_manager.get(pk=pk) for pk in (left_id, right_id))
             evidence = handles.in_bulk(handle_ids)
-            pair = self.model.same_as.for_pair(left.with_actor(source_ref), right)
-            pair.statements.set(
+            if self.propose_same_person(left, right, evidence=[evidence[pk] for pk in handle_ids]) is not None:
+                changed += 1
+        return changed
+
+    def propose_same_person(self, left: Any, right: Any, *, evidence: Iterable[Any]) -> Any | None:
+        """Propose that two parties are one person, citing the handles that link them; return the statement.
+
+        The proposal names no caller: it is the ``parties.same_as`` rule's normal
+        ``same_as`` value statement on the ordered pair, the one
+        :meth:`reconcile_same_as` states, so that job keeps it while the two are
+        linked to one address (:meth:`same_person_links`) and withdraws it when they
+        are not. ``evidence`` is the handle rows linking them. It returns ``None``
+        and writes nothing when the two are one party, either is trashed or merged
+        away, or the pair holds a current assertion or a person's keep-separate
+        decision. It never merges. It runs as named system work, so it needs no
+        actor, inside the caller's transaction, which it joins: an importer calls it
+        after landing its own party and claim.
+        """
+
+        handle_model = apps.get_model("parties", "Handle")
+        handles = list(evidence)
+        if not handles or not all(isinstance(row, handle_model) and row.pk is not None for row in handles):
+            raise ValidationError({"evidence": "A same-person proposal cites the handle rows that link the two."})
+        if left.pk == right.pk:
+            return None
+        party_model = apps.get_model("parties", "Party")
+        stances = party_model.same_as.model.statements
+        with system_context(reason="parties.propose_same_person"), transaction.atomic():
+            parties = party_model._base_manager.filter(pk__in=(left.pk, right.pk))
+            live = parties.filter(is_trashed=False, merged_into__isnull=True)
+            if live.count() != 2:
+                return None
+            source = self.rule_source("same_as")
+            first, second = parties.order_by("pk")
+            pair = party_model.same_as.for_pair(first.with_actor(to_subject_ref(source)), second)
+            # The pair locked both parties: read their state and the pair's decisions again under the lock.
+            decided = stances.current().filter(subject=pair, status=stances.model.StatementStatus.ASSERTED)
+            if live.count() != 2 or decided.exists():
+                return None
+            return pair.statements.set(
                 aspect="same_as",
                 values={},
                 asserted_by=source,
-                evidence=[EvidenceReference.of(evidence[pk]) for pk in handle_ids],
+                evidence=[EvidenceReference.of(row) for row in handles],
             )
-            changed += 1
-        return changed
 
     def reconcile_suggestions(self) -> int:
         """Reconcile the evidence-backed suggestions with every registered evidence provider.

@@ -77,7 +77,10 @@ statement names one for it (a claim below review confidence counts). A link
 parties' own suggester rules inferred (a shared name, a domain, a twin spelling, a
 signature) counts for nothing, so a shared name alone proposes no one. The job
 skips current assertions and dismissals before each run's cap without
-continuation state, and withdraws its statements no link supports any more. A
+continuation state, and withdraws its statements no link supports any more. An
+importer that lands its own party and claim proposes the same pair at once with
+`Party.objects.propose_same_person(left, right, evidence=handles)`, which states
+the same rule's statement, names no caller and never merges. A
 preferred no_value is the symmetric anti-link; preferred value
 awaits a person's survivor choice. `survivor.merge` owns the changeset and redirect;
 pointing owners union statements, retaining collisions as superseded. Where the

@@ -10,6 +10,16 @@ live in code docstrings.
 
 ## Unreleased — shared addon contracts, native embeddings and graph retrieval
 
+- Parties: `Party.objects.propose_same_person(left, right, *, evidence)` lets an
+  importer propose, inside its own transaction, that two parties are one person,
+  citing the handle rows that link them. It states the `parties.same_as` rule's
+  normal pair statement, the one `reconcile_same_as` states, so the job keeps it
+  while the two are linked to one address and withdraws it when they are not. It
+  returns that statement, or `None` without writing when the two are one party,
+  either is trashed or merged away, or the pair already holds a current assertion
+  or a keep-separate decision; it never merges. The job now states its own pairs
+  through it.
+
 - Parties proposes a same-person pair for every two live parties linked to one
   address (`PartyManager.reconcile_same_as`, over `same_person_links`). A party
   is linked when it holds a handle of that normalized value or when a source's
