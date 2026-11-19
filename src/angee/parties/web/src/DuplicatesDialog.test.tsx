@@ -114,7 +114,8 @@ describe("the batch merge dialog", () => {
     renderDialog();
 
     expect(await screen.findByText("Lovelace")).toBeTruthy();
-    expect(screen.getAllByText(message("duplicates.survives"))).toHaveLength(1);
+    // Ada's set and Joan's each name their survivor; the refused set names none.
+    expect(screen.getAllByText(message("duplicates.survives"))).toHaveLength(2);
     expect(screen.getByText("augusta@example.test")).toBeTruthy();
     expect(screen.getByText("Augusta")).toBeTruthy();
     expect(screen.getByText(message("duplicates.refused", { reason: "A person kept two of these records apart." }))).toBeTruthy();
