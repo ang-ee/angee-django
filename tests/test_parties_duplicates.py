@@ -476,3 +476,28 @@ def test_a_refused_set_discloses_no_value_of_its_members(db: None) -> None:
     assert (preview.outcome, preview.disagreements) == ("refused", ())
     assert (row["outcome"], row["disagreements"]) == ("REFUSED", [])
     assert [member["first_met_note"] for member in row["members"]] == [None, None]
+
+
+def test_an_oversized_or_unreadable_set_is_refused_before_anything_is_locked(
+    db: None, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Any signed-in account may name any public ids: size and readability are checked before a lock is taken."""
+
+    del db
+    owner, stranger = create_user("duplicates-prelock-owner"), create_user("duplicates-prelock-stranger")
+    many = _people(owner, *(f"Zoe Example {index}" for index in range(30)), value="prelock@example.com")
+    locked: list[int] = []
+    original = Party.lock_merge_records.__func__  # type: ignore[attr-defined]
+
+    def spy(cls: Any, records: Any) -> None:
+        locked.append(len(records))
+        original(cls, records)
+
+    monkeypatch.setattr(Party, "lock_merge_records", classmethod(spy))
+
+    assert _merge(owner, many) == [("refused", None, "Choose two to 10 records to merge as one.")]
+    assert _merge(stranger, many[:10]) == [("refused", None, "A record is gone or you may not read it.")]
+    assert locked == []
+    assert [outcome for outcome, _survivor, _reason in _merge(owner, many[:2])] == ["merged"]
+    # The set that passes locks its two records (the verb's pass, then the merge's own, already held).
+    assert locked and set(locked) == {2}
