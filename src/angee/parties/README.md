@@ -119,8 +119,15 @@ and so is an address a person account signs in with, whether or not the account
 has a person, so the contact states it as a claim for review (below the confidence at which a
 handle statement applies) and leaves the handle's display fields alone; an
 address nobody holds, or the contact's own person holds, is stated in full. A
-refused or colliding contact therefore never moves an address, and what is
-attributed to it, away from its holder. A two-way directory (CardDAV) still
+claim stays a claim until the contact's person holds the address through another
+statement or a person confirms the claim: a holder that lapses (trashed, or its
+statement withdrawn) and returns finds its address still its own. Confirming a
+claim moves the address, so it needs write on its live holder as well as on the
+claimant (`Party.confirm_statement`), and a claim lends the directory's contact
+readers nothing of the holder's handle (`stating_directory` reads current claims
+at `Party.REVIEW_CONFIDENCE` or above). A refused or colliding contact therefore
+never moves an address, and what is attributed to it, away from its holder. A
+two-way directory (CardDAV) still
 states every address in full: its card projects only applied handle statements,
 so a claim would drop the address from the card and write that back to the
 server, and what a two-way card publishes about a person other sources state is
@@ -229,7 +236,8 @@ relationships those links state (`contact_read` in [permissions.zed](permissions
 Each statement arm walks from the row to the statements naming it by the
 statement model's name (`addressstatement`, `relationshipstatement`, and
 `partystatement`, which the handle member declares as its reverse name). A
-tombstoned or unbound link, or a withdrawn or superseded claim, lends nothing; a
+tombstoned or unbound link, a withdrawn or superseded claim, or a claim for review
+lends nothing; a
 handle only another source asserted keeps its own gates; private fields keep
 `read_private`; and the grant reads nothing of the directory, its integration,
 streams, links or credential. Beyond the party's identity, a contact read

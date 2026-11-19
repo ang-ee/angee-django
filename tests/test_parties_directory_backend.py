@@ -20,7 +20,7 @@ from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
 from django.db import connection, transaction
 from django.utils import timezone
-from rebac import system_context
+from rebac import PermissionDenied, RelationshipTuple, system_context, to_object_ref, write_relationships
 from rebac.actors import to_subject_ref
 from rebac.roles import grant as grant_role
 
@@ -1240,6 +1240,76 @@ def test_a_page_holds_every_handle_its_linked_people_carry_before_any_record_app
             contender, pid = submit(pool, lock_other_handle)
             wait_for_lock(pid, contender)
         contender.result(timeout=10)
+
+
+def _claim(pull: Pull, key: str, address: str) -> Any:
+    """The directory's current claim of ``address`` on the contact's person."""
+
+    rows = Party.statements.filter(
+        subject_id=pull.link(key).target_object_id, handle__normalized_value=address, source_kind="directory"
+    )
+    return rows.current().get()
+
+
+def test_a_claim_stays_a_claim_while_its_holder_is_trashed_and_restored(pull: Pull) -> None:
+    """The contact's own claim is the only one left while the holder is trashed; it never becomes the address's holding.
+
+    Restored, the holder holds the address again: a directory statement would
+    otherwise outrank the holder's rule statement for good.
+    """
+
+    person, _handle = _existing(_user("someone-else"))
+    pull.sync()
+    minted = pull.link("ada").target_object_id
+    assert _claim_confidences(minted, "ada@example.com") == [0.4]
+
+    Person._base_manager.get(pk=person.pk).trash(reason="Removed by its holder")
+    pull.source.put("ada", replace(_ADA, notes="Edited at the source."))
+    assert pull.sync().count == 1
+    assert _claim_confidences(minted, "ada@example.com") == [0.4]
+
+    Person._base_manager.get(pk=person.pk).restore()
+    pull.source.put("ada", replace(_ADA, notes="Edited again."))
+    assert pull.sync().count == 1
+    assert _held_by("ada@example.com") == person.pk
+    assert _claim_confidences(minted, "ada@example.com") == [0.4]
+
+
+def test_confirming_a_claim_needs_write_on_the_person_who_holds_the_address(pull: Pull) -> None:
+    """The review queue's accept moves the address off its holder, so it takes authority over the holder too."""
+
+    holder_owner = _user("someone-else")
+    person, _handle = _existing(holder_owner)
+    pull.sync()
+    minted = pull.link("ada").target_object_id
+    claim = _claim(pull, "ada", "ada@example.com")
+
+    with pytest.raises(PermissionDenied, match="holds the address"):
+        claim.with_actor(pull.directory.owner).confirm()
+    assert _held_by("ada@example.com") == person.pk
+
+    with system_context(reason="tests.directory_claim.editor"):
+        claimant = to_object_ref(Person._base_manager.get(pk=minted))
+        write_relationships([RelationshipTuple(claimant, "editor", to_subject_ref(holder_owner))])
+    claim.with_actor(holder_owner).confirm()
+    assert _held_by("ada@example.com") == int(minted)
+
+
+def test_a_directorys_contact_reader_reads_no_handle_its_contact_only_claims(pull: Pull) -> None:
+    """A claim below review confidence lends the directory's contact readers nothing on the holder's handle."""
+
+    person, handle = _existing(_user("someone-else"))
+    pull.sync()
+    reader = _user("contacts-reader")
+    with system_context(reason="tests.directory_claim.reader"):
+        shared = RelationshipTuple(to_object_ref(pull.directory), "contact_reader", to_subject_ref(reader))
+        write_relationships([shared])
+    grace = Handle.objects.get(platform="email", value="grace@example.com")
+
+    readable = set(Handle.objects.with_actor(reader).filter(pk__in=[handle.pk, grace.pk]).values_list("pk", flat=True))
+
+    assert Party.objects.with_actor(reader).filter(pk=pull.link("ada").target_object_id).exists()
+    assert readable == {grace.pk}
 
 
 def test_a_directory_forwards_its_connection_test_and_credential_rule(

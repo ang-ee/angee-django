@@ -35,6 +35,21 @@ live in code docstrings.
   `UserManager.sign_in_addresses(emails)` answers which given addresses a person
   account signs in with, by the key `person_for_email` reads, in one query.
 
+- `angee.parties`: a claim stays a claim. An address a pull-only directory
+  already claims on its contact's person is claimed again on every record until
+  that person holds it through another statement or a person confirms the claim;
+  before, a holder that lapsed (trashed, or its statement withdrawn) left the
+  contact's claim as the only one, the next record stated it in full, and the
+  directory then outranked the returning holder's rule statement for good.
+  Confirming a handle statement another live party holds now needs write on that
+  holder too (`Party.confirm_statement`, so the review queue's accept and the
+  identity review's confirm both check it); it used to need write on the claimant
+  only. A claim for review lends a directory's contact readers nothing:
+  `parties/handle#stating_directory` reads current claims at confidence 0.5
+  (`Party.REVIEW_CONFIDENCE`) or above, so the holder's handle row, its display
+  name and its controlling account stay with their own gates. Schema revision 26:
+  `rebac sync` after compose.
+
 - `angee.parties`: a consumer addon maps a pull-only directory backend's source
   fields onto its own person columns with a `DirectoryMapping`
   (`angee.parties.backends`), registered under its key in the new
