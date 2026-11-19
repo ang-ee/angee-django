@@ -2,13 +2,16 @@
 
 from __future__ import annotations
 
+from datetime import timedelta
 from typing import Any
 
 import pytest
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
-from django.db import transaction
+from django.db import connection, transaction
 from django.test import override_settings
+from django.test.utils import CaptureQueriesContext
+from django.utils import timezone
 from rebac import actor_context, system_context, to_subject_ref
 
 import tests.test_parties_circles  # noqa: F401 -- register the fixture model graph before database setup
@@ -120,11 +123,11 @@ def test_reverting_a_merge_publishes_the_survivors_restored_values_on_its_record
     ), sent
 
 
-def _address(owner: Any, value: str = "ada@example.com", **fields: Any) -> Any:
-    """One email address row, with no holder yet."""
+def _address(owner: Any, value: str = "ada@example.com", *, platform: str = "email", **fields: Any) -> Any:
+    """One address row (an email address unless ``platform`` says otherwise), with no holder yet."""
 
     with system_context(reason="same_as address"):
-        return Handle._base_manager.create(platform="email", value=value, created_by=owner, **fields)
+        return Handle._base_manager.create(platform=platform, value=value, created_by=owner, **fields)
 
 
 def _holder(owner: Any, handle: Any, name: str = "Ada Example") -> Any:
@@ -458,7 +461,17 @@ def _rule_pair_statements(left: Any, right: Any) -> list[Any]:
         )
 
 
-def test_an_importer_proposes_two_parties_as_one_person_as_the_job_does(db: None) -> None:
+def _propose(capture: Any, left: Any, right: Any, evidence: list[Any], *, reason: str = "tests.importer.page") -> Any:
+    """An importer's committed page proposing ``left`` and ``right``; return the rule's pair statements after commit."""
+
+    with capture(execute=True):
+        Party.objects.propose_same_person_as_system(left, right, evidence=evidence, reason=reason)
+    return _rule_pair_statements(left, right)
+
+
+def test_an_importer_proposes_two_parties_as_one_person_as_the_job_does(
+    db: None, django_capture_on_commit_callbacks: Any,
+) -> None:
     """The verb names no caller: the rule's pair, citing the handle, which the job keeps and never merges."""
 
     del db
@@ -466,15 +479,14 @@ def test_an_importer_proposes_two_parties_as_one_person_as_the_job_does(db: None
     handle = _address(owner)
     holder, claimant = _holder(owner, handle), _claimant(owner, handle)
 
-    statement = Party.objects.propose_same_person(claimant, holder, evidence=[handle])
+    (statement,) = _propose(django_capture_on_commit_callbacks, claimant, holder, [handle])
 
-    assert statement is not None
     assert (statement.rank, statement.snak, statement.source_kind, statement.status) == (
         "normal", "value", "rule", "asserted",
     )
     assert [ref["id"] for ref in statement.evidence] == [handle.public_id]
     assert _pairs() == [({holder.pk, claimant.pk}, (handle,))]
-    assert Party.objects.propose_same_person(holder, claimant, evidence=[handle]) is None
+    assert _propose(django_capture_on_commit_callbacks, holder, claimant, [handle]) == [statement]
     assert _reconcile() == 0
     assert [row.pk for row in _rule_pair_statements(holder, claimant)] == [statement.pk]
     with system_context(reason="same_as readback"):
@@ -483,18 +495,149 @@ def test_an_importer_proposes_two_parties_as_one_person_as_the_job_does(db: None
         }
 
 
-def test_the_job_withdraws_a_proposal_whose_link_is_gone(db: None) -> None:
+def test_a_proposal_runs_nothing_inside_the_callers_transaction(
+    db: None, django_capture_on_commit_callbacks: Any,
+) -> None:
+    """Inside the importer's page the verb only registers: no query, no lock; the pair lands after the commit."""
+
+    del db
+    owner = create_user("same-person-verb-deferred")
+    handle = _address(owner)
+    holder, claimant = _holder(owner, handle), _claimant(owner, handle)
+
+    with django_capture_on_commit_callbacks(execute=True):
+        with transaction.atomic():
+            with CaptureQueriesContext(connection) as page:
+                Party.objects.propose_same_person_as_system(
+                    claimant, holder, evidence=[handle], reason="tests.importer.page",
+                )
+            assert _rule_pair_statements(holder, claimant) == []
+
+    assert page.captured_queries == []
+    assert [row.status for row in _rule_pair_statements(holder, claimant)] == ["asserted"]
+
+
+def test_a_rolled_back_caller_proposes_nothing(db: None, django_capture_on_commit_callbacks: Any) -> None:
+    del db
+    owner = create_user("same-person-verb-rollback")
+    handle = _address(owner)
+    holder, claimant = _holder(owner, handle), _claimant(owner, handle)
+
+    with django_capture_on_commit_callbacks(execute=True) as committed:
+        with transaction.atomic():
+            Party.objects.propose_same_person_as_system(claimant, holder, evidence=[handle], reason="tests.importer")
+            transaction.set_rollback(True)
+
+    assert (committed, _rule_pair_statements(holder, claimant)) == ([], [])
+
+
+def test_a_proposal_needs_a_named_reason(db: None) -> None:
+    del db
+    owner = create_user("same-person-verb-reason")
+    handle = _address(owner)
+    holder, claimant = _holder(owner, handle), _claimant(owner, handle)
+
+    with pytest.raises(ValueError, match="named reason"):
+        Party.objects.propose_same_person_as_system(holder, claimant, evidence=[handle], reason=" ")
+
+
+def test_a_proposal_its_evidence_does_not_support_proposes_nothing(
+    db: None, django_capture_on_commit_callbacks: Any, caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A cited handle links one of the two, and the two share a cited address, or nothing is proposed."""
+
+    del db
+    owner = create_user("same-person-verb-unsupported")
+    handle = _address(owner)
+    holder, claimant = _holder(owner, handle), _claimant(owner, handle)
+    unrelated = _address(owner, "someone-else@example.com")
+    phone = _address(owner, "+442079460958", platform="phone")
+    with system_context(reason="same_as the holder's own phone"):
+        Party.objects.assert_handle(holder, phone, asserted_by=owner)
+
+    with caplog.at_level("INFO", logger="angee.parties.managers"):
+        assert _propose(django_capture_on_commit_callbacks, holder, claimant, [unrelated]) == []
+        assert _propose(django_capture_on_commit_callbacks, holder, claimant, [phone]) == []
+        assert _propose(django_capture_on_commit_callbacks, holder, claimant, [handle, unrelated]) == []
+
+    assert [record.message for record in caplog.records].count(
+        "A same-person proposal under tests.importer.page is not supported by its evidence."
+    ) == 3
+    assert _reconcile() == 1
+
+
+def test_a_proposal_cites_the_survivor_of_a_merged_handle(db: None, django_capture_on_commit_callbacks: Any) -> None:
+    del db
+    owner = create_user("same-person-verb-merged-handle")
+    handle = _address(owner)
+    holder, claimant = _holder(owner, handle), _claimant(owner, handle)
+    alias = _address(owner, "Ada@Example.com")
+    with system_context(reason="same_as a spelling folds into its address"):
+        handle.fold([alias])
+
+    (statement,) = _propose(django_capture_on_commit_callbacks, holder, claimant, [alias])
+
+    assert [ref["id"] for ref in statement.evidence] == [handle.public_id]
+
+
+def test_the_job_withdraws_a_proposal_whose_link_is_gone(db: None, django_capture_on_commit_callbacks: Any) -> None:
     del db
     owner = create_user("same-person-verb-withdrawn")
     handle = _address(owner)
     holder, claimant = _holder(owner, handle), _claimant(owner, handle)
-    Party.objects.propose_same_person(claimant, holder, evidence=[handle])
+    _propose(django_capture_on_commit_callbacks, claimant, holder, [handle])
 
     with system_context(reason="the source drops the address"):
         Party.statements.withdraw(Party.objects.rule_source("source_sender"), [claimant])
 
     assert _reconcile() == 1
     assert [row.status for row in _rule_pair_statements(holder, claimant)] == ["withdrawn"]
+
+
+def test_the_job_leaves_a_proposal_stated_after_its_run_began(
+    db: None, django_capture_on_commit_callbacks: Any,
+) -> None:
+    """An importer's proposal committed while the job scans is the next run's to judge, never withdrawn on sight."""
+
+    del db
+    owner = create_user("same-person-verb-during-scan")
+    handle = _address(owner)
+    holder, claimant = _holder(owner, handle), _claimant(owner, handle)
+    (statement,) = _propose(django_capture_on_commit_callbacks, claimant, holder, [handle])
+    with system_context(reason="the source drops the address"):
+        Party.statements.withdraw(Party.objects.rule_source("source_sender"), [claimant])
+    stances = Party.same_as.model.statements.model._base_manager.filter(pk=statement.pk)
+
+    with system_context(reason="same_as a proposal stated after the run began"):
+        stances.update(updated_at=timezone.now() + timedelta(minutes=5))
+    assert _reconcile() == 0
+
+    with system_context(reason="same_as a proposal stated before the run began"):
+        stances.update(updated_at=timezone.now() - timedelta(minutes=5))
+    assert _reconcile() == 1
+    assert [row.status for row in _rule_pair_statements(holder, claimant)] == ["withdrawn"]
+
+
+def test_a_proposal_citing_a_deleted_handle_is_restated_with_the_handles_that_link_the_two(db: None) -> None:
+    """A deleted evidence row would hide the pair from every reader; the job cites what still links the two."""
+
+    del db
+    owner = create_user("same-person-deleted-evidence")
+    with system_context(reason="same_as a holder written onto its row"):
+        holder = Party._base_manager.create(display_name="Ada Example", created_by=owner)
+        written = Handle._base_manager.create(platform="email", value="Ada@Example.com", party=holder, created_by=owner)
+    stated = _address(owner, "ADA@example.com")
+    with system_context(reason="same_as the holder's own statement"):
+        Party.objects.assert_handle(holder, stated, asserted_by=owner)
+    claimed = _address(owner)
+    claimant = _claimant(owner, claimed)
+    assert _reconcile() == 1
+    with system_context(reason="same_as the written row goes"):
+        Handle._base_manager.filter(pk=written.pk).delete()
+    assert _pairs() == []
+
+    assert _reconcile() == 1
+    assert _pairs() == [({holder.pk, claimant.pk}, (stated, claimed))]
 
 
 def _kept_separate(owner: Any, left: Any, right: Any) -> None:
@@ -530,24 +673,28 @@ def _merged(owner: Any, left: Any, right: Any) -> None:
         pytest.param(_merged, id="merged-away"),
     ],
 )
-def test_a_proposal_does_nothing_on_a_decided_or_retired_pair(db: None, decided: Any) -> None:
+def test_a_proposal_does_nothing_on_a_decided_or_retired_pair(
+    db: None, django_capture_on_commit_callbacks: Any, decided: Any,
+) -> None:
     del db
     owner = create_user("same-person-verb-decided")
     handle = _address(owner)
     holder, claimant = _holder(owner, handle), _claimant(owner, handle)
     decided(owner, holder, claimant)
 
-    assert Party.objects.propose_same_person(holder, claimant, evidence=[handle]) is None
-    assert _rule_pair_statements(holder, claimant) == []
+    assert _propose(django_capture_on_commit_callbacks, holder, claimant, [handle]) == []
 
 
-def test_a_party_is_never_proposed_as_its_own_same_person(db: None) -> None:
+def test_a_party_is_never_proposed_as_its_own_same_person(db: None, django_capture_on_commit_callbacks: Any) -> None:
     del db
     owner = create_user("same-person-verb-self")
     handle = _address(owner)
     holder = _holder(owner, handle)
 
-    assert Party.objects.propose_same_person(holder, holder, evidence=[handle]) is None
+    with django_capture_on_commit_callbacks(execute=True) as committed:
+        Party.objects.propose_same_person_as_system(holder, holder, evidence=[handle], reason="tests.importer")
+
+    assert committed == []
 
 
 @pytest.mark.parametrize("evidence", [pytest.param("none", id="empty"), pytest.param("party", id="not-a-handle")])
@@ -558,18 +705,7 @@ def test_a_proposal_cites_the_handles_that_link_the_two(db: None, evidence: str)
     holder, claimant = _holder(owner, handle), _claimant(owner, handle)
 
     with pytest.raises(ValidationError, match="handle"):
-        Party.objects.propose_same_person(holder, claimant, evidence={"none": [], "party": [holder]}[evidence])
-    assert _rule_pair_statements(holder, claimant) == []
-
-
-def test_a_proposal_joins_the_callers_transaction(db: None) -> None:
-    del db
-    owner = create_user("same-person-verb-transaction")
-    handle = _address(owner)
-    holder, claimant = _holder(owner, handle), _claimant(owner, handle)
-
-    with transaction.atomic():
-        assert Party.objects.propose_same_person(holder, claimant, evidence=[handle]) is not None
-        transaction.set_rollback(True)
-
+        Party.objects.propose_same_person_as_system(
+            holder, claimant, evidence={"none": [], "party": [holder]}[evidence], reason="tests.importer",
+        )
     assert _rule_pair_statements(holder, claimant) == []

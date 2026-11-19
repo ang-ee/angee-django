@@ -10,15 +10,25 @@ live in code docstrings.
 
 ## Unreleased — shared addon contracts, native embeddings and graph retrieval
 
-- Parties: `Party.objects.propose_same_person(left, right, *, evidence)` lets an
-  importer propose, inside its own transaction, that two parties are one person,
-  citing the handle rows that link them. It states the `parties.same_as` rule's
-  normal pair statement, the one `reconcile_same_as` states, so the job keeps it
-  while the two are linked to one address and withdraws it when they are not. It
-  returns that statement, or `None` without writing when the two are one party,
-  either is trashed or merged away, or the pair already holds a current assertion
-  or a keep-separate decision; it never merges. The job now states its own pairs
-  through it.
+- Parties: `Party.objects.propose_same_person_as_system(left, right, *, evidence,
+  reason)` lets an importer propose that two parties are one person, citing the
+  handle rows that link them. It elevates, so it takes a named reason. It issues no
+  query and takes no lock in the caller's transaction: it registers the proposal
+  with `transaction.on_commit`, so a rolled-back caller proposes nothing, and runs
+  it after the commit in its own short transaction and changeset, returning
+  nothing. There it reads each cited handle as its merge survivor, requires it to
+  link one of the two and the two to be a same-person pair at a cited address, and
+  states the `parties.same_as` rule's normal pair statement, the one
+  `reconcile_same_as` states, keeps and withdraws. It writes nothing when the two
+  are one party, either is trashed or merged away, the pair already holds a
+  current assertion or a keep-separate decision, or the evidence does not hold; it
+  never merges, and a failure after the commit is logged for the job to heal. A
+  pair now locks both parties in one identity pass, Handles before Parties
+  (`StatementsMixin.lock_subjects`, which `Party` implements and its merges use);
+  locking one party after the other ran against the Handle, Party order. The job
+  no longer withdraws a proposal stated after its run began, and restates a
+  standing proposal whose cited handle was deleted or merged away with the handles
+  that still link the two, so it never hides from the review list.
 
 - Parties proposes a same-person pair for every two live parties of one kind
   linked to one address (`PartyManager.reconcile_same_as`, over

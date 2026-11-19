@@ -93,10 +93,18 @@ candidate addresses in SQL and reads only their links. Pairs follow from the
 model across owners too: two users' private contacts linked to one address are
 proposed to whoever can read both. The job
 skips current assertions and dismissals before each run's cap without
-continuation state, and withdraws its statements no link supports any more. An
-importer that lands its own party and claim proposes the same pair at once with
-`Party.objects.propose_same_person(left, right, evidence=handles)`, which states
-the same rule's statement, names no caller and never merges. A
+continuation state, and withdraws its statements no link supports any more, but
+not one stated after its run began. An importer that lands its own party and claim
+proposes the same pair with
+`Party.objects.propose_same_person_as_system(left, right, evidence=handles, reason=...)`.
+It is best-effort enrichment of the importer's write: it only registers the
+proposal, which runs after the importer commits, in its own short transaction, so
+a rolled-back page proposes nothing and a page never waits on a pair's locks. It
+checks that each cited handle links one of the two and that they share a cited
+address, states the same rule's statement, names no caller and never merges; the
+job heals a proposal it missed. A pair locks both parties in one identity pass
+(`Party.lock_subjects`, the provenance pair-lock hook), Handles before Parties, as
+a merge does. A
 preferred no_value is the symmetric anti-link; preferred value
 awaits a person's survivor choice. `survivor.merge` owns the changeset and redirect;
 pointing owners union statements, retaining collisions as superseded. Where the

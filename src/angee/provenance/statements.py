@@ -660,8 +660,7 @@ class StatementPairManager[T: StatementPair](_StatementPairManagerBase[T]):
                 raise PermissionDenied("A pair requires read on both endpoints.")
         ordered = sorted((left, right), key=lambda endpoint: endpoint.pk)
         with transaction.atomic():
-            for endpoint in ordered:
-                endpoint.lock_subject()
+            cast(type[StatementsMixin], model).lock_subjects(ordered)
             pair, _ = self.model._base_manager.get_or_create(
                 left_id=ordered[0].pk,
                 right_id=ordered[1].pk,
@@ -1056,6 +1055,19 @@ class StatementsMixin(PersistenceMixin, HistoryDocumentMixin):
                 self.refresh_from_db()
             elif resolved_fields:
                 self.refresh_from_db(fields=sorted(resolved_fields))
+
+    @classmethod
+    def lock_subjects(cls, subjects: Sequence[Any]) -> None:
+        """Lock several subjects of this model before a write that spans them, as a pair's endpoints.
+
+        The default locks each in key order (:meth:`lock_subject`). A subject whose
+        lock takes prerequisite rows first overrides this to take every subject's
+        prerequisites before any subject row, so two subjects never interleave
+        their lock order.
+        """
+
+        for subject in sorted(subjects, key=lambda row: row.pk):
+            subject.lock_subject()
 
     def require_statement_write(self, actor: SubjectRef | None) -> None:
         """Admit assertions through the subject's native REBAC write scope."""
@@ -1592,10 +1604,10 @@ class StatementPair(
             endpoint.require_statement_write(actor)
 
     def lock_subject(self, members: Mapping[str, Any] | None = None) -> Any:
-        """Lock both endpoint owners before their retained pair."""
+        """Lock both endpoint owners in one pass (``lock_subjects``) before their retained pair."""
 
-        for endpoint in (self.left, self.right):
-            endpoint.lock_subject()
+        endpoints = cast(type[StatementsMixin], _statement_foreign_key(type(self), "left").remote_field.model)
+        endpoints.lock_subjects((self.left, self.right))
         return super().lock_subject(members)
 
     @classmethod

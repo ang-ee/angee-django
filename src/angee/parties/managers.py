@@ -20,6 +20,7 @@ from collections import defaultdict
 from collections.abc import Collection, Iterable, Mapping, Sequence
 from dataclasses import asdict, dataclass, replace
 from datetime import date, datetime
+from functools import partial
 from itertools import batched, chain, combinations
 from typing import TYPE_CHECKING, Any, ClassVar, NamedTuple, Self, TypedDict
 
@@ -43,6 +44,7 @@ from django.db.models import (
 )
 from django.db.models.functions import Coalesce, NullIf
 from django.db.models.lookups import Exact
+from django.utils import timezone
 from django.utils.crypto import salted_hmac
 from phonenumbers import PhoneNumberMatcher
 from rebac import (
@@ -55,7 +57,7 @@ from rebac.actors import is_sudo, to_subject_ref
 
 from angee.base.hooks import resolve_hooks
 from angee.base.models.hierarchy import HierarchyQuerySet
-from angee.base.models.identity import instances_from_public_ids
+from angee.base.models.identity import instances_from_public_ids, public_id_for
 from angee.base.models.trash import ArchiveQuerySet
 from angee.base.pagination import clamp_page_size
 from angee.base.permissions import actor_user_id, reader_queryset
@@ -63,6 +65,7 @@ from angee.base.querysets import MergeableQuerySet, by_key, query_batch_size
 from angee.base.serialization import canonical_json
 from angee.parties.backends import AvatarReport, ParsedAddress, ParsedContact, ParsedPhoto
 from angee.parties.domains import GENERIC_EMAIL_DOMAINS
+from angee.provenance.context import changeset
 from angee.provenance.contrib.angee.managers import AngeeHistoryManager
 from angee.provenance.contrib.angee.querysets import AngeeHistoryQuerySet
 from angee.provenance.evidence import EvidenceReference
@@ -1498,14 +1501,19 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
         it; a pair holding any current assertion or a person's keep-separate
         decision is skipped before the cap, so retained statements advance
         discovery without continuation state. The rule's statements no pair
-        supports any more are withdrawn exactly. Each run withdraws and proposes at
-        most ``limit`` pairs between them, looks the rule up once, and holds only
-        the candidate addresses' links and the rule's own statements in memory.
+        supports any more are withdrawn exactly, except one stated after this run
+        began (an importer's proposal committed meanwhile), which the next run
+        judges. A supported statement citing a handle that no longer links the two
+        (deleted, merged away) is stated again with the handles that do, so the
+        review list can show it. Each run withdraws, restates and proposes at most
+        ``limit`` pairs between them, looks the rule up once, and holds only the
+        candidate addresses' links and the rule's own statements in memory.
         """
 
         limit = max(0, min(int(limit), 1000))
         if not limit:
             return 0
+        started = timezone.now()
         source = self.rule_source("same_as")
         supported = self.same_person_pairs(
             self.same_person_links(shared=self.shared_sender_ids() if shared is None else shared)
@@ -1515,56 +1523,97 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
         own = list(
             current.filter(asserted_by=str(to_subject_ref(source)))
             .order_by("subject__left_id", "subject__right_id")
-            .values_list("subject_id", "subject__left_id", "subject__right_id")
+            .values_list("subject_id", "subject__left_id", "subject__right_id", "updated_at", "evidence")
         )
-        decided = {(left_id, right_id) for _subject, left_id, right_id in own}
+        decided = {(left_id, right_id) for _subject, left_id, right_id, _at, _cited in own}
         for batch in batched(sorted({left_id for left_id, _right in supported}), query_batch_size(current)):
             decided.update(
                 current.filter(subject__left_id__in=batch).values_list("subject__left_id", "subject__right_id")
             )
-        unsupported = [subject for subject, left_id, right_id in own if (left_id, right_id) not in supported][:limit]
+        unsupported = [
+            subject for subject, left_id, right_id, at, _cited in own if (left_id, right_id) not in supported
+            and at < started
+        ][:limit]
         changed = statements.withdraw(source, unsupported) if unsupported else 0
-        proposals = [pair for pair in supported if pair not in decided][: limit - changed]
-        handles = apps.get_model("parties", "Handle")._base_manager.in_bulk(
-            sorted({pk for pair in proposals for pk in supported[pair]})
-        )
-        for left_id, right_id in proposals:
+        handle_model = apps.get_model("parties", "Handle")
+        stale = [
+            (left_id, right_id)
+            for _subject, left_id, right_id, _at, cited in own
+            if (left_id, right_id) in supported
+            and not {EvidenceReference.model_validate(ref).id for ref in cited}
+            <= {public_id_for(handle_model, pk) for pk in supported[left_id, right_id]}
+        ]
+        work = [*((pair, True) for pair in stale), *((pair, False) for pair in supported if pair not in decided)]
+        work = work[: limit - changed]
+        handles = handle_model._base_manager.in_bulk(sorted({pk for pair, _restate in work for pk in supported[pair]}))
+        for (left_id, right_id), restate in work:
             evidence = [handles[pk] for pk in supported[left_id, right_id]]
-            if self._state_same_person(left_id, right_id, evidence, source=source) is not None:
+            if self._state_same_person(left_id, right_id, evidence, source=source, restate=restate) is not None:
                 changed += 1
         return changed
 
-    def propose_same_person(self, left: Any, right: Any, *, evidence: Iterable[Any]) -> Any | None:
-        """Propose that two parties are one person, citing the handles that link them; return the statement.
+    def propose_same_person_as_system(self, left: Any, right: Any, *, evidence: Iterable[Any], reason: str) -> None:
+        """Propose, once the caller commits, that two parties are one person, citing the handles that link them.
 
-        The proposal names no caller: it is the ``parties.same_as`` rule's normal
-        ``same_as`` value statement on the ordered pair, the one
-        :meth:`reconcile_same_as` states, so that job keeps it while the two are
-        linked to one address (:meth:`same_person_links`) and withdraws it when they
-        are not. ``evidence`` is the handle rows linking them. It returns ``None``
-        and writes nothing when the two are one party, either is trashed or merged
-        away, or the pair holds a current assertion or a person's keep-separate
-        decision. It never merges. It runs as named system work, so it needs no
-        actor, inside the caller's transaction, which it joins: an importer calls it
-        after landing its own party and claim.
+        An importer lands its own party and claim, then calls this. The call checks
+        its arguments, issues no query and registers the proposal with
+        ``transaction.on_commit``: nothing runs inside the caller's transaction, so
+        it takes no lock there and waits on no pair, and a caller that rolls back
+        proposes nothing. Called outside a transaction, it runs at once. After the
+        commit it runs in a short transaction and changeset of its own, as named
+        system work under ``reason``: each cited handle is read as its merge
+        survivor and must link one of the two (:meth:`same_person_links`), and the
+        two must be a same-person pair at a cited address
+        (:meth:`same_person_pairs`). Then it states, under the pair's locks, the
+        ``parties.same_as`` rule's pair statement, the one the scheduled job
+        (:meth:`reconcile_same_as`) states, keeps while the pair stands and
+        withdraws when it does not. It never merges, and writes nothing when the
+        two are one party, either is trashed or merged away, the pair holds a
+        current assertion or a person's keep-separate decision, or the evidence
+        does not hold. A failure after the commit is logged, never raised; the job
+        heals any miss, and consults the shared-sender providers this call does not.
+        It elevates: the caller's own gate admitted the record it proposes for.
         """
 
+        if not reason.strip():
+            raise ValueError("A system same-person proposal requires a named reason.")
         handle_model = apps.get_model("parties", "Handle")
         handles = list(evidence)
         if not handles or not all(isinstance(row, handle_model) and row.pk is not None for row in handles):
             raise ValidationError({"evidence": "A same-person proposal cites the handle rows that link the two."})
-        if left.pk == right.pk:
-            return None
-        with system_context(reason="parties.propose_same_person"):
-            return self._state_same_person(left.pk, right.pk, handles, source=self.rule_source("same_as"))
+        if left.pk is None or right.pk is None:
+            raise ValidationError({"pair": "A same-person proposal names two saved parties."})
+        if left.pk != right.pk:
+            cited = tuple(row.pk for row in handles)
+            transaction.on_commit(partial(self._propose_cited, left.pk, right.pk, cited, reason), robust=True)
 
-    def _state_same_person(self, left_id: Any, right_id: Any, handles: Sequence[Any], *, source: Any) -> Any | None:
+    def _propose_cited(self, left_id: Any, right_id: Any, handle_ids: Sequence[Any], reason: str) -> Any | None:
+        """Run one committed proposal of :meth:`propose_same_person_as_system`; return its statement or ``None``."""
+
+        handle_model = apps.get_model("parties", "Handle")
+        with changeset(fresh=True, activity="system", change_reason=reason), system_context(reason=reason):
+            survivors = handle_model.canonical_ids(handle_ids)
+            cited = list(dict.fromkeys(survivors[pk] for pk in handle_ids if pk in survivors))
+            rows = handle_model._base_manager.in_bulk(cited)
+            links = self.same_person_links(addresses={(row.platform, row.normalized_value) for row in rows.values()})
+            pair = (min(left_id, right_id), max(left_id, right_id))
+            linking = {link.handle for address in links.values() for link in address if link.party in pair}
+            if not cited or not linking.issuperset(cited) or pair not in self.same_person_pairs(links):
+                logger.info("A same-person proposal under %s is not supported by its evidence.", reason)
+                return None
+            return self._state_same_person(*pair, [rows[pk] for pk in cited], source=self.rule_source("same_as"))
+
+    def _state_same_person(
+        self, left_id: Any, right_id: Any, handles: Sequence[Any], *, source: Any, restate: bool = False
+    ) -> Any | None:
         """State ``source``'s same_as value statement on the live, undecided pair, citing ``handles``.
 
-        The pair's endpoints lock first, then their state and the pair's decisions
-        are read again under the lock; ``None`` when either is trashed or merged
-        away or the pair holds a current assertion. Runs inside the caller's system
-        context, in a transaction of its own unless the caller holds one.
+        The pair's endpoints lock in one pass first (``Party.lock_subjects``), then
+        their state and the pair's decisions are read again under the lock; ``None``
+        when either is trashed or merged away or the pair holds a current
+        assertion, other than ``source``'s own when ``restate`` refreshes it. Runs
+        inside the caller's system context, in its own transaction unless the
+        caller holds one.
         """
 
         party_model = apps.get_model("parties", "Party")
@@ -1577,6 +1626,8 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
             first, second = parties.order_by("pk")
             pair = party_model.same_as.for_pair(first.with_actor(to_subject_ref(source)), second)
             decided = stances.current().filter(subject=pair, status=stances.model.StatementStatus.ASSERTED)
+            if restate:
+                decided = decided.exclude(asserted_by=str(to_subject_ref(source)))
             if live.count() != 2 or decided.exists():
                 return None
             return pair.statements.set(

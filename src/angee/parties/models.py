@@ -229,12 +229,26 @@ class Party(
         owner.lock_identity_rows(party_ids=(self.pk,), handle_ids=handle_ids)
         return super().lock_subject(members)
 
-    def lock_for_merge(self) -> None:
-        """Lock this party's Handles before the shared merge owner locks Parties."""
+    @classmethod
+    def lock_subjects(cls, subjects: Sequence[Any]) -> None:
+        """Lock every one of these parties' Handles, then the parties and statements, in one identity pass.
+
+        Locking party after party would take a later party's Handles after an
+        earlier party's row, the reverse of the Handle, Party order resolution
+        and the identity verbs keep, so a pair (both endpoints) and a merge (every
+        record) lock here.
+        """
 
         owner = apps.get_model("parties", "Party").objects
-        handle_ids = owner.handle_statements().filter(subject_id=self.pk).values_list("handle_id", flat=True)
-        owner.lock_identity_rows(party_ids=(self.pk,), handle_ids=handle_ids)
+        ids = sorted({row.pk for row in subjects})
+        handle_ids = owner.handle_statements().filter(subject_id__in=ids).values_list("handle_id", flat=True)
+        owner.lock_identity_rows(party_ids=ids, handle_ids=handle_ids)
+
+    @classmethod
+    def lock_merge_records(cls, records: Sequence[Any]) -> None:
+        """Lock every merged party's Handles before the shared merge owner locks Parties (:meth:`lock_subjects`)."""
+
+        cls.lock_subjects(records)
 
     def __str__(self) -> str:
         """Return the party's display name for Django displays."""
