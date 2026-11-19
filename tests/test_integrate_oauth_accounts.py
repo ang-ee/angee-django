@@ -149,6 +149,31 @@ def test_a_credential_stored_without_an_account_is_adopted_by_the_first_account(
     assert bridge.account_id == adopted.account.pk
 
 
+def test_adopting_a_credential_stored_without_an_account_sends_its_integrations_to_discover_again() -> None:
+    bridge, client = _bridge("legacy-rediscovery")
+    user = bridge.owner
+    with system_context(reason="test legacy credential in use"):
+        legacy = Credential.objects.upsert_for_user(user, client, CredentialKind.OAUTH, {"access_token": "legacy"})
+        bridge.attach_credential(legacy)
+        bridge.refresh_from_db()
+        assert bridge.finish_discovery(credential_pk=legacy.pk, generation=bridge.discovery_generation)
+        generation = bridge.discovery_generation
+
+    adopted = _connect(client, user, "account-one")
+
+    # The account and its tokens are new to the integrations attached to the row: their cursor and links are not.
+    bridge.refresh_from_db()
+    assert adopted.credential.pk == legacy.pk and bridge.account_id == adopted.account.pk
+    assert bridge.discovery_generation == generation + 1 and bridge.discovery_pending
+    with system_context(reason="test rediscovery after adoption"):
+        assert bridge.finish_discovery(credential_pk=legacy.pk, generation=bridge.discovery_generation)
+        generation = bridge.discovery_generation
+    # Reconnecting the account the row is now bound to keeps discovery.
+    _connect(client, user, "account-one")
+    bridge.refresh_from_db()
+    assert bridge.discovery_generation == generation and bridge.discovery_ready
+
+
 def test_connecting_another_account_into_a_bound_integration_is_refused() -> None:
     bridge, client = _bridge("account-switch")
     user = bridge.owner

@@ -167,3 +167,26 @@ def test_a_replaced_secret_waits_for_the_integration_without_locking_its_credent
     assert source.reveal() == {"api_key": "re-entered"}
     assert bridge.credential_id == source.pk
     assert bridge.discovery_generation == generation + 2 and bridge.discovery_pending
+
+
+def test_a_credential_delete_waits_for_the_integration_deriving_from_it_without_locking_the_credential(bridge):
+    with system_context(reason="test derived connection before the delete"):
+        source = bridge.credential
+        bridge.config = {"derived": True}
+        bridge.save(update_fields=["config"])
+        assert bridge.run_discovery(credential_pk=source.pk, generation=bridge.discovery_generation)["ok"]
+
+    def lock_for_delete():
+        with system_context(reason="test independent credential delete"), transaction.atomic():
+            return Credential.objects.get(pk=source.pk).lock_for_delete().pk
+
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        with system_context(reason="test attachment holds the integration lock"), transaction.atomic():
+            bridge.lock_capability()
+            contender, pid = submit(pool, lock_for_delete)
+            wait_for_lock(pid, contender)
+            # The delete waits on the integration it releases without holding the credential.
+            with connection.cursor() as cursor:
+                cursor.execute("SET LOCAL lock_timeout = '3s'")
+            Credential.objects.lock_if_supported().get(pk=source.pk)
+        assert contender.result(timeout=10) == source.pk

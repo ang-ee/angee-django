@@ -279,12 +279,29 @@ enters `await_discovery`, clears completion and advances `discovery_generation`.
 So does a re-entered secret, on either path: `Credential.replace_material`, and
 `create_local_credential` with a name the user's credential already has (the
 console's create, a connect flow that keys its credential by name). Both go
-through `CredentialManager.reenter_secret`, which locks the integrations the
-credential serves before the credential, as an attach does, and in the same
-transaction sends each whose capability requires discovery to await it again, so
-none syncs on facts found with the old secret. `update_material` refuses the
+through `CredentialManager.reenter_secret`. It refuses a credential an
+integration attaches as material its discovery derived: re-enter the grant it was
+derived from. When the write changed the row's kind or decrypted material, every
+integration the credential serves admits it again (`Integration.admit_credential`,
+the rule attachment and the connect picker use; a refusal rolls the re-entry
+back), and in the same transaction each whose capability requires discovery
+awaits it again, so none syncs on facts found with the old secret. An unchanged
+re-entry changes nothing. An account-less OAuth credential adopted by the first
+account its user connects sends the integrations attaching it to discover again
+too; reconnecting an account already bound does not. `update_material` refuses the
 fields the kind stores as its own secret (`CredentialKindHandler.secret_material_fields`:
 its input fields, or what a `jwt_bearer` key file becomes). No-op discovery settles synchronously.
+
+Lock order. Integrate's owners take row locks in one order: an integration's
+capability rows (`Integration.lock_capability`: the concrete row, then its
+multi-table ancestors), several integrations in primary-key order, before the
+credential they use and before the integration's streams; a stream's current
+epoch before its record links. `CredentialManager.lock_with_served_integrations`
+is the one place that takes a credential with the integrations it serves, for a
+re-entry, a reconnect, an adoption and a credential's deletion or disconnect
+(`Credential.lock_for_delete`); when what the credential serves changed between
+its two reads it releases every lock to a savepoint and takes them again in that
+order. A page's stream lock reads its integration without locking it.
 The worker runs
 `IntegrationImpl.discover_connection(credential) -> ConnectionDiscovery` outside
 transactions under the sync advisory lock. The result contains adapter-owned
@@ -297,7 +314,9 @@ database work. An adapter that keeps the remote account it found refuses another
 there with `IntegrationError`; discovery then fails with that operator message and
 sync stays refused. Integrate persists derived material through the credential
 manager (`store_derived`, which sends no integration already using that name to
-discover again) and `attach_connection`; adapters never persist credentials or implement
+discover again and overwrites only a credential another integration attaches as
+derived: a hand-made credential of the name fails the discovery with a message)
+and `attach_connection`; adapters never persist credentials or implement
 the generation fence. Integrate then settles and sends
 `signals.discovery_finished.send(sender=type(instance), instance=instance)` on commit.
 The source grant is retained in `discovery_credential` so reconnect can regenerate

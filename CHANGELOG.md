@@ -24,18 +24,32 @@ live in code docstrings.
   documented as holding the connection facts discovery learned, beside
   live-session state.
 
-- `angee.integrate`: every way a secret is re-entered is discovered again.
+- `angee.integrate`: a secret re-entered in place or by name, or an account-less
+  credential adopted by its first account, is discovered again.
   `CredentialManager.create_local_credential` with a name the user's credential
   already has (the console's create, connect flows that key their credential by
   name) replaced its material, and even its kind, without the integrations using
   it discovering again. That update and `Credential.replace_material` now share
-  one owner, `CredentialManager.reenter_secret`. Discovery stores the material it
+  one owner, `CredentialManager.reenter_secret`. It refuses a credential an
+  integration attaches as derived material; when the kind or material changed,
+  every integration the credential serves admits it again
+  (`Integration.admit_credential`; a refusal rolls the re-entry back) and those
+  whose capability requires discovery await it again; an unchanged re-entry
+  changes nothing. Adopting an account-less OAuth credential sends the
+  integrations attaching it to discover again. Discovery stores the material it
   derived through `CredentialManager.store_derived` instead, which sends no
   integration to discover again, so two that derive a credential of one name do
-  not loop. `Credential.update_material` refuses the fields the kind stores as
-  its own secret (`CredentialKindHandler.secret_material_fields`: `api_key`,
-  `password`, …, and for `jwt_bearer` the signing fields its key file becomes)
-  and points to `replace_material`.
+  not loop, and refuses to overwrite a hand-made credential of that name.
+  `Credential.update_material` refuses the fields the kind stores as its own
+  secret (`CredentialKindHandler.secret_material_fields`: `api_key`, `password`,
+  …, and for `jwt_bearer` the signing fields its key file becomes) and points to
+  `replace_material`. A token refresh, a minted scoped token, transient material
+  and the reconnect of an account already bound keep discovery. The integrate
+  README states the lock order once: `CredentialManager.lock_with_served_integrations`
+  takes the integrations a credential serves before it on every path (re-entry,
+  reconnect, adoption, `Credential.lock_for_delete` for its deletion and
+  disconnect), and takes every lock again when what the credential serves
+  changed between its two reads.
 
 - `angee.integrate`: an owner can transfer their own integration.
   `Integration.transfer_ownership` released the previous owner's connection on

@@ -1065,16 +1065,13 @@ class CredentialManager[CredentialT: Credential](_CredentialManagerBase[Credenti
 
         :meth:`retire` owns vetoes, derived releases, after-commit remote
         revocation and the delete; the account's native owner release runs between
-        them. An absent user/account link is false.
+        them. An absent user/account link is false. The credential locks as its
+        deletion does (:meth:`Credential.lock_for_delete`).
         """
 
-        candidates = self.select_related("oauth_client", "external_account").select_for_update(of=("self",))
         with system_context(reason="integrate.credential.disconnect"), transaction.atomic():
-            credential = (
-                candidates
-                .filter(user=user, external_account__sqid=external_account_sqid)
-                .first()
-            )
+            found = self.filter(user=user, external_account__sqid=external_account_sqid).first()
+            credential = None if found is None else found.lock_for_delete()
             if credential is None:
                 return False
             account = credential.external_account
@@ -1188,48 +1185,76 @@ class CredentialManager[CredentialT: Credential](_CredentialManagerBase[Credenti
 
         An integration serves the credential it attaches and the grant its
         discovered material derives from (``Integration.discovery_credential``).
+        The read is structural: every such row, whoever asks.
         """
 
         return (
             apps.get_model("integrate", "Integration")
-            .objects.filter(Q(credential_id=credential_pk) | Q(discovery_credential_id=credential_pk))
+            ._base_manager.filter(Q(credential_id=credential_pk) | Q(discovery_credential_id=credential_pk))
             .order_by("pk")
+        )
+
+    def derived_attachments(self, credential_pk: int) -> models.QuerySet[Any]:
+        """Return the integrations attaching ``credential_pk`` as material discovery derived from another grant."""
+
+        return self.served_integrations(credential_pk).filter(credential_id=credential_pk).exclude(
+            Q(discovery_credential_id__isnull=True) | Q(discovery_credential_id=credential_pk),
         )
 
     def lock_with_served_integrations(self, credential_pk: int) -> tuple[Any, list[Any]]:
         """Lock the integrations ``credential_pk`` serves, then the credential; return both, locked.
 
-        Integrations lock first (``Integration.lock_capability``), the order every
-        attachment takes. One that attached the credential meanwhile is locked
-        after it: an attachment cannot commit while the credential is locked (its
-        foreign-key check needs the row), so that second read is final. The
-        caller's transaction holds the locks.
+        The one place these locks are taken, in integrate's lock order (the
+        README's "Lock order"): each integration's capability rows
+        (``Integration.lock_capability``), in primary-key order, then the
+        credential. Once the credential is locked no attachment can commit (its
+        foreign-key check needs the row), so the integrations it serves are read
+        again: when that read differs (one attached meanwhile, or let go), every
+        lock is released to a savepoint and taken again in the same order, so
+        none is taken after the credential and none that no longer serves it is
+        returned. Runs inside the caller's transaction.
         """
 
-        integrations = [integration.lock_capability() for integration in self.served_integrations(credential_pk)]
-        credential = self.lock_if_supported().get(pk=credential_pk)
-        locked = {integration.pk for integration in integrations}
-        integrations += [
-            integration.lock_capability()
-            for integration in self.served_integrations(credential_pk)
-            if integration.pk not in locked
-        ]
-        return credential, integrations
+        if not connection.in_atomic_block:
+            raise RuntimeError("Locking a credential and the integrations it serves requires the caller's transaction.")
+        while True:
+            served = list(self.served_integrations(credential_pk))
+            savepoint = transaction.savepoint()
+            integrations = [integration.lock_capability() for integration in served]
+            credential = self.lock_if_supported().get(pk=credential_pk)
+            if list(self.served_integrations(credential_pk).values_list("pk", flat=True)) == [row.pk for row in served]:
+                transaction.savepoint_commit(savepoint)
+                return credential, integrations
+            transaction.savepoint_rollback(savepoint)
 
     @contextmanager
     def reenter_secret(self, credential_pk: int) -> Iterator[Any]:
         """Hold one re-entry of ``credential_pk``'s secret; yield the credential, locked, to write it.
 
-        A new secret may read another remote account than the one discovery
-        found, so once the caller's write is done, every integration the
-        credential serves whose capability requires connection discovery awaits
-        it again (:meth:`Integration.await_discovery`) and syncs only once it
-        settles. They lock before the credential
-        (:meth:`lock_with_served_integrations`). Runs inside the caller's transaction.
+        Runs inside the caller's transaction, the integrations the credential
+        serves locked before it (:meth:`lock_with_served_integrations`). A
+        credential an integration attaches as material its discovery derived
+        (:meth:`derived_attachments`) is refused: its own grant is re-entered
+        instead. Once the caller's write is done, a re-entry that changed the
+        row's kind or decrypted material is admitted again by every integration
+        it serves (:meth:`Integration.admit_credential`, the rule attachment and
+        the connect picker use; a refusal rolls the re-entry back), and each
+        whose capability requires connection discovery awaits it again
+        (:meth:`Integration.await_discovery`): a new secret may read another
+        remote account than the one discovery found. An unchanged re-entry
+        changes nothing.
         """
 
         credential, integrations = self.lock_with_served_integrations(credential_pk)
+        if self.derived_attachments(credential_pk).exists():
+            raise ValidationError("Connection discovery derived this credential; re-enter its source credential.")
+        before = (credential.kind, credential.reveal())
         yield credential
+        credential.refresh_from_db()
+        if (credential.kind, credential.reveal()) == before:
+            return
+        for integration in integrations:
+            integration.admit_credential(credential)
         for integration in integrations:
             if integration.requires_connection_discovery:
                 integration.await_discovery()
@@ -1300,29 +1325,17 @@ class CredentialManager[CredentialT: Credential](_CredentialManagerBase[Credenti
         with system_context(reason=self._REASON), transaction.atomic():
             if account_id is not None and not self.filter(**identity).exists():
                 self._adopt_unlinked(user, oauth_client, external_account)
-            existing = self.filter(**identity).only("pk").first()
-            integrations = []
-            if existing is not None and reconnect:
-                # Match Retry/Resume: concrete integration and ancestors, then the
-                # source credential. Refresh-only writes never touch integrations
-                # and may already hold the credential lock.
-                integrations = [
-                    integration.lock_capability() for integration in self.served_integrations(existing.pk)
-                ]
-            instance, created = self.lock_if_supported().get_or_create(**identity, defaults=create_values)
+            instance, created = self.get_or_create(**identity, defaults=create_values)
+            integrations: list[Any] = []
             stored = material
             if not created:
-                # An attachment cannot commit while the credential is locked (its
-                # foreign-key check needs the row), so this read is final. A late
-                # arrival is locked after the credential, as its re-attachment below
-                # would lock it anyway.
+                # A reconnect locks the integrations it serves before the credential, as
+                # Retry/Resume do. Refresh-only writes never touch integrations and may
+                # already hold the credential lock.
                 if reconnect:
-                    locked = {integration.pk for integration in integrations}
-                    integrations += [
-                        integration.lock_capability()
-                        for integration in self.served_integrations(instance.pk)
-                        if integration.pk not in locked
-                    ]
+                    instance, integrations = self.lock_with_served_integrations(instance.pk)
+                else:
+                    instance = self.lock_if_supported().get(pk=instance.pk)
                 stored = handler.carry_forward(material, instance.reveal())
                 values = {"kind": handler.kind, "material": self.model.encode_material(stored), **update_values}
                 for name, value in values.items():
@@ -1348,9 +1361,12 @@ class CredentialManager[CredentialT: Credential](_CredentialManagerBase[Credenti
     def _adopt_unlinked(self, user: Any, oauth_client: Any, external_account: Any) -> None:
         """Give the user's account-less credential at this client to its first connected account.
 
-        Such a row predates per-account credentials; the integrations it serves
-        without a binding bind to that account too. They lock before the
-        credential (:meth:`lock_with_served_integrations`); saves keep their history.
+        Such a row predates per-account credentials; the integrations attaching
+        it without a binding bind to that account too. The account and the
+        tokens it brings are new to every integration attaching the row, so each
+        whose capability requires connection discovery awaits it again; the
+        reconnect of an account already bound keeps discovery. They lock before
+        the credential (:meth:`lock_with_served_integrations`); saves keep their history.
         """
 
         legacy = self.filter(user_id=user.pk, oauth_client_id=oauth_client.pk, external_account__isnull=True).first()
@@ -1362,9 +1378,13 @@ class CredentialManager[CredentialT: Credential](_CredentialManagerBase[Credenti
         legacy.external_account = external_account
         legacy.save(update_fields=["external_account", "updated_at"])
         for integration in integrations:
-            if integration.credential_id == legacy.pk and integration.account_id is None:
+            if integration.credential_id != legacy.pk:
+                continue
+            if integration.account_id is None:
                 integration.account = external_account
                 integration.save(update_fields=["account", "updated_at"])
+            if integration.requires_connection_discovery:
+                integration.await_discovery()
 
     @staticmethod
     def _oauth_credential_name(oauth_client: OAuthClient, external_account: ExternalAccount | None) -> str:
@@ -1412,15 +1432,27 @@ class CredentialManager[CredentialT: Credential](_CredentialManagerBase[Credenti
         comes from the discovery that is settling, not from a re-entered secret, so
         the integrations already using a credential of that name are not sent to
         discover again (two that derive one name would rediscover each other).
+        It overwrites only a credential another integration attaches as derived
+        (:meth:`derived_attachments`): a hand-made credential of that name is
+        refused, so the discovery fails with a message for the operator.
         """
 
         values, create_values = self._local_credential_values(
             kind=derived.kind, name=derived.name, material=dict(derived.material), fields={},
         )
         with system_context(reason=self._REASON), transaction.atomic():
-            instance, _created = self.update_or_create(
-                user_id=user.pk, name=derived.name, oauth_client=None, defaults=values, create_defaults=create_values,
-            )
+            identity = {"user_id": user.pk, "name": derived.name, "oauth_client": None}
+            instance, created = self.get_or_create(**identity, defaults=create_values)
+            if not created:
+                instance = self.lock_if_supported().get(pk=instance.pk)
+                if not self.derived_attachments(instance.pk).exists():
+                    raise IntegrationError(
+                        f'A credential named "{derived.name}" was not derived by connection discovery; '
+                        "rename it, then retry discovery."
+                    )
+                for field, value in values.items():
+                    setattr(instance, field, value)
+                instance.save(update_fields=[*values, "updated_at"])
         return instance
 
     def prepare_local_credential(
@@ -1495,6 +1527,21 @@ class Credential(AuditMixin, AngeeDataModel, concrete=True):
 
         Contributions may lock admission facts and raise a coded ``ValidationError``.
         """
+
+    def lock_for_delete(self, *, queryset: models.QuerySet[models.Model] | None = None) -> Self | None:
+        """Lock the integrations this credential serves, then the row, in integrate's lock order.
+
+        Its disconnect releases the integrations whose material derives from it
+        (:meth:`CredentialManager.prepare_disconnect`), so they lock first, as an
+        attachment takes them (:meth:`CredentialManager.lock_with_served_integrations`).
+        """
+
+        with system_context(reason="integrate.credential.lock_for_delete"):
+            try:
+                type(self).objects.lock_with_served_integrations(self.pk)
+            except type(self).DoesNotExist:
+                return None
+        return super().lock_for_delete(queryset=queryset)
 
     def revoke_remote(self) -> None:
         """Revoke this credential's OAuth token when its provider supports it."""

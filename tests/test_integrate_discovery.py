@@ -29,6 +29,7 @@ from angee.integrate.connect import complete_account_connect, complete_external_
 from angee.integrate.constants import DISCOVERY_ATTEMPT_LIMIT, DISCOVERY_TASK
 from angee.integrate.discovery import ConnectionDiscovery
 from angee.integrate.errors import IntegrationError
+from angee.integrate.models import CredentialManager
 from angee.integrate.oauth import state
 from angee.integrate.oauth.client import OAuthClientProtocol
 from angee.integrate.schema import (
@@ -44,6 +45,7 @@ from angee.integrate.testing.models import RecordLink, SyncStream
 from angee.jobs.celery import app as celery_app
 from tests.conftest import (
     Credential,
+    Integration,
     addon_schema,
     create_platform_admin,
     create_user,
@@ -51,6 +53,7 @@ from tests.conftest import (
     make_integration,
 )
 from tests.integrate_fixtures import CONNECTION_CLASSES, ConnectionAdapter, ConnectionBridge, LiveConnectionAdapter
+from tests.test_integrate_jwt_bearer import neutral_key_file
 
 pytestmark = pytest.mark.django_db(transaction=True)
 
@@ -907,3 +910,175 @@ def test_discovery_stops_when_its_source_credential_was_deleted(bridge, sent_tas
         assert bridge.runtime_status == "error"
         assert bridge.last_error == "The source credential for connection discovery is no longer available."
         assert sent_tasks == []
+
+
+@pytest.mark.parametrize("path", ["kind", "delegated"])
+def test_a_re_entry_the_capability_refuses_rolls_back_with_its_refusal(bridge, sent_tasks, monkeypatch, path):
+    refusal = "This capability reads with a service key of its own."
+    monkeypatch.setattr(
+        ConnectionBridge, "credential_blocker",
+        lambda self, credential: refusal if credential.kind == "basic_auth" or credential.delegated else None,
+    )
+    with system_context(reason="test a re-entry the capability refuses"):
+        if path == "kind":
+            credential = Credential.objects.create_local_credential(
+                bridge.owner, kind="static_token", name="Service key", material={"api_key": "first"},
+            )
+        else:
+            credential = Credential.objects.create_local_credential(
+                bridge.owner, kind="jwt_bearer", name="Service key", material={"key_file": neutral_key_file()},
+            )
+        bridge.attach_credential(credential)
+        assert settle(bridge)["ok"]
+        before = (credential.kind, credential.reveal(), bridge.discovery_generation)
+        sent_tasks.clear()
+        with pytest.raises(ValidationError, match=refusal):
+            if path == "kind":
+                Credential.objects.create_local_credential(
+                    bridge.owner, kind="basic_auth", name="Service key",
+                    material={"username": "ada@example.com", "password": "re-entered"},
+                )
+            else:
+                credential.replace_material({"key_file": neutral_key_file(subject="delegate@example.com")})
+        credential.refresh_from_db()
+        bridge.refresh_from_db()
+    assert (credential.kind, credential.reveal(), bridge.discovery_generation) == before
+    assert bridge.discovery_ready and sent_tasks == []
+
+
+@pytest.mark.parametrize("change", ["arrived", "left"])
+def test_a_re_entry_takes_its_locks_again_in_order_when_what_the_credential_serves_changed(
+    bridge, sent_tasks, monkeypatch, change,
+):
+    with system_context(reason="test integrations a credential serves change under a re-entry"):
+        assert settle(bridge)["ok"]
+        source = bridge.credential
+        sibling = ConnectionBridge.objects.create(
+            vendor=bridge.vendor, owner=bridge.owner, credential=source, lifecycle="paused",
+        )
+        assert settle(sibling)["ok"]
+        if change == "left":
+            other = Credential.objects.create_local_credential(
+                bridge.owner, kind="static_token", name="Other key", material={"api_key": "other"},
+            )
+            sibling.attach_credential(other)
+            assert settle(sibling)["ok"]
+        generations = {row.pk: row.discovery_generation for row in (bridge, sibling)}
+    served, events = CredentialManager.served_integrations, []
+
+    def first_read_is_stale(manager, credential_pk):
+        # The sibling attached the credential (arrived) or let it go (left) just after the first read.
+        events.append("read")
+        rows = served(manager, credential_pk)
+        if events.count("read") > 1:
+            return rows
+        if change == "arrived":
+            return rows.exclude(pk=sibling.pk)
+        return rows.model._base_manager.filter(pk__in=(bridge.pk, sibling.pk)).order_by("pk")
+
+    lock = Integration.lock_capability
+
+    def recorded(row):
+        events.append(row.pk)
+        return lock(row)
+
+    monkeypatch.setattr(CredentialManager, "served_integrations", first_read_is_stale)
+    monkeypatch.setattr(Integration, "lock_capability", recorded)
+    with system_context(reason="test re-entry under a changed served set"):
+        source.replace_material({"api_key": "re-entered"})
+    reads = [index for index, event in enumerate(events) if event == "read"]
+    assert len(reads) >= 4, events
+    # The second read differs: every lock is released to the savepoint and taken again, in key order.
+    first = [bridge.pk] if change == "arrived" else [bridge.pk, sibling.pk]
+    again = [bridge.pk, sibling.pk] if change == "arrived" else [bridge.pk]
+    assert (events[reads[0] + 1:reads[1]], events[reads[2] + 1:reads[3]]) == (first, again)
+    with system_context(reason="test which integrations were sent to discover"):
+        for row in (bridge, sibling):
+            row.refresh_from_db()
+    assert bridge.discovery_generation == generations[bridge.pk] + 1
+    assert sibling.discovery_generation == generations[sibling.pk] + (change == "arrived")
+
+
+def test_the_integrations_a_credential_serves_are_read_whole_and_a_re_entry_needs_a_transaction(bridge):
+    stranger = create_user("served-stranger")
+    with actor_context(stranger):
+        served = Credential.objects.served_integrations(bridge.credential_id)
+        assert list(served.values_list("pk", flat=True)) == [bridge.pk]
+    with system_context(reason="test re-entry outside a transaction"), pytest.raises(RuntimeError, match="transaction"):
+        with Credential.objects.reenter_secret(bridge.credential_id):
+            pass
+
+
+def test_re_entering_a_credential_discovery_derived_is_refused(bridge, sent_tasks):
+    with system_context(reason="test a derived credential re-entered by name"):
+        bridge.config = {"derived": True}
+        bridge.save(update_fields=["config"])
+        assert settle(bridge)["ok"]
+        derived, generation = bridge.credential, bridge.discovery_generation
+        sent_tasks.clear()
+        with pytest.raises(ValidationError, match="derived"):
+            Credential.objects.create_local_credential(
+                bridge.owner, kind="static_token", name=derived.name, material={"api_key": "hand-made"},
+            )
+        derived.refresh_from_db()
+        bridge.refresh_from_db()
+    assert derived.reveal() == {"api_key": "fake"}
+    assert bridge.credential_id == derived.pk and bridge.discovery_generation == generation
+    assert sent_tasks == []
+
+
+def test_discovery_refuses_to_overwrite_a_hand_made_credential_of_the_name_it_derives(bridge):
+    with system_context(reason="test a derived name a hand-made credential holds"):
+        hand_made = Credential.objects.create_local_credential(
+            bridge.owner, kind="basic_auth", name=f"Resource {bridge.pk}",
+            material={"username": "ada@example.com", "password": "hand-made"},
+        )
+        bridge.config = {"derived": True}
+        bridge.save(update_fields=["config"])
+        assert settle(bridge) == {"ok": False, "reason": "discovery-failed"}
+        hand_made.refresh_from_db()
+    assert hand_made.kind == "basic_auth" and hand_made.reveal()["password"] == "hand-made"
+    assert f"Resource {bridge.pk}" in bridge.last_error and "rename" in bridge.last_error
+    assert not bridge.discovery_ready and bridge.credential_id != hand_made.pk
+
+
+@pytest.mark.parametrize("path", ["replace", "create"])
+def test_a_re_entry_that_changes_nothing_keeps_discovery(bridge, sent_tasks, path):
+    with system_context(reason="test an unchanged re-entry"):
+        credential = Credential.objects.create_local_credential(
+            bridge.owner, kind="static_token", name="Same key", material={"api_key": "same"},
+        )
+        bridge.attach_credential(credential)
+        assert settle(bridge)["ok"]
+        generation = bridge.discovery_generation
+        sent_tasks.clear()
+        if path == "replace":
+            credential.replace_material({"api_key": "same"})
+        else:
+            Credential.objects.create_local_credential(
+                bridge.owner, kind="static_token", name="Same key", material={"api_key": "same"},
+            )
+        bridge.refresh_from_db()
+    assert bridge.discovery_generation == generation and bridge.discovery_ready
+    assert sent_tasks == []
+
+
+def test_a_secret_re_entered_while_disconnected_is_discovered_on_resume(bridge, sent_tasks):
+    operator = create_platform_admin("resume-after-re-entry")
+    with system_context(reason="test re-entry while disconnected"):
+        assert settle(bridge)["ok"]
+        bridge.disconnect()
+        generation = bridge.discovery_generation
+        sent_tasks.clear()
+        bridge.credential.replace_material({"api_key": "re-entered"})
+        bridge.refresh_from_db()
+        assert bridge.discovery_generation == generation + 1
+        assert not bridge.discovery_pending and not bridge.discovery_ready and sent_tasks == []
+    with actor_context(operator):
+        Integration.objects.get(pk=bridge.pk).resume()
+    with system_context(reason="test rediscovery after resume"):
+        bridge.refresh_from_db()
+        assert bridge.lifecycle == "connected" and bridge.discovery_pending
+        assert [name for name, _options in sent_tasks] == [DISCOVERY_TASK]
+        assert settle(bridge)["ok"]
+    assert bridge.discovery_ready
