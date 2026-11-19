@@ -50,10 +50,9 @@ live in code docstrings.
   about discovery again once they hold their lock. Both asked before taking
   `delivery_lock()` or `sync_lock()`, so a secret re-entered while they waited
   for it sent one reply, or ran one step's IO, on the new secret. Under the lock
-  they now ask the row as stored (`Integration.require_stored_discovery_ready`,
-  one read of the readiness columns, which the stream driver's pre-write check
-  uses too): a send defers as for a pending discovery, and a step waits as for
-  contention.
+  they now ask the channel or bridge to re-read its own readiness columns
+  (`Integration.require_stored_discovery_ready`): a send defers as for a pending
+  discovery, and a step waits as for contention.
 
 - `angee.integrate`: the discovery checks cost no more than they need. A push
   asked about discovery for each candidate before its pinned, held, unchanged and
