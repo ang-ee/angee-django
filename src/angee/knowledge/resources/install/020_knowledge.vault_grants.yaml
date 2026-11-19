@@ -1,9 +1,9 @@
 rows:
   - resource: knowledge.vault_people
-    relation: contact_viewer
+    relation: contact_reader
     subject: parties/role:contact_reader#member
   - resource: knowledge.vault_people
-    relation: contact_editor
+    relation: contact_manager
     subject: parties/role:contact_manager#member
   - resource: knowledge.vault_people
     relation: contact_admin

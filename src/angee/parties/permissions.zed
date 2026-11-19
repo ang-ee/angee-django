@@ -1,7 +1,7 @@
 // Authorization schema for the parties addon.
 // @rebac_package: parties
 // @rebac_package_version: 0.1.0
-// @rebac_schema_revision: 37
+// @rebac_schema_revision: 38
 
 // Parties, folders and circles are grant roots: each is owned through its
 // transferable `owner` column (OwnerMixin), which an insert defaults to the row's
@@ -35,8 +35,12 @@
 // Parties' roles hold on every party what a per-record grant holds on one: a
 // contact reader reads as a `reader` does, a contact manager writes as an
 // `editor` does, a contact admin also deletes and transfers as an owner does.
-// A deployment grants their membership (the Permissions Hub, or a grants
-// resource row); parties grants them to nobody. Platform admins hold each.
+// What a write would lend by side effect is narrower: merging a party away
+// (`merge_away`) and granting per-record reads (`share`) take the contact admin,
+// and no role writes a record task about a party. Of an account's own person
+// the roles read the identity alone (`role_withheld`). A deployment grants their
+// membership (the Permissions Hub, or a grants resource row); parties grants
+// them to nobody. Platform admins hold each.
 definition parties/role {
     relation member: auth/user | auth/group#member | angee/role:admin#member
     relation admin:  angee/role // rebac:const=admin

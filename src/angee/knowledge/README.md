@@ -132,12 +132,14 @@ merge reversal.
 Knowledge's install tier provisions one vault for people, `Vault.PEOPLE`
 (`knowledge.vault_people`, resolved by `Vault.objects.for_resource`). It is
 unowned: platform admins administer it (read, write, delete, share and
-transfer) and members of knowledge's `vault_admin` and `knowledge_admin` roles
-read, write and delete it, as on every vault; a platform admin may transfer it
-to a person, who then owns it. Parties' roles reach it by grant rows its install
-tier writes beside it (`install/020_knowledge.vault_grants.yaml`): a contact
-reader reads it (`contact_viewer`), a contact manager writes it
-(`contact_editor`), a contact admin also removes its pages (`contact_admin`,
+transfer), and knowledge's own vault roles reach it as they reach every vault: a
+`vault_viewer` reads it, a `vault_editor` writes it, a `vault_admin` or
+`knowledge_admin` also deletes it; a platform admin may transfer it to a person,
+who then owns it. Parties' roles reach it by grant rows its install tier writes
+beside it (`install/020_knowledge.vault_grants.yaml`), each on the vault relation
+named for the parties role it holds: a contact reader reads it
+(`contact_reader`), a contact manager writes it (`contact_manager`), a contact
+admin also removes its pages (`contact_admin`,
 through `knowledge/vault#page_delete`, which also keeps a trashed page readable
 to restore it) but never the vault, whose removal would refuse every importer
 its `for_resource` (pending the architect's ruling; `delete` in place of
@@ -149,7 +151,6 @@ grantable relation, managed by whoever may `share` it), and grants `editor`
 administratively, through the Permissions Hub or a consumer addon's
 `kind = "grants"` install resource (`{resource: knowledge.vault_people,
 relation: editor, subject: <a user's xref, or auth/group:<id>#member>}`).
-Knowledge's own vault roles reach it too.
 
 A person's pages sit in a folder page bound to their party under the `folder`
 role (`RecordBindingManager.party_folder`); people add pages below it with the

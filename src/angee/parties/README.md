@@ -474,10 +474,11 @@ grant outlives its granter's role, so `role_share` is the contact admin, pending
 the architect's ruling; `role_manage` there lets a manager grant), reads every directory
 and shares who reads its contacts (`parties/directory#share`). Connecting,
 changing and removing a directory stay with its integration's writers and
-platform admins. The two choices a deployment's architect may flip are one line
-each in `parties/party`: `role_private` (whether a contact reader reads private
-fields) and `role_delete` (whether a contact manager trashes, and with it
-deletes). A role holder also reads the record tasks about every party
+platform admins. Each choice a deployment's architect may flip is one line in
+`parties/party`: `role_private` (whether a contact reader reads private fields)
+and `role_delete` (whether a contact manager trashes, and with it deletes), and
+the four pending rulings named here, `role_write_as_subject`,
+`role_merge_away`, `role_share` and `role_withheld`. A role holder also reads the record tasks about every party
 (`read_as_subject`) and sees people with an account in pickers, but writes,
 shares, deletes and transfers none of those tasks: `role_write_as_subject` is
 empty (pending the architect's ruling; `role_manage` there would lend a contact

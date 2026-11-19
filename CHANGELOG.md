@@ -14,16 +14,25 @@ live in code docstrings.
   `contact_reader`, `contact_manager` and `contact_admin` hold on every party,
   and on the handles, addresses, relationships and circle memberships it holds
   (through the party: a handle no party holds is no role's), and on every folder
-  and circle, what a per-record `reader`, `editor` and owner hold on one; a
-  contact admin also reads every directory
-  and shares its contacts (`parties/directory#share`, which now manages
-  `contact_reader`), and connecting a directory stays with platform admins.
-  `parties/party#role_private` and `#role_delete` are the two one-line choices
-  (a contact reader reads private fields: yes; a contact manager trashes, which
-  is `delete`: no). Revision 32. `angee.knowledge`: the people vault takes the
-  roles by install grant rows (`contact_viewer`, `contact_editor`,
-  `contact_admin` on `knowledge/vault`, extends revision 5). Nobody holds a role
-  until a deployment grants it. Upgrade: `rebac sync`; load the install tier.
+  and circle, what a per-record `reader`, `editor` and owner hold on one, but
+  for what a role's side effects would lend: a party merge takes the new
+  `merge_away` (`Party.MERGED_PERMISSION`) and a per-record read grant the new
+  `share` (`rebac_grantable` on parties and handles), which a contact admin
+  holds and a manager does not; no role writes a record task about a party;
+  and of an account's own person the roles read the identity alone. A contact
+  admin also reads every directory and shares its contacts
+  (`parties/directory#share`, which now manages `contact_reader`), and
+  connecting a directory stays with platform admins. Each choice is one line in
+  `parties/party`: `role_private` (a contact reader reads private fields: yes),
+  `role_delete` (a contact manager trashes, which is `delete`: no), and, pending
+  the architect's ruling, `role_write_as_subject`, `role_merge_away`,
+  `role_share` and `role_withheld`. Revision 38 on its branch.
+  `angee.knowledge`: the people vault takes the roles by install grant rows on
+  `knowledge/vault` relations named for them (`contact_reader`,
+  `contact_manager`, `contact_admin`); a contact admin removes the vault's
+  pages through the new `knowledge/vault#page_delete`, never the vault (pending
+  ruling). Knowledge revision 11, extends revision 7. Nobody holds a role until
+  a deployment grants it. Upgrade: `rebac sync`; load the install tier.
 - `angee.parties`: the batch dialog lists every group a list's "Select all N"
   matched by key, not by offset. It forwards the list's own groups read as the
   list sent it, order included (`AllMatchingGroups.read.orderBy`, always the

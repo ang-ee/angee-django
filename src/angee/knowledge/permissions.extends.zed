@@ -1,6 +1,6 @@
 // Knowledge-owned arms contributed to upstream resource definitions.
 // @rebac_package: knowledge
-// @rebac_schema_revision: 6
+// @rebac_schema_revision: 7
 
 // A party is bindable: its readers read a binding to it and its writers write one.
 // Parties cannot name knowledge (knowledge depends on messaging, which depends on
@@ -35,17 +35,19 @@ definition messaging/thread {
 }
 
 // The people vault takes parties' roles by grant rows its install tier writes
-// (resources/install/020_knowledge.vault_grants.yaml): a contact reader reads it,
+// (resources/install/020_knowledge.vault_grants.yaml). Each relation is named for
+// the parties role it holds (`parties/role:<name>#member`), a stored grant on this
+// one vault where parties' own relations are constants over every party: a contact reader reads it,
 // a contact manager writes it, a contact admin also removes its pages, never the
 // vault (pending ruling: `delete` in place of `page_delete` lets a contact admin
 // trash the vault, which `Vault.objects.for_resource` then refuses everyone).
 // Share and transfer stay with its owner and platform admins.
 definition knowledge/vault {
-    relation contact_viewer: parties/role#member
-    relation contact_editor: parties/role#member
+    relation contact_reader: parties/role#member
+    relation contact_manager: parties/role#member
     relation contact_admin: parties/role#member
 
-    permission read_granted = contact_viewer + contact_editor + contact_admin
-    permission write_granted = contact_editor + contact_admin
+    permission read_granted = contact_reader + contact_manager + contact_admin
+    permission write_granted = contact_manager + contact_admin
     permission page_delete = contact_admin
 }
