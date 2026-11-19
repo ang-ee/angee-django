@@ -388,6 +388,56 @@ def test_a_contact_landing_on_a_younger_person_moves_them_earlier_and_on_an_olde
     assert not failures(hubspot)
 
 
+def test_the_repair_moves_each_party_back_to_its_sources_earliest_creation_time_and_a_second_run_moves_nothing(
+    hubspot: HubSpot,
+) -> None:
+    """Parties imported before a contact carried its creation time, one of them merged since into a person's own."""
+
+    from io import StringIO
+
+    from django.apps import apps
+    from django.core.management import call_command
+    from django.core.management.base import OutputWrapper
+    from django_compose.provision import ProvisionContext
+    from rebac import actor_context
+
+    ada_created, grace_created = datetime(2019, 4, 2, tzinfo=UTC), datetime(2021, 6, 1, tzinfo=UTC)
+    ada = hubspot.server.add("contacts", ADA, modified=ago(days=3), created=ada_created)
+    grace = hubspot.server.add("contacts", GRACE, modified=ago(days=2), created=grace_created)
+    mary = hubspot.server.add("contacts", MARY, modified=ago(days=1), created=datetime(2023, 1, 1, tzinfo=UTC))
+    hubspot.drain()
+    people = {key: hubspot.person(key).pk for key in (ada, grace, mary)}
+    imported = timezone.now()
+    Party._base_manager.filter(pk__in=people.values()).update(created_at=imported)
+    # Mary's record was stored before a contact carried its creation time.
+    stored = hubspot.link(mary).source_payload
+    RecordLink._base_manager.filter(pk=hubspot.link(mary).pk).update(
+        source_payload={name: value for name, value in stored.items() if name != CREATED_AT}
+    )
+    # A person merged Ada's contact into a person of their own, made here after the import.
+    owner = hubspot.directory.owner
+    own = Person.objects.create(display_name="Ada Example", created_by=owner)
+    with actor_context(owner):
+        Party.objects.get(pk=own.pk).with_actor(owner).merge(records=[hubspot.person(ada).public_id])
+    assert Party._base_manager.get(pk=own.pk).created_at == imported
+
+    first = StringIO()
+    apps.get_app_config("parties").compose_provision(
+        ProvisionContext("default", OutputWrapper(first), OutputWrapper(StringIO()))
+    )
+    again = StringIO()
+    call_command("backdate_parties_from_sources", stdout=again)
+
+    assert (
+        "Moved 2 part(ies) back to the earliest creation time their sources state; 0 already as old; "
+        "1 linked record(s) state no creation time yet"
+    ) in first.getvalue()
+    assert "Moved 0 part(ies)" in again.getvalue() and "2 already as old; 1 linked record(s)" in again.getvalue()
+    assert Party._base_manager.get(pk=own.pk).created_at == ada_created
+    assert Party._base_manager.get(pk=people[grace]).created_at == grace_created
+    assert Party._base_manager.get(pk=people[mary]).created_at == imported
+
+
 def modified_after(search: dict[str, Any]) -> datetime:
     """Return the time a delta search reads changes strictly after."""
 

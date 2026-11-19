@@ -81,7 +81,15 @@ from angee.base.signals import MutedChanges, mute_changes, publish_change
 from angee.integrate.errors import IntegrationError
 from angee.integrate.models import IntegrationLifecycle, IntegrationManager
 from angee.integrate.states import LinkStatus, StreamDirection
-from angee.parties.backends import AvatarReport, ParsedAddress, ParsedContact, ParsedOrganization, ParsedPhoto
+from angee.parties.backends import (
+    CONTACTS,
+    AvatarReport,
+    ParsedAddress,
+    ParsedContact,
+    ParsedOrganization,
+    ParsedPhoto,
+    payload_created_at,
+)
 from angee.parties.domains import GENERIC_EMAIL_DOMAINS
 from angee.provenance.context import changeset
 from angee.provenance.contrib.angee.managers import AngeeHistoryManager
@@ -3907,6 +3915,52 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
             .exclude(status=LinkStatus.WITHDRAWN)
             .select_related("stream")
         )
+
+    def backdate_from_sources(self) -> tuple[int, int, int]:
+        """Move each party's creation time back to the earliest its directory records state: moved, kept, unstated.
+
+        The repair for parties imported before a contact carried its source's
+        creation time, run at every provision and as ``backdate_parties_from_sources``:
+        each canonical party's ``created_at`` becomes the earliest of its own and
+        the creation time each of its directory records' stored payloads states
+        (:func:`~angee.parties.backends.payload_created_at`), through
+        :meth:`Party.backdate_creation`. It needs no knowledge of which record
+        made the party: a party takes the minimum of every record it holds, and a
+        merge survivor holds the records it folded in. ``moved`` parties moved and
+        ``kept`` were already as old; ``unstated`` records' contact payloads state
+        no time (stored before a contact carried one, or from a source that states
+        none), which only a re-read of the source fills, never this repair.
+        Idempotent: a second run moves nothing.
+        """
+
+        reason = "parties.backdate_from_sources"
+        parties = apps.get_model("parties", "Party")
+        directories = apps.get_model("parties", "Directory")._base_manager.values("pk")
+        earliest: dict[Any, datetime] = {}
+        unstated = 0
+        with changeset(fresh=True, activity="system", change_reason=reason), system_context(reason=reason):
+            stored = (
+                parties._base_manager.filter(
+                    merged_into__isnull=True,
+                    record_links__stream__key=CONTACTS,
+                    record_links__stream__integration__in=directories,
+                )
+                .values_list("pk", "record_links__source_payload")
+                .order_by("pk")
+            )
+            for pk, payload in stored.iterator(chunk_size=500):
+                if not isinstance(payload, dict) or "contact" not in payload:
+                    continue
+                at = payload_created_at(payload)
+                if at is None:
+                    unstated += 1
+                elif pk not in earliest or at < earliest[pk]:
+                    earliest[pk] = at
+            moved = sum(
+                party.backdate_creation(earliest[party.pk])
+                for party in parties._base_manager.filter(pk__in=list(earliest)).order_by("pk")
+            )
+        return moved, len(earliest) - moved, unstated
 
     def directory_merge_blocker(self, survivor: Party, merged: Sequence[Party]) -> str | None:
         """Return why merging ``merged`` into ``survivor`` would set two contacts of one directory on one person.

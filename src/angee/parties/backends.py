@@ -239,10 +239,14 @@ def contact_from_projection(projection: Mapping[str, Any]) -> ParsedContact:
 def contact_from_payload(payload: Mapping[str, Any]) -> ParsedContact:
     """Decode a contact payload :meth:`DirectoryBackend.observe` made: its projection, with its creation time."""
 
+    return replace(contact_from_projection(payload["contact"]), created_at=payload_created_at(payload))
+
+
+def payload_created_at(payload: Mapping[str, Any]) -> datetime | None:
+    """Return when a contact payload :meth:`DirectoryBackend.observe` made says its record began; else ``None``."""
+
     created = payload.get(CREATED_AT)
-    return replace(
-        contact_from_projection(payload["contact"]), created_at=datetime.fromisoformat(created) if created else None
-    )
+    return datetime.fromisoformat(created) if created else None
 
 
 def _preferred(contact: ParsedContact) -> list[str]:

@@ -23,7 +23,7 @@ class PartiesConfig(AppConfig):
     name = "angee.parties"
 
     def compose_provision(self, context: ProvisionContext) -> None:
-        """Repair handle keys, handle holders and directory owners' contact read on every provision.
+        """Repair handle keys and holders, directory owners' contact read and party creation times on every provision.
 
         They run after the resources load. ``renormalize_handles`` saves again
         every comparison key computed under another version of the handle's
@@ -37,13 +37,17 @@ class PartiesConfig(AppConfig):
         at most ``HandleManager.REPAIR_LIMIT`` holders a run (past that, the
         provision log says how many remain and the next provision continues);
         ``grant_directory_owner_contact_reads`` grants each directory's owner the
-        read of its contacts where missing (connecting grants it). All are
-        idempotent, so a deployment never depends on someone running them.
+        read of its contacts where missing (connecting grants it);
+        ``backdate_parties_from_sources`` moves each party's creation time back to
+        the earliest its directory records' stored payloads state
+        (``PartyManager.backdate_from_sources``). All are idempotent, so a
+        deployment never depends on someone running them.
         """
 
         context.call("renormalize_handles")
         context.call("resolve_stale_owners")
         context.call("grant_directory_owner_contact_reads")
+        context.call("backdate_parties_from_sources")
 
     def ready(self) -> None:
         """Run parties ready-time hooks after app population."""
