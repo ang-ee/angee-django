@@ -66,7 +66,7 @@ from rebac.resources import model_resource_type
 
 from angee.base.fields.identity import SqidField
 from angee.base.hooks import resolve_hooks
-from angee.base.lineage import concrete_child, concrete_child_models
+from angee.base.lineage import concrete_child
 from angee.base.models.hierarchy import HierarchyQuerySet
 from angee.base.models.identity import instances_from_public_ids, public_id_for
 from angee.base.models.trash import ArchiveQuerySet
@@ -74,7 +74,7 @@ from angee.base.pagination import clamp_page_size
 from angee.base.permissions import actor_user_id, reader_queryset
 from angee.base.querysets import MergeableQuerySet, by_key, query_batch_size
 from angee.base.serialization import canonical_json
-from angee.base.signals import mute_changes, publish_change
+from angee.base.signals import MutedChanges, mute_changes, publish_change
 from angee.integrate.errors import IntegrationError
 from angee.integrate.models import IntegrationLifecycle, IntegrationManager
 from angee.integrate.states import LinkStatus, StreamDirection
@@ -2709,10 +2709,11 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
         readable = self._readable_members(actor, confirmed)
         permitted = self.batch_mergeable(actor, sorted({row.pk for row in readable.values()}))
         outcomes = []
-        changed: set[Any] = set()
-        # Each set's own writes would publish row by row, a stream of changes every viewer refetches on;
-        # the request's sets merge muted and each merged set's records are published once, after the last.
-        with mute_changes():
+        # Each set's own writes would publish row by row as it ran, a stream of changes every viewer refetches on.
+        # The request's sets merge muted, collecting what they wrote, and every row a committed set wrote (its
+        # records, and what their merge re-pointed) is published once after the last, each through its own gate.
+        written = MutedChanges()
+        with mute_changes(collect=written):
             for index, ids in enumerate(confirmed):
                 if refusal := self._admission(ids, readable, permitted):
                     outcomes.append(DuplicateSetOutcome(ids, DuplicateMergeOutcome.REFUSED, reason=refusal))
@@ -2739,6 +2740,9 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
                             fill_empty=True,
                             confirmed_fields=self.BATCH_CONFIRMED_FIELDS,
                         )
+                        # The survivor gained the merged records even where its own row was not written: it is
+                        # collected with the set, so it is published once if the set commits.
+                        publish_change(survivor, action="update", update_fields=None)
                 except (PermissionDenied, ValidationError) as error:
                     outcomes.append(DuplicateSetOutcome(ids, DuplicateMergeOutcome.REFUSED, reason=_refusal(error)))
                 except DatabaseError as error:
@@ -2753,28 +2757,8 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
                         )
                 else:
                     outcomes.append(DuplicateSetOutcome(ids, DuplicateMergeOutcome.MERGED, survivor=kept))
-                    changed.update(row.pk for row in preview.members)
-        self._publish_merged(changed)
+        written.publish()
         return outcomes
-
-    @staticmethod
-    def _publish_merged(pks: Collection[Any]) -> None:
-        """Publish each record of the merged sets once, as its concrete row: the change readers observe.
-
-        :meth:`merge_duplicates` mutes the per-row changes of the request's sets;
-        a set that was refused, stopped or failed rolled back and is not published.
-        """
-
-        if not pks:
-            return
-        party_model = apps.get_model("parties", "Party")
-        rows: list[Any] = []
-        for child in concrete_child_models(party_model):
-            rows.extend(child._base_manager.filter(pk__in=pks).order_by("pk"))
-        concrete = {row.pk for row in rows}
-        rows.extend(party_model._base_manager.filter(pk__in=set(pks) - concrete).order_by("pk"))
-        for row in rows:
-            publish_change(row, action="update", update_fields=None)
 
     def _readable_members(
         self, actor: Any, confirmed: Sequence[tuple[str, ...]], *, statements: bool = False,

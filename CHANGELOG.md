@@ -10,6 +10,18 @@ live in code docstrings.
 
 ## Unreleased — shared addon contracts, native embeddings and graph retrieval
 
+- `angee.base`: `mute_changes(collect=MutedChanges())` is a collecting mode of
+  the mute. The block also keeps the `(concrete model label, pk)` key of every
+  row it suppressed, deduplicated and never the row itself, joining as the
+  write's transaction commits, so a block or savepoint that rolled back
+  contributes nothing. `MutedChanges.publish()` then observes each row once, as
+  a full update in `(model label, pk)` order, through `transaction.on_commit` of
+  the outermost scope, so each passes every adapter's own read gate. A row
+  deleted inside the block, or a write that asked for no transport, is not
+  observed. An ordinary mute is unchanged, including one nested inside a
+  collecting mute, so the callers that mute on purpose and publish their own
+  summary (workflows settlement, decisions, messaging teardown and fan-out) are
+  untouched; `publish_bulk_update` coalesces under a collecting mute only.
 - `@angee/ui`: `FormView` (and so `Form` and every registered form) takes an
   optional `renderUnavailable(id, unavailable)`: what a saved record's form
   shows when its id reads no record, given the default "Record unavailable"
@@ -951,11 +963,23 @@ live in code docstrings.
   does not reach, so a list's heading count no longer keeps its pre-merge total
   until a reload; the compare page's merge and keep-apart refresh the same
   resource lists. On the server each request's
-  sets merge with their per-row changes muted (`mute_changes`), and once its
-  last set is done each record of a merged set is published once, as its
-  concrete row, so a chunk is one change for every viewer of those pages; a
-  set that was refused, stopped or failed rolled back and publishes nothing,
-  and a hand merge publishes as before. Each set asks the batch permission and
+  sets merge with their per-row changes muted and collected
+  (`mute_changes(collect=...)`), and once its last set is done every row a
+  committed set wrote is published once: its records (the survivor observed
+  with its set) and the handles their merge re-pointed, each through its own
+  read gate, so a chunk is one burst for every viewer of those pages. A set
+  that was refused, stopped or failed rolled back and publishes nothing, and a
+  hand merge publishes as before. Measured with a record holding 30 handles,
+  circle memberships and relationships, the batch broadcasts 32 changes (each
+  row once) where the hand merge broadcasts 92, one party up to 32 times; the
+  publish costs about 4 statements a handle (117, 197 and 317 at 10, 30 and 60).
+  There is no cap: every row is published. Known limits: the circle
+  memberships, relationships and every other reference the base merge
+  re-points (`Reference.move`, one queryset update) are never observed, by hand
+  or in a batch, so their lists refresh for other viewers only on their next
+  read; that owner would have to observe the rows it moves. The statements,
+  pair statements and addresses have no change feed, so no viewer's list of
+  them refreshes from any change. Each set asks the batch permission and
   reads its members once for the whole batch, before any lock, and keeps under
   its own lock what must be live there (the members, their statements and
   handles through the person, the kinds, the keep-apart decisions and the field

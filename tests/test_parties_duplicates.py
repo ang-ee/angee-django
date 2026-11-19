@@ -15,7 +15,16 @@ from django.test.utils import CaptureQueriesContext
 from rebac import RelationshipTuple, actor_context, system_context, to_object_ref, to_subject_ref, write_relationships
 
 import tests.test_parties_circles  # noqa: F401 -- register the fixture model graph before database setup
-from angee.messaging.testing.models import Handle, Organization, Party, Person
+from angee.messaging.testing.models import (
+    Circle,
+    CircleMember,
+    Handle,
+    Organization,
+    Party,
+    Person,
+    Relationship,
+    RelationshipKind,
+)
 from tests.conftest import create_user
 from tests.test_parties_same_as import _address, _kept_separate, _pairs, _reconcile
 
@@ -867,6 +876,57 @@ def test_a_batch_publishes_each_merged_record_once_after_its_sets(
     assert _sent_parties(sent) == sorted(("parties.Party", person.public_id) for members in sets for person in members)
 
 
+def _loser_with_many_rows(owner: Any, count: int) -> list[Any]:
+    """A pair whose newer record holds ``count`` handles, circle memberships and relationships of its own."""
+
+    pair = _people(owner, "Zoe Many", "Zoe Many", value="many@example.com")
+    with system_context(reason="duplicates many rows"):
+        kind = RelationshipKind._base_manager.create(slug="duplicates-sibling", name="Sibling")
+        for index in range(count):
+            Party.objects.assert_handle(pair[1], _address(owner, f"many-{index}@example.com"), asserted_by=owner)
+            circle = Circle._base_manager.create(name=f"Many {index}", created_by=owner)
+            CircleMember._base_manager.create(circle=circle, party=pair[1], created_by=owner)
+            other = Party._base_manager.create(display_name=f"Other {index}", created_by=owner)
+            Relationship._base_manager.create(party=pair[1], other_party=other, kind=kind, created_by=owner)
+    return pair
+
+
+def test_a_batch_publishes_each_row_its_merge_wrote_once_through_its_own_gate(
+    db: None, django_capture_on_commit_callbacks: Any,
+) -> None:
+    """The re-pointed handles reach a handles viewer once each, after the request's sets, each through its read gate.
+
+    Measured on SQLite with a newer record holding N handles, circle memberships and
+    relationships: the batch broadcasts each row once (N handles and the 2 parties),
+    where the same merge by hand broadcasts 92 changes at N=30, one party up to 32
+    times. The publish after the sets costs 117, 197 and 317 statements, about 0.05,
+    0.15 and 0.24 s, at N = 10, 30 and 60: about 4 statements a handle. The circle
+    memberships and relationships are re-pointed by the base merge's bulk update
+    (``Reference.move``), which no observer sees, by hand or in a batch.
+    """
+
+    del db
+    from angee.graphql.access import ChangeReadGate
+    from angee.graphql.testing import capture_broadcasts
+
+    owner, stranger = create_user("duplicates-many-rows"), create_user("duplicates-many-rows-stranger")
+    pair = _loser_with_many_rows(owner, 30)
+    handles = sorted(handle.public_id for handle in Handle._base_manager.filter(party=pair[1]))
+
+    with capture_broadcasts() as sent, django_capture_on_commit_callbacks(execute=True):
+        outcomes = _merge(owner, pair)
+
+    assert [outcome for outcome, _survivor, _reason in outcomes] == ["merged"]
+    assert sorted(_sent_parties(sent)) == sorted(
+        [("parties.Handle", public_id) for public_id in handles]
+        + [("parties.Party", party.public_id) for party in pair]
+    )
+    readable, hidden = ChangeReadGate(Handle, to_subject_ref(owner)), ChangeReadGate(Handle, to_subject_ref(stranger))
+    changes = [event for event in sent if event["model"] == "parties.Handle"]
+    assert all(readable.filter(event) is not None for event in changes)
+    assert all(hidden.filter(event) is None for event in changes)
+
+
 def test_a_partly_failed_batch_still_publishes_what_merged(db: None, django_capture_on_commit_callbacks: Any) -> None:
     del db
     from angee.graphql.testing import capture_broadcasts
@@ -943,7 +1003,9 @@ def test_a_sets_merge_costs_a_counted_number_of_statements(db: None) -> None:
     """Each set's own reads, as the batch asks them: the batch permission and the members once for the batch.
 
     Per set, under its lock: the lock pass, the judgement (members, statements and handles through the actor,
-    party kinds, keep-apart decisions, field values) and the record merge itself (``Party.merge``).
+    party kinds, keep-apart decisions, field values) and the record merge itself (``Party.merge``). The rows the
+    sets wrote are published once for the request, on commit, outside this count
+    (:func:`test_a_batch_publishes_each_row_its_merge_wrote_once_through_its_own_gate` measures that).
     """
 
     del db
@@ -953,7 +1015,7 @@ def test_a_sets_merge_costs_a_counted_number_of_statements(db: None) -> None:
     one = _merge_statements(owner, sets[0])
     two = _merge_statements(owner, *sets[1:])
 
-    assert (two[0] - one[0], two[1] - one[1]) == (374, 18)
+    assert (two[0] - one[0], two[1] - one[1]) == (356, 18)
 
 
 def _singles(owner: Any, count: int, tag: str) -> list[Any]:
