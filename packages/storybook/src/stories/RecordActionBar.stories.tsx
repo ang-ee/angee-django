@@ -2,8 +2,8 @@ import type { Meta, StoryObj } from "@storybook/react-vite";
 import { RecordActionBar } from "@angee/ui";
 
 /**
- * The record's verbs: the leading icon-only menu holds the secondary verbs; the
- * band shows the primary verb first and a danger verb last; a blocked verb stays
+ * The record's verbs: explicit placement wins, primary implies the toolbar, and
+ * the form's band opts into a lone non-danger verb as a secondary button. A blocked verb stays
  * focusable and explains itself in a tooltip, never in a sentence beside it.
  */
 const meta = {
@@ -40,6 +40,25 @@ export const MenuOnly: Story = {
   render: () => (
     <RecordActionBar record={record} menuPlacement="leading" actions={[
       { id: "duplicate", label: "Duplicate", icon: "file", run },
+      { id: "copy", label: "Copy link", icon: "copy", run },
+    ]} />
+  ),
+};
+
+/** The form's band opts into a lone unmarked verb, without giving it primary emphasis. */
+export const LoneVerb: Story = {
+  render: () => (
+    <RecordActionBar record={record} menuPlacement="leading" promoteLoneAction actions={[
+      { id: "sync", label: "Sync now", icon: "refresh", run },
+    ]} />
+  ),
+};
+
+/** Primary is enough to put a verb on the toolbar, even without lone-verb promotion. */
+export const PrimaryWithoutPlacement: Story = {
+  render: () => (
+    <RecordActionBar record={record} menuPlacement="leading" actions={[
+      { id: "post", label: "Post", icon: "check", primary: true, run },
       { id: "copy", label: "Copy link", icon: "copy", run },
     ]} />
   ),

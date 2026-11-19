@@ -62,7 +62,7 @@ const CREATE_FOLDER = `
 
 const DELETE_FOLDER = `
   mutation DeleteSharingFolder($id: ID!) {
-    delete_folder(id: $id, confirm: true) { total_deleted_count has_blockers }
+    folders_delete(id: $id, confirm: true) { total_deleted_count has_blockers }
   }
 `;
 

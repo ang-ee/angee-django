@@ -1295,7 +1295,9 @@ exception closes the rows as failed. Tests inherit a boundary from the root
   `is_trashed`, subtracted outside any recursive arm (see
   [knowledge pages](../../src/angee/knowledge/permissions.zed)). The shared
   [`trash_record` / `restore_record`](../../src/angee/graphql/trash.py) verbs
-  check the row's `delete`; metadata marks the flag `trashable` for shared views.
+  check the row's `delete`; metadata marks the flag `trashable` only on the
+  model that stores it (`TrashMixin.stores_trash()`). A multi-table child's
+  inherited flag is addressed through its parent by the shared verbs.
   A domain authority that is not `delete` (record-chatter moderation, the host's
   declared `ThreadedModelMixin.thread_moderate_access`, default `write`, beside
   `thread_read_access` and `thread_post_access`) keeps its own
@@ -1697,6 +1699,19 @@ open fresh evaluator scopes for authorization and change-feed reads.
   write backends and their declared arguments; provenance owns creation claims,
   and the model owns optimistic locking. A host without provenance exposes no
   idempotency argument.
+- **Delete previews are generated with the resource's delete surface.**
+  [`hasura_model_resource`](../../src/angee/graphql/data/hasura.py) generates
+  `<resource>_delete(id, confirm)` and its metadata when `delete=True`.
+  Custom deletion belongs in the write backend's `delete_preview`, which both
+  that root and the native Hasura `delete` compose. Backends missing the method,
+  or overriding `delete` without a matching preview, fail at composition.
+  The default backend delegates to
+  [`delete_by_public_id`](../../src/angee/graphql/deletion.py) with its write
+  target queryset; model refusals remain `delete_blocker()`. An explicitly
+  gated authored preview on a `delete=False` resource uses the same root
+  spelling and `attach_delete_preview_metadata`.
+  A resource whose removal is the trash declares `delete=False` and uses the
+  shared trash verbs; see [storage files](../../src/angee/storage/README.md).
 - **Permission answers reuse the authorization owner.** Declare a type's
   `permissions` through [`permissions_field(names)`](../../src/angee/graphql/capabilities.py);
   it reports only the declared Zed permissions held by the current actor,

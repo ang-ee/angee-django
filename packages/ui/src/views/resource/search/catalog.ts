@@ -1,5 +1,6 @@
 import * as React from "react";
-import { Filter, isClientRowModel, useSchemaFieldMetadata, type ModelMetadata, type ResourceQuery, type Row } from "@angee/metadata";
+import { archiveFlagField, Filter, isClientRowModel, useSchemaFieldMetadata, type ModelMetadata, type ResourceQuery, type Row } from "@angee/metadata";
+import { useUiT } from "../../../i18n";
 import type { FilterClauseField, ResourceToolbarFilterOption, ResourceToolbarGroupOption } from "../../../toolbars";
 import type { ColumnDescriptor } from "../../page";
 import { fieldLabel, relationFieldInfo, relationFieldInfoForQueryField } from "../model-metadata-defaults";
@@ -37,6 +38,7 @@ const EMPTY = [] as const;
 
 /** Resolve declaration > contribution > inference once for every collection kind. */
 export function useSearchCatalog<TRow extends Row>(input: UseSearchCatalogInput<TRow>): SearchCatalog {
+  const t = useUiT();
   const schema = useSchemaFieldMetadata();
   const reported = React.useRef(new Set<string>()).current;
   const { columns, rows, modelMetadata, resourceView, inferOptions = true } = input;
@@ -64,7 +66,14 @@ export function useSearchCatalog<TRow extends Row>(input: UseSearchCatalogInput<
       mergeFilterFields(contributedFacets.filter((facet) => facet.source === "relation" || facet.options.length > 0).map(facetField), inferredFields)))
     .filter((field) => Boolean(query.fields[field.field ?? field.id]?.filter?.operators.length)),
   [input.customFilterFields, input.contributedCustomFilterFields, contributedFacets, inferredFields, query]);
-  const filters = React.useMemo(() => mergeFilterOptions(input.filterOptions, input.contributedFilterOptions ?? EMPTY, query, reported), [input.filterOptions, input.contributedFilterOptions, query, reported]);
+  const archiveFlag = archiveFlagField(modelMetadata?.resource);
+  const contributedFilterOptions = React.useMemo(() => [
+    ...(input.contributedFilterOptions ?? EMPTY),
+    ...(archiveFlag && query.fields[archiveFlag]?.filter?.operators.includes("exact") ? [{
+      id: "record.archive.archived", label: t("record.archive.archived"), filter: { [archiveFlag]: { exact: true } },
+    }] : EMPTY),
+  ], [input.contributedFilterOptions, archiveFlag, query, t]);
+  const filters = React.useMemo(() => mergeFilterOptions(input.filterOptions, contributedFilterOptions, query, reported), [input.filterOptions, contributedFilterOptions, query, reported]);
   const facets = React.useMemo(() => {
     const choices = buildFilterOptions(columns, inferOptions ? rows : EMPTY, fields);
     const predicates = new Set(filters.map((option) => JSON.stringify(query.toWhere(option.filter))));

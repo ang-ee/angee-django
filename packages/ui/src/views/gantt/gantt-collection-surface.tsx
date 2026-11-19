@@ -1,5 +1,5 @@
 import * as React from "react";
-import { ResourceQuery, rowPublicId, useModelMetadata, type Row } from "@angee/metadata";
+import { ResourceQuery, rowPublicId, unarchivedFilter, useModelMetadata, type Row } from "@angee/metadata";
 import { MAX_PAGE_SIZE } from "@angee/refine";
 import { getCoreRowModel, useReactTable } from "@tanstack/react-table";
 import { useNavigate } from "@tanstack/react-router";
@@ -12,6 +12,7 @@ import { useValueStable } from "../../lib/use-value-stable";
 import { useStatusTone } from "../../widgets/use-status-tone";
 import { useRelationOptions } from "../relation/relation-options";
 import { ResourceListFrame } from "../resource/ResourceListFrame";
+import { ResourceViewArchiveScopeContext } from "../resource/surface/archive-scope";
 import { useResourceSearch } from "../resource/search/use-resource-search";
 import { useSearchCatalog, type UseSearchCatalogInput } from "../resource/search/catalog";
 import type { ResourceToolbarProps } from "../../toolbars";
@@ -44,6 +45,7 @@ export function GanttCollectionSurface<TRow extends Row>({
   onCreate, createLabel, toolbarActions, className, presentation, toolbarWrap, maxGroupDepth, onRowClick, rowHref,
 }: GanttCollectionSurfaceProps<TRow>) {
   const t = useUiT();
+  const archiveScope = React.useContext(ResourceViewArchiveScopeContext);
   const navigate = useNavigate();
   const navigateInApp = useInAppNavigator();
   const resolveTone = useStatusTone();
@@ -107,16 +109,17 @@ export function GanttCollectionSurface<TRow extends Row>({
         throw new Error(`Gantt marker field "${markerSpec.lane}" must reference the lane resource "${laneSource.relation.resource}".`);
       }
       const label = markerSpec.label ?? markerMetadata.resource.recordRepresentation ?? "id";
+      const filter = ganttLaneFilter(markerQuery, markerSpec.lane, lanes.map((lane) => lane.value), markerSpec.filter);
       return {
         fields: ["id", markerSpec.date, label, ...(markerSpec.tone ? [markerSpec.tone] : []), ...markerQuery.selection([{ field: markerSpec.lane }])],
-        filter: ganttLaneFilter(markerQuery, markerSpec.lane, lanes.map((lane) => lane.value), markerSpec.filter),
+        filter: archiveScope ? unarchivedFilter(markerMetadata.resource, filter) : filter,
         order: markerQuery.fields.id?.sort ? { id: "ASC" as const } : undefined,
         error: null,
       };
     } catch (cause) {
       return { fields: [], filter: undefined, order: undefined, error: errorFromUnknown(cause) };
     }
-  }, [markerSpec, markerMetadata, laneSource.relation.resource, lanes]);
+  }, [markerSpec, markerMetadata, laneSource.relation.resource, lanes, archiveScope]);
   const markerFields = useValueStable(markerSource.fields);
   const markers = useGanttRecords({
     resource: markerMetadata?.resource ?? null, fields: markerFields, filter: markerSource.filter, order: markerSource.order,

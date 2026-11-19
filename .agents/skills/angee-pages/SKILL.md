@@ -35,7 +35,7 @@ design-system shape that declares intent and composes owners.
 ## Reuse first
 
 - Copy shapes from `src/angee/tags/web` (resource page with own containers) and `examples/src/example/notes/web` (consumer page, e2e target); start a fragment from `templates/addons/web` ([pitfall](../angee-framework/references/web-pitfalls.md)).
-- `ResourceList` + `List`/`Form` own the resource page; `ListView` owns grouping, boards, search, `rowActions`, trash; `RowsListView` owns bounded in-memory rows ([rules](../../../docs/frontend/guidelines.md#rules)).
+- `ResourceList` + `List`/`Form` own the resource page; `ListView` owns grouping, boards, search and `rowActions`; `RowsListView` owns bounded in-memory rows ([rules](../../../docs/frontend/guidelines.md#rules)). The record form and the selection bar supply Archive, Move to trash and Delete from resource metadata; an archivable resource's list hides archived rows by default when its query can filter on the flag and offers an "Archived" filter. The page declares nothing for any of these; an embedded related list keeps all its rows.
 - Record surfaces are `FormView` via `ResourceList`'s `Form` child or `form`; `RecordHeader`, `MetaGrid`, `Statusline`, `EmptyState`, `ErrorBanner`, `LoadingPanel` are the fragments ([ontology](../../../docs/frontend/guidelines.md#component-ontology)).
 - A tab, verb, header control, drawer or Links group is a child of a [framework container](../../../docs/frontend/guidelines.md#framework-containers); search `packages/ui/src/catalog.ts` before any new element.
 - Links: `useRouteHref` (`packages/ui/src/runtime/runtime.ts`), `useResourceRecordHref`, `useRouteParam` (`packages/ui/src/views/resource/resource-routing.ts`).
@@ -90,7 +90,7 @@ design-system shape that declares intent and composes owners.
      const scopeColumnEntries = useContainer("tags.tags#columns");
      return (
        <ResourceList resource={TAG_MODEL} form={tagForm} placement="inline" routed>
-         <List resource={TAG_MODEL} defaultGroup={{ field: "is_archived" }}>
+         <List resource={TAG_MODEL}>
            {containerContents(scopeFacetEntries)}
            <Column field="name" header={t("col.name")} />
            <Column field="color" header={t("col.color")} />

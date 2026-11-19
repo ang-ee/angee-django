@@ -192,9 +192,20 @@ def is_archive_field(field: models.Field[Any, Any] | ForeignObjectRel | None) ->
     )
 
 
-def is_trash_field(field: models.Field[Any, Any] | ForeignObjectRel | None) -> bool:
-    """Recognize the trash capability on its declared model owner."""
-    return isinstance(field, models.Field) and field.name == TRASH_FLAG_FIELD and issubclass(field.model, TrashMixin)
+def is_trash_field(
+    field: models.Field[Any, Any] | ForeignObjectRel | None,
+    *,
+    model: type[models.Model] | None,
+) -> bool:
+    """Recognize trash only on the resource model that stores the flag.
+
+    Django returns the parent's field for a multi-table child, so classification
+    requires the resource model rather than the field's declaring model.
+    """
+
+    if model is None or not isinstance(field, models.Field) or field.name != TRASH_FLAG_FIELD:
+        return False
+    return issubclass(model, TrashMixin) and model.stores_trash()
 
 
 #: Backend-owned display-field precedence, shared by record representation and
@@ -365,7 +376,7 @@ def final_resource_fields(
                     or (model_field is not None and model_field_name in required_on_create)
                 ),
                 archivable=is_archive_field(model_field),
-                trashable=is_trash_field(model_field),
+                trashable=is_trash_field(model_field, model=model),
                 currency_field=money_currency_field(model_field, source_metadata),
                 status_display=status_display(model_field, source_metadata),
                 relation_model_label=relation_model_label,
@@ -446,7 +457,7 @@ def final_input_only_resource_fields(
                 updatable=name in update,
                 required_on_create=name in required,
                 archivable=is_archive_field(model_field),
-                trashable=is_trash_field(model_field),
+                trashable=is_trash_field(model_field, model=model),
                 currency_field=money_currency_field(model_field, source_metadata),
                 status_display=status_display(model_field, source_metadata),
                 relation_model_label=_relation_model_label(model_field),

@@ -351,6 +351,7 @@ export {
   useBulkDelete,
   type UseBulkDeleteResult,
 } from "./resource/useBulkDelete";
+export { useBulkAction, type BulkActionRunner } from "./resource/bulk-action";
 export {
   useDeletePreviewOperation,
   useDeleteWithPreview,
@@ -365,7 +366,6 @@ export {
   TRASH_PERMISSION,
   TRASH_REASON_MAX_LENGTH,
   TRASH_STAMP_FIELDS,
-  useTrashActions,
   useTrashPrompt,
   useTrashRecord,
   useTrashRowActions,
@@ -408,6 +408,7 @@ export {
 export {
   useRelationOptions,
   useRelationPickerOptions,
+  useRelationPickerSearch,
   useRelationSelectedOption,
   relationSelectedOption,
   type RelationOptionsConfig,

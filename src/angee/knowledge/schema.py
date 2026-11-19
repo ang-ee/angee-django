@@ -34,7 +34,6 @@ from angee.graphql.data.hasura import (
     hasura_model_resource,
     public_pk_decoder,
 )
-from angee.graphql.deletion import DeletePreview, attach_delete_preview_metadata, delete_by_public_id
 from angee.graphql.ids import (
     PublicID,
     optional_public_id,
@@ -726,28 +725,6 @@ class KnowledgeMutation:
         )
         return True
 
-    @strawberry.mutation(name="delete_vault")
-    def delete_vault(self, id: PublicID, confirm: bool = False) -> DeletePreview:
-        """Return or apply the authored vault cascade delete preview."""
-
-        return delete_by_public_id(
-            Vault,
-            str(id),
-            confirm=confirm,
-            queryset=Vault.objects.for_write(),
-        )
-
-    @strawberry.mutation(name="delete_page")
-    def delete_page(self, id: PublicID, confirm: bool = False) -> DeletePreview:
-        """Return or apply the authored page cascade delete preview."""
-
-        return delete_by_public_id(
-            Page,
-            str(id),
-            confirm=confirm,
-            queryset=Page.objects.for_write(),
-        )
-
     @strawberry.mutation(name="update_page_body")
     def update_page_body(
         self,
@@ -842,20 +819,6 @@ class KnowledgeMutation:
         return _markdown_write_payload(
             lambda: MarkdownPage._default_manager.append(target, content, expected_hash=expected_hash)
         )
-
-
-attach_delete_preview_metadata(
-    KnowledgeMutation,
-    model=Vault,
-    node=VaultType,
-    field="delete_vault",
-)
-attach_delete_preview_metadata(
-    KnowledgeMutation,
-    model=Page,
-    node=PageType,
-    field="delete_page",
-)
 
 
 @strawberry_django.type(Page, name="PageType", extend=True)

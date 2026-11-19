@@ -159,5 +159,5 @@ function StoragePageContent({
   return openFileId ? <FilePreviewFrame id={openFileId} page={openFilePreviewPage} crumbs={crumbs}
     fileActions={fileActions} closeDetail={closeDetail} fileNavigation={fileNavigation} /> :
     <StorageListContent controller={controller} fileResource={fileResource} navigationScope={navigationScope}
-      uploads={uploads} fileActions={fileActions} onListStateChange={onListStateChange} />;
+      uploads={uploads} onListStateChange={onListStateChange} />;
 }

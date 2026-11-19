@@ -386,15 +386,6 @@ def test_hasura_resource_attaches_angee_resource_metadata() -> None:
         created_at: auto
         updated_at: auto
 
-    write_backend = type(
-        "NoopWriteBackend",
-        (),
-        {
-            "create": lambda self, info, data: None,
-            "update": lambda self, info, pk, data: None,
-            "delete": lambda self, info, pk: None,
-        },
-    )()
     resource = hasura_model_resource(
         HasuraResourceThingType,
         model=HasuraResourceThing,
@@ -404,7 +395,6 @@ def test_hasura_resource_attaches_angee_resource_metadata() -> None:
         aggregatable=["id", "word_count"],
         groupable=["name"],
         get_queryset=lambda info: HasuraResourceThing.objects.all(),
-        write_backend=write_backend,
         id_decode=lambda value: value,
         subtitle=DataResourceSubtitleMetadata(word_count="word_count"),
     )
@@ -434,6 +424,7 @@ def test_hasura_resource_attaches_angee_resource_metadata() -> None:
         create_name="insert_things_one",
         update_name="update_things_by_pk",
         delete_name="delete_things_by_pk",
+        delete_preview_name="things_delete",
     )
     assert metadata.type_names == DataResourceTypeNames(
         query="things_Query",
@@ -448,6 +439,7 @@ def test_hasura_resource_attaches_angee_resource_metadata() -> None:
         having="thingsHaving",
         create_input="things_insert_input",
         update_input="things_set_input",
+        delete_payload="DeletePreview",
     )
     assert metadata.capabilities == (
         "list",
@@ -457,6 +449,7 @@ def test_hasura_resource_attaches_angee_resource_metadata() -> None:
         "create",
         "update",
         "delete",
+        "deletePreview",
     )
     assert {name for name, field in metadata.query.fields.items() if field.filter} == {
         "has_open_decisions", "id", "word_count", "name",
@@ -515,15 +508,6 @@ def test_named_schemas_project_only_the_native_roots_they_expose(monkeypatch: An
     class HealthQuery:
         healthy: bool = True
 
-    write_backend = type(
-        "NoopWriteBackend",
-        (),
-        {
-            "create": lambda self, info, data: None,
-            "update": lambda self, info, pk, data: None,
-            "delete": lambda self, info, pk: None,
-        },
-    )()
     resource = hasura_model_resource(
         NamedSchemaThingType,
         model=HasuraResourceThing,
@@ -532,7 +516,6 @@ def test_named_schemas_project_only_the_native_roots_they_expose(monkeypatch: An
         sortable=["name"],
         aggregatable=["id"],
         get_queryset=lambda info: HasuraResourceThing.objects.all(),
-        write_backend=write_backend,
         id_decode=lambda value: value,
     )
     schemas = GraphQLSchemas(
@@ -1007,15 +990,6 @@ def test_hasura_nested_relation_group_dimension_matches_group_key_contract() -> 
     class ResourceGrandchildType(AngeeNode):
         pass
 
-    write_backend = type(
-        "NoopWriteBackend",
-        (),
-        {
-            "create": lambda self, info, data: None,
-            "update": lambda self, info, pk, data: None,
-            "delete": lambda self, info, pk: None,
-        },
-    )()
     resource = hasura_model_resource(
         ResourceGrandchildType,
         model=ResourceGrandchild,
@@ -1025,7 +999,6 @@ def test_hasura_nested_relation_group_dimension_matches_group_key_contract() -> 
         aggregatable=["id"],
         groupable=["child", "child__parent"],
         get_queryset=lambda info: ResourceGrandchild.objects.all(),
-        write_backend=write_backend,
         id_decode=lambda value: value,
     )
     schema = GraphQLSchemas(
@@ -1080,15 +1053,6 @@ def test_hasura_model_resource_groups_json_path_axes() -> None:
     class HasuraJsonResourceThingType(AngeeNode):
         name: auto
 
-    write_backend = type(
-        "NoopWriteBackend",
-        (),
-        {
-            "create": lambda self, info, data: None,
-            "update": lambda self, info, pk, data: None,
-            "delete": lambda self, info, pk: None,
-        },
-    )()
     resource = hasura_model_resource(
         HasuraJsonResourceThingType,
         model=HasuraJsonResourceThing,
@@ -1099,7 +1063,6 @@ def test_hasura_model_resource_groups_json_path_axes() -> None:
         groupable=["metadata.mailbox"],
         json_paths={"metadata.mailbox": "str"},
         get_queryset=lambda info: HasuraJsonResourceThing.objects.all(),
-        write_backend=write_backend,
         id_decode=lambda value: value,
     )
     schema = GraphQLSchemas(
@@ -1184,15 +1147,6 @@ def test_hasura_model_resource_groups_json_path_values(transactional_db: Any) ->
     class HasuraJsonValuesThingType(AngeeNode):
         name: auto
 
-    write_backend = type(
-        "NoopWriteBackend",
-        (),
-        {
-            "create": lambda self, info, data: None,
-            "update": lambda self, info, pk, data: None,
-            "delete": lambda self, info, pk: None,
-        },
-    )()
     resource = hasura_model_resource(
         HasuraJsonValuesThingType,
         model=HasuraJsonResourceThing,
@@ -1203,7 +1157,6 @@ def test_hasura_model_resource_groups_json_path_values(transactional_db: Any) ->
         groupable=["metadata.mailbox"],
         json_paths={"metadata.mailbox": "str"},
         get_queryset=lambda info: HasuraJsonResourceThing.objects.all(),
-        write_backend=write_backend,
         id_decode=lambda value: value,
     )
     schema = GraphQLSchemas(
@@ -1650,15 +1603,6 @@ def test_hasura_resource_rejects_unresolvable_axis_paths(
     class ResourceChildResourceType(AngeeNode):
         name: auto
 
-    write_backend = type(
-        "NoopWriteBackend",
-        (),
-        {
-            "create": lambda self, info, data: None,
-            "update": lambda self, info, pk, data: None,
-            "delete": lambda self, info, pk: None,
-        },
-    )()
     with pytest.raises((ImproperlyConfigured, FieldDoesNotExist, GroupByFieldNotAllowed)):
         hasura_model_resource(
             ResourceChildResourceType,
@@ -1669,7 +1613,6 @@ def test_hasura_resource_rejects_unresolvable_axis_paths(
             aggregatable=aggregatable,
             groupable=groupable,
             get_queryset=lambda info: ResourceChild.objects.all(),
-            write_backend=write_backend,
             id_decode=lambda value: value,
         )
 

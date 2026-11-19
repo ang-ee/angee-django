@@ -1430,14 +1430,17 @@ test.each(["create", "update", "patch", "nested", "command", "rejected"] as cons
   let nativeTitle: unknown;
   let authoredTitle: unknown;
   let currentAuthoredTitle: unknown;
+  let currentNativeTitle: unknown;
   let unrelatedTitle: unknown;
   function Probe() {
     const list = useList({ resource: related.roots.list!, dataProviderName: "console" });
+    const current = useList({ resource: formResource.roots.list!, dataProviderName: "console" });
     const other = useList({ resource: unrelated.roots.list!, dataProviderName: "console" });
     const authored = useAuthoredQuery(relatedSummary, {}, { dataProviderName: "console", models: [related.modelLabel] });
     const currentAuthored = useAuthoredQuery(currentSummary, {}, { dataProviderName: "console", models: [resource.modelLabel] });
     const [command] = useAuthoredResourceMutation(createNoteCommand, { dataProviderName: "console", invalidateModels: [resource.modelLabel] });
     currentAuthoredTitle = currentAuthored.data?.summary;
+    currentNativeTitle = current.result.data?.[0]?.title;
     nativeTitle = list.result.data?.[0]?.title;
     unrelatedTitle = other.result.data?.[0]?.title;
     authoredTitle = authored.data?.summary;
@@ -1456,7 +1459,7 @@ test.each(["create", "update", "patch", "nested", "command", "rejected"] as cons
   render(<Provider resources={[formResource, related, unrelated]} queryClient={client} dataProvider={{
     getList, custom, create: write, update: write, getOne: async () => ({ data: { id: "note-1", title, body: "", deadline: "", ...(mode === "nested" ? { lines: [{ id: "line-1", label: title }] } : {}) } }),
   }}><RouterContextProvider router={router}><ModalsHost><ToastProvider><AppRuntimeProvider runtime={{ widgets: defaultWidgets }}><OperationDocumentsProvider documents={{ console: { saves: { [resource.modelLabel]: gql`mutation Save { notes_save { id } }` } } }}><Probe /></OperationDocumentsProvider></AppRuntimeProvider></ToastProvider></ModalsHost></RouterContextProvider></Provider>);
-  await waitFor(() => { expect(surface.loading).toBe(false); expect(nativeTitle).toBe("Before"); expect(authoredTitle).toBe("Before"); expect(currentAuthoredTitle).toBe("Before"); expect(unrelatedTitle).toBe("Before"); });
+  await waitFor(() => { expect(surface.loading).toBe(false); expect(nativeTitle).toBe("Before"); expect(authoredTitle).toBe("Before"); expect(currentAuthoredTitle).toBe("Before"); expect(currentNativeTitle).toBe("Before"); expect(unrelatedTitle).toBe("Before"); });
   await act(async () => {
     if (mode === "patch") await surface.applyPatch({ title: "After" });
     else {
@@ -1468,12 +1471,12 @@ test.each(["create", "update", "patch", "nested", "command", "rejected"] as cons
   if (mode === "rejected") {
     expect(surface.saveError).toBe("Refused");
     expect(write).not.toHaveBeenCalled();
-    expect(getList).toHaveBeenCalledTimes(2);
+    expect(getList).toHaveBeenCalledTimes(3);
     expect(custom).toHaveBeenCalledTimes(2);
   } else {
-    await waitFor(() => { expect(nativeTitle).toBe("After"); expect(authoredTitle).toBe("After"); expect(currentAuthoredTitle).toBe("After"); });
+    await waitFor(() => { expect(nativeTitle).toBe("After"); expect(authoredTitle).toBe("After"); expect(currentAuthoredTitle).toBe("After"); expect(currentNativeTitle).toBe("After"); });
     expect(write).toHaveBeenCalledTimes(mode === "nested" || mode === "command" ? 0 : 1);
-    expect(getList.mock.calls).toHaveLength(3);
+    expect(getList.mock.calls).toHaveLength(5);
     expect(custom).toHaveBeenCalledTimes(mode === "nested" || mode === "command" ? 5 : 4);
     // The command owns its own model refresh; the Form must not issue a second one.
     expect(custom.mock.calls.filter(([params]) => params.meta?.gqlQuery === currentSummary)).toHaveLength(2);

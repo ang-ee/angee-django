@@ -1,5 +1,5 @@
 import { useModelMetadata } from "@angee/metadata";
-import { relationFieldInfoForResource, useRelationOptions, useRelationPickerOptions } from "@angee/ui";
+import { relationFieldInfoForResource, useRelationPickerSearch, useRelationPickerOptions } from "@angee/ui";
 import { useMemo } from "react";
 
 const DRIVE_MODEL = "storage.Drive";
@@ -9,7 +9,7 @@ export function useDrivePicker(value: string | null | undefined, enabled = true)
   const metadata = useModelMetadata(DRIVE_MODEL);
   const relation = useMemo(() => enabled
     ? relationFieldInfoForResource(DRIVE_MODEL, metadata ?? null) : null, [enabled, metadata]);
-  const first = useRelationOptions(relation, { enabled: !value, pageSize: 1, sort: true });
+  const first = useRelationPickerSearch(relation, { enabled: !value, pageSize: 1, sort: true });
   const selectedId = value || first.options[0]?.value || "";
   const picker = useRelationPickerOptions(relation, {
     value: selectedId, selectedOption: first.options.find((option) => option.value === selectedId),

@@ -89,12 +89,18 @@ description: "Builds forms and widgets in an Angee addon: registered JSX forms (
            <Field name="attention" label={t("col.attention")} />
            {containerContents(scopeFieldEntries)}
          </Group>
-         <Group savedOnly><Field name="is_archived" /></Group>
        </Form>
      );
    }
    export const tagForm = registerForm(TAG_MODEL, TagForm);
    ```
+
+   The form supplies Archive, Move to trash and Delete from resource metadata: an archivable
+   resource whose update root accepts its archive flag gets Archive / Unarchive in the record
+   menu and an Archived chip, with no field or action declared here. A form's own verb is a
+   button when it is its only visible verb on a saved record or is marked `primary` (which
+   needs no `placement`); the rest live in the overflow menu
+   ([frontend rules](../../../docs/frontend/guidelines.md#rules), "Record verbs compose the shared action owner").
 
    `index.tsx` contributes `forms: { "tags.Tag": tagForm }` and the `"tags.tags#fields": {}`
    container; `TagsPage.tsx` passes `<ResourceList resource={TAG_MODEL} form={tagForm} placement="inline" routed>`.

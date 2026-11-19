@@ -15,10 +15,17 @@ import { KnowledgePageView } from "./KnowledgePageView";
 import { KnowledgePages, KnowledgeUpdatePageBody, PAGE_MODEL, type KnowledgePageDetail } from "./data/documents";
 
 const resource = testDataResource(PAGE_MODEL, {
+  resourceType: "knowledge/page",
   query: ResourceQuery.forRows({ fields: { id: { scalar: "ID" }, title: { scalar: "String" }, vault: { scalar: "ID" },
     parent: { scalar: "ID" }, is_trashed: { scalar: "Boolean" }, navigation_root: { scalar: "Boolean" } } }).contract,
-  fields: [{ name: "title", kind: "scalar", scalar: "String", readable: true, updatable: true,
-    creatable: true, requiredOnCreate: true, aggregatable: false }],
+  fields: [
+    { name: "title", kind: "scalar", scalar: "String", readable: true, updatable: true,
+      creatable: true, requiredOnCreate: true, aggregatable: false },
+    { name: "is_trashed", kind: "scalar", scalar: "Boolean", readable: true, updatable: false,
+      creatable: false, requiredOnCreate: false, aggregatable: false, trashable: true },
+    { name: "permissions", kind: "list", scalar: "String", readable: true, updatable: false,
+      creatable: false, requiredOnCreate: false, aggregatable: false },
+  ],
 });
 const { Provider, createClient, clearClients } = createUiTestProviders({ resources: [resource], apiUrl: "test://knowledge-page" });
 afterEach(() => { cleanup(); clearClients(); });
@@ -109,6 +116,20 @@ function edit(label: string, value: string) {
 async function save() {
   fireEvent.click(await screen.findByRole("button", { name: "Save" }));
 }
+
+test.each([false, true])("Knowledge's form supplies exactly one trash verb for is_trashed=%s", async (is_trashed) => {
+  await fixture(detail({ is_trashed, permissions: ["write", "delete"] }));
+  fireEvent.click(await screen.findByRole("button", { name: "Actions" }));
+  const label = is_trashed ? "Restore" : "Move to trash";
+  await screen.findByRole("menuitem", { name: label });
+  expect(screen.getAllByRole("menuitem", { name: label })).toHaveLength(1);
+  expect(screen.queryByRole("menuitem", { name: is_trashed ? "Move to trash" : "Restore" })).toBeNull();
+});
+
+test("Knowledge's form offers no trash verb without projected delete permission", async () => {
+  await fixture(detail({ permissions: ["write"] }));
+  expect(screen.queryByRole("button", { name: "Actions" })).toBeNull();
+});
 
 test("native form saves title and body together and advances the hash for the next save", async () => {
   const f = await fixture();

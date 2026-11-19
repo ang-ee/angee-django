@@ -400,7 +400,7 @@ def attach_delete_preview_metadata(
     model_label: str | None = None,
     public_id_field: str = PUBLIC_ID_FIELD_NAME,
 ) -> type[_SurfaceT]:
-    """Attach resource metadata for one authored cascade-preview mutation."""
+    """Attach resource metadata for one generated or authored delete preview."""
 
     return attach_data_resource_contribution(
         surface,

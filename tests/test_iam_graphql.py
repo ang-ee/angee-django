@@ -1054,7 +1054,7 @@ def test_user_crud_create_update_delete_are_admin_only(
             console_schema,
             """
         mutation DeleteUser($id: ID!) {
-          delete_user(id: $id, confirm: true) { total_deleted_count }
+          users_delete(id: $id, confirm: true) { total_deleted_count }
         }
         """,
             {"id": user_id},
@@ -1068,7 +1068,7 @@ def test_user_crud_create_update_delete_are_admin_only(
             console_schema,
             """
             mutation DeleteUser($id: ID!) {
-              delete_user(id: $id, confirm: true) {
+              users_delete(id: $id, confirm: true) {
                 has_blockers
                 total_deleted_count
               }
@@ -1077,7 +1077,7 @@ def test_user_crud_create_update_delete_are_admin_only(
             {"id": user_id},
             user=admin,
         )
-    )["delete_user"]
+    )["users_delete"]
     assert deleted["has_blockers"] is False
     assert deleted["total_deleted_count"] >= 1
     with system_context(reason="test.iam.user_crud.delete"):
@@ -1170,9 +1170,24 @@ def test_external_account_update_delete_are_admin_only(
     with system_context(reason="test.iam.external_account.owner_before_delete"):
         assert ExternalAccount.objects.get(pk=account.pk).owner_id == admin.pk
 
+    preview = _data(_execute(
+        console_schema,
+        """mutation PreviewExternalAccount($id: ID!) {
+          external_accounts_delete(id: $id, confirm: null) {
+            has_blockers total_deleted_count
+          }
+        }""",
+        {"id": account_id},
+        user=admin,
+    ))["external_accounts_delete"]
+    assert preview["has_blockers"] is False
+    assert preview["total_deleted_count"] >= 1
+    with system_context(reason="test.iam.external_account.after_preview"):
+        assert ExternalAccount.objects.filter(pk=account.pk).exists()
+
     delete_account = """
         mutation DeleteExternalAccount($id: ID!) {
-          delete_external_account(id: $id, confirm: true) {
+          external_accounts_delete(id: $id, confirm: true) {
             has_blockers
             total_deleted_count
           }
@@ -1181,7 +1196,9 @@ def test_external_account_update_delete_are_admin_only(
 
     assert _execute(console_schema, delete_account, {"id": account_id}, user=plain).errors is not None
 
-    deleted = _data(_execute(console_schema, delete_account, {"id": account_id}, user=admin))["delete_external_account"]
+    deleted = _data(
+        _execute(console_schema, delete_account, {"id": account_id}, user=admin)
+    )["external_accounts_delete"]
     assert deleted["has_blockers"] is False
     assert deleted["total_deleted_count"] >= 1
     with system_context(reason="test.iam.external_account.after_delete"):
@@ -1237,18 +1254,20 @@ def test_credential_crud_create_delete_are_admin_only(
     )
     monkeypatch.setattr(Credential, "revoke_remote", lambda credential: revoked.append(credential.pk))
 
-    delete_credential = """
+    credentials_delete = """
         mutation DeleteCredential($id: ID!) {
-          delete_credential(id: $id, confirm: true) {
+          credentials_delete(id: $id, confirm: true) {
             has_blockers
             total_deleted_count
           }
         }
     """
 
-    assert _execute(console_schema, delete_credential, {"id": credential_id}, user=plain).errors is not None
+    assert _execute(console_schema, credentials_delete, {"id": credential_id}, user=plain).errors is not None
 
-    deleted = _data(_execute(console_schema, delete_credential, {"id": credential_id}, user=admin))["delete_credential"]
+    deleted = _data(
+        _execute(console_schema, credentials_delete, {"id": credential_id}, user=admin)
+    )["credentials_delete"]
     assert deleted["has_blockers"] is False
     assert deleted["total_deleted_count"] >= 1
     assert revoked == []
@@ -1932,7 +1951,7 @@ def test_competing_oidc_disconnects_keep_one_sign_in_method(
     def remove_other_account() -> bool:
         with actor_context(admin if second_path == "administrator" else user):
             if second_path == "administrator":
-                preview = integrate_schema.IntegrateCredentialMutation().delete_credential(
+                preview = integrate_schema.IntegrateCredentialMutation().credentials_delete(
                     id=credentials[1].public_id, confirm=True,
                 )
                 assert preview.refusals == ["This is your only sign-in method."]

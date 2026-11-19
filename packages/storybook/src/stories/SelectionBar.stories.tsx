@@ -39,14 +39,22 @@ export const Playground: Story = {
       actions={
         <>
           <SelectionBar.Action surface={surface}>
+            <Glyph name="star" />
+            Favorite
+          </SelectionBar.Action>
+          <SelectionBar.Action surface={surface}>
             <Glyph name="archive" />
             Archive
           </SelectionBar.Action>
           <SelectionBar.Action surface={surface}>
-            <Glyph name="star" />
-            Favorite
+            <Glyph name="trash" />
+            Move to trash
           </SelectionBar.Action>
           <SelectionBar.Action surface={surface} tone="danger">
+            <Glyph name="trash" />
+            Delete
+          </SelectionBar.Action>
+          <SelectionBar.Action surface={surface}>
             <Glyph name="x" />
             Clear
           </SelectionBar.Action>

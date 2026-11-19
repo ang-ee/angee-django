@@ -121,6 +121,13 @@ export function trashFlagField(
   return resource?.fields?.find((field) => field.trashable === true)?.name ?? null;
 }
 
+/** The resource's archive flag, classified by the backend rather than its name. */
+export function archiveFlagField(
+  resource: DataResourceMetadata | null | undefined,
+): string | null {
+  return resource?.fields?.find((field) => field.archivable === true)?.name ?? null;
+}
+
 export function supportsChoiceFacet(support: ChoiceFacetSupport): boolean {
   if (support.field?.kind === "enum") return true;
   if (support.hasOptions) return true;

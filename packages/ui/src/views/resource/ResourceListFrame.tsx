@@ -23,6 +23,7 @@ export interface ResourceListFrameSelection {
   onClear: () => void;
   onDelete?: () => void;
   deletePending?: boolean;
+  pending?: boolean;
   actions?: React.ReactNode;
 }
 
@@ -135,6 +136,7 @@ export function ResourceListFrame({
             onClear={selection.onClear}
             onDelete={selection.onDelete}
             deletePending={selection.deletePending}
+            pending={selection.pending}
             actions={selection.actions}
           />
         ) : null}
