@@ -29,7 +29,7 @@ from rebac import system_context
 from angee.base.models.merge_references import has_live_references
 from angee.base.serialization import canonical_json
 from angee.integrate import streams as stream_driver
-from angee.integrate.errors import IntegrationError
+from angee.integrate.errors import IntegrationError, IntegrationFailure
 from angee.integrate.impl import AdapterContractError, BridgeImpl
 from angee.integrate.models import merge_json_state
 from angee.integrate.states import (
@@ -3017,3 +3017,127 @@ def test_no_answer_resets_a_stream_while_discovery_is_pending(
 
     generations = SyncStream.objects.filter(integration_id=discovered_bridge.pk).values_list("pk", "generation")
     assert list(generations) == [(stream.pk, stream.generation)]
+
+
+def test_local_repairs_commit_while_discovery_is_pending(discovered_bridge: ConnectionBridge) -> None:
+    stream = _two_way(discovered_bridge, "one")
+    link = RecordLink.objects.get(stream=stream, external_key="one")
+    linked = link.record_failure(kind=SyncFailureKind.SEMANTIC, code="refused")
+    streamed = stream.record_failure(kind=SyncFailureKind.SEMANTIC, code="refused")
+    later = link.record_failure(kind=SyncFailureKind.SEMANTIC, code="later")
+    discovered_bridge.await_discovery()
+
+    link.pin()
+    assert RecordLink.objects.get(pk=link.pk).pinned
+    link.unpin()
+    linked.resolve()
+    streamed.resolve()
+    # A retry asks for remote work, so it waits for discovery.
+    with pytest.raises(IntegrationError, match=_DISCOVERY_PENDING):
+        later.retry()
+
+    current = RecordLink.objects.get(pk=link.pk)
+    assert not current.pinned
+    assert [(row.code, row.status) for row in current.failures(open_only=True)] == [("later", SyncFailureStatus.OPEN)]
+    assert SyncStream.objects.get(pk=stream.pk).failures(open_only=True) == ()
+
+
+def test_a_conflict_whose_follow_through_meets_pending_discovery_is_reopened(
+    discovered_bridge: ConnectionBridge, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    stream = _two_way(discovered_bridge, "one")
+    link = RecordLink.objects.get(stream=stream, external_key="one")
+    failure = link.record_failure(kind=SyncFailureKind.CONFLICT, code="both_changed", source_hash="base")
+    remote = RecordChange("one", {"name": "remote"}, "remote", "v2", mapped_payload={"name": "remote"})
+
+    @dataclass
+    class ReEnteringAdapter(ReadKeysAdapter):
+        def local_changes(self, stream: Any, *, keys: frozenset[str] | None = None) -> Iterable[LocalChange]:
+            # A secret re-entered after the choice committed, before its push reads the local side.
+            discovered_bridge.await_discovery()
+            return super().local_changes(stream, keys=keys)
+
+    adapter = ReEnteringAdapter(remote={"one": remote}, candidates=(LocalChange("one", {"name": "local"}),))
+    monkeypatch.setattr(ConnectionBridge, "capability_impl", property(lambda self: adapter))
+
+    with pytest.raises(IntegrationError, match=_DISCOVERY_PENDING):
+        failure.resolve_conflict(keep="local")
+
+    assert adapter.written == []
+    [reopened] = RecordLink.objects.get(pk=link.pk).failures(open_only=True)
+    assert (reopened.kind, reopened.code) == (SyncFailureKind.CONFLICT, "both_changed")
+
+
+@dataclass
+class _ReEnteringWriter(MemoryAdapter):
+    """Sends each write, then has the secret re-entered while the answer is on its way back."""
+
+    bridge: Any = None
+
+    def write_back(self, link: Any, projection: Any, *, expected_version: str) -> WriteBackResult:
+        result = super().write_back(link, projection, expected_version=expected_version)
+        self.bridge.await_discovery()
+        return result
+
+
+def test_a_push_reflects_the_write_it_sent_when_discovery_turns_pending(discovered_bridge: ConnectionBridge) -> None:
+    stream = _two_way(discovered_bridge, "one", "two")
+    adapter = _ReEnteringWriter(
+        candidates=(LocalChange("one", {"n": 1}), LocalChange("two", {"n": 2})), bridge=discovered_bridge,
+    )
+
+    with pytest.raises(IntegrationError, match=_DISCOVERY_PENDING):
+        push_stream(stream, adapter)
+
+    # The write that landed is the link's new base; the next one is not sent.
+    assert [key for key, _projection, _version in adapter.written] == ["one"]
+    one = RecordLink.objects.with_sync_evidence().get(stream=stream, external_key="one")
+    two = RecordLink.objects.with_sync_evidence().get(stream=stream, external_key="two")
+    assert (one.remote_version, one.applied_base.mapped_payload) == ("v2", {"n": 1})
+    assert (two.remote_version, two.applied_base.source_hash) == ("v1", "base")
+
+
+def test_a_two_way_page_reflects_the_write_it_sent_when_discovery_turns_pending(
+    discovered_bridge: ConnectionBridge,
+) -> None:
+    stream = _two_way(discovered_bridge, "one", "two")
+    edits = tuple(
+        RecordChange(key, {}, "base", "v1", mapped_payload={}, projection={"value": key}) for key in ("one", "two")
+    )
+    adapter = _ReEnteringWriter(pages=[StreamPage(edits, {"offset": 2})], bridge=discovered_bridge)
+
+    with pytest.raises(IntegrationError, match=_DISCOVERY_PENDING):
+        advance_stream(stream, adapter)
+
+    # Each write asks first: the second is not sent, and the first is reflected.
+    assert [key for key, _projection, _version in adapter.written] == ["one"]
+    one = RecordLink.objects.with_sync_evidence().get(stream=stream, external_key="one")
+    two = RecordLink.objects.with_sync_evidence().get(stream=stream, external_key="two")
+    assert (one.remote_version, one.applied_base.mapped_payload) == ("v2", {"value": "one"})
+    assert (two.remote_version, two.applied_base.source_hash) == ("v1", "base")
+
+
+def test_a_failed_discovery_refuses_stream_work_with_its_own_message(discovered_bridge: ConnectionBridge) -> None:
+    stream = _two_way(discovered_bridge, "one")
+    discovered_bridge.await_discovery()
+    assert discovered_bridge.finish_discovery(
+        credential_pk=discovered_bridge.credential_id, generation=discovered_bridge.discovery_generation,
+        error=IntegrationFailure("This key reads another account."),
+    )
+    adapter = MemoryAdapter(candidates=(LocalChange("one", {"n": 1}),))
+
+    with pytest.raises(IntegrationError) as refused:
+        push_stream(stream, adapter)
+
+    # Only an operator clears a failed discovery: the refusal is permanent and says why.
+    assert (str(refused.value), refused.value.transient) == ("This key reads another account.", False)
+    assert adapter.written == []
+
+
+def test_the_check_before_a_remote_write_is_one_read(
+    discovered_bridge: ConnectionBridge, django_assert_num_queries: Any
+) -> None:
+    stream = SyncStream.objects.get(pk=_two_way(discovered_bridge).pk)
+
+    with django_assert_num_queries(1):
+        stream_driver._require_discovery_ready(stream)

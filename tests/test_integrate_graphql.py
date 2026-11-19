@@ -2267,17 +2267,18 @@ _PENDING_REFUSAL = "Connection discovery must finish before syncing."
 
 
 @pytest.mark.parametrize(
-    ("action", "kind", "keep"),
+    ("action", "kind", "keep", "expected"),
     [
-        ("resolveSyncFailure", SyncFailureKind.SEMANTIC, None),
-        ("retrySyncFailure", SyncFailureKind.SEMANTIC, None),
-        ("resolveSyncFailure", SyncFailureKind.CONFLICT, "REMOTE"),
+        # Dismissing a failure changes local state only, so discovery does not hold it back.
+        ("resolveSyncFailure", SyncFailureKind.SEMANTIC, None, {"ok": True, "message": "Failure resolved."}),
+        ("retrySyncFailure", SyncFailureKind.SEMANTIC, None, {"ok": False, "message": _PENDING_REFUSAL}),
+        ("resolveSyncFailure", SyncFailureKind.CONFLICT, "REMOTE", {"ok": False, "message": _PENDING_REFUSAL}),
     ],
     ids=["resolve", "retry", "conflict"],
 )
 @pytest.mark.django_db(transaction=True)  # Conflict resolution reads the remote outside a transaction.
 def test_an_integration_refusal_reaches_the_operator_in_band(
-    action: str, kind: SyncFailureKind, keep: str | None,
+    action: str, kind: SyncFailureKind, keep: str | None, expected: dict[str, Any],
 ) -> None:
     admin = _platform_admin(f"in-band-{action}-{kind}")
     bridge = make_integration(f"in-band-{action.lower()}-{kind}", model=ConnectionBridge)
@@ -2295,9 +2296,9 @@ def test_an_integration_refusal_reaches_the_operator_in_band(
     query = f"mutation Act({variables}) {{ {action}({arguments}) {{ ok message }} }}"
     values = {"stream": failure.stream_id, "link": failure.link_id, "slot": failure.slot}
     result = _data(execute_schema(_schema(), query, {**values, **({"keep": keep} if keep else {})}, user=admin))
-    assert result[action] == {"ok": False, "message": _PENDING_REFUSAL}
-    with system_context(reason="test the refused action changed nothing"):
-        assert RecordLink.objects.get(pk=link.pk).failures(open_only=True)
+    assert result[action] == expected
+    with system_context(reason="test a refused action changed nothing"):
+        assert bool(RecordLink.objects.get(pk=link.pk).failures(open_only=True)) == (not expected["ok"])
 
 
 def test_integrates_actions_show_an_integration_refusal_and_log_a_permanent_one(

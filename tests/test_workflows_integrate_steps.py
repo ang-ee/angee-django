@@ -445,9 +445,7 @@ def test_a_step_fails_with_the_discovery_message_once_discovery_failed(cycle, mo
     assert runner.execute(step_row(run).pk)
 
     attempt = StepAttempt.system_queryset().get(step_run=step_row(run))
-    assert (attempt.result, attempt.error) == (
-        "failed", "IntegrationError: Connection discovery must finish before syncing.",
-    )
+    assert (attempt.result, attempt.error) == ("failed", "IntegrationError: This key reads another account.")
     # A failed discovery needs the operator: the step fails at once, nothing read, rather than retrying.
     assert step_row(run).status == "failed" and cycle.extracted == []
 

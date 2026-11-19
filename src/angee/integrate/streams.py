@@ -9,6 +9,7 @@ from __future__ import annotations
 import logging
 from collections.abc import Iterator, Mapping, Sequence
 from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
+from contextlib import nullcontext
 from contextvars import copy_context
 from copy import copy
 from dataclasses import dataclass, field, replace
@@ -348,15 +349,16 @@ def _quarantine(stream: Any, record: Any, error: SemanticError, *, link: Any = N
 
 
 def _require_discovery_ready(stream: Any) -> None:
-    """Refuse a remote write or a reset, transiently, while the stream's integration awaits discovery.
+    """Refuse a remote write or a reset while the stream's integration is not discovery-ready.
 
     The driver asks before each one, outside the page transaction, on the
-    integration as it is stored now (``Integration.require_discovery_ready``);
-    every commit is also refused under the stream lock (``SyncStreamManager.lock_current``).
+    integration as it is stored now, in one read (``Integration.require_discovery_ready``);
+    every commit resting on remote facts is also refused under the stream lock
+    (``SyncStreamManager.lock_current``).
     """
 
-    stream.refresh_from_db(fields=["integration"])
-    stream.integration.require_discovery_ready()
+    integration_model = stream._meta.get_field("integration").related_model
+    integration_model._base_manager.get(pk=stream.integration_id).require_discovery_ready()
 
 
 def reset_stream(stream: Any, *, cursor: dict[str, Any]) -> PageResult:
@@ -583,8 +585,9 @@ def _apply_page(
     # again before reflecting the response; a later local edit remains dirty.
     written: dict[str, tuple[dict[str, Any], WriteBackResult | SemanticError]] = {}
     held: set[str] = set()
+    # Discovery's refusal of a write after others were sent: those are reflected, the rest wait.
+    unsent: IntegrationError | None = None
     if evidence_rows is not None and stream.writes_back:
-        _require_discovery_ready(stream)
         evidence = {link.external_key: link for link in evidence_rows}
         held = {key for key, link in evidence.items() if link.write_holds}
         for record in page.records:
@@ -603,6 +606,13 @@ def _apply_page(
                 )
                 == ChangeKind.WRITE_BACK
             ):
+                try:
+                    _require_discovery_ready(stream)
+                except IntegrationError as stopped:
+                    if not written:
+                        raise
+                    unsent = stopped
+                    break
                 bases = link.sync_precondition
                 result: WriteBackResult | SemanticError
                 try:
@@ -617,7 +627,13 @@ def _apply_page(
     ended = any(record.tombstone for record in page.records if isinstance(record, RecordChange)) or any(
         isinstance(result, WriteBackResult) and result.tombstone for _bases, result in written.values()
     )
-    with changeset(fresh=True, activity="pull", origin=stream), transaction.atomic():
+    # A page that sent a write commits through the exemption: the write landed, and the check
+    # before the first one, after the extraction, confirmed what the page read.
+    with (
+        changeset(fresh=True, activity="pull", origin=stream),
+        type(stream).objects.exempt_from_discovery() if written else nullcontext(),
+        transaction.atomic(),
+    ):
         current_changeset(record=True)
         locked = type(stream).objects.lock_current(stream, fenced_to=stream)
         adapter.prepare_page(locked, page)
@@ -707,10 +723,11 @@ def _apply_page(
                             if not locked.writes_back:
                                 raise SemanticError("local_change_on_pull", kind=SyncFailureKind.CONFLICT)
                             write = written.get(record.external_key)
-                            if write is None and record.external_key in held:
-                                # A refused write waits out its retry time; the local change
-                                # stays. The first pass's hold decides, so a refusal resolved
-                                # since then waits for the next page rather than failing this one.
+                            if write is None and (record.external_key in held or unsent is not None):
+                                # A refused write waits out its retry time, and one discovery
+                                # stopped waits for it; the local change stays. The first pass's
+                                # hold decides, so a refusal resolved since then waits for the
+                                # next page rather than failing this one.
                                 failures.extend(
                                     row.pk for row in (observed.write_holds if observed is not None else ())
                                 )
@@ -808,6 +825,8 @@ def _apply_page(
                 exhausted=page.exhausted,
                 cursor_expires_at=page.cursor_expires_at,
             )
+    if unsent is not None:
+        raise unsent
     hashes = [record.source_hash for record in page.records] if locked.kind == StreamKind.RECORD_REPLICA else []
     progress = canonical_json_sha256([locked.generation, page.cursor, hashes])
     return PageResult(locked, count, page.exhausted, tuple(failures), progress=progress, appeared=appeared)
@@ -828,7 +847,9 @@ def push_stream(
     sweep is due (``SyncStream.sweep_due``) the push compares every local row; a
     push stream's push that ran through every candidate completes that sweep, which
     no absence pass does for it (``SyncStream.save_reconcile``). No candidate is
-    written while the stream's integration awaits discovery.
+    written while the stream's integration awaits discovery; each asks before it
+    is sent, and a write already sent is reflected even when discovery turned
+    pending since.
     """
 
     if connection.in_atomic_block:
@@ -881,9 +902,17 @@ def push_stream(
             try:
                 result = adapter.write_back(link, candidate.projection, expected_version=link.remote_version)
             except RemoteRejected as error:
-                failures.append(_quarantine(stream, record, error, link=link).pk)
+                # The remote answered the write it was sent: its refusal is recorded whatever discovery says.
+                with type(stream).objects.exempt_from_discovery():
+                    failures.append(_quarantine(stream, record, error, link=link).pk)
                 continue
-            with changeset(fresh=True, activity="push", origin=stream), transaction.atomic():
+            # The write landed: it is reflected whatever discovery says, so the next push neither repeats nor
+            # conflicts with it. The next candidate asks again before it is sent.
+            with (
+                changeset(fresh=True, activity="push", origin=stream),
+                type(stream).objects.exempt_from_discovery(),
+                transaction.atomic(),
+            ):
                 current_changeset(record=True)
                 locked_stream = type(stream).objects.lock_current(stream, fenced_to=stream)
                 locked, record = _lock_written(locked_stream, adapter, links, link, record)

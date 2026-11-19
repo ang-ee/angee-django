@@ -157,9 +157,13 @@ class SyncStateMixin(models.Model):
             return SyncFailure.from_state(self, slot, data)
 
     def resolve_failure(self, slot: int | None, *, conflict: bool = False) -> SyncFailure:
-        return self._transition_failure(slot, retry=False, conflict=conflict)
+        """Close one retained failure: local state, so it commits while discovery is pending."""
+        stream = self.failure_stream
+        with type(stream).objects.exempt_from_discovery():
+            return self._transition_failure(slot, retry=False, conflict=conflict)
 
     def retry_failure(self, slot: int | None) -> SyncFailure:
+        """Make one retained failure due: a request for remote work, so it waits for discovery."""
         return self._transition_failure(slot, retry=True)
 
     def defer_failure(self, row: SyncFailure, *, details: Mapping[str, Any]) -> None:

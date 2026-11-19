@@ -10,6 +10,22 @@ live in code docstrings.
 
 ## Unreleased — shared addon contracts, native embeddings and graph retrieval
 
+- `angee.integrate`: the discovery check on stream commits covers what rests on
+  remote facts, and says why it refuses. Pinning, unpinning, dismissing a failure
+  and reopening a conflict whose follow-through was refused change local state
+  only; they were refused until discovery succeeded, and the reopen left the
+  conflict closed with neither side applied. They now commit through
+  `SyncStreamManager.exempt_from_discovery()`, the one named way past
+  `lock_current`'s check. So does the reflection of a write already sent (and a
+  remote's refusal of it): a write that landed while a secret was re-entered is
+  recorded, so the next run neither repeats it nor conflicts with it. A two-way
+  page now asks before each write-back, not once. A discovery that failed
+  refuses permanently with its own operator message instead of a transient "must
+  finish", so a workflow sync step fails with it. The check before a remote write
+  is one read. Retrying a failure still waits for discovery. Known limit: an
+  adapter that reads its credential again between the check and the send can send
+  that one write with the new secret.
+
 - `angee.integrate`: a re-entered secret is discovered again.
   `Credential.replace_material` kept every attached integration running on the
   facts its connection discovery found with the old secret, so a key of another

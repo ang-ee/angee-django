@@ -22,6 +22,7 @@ import logging
 import secrets
 from collections.abc import Callable, Collection, Iterable, Iterator, Mapping
 from contextlib import contextmanager
+from contextvars import ContextVar
 from copy import copy, deepcopy
 from dataclasses import replace
 from datetime import datetime, timedelta
@@ -178,6 +179,7 @@ _INTEGRATION_FAILURE_MESSAGE = INTEGRATION_FAILURE_MESSAGE
 _WEBHOOK_FAILURE_MESSAGE = "Webhook delivery failed."
 _DISCOVERY_RETRY_EXHAUSTED_MESSAGE = "Connection discovery exhausted its retries; retry discovery to continue."
 _DISCOVERY_REQUIRED_MESSAGE = "Connection discovery must finish before syncing."
+_DISCOVERY_FAILED_MESSAGE = "Connection discovery did not succeed; retry discovery to continue."
 
 
 class AccountStatus(models.TextChoices):
@@ -3426,21 +3428,26 @@ class Integration(StatementSourceMixin, ImplDefaultsMixin, OwnerMixin, AngeeData
         )
 
     def require_discovery_ready(self) -> None:
-        """Stop work already admitted, transiently, once :attr:`discovery_ready` no longer holds.
+        """Stop work already admitted once :attr:`discovery_ready` no longer holds.
 
         A secret re-entered or a credential attached since a run was admitted
         leaves discovery pending, so what the run read is on facts discovery has
-        not confirmed. Every stream commit asks it under the stream lock
-        (:meth:`SyncStreamManager.lock_current`), and the stream driver asks it
-        on a freshly read row before each remote write and each reset, and
-        conflict resolution before it reads: the run commits and sends nothing,
-        and the next one waits for discovery. The row is read, never locked:
-        a page holds its stream lock, and epoch changes lock the integration
-        before the stream.
+        not confirmed. A pending discovery refuses transiently: the next run
+        waits for it. A discovery that finished without success refuses
+        permanently with its own operator message (``last_error``), since only
+        an operator clears it. Every stream commit resting on remote facts asks
+        it under the stream lock (:meth:`SyncStreamManager.lock_current`), the
+        stream driver asks it on a freshly read row before each remote write and
+        each reset, conflict resolution before it reads, and delivery before it
+        sends. The row is read, never locked: a page holds its stream lock, and
+        epoch changes lock the integration before the stream.
         """
 
-        if not self.discovery_ready:
+        if self.discovery_ready:
+            return
+        if self.discovery_pending:
             raise IntegrationError(_DISCOVERY_REQUIRED_MESSAGE, transient=True)
+        raise IntegrationError(self.last_error or _DISCOVERY_FAILED_MESSAGE)
 
     def prepare_connection_discovery(self) -> None:
         """Database-only preparation; concrete capabilities may suspend their work."""
@@ -5015,8 +5022,30 @@ class SyncStreamQuerySet[SyncStreamT: SyncStream](AngeeHistoryQuerySet[SyncStrea
 _SyncStreamManagerBase = AngeeHistoryManager.from_queryset(SyncStreamQuerySet)
 
 
+_discovery_exempt: ContextVar[bool] = ContextVar("angee_integrate_discovery_exempt", default=False)
+"""Whether stream commits here are exempt from discovery (:meth:`SyncStreamManager.exempt_from_discovery`)."""
+
+
 class SyncStreamManager[SyncStreamT: SyncStream](_SyncStreamManagerBase[SyncStreamT]):
     """Serialize stream discovery and epoch changes on the integration row."""
+
+    @contextmanager
+    def exempt_from_discovery(self) -> Iterator[None]:
+        """Let the stream commits inside commit while the stream's integration is not discovery-ready.
+
+        The one way past :meth:`lock_current`'s discovery check, for a commit that
+        rests on no remote fact discovery confirms: local state (a pin, a
+        dismissed failure, a conflict reopened after its follow-through was
+        refused) and the reflection of a write already sent, whose remote effect
+        has landed, so leaving it unrecorded would write it again or conflict.
+        Each caller names it where it commits; everything else stays fenced.
+        """
+
+        token = _discovery_exempt.set(True)
+        try:
+            yield
+        finally:
+            _discovery_exempt.reset(token)
 
     def lock_current(self, stream: Any, *, fenced_to: Any = None) -> Any:
         """Fence one page against epoch changes inside the caller's transaction.
@@ -5025,8 +5054,9 @@ class SyncStreamManager[SyncStreamT: SyncStream](_SyncStreamManagerBase[SyncStre
         page must fail before any domain records or cursor state are applied.
         Every commit to a stream or its links passes here (a page, a push's
         reflection, a sweep, an absence, a conflict decision, a retained
-        failure), so here too it stops, transiently, while the stream's
-        integration awaits discovery (:meth:`Integration.require_discovery_ready`).
+        failure), so here too it stops while the stream's integration is not
+        discovery-ready (:meth:`Integration.require_discovery_ready`), unless
+        the caller declared its commit exempt (:meth:`exempt_from_discovery`).
         The integration is read with the stream in one statement, never locked:
         epoch changes lock it before the stream.
         """
@@ -5044,7 +5074,8 @@ class SyncStreamManager[SyncStreamT: SyncStream](_SyncStreamManagerBase[SyncStre
                 raise RuntimeError("The extracted page belongs to a superseded stream generation.")
             if fenced_to is not None and not json_equal(locked.operation_fence, fenced_to.operation_fence):
                 raise RuntimeError("Stream state changed during external work; retry the operation.")
-            locked.integration.require_discovery_ready()
+            if not _discovery_exempt.get():
+                locked.integration.require_discovery_ready()
             return locked
 
     def current(
@@ -6451,14 +6482,16 @@ class RecordLink(
                 if resolved:
                     fresh = type(link).objects.get(pk=link.pk)
                     if not type(link).objects.filter(pk__in=(link.pk, owner.pk)).open_failures():
-                        fresh.record_failure(
-                            kind=row.kind,
-                            code=row.code,
-                            source_hash=row.source_hash,
-                            mapping_version=row.mapping_version,
-                            details=row.details,
-                            outbox=slot is None,
-                        )
+                        # Reopening restores local state only: a refusal from discovery does not stop it.
+                        with type(stream).objects.exempt_from_discovery():
+                            fresh.record_failure(
+                                kind=row.kind,
+                                code=row.code,
+                                source_hash=row.source_hash,
+                                mapping_version=row.mapping_version,
+                                details=row.details,
+                                outbox=slot is None,
+                            )
                 raise
             finally:
                 adapter.close()
@@ -6470,15 +6503,16 @@ class RecordLink(
         return not json_equal(self.applied_base.mapped_payload, projection)
 
     def pin(self) -> None:
-        """Withhold automatic inbound application and write-back."""
+        """Withhold automatic inbound application and write-back; a pin is local state, so discovery never holds it."""
         self._set_pinned(True)
 
     def unpin(self) -> None:
-        """Resume automatic synchronization on the next cycle."""
+        """Resume automatic synchronization on the next cycle; local state, as :meth:`pin`."""
         self._set_pinned(False)
 
     def _set_pinned(self, pinned: bool) -> None:
-        with transaction.atomic():
+        stream = self.failure_stream
+        with type(stream).objects.exempt_from_discovery(), transaction.atomic():
             locked = self._lock_sync_state()
             locked.pinned = pinned
             locked.save(update_fields=["pinned", "updated_at"])

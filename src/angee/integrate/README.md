@@ -361,13 +361,21 @@ A run already admitted stops once discovery is pending. Every commit to a stream
 or its links takes the stream lock (`SyncStreamManager.lock_current`): a page, a
 push's reflection, a sweep's phase and absences, a retained failure, a conflict
 decision. There the stream's integration, read with the stream, is asked
-`require_discovery_ready()`. The driver asks again, on the integration as stored,
-before each remote write (a two-way page's write-back, each push candidate,
+`require_discovery_ready()`: a pending discovery refuses transiently, and one that
+finished without success refuses permanently with its own operator message. The
+driver asks again, on the integration as stored (one read), before each remote
+write (each write-back of a two-way page, each push candidate,
 `RecordLink.resolve_conflict`) and each reset (`reset_stream`). A secret
 re-entered or a credential attached since admission leaves discovery pending, so
-the run sends nothing and commits nothing it read (a transient
+the run sends nothing more and commits nothing it read (a transient
 `IntegrationError`); earlier pages and their cursor stay, and the next run waits
-for discovery. Operator actions on a stream's retained failures wait for it too.
+for discovery. A commit that rests on no remote fact goes through
+`SyncStreamManager.exempt_from_discovery()`, the one way past that check, named
+where it commits: pinning and unpinning a record, dismissing a failure, and
+reopening a conflict whose follow-through was refused. So does the reflection of a
+write already sent, and the remote's refusal of one: its effect has landed, so a
+page that sent a write commits what it read and sent, then stops. Retrying a
+failure asks for remote work and waits for discovery.
 A workflow sync step checks readiness before any IO or lock
 (`workflows_integrate.steps.bridge_io`): a pending discovery parks it in a time
 wait, with the discovery message as a note and no attempt spent, and a failed
@@ -376,10 +384,12 @@ when discovery turns pending meets the refusal inside it, spends that one attemp
 (as a transport failure caused by the refusal), and the next attempt waits.
 Discovery's own apply writes no stream. While a run holds the sync lock discovery
 cannot settle, so readiness stands for the generation the run was admitted under.
-Two limits still hold: a multi-partition workflow step runs without the sync
+Three limits still hold: a multi-partition workflow step runs without the sync
 lock, so a discovery that succeeds between a page's extraction and its commit
-lets that page commit; and an attach on a capability that requires no discovery
-settles at once and does not stop a run.
+lets that page commit; an attach on a capability that requires no discovery
+settles at once and does not stop a run; and the check before a write is not
+atomic with a re-entry, so an adapter that reads its credential again between
+the check and the send can send that one write with the new secret.
 
 `IntegrationError(public_message, transient=…, retry_after=…)` owns the optional
 positive provider horizon. Integrate's own console actions are guarded by
