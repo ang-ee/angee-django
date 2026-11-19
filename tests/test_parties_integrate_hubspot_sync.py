@@ -11,7 +11,7 @@ from __future__ import annotations
 import json
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from time import monotonic
 from typing import Any
 from urllib.parse import parse_qs, urlsplit
@@ -29,8 +29,8 @@ from angee.integrate.streams import BridgeSyncError, PageResult, advance_stream,
 from angee.integrate.testing.models import RecordLink, SyncStream
 from angee.messaging.testing.models import Directory, Handle, Party, Person, RelationshipKind
 from angee.parties.backends import CONTACTS, ParsedContact
-from angee.parties_integrate_hubspot.backends import HubSpotDirectoryBackend
-from angee.parties_integrate_hubspot.client import HubSpotError
+from angee.parties_integrate_hubspot.backends import OVERLAP, HubSpotDirectoryBackend
+from angee.parties_integrate_hubspot.client import EPOCH, HubSpotError
 from angee.parties_integrate_hubspot.testing.server import HUB_ID, TOKEN, HubSpotServer, error_response, serve
 from tests.conftest import Credential, make_integration
 from tests.stream_adapters import applied_history
@@ -50,6 +50,8 @@ UNAVAILABLE = "HubSpot is temporarily unavailable (HTTP 503)."
 RATE_LIMITED = "HubSpot is rate limiting requests (HTTP 429)."
 DAILY_LIMIT = "This HubSpot account has used its daily API request limit."
 NOT_A_SERVICE_KEY = "A HubSpot directory reads with a HubSpot service key: attach a static token that holds one."
+IMPORTED = datetime(2026, 11, 2, 9, 0, tzinfo=UTC)
+"""When the scripted contacts of a test that keeps HubSpot's time were created."""
 
 ADA = {
     "firstname": "Ada",
@@ -195,6 +197,13 @@ def asserted(party_id: Any, link: Any) -> Any:
     return statements.filter(status=records.model.StatementStatus.ASSERTED)
 
 
+def link_snapshots() -> int:
+    """Count the history snapshots saved of every link: each save of a link adds one."""
+
+    history: Any = RecordLink.history
+    return int(history.count())
+
+
 def failures(hubspot: HubSpot) -> list[Any]:
     return [failure for link in RecordLink.objects.filter(stream=hubspot.stream) for failure in link.failures()]
 
@@ -267,6 +276,96 @@ def test_a_delta_lands_hubspots_edits_including_one_made_between_its_pages(hubsp
     assert hubspot.listings() == []
     assert all("after" not in search and search["limit"] == 1 for search in hubspot.searches())
     assert [page.count for page in hubspot.drain()] == [0]
+    assert not failures(hubspot)
+
+
+def modified_after(search: dict[str, Any]) -> datetime:
+    """Return the time a delta search reads changes strictly after."""
+
+    (changed,) = (
+        item
+        for item in search["filterGroups"][0]["filters"]
+        if (item["propertyName"], item["operator"]) == ("lastmodifieddate", "GT")
+    )
+    return EPOCH + timedelta(milliseconds=int(changed["value"]))
+
+
+def test_a_quiet_accounts_polls_after_its_baseline_send_one_search_and_save_nothing(hubspot: HubSpot) -> None:
+    """Contacts imported together and not changed since: no later poll reads them again."""
+
+    for second, properties in enumerate((ADA, GRACE, MARY)):
+        hubspot.server.add("contacts", properties, modified=IMPORTED + timedelta(seconds=second))
+    hubspot.server.clock = IMPORTED + timedelta(days=1)
+    assert sum(page.count for page in hubspot.drain(page_bound=2)) == 3
+    snapshots, applications = link_snapshots(), applied_history().count()
+
+    for _ in range(3):
+        hubspot.server.clock += timedelta(minutes=5)
+        hubspot.server.requests.clear()
+        assert [page.count for page in hubspot.drain(page_bound=2)] == [0]
+        assert [modified_after(search) for search in hubspot.searches()] == [IMPORTED + timedelta(seconds=2)]
+        assert len(hubspot.server.requests) == 1
+
+    assert (link_snapshots(), applied_history().count()) == (snapshots, applications)
+    assert not failures(hubspot)
+
+
+def test_a_burst_is_read_again_only_until_a_poll_starts_an_overlap_after_it(hubspot: HubSpot) -> None:
+    """A burst of changes, then silence: polls re-read the window behind the newest change until one starts the
+    overlap after it; that poll settles the window, and every later one searches strictly after it."""
+
+    ada = hubspot.server.add("contacts", ADA, modified=IMPORTED)
+    hubspot.server.clock = IMPORTED + timedelta(days=1)
+    hubspot.drain()
+    burst = hubspot.server.clock + timedelta(minutes=1)
+    hubspot.server.update("contacts", ada, {"lastname": "Lovelace"}, modified=burst)
+    newest = burst + timedelta(seconds=1)
+    hubspot.server.add("contacts", GRACE, modified=newest)
+    polls = []
+
+    for minutes in (2, 4, 7, 9, 11):
+        hubspot.server.clock = burst + timedelta(minutes=minutes)
+        hubspot.server.requests.clear()
+        landed = sum(page.count for page in hubspot.drain())
+        polls.append((landed, [modified_after(search) for search in hubspot.searches()]))
+
+    window = newest - OVERLAP
+    assert polls == [(2, [IMPORTED]), (0, [window]), (0, [window]), (0, [newest]), (0, [newest])]
+    assert hubspot.contact(ada).display_name == "Ada Lovelace"
+    assert not failures(hubspot)
+
+
+@pytest.mark.parametrize(
+    "ahead", [pytest.param(timedelta(hours=1), id="local-clock-ahead"), pytest.param(-timedelta(hours=1), id="behind")]
+)
+def test_hubspots_clock_paces_every_pass_whatever_the_local_clock_says(hubspot: HubSpot, ahead: timedelta) -> None:
+    """The local clock runs ``ahead`` of HubSpot's: HubSpot edits one contact the baseline already read and,
+    nine minutes later, one it has not; the delta reads the first edit, and the window then settles."""
+
+    hubspot.server.clock = start = (timezone.now() - ahead).replace(microsecond=0)
+    ada, grace, mary = (
+        hubspot.server.add("contacts", properties, modified=start - timedelta(days=1))
+        for properties in (ADA, GRACE, MARY)
+    )
+    edits = iter(
+        [(timedelta(minutes=1), ada, {"lastname": "Lovelace"}), (timedelta(minutes=9), mary, {"jobtitle": "Analyst"})]
+    )
+
+    def edit_during_the_baseline() -> None:
+        wait, key, properties = next(edits)
+        hubspot.server.clock += wait
+        hubspot.server.update("contacts", key, properties, modified=hubspot.server.clock)
+
+    assert sum(page.count for page in hubspot.drain(page_bound=1, between=edit_during_the_baseline)) == 3
+    hubspot.server.clock = start + timedelta(minutes=20)
+    hubspot.drain()
+
+    assert hubspot.contact(ada).display_name == "Ada Lovelace"
+    assert hubspot.contact(grace).display_name == "Grace Example"
+    hubspot.server.clock += timedelta(minutes=5)
+    hubspot.server.requests.clear()
+    assert [page.count for page in hubspot.drain()] == [0]
+    assert [modified_after(search) for search in hubspot.searches()] == [start + timedelta(minutes=10)]
     assert not failures(hubspot)
 
 

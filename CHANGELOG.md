@@ -51,8 +51,8 @@ live in code docstrings.
 - New addon `angee.parties_integrate_hubspot` (`angee-parties-integrate-hubspot`)
   registers the `hubspot` directory backend: one HubSpot account's contacts read
   one way into parties over HubSpot's `2026-09` REST paths, with no HubSpot SDK.
-  Its requests are integrate's typed request (`HttpClient.request_model`), whose
-  refusal rule it shares; it adds a 423 as transient (at least two seconds), a
+  Its requests are integrate's pinned request (`HttpClient.request`), whose
+  refusal rule (`HttpRefusal`) it shares; it adds a 423 as transient (at least two seconds), a
   429 without `Retry-After` waits for its policy's window (ten seconds, or an
   hour for the daily limit, which its message names), and HubSpot's rejection of
   a key that lacks a service key's usual shape says to check it for extra or
@@ -64,7 +64,11 @@ live in code docstrings.
   directory syncs only after discovery and its source links open each contact in
   HubSpot; a later discovery that finds another account refuses the key. The
   connection test is one one-contact read. A baseline lists contacts by record id;
-  a delta searches by modified time without an offset; an unreadable stored cursor
+  a delta searches by modified time without an offset, reaching back five minutes
+  for HubSpot's lagging search index only until a pass that started that long
+  after the newest change read has completed, so a quiet account costs one search
+  per poll; every pass keeps HubSpot's time (the `Date` of its first answer),
+  never the local clock; an unreadable stored cursor
   starts a new baseline, and a transient refusal inside one page keeps what that
   page read. A merge's survivor lands on a replaced record's person, the replaced
   records leave with the absence sweeps, and an archived or deleted contact is

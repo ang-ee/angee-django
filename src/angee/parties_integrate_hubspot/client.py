@@ -1,12 +1,14 @@
 """HubSpot's CRM REST API at the date-versioned ``2026-09`` paths, over integrate's HTTP owner.
 
 The one owner of the HubSpot wire protocol for this addon. Every request is
-integrate's typed request (``HttpClient.request_model``: SSRF-pinned,
-byte-capped) with the authorization headers the caller supplies; the client never
-reads a credential. Every answer is validated into a pydantic model that ignores
-the fields it does not name, so a new HubSpot field never breaks a sync and a
-missing required one is a :class:`HubSpotError`. No HubSpot client library is
-involved.
+integrate's pinned, byte-capped request (``HttpClient.request``) with the
+authorization headers the caller supplies; the client never reads a credential.
+Every answer is validated into a pydantic model that ignores the fields it does
+not name, so a new HubSpot field never breaks a sync and a missing required one
+is a :class:`HubSpotError`; a page also states HubSpot's time from the answer's
+``Date`` header (:attr:`HubSpotPage.sent_at`), which is why the client reads the
+response itself rather than through ``HttpClient.request_model``. No HubSpot
+client library is involved.
 
 Integrate's ``HttpRefusal`` classifies whatever brings a request no usable
 answer, and :meth:`HubSpotError.of` turns it into HubSpot's error, adding only
@@ -27,15 +29,16 @@ from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal, InvalidOperation
+from email.utils import parsedate_to_datetime
 from itertools import batched
 from typing import Any, Self
 from urllib.parse import urlencode
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, ValidationInfo, field_validator, model_validator
 from pydantic.alias_generators import to_camel
 
 from angee.integrate.errors import IntegrationError
-from angee.integrate.http import HttpClient, HttpRefusal
+from angee.integrate.http import JSON_MAX_BYTES, HttpClient, HttpRefusal
 
 HUBSPOT_API = "https://api.hubapi.com"
 API_VERSION = "2026-09"
@@ -199,16 +202,31 @@ class HubSpotPaging(_HubSpotModel):
 
 
 class HubSpotPage(_HubSpotModel):
-    """One page of a list walk or a search.
+    """One page of a list walk or a search, and HubSpot's time when it answered.
 
     A list page's following position is the id of the record it starts at; a
     search page's is an offset into the query's results, which this client reads
     only as a sign that more results follow. A page with no records that names a
     following one is refused: no walk, search or drain could move past it.
+    ``sent_at`` is the time the answer's ``Date`` header states, HubSpot's clock to
+    the second; ``None`` when it states none that can be read.
     """
 
     results: tuple[HubSpotObject, ...] = ()
     paging: HubSpotPaging | None = None
+    sent_at: datetime | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def _sent_at(cls, data: Any, info: ValidationInfo) -> Any:
+        headers = (info.context or {}).get("headers")
+        if headers is None or not isinstance(data, dict):
+            return data
+        try:
+            stated = parsedate_to_datetime(headers.get("date", ""))
+        except (TypeError, ValueError, IndexError):
+            stated = None
+        return {**data, "sent_at": stated if stated is not None and stated.tzinfo is not None else None}
 
     @model_validator(mode="after")
     def _records_before_more(self) -> Self:
@@ -409,17 +427,33 @@ class HubSpotClient:
         payload: Mapping[str, Any] | None = None,
         scopes: Sequence[str] = (),
     ) -> T:
-        """Send one typed request with ``payload`` as its JSON body; any refusal is a :class:`HubSpotError`."""
+        """Send one JSON request with ``payload`` as its body and validate the answer into ``model``.
 
-        return self.http.request_model(
+        Integrate's request refuses a transport failure, an oversized answer and
+        one it cannot decode, ``HttpRefusal.of`` a non-success, and an answer that
+        does not validate is unreadable: every refusal is a :class:`HubSpotError`.
+        The answer's headers are the validation context, so a page states its
+        ``Date``.
+        """
+
+        def error(refusal: HttpRefusal) -> HubSpotError:
+            return HubSpotError.of(refusal, scopes=scopes, usual_key=self.usual_key)
+
+        response = self.http.request(
             method,
             f"{HUBSPOT_API}{path}" + (f"?{urlencode(query)}" if query else ""),
-            headers=self.headers,
+            headers={"Accept": "application/json", **self.headers},
             json=payload,
-            model=model,
+            max_bytes=JSON_MAX_BYTES,
             timeout=_REQUEST_TIMEOUT_SECONDS,
-            error=lambda refusal: HubSpotError.of(refusal, scopes=scopes, usual_key=self.usual_key),
+            error=error,
         )
+        if not response.is_success:
+            raise error(HttpRefusal.of(response))
+        try:
+            return model.model_validate_json(response.content, context={"headers": response.headers})
+        except ValueError as failure:  # pydantic's ValidationError, or JSON that does not decode
+            raise error(HttpRefusal(failure=failure)) from failure
 
 
 def _requested(object_type: str, properties: Sequence[str]) -> list[str]:

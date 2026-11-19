@@ -31,8 +31,15 @@ before it saves the credential and the directory, so a rejected key saves
 nothing and shows HubSpot's refusal. Each directory gets a credential of its own.
 Discovery then learns the account, and the first sync follows.
 
-The backend speaks HubSpot's date-versioned REST API through integrate's typed
-request (`HttpClient.request_model`), with no HubSpot SDK;
+A sync after a baseline searches for contacts changed since the last one, and
+reaches five minutes further back, since HubSpot's search index shows a change a
+few moments late, only until a sync has run that long after the newest change it
+read. A poll of an account where nothing changed then sends one search and reads
+nothing. Each pass keeps HubSpot's own time, from the `Date` of its answers, so the
+host's clock never decides what a pass reads.
+
+The backend speaks HubSpot's date-versioned REST API through integrate's pinned
+request (`HttpClient.request`), with no HubSpot SDK;
 [the stack guide](../../../docs/stack.md#backend) records why. Integrate's
 `HttpRefusal` classifies every refused request, and `HubSpotError` adds only
 HubSpot's own cases: a 423 is transient, a rate limit without `Retry-After`
@@ -111,5 +118,5 @@ means the property's internal name needs checking in HubSpot.
 `angee.parties_integrate_hubspot.testing.server` ships `HubSpotServer`, an
 in-memory HubSpot account behind `angee.integrate.testing.http.mock_transport`.
 Use it with `serve(server)` or the `hubspot_server` fixture, and script records,
-merges, deletions, index lag, refusals and per-record read errors on it. Nothing
-calls the real HubSpot API.
+merges, deletions, HubSpot's clock (each answer's `Date`), index lag, refusals
+and per-record read errors on it. Nothing calls the real HubSpot API.

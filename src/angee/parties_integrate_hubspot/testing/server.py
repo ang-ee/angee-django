@@ -13,6 +13,7 @@ import operator
 from collections.abc import Iterable, Iterator, Mapping
 from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
+from email.utils import format_datetime
 from typing import Any
 from urllib.parse import parse_qs, urlsplit
 
@@ -105,10 +106,17 @@ class HubSpotServer:
     first page only and refuses an offset or any other shape. It refuses a wrong
     bearer with 401 and a missing read scope with 403 ``MISSING_SCOPES``.
 
+    ``clock`` is HubSpot's time, which every answer states in its ``Date`` header
+    (to the second, as HTTP dates are), queued answers included. It starts at the
+    epoch, moves forward with every change the account stamps, as HubSpot stamps a
+    change with its own time, and a test sets it on to let time pass. A change
+    made with a ``lag`` stays out of search results until the clock has passed it
+    by that much, as HubSpot's search index catches up with its writes; lists and
+    batch reads show it at once.
+
     Server-side behaviour is scripted rather than patched: ``queue`` answers the
     next requests before any routing (an exception models an unreachable host,
     and ``None`` lets one request through to the account),
-    ``unindexed`` ids stay out of search results as HubSpot's lagging index does,
     ``read_errors`` names the ids a batch read fails on and the error category it
     states for each, and ``resolves_merged`` makes a batch read of a merged id
     return the record it was merged into, under that record's id. Every request is
@@ -125,7 +133,7 @@ class HubSpotServer:
         self.properties = {object_type: set(names) for object_type, names in _STANDARD_PROPERTIES.items()}
         self.merged: dict[str, dict[str, str]] = {object_type: {} for object_type in _MODIFIED_PROPERTY}
         self.resolves_merged = True
-        self.unindexed: set[str] = set()
+        self.clock = _EPOCH
         self.read_errors: dict[str, str] = {}
         self.queued: list[httpx2.Response | BaseException | None] = []
         self.requests: list[httpx2.Request] = []
@@ -139,6 +147,7 @@ class HubSpotServer:
         modified: datetime,
         created: datetime = CREATED,
         record_id: str = "",
+        lag: timedelta = timedelta(0),
     ) -> str:
         """Create one record stating ``properties`` and return its id (the next free one unless named)."""
 
@@ -150,22 +159,29 @@ class HubSpotServer:
             "created": created,
             "archived_at": None,
         }
-        self._stamp(object_type, record_id, modified)
+        self._stamp(object_type, record_id, modified, lag)
         return record_id
 
     def update(
-        self, object_type: str, record_id: str, properties: Mapping[str, str | None], *, modified: datetime
+        self,
+        object_type: str,
+        record_id: str,
+        properties: Mapping[str, str | None],
+        *,
+        modified: datetime,
+        lag: timedelta = timedelta(0),
     ) -> None:
         """Change ``properties`` of one record and stamp ``modified`` on it."""
 
         self.properties[object_type].update(properties)
         self.records[object_type][record_id]["properties"].update(properties)
-        self._stamp(object_type, record_id, modified)
+        self._stamp(object_type, record_id, modified, lag)
 
     def archive(self, object_type: str, record_id: str, *, at: datetime) -> None:
         """Soft-delete one record: it leaves lists, searches and batch reads, and lists as archived."""
 
         self.records[object_type][record_id]["archived_at"] = at
+        self.clock = max(self.clock, at)
 
     def delete(self, object_type: str, record_id: str) -> None:
         """Delete one record permanently: it leaves every listing, search and batch read, archived ones too."""
@@ -195,13 +211,19 @@ class HubSpotServer:
         self.queued.extend(answers)
 
     def answer(self, request: httpx2.Request) -> httpx2.Response:
-        """Answer one outbound request as the account would."""
+        """Answer one outbound request as the account would, stating :attr:`clock` as its ``Date``."""
 
         self.requests.append(request)
         if self.queued and (queued := self.queued.pop(0)) is not None:
             if isinstance(queued, BaseException):
                 raise queued
-            return queued
+            response = queued
+        else:
+            response = self._route(request)
+        response.headers.setdefault("Date", format_datetime(self.clock, usegmt=True))
+        return response
+
+    def _route(self, request: httpx2.Request) -> httpx2.Response:
         url = urlsplit(str(request.url))
         if f"{url.scheme}://{url.netloc}" != _HOST:
             return httpx2.Response(404)
@@ -223,10 +245,11 @@ class HubSpotServer:
                 return self._scoped(object_type) or self._batch_read(object_type, body)
         return httpx2.Response(404, json={"status": "error", "category": "OBJECT_NOT_FOUND"})
 
-    def _stamp(self, object_type: str, record_id: str, modified: datetime) -> None:
+    def _stamp(self, object_type: str, record_id: str, modified: datetime, lag: timedelta) -> None:
         record = self.records[object_type][record_id]
-        record["modified"] = modified
+        record["modified"], record["searchable"] = modified, modified + lag if lag else None
         record["properties"][_MODIFIED_PROPERTY[object_type]] = _iso(modified)
+        self.clock = max(self.clock, modified)
 
     def _live(self, object_type: str) -> dict[str, dict[str, Any]]:
         return {key: record for key, record in self.records[object_type].items() if record["archived_at"] is None}
@@ -325,11 +348,12 @@ class HubSpotServer:
         def value(key: str, name: str) -> int:
             return int(key) if name == _RECORD_ID else _epoch_ms(self.records[object_type][key]["modified"])
 
+        live = self._live(object_type)
         matches = sorted(
             (
                 key
-                for key in self._live(object_type)
-                if key not in self.unindexed
+                for key, record in live.items()
+                if (record["searchable"] is None or record["searchable"] <= self.clock)
                 and all(
                     _SEARCH_OPERATORS[item["operator"]](value(key, item["propertyName"]), int(item["value"]))
                     for item in filters

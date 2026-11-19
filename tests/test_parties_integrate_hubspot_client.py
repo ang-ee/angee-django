@@ -78,8 +78,24 @@ def test_list_pages_walk_every_record_in_id_order_to_exhaustion(
         "firstname,lastname,email,lastmodifieddate",
         "false",
     )
-    assert first.headers["authorization"] == f"Bearer {TOKEN}"
+    assert (first.headers["authorization"], first.headers["accept"]) == (f"Bearer {TOKEN}", "application/json")
     assert len(hubspot_server.requests) == 3
+
+
+def test_a_page_states_hubspots_time_from_its_answers_date_header(
+    hubspot_server: HubSpotServer, client: HubSpotClient
+) -> None:
+    """HubSpot states when it sent each answer, to the second; an answer whose ``Date`` cannot be read states none."""
+
+    hubspot_server.clock = MODIFIED + timedelta(seconds=1, milliseconds=750)
+
+    listed = client.list_page("contacts", after="", limit=10, properties=())
+    searched = client.search_modified("contacts", since=EPOCH, limit=10, properties=())
+
+    assert (listed.sent_at, searched.sent_at) == (MODIFIED + timedelta(seconds=1),) * 2
+    for stated in ("", "not a date", "Thu, 19 Nov 2026 03:10:31 -0000"):
+        hubspot_server.queue(httpx2.Response(200, json={"results": []}, headers={"Date": stated}))
+        assert client.list_page("contacts", after="", limit=10, properties=()).sent_at is None
 
 
 def test_an_archived_listing_returns_only_soft_deleted_records(
