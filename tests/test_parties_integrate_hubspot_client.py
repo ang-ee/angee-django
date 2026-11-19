@@ -1,10 +1,9 @@
-"""HubSpot's wire client against the scripted account: paging, reads, refusals and property decoding."""
+"""HubSpot's wire client against the scripted account: paging, reads, refusals and property parsing."""
 
 from __future__ import annotations
 
 from collections.abc import Callable
-from datetime import UTC, date, datetime, timedelta
-from decimal import Decimal
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import httpx2
@@ -12,22 +11,16 @@ import pytest
 
 from angee.integrate.testing.http import request_fields
 from angee.parties_integrate_hubspot.client import (
-    BATCH_READ_LIMIT,
     HubSpotClient,
     HubSpotError,
-    decode_bool,
-    decode_date,
-    decode_datetime,
-    decode_number,
-    decode_options,
-    decode_string,
-    read_scope,
+    HubSpotObject,
+    parse_options,
+    parse_string,
 )
 from angee.parties_integrate_hubspot.testing.server import (
-    CONTACT_TO_COMPANY,
     HUB_ID,
-    PRIMARY_COMPANY,
     TOKEN,
+    VENDOR_TEXT,
     HubSpotServer,
     error_response,
 )
@@ -35,6 +28,7 @@ from angee.parties_integrate_hubspot.testing.server import hubspot_server as hub
 
 MODIFIED = datetime(2026, 11, 2, 12, 0, tzinfo=UTC)
 NAMES = ("firstname", "lastname", "email")
+CONTACTS_READ = "crm.objects.contacts.read"
 
 
 @pytest.fixture
@@ -71,8 +65,12 @@ def test_list_pages_walk_every_record_in_id_order_to_exhaustion(
     assert read == ids
     assert page.results[0].properties["email"] == "person4@example.com"
     assert page.results[0].properties["firstname"] is None
+    assert page.results[0].modified_at("contacts") == MODIFIED + timedelta(minutes=4)
     first = hubspot_server.requests[0]
-    assert (first.url.params["properties"], first.url.params["archived"]) == ("firstname,lastname,email", "false")
+    assert (first.url.params["properties"], first.url.params["archived"]) == (
+        "firstname,lastname,email,lastmodifieddate",
+        "false",
+    )
     assert first.headers["authorization"] == f"Bearer {TOKEN}"
     assert len(hubspot_server.requests) == 3
 
@@ -87,9 +85,8 @@ def test_an_archived_listing_returns_only_soft_deleted_records(
     gone = client.list_page("contacts", after="", limit=10, properties=(), archived=True)
 
     assert [record.id for record in live.results] == [kept]
-    assert [(record.id, record.archived, record.archived_at) for record in gone.results] == [
-        (archived, True, MODIFIED + timedelta(days=1))
-    ]
+    assert [record.id for record in gone.results] == [archived]
+    assert hubspot_server.requests[1].url.params["archived"] == "true"
 
 
 def test_record_ids_seek_strictly_past_an_id_in_numeric_order(
@@ -108,7 +105,23 @@ def test_record_ids_seek_strictly_past_an_id_in_numeric_order(
     assert list(client.record_ids("contacts", after="100")) == []
 
 
-def test_a_batch_read_reports_the_ids_hubspot_did_not_return(
+def test_a_record_listing_that_names_its_own_position_again_is_refused(
+    hubspot_server: HubSpotServer, client: HubSpotClient
+) -> None:
+    stuck = {"results": [{"id": "205", "properties": {}}], "paging": {"next": {"after": "205"}}}
+    hubspot_server.queue(httpx2.Response(200, json=stuck), httpx2.Response(200, json=stuck))
+
+    with pytest.raises(HubSpotError) as refusal:
+        list(client.record_ids("contacts"))
+
+    assert (refusal.value.public_message, refusal.value.transient) == (
+        "HubSpot did not advance its record listing.",
+        False,
+    )
+    assert [request.url.params.get("after") for request in hubspot_server.requests] == [None, "205"]
+
+
+def test_a_batch_read_reports_the_ids_hubspot_has_no_record_under(
     hubspot_server: HubSpotServer, client: HubSpotClient
 ) -> None:
     first, archived, last = (contact(hubspot_server, number) for number in range(3))
@@ -116,7 +129,7 @@ def test_a_batch_read_reports_the_ids_hubspot_did_not_return(
 
     read = client.batch_read("contacts", [first, archived, "999", last, first], ("email",))
 
-    assert [record.id for record in read.results] == [first, last]
+    assert [record.id for record in read.found] == [first, last]
     assert read.missing == (archived, "999")
     assert request_fields(hubspot_server.requests[0]) == {
         "inputs": [{"id": first}, {"id": archived}, {"id": "999"}, {"id": last}],
@@ -128,12 +141,12 @@ def test_a_batch_read_reports_the_ids_hubspot_did_not_return(
 def test_a_batch_read_splits_ids_into_hubspots_batch_size(
     hubspot_server: HubSpotServer, client: HubSpotClient
 ) -> None:
-    ids = [contact(hubspot_server, number) for number in range(BATCH_READ_LIMIT + 1)]
+    ids = [contact(hubspot_server, number) for number in range(101)]
 
     read = client.batch_read("contacts", ids, ())
 
-    assert [record.id for record in read.results] == ids and read.missing == ()
-    assert [len(request_fields(request)["inputs"]) for request in hubspot_server.requests] == [BATCH_READ_LIMIT, 1]
+    assert [record.id for record in read.found] == ids and read.missing == ()
+    assert [len(request_fields(request)["inputs"]) for request in hubspot_server.requests] == [100, 1]
 
 
 def test_a_batch_read_of_a_merged_id_reports_it_missing_beside_the_survivor(
@@ -144,94 +157,59 @@ def test_a_batch_read_of_a_merged_id_reports_it_missing_beside_the_survivor(
 
     read = client.batch_read("contacts", [kept], ("hs_merged_object_ids",))
 
-    assert [record.id for record in read.results] == [survivor] and read.missing == (kept,)
-    assert decode_options(read.results[0].properties["hs_merged_object_ids"]) == (kept, folded)
+    assert [record.id for record in read.found] == [survivor] and read.missing == (kept,)
+    assert parse_options(read.found[0].properties["hs_merged_object_ids"]) == (kept, folded)
 
     hubspot_server.resolves_merged = False
     read = client.batch_read("contacts", [folded, survivor], ())
-    assert [record.id for record in read.results] == [survivor] and read.missing == (folded,)
+    assert [record.id for record in read.found] == [survivor] and read.missing == (folded,)
 
 
-def test_associations_follow_each_records_own_paging(hubspot_server: HubSpotServer, client: HubSpotClient) -> None:
-    hubspot_server.association_page_size = 2
-    ada, grace, alone = (contact(hubspot_server, number) for number in range(3))
-    companies = [hubspot_server.add("companies", {"name": f"Example {n}"}, modified=MODIFIED) for n in range(3)]
-    hubspot_server.associate(ada, companies[0], primary=True)
-    hubspot_server.associate(ada, companies[1])
-    hubspot_server.associate(ada, companies[2])
-    hubspot_server.associate(grace, companies[1])
-
-    found = client.associations("contacts", "companies", [ada, grace, alone])
-
-    assert [target.to_object_id for target in found[ada]] == companies
-    assert [target.to_object_id for target in found[grace]] == [companies[1]]
-    assert found[alone] == ()
-    assert {(kind.type_id, kind.label) for kind in found[ada][0].association_types} == {
-        (CONTACT_TO_COMPANY, None),
-        (PRIMARY_COMPANY, "Primary"),
-    }
-    assert len(hubspot_server.requests) == 2
-    assert request_fields(hubspot_server.requests[1]) == {"inputs": [{"id": ada, "after": "2"}]}
-
-
-def test_properties_return_standard_and_custom_definitions(
+def test_a_record_hubspot_failed_to_read_is_a_transient_refusal_and_never_missing(
     hubspot_server: HubSpotServer, client: HubSpotClient
 ) -> None:
-    hubspot_server.define(
-        "contacts", "favourite_colour", kind="enumeration", field_type="select", options=("red", "green")
+    kept, failing = contact(hubspot_server, 1), contact(hubspot_server, 2)
+    hubspot_server.read_errors[failing] = "VALIDATION_ERROR"
+
+    with pytest.raises(HubSpotError) as refusal:
+        client.batch_read("contacts", [kept, failing, "999"], ())
+
+    assert (refusal.value.public_message, refusal.value.transient) == (
+        "HubSpot could not read some records (VALIDATION_ERROR).",
+        True,
     )
-
-    definitions = {definition.name: definition for definition in client.properties("contacts")}
-
-    colour = definitions["favourite_colour"]
-    assert (colour.type, colour.field_type, colour.hubspot_defined) == ("enumeration", "select", False)
-    assert [option.value for option in colour.options] == ["red", "green"]
-    assert definitions["email"].hubspot_defined is True
+    assert VENDOR_TEXT not in refusal.value.public_message
 
 
 def test_token_info_states_the_hub_and_its_scopes(hubspot_server: HubSpotServer, client: HubSpotClient) -> None:
     info = client.token_info(TOKEN)
 
-    assert info.hub_id == HUB_ID
-    assert set(info.scopes) == {read_scope("contacts"), read_scope("companies")}
+    assert (info.hub_id, info.scopes) == (HUB_ID, (CONTACTS_READ,))
     assert request_fields(hubspot_server.requests[0]) == {"tokenKey": TOKEN}
     with pytest.raises(HubSpotError) as rejected:
         client.token_info("pat-na1-ffffffff-ffff-4fff-8fff-ffffffffffff")
     assert (rejected.value.status, rejected.value.transient) == (401, False)
 
 
-def test_account_details_answer_when_introspection_is_refused(
-    hubspot_server: HubSpotServer, client: HubSpotClient
-) -> None:
-    hubspot_server.queue(error_response(403))
-    with pytest.raises(HubSpotError):
-        client.token_info(TOKEN)
-
+def test_account_details_state_the_portal(hubspot_server: HubSpotServer, client: HubSpotClient) -> None:
     account = client.account()
 
     assert account.portal_id == HUB_ID
-    assert (account.time_zone, account.data_hosting_location, account.ui_domain) == (
-        "Etc/UTC",
-        "na1",
-        "app.hubspot.com",
-    )
+    assert hubspot_server.requests[0].url.path == "/account-info/2026-09/details"
 
 
-def test_a_search_asks_for_changes_since_a_time_ascending_on_the_modified_property(
+def test_a_search_asks_for_changes_since_a_time_ascending_on_the_contacts_modified_property(
     hubspot_server: HubSpotServer, client: HubSpotClient
 ) -> None:
     contact(hubspot_server, 1)
     late = contact(hubspot_server, 30)
     since = MODIFIED + timedelta(minutes=10)
 
-    page = client.search_modified(
-        "contacts", modified_property="lastmodifieddate", since=since, after="", limit=10, properties=("email",)
-    )
+    page = client.search_modified("contacts", since=since, after="", limit=10, properties=("email",))
 
-    assert [record.id for record in page.results] == [late] and page.total == 1
-    assert page.results[0].modified_at("lastmodifieddate") == MODIFIED + timedelta(minutes=30)
-    fields = request_fields(hubspot_server.requests[0])
-    assert fields == {
+    assert [record.id for record in page.results] == [late]
+    assert page.results[0].modified_at("contacts") == MODIFIED + timedelta(minutes=30)
+    assert request_fields(hubspot_server.requests[0]) == {
         "filterGroups": [
             {"filters": [{"propertyName": "lastmodifieddate", "operator": "GTE", "value": epoch_ms(since)}]}
         ],
@@ -241,23 +219,34 @@ def test_a_search_asks_for_changes_since_a_time_ascending_on_the_modified_proper
     }
 
 
+UNAVAILABLE = "HubSpot is temporarily unavailable."
+
+
 @pytest.mark.parametrize(
-    ("status", "fields", "transient", "wait"),
+    ("status", "fields", "transient", "wait", "message"),
     [
-        pytest.param(401, {"category": "INVALID_AUTHENTICATION"}, False, None, id="401-token-rejected"),
-        pytest.param(403, {}, False, None, id="403-refused"),
-        pytest.param(423, {}, True, timedelta(seconds=2), id="423-waits-two-seconds"),
-        pytest.param(423, {"headers": {"Retry-After": "1"}}, True, timedelta(seconds=2), id="423-short-hint-floored"),
-        pytest.param(423, {"headers": {"Retry-After": "7"}}, True, timedelta(seconds=7), id="423-longer-hint"),
         pytest.param(
-            429, {"policy_name": "TEN_SECONDLY_ROLLING"}, True, timedelta(seconds=10), id="429-ten-secondly"
+            401,
+            {"category": "INVALID_AUTHENTICATION"},
+            False,
+            None,
+            "HubSpot rejected the access token. Enter a valid HubSpot service key.",
+            id="401-token-rejected",
         ),
-        pytest.param(429, {"policy_name": "DAILY"}, True, timedelta(hours=1), id="429-daily"),
+        pytest.param(403, {}, False, None, "HubSpot refused this request for the service key.", id="403-refused"),
+        pytest.param(423, {}, True, timedelta(seconds=2), None, id="423-waits-two-seconds"),
+        pytest.param(423, {"headers": {"Retry-After": "1"}}, True, timedelta(seconds=2), None, id="423-short-hint"),
+        pytest.param(423, {"headers": {"Retry-After": "7"}}, True, timedelta(seconds=7), None, id="423-longer-hint"),
+        pytest.param(
+            429, {"policy_name": "TEN_SECONDLY_ROLLING"}, True, timedelta(seconds=10), None, id="429-ten-secondly"
+        ),
+        pytest.param(429, {"policy_name": "DAILY"}, True, timedelta(hours=1), None, id="429-daily"),
         pytest.param(
             429,
             {"policy_name": "TEN_SECONDLY_ROLLING", "headers": {"Retry-After": "30"}},
             True,
             timedelta(seconds=30),
+            None,
             id="429-ten-secondly-retry-after",
         ),
         pytest.param(
@@ -265,21 +254,35 @@ def test_a_search_asks_for_changes_since_a_time_ascending_on_the_modified_proper
             {"policy_name": "DAILY", "headers": {"Retry-After": "30"}},
             True,
             timedelta(seconds=30),
+            None,
             id="429-daily-retry-after",
         ),
-        *(pytest.param(status, {}, True, None, id=f"{status}-transient") for status in (502, 503, 504, 521, 523, 524)),
-        pytest.param(503, {"headers": {"Retry-After": "120"}}, True, timedelta(minutes=2), id="503-retry-after"),
-        pytest.param(500, {}, False, None, id="500-permanent"),
-        pytest.param(400, {"category": "VALIDATION_ERROR"}, False, None, id="400-permanent"),
+        *(
+            pytest.param(status, {}, True, None, UNAVAILABLE, id=f"{status}-transient")
+            for status in (500, 501, 502, 503, 504, 521, 523, 524, 599)
+        ),
+        pytest.param(
+            503, {"headers": {"Retry-After": "120"}}, True, timedelta(minutes=2), UNAVAILABLE, id="503-retry-after"
+        ),
+        pytest.param(
+            400,
+            {"category": "VALIDATION_ERROR"},
+            False,
+            None,
+            "HubSpot refused the request (HTTP 400).",
+            id="400-permanent",
+        ),
+        pytest.param(404, {}, False, None, "HubSpot refused the request (HTTP 404).", id="404-permanent"),
     ],
 )
-def test_each_refusal_maps_to_its_transience_and_wait(
+def test_each_refusal_maps_to_its_transience_wait_and_message(
     hubspot_server: HubSpotServer,
     client: HubSpotClient,
     status: int,
     fields: dict[str, Any],
     transient: bool,
     wait: timedelta | None,
+    message: str | None,
 ) -> None:
     hubspot_server.queue(error_response(status, **fields))
 
@@ -287,25 +290,22 @@ def test_each_refusal_maps_to_its_transience_and_wait(
         client.list_page("contacts", after="", limit=10, properties=())
 
     assert (refusal.value.status, refusal.value.transient, refusal.value.retry_after) == (status, transient, wait)
-    assert "Vendor text" not in refusal.value.public_message
+    assert message is None or refusal.value.public_message == message
+    assert VENDOR_TEXT not in refusal.value.public_message
 
 
-def test_a_missing_scope_names_the_scopes_the_request_needed(
+def test_a_missing_scope_names_the_scope_the_request_needed(
     hubspot_server: HubSpotServer, client: HubSpotClient
 ) -> None:
-    hubspot_server.scopes = {read_scope("contacts")}
-    with pytest.raises(HubSpotError) as associations:
-        client.associations("contacts", "companies", ["101"])
     hubspot_server.scopes = set()
-    with pytest.raises(HubSpotError) as listing:
+
+    with pytest.raises(HubSpotError) as refusal:
         client.list_page("contacts", after="", limit=10, properties=())
 
-    message = associations.value.public_message
-    assert read_scope("contacts") in message and read_scope("companies") in message
-    assert listing.value.public_message == (
-        "The HubSpot service key is missing a scope this connection needs: crm.objects.contacts.read."
+    assert refusal.value.public_message == (
+        f"The HubSpot service key is missing a scope this connection needs: {CONTACTS_READ}."
     )
-    assert (listing.value.status, listing.value.transient) == (403, False)
+    assert (refusal.value.status, refusal.value.transient) == (403, False)
 
 
 def test_a_rejected_bearer_is_a_permanent_refusal(hubspot_server: HubSpotServer) -> None:
@@ -315,7 +315,6 @@ def test_a_rejected_bearer_is_a_permanent_refusal(hubspot_server: HubSpotServer)
         stranger.list_page("contacts", after="", limit=10, properties=())
 
     assert (refusal.value.status, refusal.value.transient) == (401, False)
-    assert refusal.value.public_message == "HubSpot rejected the access token. Enter a valid HubSpot service key."
 
 
 def test_an_unreachable_host_and_an_oversized_answer_are_transient(
@@ -342,74 +341,52 @@ def test_an_answer_that_fails_validation_is_a_permanent_vendor_error(
 
 
 @pytest.mark.parametrize(
-    ("decode", "raw", "expected"),
+    ("parse", "raw", "expected"),
     [
-        pytest.param(decode_string, None, "", id="string-unset"),
-        pytest.param(decode_string, "", "", id="string-empty"),
-        pytest.param(decode_string, "  Ada Example ", "Ada Example", id="string-trimmed"),
-        pytest.param(decode_string, "green", "green", id="single-enumeration-option"),
-        pytest.param(decode_options, None, (), id="options-unset"),
-        pytest.param(decode_options, "", (), id="options-empty"),
-        pytest.param(decode_options, "red", ("red",), id="options-one"),
-        pytest.param(decode_options, "red;green; blue;", ("red", "green", "blue"), id="options-joined"),
-        pytest.param(decode_number, None, None, id="number-unset"),
-        pytest.param(decode_number, "", None, id="number-empty"),
-        pytest.param(decode_number, "42", Decimal(42), id="number-integer"),
-        pytest.param(decode_number, "-3.25", Decimal("-3.25"), id="number-exact-decimal"),
-        pytest.param(decode_bool, None, None, id="bool-unset"),
-        pytest.param(decode_bool, "", None, id="bool-empty"),
-        pytest.param(decode_bool, "true", True, id="bool-true"),
-        pytest.param(decode_bool, "FALSE", False, id="bool-false"),
-        pytest.param(decode_date, None, None, id="date-unset"),
-        pytest.param(decode_date, "", None, id="date-empty"),
-        pytest.param(decode_date, "2026-03-01", date(2026, 3, 1), id="date-iso-day"),
-        pytest.param(decode_date, "2026-03-01T00:00:00.000Z", date(2026, 3, 1), id="date-midnight-utc-not-shifted"),
-        pytest.param(decode_date, epoch_ms(datetime(2026, 3, 1, tzinfo=UTC)), date(2026, 3, 1), id="date-epoch-ms"),
-        pytest.param(decode_date, "-86400000", date(1969, 12, 31), id="date-before-epoch"),
-        pytest.param(decode_datetime, None, None, id="datetime-unset"),
-        pytest.param(decode_datetime, "", None, id="datetime-empty"),
-        pytest.param(
-            decode_datetime,
-            "2026-11-18T12:34:56.789Z",
-            datetime(2026, 11, 18, 12, 34, 56, 789000, tzinfo=UTC),
-            id="datetime-iso-utc",
-        ),
-        pytest.param(
-            decode_datetime,
-            "2026-11-18T08:34:56-04:00",
-            datetime(2026, 11, 18, 12, 34, 56, tzinfo=UTC),
-            id="datetime-offset-to-utc",
-        ),
-        pytest.param(
-            decode_datetime,
-            "2026-11-18T12:34:56",
-            datetime(2026, 11, 18, 12, 34, 56, tzinfo=UTC),
-            id="datetime-naive-is-utc",
-        ),
-        pytest.param(
-            decode_datetime,
-            epoch_ms(datetime(2026, 11, 18, 12, 34, 56, 789000, tzinfo=UTC)),
-            datetime(2026, 11, 18, 12, 34, 56, 789000, tzinfo=UTC),
-            id="datetime-epoch-ms",
-        ),
+        pytest.param(parse_string, None, "", id="string-unset"),
+        pytest.param(parse_string, "", "", id="string-empty"),
+        pytest.param(parse_string, "  Ada Example ", "Ada Example", id="string-trimmed"),
+        pytest.param(parse_string, "green", "green", id="single-enumeration-option"),
+        pytest.param(parse_options, None, (), id="options-unset"),
+        pytest.param(parse_options, "", (), id="options-empty"),
+        pytest.param(parse_options, "red", ("red",), id="options-one"),
+        pytest.param(parse_options, "red;green; blue;", ("red", "green", "blue"), id="options-joined"),
     ],
 )
-def test_each_decoder_reads_hubspots_nullable_string(
-    decode: Callable[[str | None], Any], raw: str | None, expected: Any
+def test_each_parser_reads_hubspots_nullable_string(
+    parse: Callable[[str | None], Any], raw: str | None, expected: Any
 ) -> None:
-    assert decode(raw) == expected
+    assert parse(raw) == expected
 
 
 @pytest.mark.parametrize(
-    ("decode", "raw"),
+    ("stated", "expected"),
     [
-        pytest.param(decode_number, "twelve", id="number-words"),
-        pytest.param(decode_number, "NaN", id="number-not-finite"),
-        pytest.param(decode_bool, "yes", id="bool-other-word"),
-        pytest.param(decode_datetime, "soon", id="datetime-words"),
-        pytest.param(decode_date, "March", id="date-words"),
+        pytest.param(None, None, id="unset"),
+        pytest.param("", None, id="empty"),
+        pytest.param(
+            "2026-11-18T12:34:56.789Z", datetime(2026, 11, 18, 12, 34, 56, 789000, tzinfo=UTC), id="iso-utc"
+        ),
+        pytest.param(
+            "2026-11-18T08:34:56-04:00", datetime(2026, 11, 18, 12, 34, 56, tzinfo=UTC), id="offset-to-utc"
+        ),
+        pytest.param("2026-11-18T12:34:56", datetime(2026, 11, 18, 12, 34, 56, tzinfo=UTC), id="naive-is-utc"),
+        pytest.param(
+            epoch_ms(datetime(2026, 11, 18, 12, 34, 56, 789000, tzinfo=UTC)),
+            datetime(2026, 11, 18, 12, 34, 56, 789000, tzinfo=UTC),
+            id="epoch-ms",
+        ),
+        pytest.param("-86400000", datetime(1969, 12, 31, tzinfo=UTC), id="before-the-epoch"),
+        pytest.param("soon", None, id="words"),
+        pytest.param("9" * 30, None, id="absurd-epoch-ms"),
+        pytest.param("253402300800000", None, id="epoch-ms-past-the-calendar"),
+        pytest.param("0001-01-01T00:00:00+01:00", None, id="iso-before-the-calendar"),
     ],
 )
-def test_a_malformed_value_is_refused(decode: Callable[[str | None], Any], raw: str) -> None:
-    with pytest.raises(ValueError):
-        decode(raw)
+def test_a_records_modified_time_reads_in_utc_and_an_unreadable_one_is_unset(
+    stated: str | None, expected: datetime | None
+) -> None:
+    record = HubSpotObject(id="101", properties={"lastmodifieddate": stated})
+
+    assert record.modified_at("contacts") == expected
+    assert HubSpotObject(id="101").modified_at("contacts") is None

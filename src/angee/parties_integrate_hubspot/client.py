@@ -13,16 +13,18 @@ request needed, never HubSpot's message text. :func:`_retry_policy` is the statu
 table that decides which refusals a later attempt can outlive and how long to
 wait. A failure to reach HubSpot, and an oversized answer, are transient.
 
-HubSpot states every property value as a nullable string; the ``decode_*``
-functions turn one into a Python value by property type.
+HubSpot states every property value as a nullable string; the ``parse_*``
+functions turn one into a Python value by property type. Which property states
+a record's last-modified time depends on its object type, and the client alone
+knows it.
 """
 
 from __future__ import annotations
 
 import json
 from collections.abc import Iterator, Mapping, Sequence
-from datetime import UTC, date, datetime, timedelta
-from decimal import Decimal, InvalidOperation
+from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
 from itertools import batched
 from typing import Any
 from urllib.parse import urlencode
@@ -46,23 +48,19 @@ SEARCH_RESULT_LIMIT = 10_000
 """The most results one search query pages through; HubSpot refuses a page past it."""
 BATCH_READ_LIMIT = 100
 """The most ids one batch read takes."""
-ASSOCIATION_BATCH_LIMIT = 1_000
-"""The most records one association batch read takes."""
-
-MODIFIED_PROPERTY = {"contacts": "lastmodifieddate", "companies": "hs_lastmodifieddate"}
-"""The property each object type's last-modified time is searched and read by."""
 
 EPOCH = datetime(1970, 1, 1, tzinfo=UTC)
 """HubSpot's timestamps count milliseconds from here."""
 
+_MODIFIED_PROPERTY = {"contacts": "lastmodifieddate"}
+_NOT_FOUND = "OBJECT_NOT_FOUND"
 _RESPONSE_MAX_BYTES = 8 * 1024 * 1024
 _REQUEST_TIMEOUT_SECONDS = 30
-_TRANSIENT_STATUSES = frozenset({423, 429, 502, 503, 504, 521, 523, 524})
 _LOCKED_WAIT = timedelta(seconds=2)
 _RATE_LIMIT_WAITS = {"TEN_SECONDLY_ROLLING": timedelta(seconds=10), "DAILY": timedelta(hours=1)}
 
 
-def read_scope(object_type: str) -> str:
+def get_read_scope(object_type: str) -> str:
     """Return the scope a service key needs to read records of a standard ``object_type``."""
 
     return f"crm.objects.{object_type}.read"
@@ -71,8 +69,9 @@ def read_scope(object_type: str) -> str:
 class HubSpotError(IntegrationError):
     """A HubSpot refusal whose message is composed from facts, never from HubSpot's text.
 
-    ``status`` is the HTTP status HubSpot answered with, or ``None`` when no usable
-    answer arrived (unreachable, oversized, unreadable).
+    ``status`` is the HTTP status of the refused answer, or ``None`` when the
+    failure is not a refused answer (unreachable, oversized, unreadable, or a
+    record HubSpot could not read).
     """
 
     def __init__(
@@ -131,48 +130,16 @@ class _HubSpotErrorBody(_HubSpotModel):
 
 
 class HubSpotTokenInfo(_HubSpotModel):
-    """What HubSpot's token introspection states about one access token."""
+    """What HubSpot's token introspection states about one access token: its account (hub) and scopes."""
 
     hub_id: int
-    user_id: int | None = None
-    app_id: int | None = None
     scopes: tuple[str, ...] = ()
-    is_user_token: bool | None = None
 
 
 class HubSpotAccount(_HubSpotModel):
-    """The details HubSpot states for the account (portal) a token belongs to."""
+    """The account (portal) a token belongs to."""
 
     portal_id: int
-    account_type: str | None = None
-    time_zone: str | None = None
-    company_currency: str | None = None
-    data_hosting_location: str | None = None
-    ui_domain: str | None = None
-
-
-class HubSpotOption(_HubSpotModel):
-    """One option of an enumeration property: the stored value and its label."""
-
-    value: str
-    label: str | None = None
-
-
-class HubSpotProperty(_HubSpotModel):
-    """One property definition: its name, and the type and field type its values decode by."""
-
-    name: str
-    label: str | None = None
-    type: str | None = None
-    field_type: str | None = None
-    options: tuple[HubSpotOption, ...] = ()
-    hubspot_defined: bool | None = None
-    calculated: bool | None = None
-    external_options: bool | None = None
-
-
-class _HubSpotProperties(_HubSpotModel):
-    results: tuple[HubSpotProperty, ...] = ()
 
 
 class HubSpotObject(_HubSpotModel):
@@ -180,15 +147,14 @@ class HubSpotObject(_HubSpotModel):
 
     id: str
     properties: dict[str, str | None] = Field(default_factory=dict)
-    created_at: datetime | None = None
-    updated_at: datetime | None = None
-    archived: bool = False
-    archived_at: datetime | None = None
 
-    def modified_at(self, modified_property: str) -> datetime | None:
-        """Return the last-modified time ``modified_property`` states, or ``None`` when it was not read."""
+    def modified_at(self, object_type: str) -> datetime | None:
+        """Return the record's last-modified time, or ``None`` when it was not read or cannot be parsed."""
 
-        return decode_datetime(self.properties.get(modified_property))
+        try:
+            return _parse_datetime(self.properties.get(_MODIFIED_PROPERTY[object_type]))
+        except ValueError:
+            return None
 
 
 class HubSpotNext(_HubSpotModel):
@@ -205,71 +171,45 @@ class HubSpotPaging(_HubSpotModel):
     next: HubSpotNext | None = None
 
 
-class _Paged(_HubSpotModel):
+class HubSpotPage(_HubSpotModel):
+    """One page of a list walk or a search.
+
+    A list page's following position is the id of the record it starts at; a
+    search page's is an offset into the query's results.
+    """
+
+    results: tuple[HubSpotObject, ...] = ()
     paging: HubSpotPaging | None = None
 
     @property
     def next_after(self) -> str:
-        """Return the following page's ``after`` position, or ``""`` on the last page."""
+        """Return the following page's position, or ``""`` on the last page."""
 
         return self.paging.next.after if self.paging is not None and self.paging.next is not None else ""
 
 
-class HubSpotPage(_Paged):
-    """One page of a list walk; ``after`` names the following page's first record id."""
-
-    results: tuple[HubSpotObject, ...] = ()
-
-
-class HubSpotSearchPage(HubSpotPage):
-    """One page of a search; ``after`` is an offset into the query's results."""
-
-    total: int = 0
-
-
-class HubSpotBatchRead(_HubSpotModel):
-    """The records a batch read returned, and the requested ids it did not return.
-
-    A returned record may carry another id than the one requested: a merge
-    replaces the merged ids with its surviving record's.
-    """
-
-    results: tuple[HubSpotObject, ...] = ()
-    missing: tuple[str, ...] = ()
-
-
-class HubSpotObjectRef(_HubSpotModel):
-    """A record named by its id alone."""
-
-    model_config = ConfigDict(coerce_numbers_to_str=True)
-
-    id: str
-
-
-class HubSpotAssociationType(_HubSpotModel):
-    """One kind of association: HubSpot's category, its type id and its label (``Primary``)."""
+class _HubSpotBatchError(_HubSpotModel):
+    """One error a partial (207) batch answer states for some of its records."""
 
     category: str | None = None
-    type_id: int
-    label: str | None = None
 
 
-class HubSpotAssociation(_HubSpotModel):
-    """One associated record and the association types that link it."""
-
-    model_config = ConfigDict(coerce_numbers_to_str=True)
-
-    to_object_id: str
-    association_types: tuple[HubSpotAssociationType, ...] = ()
+class _HubSpotBatchAnswer(_HubSpotModel):
+    results: tuple[HubSpotObject, ...] = ()
+    errors: tuple[_HubSpotBatchError, ...] = ()
 
 
-class _HubSpotAssociations(_Paged):
-    from_: HubSpotObjectRef = Field(alias="from")
-    to: tuple[HubSpotAssociation, ...] = ()
+@dataclass(frozen=True, slots=True)
+class HubSpotBatchRead:
+    """The records a batch read found, and the requested ids HubSpot has no record under.
 
+    A found record may carry another id than the one requested: a merge replaces
+    the merged ids with its surviving record's, so a merged id is missing beside
+    its survivor.
+    """
 
-class _HubSpotAssociationPage(_HubSpotModel):
-    results: tuple[_HubSpotAssociations, ...] = ()
+    found: tuple[HubSpotObject, ...]
+    missing: tuple[str, ...]
 
 
 class HubSpotClient:
@@ -298,32 +238,28 @@ class HubSpotClient:
         )
 
     def account(self) -> HubSpotAccount:
-        """Return the details of the account the token belongs to."""
+        """Return the account the token belongs to."""
 
         return self._request(HubSpotAccount, "GET", f"/account-info/{API_VERSION}/details")
-
-    def properties(self, object_type: str) -> tuple[HubSpotProperty, ...]:
-        """Return ``object_type``'s property definitions, standard and custom."""
-
-        path = f"/crm/properties/{API_VERSION}/{object_type}"
-        return self._request(_HubSpotProperties, "GET", path, scopes=(read_scope(object_type),)).results
 
     def list_page(
         self, object_type: str, *, after: str, limit: int, properties: Sequence[str], archived: bool = False
     ) -> HubSpotPage:
         """Return one page of ``object_type``'s records in id order, starting at the record ``after`` names.
 
-        Only ``properties`` come back, besides HubSpot's defaults. ``archived``
-        lists the soft-deleted records instead of the live ones.
+        ``properties`` and the type's modified time come back, besides HubSpot's
+        defaults. ``archived`` lists the soft-deleted records instead of the live ones.
         """
 
-        query = {"limit": str(limit), "archived": "true" if archived else "false"}
+        query = {
+            "limit": str(limit),
+            "archived": "true" if archived else "false",
+            "properties": ",".join(_requested(object_type, properties)),
+        }
         if after:
             query["after"] = after
-        if properties:
-            query["properties"] = ",".join(properties)
         path = f"/crm/objects/{API_VERSION}/{object_type}"
-        return self._request(HubSpotPage, "GET", path, query=query, scopes=(read_scope(object_type),))
+        return self._request(HubSpotPage, "GET", path, query=query, scopes=(get_read_scope(object_type),))
 
     def record_ids(self, object_type: str, *, after: str | None = None, limit: int = LIST_PAGE_LIMIT) -> Iterator[str]:
         """Yield the ids of ``object_type``'s live records strictly after ``after``, in HubSpot's id order.
@@ -338,7 +274,7 @@ class HubSpotClient:
         floor = int(after) if after else None
         position = after or ""
         while True:
-            page = self.list_page(object_type, after=position, limit=limit, properties=("hs_object_id",))
+            page = self.list_page(object_type, after=position, limit=limit, properties=())
             yield from (record.id for record in page.results if floor is None or int(record.id) > floor)
             if not page.next_after:
                 return
@@ -347,85 +283,55 @@ class HubSpotClient:
             position = page.next_after
 
     def search_modified(
-        self,
-        object_type: str,
-        *,
-        modified_property: str,
-        since: datetime,
-        after: str,
-        limit: int,
-        properties: Sequence[str],
-    ) -> HubSpotSearchPage:
-        """Return one page of the records modified at or after ``since``, ascending on ``modified_property``.
+        self, object_type: str, *, since: datetime, after: str, limit: int, properties: Sequence[str]
+    ) -> HubSpotPage:
+        """Return one page of ``object_type``'s records modified at or after ``since``, oldest change first.
 
-        ``after`` is the offset into the query's results. ``modified_property`` is
-        always read back, so each record states the time it was found by.
+        ``after`` is the offset into the query's results. The type's modified time
+        is always read back, so each record states the time it was found by.
         HubSpot's search lags its writes and never returns archived records.
         """
 
+        modified = _MODIFIED_PROPERTY[object_type]
+        changed_since = {"propertyName": modified, "operator": "GTE", "value": str(_epoch_ms(since))}
         payload: dict[str, Any] = {
-            "filterGroups": [
-                {"filters": [{"propertyName": modified_property, "operator": "GTE", "value": str(_epoch_ms(since))}]}
-            ],
-            "sorts": [{"propertyName": modified_property, "direction": "ASCENDING"}],
-            "properties": list(dict.fromkeys((*properties, modified_property))),
+            "filterGroups": [{"filters": [changed_since]}],
+            "sorts": [{"propertyName": modified, "direction": "ASCENDING"}],
+            "properties": _requested(object_type, properties),
             "limit": limit,
         }
         if after:
             payload["after"] = after
         path = f"/crm/objects/{API_VERSION}/{object_type}/search"
-        return self._request(HubSpotSearchPage, "POST", path, payload=payload, scopes=(read_scope(object_type),))
+        return self._request(HubSpotPage, "POST", path, payload=payload, scopes=(get_read_scope(object_type),))
 
     def batch_read(self, object_type: str, ids: Sequence[str], properties: Sequence[str]) -> HubSpotBatchRead:
-        """Read ``ids`` in batches of :data:`BATCH_READ_LIMIT`; report the requested ids HubSpot did not return.
+        """Read ``ids`` in batches of :data:`BATCH_READ_LIMIT`.
 
-        HubSpot leaves out an archived or deleted record. For a merged id it
-        returns the surviving record under the survivor's id, so the merged id is
-        reported missing too.
+        An id is missing when HubSpot states it has no such record, or answers it
+        under another id: a merge's survivor. Any other error HubSpot states for a
+        record is a transient :class:`HubSpotError`, so a record HubSpot failed to
+        read is never reported missing.
         """
 
         path = f"/crm/objects/{API_VERSION}/{object_type}/batch/read"
         requested = tuple(dict.fromkeys(ids))
-        results: list[HubSpotObject] = []
+        found: list[HubSpotObject] = []
         for chunk in batched(requested, BATCH_READ_LIMIT):
             payload = {
                 "inputs": [{"id": key} for key in chunk],
                 "properties": list(properties),
                 "propertiesWithHistory": [],
             }
-            page = self._request(HubSpotBatchRead, "POST", path, payload=payload, scopes=(read_scope(object_type),))
-            results.extend(page.results)
-        returned = {record.id for record in results}
-        return HubSpotBatchRead(results=tuple(results), missing=tuple(key for key in requested if key not in returned))
-
-    def associations(
-        self, from_type: str, to_type: str, ids: Sequence[str]
-    ) -> dict[str, tuple[HubSpotAssociation, ...]]:
-        """Return each of ``ids``'s associated ``to_type`` records; an id without any maps to ``()``.
-
-        Ids go in batches of :data:`ASSOCIATION_BATCH_LIMIT`. A result with more
-        associations carries its own paging cursor, which is sent back with its id
-        until that record's associations are exhausted.
-        """
-
-        path = f"/crm/associations/{API_VERSION}/{from_type}/{to_type}/batch/read"
-        scopes = (read_scope(from_type), read_scope(to_type))
-        requested = tuple(dict.fromkeys(ids))
-        found: dict[str, list[HubSpotAssociation]] = {key: [] for key in requested}
-        for chunk in batched(requested, ASSOCIATION_BATCH_LIMIT):
-            inputs: list[dict[str, str]] = [{"id": key} for key in chunk]
-            while inputs:
-                page = self._request(_HubSpotAssociationPage, "POST", path, payload={"inputs": inputs}, scopes=scopes)
-                sent = {item["id"]: item.get("after", "") for item in inputs}
-                inputs = []
-                for result in page.results:
-                    key = result.from_.id
-                    found.setdefault(key, []).extend(result.to)
-                    if result.next_after:
-                        if result.next_after == sent.get(key):
-                            raise HubSpotError("HubSpot did not advance an association listing.")
-                        inputs.append({"id": key, "after": result.next_after})
-        return {key: tuple(targets) for key, targets in found.items()}
+            answer = self._request(
+                _HubSpotBatchAnswer, "POST", path, payload=payload, scopes=(get_read_scope(object_type),)
+            )
+            if failed := next((error for error in answer.errors if error.category != _NOT_FOUND), None):
+                stated = f" ({failed.category})" if failed.category else ""
+                raise HubSpotError(f"HubSpot could not read some records{stated}.", transient=True)
+            found.extend(answer.results)
+        answered = {record.id for record in found}
+        return HubSpotBatchRead(found=tuple(found), missing=tuple(key for key in requested if key not in answered))
 
     def _request[T: BaseModel](
         self,
@@ -464,17 +370,23 @@ class HubSpotClient:
             raise HubSpotError("HubSpot returned a response this connection cannot read.") from error
 
 
+def _requested(object_type: str, properties: Sequence[str]) -> list[str]:
+    """Return ``properties`` with ``object_type``'s modified property, which every read needs."""
+
+    return list(dict.fromkeys((*properties, _MODIFIED_PROPERTY[object_type])))
+
+
 def _retry_policy(response: httpx2.Response, body: _HubSpotErrorBody) -> tuple[bool, timedelta | None]:
     """HubSpot's status table: whether a later attempt can outlive a refusal, and the wait before it.
 
-    423 waits at least two seconds. 429 waits for ``Retry-After`` when HubSpot
-    sends it, else for its rate-limit policy's window (ten seconds, or an hour
-    for the daily limit). The gateway statuses wait for ``Retry-After`` when sent.
-    Every other refusal is permanent.
+    423, 429 and every 5xx are transient; every other refusal is permanent. 423
+    waits at least two seconds. 429 waits for ``Retry-After`` when HubSpot sends
+    it, else for its rate-limit policy's window (ten seconds, or an hour for the
+    daily limit). A 5xx waits for ``Retry-After`` when sent.
     """
 
     status = response.status_code
-    if status not in _TRANSIENT_STATUSES:
+    if status not in (423, 429) and status < 500:
         return False, None
     hinted = retry_after(response)
     if status == 423:
@@ -501,69 +413,32 @@ def _epoch_ms(moment: datetime) -> int:
     return (aware - EPOCH) // timedelta(milliseconds=1)
 
 
-def decode_string(value: str | None) -> str:
+def parse_string(value: str | None) -> str:
     """Return a text property's value, or a single-select enumeration's option value; ``""`` when unset."""
 
     return (value or "").strip()
 
 
-def decode_options(value: str | None) -> tuple[str, ...]:
-    """Return the option values of a multi-valued enumeration, which HubSpot joins with ``;``."""
+def parse_options(value: str | None) -> tuple[str, ...]:
+    """Return the values of a multi-valued property, which HubSpot joins with ``;``."""
 
     return tuple(part for part in (item.strip() for item in (value or "").split(";")) if part)
 
 
-def decode_number(value: str | None) -> Decimal | None:
-    """Return a number property's value exactly; ``None`` when unset, ``ValueError`` when it is not a number."""
-
-    text = decode_string(value)
-    if not text:
-        return None
-    try:
-        number = Decimal(text)
-    except InvalidOperation as error:
-        raise ValueError("Not a HubSpot number value.") from error
-    if not number.is_finite():
-        raise ValueError("Not a HubSpot number value.")
-    return number
-
-
-def decode_bool(value: str | None) -> bool | None:
-    """Return a boolean property's value; ``None`` when unset, ``ValueError`` for anything but true or false."""
-
-    text = decode_string(value).lower()
-    if not text:
-        return None
-    if text not in ("true", "false"):
-        raise ValueError("Not a HubSpot boolean value.")
-    return text == "true"
-
-
-def decode_datetime(value: str | None) -> datetime | None:
+def _parse_datetime(value: str | None) -> datetime | None:
     """Return a ``datetime`` property's instant in UTC, stated in ISO 8601 or epoch milliseconds.
 
     ``None`` when unset; a time without an offset is UTC; ``ValueError`` when the
-    value is neither form.
+    value is neither form or names an instant outside the calendar.
     """
 
-    text = decode_string(value)
+    text = parse_string(value)
     if not text:
         return None
-    if text.removeprefix("-").isdecimal():
-        return EPOCH + timedelta(milliseconds=int(text))
     try:
+        if text.removeprefix("-").isdecimal():
+            return EPOCH + timedelta(milliseconds=int(text))
         moment = datetime.fromisoformat(text)
-    except ValueError as error:
+        return moment.replace(tzinfo=UTC) if moment.tzinfo is None else moment.astimezone(UTC)
+    except (ValueError, OverflowError) as error:
         raise ValueError("Not a HubSpot date or time value.") from error
-    return moment.replace(tzinfo=UTC) if moment.tzinfo is None else moment.astimezone(UTC)
-
-
-def decode_date(value: str | None) -> date | None:
-    """Return a ``date`` property's day.
-
-    HubSpot states a day as its midnight in UTC, so the day is read in UTC and
-    never shifted into a local time zone.
-    """
-
-    moment = decode_datetime(value)
-    return moment.date() if moment is not None else None
