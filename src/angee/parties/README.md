@@ -79,7 +79,11 @@ adopted, through the contact's link, so withdrawing the link withdraws them.
 Each mapping is one part of the contacts stream's mapping: adding, removing,
 exchanging or re-versioning one replays every contact once. A mapping declares
 the person statement groups it states (`aspects`), never one the ingest states
-(`Person.contact_aspects()`, read from parties' own declarations); on every
+(`Person.contact_aspects()`, read from parties' own declarations). A person's
+`languages` (ISO 639 codes, most preferred first, `LanguageCodesField`) and
+`occupation` (free text, apart from an employment's title) are parties' own
+groups, one each, that no contact carries (`Person.MAPPED_ASPECTS`): a mapping
+states them, and a person's own statement outranks it. On every
 pull-only record the base first withdraws what the link states in a person group
 that neither the ingest nor a registered mapping states, so a mapping removed
 from the registry has its statements withdrawn on its replay, and nothing else on

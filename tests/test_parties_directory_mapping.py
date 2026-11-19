@@ -172,6 +172,25 @@ class CardDavMapping(ColourMapping):
     backend = "carddav"
 
 
+class ProfileMapping(DirectoryMapping):
+    """Parties' own languages and occupation groups, from a source that says "both" for two languages."""
+
+    key = "profile"
+    backend = PullDirectoryBackend.key
+    fields = ("spoken", "job")
+    aspects = ("languages", "occupation")
+
+    def project(self, row: Mapping[str, Any]) -> dict[str, Any]:
+        spoken = {"english": ["en"], "spanish": ["es"], "both": ["en", "es"]}
+        return {"languages": spoken.get(str(row.get("spoken") or ""), []), "occupation": str(row.get("job") or "")}
+
+    def apply_record(self, person: Any, values: Mapping[str, Any], *, link: Any) -> None:
+        for aspect in self.aspects:
+            person.statements_for(aspect).set(
+                aspect=aspect, values={aspect: values[aspect]}, asserted_by=link.asserting_source(), link=link
+            )
+
+
 def _path(cls: type) -> str:
     return f"{cls.__module__}.{cls.__qualname__}"
 
@@ -349,6 +368,37 @@ def test_a_persons_own_value_wins_by_the_donors_precedence(pull: Pull, settings:
     assert _person(pull, "ada").favourite_colour == "blue"
     statement = _stated(pull, "ada", "colour")
     assert (statement.favourite_colour, statement.applied) == ("violet", False)
+
+
+def test_a_mapping_states_parties_own_languages_and_occupation_and_a_persons_own_value_wins(
+    pull: Pull, settings: Any
+) -> None:
+    """No neutral contact carries them, so a mapping states them; a person's statement outranks the directory's."""
+
+    pull.source.fields["ada"] = {"spoken": "both", "job": "Cartographer"}
+    settings.ANGEE_DIRECTORY_BACKEND_CLASSES = {
+        **settings.ANGEE_DIRECTORY_BACKEND_CLASSES,
+        PullDirectoryBackend.key: _path(PullDirectoryBackend),
+    }
+    _register(settings, ProfileMapping)
+    assert check_directory_mappings() == []
+    pull.reopen()
+
+    pull.sync()
+
+    person = _person(pull, "ada")
+    assert (person.languages, person.occupation) == (["en", "es"], "Cartographer")
+    assert _stated(pull, "ada", "languages").link_id == pull.link("ada").pk
+    person.with_actor(pull.directory.owner).statements_for("languages").set(
+        aspect="languages", values={"languages": ["es"]}
+    )
+
+    pull.source.put("ada", _ADA, fields={"spoken": "english", "job": "Surveyor"})
+    assert pull.sync().count == 1
+
+    person = _person(pull, "ada")
+    assert (person.languages, person.occupation) == (["es"], "Surveyor")
+    assert (_stated(pull, "ada", "languages").languages, _stated(pull, "ada", "languages").applied) == (["en"], False)
 
 
 @pytest.mark.usefixtures("adoption")

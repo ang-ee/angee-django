@@ -264,11 +264,13 @@ def organization_projection(organization: ParsedOrganization) -> dict[str, Any]:
 
 
 class DirectoryMapping(ImplBase):
-    """Fill a consumer addon's own person columns from source fields of one pull-only directory backend.
+    """Fill person columns from source fields of one pull-only directory backend.
 
-    The consumer declares the columns and the statement group that owns them on
-    a donor of ``parties.Person`` (its precedence decides against the person's
-    own values), and registers its mapping under the mapping's ``key`` from its
+    The columns are a consumer's own, declared with the statement group that
+    owns them on a donor of ``parties.Person`` (its precedence decides against
+    the person's own values), or parties' own groups no contact carries
+    (``Person.MAPPED_ASPECTS``: languages, occupation). The consumer registers
+    its mapping under the mapping's ``key`` from its
     ``autoconfig.py``: ``"ANGEE_DIRECTORY_MAPPING_CLASSES.<key>": "<dotted.path>"``.
     ``backend`` is the registry key of the directory backend whose contacts it
     maps; that backend asks its source for ``fields`` too

@@ -129,6 +129,8 @@ def test_public_resource_metadata_declares_people_surface() -> None:
         "nickname",
         "birthday",
         "anniversary",
+        "languages",
+        "occupation",
     ]
     assert person["requiredCreateFields"] == ["display_name"]
     assert person["updateFields"] == [
@@ -142,6 +144,8 @@ def test_public_resource_metadata_declares_people_surface() -> None:
         "nickname",
         "birthday",
         "anniversary",
+        "languages",
+        "occupation",
     ]
     display_name_field = {field["name"]: field for field in person["fields"]}["display_name"]
     assert display_name_field["creatable"] is True

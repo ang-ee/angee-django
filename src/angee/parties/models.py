@@ -59,7 +59,7 @@ from angee.integrate.mixins import LinkedRecordMixin, StatedRecordMixin
 from angee.integrate.models import Bridge, IntegrationCreateMode
 from angee.parties.backends import DirectoryBackend
 from angee.parties.connections import ConnectionHandle
-from angee.parties.fields import CountryCodeField
+from angee.parties.fields import CountryCodeField, LanguageCodesField
 from angee.parties.managers import (
     VISIBLE_CIRCLE_MEMBERS,
     CircleManager,
@@ -576,29 +576,40 @@ class Party(
             apps.get_model("parties", "Party").objects.withdraw_directory_match(self, row)
 
 
+_PERSON_FACT_PRECEDENCE = cast(
+    tuple[SourceKind, ...], (SourceKind.PERSON, SourceKind.SYSTEM_OF_RECORD, SourceKind.DIRECTORY, SourceKind.IMPORT)
+)
+"""Who wins a person's own facts: the person, then a system of record, a directory, an import."""
+
+
 class Person(Composable, metaclass=RebacModelBase, inherits="parties.Party"):
-    """A human party — carries name parts and an optional platform-user link."""
+    """A human party — carries name parts, generic facts and an optional platform-user link.
+
+    ``languages`` and ``occupation`` each have a statement group of their own, so a
+    source stating one never states the other empty and a person editing one holds
+    only that one. No neutral contact carries them (:attr:`MAPPED_ASPECTS`): a
+    source states them through a directory mapping.
+    """
 
     statements = StatementRecords(
         link="integrate.RecordLink",
         aspects={
             "name": Aspect(
                 fields=("name_prefix", "given_name", "additional_name", "family_name", "name_suffix", "nickname"),
-                precedence=cast(
-                    tuple[SourceKind, ...],
-                    (SourceKind.PERSON, SourceKind.SYSTEM_OF_RECORD, SourceKind.DIRECTORY, SourceKind.IMPORT),
-                ),
+                precedence=_PERSON_FACT_PRECEDENCE,
             ),
-            "dates": Aspect(
-                fields=("birthday", "anniversary"),
-                precedence=cast(
-                    tuple[SourceKind, ...],
-                    (SourceKind.PERSON, SourceKind.SYSTEM_OF_RECORD, SourceKind.DIRECTORY, SourceKind.IMPORT),
-                ),
-            ),
+            "dates": Aspect(fields=("birthday", "anniversary"), precedence=_PERSON_FACT_PRECEDENCE),
+            "languages": Aspect(fields=("languages",), precedence=_PERSON_FACT_PRECEDENCE),
+            "occupation": Aspect(fields=("occupation",), precedence=_PERSON_FACT_PRECEDENCE),
         },
         sqid_prefix="pns_",
     )
+    MAPPED_ASPECTS: ClassVar[frozenset[str]] = frozenset({"languages", "occupation"})
+    """The person groups parties declares that no neutral contact carries; a source states them through a mapping.
+
+    The contact ingest states every other group parties declares on a person
+    (:meth:`contact_aspects`), and a ``DirectoryMapping`` may declare these.
+    """
 
     name_prefix = models.TextField(blank=True, default="")
     given_name = models.TextField(blank=True, default="")
@@ -608,6 +619,10 @@ class Person(Composable, metaclass=RebacModelBase, inherits="parties.Party"):
     nickname = models.TextField(blank=True, default="")
     birthday = models.DateField(null=True, blank=True)
     anniversary = models.DateField(null=True, blank=True)
+    languages = LanguageCodesField(default=list, blank=True)
+    """The languages the person uses with us, most preferred first; two with no order known are still two."""
+    occupation = models.TextField(blank=True, default="")
+    """What the person does, in their words or a source's; an employment's title stays on its relationship."""
     user = models.OneToOneField(
         settings.AUTH_USER_MODEL,
         null=True,
@@ -625,16 +640,16 @@ class Person(Composable, metaclass=RebacModelBase, inherits="parties.Party"):
 
     @classmethod
     def contact_aspects(cls) -> frozenset[str]:
-        """Return the statement groups parties itself declares on a person, its party's and its own.
+        """Return the statement groups ``PartyManager.ingest_contact`` states through a contact's link.
 
-        They are the groups ``PartyManager.ingest_contact`` states through a
-        contact's link, read from parties' declarations rather than the
+        Those parties itself declares on a person, its party's and its own, but
+        :attr:`MAPPED_ASPECTS`, read from parties' declarations rather than the
         composed tables, so a consumer donor's groups are never among them.
         """
 
         # On parties' abstract source models the attribute is still the declaration: StatementRecords keeps it there.
         declarations = (cast(StatementRecords, Party.statements), cast(StatementRecords, Person.statements))
-        return frozenset(aspect for declaration in declarations for aspect in declaration.aspects)
+        return frozenset(aspect for declaration in declarations for aspect in declaration.aspects) - cls.MAPPED_ASPECTS
 
 
 class Organization(Composable, metaclass=RebacModelBase, inherits="parties.Party"):

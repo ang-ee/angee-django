@@ -47,7 +47,7 @@ def check_directory_mappings(app_configs: Any = None, **kwargs: Any) -> list[che
             errors.append(
                 checks.Error(
                     f"Directory mapping {mapping.key!r} declares {overlap!r}, groups the contact ingest states; a "
-                    "mapping states its donor's own groups.",
+                    "mapping states only groups no contact carries.",
                     obj=mapping,
                     id="parties.E004",
                 )

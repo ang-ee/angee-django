@@ -10,6 +10,17 @@ live in code docstrings.
 
 ## Unreleased — shared addon contracts, native embeddings and graph retrieval
 
+- `angee.parties`: a person has `languages`, the ISO 639 codes they use with
+  us, most preferred first (`LanguageCodesField`: a JSON list that stores a
+  two-letter code where one exists and refuses a region subtag), and
+  `occupation`, free text apart from an employment's title. Each is a statement
+  group of its own on the person, ranked person, system of record, directory,
+  import; no neutral contact carries them (`Person.MAPPED_ASPECTS`), so
+  `Person.contact_aspects()` leaves them out and a directory mapping states them.
+  The people resource reads and writes both and the person form shows them.
+  Upgrade: the host generates the parties migration (two person columns, the
+  same two on the person statement table, its aspect choices and per-group
+  constraints) and applies it.
 - `angee.parties`: each source creates its own people, and a merge joins them;
   adoption is an option of a pull-only directory, off by default. A directory's
   configuration has a model of its own, `DirectoryConfig`
