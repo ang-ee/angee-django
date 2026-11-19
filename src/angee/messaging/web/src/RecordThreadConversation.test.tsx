@@ -706,6 +706,7 @@ describe("RecordThreadStream", () => {
     fireEvent.click(button);
     await waitFor(() => expect(submit).toHaveBeenCalledWith(
       { body: "A new milestone" }, { record: { id: "prj_1", permissions: ["write"] }, selectedIds: [] },
+      { errorNotification: false },
     ));
   });
 });

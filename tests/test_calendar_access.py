@@ -12,8 +12,11 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from typing import Any
+from zoneinfo import ZoneInfo
 
 import pytest
+from django.db import connection
+from django.test.utils import CaptureQueriesContext
 from django.utils import timezone
 from rebac import PermissionDenied, actor_context, system_context, to_subject_ref
 from rebac.testing import assert_decisions
@@ -481,3 +484,154 @@ def test_an_all_day_instant_off_its_zones_midnight_is_still_refused(world: Simpl
     refused = execute_schema(_console(), _INSERT_ALL_DAY, variables, user=w.holder)
 
     assert refused.errors and "An all-day event starts at midnight in its time zone" in repr(refused.errors)
+
+
+_EFFECTIVE_TIMEZONE = """
+query ($id: String!, $start: DateTime!, $end: DateTime!) {
+  calendar_events_by_pk(id: $id) { effective_timezone }
+  event_occurrences(window_start: $start, window_end: $end) { event_sqid effective_timezone }
+}
+"""
+
+
+@pytest.mark.parametrize(("event_zone", "calendar_zone", "expected"), [
+    pytest.param("Asia/Tokyo", "Europe/Berlin", "Asia/Tokyo", id="its-own"),
+    pytest.param("", "Europe/Berlin", "Europe/Berlin", id="its-calendars"),
+    # The project zone (America/Chicago), which no client surface could otherwise read.
+    pytest.param("", "", "America/Chicago", id="the-projects"),
+])
+def test_an_event_and_its_occurrences_read_its_effective_timezone(
+    world: SimpleNamespace, event_zone: str, calendar_zone: str, expected: str,
+) -> None:
+    """A client reads an all-day event's days in this zone: the event's own, else its calendar's, else the project's."""
+
+    w = world
+    with system_context(reason="tests.calendar.access.setup"):
+        w.calendar.timezone = calendar_zone
+        w.calendar.save(update_fields=["timezone", "updated_at"])
+        event = CalendarEvent.objects.create(
+            calendar=w.calendar, title="Offsite", timezone=event_zone, start=_utc(22, 9), end=_utc(22, 10),
+        )
+    variables = {"id": event.sqid, "start": _utc(22, 0).isoformat(), "end": _utc(23, 0).isoformat()}
+
+    read = result_data(execute_schema(_console(), _EFFECTIVE_TIMEZONE, variables, user=w.reader))
+
+    assert read["calendar_events_by_pk"] == {"effective_timezone": expected}
+    assert read["event_occurrences"] == [{"event_sqid": event.sqid, "effective_timezone": expected}]
+
+
+def test_a_list_reads_each_events_effective_timezone_in_its_own_query(world: SimpleNamespace) -> None:
+    """The field annotates the list's query: ten events on two calendars cost what four on one do, and no more."""
+
+    w = world
+
+    def read(fields: str) -> tuple[int, list[dict[str, Any]]]:
+        with CaptureQueriesContext(connection) as captured:
+            result = execute_schema(_console(), f"query {{ calendar_events {{ {fields} }} }}", {}, user=w.holder)
+        return len(captured), result_data(result)["calendar_events"]
+
+    plain, _rows = read("title")
+    four, rows = read("title effective_timezone")
+    assert {row["effective_timezone"] for row in rows} == {"America/Chicago"}
+    with system_context(reason="tests.calendar.access.setup"):
+        tokyo = Calendar.objects.create(party=w.calendar.party, name="Tokyo", timezone="Asia/Tokyo")
+        for index in range(6):
+            CalendarEvent.objects.create(
+                calendar=tokyo if index % 2 else w.calendar, title=f"Extra {index}",
+                timezone="Europe/Berlin" if index == 0 else "", start=_utc(20, 9 + index), end=_utc(20, 10 + index),
+            )
+    ten, rows = read("title effective_timezone")
+
+    assert len(rows) == 10
+    assert four == ten == plain
+    assert sorted(row["effective_timezone"] for row in rows) == sorted(
+        ["America/Chicago"] * 6 + ["Asia/Tokyo"] * 3 + ["Europe/Berlin"]
+    )
+
+
+_REDACTED_ZONES = """
+query ($start: DateTime!, $end: DateTime!) {
+  event_occurrences(window_start: $start, window_end: $end) { event_sqid redacted effective_timezone }
+}
+"""
+
+
+def test_a_redacted_timed_occurrence_carries_its_calendars_zone_and_an_all_day_one_its_own(
+    world: SimpleNamespace,
+) -> None:
+    """A free/busy viewer learns no event's own zone from its instants; an all-day one keeps it to lie on its days."""
+
+    w = world
+    with system_context(reason="tests.calendar.access.setup"):
+        w.calendar.timezone = "Europe/Berlin"
+        w.calendar.save(update_fields=["timezone", "updated_at"])
+        timed = CalendarEvent.objects.create(
+            calendar=w.calendar, title="Flight", timezone="Asia/Tokyo", start=_utc(22, 9), end=_utc(22, 10),
+        )
+        all_day = CalendarEvent.objects.create(
+            calendar=w.calendar, title="Retreat", timezone="Asia/Tokyo", all_day=True,
+            start=datetime(2026, 7, 23, tzinfo=ZoneInfo("Asia/Tokyo")),
+            end=datetime(2026, 7, 24, tzinfo=ZoneInfo("Asia/Tokyo")),
+        )
+    variables = {"start": _utc(22, 0).isoformat(), "end": _utc(24, 0).isoformat()}
+
+    def zones(seat: str) -> dict[str, tuple[bool, str]]:
+        read = result_data(execute_schema(_console(), _REDACTED_ZONES, variables, user=getattr(w, seat)))
+        return {row["event_sqid"]: (row["redacted"], row["effective_timezone"]) for row in read["event_occurrences"]}
+
+    assert zones("viewer") == {timed.sqid: (True, "Europe/Berlin"), all_day.sqid: (True, "Asia/Tokyo")}
+    assert zones("reader") == {timed.sqid: (False, "Asia/Tokyo"), all_day.sqid: (False, "Asia/Tokyo")}
+
+
+_UPDATE_ZONE = """
+mutation ($id: String!, $zone: String!) {
+  update_calendar_events_by_pk(pk_columns: {id: $id}, _set: {timezone: $zone}) { start end effective_timezone }
+}
+"""
+
+
+def test_the_event_form_changes_an_all_day_events_zone_alone_and_its_days_stay(world: SimpleNamespace) -> None:
+    """The form sends the zone without the dates: the event keeps its days, re-placed at midnight in the new zone."""
+
+    w = world
+    inserted = execute_schema(
+        _console(), _INSERT_ALL_DAY, {"calendar": w.calendar.sqid, "start": "2026-11-20", "end": "2026-11-21"},
+        user=w.holder,
+    )
+    event_id = result_data(inserted)["insert_calendar_events_one"]["id"]
+
+    updated = execute_schema(_console(), _UPDATE_ZONE, {"id": event_id, "zone": "Asia/Tokyo"}, user=w.holder)
+
+    tokyo = ZoneInfo("Asia/Tokyo")
+    with system_context(reason="tests.calendar.access.read"):
+        event = CalendarEvent.objects.get(sqid=event_id)
+    assert result_data(updated)["update_calendar_events_by_pk"]["effective_timezone"] == "Asia/Tokyo"
+    assert (event.start, event.end) == (datetime(2026, 11, 20, tzinfo=tokyo), datetime(2026, 11, 21, tzinfo=tokyo))
+
+
+@pytest.mark.parametrize(("zone", "midnight"), [
+    ("", datetime(2026, 11, 22, 6, tzinfo=UTC)),
+    ("Asia/Tokyo", datetime(2026, 11, 21, 15, tzinfo=UTC)),
+])
+def test_dragging_an_all_day_event_sends_days_the_event_places_in_its_zone(
+    world: SimpleNamespace, zone: str, midnight: datetime
+) -> None:
+    """The drag sends the days it lands on, whatever the browser's zone; the event places them, guessing none."""
+
+    w = world
+    with system_context(reason="tests.calendar.access.setup"):
+        w.calendar.timezone = zone
+        w.calendar.save(update_fields=["timezone", "updated_at"])
+    inserted = execute_schema(
+        _console(), _INSERT_ALL_DAY, {"calendar": w.calendar.sqid, "start": "2026-11-20", "end": "2026-11-21"},
+        user=w.holder,
+    )
+    event_id = result_data(inserted)["insert_calendar_events_one"]["id"]
+    variables = {"id": event_id, "start": "2026-11-22", "end": "2026-11-23"}
+
+    moved = result_data(execute_schema(_console(), _RESCHEDULE, variables, user=w.holder))["reschedule_event"]
+
+    with system_context(reason="tests.calendar.access.read"):
+        event = CalendarEvent.objects.get(sqid=event_id)
+    assert moved["ok"] is True
+    assert (event.start, event.end) == (midnight, midnight + timedelta(days=1))

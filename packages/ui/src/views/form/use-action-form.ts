@@ -1,18 +1,25 @@
 import * as React from "react";
 import { useForm, type FieldValues, type DefaultValues, type Path, type Resolver } from "react-hook-form";
+import type { AuthoredMutateOptions } from "@angee/refine";
 
 import { useToast } from "../../feedback";
 import { useUiT } from "../../i18n";
 import { useRuntimeViewAs } from "../../runtime";
 import { useLatestRef } from "../../lib/use-latest-ref";
-import { applyFormErrors, serverErrorsFromForm, formSubmitError, type FormSubmitResult } from "./validation-errors";
+import {
+  SURFACE_RENDERS_FAILURE, applyFormErrors, serverErrorsFromForm, formSubmitError, type FormSubmitResult,
+} from "./validation-errors";
 import { useFieldValidation, type FieldValidationForm } from "./use-field-validation";
 
 /** RHF owns collection and validation; the callback owns the authored submission. */
 export interface UseActionFormOptions<TValues extends FieldValues, TData = unknown, TSubmitValues extends FieldValues = TValues> {
   defaultValues?: DefaultValues<TValues>;
   resolver?: Resolver<TValues, unknown, TSubmitValues>;
-  submit: (values: TSubmitValues) => FormSubmitResult<TData> | Promise<FormSubmitResult<TData>>;
+  /**
+   * Submit the collected values. The form renders a failure under its fields or in its
+   * banner, so `options` turn refine's toast off: pass them on to the authored call.
+   */
+  submit: (values: TSubmitValues, options: AuthoredMutateOptions) => FormSubmitResult<TData> | Promise<FormSubmitResult<TData>>;
   /** Called once after a successful submission, with its accepted data. */
   onSuccess?: (values: TSubmitValues, data: TData) => void;
   /** Toast the successful result's message. Default true. */
@@ -68,7 +75,7 @@ export function useActionForm<TValues extends FieldValues, TData = unknown, TSub
         if (validateEditors()) return;
         const { submit, onSuccess, toastSuccess = true, fieldNames, genericErrorMessage } = optionsRef.current;
         const fallback = genericErrorMessage ?? t("error.generic");
-        const result = await Promise.resolve().then(() => submit(collected))
+        const result = await Promise.resolve().then(() => submit(collected, SURFACE_RENDERS_FAILURE))
           .catch((cause) => formSubmitError(cause, fallback));
         if (!mounted.current) return;
         if (applyFormErrors(form, result, { fieldNames: fieldNames ?? [], fallback })) return;

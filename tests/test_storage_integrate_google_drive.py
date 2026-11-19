@@ -635,14 +635,17 @@ def test_graphql_lists_accounts_browses_and_connects_with_the_session_users_acco
         execute_schema(
             schema,
             'query { mount_backend(backend_class: "google_drive") '
-            "{ requires_credential oauth_client oauth_scopes accounts { id display_name } } }",
+            "{ requires_credential oauth_client oauth_scopes accounts { id display_name blocked_reason } } }",
             user=admin,
         )
     )["mount_backend"]
     assert accounts["requires_credential"] is True
     assert accounts["oauth_scopes"] == ["https://www.googleapis.com/auth/drive.readonly"]
     assert accounts["oauth_client"] == str(drive_env.google.public_id)
-    assert [account["id"] for account in accounts["accounts"]] == [str(drive_env.credential.public_id)]
+    # A Mount admits every account it reads with (``Mount.credential_blocker``): one account reads many mounts.
+    assert [(account["id"], account["blocked_reason"]) for account in accounts["accounts"]] == [
+        (str(drive_env.credential.public_id), None)
+    ]
     others = result_data(
         execute_schema(
             schema,
@@ -924,6 +927,9 @@ def test_a_mount_offers_only_the_users_own_google_grants_with_the_drive_scope(
     assert offered == {drive_env.credential}
     assert mount.reads_with(drive_env.credential) and mount.reads_with(foreign)
     assert not any(mount.reads_with(credential) for credential in (other_client, narrow, key_pair))
+    # The admission rule the picker shows and every attachment raises.
+    assert mount.credential_blocker(drive_env.credential) is None
+    assert all(mount.credential_blocker(credential) for credential in (other_client, narrow, key_pair))
     assert not local.reads_with(drive_env.credential)
     for refused_credential in (other_client, narrow, foreign, key_pair):
         with pytest.raises(ValidationError) as refused:

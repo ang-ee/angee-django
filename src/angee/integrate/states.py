@@ -31,6 +31,14 @@ A child stream's partition is its container's external key, one fact, so both
 columns take this one length; the driver refuses a longer record identity.
 """
 
+LOCAL_VERSION_LENGTH = 244
+"""The longest local version a push adapter yields (``LocalChange.local_version``); the driver refuses a longer one.
+
+A link holds it behind the mapping version that projected it
+(``RecordLink.local_version``): a positive integer of at most ten digits and a
+colon, within that column's 255 characters.
+"""
+
 
 class StreamKind(models.TextChoices):
     """Whether a stream carries append-only events or mutable replicas."""

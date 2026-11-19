@@ -42,7 +42,7 @@ import {
 } from "../operation-documents";
 import { useActiveDataProviderName } from "./data-provider-context";
 import { invalidateAuthoredQueries } from "../query-invalidation";
-import { useAuthoredQueryBatch, type AuthoredQueryOptions } from "./authored-hooks";
+import { useAuthoredQueryBatch, type AuthoredMutateOptions, type AuthoredQueryOptions } from "./authored-hooks";
 import type { TypedDocumentNode } from "../typed-document";
 import { graphqlDocumentIdentity } from "./wire";
 import { stableKey, useStableArray } from "../stable-deps";
@@ -158,6 +158,7 @@ export type ActionArguments = Readonly<Record<string, unknown>>;
 export type ActionMutate = (
   id: string,
   arguments_?: ActionArguments,
+  options?: AuthoredMutateOptions,
 ) => Promise<ActionOutcome | undefined>;
 
 export interface UseActionMutationOptions {
@@ -546,7 +547,9 @@ export function useAngeeResourceSave(
  * failure, and deep-linking from one value; registered resource invalidations
  * and authored-read model invalidations run only when the outcome is not a
  * domain failure, unless `invalidateOnFailure` declares that the verb's
- * failures persist state too.
+ * failures persist state too. A call's `AuthoredMutateOptions` turn refine's
+ * generic error notification off for a surface that renders the failure itself
+ * (`MutationDialog`).
  */
 export function useActionMutation<TField extends string = string>(
   field: TField,
@@ -567,7 +570,8 @@ export function useActionMutation<TField extends string = string>(
   const queryClient = useQueryClient();
   const run = useCustomMutation<BaseRecord, HttpError, Record<string, unknown>>();
   const mutate = useCallback<ActionMutate>(
-    async (id, arguments_ = {}) => {
+    async (id, arguments_ = {}, callOptions) => {
+      const errorNotification = callOptions?.errorNotification;
       const idArgument = options.idArgument === undefined ? "id" : options.idArgument;
       const variables = idArgument === null ? { ...arguments_ } : { ...arguments_, [idArgument]: id };
       const request = actionRequest(field, variables, {
@@ -585,6 +589,7 @@ export function useActionMutation<TField extends string = string>(
         values: variables,
         dataProviderName: request.dataProviderName,
         meta: request.meta,
+        ...(errorNotification === false ? { errorNotification } : {}),
       });
       const outcome =
         extractActionOutcome(response.data, request.root) ?? undefined;

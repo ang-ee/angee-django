@@ -8,6 +8,7 @@ import allLocales from "@fullcalendar/core/locales-all";
 
 import { useAppRuntime } from "../../runtime";
 import { cn } from "../../lib/cn";
+import { dateFromValue } from "../../widgets/date-format";
 import type { CalendarViewMode, CalendarViewProps, Occurrence } from "./CalendarView";
 import "./calendar-surface.css";
 
@@ -107,14 +108,17 @@ export default function CalendarSurface({
   const reschedule = onEventDrop
     ? async (arg: CalendarChangeArg): Promise<void> => {
         const occ = arg.event.extendedProps.occurrence as Occurrence | undefined;
+        // An all-day occurrence's own start is a bare day: read it as the viewer's local day, the
+        // day the grid shows, never as UTC midnight.
+        const start = arg.event.start ?? (occ ? dateFromValue(occ.start) : null);
         // Belt to FullCalendar's per-event gate: never reschedule a
         // non-editable occurrence even if a change somehow arrives.
-        if (!occ || !occ.editable) {
+        if (!occ || !occ.editable || !start) {
           arg.revert();
           return;
         }
         try {
-          await onEventDrop(occ, arg.event.start ?? new Date(occ.start), arg.event.end);
+          await onEventDrop(occ, start, arg.event.end);
         } catch {
           arg.revert();
         }
@@ -140,6 +144,9 @@ export default function CalendarSurface({
         height="auto"
         dayMaxEvents={4}
         editable={Boolean(onEventDrop)}
+        // A drop keeps the occurrence's kind: `onEventDrop` hands over new bounds, never a switch
+        // between all day and timed, so FullCalendar withholds a drop across the all-day row.
+        eventAllow={(span, moving) => span.allDay === moving?.allDay}
         selectable={Boolean(onSelectRange)}
         selectMirror
         events={events}

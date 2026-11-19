@@ -8,6 +8,7 @@ import * as v from "valibot";
 import type { ResourceViewFilter, ResourceViewGroup, ResourceViewInitialState, ResourceViewSort } from "./filter";
 import { createResourceViewState, type ResourceViewState } from "./state";
 import { normalisePageSize } from "../page-size";
+import { isStorageDate } from "../../../widgets/date-format";
 const RESOURCE_VIEW_SEARCH_SHAPE = {
   preset: undefined as string | undefined,
   columns: undefined as string | undefined,
@@ -203,12 +204,8 @@ export function parseSearchMode(value: unknown): CalendarViewMode | null {
 }
 
 export function parseSearchAnchor(value: unknown): string | null {
-  return typeof value === "string" && CALENDAR_ANCHOR_PATTERN.test(value)
-    ? value
-    : null;
+  return isStorageDate(value) ? value : null;
 }
-
-const CALENDAR_ANCHOR_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
 
 /** A calendar source key: letters, digits, `_`, `-` and `.`, so a comma list carries them. */
 const CALENDAR_SOURCE_KEY_PATTERN = /^[A-Za-z0-9_.-]+$/;

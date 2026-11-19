@@ -3,9 +3,12 @@ import type { DocumentType } from "@angee/gql/console";
 import type { ActionFieldName } from "@angee/gql/console/actions";
 import { useActionMutation, useAuthoredQuery } from "@angee/refine";
 import {
+  AbsoluteTime,
   ResourceList,
+  calendarDay,
   calendarWindowBounds,
   calendarWindowSource,
+  dateFromValue,
   formatDateStorage,
   useActionResultRun,
   useContainer,
@@ -21,23 +24,49 @@ import { CalendarListDocument, EventOccurrencesDocument } from "../documents.con
 import { useCalendarT } from "../i18n";
 import { CALENDAR_MODEL, EVENT_MODEL } from "../resources";
 import { OCCURRENCE_SOURCES, type OccurrenceSourceContribution } from "../sources";
-import { calendarEventForm } from "./CalendarEventForm";
+import { allDayBoundDay, calendarEventForm } from "./CalendarEventForm";
 
 type OccurrenceRow = DocumentType<typeof EventOccurrencesDocument>["event_occurrences"][number];
+
+/**
+ * A bound as the events list shows it, through `AbsoluteTime`'s date and time: a timed event's instant, its
+ * date and clock time in the viewer's zone, and an all-day event's day in its own zone, which has no clock time
+ * and which every viewer reads as that day (a Chicago Nov 20 is no Nov 19 in Los Angeles).
+ */
+function eventBoundColumn(field: "start" | "end"): ListColumn {
+  return {
+    field,
+    selectionPaths: [field, "all_day", "effective_timezone"],
+    render: (row) => {
+      const shown = row.all_day === true ? allDayBoundDay(row[field], row.effective_timezone) : row[field];
+      return <AbsoluteTime display="datetime" value={typeof shown === "string" ? shown : null} />;
+    },
+  };
+}
 
 // The plain events table the switcher shows in list view (calendar view renders the
 // windowed surface instead). Headers derive from the field metadata.
 const EVENT_COLUMNS: readonly ListColumn[] = [
   { field: "title" },
   { field: "calendar" },
-  { field: "start" },
-  { field: "end" },
+  eventBoundColumn("start"),
+  eventBoundColumn("end"),
   { field: "status" },
   { field: "location" },
 ];
 
 const CALENDAR_MODELS = [CALENDAR_MODEL];
 const EVENT_MODELS = [EVENT_MODEL];
+
+/**
+ * A bound as the event takes it from the grid. A timed bound is its instant. An all-day bound is the
+ * day the viewer sees (FullCalendar's local date; the grid shows each event on its own days), sent as
+ * a date that the event places at midnight in its own zone: a browser in another zone never sends its
+ * own midnight as the bound, nor a day picked by the nearest midnight.
+ */
+function eventBound(moment: Date, allDay: boolean): string | null {
+  return allDay ? formatDateStorage(moment) : moment.toISOString();
+}
 
 /**
  * The calendar page: a thin `ResourceList` declaration over the events resource.
@@ -66,11 +95,14 @@ export function CalendarPage(): React.ReactElement {
   const [reschedule] = useActionMutation<ActionFieldName>("reschedule_event", { invalidateModels: EVENT_MODELS });
   const settle = useActionResultRun();
 
+  // A drop without a later end sends its start again: the event's `reschedule` owns that move's
+  // length, one day for an all-day event.
   const onReschedule = React.useCallback<NonNullable<ResourceListCalendarSpec["onReschedule"]>>(
     async (occurrence, start, end) => {
-      const outcome = await settle(() =>
-        reschedule(occurrence.event_sqid, { start: start.toISOString(), end: (end ?? start).toISOString() }),
-      );
+      const outcome = await settle(() => reschedule(occurrence.event_sqid, {
+        start: eventBound(start, occurrence.all_day),
+        end: eventBound(end ?? start, occurrence.all_day),
+      }));
       // The settle owner has told the viewer; throwing makes the surface revert the move.
       if (!outcome?.ok) throw new Error(outcome?.message || t("reschedule.failed"));
     },
@@ -80,9 +112,17 @@ export function CalendarPage(): React.ReactElement {
   const sources = React.useMemo<readonly AnyCalendarWindowSource[]>(() => {
     const listed = calendars.data?.calendars ?? [];
     const named = new Set(listed.map((calendar) => calendar.id));
-    // Busy time shows as "Busy" and opens nothing; an event opens its row.
+    // Busy time shows as "Busy" and opens nothing; an event opens its row. An all-day occurrence is
+    // the days its bounds fall on in its event's own zone, so every viewer sees it on those days.
+    const day = (instant: string, zone: string) => {
+      const date = dateFromValue(instant);
+      return date ? calendarDay(date, zone) : instant;
+    };
     const project = (row: OccurrenceRow): Occurrence => ({
       ...row,
+      ...(row.all_day
+        ? { start: day(row.start, row.effective_timezone), end: day(row.end, row.effective_timezone) }
+        : {}),
       title: row.redacted ? t("occurrence.busy") : row.title,
       to: row.redacted ? undefined : recordHref(EVENT_MODEL, row.event_sqid),
     });
@@ -111,12 +151,11 @@ export function CalendarPage(): React.ReactElement {
     () => ({
       sources,
       onReschedule,
-      // The surface opens routed create seeded with the selection. A month-view day is an all-day
-      // event whose bounds are the days chosen (FullCalendar's local dates): the event places them at
-      // midnight in its own zone, which only the server knows. A timed selection is its instants.
-      createDefaults: (start, end, allDay) => allDay
-        ? { start: formatDateStorage(start), end: formatDateStorage(end), all_day: true }
-        : { start: start.toISOString(), end: end.toISOString(), all_day: false },
+      // The surface opens routed create seeded with the selection: a month-view day is an all-day
+      // event on the days chosen, a timed selection its instants.
+      createDefaults: (start, end, allDay) => ({
+        start: eventBound(start, allDay), end: eventBound(end, allDay), all_day: allDay,
+      }),
     }),
     [sources, onReschedule],
   );

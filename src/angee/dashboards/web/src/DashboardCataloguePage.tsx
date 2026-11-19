@@ -24,7 +24,7 @@ import {
   type StringIdRow,
   titleCase,
 } from "@angee/ui";
-import type { DashboardRegistry, DashboardSummary, DashboardTarget } from "@angee/ui/dashboard/headless";
+import type { DashboardRegistry, DashboardSaveResult, DashboardSummary, DashboardTarget } from "@angee/ui/dashboard/headless";
 import { useDashboardsT } from "./i18n";
 
 export function DashboardCataloguePage(): React.ReactElement {
@@ -146,14 +146,13 @@ function DashboardCatalogue({ store, registry }: {
             submitLabel={t("common.create")}
             submittingLabel={t("common.creating")}
             parseValues={(values: MutationDialogValues) => ({ name: mutationDialogValueCodecs.requiredString(values.name, "name") })}
-            onSubmit={async ({ name }) => {
-              const result = await catalogue.createPersonal({
-                name,
-                idempotencyKey: globalThis.crypto?.randomUUID?.() ?? `dashboard-${Date.now()}`,
-              });
-              return { status: "ok", data: result };
+            mutation={({ name }, options) => catalogue.createPersonal({
+              name,
+              idempotencyKey: globalThis.crypto?.randomUUID?.() ?? `dashboard-${Date.now()}`,
+            }, options)}
+            onSubmitted={(result: DashboardSaveResult) => {
+              void navigate({ to: routeHref("dashboards.detail", { id: result.persistedId }) });
             }}
-            onSubmitted={(result) => { void navigate({ to: routeHref("dashboards.detail", { id: result.persistedId }) }); }}
           />
         )}
       />

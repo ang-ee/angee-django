@@ -48,6 +48,7 @@ export const ConnectWithAccountFields = graphql(`
     accounts {
       id
       display_name
+      blocked_reason
     }
   }
 `);

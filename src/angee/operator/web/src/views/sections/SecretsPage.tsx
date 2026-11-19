@@ -1,3 +1,4 @@
+import type { AuthoredMutateOptions } from "@angee/refine";
 import { Button, Code, Glyph, MutationDialog, RowsListView, StatusBadge, defineRowAction, mutationDialogValueCodecs, type DescriptorField, type ListColumn, type RowActionDeclaration } from "@angee/ui";
 import { useCallback, useMemo, useState, type ReactElement, type ReactNode } from "react";
 
@@ -91,7 +92,7 @@ function SecretSetDialog({ open, presetName, onOpenChange, onSubmit }: {
   open: boolean;
   presetName?: string;
   onOpenChange: (open: boolean) => void;
-  onSubmit: (name: string, value: string) => Promise<void>;
+  onSubmit: (name: string, value: string, options?: AuthoredMutateOptions) => Promise<void>;
 }): ReactElement {
   const t = useOperatorT();
   const fields = useMemo<readonly DescriptorField[]>(() => [
@@ -111,8 +112,8 @@ function SecretSetDialog({ open, presetName, onOpenChange, onSubmit }: {
         name: mutationDialogValueCodecs.requiredString(values.name, "name").trim(),
         value: mutationDialogValueCodecs.requiredString(values.value, "value"),
       })}
-      onSubmit={async ({ name, value }) => {
-        await onSubmit(name, value);
+      onSubmit={async ({ name, value }, options) => {
+        await onSubmit(name, value, options);
         return { status: "ok", data: name };
       }}
     />
@@ -121,7 +122,7 @@ function SecretSetDialog({ open, presetName, onOpenChange, onSubmit }: {
 
 /** Secret mutations: set and delete, each refetching the snapshot. */
 function useSecretActions(refetch: () => void): {
-  setSecret: (name: string, value: string) => Promise<void>;
+  setSecret: (name: string, value: string, options?: AuthoredMutateOptions) => Promise<void>;
   deleteSecret: (secret: SecretRef) => Promise<void>;
   busy: boolean;
 } {
@@ -131,7 +132,9 @@ function useSecretActions(refetch: () => void): {
   const busy = set.result.fetching || remove.result.fetching;
 
   const setSecret = useCallback(
-    (name: string, value: string) => runDaemon({ run: set.run, field: "insert_secrets_one", variables: { object: { name, value } } }),
+    (name: string, value: string, options?: AuthoredMutateOptions) => runDaemon({
+      run: set.run, field: "insert_secrets_one", variables: { object: { name, value } }, options,
+    }),
     [runDaemon, set.run],
   );
   const deleteSecret = useCallback(

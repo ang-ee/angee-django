@@ -33,6 +33,7 @@ from angee.integrate.errors import IntegrationError, safe_integration_failure
 from angee.integrate.impl import AdapterContractError, BridgeImpl
 from angee.integrate.states import (
     EXTERNAL_KEY_LENGTH,
+    LOCAL_VERSION_LENGTH,
     UNSET,
     LinkStatus,
     StreamDefinition,
@@ -176,6 +177,8 @@ class RecordChange:
     """The remote projection in the same domain shape as the local projection."""
     failure: SemanticError | None = None
     """An adapter's refusal when the source cannot produce a mapped projection."""
+    local_version: str | None = ""
+    """The local version ``projection`` was read at (:attr:`LocalChange.local_version`); a push records it."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -185,6 +188,17 @@ class LocalChange:
     external_key: str
     projection: Any
     target: Any = None
+    local_version: str | None = ""
+    """The version of the local state ``projection`` was read from, in the same read; ``""`` when unversioned.
+
+    Exact for what the projection reads, and compared only for equality: a push
+    records it with the base it writes (``RecordLink.local_version``), so a row
+    whose version is unchanged is unchanged since that base, and an adapter may
+    leave it out of a full read (``RecordLinkManager.changed_since_base``). At
+    most ``LOCAL_VERSION_LENGTH`` long. ``None`` is a versioned row without a
+    version yet (``RecordLinkManager.with_local_versions``): the push baselines
+    it (``RecordLinkManager.settle``).
+    """
 
 
 @dataclass(frozen=True, slots=True)
@@ -453,7 +467,7 @@ def _lock_written(
     )
     locked = links.lock_if_supported().get(pk=link.pk)
     if target is not None and not named:
-        record = replace(record, target=None)
+        record = replace(record, target=None, local_version="")
     return locked, record
 
 
@@ -471,6 +485,7 @@ def _reflect_write(stream: Any, link: Any, record: RecordChange, result: WriteBa
         dependency_digest=record.dependency_digest,
         origin="local",
         tombstone=result.tombstone,
+        local_version=record.local_version,
     )
 
 
@@ -797,7 +812,10 @@ def push_stream(
 
     The cycle's deadline (``sync_deadline()``: ``deadline``, else the enclosing
     sync's) is checked between candidates; a push stream's released links are
-    candidates too, their removal (:func:`push_candidates`).
+    candidates too, their removal (:func:`push_candidates`). While the stream's
+    sweep is due (``SyncStream.sweep_due``) the push compares every local row; a
+    push stream's push that ran through every candidate completes that sweep, which
+    no absence pass does for it (``SyncStream.save_reconcile``).
     """
 
     if connection.in_atomic_block:
@@ -814,7 +832,8 @@ def push_stream(
             return PageResult(stream, exhausted=True)
         links = stream.links.model.objects
         candidates: set[str] = set()
-        for candidate, link in push_candidates(stream, adapter, external_keys):
+        sweep = external_keys is None and stream.direction == StreamDirection.PUSH and stream.sweep_due()
+        for candidate, link in push_candidates(stream, adapter, external_keys, settle=True):
             if (limit := sync_deadline()) is not None and monotonic() >= limit:
                 return PageResult(stream, count, failure_ids=tuple(failures))
             candidates.add(candidate.external_key)
@@ -842,6 +861,7 @@ def push_stream(
                 projection=candidate.projection,
                 target=candidate.target,
                 dependency_digest=revision.dependency_digest if revision is not None else "",
+                local_version=candidate.local_version,
             )
             bases = link.sync_precondition
             try:
@@ -860,6 +880,11 @@ def push_stream(
                 if result.tombstone:
                     type(locked_stream).objects.retire_children(locked_stream)
             count += 1
+        if sweep:
+            with transaction.atomic():
+                swept = type(stream).objects.lock_current(stream, fenced_to=stream)
+                swept.save_reconcile(None)
+                stream.last_reconciled_at = swept.last_reconciled_at
         if external_keys is None:
             # A due refusal whose record has nothing left to write (deleted or
             # reverted locally) has nothing to retry, and no rescan reads it.
@@ -907,13 +932,22 @@ _CANDIDATE_BATCH = 500
 
 
 def push_candidates(
-    stream: Any, adapter: BridgeImpl, external_keys: frozenset[str] | None
+    stream: Any, adapter: BridgeImpl, external_keys: frozenset[str] | None, *, settle: bool = False
 ) -> Iterator[tuple[LocalChange, Any]]:
     """Yield each local change that differs from its link's base, with that link or ``None`` when new.
 
     A link carries its sync evidence (:meth:`RecordLinkQuerySet.with_sync_evidence`),
     so the preview reads its write holds without a query each. The push re-reads a
     link just before writing it, since the batch predates the writes ahead of it.
+
+    ``settle`` (the push's; a preview writes nothing) records the newer local
+    version of each candidate whose projection still equals its base, and
+    baselines one read without a version (:meth:`RecordLinkManager.settle`), so an
+    adapter that reads only rows changed since their base
+    (:meth:`RecordLinkManager.changed_since_base`) stops reading a row touched
+    without a change to its projection. A local version longer than
+    ``LOCAL_VERSION_LENGTH`` is the adapter's contract error, refused before
+    anything of its batch is written.
 
     On a push stream, a written link whose row went (released by its deletion,
     ``RecordLinkManager.release_pushes``, or still naming a row a delete that locked
@@ -926,6 +960,8 @@ def push_candidates(
     links = stream.links.model.objects
     named: set[str] = set()
     while batch := list(islice(candidates, _CANDIDATE_BATCH)):
+        if any(len(candidate.local_version or "") > LOCAL_VERSION_LENGTH for candidate in batch):
+            raise AdapterContractError(f"A local version is at most {LOCAL_VERSION_LENGTH} characters long.")
         named.update(candidate.external_key for candidate in batch)
         known = {
             link.external_key: link
@@ -933,10 +969,15 @@ def push_candidates(
                 stream=stream, external_key__in=[candidate.external_key for candidate in batch]
             ).with_sync_evidence()
         }
+        unchanged = []
         for candidate in batch:
             link = known.get(candidate.external_key)
             if link is None or link.local_changed(candidate.projection):
                 yield candidate, link
+            elif settle:
+                unchanged.append((link, candidate))
+        if unchanged:
+            links.settle(stream, unchanged)
     if stream.direction != StreamDirection.PUSH:
         return
     written = links.filter(stream=stream).exclude(applied_base=None).exclude(status=LinkStatus.TOMBSTONE)
@@ -1007,12 +1048,11 @@ def reconcile_stream(stream: Any, adapter: BridgeImpl, *, page_bound: int = 100,
                 return 0
             state = _validated_cursor(locked.reconcile_state) or None
             if state is None:
-                now = timezone.now()
-                if locked.last_reconciled_at and locked.last_reconciled_at + locked.reconcile_interval > now:
+                if not locked.sweep_due():
                     stream.reconcile_state = locked.reconcile_state
                     return 0
                 state = {
-                    "started_at": now.isoformat(),
+                    "started_at": timezone.now().isoformat(),
                     "phase": "enumerate" if identity_reads else "extract",
                     "after": None,
                 }
