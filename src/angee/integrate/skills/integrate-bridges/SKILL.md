@@ -98,8 +98,9 @@ source addon contributes one adapter class, its registry key and its tests. Refe
    `reconcile_interval`, `absence_threshold`, `tombstone_retention`, `snapshot`, `authoritative`, `mapping_version`
    or `mapping_contributions`, `config`, `container`; `StreamDefinition` in `src/angee/integrate/states.py`). If one
    declarer owns the mapping → bump `mapping_version`. If several declarers compose it (a base plus the consumer
-   addons that map more fields) → declare `mapping_contributions` as `(key, version)` pairs sorted by the
-   declarer's explicit sequence, then key, and never a version of your own: the stream retains the list and gives
+   addons that map more fields) → declare `mapping_contributions` as one `MappingContribution(key, version,
+   sequence=...)` per part, in any order, and never a version of your own: integrate orders the parts by sequence,
+   then key, and the stream retains the ordered list and gives
    every change of it a new version (`SyncStreamManager.current` in `src/angee/integrate/models.py`), never a
    bridge-side column. If a partition is itself a record of another
    stream (an address book, a calendar) → declare that parent stream with `holds_containers=True`, create the
@@ -203,7 +204,7 @@ session exits within one wake on stop, shutdown and lost lock.
 ## Pitfalls
 
 - Declaration knobs `cursor`, `reconcile_interval`, `absence_threshold`, `tombstone_retention`, `config` seed the first generation only; a changed `direction`/`snapshot`, an increased `mapping_version` or any change of the `mapping_contributions` list opens a new baseline and a changed `kind` is refused (`src/angee/integrate/README.md`).
-- A composed mapping's version is not the sum of its parts: removing a part lowers the sum and exchanging one can keep it, which would skip the replay. Declare the parts as `mapping_contributions` and let the stream retain them (`src/angee/integrate/README.md`); a reordering is a change, because parts apply in order.
+- A composed mapping's version is not the sum of its parts: removing a part lowers the sum and exchanging one can keep it, which would skip the replay. Declare the parts as `mapping_contributions` and let the stream retain them (`src/angee/integrate/README.md`); a change of their sequence order is a change, because parts apply in order, and a renumbering that keeps it is none.
 - A declared snapshot without `reconcile_interval` closes after its baseline; a missing interval alone never means read-once ([Integration and worker contracts](../../../../../docs/backend/guidelines.md#integration-and-worker-contracts) "Read-once requires a snapshot source and closure").
 - Advisory locks are process-local on SQLite: `claim_account` is serialized by the lock, not the database (`claim_account` in `src/angee/integrate/impl.py`, `task_locks_are_cross_process` in `src/angee/base/locks.py`).
 - A child capability's second intent axis (live desire) is unset by generic lifecycle verbs; the reconciler selects on lifecycle and closes it ([Integrate pitfalls](references/pitfalls.md) "An Integration child's second intent axis").

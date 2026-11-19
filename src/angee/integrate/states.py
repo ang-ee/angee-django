@@ -119,6 +119,21 @@ class ConflictKeep(models.TextChoices):
 
 
 @dataclass(frozen=True, slots=True)
+class MappingContribution:
+    """One declarer's part of a composed stream mapping (``StreamDefinition.mapping_contributions``).
+
+    Parts apply in ``sequence`` order, ties broken by ``key``. Integrate orders
+    them and the stream retains only their keys and versions in that order, so
+    the order never depends on how a declarer collected its parts, and
+    renumbering that keeps the order changes nothing.
+    """
+
+    key: str
+    version: int
+    sequence: int = field(kw_only=True)
+
+
+@dataclass(frozen=True, slots=True)
 class StreamDefinition:
     """The declaration-owned facts for one independently ordered partition."""
 
@@ -138,15 +153,16 @@ class StreamDefinition:
 
     A lower version is a rollback that keeps progress, on a stream that never
     composed its mapping. A stream whose mapping is composed from several
-    declarers declares ``mapping_contributions`` instead.
+    declarers declares ``mapping_contributions`` instead and leaves this at its
+    default; any other version beside them is refused.
     """
-    mapping_contributions: tuple[tuple[str, int], ...] = ()
-    """A mapping composed from several declarers, as ``(key, version)`` pairs in the order they apply.
+    mapping_contributions: tuple[MappingContribution, ...] = field(default=(), metadata={"stream_field": False})
+    """A mapping composed from several declarers, one :class:`MappingContribution` each.
 
-    The declarer orders them by its explicit sequence, then key; the order is part
-    of the mapping's identity. The stream then owns the version
-    (``SyncStreamManager.current``): any change of the list replays every record
-    once, under a version above every one the stream used before.
+    The stream then owns the version (``SyncStreamManager.current``): any change
+    of the ordered keys and versions replays every record once, under a version
+    none of its records was applied with. The stream retains the ordered keys and
+    versions, not this declaration.
     """
     holds_containers: bool = False
     """Whether this stream's records are containers of other partitions; a changed value updates the stream."""
@@ -159,14 +175,24 @@ class StreamDefinition:
 
     @classmethod
     def from_stream(cls, stream: SyncStream) -> StreamDefinition:
-        """Read declaration facts from a persisted generation without another field inventory."""
+        """Read declaration facts from a persisted generation without another field inventory.
 
-        return cls(**{item.name: _independent(getattr(stream, item.name)) for item in fields(cls)})
+        A field marked ``stream_field=False`` is no stream column of the same
+        shape: the stream manager writes what the stream keeps of it.
+        """
+
+        return cls(**{name: _independent(getattr(stream, name)) for name in _stream_facts(cls)})
 
     def stream_fields(self) -> dict[str, Any]:
         """Return independent values suitable for creating a stream generation."""
 
-        return {item.name: _independent(getattr(self, item.name)) for item in fields(self)}
+        return {name: _independent(getattr(self, name)) for name in _stream_facts(self)}
+
+
+def _stream_facts(definition: StreamDefinition | type[StreamDefinition]) -> tuple[str, ...]:
+    """The declaration fields a stream generation stores under the same name and shape."""
+
+    return tuple(item.name for item in fields(definition) if item.metadata.get("stream_field", True))
 
 
 def _independent(value: Any) -> Any:
