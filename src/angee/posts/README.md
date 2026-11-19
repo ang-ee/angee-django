@@ -134,7 +134,9 @@ Feed HTTP calls compose
 It accepts GET/POST and forwards native `HttpClient.request` keyword arguments.
 The result must be a JSON object. Transport errors, oversized responses, 5xx, a
 success whose body is not a JSON object, and provider transient markers raise
-`DeliveryUncertain` for POST and transient `IntegrationError` for GET. A 4xx whose
+`DeliveryUncertain` for POST. For GET, an oversized answer and a success whose
+body is not a JSON object are integrate's permanent `HttpRefusal`, because the
+same read brings the same answer; the rest raise transient `IntegrationError`. A 4xx whose
 body is not a JSON object answered the request: both predicates run with empty
 data, and it is never uncertain. `RequestNotSentError` (connect, DNS or TLS
 failure before sending) propagates unchanged. The pinned transport's pre-connect

@@ -352,16 +352,22 @@ def test_a_refused_listing_fails_the_page_in_notions_own_words(bridge, api, answ
     assert (refused.value.transient, str(refused.value)) == (transient, message)
 
 
-def test_an_oversized_page_is_that_pages_refusal_and_its_neighbours_continue(bridge, api):
-    """One record's oversized answer is quarantined as its own refusal; the stream still completes."""
+@pytest.mark.parametrize(("answer", "code"), [
+    pytest.param(httpx2.Response(200, content=b" " * (JSON_MAX_BYTES + 1)), "notion_page_oversized", id="oversized"),
+    pytest.param(httpx2.Response(200, text="not json"), "notion_page_unreadable", id="unreadable"),
+])
+def test_a_page_whose_content_cannot_be_read_is_that_pages_refusal_and_its_neighbours_continue(
+    bridge, api, answer, code,
+):
+    """One record's oversized or unreadable answer is quarantined as its own refusal; the stream still completes."""
     key = api.add(node(1, "Huge"), "Body")
     api.add(node(2, "Healthy"), "Arrives")
-    api.refusals[f"pages/{key}/markdown"] = httpx2.Response(200, content=b" " * (JSON_MAX_BYTES + 1))
+    api.refusals[f"pages/{key}/markdown"] = answer
     sync_bridge(bridge)
     assert Page.objects.filter(vault=bridge.vault, title="Healthy").exists()
     stream = bridge.sync_streams.get()
     assert stream.cursor == {}
-    assert stream.links.get(external_key=key).failures(open_only=True)[0].code == "notion_page_oversized"
+    assert stream.links.get(external_key=key).failures(open_only=True)[0].code == code
 
 
 @pytest.mark.parametrize("status", [403, 404])
