@@ -36,7 +36,7 @@ from angee.parties_integrate_carddav.backend import (
 )
 from angee.resources.testing.models import Resource
 from tests import test_parties_graphql as parties_graphql
-from tests.conftest import Credential, Integration, Vendor, addon_schema
+from tests.conftest import Credential, Integration, Vendor, addon_schema, make_integration
 
 pytestmark = pytest.mark.django_db(transaction=True)
 
@@ -267,6 +267,25 @@ def test_connecting_refuses_a_setting_its_backend_does_not_know_before_the_conne
 
     with system_context(reason="test.parties.carddav.typo.verify"):
         assert not Credential._base_manager.exists() and not Directory._base_manager.exists()
+
+
+def test_a_directory_that_writes_back_refuses_to_adopt_existing_people(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Only a pull-only directory may bind a contact to an existing person: CardDAV refuses the option on every edit."""
+
+    _load_vendor()
+    monkeypatch.setattr(CardDavDirectoryBackend, "test_connection", lambda backend: pytest.fail("tested"))
+    admin = parties_graphql._platform_admin("carddav-adopt-admin")
+    adopting = {"server_url": "https://dav.example.com/", "adopt_existing_people": True}
+
+    with pytest.raises(ValidationError, match="writes back"):
+        _connect(admin, config=adopting)
+
+    with system_context(reason="test.parties.carddav.adopt.verify"):
+        assert not Credential._base_manager.exists() and not Directory._base_manager.exists()
+        directory = make_integration("carddav-adopting", model=Directory, backend_class="carddav", owner=admin)
+        directory.config = adopting
+        with pytest.raises(ValidationError, match="writes back"):
+            directory.save(update_fields=["config"])
 
 
 def test_connecting_with_an_account_address_someone_else_holds_connects_and_leaves_a_claim(

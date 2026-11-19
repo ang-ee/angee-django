@@ -54,6 +54,7 @@ from angee.parties.backends import (
     CONTACTS,
     SET_FIELDS,
     DirectoryBackend,
+    DirectoryConfig,
     ParsedAddress,
     ParsedAddressbook,
     ParsedContact,
@@ -134,14 +135,15 @@ class CardDavStreams(BaseModel):
     )
 
 
-class CardDavConfig(BaseModel):
-    """A CardDAV directory's non-secret configuration.
+class CardDavConfig(DirectoryConfig):
+    """A CardDAV directory's non-secret configuration, beside the directory's own (:class:`DirectoryConfig`).
 
     Validated strictly where a person edits it: ``Directory.objects.connect``
     refuses a key the model does not know. Every save validates the keys it
     knows and keeps the rest, at every level, so a directory carrying a key
     another version knows saves unchanged; a known key with an invalid value is
-    refused. A reader ignores what it does not know.
+    refused, and so is turning adoption on, since CardDAV writes back. A reader
+    ignores what it does not know.
     """
 
     model_config = ConfigDict(extra="allow")

@@ -2226,16 +2226,18 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
             raise ValidationError(f"A contact target must be a Party of kind {model.__name__}.")
         return child
 
-    def holding_links(self, link: RecordLink, replaces: Sequence[RecordLink] = ()) -> set[Any]:
+    def holding_links(self, link: RecordLink, replaces: Sequence[RecordLink] = (), *, readmitted: bool) -> set[Any]:
         """Return the keys of ``link`` and of the links it ``replaces`` whose party stays or passes to it unadmitted.
 
         Such a link is bound and observing (neither tombstoned nor withdrawn)
         and, for a replaced one, of ``link``'s stream: ``link`` keeps its own
-        party, and a merge at the source hands the replaced record's over. Any
-        other link's party is a candidate admitted again
-        (:meth:`adoption_blocker`), a pull-only link returning from a tombstone
-        included. A stream that writes back adopts nobody, so there ``link``
-        keeps its bound party through a tombstone.
+        party, and a merge at the source hands the replaced record's over. Where
+        ``link`` returning from a tombstone is ``readmitted`` (a contact of a
+        directory that adopts, ``DirectoryBackend.adopts_existing_people``), its
+        party is a candidate admitted again (:meth:`adoption_blocker`), as is any
+        other link's; elsewhere (a directory that adopts nobody, a stream that
+        writes back, an organization) ``link`` keeps its bound party through a
+        tombstone.
         """
 
         rows = (
@@ -2248,7 +2250,7 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
             )
         )
         holding = set(rows.observing().values_list("pk", flat=True))
-        if link.target_object_id and link.stream.direction != StreamDirection.PULL:
+        if link.target_object_id and not readmitted:
             holding.add(link.pk)
         return holding
 
@@ -2348,7 +2350,8 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
         the page's (:meth:`lookup_emails`) and keeps each verdict, so the target
         decision and the ingest that binds the person admit them once; without
         one the contact's addresses are looked up here.
-        :meth:`ingest_contact` calls it for every person new to its link.
+        :meth:`ingest_contact` calls it for every person new to its link where
+        the link's directory adopts (``DirectoryBackend.adopts_existing_people``).
         """
 
         stream = link.stream
@@ -2385,7 +2388,7 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
         target: M | None,
         *,
         replaces: Sequence[RecordLink] = (),
-        readmitted: bool = True,
+        readmitted: bool,
     ) -> bool:
         """Return whether ``target``, the ``model`` row the caller decided ``link`` lands on, needs admission.
 
@@ -2394,18 +2397,17 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
         (:meth:`holding_links`) keeps it: an ingest never rebinds it. Its own row,
         or one a replaced link hands over, needs no admission; ``None`` mints
         one. Any other row is new to the link, and its verb admits it or
-        refuses. Where a link returning from a tombstone is ``readmitted`` (a
-        pull-only contact's person), the row it named is new to it too; where
-        no rule admits a row (an organization), the link keeps its own through a
-        tombstone. A link whose row is trashed names nobody (:meth:`contact_people`).
+        refuses. Where a link returning from a tombstone is ``readmitted`` (the
+        person of a contact whose directory adopts), the row it named is new to
+        it too; where no rule admits a row (a directory that adopts nobody, an
+        organization), the link keeps its own through a tombstone. A link whose
+        row is trashed names nobody (:meth:`contact_people`).
         """
 
         if target is not None and not isinstance(target, model):
             raise ValidationError(f"A contact target must be a Party of kind {model.__name__}.")
         named = self._live_parties([link, *replaces], model)
-        holding = self.holding_links(link, replaces)
-        if not readmitted and link.target_object_id:
-            holding.add(link.pk)
+        holding = self.holding_links(link, replaces, readmitted=readmitted)
         kept = named[link.pk] if link.pk in holding else None
         if kept is not None and (target is None or kept.pk != target.pk):
             raise ValidationError("A bound link keeps its target; ingestion never rebinds it.")
@@ -2824,9 +2826,11 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
         so its container (the address book, whose folder belongs to the same
         directory) and integration resolve once per page. ``target`` is the person
         the caller decided the contact is, ``None`` to mint one; a link holding a
-        live person keeps it, and a person new to the link binds only as an
-        adoption would (:meth:`_target_is_new`, :meth:`adoption_blocker`), under
-        the contact's locks, taken first. ``through`` is the handle an adoption
+        live person keeps it (:meth:`_target_is_new`). A person new to the link
+        is refused unless its directory adopts
+        (``DirectoryBackend.adopts_existing_people``, off by default), and then
+        binds only as adoption admits it (:meth:`adoption_blocker`), under the
+        contact's locks, taken first. ``through`` is the handle an adoption
         found ``target`` by: the identity statement cites it as evidence,
         restated on every later record, and the contact's spelling of its address
         lands on it. On a pull-only stream ``lookup`` (the page's,
@@ -2863,11 +2867,19 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
         people = apps.get_model("parties", "Person").objects
         source = stream.integration
         pull = stream.direction == StreamDirection.PULL
+        # The folder belongs to the stream's own directory, checked above.
+        adopts = pull and cast("Directory", folder.directory).backend.adopts_existing_people()
         with transaction.atomic():
             self.lock_contact(target, parsed=parsed)
-            if pull:
+            if adopts:
                 lookup = self.lookup_emails((value for value, _label, _preferred in parsed.emails), lookup=lookup)
-            if self._target_is_new(link, people.model, target, replaces=replaces) and target is not None:
+            new = self._target_is_new(link, people.model, target, replaces=replaces, readmitted=adopts)
+            if new and target is not None:
+                if not adopts:
+                    raise ValidationError(
+                        "This directory binds no existing person: a contact lands on its own person, on the person "
+                        "of a record it replaced, or on a new one."
+                    )
                 blocker = self.adoption_blocker(target, link=link, parsed=parsed, lookup=lookup, replaces=replaces)
                 if blocker is not None:
                     raise ValidationError(blocker)

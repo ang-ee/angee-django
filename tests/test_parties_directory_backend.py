@@ -209,6 +209,16 @@ def two_way(db: None) -> Iterator[Pull]:
     yield from _connect(TwoWayDirectoryBackend)
 
 
+@pytest.fixture
+def adoption(pull: Pull) -> Pull:
+    """The scripted directory with its option to bind a contact to an existing person (adoption) turned on."""
+
+    with system_context(reason="tests.directory.adoption"):
+        pull.directory.config = {**pull.directory.config, "adopt_existing_people": True}
+        pull.directory.save(update_fields=["config"])
+    return pull
+
+
 def _asserted(party_id: Any, link: Any) -> Any:
     """The statements ``link`` currently asserts on the party."""
 
@@ -531,7 +541,7 @@ def test_a_record_rebinding_off_a_trashed_person_withdraws_what_its_link_stated_
 
 
 def test_a_record_minting_again_after_its_person_is_trashed_withdraws_the_pair_the_old_one_had(pull: Pull) -> None:
-    """The limit still refuses the existing person: the new mint is proposed as them and the trashed one is not."""
+    """The contact never lands on the existing person: the new mint is proposed as them and the trashed one is not."""
 
     person = _refused_account_holder(pull)
     pull.sync()
@@ -548,6 +558,7 @@ def test_a_record_minting_again_after_its_person_is_trashed_withdraws_the_pair_t
     )
 
 
+@pytest.mark.usefixtures("adoption")
 def test_a_contact_adopts_the_one_person_a_claim_proposes_its_address_for(pull: Pull) -> None:
     """Nobody holds the address; the one claimant, whom the owner owns, is adopted and then holds it."""
 
@@ -564,6 +575,7 @@ def test_a_contact_adopts_the_one_person_a_claim_proposes_its_address_for(pull: 
     assert _proposals() == []
 
 
+@pytest.mark.usefixtures("adoption")
 def test_a_contact_adopts_a_later_candidate_when_the_first_is_refused_and_only_claims_the_firsts_address(
     pull: Pull,
 ) -> None:
@@ -662,6 +674,42 @@ def _identity_evidence(party_id: Any) -> list[Any]:
     return stated.get().evidence
 
 
+def test_by_default_a_contact_whose_address_the_owners_person_holds_lands_on_a_new_person(
+    pull: Pull, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Each source creates its own people, and the merge joins them: adoption is off unless the directory turns it on.
+
+    The directory's owner owns the existing person, the case adoption binds when it
+    is on. The contact mints its own person, which only claims the address, and the
+    two are proposed as one person, citing the contact's link and the handle.
+    Adoption's admission is never reached, and no caller binds the existing person
+    to a contact of the directory either.
+    """
+
+    def unreachable(*args: Any, **kwargs: Any) -> Any:
+        pytest.fail("Adoption's admission was reached while the directory does not adopt.")
+
+    monkeypatch.setattr(Party.objects, "adoption_blocker", unreachable)
+    person, handle = _existing(pull.directory.owner)
+
+    assert pull.sync().count == 2
+
+    ada = pull.link("ada")
+    assert ada.target_object_id not in (None, str(person.pk))
+    assert not Party.statements.filter(subject_id=person.pk, asserted_by=str(ada.asserted_by)).exists()
+    assert _held_by("ada@example.com") == person.pk
+    assert _claim_confidences(ada.target_object_id, "ada@example.com") == [Party.CLAIM_CONFIDENCE]
+    assert _proposals() == [(frozenset({ada.target_object_id, str(person.pk)}), "asserted", _refs(ada, handle))]
+    link = RecordLink.objects.observe(pull.stream, "downstream")
+    with pytest.raises(ValidationError, match="binds no existing person"):
+        Party.objects.ingest_contact(
+            _ADA, stream=pull.stream, link=link, created_by_id=pull.directory.owner_id, target=person
+        )
+    link.refresh_from_db()
+    assert link.target_object_id is None
+
+
+@pytest.mark.usefixtures("adoption")
 def test_a_pull_only_contact_adopts_the_person_its_email_names_when_the_owner_owns_them(pull: Pull) -> None:
     """The record attaches to the existing person, keeps one handle row, and cites the handle as its evidence.
 
@@ -690,6 +738,7 @@ def test_a_pull_only_contact_adopts_the_person_its_email_names_when_the_owner_ow
     assert Person.objects.get(pk=person.pk).notes == "Edited at the source."
 
 
+@pytest.mark.usefixtures("adoption")
 def test_an_adoption_through_another_spelling_lands_on_the_handle_that_found_the_person(pull: Pull) -> None:
     """The contact spells the address differently: its claim lands on the existing row, never a second one."""
 
@@ -711,10 +760,11 @@ def test_an_adoption_through_another_spelling_lands_on_the_handle_that_found_the
 def test_a_page_locks_every_spelling_of_its_contacts_addresses_and_the_people_they_name_first(
     pull: Pull, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Before any record decides, the page locks the candidate's handle by normalized value, and the candidate.
+    """Before any record lands, the page locks every spelling of the address and the person it names.
 
-    Two address books of one directory syncing at once then serialize on the
-    candidate, and each record's admission is checked again under the lock.
+    A record proposes that person (with adoption on, it may adopt them), so two
+    address books of one directory syncing at once serialize on them, and each
+    record reads them again under the lock.
     """
 
     person, handle = _existing(pull.directory.owner, email="Ada@Example.COM")
@@ -733,6 +783,7 @@ def test_a_page_locks_every_spelling_of_its_contacts_addresses_and_the_people_th
     assert locked and person.pk in locked[0][0] and handle.pk in locked[0][1]
 
 
+@pytest.mark.usefixtures("adoption")
 def test_contact_ingest_binds_an_existing_person_new_to_its_link_only_as_an_adoption_would(pull: Pull) -> None:
     """The binding owner admits the target, so neither a vendor's ``apply_record`` nor a caller can skip the limits."""
 
@@ -749,6 +800,7 @@ def test_contact_ingest_binds_an_existing_person_new_to_its_link_only_as_an_adop
     assert landed.pk == adoptable.pk
 
 
+@pytest.mark.usefixtures("adoption")
 def test_an_address_an_account_signs_in_with_adopts_nobody(pull: Pull) -> None:
     """Its holder is no account's own person and the owner owns them, yet the address is an account's: no adoption."""
 
@@ -762,6 +814,7 @@ def test_an_address_an_account_signs_in_with_adopts_nobody(pull: Pull) -> None:
     assert not Party.statements.filter(subject_id=person.pk, asserted_by=str(ada.asserted_by)).exists()
 
 
+@pytest.mark.usefixtures("adoption")
 def test_an_adopted_person_keeps_their_own_edits_and_private_fields(pull: Pull) -> None:
     owner = pull.directory.owner
     person, _handle = _existing(owner, first_met_note="Met at a lecture.")
@@ -788,6 +841,7 @@ def test_an_adopted_person_keeps_their_own_edits_and_private_fields(pull: Pull) 
         "empty value over a column no statement holds; no provenance option keeps it for an adopted person alone."
     ),
 )
+@pytest.mark.usefixtures("adoption")
 def test_an_adopted_person_keeps_the_values_no_statement_holds_when_the_contact_has_none(pull: Pull) -> None:
     """Notes, an avatar and a birthday written without a statement survive a contact that carries none of them."""
 
@@ -874,6 +928,7 @@ def _refused_other_stream(pull: Pull) -> Any:
         _refused_other_stream,
     ],
 )
+@pytest.mark.usefixtures("adoption")
 def test_a_contact_mints_its_own_person_when_an_adoption_limit_refuses_the_one_its_email_names(
     pull: Pull, refusal: Any
 ) -> None:
@@ -906,6 +961,7 @@ def test_a_contact_mints_its_own_person_when_an_adoption_limit_refuses_the_one_i
     assert _proposals() == proposed
 
 
+@pytest.mark.usefixtures("adoption")
 def test_merging_a_proposed_pair_withdraws_it_and_the_same_as_reconciler_leaves_it_standing(pull: Pull) -> None:
     """The minted and the existing person claim one handle row, which supports no pair of the ``same_as`` rule.
 
@@ -985,6 +1041,7 @@ def test_a_merge_of_a_proposed_pair_never_breaks_a_pull_only_directorys_limits(
     assert [status for _pair, status, _evidence in _proposals()] == ["asserted"]
 
 
+@pytest.mark.usefixtures("adoption")
 def test_adopting_a_person_once_refused_withdraws_the_proposal_its_refusal_made(pull: Pull) -> None:
     """The person is no account's any more and the minted one is trashed: the contact's next record adopts them."""
 
@@ -1016,6 +1073,7 @@ def test_a_two_way_directory_never_adopts(two_way: Pull) -> None:
     assert _claim_confidences(ada.target_object_id, "ada@example.com") == [1.0]
 
 
+@pytest.mark.usefixtures("adoption")
 def test_two_contacts_that_would_adopt_one_person_adopt_it_once(pull: Pull) -> None:
     """The second contact of one directory finds the person already linked, so it mints its own, proposed as them.
 
@@ -1059,7 +1117,7 @@ def test_two_contacts_with_one_address_nobody_held_leave_it_with_the_first(pull:
 
 
 def test_a_contact_refused_the_one_person_claimed_for_its_address_keeps_only_claiming_it(pull: Pull) -> None:
-    """Nobody holds the address; a refused claimant leaves the contact's own claim a claim, record after record.
+    """Nobody holds the address; another person's claim leaves the contact's own claim a claim, record after record.
 
     The contact's claim makes two claimants, which the lookup answers with
     nobody; that never turns the claim into the contact's own address.
@@ -1091,6 +1149,7 @@ def _tombstone(pull: Pull, key: str) -> None:
     assert pull.link(key).status == LinkStatus.TOMBSTONE
 
 
+@pytest.mark.usefixtures("adoption")
 def test_a_replaced_link_of_another_stream_hands_no_person_over(pull: Pull) -> None:
     """A caller may name any link as replaced; only one of the contact's own stream hands its person over."""
 
@@ -1112,6 +1171,7 @@ def test_a_replaced_link_of_another_stream_hands_no_person_over(pull: Pull) -> N
     assert link.target_object_id is None
 
 
+@pytest.mark.usefixtures("adoption")
 def test_a_tombstoned_replaced_link_hands_over_only_a_person_admitted_again(pull: Pull) -> None:
     """The merged-away record's person became an account's own while its link was tombstoned: the survivor mints."""
 
@@ -1127,6 +1187,7 @@ def test_a_tombstoned_replaced_link_hands_over_only_a_person_admitted_again(pull
     assert pull.link("merged").target_object_id not in (None, first)
 
 
+@pytest.mark.usefixtures("adoption")
 def test_a_tombstoned_contact_still_names_its_person_for_the_directorys_other_contacts(pull: Pull) -> None:
     """While its record is gone at the source, no other contact of the directory adopts the person its link names."""
 
@@ -1142,6 +1203,7 @@ def test_a_tombstoned_contact_still_names_its_person_for_the_directorys_other_co
     assert _held_by("ada@example.com") == person.pk
 
 
+@pytest.mark.usefixtures("adoption")
 def test_a_contact_returning_from_a_tombstone_is_admitted_again(pull: Pull) -> None:
     """Another contact of the directory names the person now: the returning record mints its own and proposes them."""
 
@@ -1162,6 +1224,7 @@ def test_a_contact_returning_from_a_tombstone_is_admitted_again(pull: Pull) -> N
     assert frozenset({ada.target_object_id, str(person.pk)}) in {pair for pair, _status, _evidence in _proposals()}
 
 
+@pytest.mark.usefixtures("adoption")
 def test_an_address_an_account_signs_in_with_adopts_nobody_without_the_handle_that_found_them(pull: Pull) -> None:
     """A caller binding the person directly passes no handle; the contact's own addresses still refuse it."""
 
@@ -1175,6 +1238,7 @@ def test_an_address_an_account_signs_in_with_adopts_nobody_without_the_handle_th
         )
 
 
+@pytest.mark.usefixtures("adoption")
 def test_an_address_an_account_signs_in_with_in_another_spelling_adopts_nobody(pull: Pull) -> None:
     """The handle that found the person spells the account's address the provider's other way; it is the same one."""
 
@@ -1191,6 +1255,7 @@ def test_an_address_an_account_signs_in_with_in_another_spelling_adopts_nobody(p
     assert _claim_confidences(ada.target_object_id, "adalovelace@gmail.com") == [0.4]
 
 
+@pytest.mark.usefixtures("adoption")
 def test_an_address_an_account_signs_in_with_in_a_spelling_no_handle_holds_adopts_nobody(pull: Pull) -> None:
     """The account spells it the provider's other way, which neither the contact nor any handle does: still the same."""
 
@@ -1246,6 +1311,7 @@ def _between_lookup_and_lock(monkeypatch: pytest.MonkeyPatch, change: Any) -> No
     monkeypatch.setattr(Party.objects, "lock_identity_rows", racing)
 
 
+@pytest.mark.usefixtures("adoption")
 def test_a_person_trashed_before_the_page_locks_is_not_adopted(pull: Pull, monkeypatch: pytest.MonkeyPatch) -> None:
     person, _handle = _existing(pull.directory.owner)
     _between_lookup_and_lock(
@@ -1258,6 +1324,7 @@ def test_a_person_trashed_before_the_page_locks_is_not_adopted(pull: Pull, monke
     assert pull.link("ada").target_object_id not in (None, str(person.pk))
 
 
+@pytest.mark.usefixtures("adoption")
 def test_a_person_merged_away_before_the_page_locks_is_not_adopted(pull: Pull, monkeypatch: pytest.MonkeyPatch) -> None:
     """The survivor holds the address once the page reads under its locks, and is the one adopted."""
 
@@ -1277,7 +1344,7 @@ def test_a_person_merged_away_before_the_page_locks_is_not_adopted(pull: Pull, m
 
 
 def test_a_page_looks_up_its_addresses_once(pull: Pull, monkeypatch: pytest.MonkeyPatch) -> None:
-    """The contested-address rule and the admission read the page's one lookup instead of each record's own."""
+    """The contested-address rule (and, with adoption on, its admission) reads the page's one lookup."""
 
     _existing(pull.directory.owner)
     lookups: list[list[str]] = []
@@ -1380,6 +1447,7 @@ def test_a_confirmation_of_a_pages_address_waits_for_the_page(pull: Pull) -> Non
 
 
 @pytest.mark.skipif(connection.vendor != "postgresql", reason="Real PostgreSQL row locks are required.")
+@pytest.mark.usefixtures("adoption")
 def test_an_account_adopting_a_pages_candidate_waits_for_the_page(pull: Pull) -> None:
     """``for_user(adopt=)`` locks the person row with its party row, which the page holds, so no verdict goes stale."""
 
@@ -1573,6 +1641,7 @@ def test_a_holder_trashed_while_the_source_dropped_the_address_keeps_it_when_the
     assert _claim_confidences(minted, "ada@example.com") == [0.4]
 
 
+@pytest.mark.usefixtures("adoption")
 def test_a_contact_adopts_no_claimant_of_an_address_a_trashed_holder_keeps(pull: Pull) -> None:
     """Another source only claims the address while its holder is trashed: the claim names nobody to adopt."""
 
@@ -1755,6 +1824,7 @@ def _granted_editor(pull: Pull, *, group: bool) -> Any:
 
 
 @pytest.mark.parametrize("group", [False, True])
+@pytest.mark.usefixtures("adoption")
 def test_an_editor_of_the_persons_party_adopts_them(pull: Pull, group: bool) -> None:
     """Editors are granted on the party; ``adopt`` follows them there, a user's grant and a group's alike."""
 
@@ -1766,6 +1836,7 @@ def test_an_editor_of_the_persons_party_adopts_them(pull: Pull, group: bool) -> 
 
 
 @pytest.mark.parametrize("to_owner", [True, False])
+@pytest.mark.usefixtures("adoption")
 def test_adoption_follows_an_ownership_transfer(pull: Pull, to_owner: bool) -> None:
     """The person's owner adopts them: a transfer to the directory's owner admits them, one away refuses."""
 
@@ -1797,6 +1868,7 @@ def test_a_record_leaving_a_trashed_person_withdraws_what_it_stated_there_even_b
         assert not stated.exists(), model
 
 
+@pytest.mark.usefixtures("adoption")
 def test_a_returning_contact_cites_no_handle_a_withdrawn_adoption_found_them_by(pull: Pull) -> None:
     """Its record comes back with another address: the identity it states again cites only current evidence."""
 

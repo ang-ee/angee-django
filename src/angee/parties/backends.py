@@ -21,7 +21,8 @@ from datetime import date, timedelta
 from typing import TYPE_CHECKING, Any, ClassVar, cast
 
 from django.apps import apps
-from django.core.exceptions import ImproperlyConfigured
+from django.core.exceptions import ImproperlyConfigured, ValidationError
+from pydantic import BaseModel, ConfigDict, Field
 
 from angee.base.implementations import ImplBase, resolve_all_impl_classes
 from angee.base.serialization import canonical_json_sha256
@@ -330,6 +331,27 @@ class DirectoryMapping(ImplBase):
         raise NotImplementedError("DirectoryMapping subclasses must implement apply_record().")
 
 
+class DirectoryConfig(BaseModel):
+    """A directory's own configuration, which a backend's config model extends with what its source needs.
+
+    Validated by ``DirectoryBackend.parse_config`` on every save and strictly in
+    ``Directory.objects.connect``; it knows no other setting.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    adopt_existing_people: bool = Field(
+        default=False,
+        exclude_if=lambda adopt: not adopt,
+        title="Adopt existing people",
+        description=(
+            "Bind a contact to the existing person one of its email addresses names, within adoption's limits. "
+            "Off (the default), each contact lands on a person of its own, and a merge joins duplicates. "
+            "Only a pull-only directory may turn it on."
+        ),
+    )
+
+
 class DirectoryBackend(BridgeImpl, HttpClientMixin):
     """An address-book stream, and one contacts replica per address book mapped through Party.ingest_contact.
 
@@ -344,7 +366,8 @@ class DirectoryBackend(BridgeImpl, HttpClientMixin):
     :meth:`read_keys`. A pull-only backend supports consumer mappings
     (:class:`DirectoryMapping`) by asking its source for :meth:`mapped_fields`
     as well and passing their values to :meth:`observe` as ``row``, for every
-    payload it makes; the base does the rest.
+    payload it makes; the base does the rest. A backend that declares its own
+    config model extends :class:`DirectoryConfig`.
     """
 
     registry_setting = "ANGEE_DIRECTORY_BACKEND_CLASSES"
@@ -352,6 +375,7 @@ class DirectoryBackend(BridgeImpl, HttpClientMixin):
     category = "directory"
     label = "Directory"
     icon = "address-book"
+    config_model = DirectoryConfig
 
     direction: ClassVar[StreamDirection] = StreamDirection.PULL
     """Which way this backend's contacts sync.
@@ -367,6 +391,38 @@ class DirectoryBackend(BridgeImpl, HttpClientMixin):
         super().__init__(integration)
         self._page_lookup: EmailLookup | None = None
         """The page in application's lookup of its addresses (:meth:`prepare_page`), read under its locks."""
+
+    @classmethod
+    def parse_config(cls, value: Any) -> BaseModel | None:
+        """Validate a directory's configuration (``ImplBase.parse_config``); one that writes back adopts nobody.
+
+        Every save of a directory and ``Directory.objects.connect`` validate
+        through here, so turning on ``adopt_existing_people``
+        (:class:`DirectoryConfig`) for a backend that writes back is refused.
+        """
+
+        config = super().parse_config(value)
+        adopting = isinstance(config, DirectoryConfig) and config.adopt_existing_people
+        if adopting and cls.direction != StreamDirection.PULL:
+            raise ValidationError({"config": "A directory that writes back binds no contact to an existing person."})
+        return config
+
+    def adopts_existing_people(self) -> bool:
+        """Whether this directory binds a contact to an existing person (adoption); off unless configured so.
+
+        Its ``adopt_existing_people`` (:class:`DirectoryConfig`), which only a
+        pull-only backend accepts. Off, a contact lands on the person its own
+        link names, on the person of a record it replaced in its stream, or on a
+        new person, and the merge joins duplicates. :meth:`_contact_target` is the
+        one place that asks it before entering adoption; the ingest verb asks it
+        of the contact's directory only to refuse a person new to the link
+        (``PartyManager.ingest_contact``).
+        """
+
+        if self.direction != StreamDirection.PULL:
+            return False
+        config = self.parse_config(self.bridge.config)
+        return isinstance(config, DirectoryConfig) and config.adopt_existing_people
 
     def test_connection(self) -> str:
         """Prove this backend reaches its source; return the operator message.
@@ -717,14 +773,16 @@ class DirectoryBackend(BridgeImpl, HttpClientMixin):
         their rows held, so the page never locks a handle after a person, the
         reverse of mail ingestion's and a merge's order. Only then are the
         page's addresses looked up once (``PartyManager.lookup_emails``: who each
-        names, and which a person account signs in with), kept for
-        :meth:`_contact_target` and the ingest. Two address books of one
-        directory syncing at once therefore serialize on a person both could
-        adopt, and every adoption limit reads rows loaded under these locks; an
-        account adopting a person (``PartyManager.for_user(adopt=...)``) locks
-        the person's party row too, so it waits for the page. A two-way stream
-        adopts nobody and an address-book page names no person: they lock
-        nothing here.
+        names, and which a person account signs in with), kept for the ingest
+        and, when the directory adopts, :meth:`_contact_target`. A record
+        proposes each person its addresses name as its own person's same person,
+        and a proposal locks both people, handles first, so the lock set is the
+        same whether or not the directory adopts: two address books of one
+        directory syncing at once serialize on such a person, and every adoption
+        limit reads rows loaded under these locks; an account adopting a person
+        (``PartyManager.for_user(adopt=...)``) locks the person's party row too,
+        so it waits for the page. A two-way stream adopts nobody and an
+        address-book page names no person: they lock nothing here.
         """
 
         self._page_lookup = None
@@ -759,16 +817,19 @@ class DirectoryBackend(BridgeImpl, HttpClientMixin):
     ) -> tuple[Any | None, Any | None, list[tuple[Any, Any | None]]]:
         """Return a contact's target (``None`` mints one), the handle an adoption found it by, and whom it passed over.
 
-        The one place a contact's target is decided, in order: the person its
-        own link keeps; then, for a merge at the source, the person of the first
-        link it ``replaced``, in the source's order, that hands one over
-        (``PartyManager.holding_links``: bound, observing, of this stream). Then,
-        on a pull-only stream, the first candidate parties admit
-        (``PartyManager.adoption_blocker``): the person its own link named when
-        it returns from a tombstone, each person a replaced link that hands
-        nothing over names, then an existing person one of its emails names, the
-        preferred email first (the page's lookup, :meth:`prepare_page`). A
-        trashed person is nobody's target (``PartyManager.contact_people``), and
+        The one place a contact's target is decided, and the one place that
+        asks whether its directory adopts (:meth:`adopts_existing_people`), in
+        order: the person its own link keeps; then, for a merge at the source,
+        the person of the first link it ``replaced``, in the source's order, that
+        hands one over (``PartyManager.holding_links``: bound, of this stream,
+        and observing, except that where the directory adopts nobody its own
+        link keeps its person through a tombstone). Otherwise the contact mints
+        its own person, unless the directory adopts: then the first candidate
+        parties admit (``PartyManager.adoption_blocker``): the person its own
+        link named when it returns from a tombstone, each person a replaced link
+        that hands nothing over names, then an existing person one of its emails
+        names, the preferred email first (the page's lookup, :meth:`prepare_page`).
+        A trashed person is nobody's target (``PartyManager.contact_people``), and
         a two-way stream never adopts. The people passed over are every other
         person the contact's links name, each with the replaced link naming it
         (``None`` for its own link); :meth:`apply_record` proposes each as the
@@ -778,12 +839,13 @@ class DirectoryBackend(BridgeImpl, HttpClientMixin):
         """
 
         parties = apps.get_model("parties", "Party").objects
+        adopts = self.adopts_existing_people()
         people = parties.contact_people([link, *replaced])
-        holding = parties.holding_links(link, replaced)
+        holding = parties.holding_links(link, replaced, readmitted=adopts)
         named = [(person, row) for row in (link, *replaced) if (person := people[row.pk]) is not None]
         target = next((person for person, row in named if row.pk in holding), None)
         through = None
-        if target is None and stream.direction == StreamDirection.PULL:
+        if target is None and adopts:
             lookup = self._page_lookup = parties.lookup_emails(_preferred(parsed), lookup=self._page_lookup)
             candidates: list[tuple[Any, Any | None]] = [(person, None) for person, _row in named]
             candidates += [
@@ -813,8 +875,9 @@ class DirectoryBackend(BridgeImpl, HttpClientMixin):
         the people its own link and the links it replaces name, and its handles,
         are locked first (already held by the page's locks, :meth:`prepare_page`),
         then :meth:`_contact_target` decides its person once, the ingest binds a
-        person new to the link only as admitted (the page's lookup keeps the
-        verdict), cites the handle an adoption found them by, claims for review
+        person new to the link only where the directory adopts and adoption
+        admits them (the page's lookup keeps the verdict), cites the handle an
+        adoption found them by, claims for review
         an address someone else holds or an account signs in with and proposes
         them, withdraws what neither its link nor a replaced link still supports,
         and, for a link leaving a person, what it stated there. Each other person

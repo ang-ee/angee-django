@@ -32,6 +32,7 @@ from tests.test_parties_directory_backend import (
     TwoWayDirectoryBackend,
     _existing,
 )
+from tests.test_parties_directory_backend import adoption as adoption  # noqa: F401 -- the directory adopting
 from tests.test_parties_directory_backend import pull as pull  # noqa: F401 -- the scripted pull-only directory
 
 pytestmark = pytest.mark.django_db(transaction=True)
@@ -350,6 +351,7 @@ def test_a_persons_own_value_wins_by_the_donors_precedence(pull: Pull, settings:
     assert (statement.favourite_colour, statement.applied) == ("violet", False)
 
 
+@pytest.mark.usefixtures("adoption")
 def test_an_adopted_person_is_mapped_like_a_minted_one(pull: Pull, settings: Any) -> None:
     person, _handle = _existing(pull.directory.owner)
     _colours(pull, ada="green")
