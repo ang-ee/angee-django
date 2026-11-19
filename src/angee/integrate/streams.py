@@ -605,6 +605,7 @@ def _apply_page(
     with changeset(fresh=True, activity="pull", origin=stream), transaction.atomic():
         current_changeset(record=True)
         locked = type(stream).objects.lock_current(stream, fenced_to=stream)
+        locked.integration.require_discovery_ready()
         adapter.prepare_page(locked, page)
         evidence = (
             {}

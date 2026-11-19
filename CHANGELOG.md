@@ -44,6 +44,18 @@ live in code docstrings.
   integration running on their own credential was refused. The release now runs
   on the locked capability row (`Integration.lock_capability`).
 
+- `angee.integrate`: a sync run already in flight stops at its next page once a
+  secret is re-entered or a credential attached. Admission was fenced, but a run
+  admitted before the change read the fresh credential page by page and finished
+  on facts discovered from the old one. Each page transaction now asks the
+  stream's integration `Integration.require_discovery_ready()` after the stream
+  lock and before any write; a pending discovery refuses the page with a
+  transient `IntegrationError`, earlier pages and their cursor stay, and the
+  next run waits for discovery. Known limits: a multi-partition workflow step
+  runs without the sync lock, so a discovery that settles between a page's
+  extraction and its commit lets that page commit; an attach on a capability
+  that requires no discovery does not stop a run.
+
 - The UX guard accepts manifest `vocabulary` field tones by structure while rejecting local tone maps and switches.
 
 - Integrate compares synchronized JSON as JSON values (`json_equal` in

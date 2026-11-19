@@ -177,6 +177,7 @@ _UNSET = object()
 _INTEGRATION_FAILURE_MESSAGE = INTEGRATION_FAILURE_MESSAGE
 _WEBHOOK_FAILURE_MESSAGE = "Webhook delivery failed."
 _DISCOVERY_RETRY_EXHAUSTED_MESSAGE = "Connection discovery exhausted its retries; retry discovery to continue."
+_DISCOVERY_REQUIRED_MESSAGE = "Connection discovery must finish before syncing."
 
 
 class AccountStatus(models.TextChoices):
@@ -3354,6 +3355,21 @@ class Integration(StatementSourceMixin, ImplDefaultsMixin, OwnerMixin, AngeeData
             self.discovery_generation == 0 or self.discovery_completed_at is not None
         )
 
+    def require_discovery_ready(self) -> None:
+        """Stop work already admitted, transiently, once :attr:`discovery_ready` no longer holds.
+
+        The stream driver asks the integration it reads from inside each page
+        transaction, before anything of the page is written: a secret re-entered
+        or a credential attached since the run was admitted leaves discovery
+        pending, so the page, read on facts discovery has not confirmed, commits
+        nothing, and the next run waits for discovery. The row is read, never
+        locked, there: a page holds its stream lock, and epoch changes lock the
+        integration before the stream.
+        """
+
+        if not self.discovery_ready:
+            raise IntegrationError(_DISCOVERY_REQUIRED_MESSAGE, transient=True)
+
     def prepare_connection_discovery(self) -> None:
         """Database-only preparation; concrete capabilities may suspend their work."""
 
@@ -4292,7 +4308,7 @@ class Bridge(Composable, metaclass=RebacModelBase, demands="integrate.Integratio
         """Decide and persist admission from this already-locked capability row."""
 
         if not self.discovery_ready:
-            raise IntegrationError("Connection discovery must finish before syncing.")
+            raise IntegrationError(_DISCOVERY_REQUIRED_MESSAGE)
         recovering = self.sync_stage == self.SyncStage.QUEUED
         admitted = not (self.sync_is_dispatched or self.is_syncing)
         fields: list[str] = []
@@ -4538,7 +4554,7 @@ class Bridge(Composable, metaclass=RebacModelBase, demands="integrate.Integratio
         if self.sync_is_dispatched:
             return SyncDispatch.DISPATCHED
         if not self.mark_sync_started(now=now):
-            raise IntegrationError("Connection discovery must finish before syncing.")
+            raise IntegrationError(_DISCOVERY_REQUIRED_MESSAGE)
         try:
             with progress_bridge_context(self):
                 result = self.sync()

@@ -16,7 +16,7 @@ from angee.integrate.impl import BridgeImpl, LiveBridgeImpl
 from angee.integrate.models import Bridge
 from angee.integrate.oauth.providers import OAuthProviderType
 from angee.integrate.states import StreamDefinition, StreamKind
-from angee.integrate.streams import StreamPage
+from angee.integrate.streams import ApplyResult, RecordChange, StreamPage
 from angee.integrate.testing.integration import Integration
 
 CONNECTION_CLASSES = settings.ANGEE_TEST_CONNECTION_CLASSES
@@ -66,8 +66,10 @@ class ConnectionAdapter(BridgeImpl):
             self.bridge.merge_subscription_state(account=account)
 
     def streams(self, *, deadline: float | None = None) -> tuple[StreamDefinition, ...]:
+        # ``pages`` scripts "first" as a replica read in pages of keys.
+        first = StreamKind.RECORD_REPLICA if self.bridge.config.get("pages") else StreamKind.EVENT_FEED
         return (
-            StreamDefinition("first", kind=StreamKind.EVENT_FEED),
+            StreamDefinition("first", kind=first),
             StreamDefinition("second", kind=StreamKind.EVENT_FEED),
         )
 
@@ -78,7 +80,15 @@ class ConnectionAdapter(BridgeImpl):
         if self.bridge.config.get("sync_quota"):
             hours = 1 if stream.key == "first" else 2
             raise IntegrationError("Provider quota reached.", retry_after=timedelta(hours=hours))
+        if (pages := self.bridge.config.get("pages")) and stream.key == "first":
+            page = stream.cursor.get("page", 0)
+            records = tuple(RecordChange(key, {"key": key}, key, mapped_payload={"key": key}) for key in pages[page])
+            return StreamPage(records=records, cursor={"page": page + 1}, exhausted=page + 1 == len(pages))
         return StreamPage(records=(), cursor={}, exhausted=True)
+
+    def apply_record(self, stream: Any, record: Any) -> ApplyResult:
+        assert connection.in_atomic_block
+        return ApplyResult(mapped_payload=record.mapped_payload)
 
 
 class LiveConnectionAdapter(ConnectionAdapter, LiveBridgeImpl):

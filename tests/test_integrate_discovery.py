@@ -40,6 +40,7 @@ from angee.integrate.session_runner import run_bridge_session_job
 from angee.integrate.signals import discovery_finished
 from angee.integrate.streams import BridgeSyncError
 from angee.integrate.testing.http import mock_transport
+from angee.integrate.testing.models import RecordLink, SyncStream
 from angee.jobs.celery import app as celery_app
 from tests.conftest import (
     Credential,
@@ -49,7 +50,7 @@ from tests.conftest import (
     make_addon,
     make_integration,
 )
-from tests.integrate_fixtures import CONNECTION_CLASSES, ConnectionBridge, LiveConnectionAdapter
+from tests.integrate_fixtures import CONNECTION_CLASSES, ConnectionAdapter, ConnectionBridge, LiveConnectionAdapter
 
 pytestmark = pytest.mark.django_db(transaction=True)
 
@@ -691,6 +692,52 @@ def test_stream_partition_errors_retain_the_longest_provider_horizon(bridge, pau
         assert bridge.next_sync_at is None
     else:
         assert bridge.next_sync_at >= before + timedelta(hours=2)
+
+
+@pytest.mark.parametrize("change", ["re-entered secret", "attach", "none"])
+def test_a_run_in_flight_stops_at_its_next_page_once_discovery_is_pending(bridge, sent_tasks, monkeypatch, change):
+    extract, changed = ConnectionAdapter.extract, []
+
+    def between_pages(adapter, stream, page_bound, *, deadline=None):
+        if stream.key == "first" and stream.cursor == {"page": 1} and not changed:
+            # Another writer, once, between the run's two pages of "first".
+            changed.append(change)
+            if change == "re-entered secret":
+                Credential.objects.get(pk=bridge.credential_id).replace_material({"api_key": "re-entered"})
+            elif change == "attach":
+                ConnectionBridge.objects.get(pk=bridge.pk).attach_credential(other)
+        return extract(adapter, stream, page_bound, deadline=deadline)
+
+    monkeypatch.setattr(ConnectionAdapter, "extract", between_pages)
+    with system_context(reason="test a run in flight"):
+        other = Credential.objects.create_local_credential(
+            bridge.owner, kind="static_token", name="Other key", material={"api_key": "other"},
+        )
+        bridge.config = {"pages": [["a", "b"], ["c"]]}
+        bridge.save(update_fields=["config"])
+        assert settle(bridge)["ok"]
+        sent_tasks.clear()
+        if change == "none":
+            assert bridge.run_sync(now=timezone.now()) == 3
+        else:
+            with pytest.raises(BridgeSyncError) as raised:
+                bridge.run_sync(now=timezone.now())
+            assert raised.value.transient and raised.value.failures[0].definition.key == "first"
+            assert {failure.error.public_message for failure in raised.value.failures} == {
+                "Connection discovery must finish before syncing.",
+            }
+            # The first page stays committed; the second commits nothing.
+            stream = SyncStream.objects.current_for_bridge(bridge, "first").get()
+            assert stream.cursor == {"page": 1}
+            assert sorted(RecordLink.objects.filter(stream=stream).values_list("external_key", flat=True)) == ["a", "b"]
+            bridge.refresh_from_db()
+            assert bridge.discovery_pending and not bridge.mark_sync_started(now=timezone.now())
+            assert [name for name, _options in sent_tasks] == [DISCOVERY_TASK]
+            assert settle(bridge)["ok"]
+            assert bridge.run_sync(now=timezone.now()) == 1
+        stream = SyncStream.objects.current_for_bridge(bridge, "first").get()
+        keys = sorted(RecordLink.objects.filter(stream=stream).values_list("external_key", flat=True))
+    assert stream.cursor == {"page": 2} and keys == ["a", "b", "c"]
 
 
 def test_scheduler_failure_does_not_skip_regular_polling(monkeypatch):
