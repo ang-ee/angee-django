@@ -1,7 +1,7 @@
 // Authorization schema for the parties addon.
 // @rebac_package: parties
 // @rebac_package_version: 0.1.0
-// @rebac_schema_revision: 35
+// @rebac_schema_revision: 36
 
 // Parties, folders and circles are grant roots: each is owned through its
 // transferable `owner` column (OwnerMixin), which an insert defaults to the row's
@@ -80,6 +80,9 @@ definition parties/party {
     // Pending ruling: merging a party away retires it to the trash (`Party.MERGED_PERMISSION`), which the
     // roles leave to the contact admin (`role_admin`); `role_manage` here lets a contact manager merge, and so trash.
     permission role_merge_away = role_admin
+    // Pending ruling: a per-record grant outlives the role of whoever made it, so the roles leave granting
+    // reads on a party or handle (`share`) to the contact admin; `role_manage` here lets a contact manager grant.
+    permission role_share = role_admin
 
     permission create = authenticated
     // Whoever reads the contacts of a directory linking this party reads its identity.
@@ -101,6 +104,8 @@ definition parties/party {
     permission batch_merge = write & person->active_member
     // What merging this party away into another needs: its write, but through the roles only `role_merge_away`.
     permission merge_away = owner + editor + statement_source + role_merge_away + admin->member
+    // Granting a per-record read (`Party.rebac_grantable`): its write, but through the roles only `role_share`.
+    permission share = owner + editor + statement_source + role_share + admin->member
     permission delete = owner + role_delete + admin->member
     permission transfer = owner + role_admin + admin->member
     permission write__owner = transfer
@@ -187,6 +192,7 @@ definition parties/handle {
     permission read_granted = creator + editor + reader + statement_source + stating_directory->contact_read + party->role_read + admin->member
     permission read = read_granted
     permission write  = creator + editor + party->role_manage + admin->member
+    permission share  = creator + editor + party->role_share + admin->member
     permission delete = creator + party->role_admin + admin->member
 }
 

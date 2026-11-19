@@ -114,6 +114,8 @@ MATRIX: dict[str, dict[str, tuple[str, ...]]] = {
         "read__notes": (*ROLE_HOLDERS, "owner", "editor", "platform"),
         "write": (*WRITERS, "editor"),
         "merge_away": (*ADMINS, "editor"),
+        # Granting a per-record read outlives the granter's role: through the roles, the contact admin's.
+        "share": (*ADMINS, "editor"),
         "delete": ADMINS,
         "transfer": ADMINS,
     },
@@ -125,7 +127,7 @@ MATRIX: dict[str, dict[str, tuple[str, ...]]] = {
         "merge_away": ADMINS,
         "delete": ADMINS,
     },
-    "handle": {"read": (*ROLE_HOLDERS, "owner", "platform"), "write": WRITERS, "delete": ADMINS},
+    "handle": {"read": (*ROLE_HOLDERS, "owner", "platform"), "write": WRITERS, "share": ADMINS, "delete": ADMINS},
     "address": {"read": (*ROLE_HOLDERS, "owner", "dir reader", "platform"), "write": WRITERS, "delete": ADMINS},
     "relationship": {"read": (*ROLE_HOLDERS, "owner", "dir reader", "platform"), "write": WRITERS, "delete": ADMINS},
     "folder": {"read": (*ROLE_HOLDERS, "owner", "platform"), "write": WRITERS, "delete": ADMINS, "transfer": ADMINS},
@@ -265,3 +267,24 @@ def test_a_merge_is_refused_to_whoever_does_not_write_both_parties(world: Simple
             Party.objects.with_actor(actor).get(pk=survivor.pk).merge(records=[merged.public_id])
     with system_context(reason="tests.parties_roles.merge_refusals.readback"):
         assert Party._base_manager.get(pk=merged.pk).merged_into_id is None
+
+
+def test_a_contact_admin_grants_a_per_record_reader_and_a_manager_cannot(world: SimpleNamespace) -> None:
+    """A per-record grant outlives its granter's role, so the roles lend sharing to the contact admin alone
+    (pending ruling, parties/party#role_share)."""
+
+    w = world
+    admin, manager = w.holders["contact_admin"], w.holders["contact_manager"]
+    grantee = get_user_model().objects.create_user(username="role-party-grantee")
+    for model, pk in ((Party, w.unlinked.pk), (Handle, w.own_handle.pk)):
+        with system_context(reason="tests.parties_roles.share_target"):
+            row = model._base_manager.get(pk=pk)
+        with actor_context(manager), pytest.raises(PermissionDenied):
+            model.objects.with_actor(manager).get(pk=pk).grant_record_access("reader", grantee)
+        assert not _allowed(row, grantee), model.__name__
+        with actor_context(admin):
+            model.objects.with_actor(admin).get(pk=pk).grant_record_access("reader", grantee)
+        assert _allowed(row, grantee), model.__name__
+        with actor_context(admin):
+            model.objects.with_actor(admin).get(pk=pk).revoke_record_access("reader", grantee)
+        assert not _allowed(row, grantee), model.__name__

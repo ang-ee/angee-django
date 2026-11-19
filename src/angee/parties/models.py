@@ -116,7 +116,7 @@ class Party(
 
     _angee_base = AngeeHistoryMergeableUnscopedManager()
 
-    rebac_grantable = {"reader": "write", "identity_reader": "write"}
+    rebac_grantable = {"reader": "share", "identity_reader": "share"}
 
     owned_relations = ("addresses", "relationships")
 
@@ -846,7 +846,7 @@ class Handle(
 
     _angee_base = AngeeHistoryMergeableUnscopedManager()
 
-    rebac_grantable = {"reader": "write"}
+    rebac_grantable = {"reader": "share"}
     retains_merged = True
 
     class Platform(models.TextChoices):

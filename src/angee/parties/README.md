@@ -465,7 +465,10 @@ write with `role_merge_away` (the contact admin) in place of `role_manage`
 (pending the architect's ruling; `role_manage` there lets a manager merge, and
 so trash, without restoring); a
 **contact admin** (`contact_admin`) also deletes and transfers as an owner
-does, which is where trashing a party sits (its `delete`), reads every directory
+does, which is where trashing a party sits (its `delete`), grants per-record
+reads on a party or handle (their `share`, which backs `rebac_grantable`: a
+grant outlives its granter's role, so `role_share` is the contact admin, pending
+the architect's ruling; `role_manage` there lets a manager grant), reads every directory
 and shares who reads its contacts (`parties/directory#share`). Connecting,
 changing and removing a directory stay with its integration's writers and
 platform admins. The two choices a deployment's architect may flip are one line
