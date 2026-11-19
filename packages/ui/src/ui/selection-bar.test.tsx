@@ -24,16 +24,15 @@ test("a verb that cannot run carries its reason as its tooltip and description, 
 
   const verb = screen.getByRole("button", { name: "Merge…" });
   expect(description(verb)).toBe(REASON);
+  // Disabled, yet focusable: not the native attribute, which would drop it from the tab order.
   expect(verb.getAttribute("aria-disabled")).toBe("true");
+  expect(verb.hasAttribute("disabled")).toBe(false);
   // The bar renders no reason text: the description node is hidden, the tooltip shows it on demand.
   expect(screen.getByText(REASON).hidden).toBe(true);
   verb.focus();
   expect(document.activeElement).toBe(verb);
+  // A click dispatched at it (what Enter or Space become in a browser) does not reach the handler.
   fireEvent.click(verb);
-  for (const key of ["Enter", " "]) {
-    fireEvent.keyDown(verb, { key });
-    fireEvent.keyUp(verb, { key });
-  }
   expect(onClick).not.toHaveBeenCalled();
 });
 

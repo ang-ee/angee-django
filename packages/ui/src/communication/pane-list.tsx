@@ -4,6 +4,7 @@ import { Glyph } from "../chrome/Glyph";
 import { useUiT } from "../i18n";
 import { cn } from "../lib/cn";
 import { useInAppLink } from "../lib/in-app-link";
+import { shownContent } from "../lib/shown-content";
 import { Chip } from "../ui/chip";
 import { Avatar, type AvatarProps } from "../ui/avatar";
 import { Popover, type PopoverRootProps } from "../ui/popover";
@@ -55,7 +56,7 @@ export interface PaneRowProps {
    * navigates. It stays reachable by keyboard so its `disabledReason` is announced.
    */
   disabled?: boolean;
-  /** Why the row is unavailable (implies `disabled`): shown in full under the title and read as its description. */
+  /** Why the row is unavailable (implies `disabled`; null, false and "" are no reason): shown in full under the title and read as its description. */
   disabledReason?: React.ReactNode;
   className?: string;
 }
@@ -78,7 +79,7 @@ export function PaneRow({
 }: PaneRowProps): React.ReactElement {
   const link = useInAppLink(href);
   const reasonId = React.useId();
-  const reason = disabledReason !== undefined && disabledReason !== null && disabledReason !== false ? disabledReason : null;
+  const reason = shownContent(disabledReason);
   const unavailable = disabled || reason !== null;
   const glyph = (
     <span className="relative mt-0.5 shrink-0">

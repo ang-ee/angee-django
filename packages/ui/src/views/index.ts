@@ -416,7 +416,18 @@ export {
   type RelationOptionsResult,
 } from "./relation/relation-options";
 export * from "./resource/resource-view-model";
-export * from "./resource/resource-view-context";
+// `useSelectionPlaces` stays internal: a page reads the split through `bulkActions`.
+export {
+  ResourceViewProvider,
+  useResourceView,
+  useResourceViewMaybe,
+  withResourceViewScope,
+  type ResourceViewContextValue,
+  type ResourceViewGroupExpansion,
+  type ResourceViewProviderProps,
+  type ResourceViewProviderScope,
+  type ResourceViewScopeMountOptions,
+} from "./resource/resource-view-context";
 export {
   ResourceViewUtilities,
   useResourceViewUtilities,

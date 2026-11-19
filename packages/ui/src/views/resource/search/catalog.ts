@@ -1,5 +1,5 @@
 import * as React from "react";
-import { resourceLifecycle, Filter, isClientRowModel, useSchemaFieldMetadata, type ModelMetadata, type ResourceQuery, type Row } from "@angee/metadata";
+import { resourceLifecycle, Filter, isClientRowModel, useSchemaFieldMetadata, type GroupSpec, type ModelMetadata, type ResourceQuery, type Row } from "@angee/metadata";
 import { useUiT } from "../../../i18n";
 import type { FilterClauseField, ResourceToolbarFilterOption, ResourceToolbarGroupOption } from "../../../toolbars";
 import type { ColumnDescriptor } from "../../page";
@@ -17,7 +17,7 @@ export interface UseSearchCatalogInput<TRow extends Row> {
   search?: ListSearchDeclaration;
   inferOptions?: boolean;
   serverGrouping?: boolean;
-  /** The list groups through the native server group read, the one read that applies `GroupSpec.repeated`. */
+  /** The list groups through the native server group read, the one read that applies `GroupSpec.repeated` (its list decides). */
   appliesRepeated?: boolean;
   columns: readonly ColumnDescriptor<TRow>[];
   rows: readonly TRow[];
@@ -50,12 +50,13 @@ export function useSearchCatalog<TRow extends Row>(input: UseSearchCatalogInput<
   const shortcutTextFields = React.useMemo(() => shortcuts.flatMap(({ content }) => content.kind === "text" ? [content.field] : []), [shortcuts]);
   const serverGrouping = input.serverGrouping ?? Boolean(modelMetadata && !isClientRowModel(modelMetadata.resource)
     && (resourceView.state.view === "list" || resourceView.state.view === "board"));
-  const appliesRepeated = Boolean(input.appliesRepeated) && serverGrouping;
   const groups = React.useMemo(() => buildGroupOptions(columns, modelMetadata, defaults, query).filter(({ group }) => {
     const axis = query.axes[group.field];
     return serverGrouping ? Boolean(axis?.server) : Boolean(axis?.identityPath);
-  }).map((option) => appliesRepeated && query.axis(option.group.field).repeatable ? { ...option, repeatable: true } : option),
-  [columns, modelMetadata, defaults, query, serverGrouping, appliesRepeated]);
+  }), [columns, modelMetadata, defaults, query, serverGrouping]);
+  // Per level: a date axis can list repeated days, say, yet not repeated weekdays.
+  const repeatable = React.useMemo(() => input.appliesRepeated
+    ? (level: GroupSpec) => query.axis(level.field, level.granularity).repeatable : undefined, [input.appliesRepeated, query]);
   const inferredFields = React.useMemo(() => buildFilterFields(columns, inferOptions ? rows : EMPTY, modelMetadata, schema, query), [columns, inferOptions, rows, modelMetadata, schema, query]);
   const contributedFacets = React.useMemo(() => {
     const seen = new Set<string>();
@@ -134,8 +135,9 @@ export function useSearchCatalog<TRow extends Row>(input: UseSearchCatalogInput<
   const text = React.useMemo(() => searchTextFields(query, input.textFilterField, shortcutTextFields).map((field) => ({
     field, label: fieldLabel(field, modelMetadata, columns.find((column) => column.field === field)?.header),
   })), [query, input.textFilterField, shortcutTextFields, modelMetadata, columns]);
-  return React.useMemo(() => ({ query, text, filters, facets, fields, groups, curatedGroups, favorites: resourceView.savedFavorites }),
-    [query, text, filters, facets, fields, groups, curatedGroups, resourceView.savedFavorites]);
+  return React.useMemo(() => ({ query, text, filters, facets, fields, groups, curatedGroups, favorites: resourceView.savedFavorites,
+    ...(repeatable ? { repeatable } : {}) }),
+  [query, text, filters, facets, fields, groups, curatedGroups, resourceView.savedFavorites, repeatable]);
 }
 
 /**

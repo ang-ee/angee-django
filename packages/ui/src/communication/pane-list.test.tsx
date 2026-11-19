@@ -35,6 +35,15 @@ test("rows without a destination or action remain readable and non-interactive",
   expect(open).toHaveBeenCalledOnce();
 });
 
+test("an empty reason is no reason: the row stays available", () => {
+  const open = vi.fn();
+  render(<PaneRow title="Ada" onOpen={open} disabledReason="" />);
+  const row = screen.getByRole("button", { name: "Ada" });
+  expect(row.hasAttribute("aria-disabled")).toBe(false);
+  fireEvent.click(row);
+  expect(open).toHaveBeenCalledOnce();
+});
+
 test("an unavailable row is listed with its whole reason, reachable by keyboard, and does nothing", () => {
   const open = vi.fn(), navigate = vi.fn();
   const reason = "Already connected as the calendar source of another workspace";

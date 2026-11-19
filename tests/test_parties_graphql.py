@@ -96,6 +96,9 @@ def test_public_resource_metadata_declares_people_surface() -> None:
     # The name axes come first, so the list offers them before "Created".
     assert list(person["query"]["axes"]) == ["display_name", "given_name", "family_name", "created_at"]
     group_dimensions = person["query"]["axes"]
+    # The client lists repeated names only where a drill tells the null group apart.
+    for name in ("display_name", "given_name", "family_name"):
+        assert group_dimensions[name]["drill"]["nullMode"] == "isNull"
     assert {
         field: (
             dimension["server"]["input"],
@@ -387,11 +390,75 @@ def test_handle_aggregate_includes_unresolved_rows(db: None) -> None:
 def test_organizations_group_by_their_names_beside_domain_and_created() -> None:
     """Organization offers its names first, then its existing axes, each with its drill filter."""
 
-    resources = {item.model_label: item for item in _schema("public").angee_resources}
-    axes = resources["parties.Organization"].query.axes
+    schema = _schema("public")
+    resources = {item.model_label: item for item in schema.angee_resources}
+    query = resources["parties.Organization"].query
+    axes = query.axes
 
     assert list(axes) == ["display_name", "legal_name", "domain", "created_at"]
     assert all(axis.drill is not None and axis.drill.field == name for name, axis in axes.items())
+    # What the client's repeated-values read relies on, as it reads it: a drill telling the
+    # null group apart and text filters that leave out the null and the blank name.
+    serialized = {item["modelLabel"]: item for item in schema._schema.extensions["angee"]["resources"]}
+    organization = serialized["parties.Organization"]["query"]
+    for name in ("display_name", "legal_name"):
+        assert organization["axes"][name]["drill"]["nullMode"] == "isNull"
+        assert organization["fields"][name]["filter"]["scalar"] == "String"
+        assert {"isNull", "ne"} <= set(organization["fields"][name]["filter"]["operators"])
+
+
+def test_repeated_organization_names_leave_out_single_and_empty_names(db: None) -> None:
+    """By display or legal name, only names held more than once are listed; an empty name never is."""
+
+    admin = _platform_admin("organizations-repeated-admin")
+    with system_context(reason="test.parties.organizations_repeated.seed"):
+        for display_name, legal_name in (
+            ("Acme", "Acme Ltd"),
+            ("Acme", "Acme Ltd"),
+            ("Globex", ""),
+            ("Initech", ""),
+            ("Umbrella", "Umbrella Corp"),
+        ):
+            Organization.objects.create(display_name=display_name, legal_name=legal_name, created_by_id=admin.pk)
+
+    result = _data(
+        execute_schema(
+            _schema("public"),
+            """
+            query RepeatedOrganizationNames {
+              display: organizations_groups(
+                group_by: [{field: DISPLAY_NAME}]
+                where: {display_name: {_is_null: false, _neq: ""}}
+                having: {count_gt: 1}
+                limit: 10
+              ) {
+                key { display_name }
+                aggregate { count }
+              }
+              legal: organizations_groups(
+                group_by: [{field: LEGAL_NAME}]
+                where: {legal_name: {_is_null: false, _neq: ""}}
+                having: {count_gt: 1}
+                limit: 10
+              ) {
+                key { legal_name }
+                aggregate { count }
+              }
+              legal_count: organizations_groups_count(
+                group_by: [{field: LEGAL_NAME}]
+                where: {legal_name: {_is_null: false, _neq: ""}}
+                having: {count_gt: 1}
+              )
+            }
+            """,
+            user=admin,
+        )
+    )
+
+    assert {group["key"]["display_name"]: group["aggregate"]["count"] for group in result["display"]} == {"Acme": 2}
+    # Globex and Initech share the empty legal name: a missing value is not a repeated one.
+    assert {group["key"]["legal_name"]: group["aggregate"]["count"] for group in result["legal"]} == {"Acme Ltd": 2}
+    assert result["legal_count"] == 1
 
 
 def test_people_group_by_display_name_and_drill_to_a_groups_rows(db: None) -> None:
