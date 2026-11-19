@@ -88,6 +88,7 @@
     "tests/test_calendar_concurrency.py::test_a_second_overlapping_save_waits_for_the_first_and_is_refused": 10.398629748960957,
     "tests/test_calendar_google.py::test_two_racing_connects_of_one_account_make_one_source": 0.98,
     "tests/test_calendar_google_publish.py::test_a_publish_holding_its_vendor_lets_another_source_of_that_vendor_connect": 1.13,
+    "tests/test_calendar_google_publish.py::test_an_edit_the_push_waits_on_to_bind_its_event_is_the_next_push": 1.88,
     "tests/test_calendar_google_publish.py::test_moving_a_series_waits_on_an_override_a_push_is_binding_then_releases_its_link": 1.53,
     "tests/test_calendar_google_publish.py::test_two_racing_publishes_of_one_calendar_bind_it_once": 1.1,
     "tests/test_calendar_google_publish.py::test_two_sources_racing_to_publish_to_one_remote_calendar_bind_it_once": 1.19,
