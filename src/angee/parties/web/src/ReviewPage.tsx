@@ -9,7 +9,11 @@ import { usePartyStatementRowActions } from "./party-statement-row-actions";
 
 type SuggestionRow = IdentityClaimRow & { source_kind?: string };
 
-/** The possible duplicates read a page at a time, and the certain ones a batch at a time (the batch merge's cap). */
+/**
+ * The possible duplicates read a page at a time, and the certain ones a batch at
+ * a time: the batch is the server's ``PartyManager.BATCH_SETS`` (copied, as in
+ * ``merge-selection.tsx``; no read carries it).
+ */
 const SAME_AS_PAGE = 50;
 
 /**

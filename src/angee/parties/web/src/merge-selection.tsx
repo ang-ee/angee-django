@@ -6,7 +6,12 @@ import { DuplicatesDialog, type DuplicateSetInput } from "./DuplicatesDialog";
 import { usePartiesT } from "./i18n";
 import { useMergeIntoAction } from "./merge-into";
 
-/** The most sets one batch merge takes (the server's ``PartyManager.BATCH_SETS``). */
+/**
+ * The most sets one batch merge takes: a copy of the server's
+ * ``PartyManager.BATCH_SETS``, which refuses a larger batch. No read this
+ * fragment receives carries it; its smallest owner would be one more field on
+ * the review counts read (``same_as_pair_counts``), not a query of its own.
+ */
 const BATCH_SETS = 50;
 
 /**
@@ -38,6 +43,8 @@ export function selectionSplit(
   let unpaired = 0;
   let blank = 0;
   for (const group of selectedGroups) {
+    // A whitespace-only key counts as blank here, though the server would group it as a value:
+    // that errs safe, leaving those records out of a batch rather than merging them as one.
     if (group.key === null || group.key.trim() === "") {
       blank += group.ids.length;
     } else if (group.ids.length < 2) {
