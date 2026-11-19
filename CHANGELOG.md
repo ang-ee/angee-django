@@ -98,6 +98,23 @@ live in code docstrings.
   (`angee.parties_integrate_hubspot.testing.server`) builds its invented keys at
   runtime (`service_key`), so no literal in the repository has a real key's shape.
 
+- `angee.parties`' web fragment owns the connect ceremony of a contacts
+  directory: `ConnectDirectoryAction` (`@angee/parties`) renders the menu trigger
+  and the typed mutation dialog with the shared submit and failure wording, and a
+  vendor declares only its connect mutation, its fields, its message range in the
+  parties namespace (`<prefix>.button`, `.title` and `.description`) and how raw
+  values become the mutation's variables. CardDAV and HubSpot are reduced to those
+  declarations: their copied dialogs and their own i18n namespaces are deleted,
+  and their words join the parties namespace under `directory.carddav` and
+  `directory.hubspot`. A connect now refreshes the directories list, which is a
+  resource view (`useAuthoredResourceMutation`; before, only the live
+  subscription updated it), and its entered key or password leaves the mutation
+  cache once the connect settles (`transient`, whose `@angee/refine`
+  documentation now names secret inputs). The fragment exports the toolbar as
+  `DIRECTORIES_TOOLBAR`, and each connect entry `requires` `DIRECTORY_CREATE`
+  (`parties.Directory#create`, the permission `Directory.objects.connect`
+  checks), so the Connect menu is absent for an identity the mutation refuses.
+
 - Sharing a directory shares its contacts. `parties/directory` has a stored,
   grantable `contact_reader` relation (shared through the record-access surface
   under the directory's `write`) and a `contact_read` permission: its grantees and

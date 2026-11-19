@@ -17,9 +17,10 @@ import pytest
 from django.apps import apps
 from django.contrib.auth import get_user_model
 from django.utils import timezone
-from rebac import system_context
+from rebac import system_context, to_subject_ref
 
 from angee.graphql.testing.documents import execute_schema
+from angee.iam.roles import subject_permitted
 from angee.integrate import scheduler
 from angee.integrate.constants import DISCOVERY_TASK
 from angee.integrate.tasks import discover_connection
@@ -37,6 +38,8 @@ SYNC_TASK = "integrate.sync_bridge_now"
 REJECTED = "HubSpot rejected the access token. Enter a valid HubSpot service key."
 CHECK_THE_KEY = "This key lacks a service key's usual shape: check it for extra or missing characters."
 NAME_TAKEN = "An account is already connected under that name; choose another name."
+# The presence ref the console's connect entry requires (`DIRECTORY_CREATE`, the parties web fragment).
+CONNECT_ENTRY = "parties.Directory#create"
 CONNECT = """
 mutation ConnectHubSpot($name: String!, $token: String!) {
   connect_hubspot_directory(name: $name, token: $token) {
@@ -88,6 +91,7 @@ def test_an_admin_connects_an_account_tested_first_then_discovered_and_queued_fo
     hubspot: HubSpotServer, sent_tasks: list[tuple[str, dict[str, Any]]]
 ) -> None:
     admin = create_platform_admin("hubspot-connect-admin")
+    assert subject_permitted(to_subject_ref(admin), [CONNECT_ENTRY]) == [CONNECT_ENTRY]
 
     result = connect(admin)
 
@@ -139,11 +143,12 @@ def test_an_admin_connects_an_account_tested_first_then_discovered_and_queued_fo
     assert [(name, kwargs["pk"]) for name, kwargs in sent_tasks] == [(SYNC_TASK, directory.pk)]
 
 
-def test_a_caller_who_is_no_platform_admin_is_refused_before_anything_is_tested_or_saved(
+def test_a_caller_who_is_no_platform_admin_is_not_offered_the_connect_entry_and_is_refused_before_anything_is_tested(
     hubspot: HubSpotServer, sent_tasks: list[tuple[str, dict[str, Any]]]
 ) -> None:
     with system_context(reason="test.parties.hubspot.connect.member"):
         member = get_user_model().objects.create_user(username="hubspot-member", email="member@example.com")
+    assert subject_permitted(to_subject_ref(member), [CONNECT_ENTRY]) == []
 
     result = connect(member)
 

@@ -3,14 +3,13 @@ import { Field, Form, registerForm, type RegisteredFormProps } from "@angee/ui";
 import { IntegrationSyncFields, useIntegrationSyncAction } from "@angee/integrate";
 
 import { usePartiesT } from "./i18n";
-
-const MODEL = "parties.Directory";
+import { DIRECTORY_MODEL } from "./resources";
 
 function DirectoryForm({ resource: _resource, ...props }: RegisteredFormProps): React.ReactElement {
   const t = usePartiesT();
   const syncAction = useIntegrationSyncAction("sync_integration", t("directory.action.sync"));
   return (
-    <Form {...props} resource={MODEL}>
+    <Form {...props} resource={DIRECTORY_MODEL}>
       <Field name="display_name" title readOnly />
       <Field name="lifecycle" readOnly />
       <Field name="runtime_status" readOnly />
@@ -22,4 +21,4 @@ function DirectoryForm({ resource: _resource, ...props }: RegisteredFormProps): 
   );
 }
 
-export const directoryForm = registerForm(MODEL, DirectoryForm);
+export const directoryForm = registerForm(DIRECTORY_MODEL, DirectoryForm);

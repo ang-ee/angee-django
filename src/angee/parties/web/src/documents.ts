@@ -1,8 +1,7 @@
-// Bespoke console operation for connecting a CardDAV directory — a single action
-// that creates the Basic-auth credential + the Directory (two models), the
-// sanctioned multi-model-create shape. The directories list/detail are model-driven
-// (ResourceList reads the SDL) and sync is the single-id `sync_integration` action, so
-// neither needs a document here.
+// The parties console's authored operations. A directory's connect mutation belongs
+// to its vendor addon, which hands it to `ConnectDirectoryAction`; the directories
+// list/detail are model-driven (ResourceList reads the SDL) and sync is the single-id
+// `sync_integration` action, so neither needs a document here.
 
 import { graphql, type DocumentType } from "@angee/gql/console";
 

@@ -4,13 +4,12 @@ import { IntegrationSyncColumns } from "@angee/integrate";
 
 import { directoryForm } from "./DirectoryForm";
 import { usePartiesT } from "./i18n";
-
-const MODEL = "parties.Directory";
+import { DIRECTORIES_TOOLBAR, DIRECTORY_MODEL } from "./resources";
 
 /**
  * Connected contacts directories. Connect verbs come from the
- * `parties.directories#toolbar` container (this addon contributes CardDAV; vendor
- * addons add theirs) and render as one Connect menu; rows are model-driven via
+ * `parties.directories#toolbar` container (each directory vendor addon contributes
+ * its `ConnectDirectoryAction`) and render as one Connect menu; rows are model-driven via
  * ResourceList, each detail carrying a declarative "Sync now" record action.
  * Directories are created through the connect flow and have no delete root, so the
  * form is read-only (`hideCreate`) and no delete affordance renders — a directory
@@ -18,16 +17,16 @@ const MODEL = "parties.Directory";
  */
 export function DirectoriesPage(): React.ReactElement {
   const t = usePartiesT();
-  const toolbarEntries = useContainer("parties.directories#toolbar");
+  const toolbarEntries = useContainer(DIRECTORIES_TOOLBAR);
   return (
-    <ResourceList resource={MODEL} form={directoryForm} placement="inline" routed hideCreate toolbarActions={
+    <ResourceList resource={DIRECTORY_MODEL} form={directoryForm} placement="inline" routed hideCreate toolbarActions={
       containerHasContent(toolbarEntries) ? (
         <ActionMenu label={t("directory.connect.menu")} glyph="plus" variant="primary" size="sm">
           <ContainerOutlet entries={toolbarEntries} />
         </ActionMenu>
       ) : null
     }>
-      <List resource={MODEL}>
+      <List resource={DIRECTORY_MODEL}>
         <Column field="display_name" header={t("directory.name")} />
         <Column field="lifecycle" widget="statusBadge" />
         <Column field="runtime_status" widget="statusBadge" />

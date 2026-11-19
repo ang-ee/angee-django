@@ -1,11 +1,9 @@
 import { composeAddons } from "@angee/app";
 import { expectValidBaseAddon } from "@angee/app/testing";
-import parties from "@angee/parties";
+import parties, { DIRECTORIES_TOOLBAR, DIRECTORY_CREATE } from "@angee/parties";
 import { describe, expect, test } from "vitest";
 
 import partiesIntegrateHubSpot from "./index";
-
-const TOOLBAR = "parties.directories#toolbar";
 
 describe("angee.parties_integrate_hubspot addon manifest", () => {
   test("satisfies the rendered-addon invariants", () => {
@@ -18,8 +16,9 @@ describe("angee.parties_integrate_hubspot addon manifest", () => {
       [{ id: parties.id, containers: parties.containers }, { ...partiesIntegrateHubSpot, dependsOn: ["parties"] }],
       { canonicalModelLabel: (model) => model },
     );
-    expect(containers.children[TOOLBAR]?.map(({ id, sequence }) => ({ id, sequence }))).toEqual([
-      { id: "parties_integrate_hubspot.connect", sequence: 20 },
+    expect(containers.children[DIRECTORIES_TOOLBAR]?.map(({ id, sequence, requires }) => ({ id, sequence, requires }))).toEqual([
+      // Present only for an identity that may connect a directory.
+      { id: "parties_integrate_hubspot.connect", sequence: 20, requires: DIRECTORY_CREATE },
     ]);
   });
 });

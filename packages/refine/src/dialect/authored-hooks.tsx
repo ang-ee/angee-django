@@ -190,9 +190,12 @@ export interface AuthoredMutationOptions<
   TVariables = Record<string, unknown>,
 > extends AuthoredOperationOptions {
   /**
-   * For operations whose result is a secret shown once: observer reset on
-   * settlement; the cache entry is collected on the next tick; single-flight
-   * per hook instance. Overlapping calls reject before executing.
+   * For an operation that carries a secret, in its variables (a key or a
+   * password the person enters) or in its result (a secret shown once). On
+   * settlement, success or failure, the observer resets and the native mutation,
+   * which holds the variables it sent and the data it returned, leaves the
+   * mutation cache on the next tick instead of after the default five minutes.
+   * Single-flight per hook instance: overlapping calls reject before executing.
    */
   transient?: boolean;
   /**
