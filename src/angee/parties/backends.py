@@ -49,6 +49,8 @@ MAPPINGS = "mappings"
 A contact's payload and mapped payload carry it only while a mapping applies,
 so a backend without one keeps the payload it always had.
 """
+MAPPING_REFUSED = "mapping_refused"
+"""The refusal code of a record a mapping cannot read or state; its details name the mapping, never the value."""
 
 
 @dataclass(frozen=True)
@@ -275,9 +277,17 @@ class DirectoryMapping(ImplBase):
     the record. After the contact's ingest, in its savepoint, :meth:`apply_record`
     states them on the person the contact landed on, minted or adopted, through
     the contact's link, so withdrawing the link withdraws them. Mappings apply in
-    key order, each stating its own group. A mapping states every field of its
-    group: a field it leaves out is stated as empty. A mapping of a backend that
-    writes back is refused at startup (``check_directory_mappings``).
+    key order, each stating its own groups, which it declares as ``aspects``: on
+    every record the base withdraws what the link states in any person group no
+    registered mapping declares and the ingest does not state, so a mapping
+    removed from the registry has its statements withdrawn on its replay. A
+    mapping states every field of its group: a field it leaves out is stated as
+    empty. Either step may raise ``ValueError`` (or ``TypeError``) for a value it
+    cannot read or state: that record alone is refused (:data:`MAPPING_REFUSED`,
+    naming the mapping, never the value), the rest of its page lands, and the
+    record applies once its source changes. A mapping of a backend that writes
+    back, or one declaring no group or a group the person has not, is refused at
+    startup (``check_directory_mappings``).
     """
 
     registry_setting = "ANGEE_DIRECTORY_MAPPING_CLASSES"
@@ -288,6 +298,8 @@ class DirectoryMapping(ImplBase):
     """The source fields this mapping reads; its backend asks the source for them."""
     version: ClassVar[int] = 1
     """This mapping's version; raise it when :meth:`project` or :meth:`apply_record` changes what it states."""
+    aspects: ClassVar[tuple[str, ...]] = ()
+    """The person statement groups :meth:`apply_record` states, its donor's; nothing it states lies outside them."""
 
     def project(self, row: Mapping[str, Any]) -> dict[str, Any]:
         """Return the JSON values to state from ``row``, the source's values of :attr:`fields` it sent.
@@ -522,17 +534,24 @@ class DirectoryBackend(BridgeImpl, HttpClientMixin):
         survivor's: :meth:`apply_record`); the payload keeps each once. ``row``
         holds the source's values of :meth:`mapped_fields`: each mapping projects
         the ones it names, and the payload keeps only those projections, under
-        :data:`MAPPINGS`, never ``row`` itself. Call it while extracting, outside
-        any transaction.
+        :data:`MAPPINGS`, never ``row`` itself; a mapping that cannot read its
+        values makes the payload the record's refusal (:class:`DirectoryMapping`).
+        Call it while extracting, outside any transaction.
         """
 
         payload: dict[str, Any] = {"contact": contact_projection(self._prepare_contact(contact))}
         if mappings := self.mappings():
             row = row or {}
-            payload[MAPPINGS] = {
-                mapping.key: mapping.project({name: row[name] for name in mapping.fields if name in row})
-                for mapping in mappings
-            }
+            projections = {}
+            for mapping in mappings:
+                try:
+                    projections[mapping.key] = mapping.project(
+                        {name: row[name] for name in mapping.fields if name in row}
+                    )
+                except (ValueError, TypeError):
+                    # The record alone is refused; the refusal names the mapping, never the value it could not read.
+                    return {"error": MAPPING_REFUSED, "mapping": mapping.key}
+            payload[MAPPINGS] = projections
         if replaced := list(dict.fromkeys(replaces)):
             payload["replaces"] = replaced
         return payload
@@ -542,13 +561,13 @@ class DirectoryBackend(BridgeImpl, HttpClientMixin):
 
         ``None`` is a record the source removed (a tombstone). A payload carrying
         ``error`` is one the backend could not map; the driver quarantines it under
-        its key. Any other payload is one :meth:`observe` made: its ``contact``
-        projection, with the mappings' projections under :data:`MAPPINGS` when it
-        carries them, is the remote side, and the source hash covers the whole
-        payload. A record the source merged away (a key another payload
-        ``replaces``) is no record here: it leaves the source's key walk, so the
-        absence sweep tombstones its link, and an identity read of it answers it
-        gone.
+        its key, with the payload's other keys as the refusal's details. Any other
+        payload is one :meth:`observe` made: its ``contact`` projection, with the
+        mappings' projections under :data:`MAPPINGS` when it carries them, is the
+        remote side, and the source hash covers the whole payload. A record the
+        source merged away (a key another payload ``replaces``) is no record
+        here: it leaves the source's key walk, so the absence sweep tombstones its
+        link, and an identity read of it answers it gone.
         """
 
         links = stream.links.filter(external_key__in=list(payloads)).with_sync_evidence()
@@ -559,9 +578,13 @@ class DirectoryBackend(BridgeImpl, HttpClientMixin):
             if payload is None:
                 records.append(RecordChange(key, {}, "", tombstone=True, target=target, projection=projection))
             elif "error" in payload:
+                details = {name: value for name, value in payload.items() if name != "error"}
                 records.append(
                     RecordChange(
-                        key, dict(payload), canonical_json_sha256(payload), failure=SemanticError(payload["error"])
+                        key,
+                        dict(payload),
+                        canonical_json_sha256(payload),
+                        failure=SemanticError(payload["error"], details=details),
                     )
                 )
             else:
@@ -832,13 +855,47 @@ class DirectoryBackend(BridgeImpl, HttpClientMixin):
             projections = record.source_payload.get(MAPPINGS, {})
             for mapping in self.mappings():
                 if mapping.key in projections:
-                    mapping.apply_record(target, projections[mapping.key], link=link)
+                    try:
+                        mapping.apply_record(target, projections[mapping.key], link=link)
+                    except (ValueError, TypeError) as error:
+                        raise SemanticError(MAPPING_REFUSED, details={"mapping": mapping.key}) from error
+            if stream.direction == StreamDirection.PULL:
+                self._withdraw_unmapped(target, link=link)
         if stream.direction == StreamDirection.PULL:
             return ApplyResult(target=target, mapped_payload=None if record.tombstone else record.mapped_payload)
         return ApplyResult(
             target=target,
             mapped_payload=contact_projection(parties.project_contact(target)) if target is not None else None,
         )
+
+    def _withdraw_unmapped(self, person: Any, *, link: Any) -> None:
+        """Withdraw what ``link`` states on ``person`` in groups neither the ingest nor a registered mapping states.
+
+        The ingest's groups are ``PartyManager.contact_aspects``; a mapping's,
+        its declared ``aspects``. What a mapping no longer registered stated is
+        all that this finds, so its replay withdraws it, through provenance's
+        own withdrawal, and nothing else on the link.
+        """
+
+        stated = {
+            *apps.get_model("parties", "Party").objects.contact_aspects,
+            *(aspect for mapping in self.mappings() for aspect in mapping.aspects),
+        }
+        source = link.asserting_source()
+        for manager in person.statement_managers():
+            statements = manager.model
+            unstated = set(statements.statement_aspects) - stated
+            if not unstated:
+                continue
+            live = statements._base_manager.filter(
+                subject_id=person.pk,
+                link=link,
+                aspect__in=sorted(unstated),
+                status=statements.StatementStatus.ASSERTED,
+                superseded__isnull=True,
+            )
+            for aspect in sorted(set(live.values_list("aspect", flat=True))):
+                manager.withdraw_unsupported(source, (), aspect=aspect, link=link)
 
     def on_absent(self, stream: Any, links: Sequence[Any]) -> dict[Any, ApplyResult] | None:
         """Withdraw what a confirmed-absent address book, or a pull-only stream's contact, stated.

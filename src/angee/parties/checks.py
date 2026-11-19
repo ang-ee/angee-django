@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from django.apps import apps
 from django.core import checks
 from django.core.exceptions import ImproperlyConfigured
 
@@ -18,15 +19,27 @@ def check_directory_mappings(app_configs: Any = None, **kwargs: Any) -> list[che
     The registry's own check comes first: every entry resolves to a
     :class:`DirectoryMapping` that claims the key it is registered under, so no
     key maps twice. Then a mapping naming no registered backend
-    (``parties.E001``) or a backend that writes back (``parties.E002``) fails at
-    startup rather than at its first sync.
+    (``parties.E001``) or a backend that writes back (``parties.E002``), or one
+    declaring no statement group or a group the person model has not
+    (``parties.E003``), fails at startup rather than at its first sync.
     """
 
     del app_configs, kwargs
     errors = check_impl_registry(DirectoryMapping)
     if errors:
         return errors
+    person = apps.get_model("parties", "Person")
+    groups = {aspect for model in person.statement_models() for aspect in model.statement_aspects}
     for mapping in resolve_all_impl_classes(DirectoryMapping):
+        if not mapping.aspects or set(mapping.aspects) - groups:
+            errors.append(
+                checks.Error(
+                    f"Directory mapping {mapping.key!r} must declare the person statement groups it states; "
+                    f"it declares {list(mapping.aspects)!r}, and the person has {sorted(groups)!r}.",
+                    obj=mapping,
+                    id="parties.E003",
+                )
+            )
         try:
             backend = resolve_impl_class(DirectoryBackend, mapping.backend)
         except (ImportError, ImproperlyConfigured) as error:

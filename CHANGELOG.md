@@ -94,11 +94,19 @@ live in code docstrings.
   payload keep only the projections, under a `mappings` key that appears only
   while a mapping applies. Each mapping is one `MappingContribution` of the
   contacts stream, so adding, removing, exchanging or re-versioning one replays
-  every contact once. The system check refuses a mapping of a backend that
-  writes back (`parties.E002`) or of no registered backend (`parties.E001`).
-  CardDAV and any backend without a mapping keep their payloads, comparison and
-  mapping version. Known gap: a mapping no longer registered leaves what it
-  stated asserted until the link is withdrawn.
+  every contact once. A mapping declares the person statement groups it states
+  (`aspects`), and on every pull-only record the base withdraws what the link
+  states in a person group neither the ingest (`PartyManager.contact_aspects`)
+  nor a registered mapping states, so a mapping no longer registered has its
+  statements withdrawn on its replay. A `project` or `apply_record` that raises
+  `ValueError` or `TypeError` for one record refuses that record alone
+  (`mapping_refused`, its details naming the mapping, never the value), where it
+  failed the whole page; it applies once its source changes. A backend's error
+  payload passes its other keys to the refusal's details. The system check
+  refuses a mapping of a backend that writes back (`parties.E002`), of no
+  registered backend (`parties.E001`), or declaring no group or one the person
+  has not (`parties.E003`). CardDAV and any backend without a mapping keep their
+  payloads, comparison and mapping version.
 
 - `angee.integrate`: a stream's mapping can be composed from several declarers.
   `StreamDefinition.mapping_contributions` declares one
