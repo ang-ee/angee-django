@@ -10,6 +10,19 @@ live in code docstrings.
 
 ## Unreleased — shared addon contracts, native embeddings and graph retrieval
 
+- `angee.knowledge`: one vault for people. Knowledge's install tier provisions
+  `Vault.PEOPLE` (`knowledge.vault_people`), unowned and administered by
+  platform admins and knowledge's vault roles; a deployment grants it with a
+  vault's ordinary grants (viewers through its share surface, editors
+  administratively). Whoever reads it reads every person's pages, people they
+  cannot read in parties included; finer control is a later version.
+  `RecordBindingManager.party_folder(party, vault=, title=)` finds or makes a
+  party's folder page bound under the new `FOLDER_ROLE` (`folder`), locking the
+  party first, and returns the oldest when a merge left several;
+  `PageManager.subpage(folder, title=)` finds or makes a named note under it.
+  `PageManager.create_in` without an actor, inside a system context, creates
+  the page as system work. Nothing changes in knowledge's permission schema.
+  Upgrade: load the install tier (provision does).
 - `angee.parties`: a directory mapping's refinement may set the preferred flag
   of an email or phone the source sent (`REFINABLE_FIELDS` gains `emails` and
   `phones`, `POINT_FIELDS`); a refinement changing an address's value, label or
