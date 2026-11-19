@@ -72,7 +72,9 @@ const { Provider, clearClients } = createUiTestProviders({
       sdkMocks.getList();
       return { data: sdkMocks.rows, total: sdkMocks.rows.length };
     },
-    custom: async ({ payload }) => ({ data: { deleteRecordPreview: await sdkMocks.mutate(payload ?? {}) } }),
+    custom: async ({ payload }: { payload?: unknown }) => ({
+      data: { deleteRecordPreview: await sdkMocks.mutate(payload ?? {}) },
+    }),
   },
 });
 

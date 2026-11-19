@@ -96,7 +96,7 @@ test("a default archive-aware collection requests unarchived rows and selects th
 });
 
 test.each(["base", "editable", "preset"] as const)("an explicit %s filter can request archived rows", async (source) => {
-  const filter = { OR: [{ is_archived: { exact: true } }, { name: { exact: "One" } }] };
+  const filter: QueryFilter = { OR: [{ is_archived: { exact: true } }, { name: { exact: "One" } }] };
   const { getList } = collection(source === "base" ? { baseFilter: filter }
     : source === "editable" ? { filter }
     : { preset: { id: "example.archived", preset: "example.archived", label: "Archived", resource: resource.modelLabel,
