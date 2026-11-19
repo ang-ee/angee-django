@@ -128,6 +128,21 @@ live in code docstrings.
   removed: the driver replaces link metadata wholesale. Schema revision 25:
   `rebac sync` after compose.
 
+- A pull-only contact never moves an address away from its holder. An email the
+  lookup answers with a person other than the contact's own, who does not hold it
+  too, is stated as a claim for review (confidence 0.4, below
+  `Party.REVIEW_CONFIDENCE`), without touching the handle's display fields, and
+  each such person is proposed as the contact's same person by
+  `parties.directory_match`; one the contact claimed stays a claim while nobody
+  holds it. Before, a refused contact's minted person stated the address in full
+  as a directory source and resolution moved it, and what is attributed to it,
+  off its holder; so did a second contact colliding with an adopted person. The
+  ingest owner (`ingest_contact`) now makes these proposals, so the backend's
+  decision proposes only the other people a source merge's replaced records
+  name. A two-way directory (CardDAV) still states every address in full: its card
+  projects only applied handle statements, so a claim would drop the address from
+  the card, and what a two-way card publishes is open with the architect.
+
 - A directory proposes for the same-as review each person its decision of a
   contact's target passed over: a candidate an adoption limit refused, and the
   other people the records a source merge replaced were linked to. The new

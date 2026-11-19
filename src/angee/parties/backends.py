@@ -614,12 +614,12 @@ class DirectoryBackend(BridgeImpl, HttpClientMixin):
         first (the page's lookup, :meth:`prepare_page`), the first whose
         adoption parties admits (``PartyManager.adoption_blocker``). A trashed
         person is nobody's target (``PartyManager.contact_people``), and a
-        two-way stream never adopts. The people passed over, each with what ties
-        them to the contact, are every other person a replaced link names (with
-        that link) and every person an adoption limit refused (with the handle
-        their email found them by, if any); :meth:`apply_record` proposes each as
-        the target's same person. Call it once, under the page's and the
-        contact's locks (:meth:`apply_record`).
+        two-way stream never adopts. The people passed over are every other
+        person a replaced link names, each with that link; :meth:`apply_record`
+        proposes each as the target's same person. A person an adoption limit
+        refused is named by one of the contact's emails, so the ingest proposes
+        them (``PartyManager.ingest_contact``). Call it once, under the page's
+        and the contact's locks (:meth:`apply_record`).
         """
 
         parties = apps.get_model("parties", "Party").objects
@@ -635,14 +635,12 @@ class DirectoryBackend(BridgeImpl, HttpClientMixin):
         if parsed is None or stream.direction != StreamDirection.PULL:
             return None, None, []
         tried: set[Any] = set()
-        refused: list[tuple[Any, Any | None]] = []
         for holder in (holder for email in _preferred(parsed) for holder in self._page_holders.get(email, ())):
             if holder.person.pk not in tried:
                 tried.add(holder.person.pk)
                 if parties.adoption_blocker(holder.person, link=link, through=holder.handle) is None:
-                    return holder.person, holder.handle, refused
-                refused.append((holder.person, holder.handle))
-        return None, None, refused
+                    return holder.person, holder.handle, []
+        return None, None, []
 
     def apply_record(self, stream: Any, record: RecordChange) -> ApplyResult:
         """Revalidate under domain locks, then use the single folder or contact ingest verb.
@@ -654,9 +652,10 @@ class DirectoryBackend(BridgeImpl, HttpClientMixin):
         are locked first (beside the page's locks, :meth:`prepare_page`), then
         :meth:`_contact_target` decides its person once, the ingest admits that
         person again as the binding owner, cites the handle an adoption found them
-        by, and withdraws what neither its link nor a replaced link still
-        supports. Each person that decision passed over is proposed for the
-        same-as review as the landed person's same person
+        by, claims for review an address someone else holds and proposes them,
+        and withdraws what neither its link nor a replaced link still supports.
+        Each other person a replaced link names is proposed for the same-as
+        review as the landed person's same person
         (``PartyManager.propose_directory_match``); adopting a person withdraws the
         proposal pairing them with the link's previous person. A tombstone
         withdraws the link's statements while the party stays. A two-way stream's

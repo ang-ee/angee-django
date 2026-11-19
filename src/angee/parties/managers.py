@@ -18,7 +18,7 @@ from __future__ import annotations
 import logging
 import re
 from collections import defaultdict
-from collections.abc import Iterable, Sequence
+from collections.abc import Collection, Iterable, Sequence
 from dataclasses import dataclass, replace
 from datetime import date, datetime
 from enum import StrEnum
@@ -2345,6 +2345,7 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
         created_by_id: Any,
         replaces: Sequence[Any] = (),
         through: Handle | None = None,
+        claims: Collection[str] = (),
     ) -> None:
         """Assert the emails and phones ``link`` names for ``party``; withdraw the others it or ``replaces`` asserted.
 
@@ -2353,8 +2354,12 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
         a blank one keeps the handle's); the Party row is the assertion's evidence.
         An email spelling ``through``'s address lands on that handle, the one an
         adoption found ``party`` by, never on a second row of another spelling.
-        ``replaces`` are the links of records a merge at the source folded into
-        this one: a handle only they asserted on ``party`` is withdrawn, never moved.
+        An email whose normalized value is in ``claims`` is someone else's
+        (:meth:`_contested_emails`): it is stated as a claim for review, below
+        ``Party.REVIEW_CONFIDENCE``, so it never resolves the handle, and the
+        handle's display fields stay its holder's. ``replaces`` are the links of
+        records a merge at the source folded into this one: a handle only they
+        asserted on ``party`` is withdrawn, never moved.
         """
 
         handle_model = apps.get_model("parties", "Handle")
@@ -2362,30 +2367,71 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
         supported = []
         for platform, points in (("email", parsed.emails), ("phone", parsed.phones)):
             for value, label, preferred in points:
-                if (
-                    through is not None
-                    and platform == through.platform
-                    and handle_model.normalize_value(platform, value) == through.normalized_value
-                ):
+                normalized = handle_model.normalize_value(platform, value)
+                if through is not None and platform == through.platform and normalized == through.normalized_value:
                     value = through.value
-                handle = handles.upsert(
-                    platform=platform,
-                    value=value,
-                    created_by_id=created_by_id,
-                    display_name=display_name,
-                    label=label,
-                    is_preferred=preferred,
-                )
-                mapped = {"label": label, "is_preferred": preferred}
+                claim = platform == handle_model.Platform.EMAIL and normalized in claims
+                shown = {} if claim else {"display_name": display_name, "label": label, "is_preferred": preferred}
+                handle = handles.upsert(platform=platform, value=value, created_by_id=created_by_id, **shown)
+                mapped = {} if claim else {"label": label, "is_preferred": preferred}
                 dirty = [name for name, value in mapped.items() if getattr(handle, name) != value]
                 if dirty:
                     for name in dirty:
                         setattr(handle, name, mapped[name])
                     handle.save(update_fields=(*dirty, "updated_at"))
-                self.assert_handle(party, handle, asserted_by=source, link=link, evidence=[party])
+                self.assert_handle(
+                    party, handle, asserted_by=source, link=link, evidence=[party], confidence=0.4 if claim else 1.0
+                )
                 supported.append({"subject": party, "aspect": "handle", "handle": handle})
         for stating in (link, *replaces):
             party.statements.withdraw_unsupported(source, supported, aspect="handle", link=stating)
+
+    def _contested_emails(
+        self, person: Person, parsed: ParsedContact, *, source: Any
+    ) -> tuple[set[str], list[tuple[Person, Handle | None]]]:
+        """Return the contact's emails ``source`` may only claim for ``person``, and the people they name instead.
+
+        What a contact may state about an address depends on whom the lookup
+        (:meth:`people_for_emails`, on any basis) finds by it. One that names a
+        person other than ``person`` is theirs, unless ``person`` holds it too:
+        stating it in full would move it, and what is attributed to it, away from
+        them, so it is a claim for review, and each such person comes back once,
+        with the handle that names them, to be proposed as ``person``'s same
+        person. One that names nobody stays a claim while ``source`` claims it on
+        ``person``: the claim itself makes a second claimant, which the lookup
+        answers with nobody. Any other address is stated in full. Values are
+        normalized email addresses (``Handle.normalize_value``).
+        """
+
+        handle_model = apps.get_model("parties", "Handle")
+        email = handle_model.Platform.EMAIL
+        answered: defaultdict[str, list[EmailHolder]] = defaultdict(list)
+        for holder in self.people_for_emails(value for value, _label, _preferred in parsed.emails):
+            answered[handle_model.normalize_value(email, holder.email)].append(holder)
+        claimed = set(
+            self.handle_statements()
+            .filter(
+                subject_id=person.pk,
+                asserted_by=str(to_subject_ref(source)),
+                status=self.handle_statements().model.StatementStatus.ASSERTED,
+                confidence__lt=self.model.REVIEW_CONFIDENCE,
+                handle__platform=email,
+            )
+            .values_list("handle__normalized_value", flat=True)
+        )
+        claims: set[str] = set()
+        others: dict[Any, tuple[Person, Handle | None]] = {}
+        for value, _label, _preferred in parsed.emails:
+            normalized = handle_model.normalize_value(email, value)
+            found = answered.get(normalized, [])
+            if any(holder.basis == EmailBasis.HELD and holder.person.pk == person.pk for holder in found):
+                continue
+            rivals = [holder for holder in found if holder.person.pk != person.pk]
+            if rivals or (not found and normalized in claimed):
+                claims.add(normalized)
+            for holder in rivals:
+                others.setdefault(holder.person.pk, (holder.person, holder.handle))
+        return claims, list(others.values())
 
     def ingest_contact(
         self,
@@ -2409,7 +2455,11 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
         adoption would (:meth:`_ingest_target`, :meth:`adoption_blocker`), locked
         first. ``through`` is the handle an adoption found ``target`` by: the
         identity statement cites it as evidence, restated on every later record,
-        and the contact's spelling of its address lands on it. ``replaces`` are
+        and the contact's spelling of its address lands on it. On a pull-only
+        stream an email that someone else holds is only claimed, for review, and
+        each such person is proposed as the contact's same person
+        (:meth:`_contested_emails`, :meth:`propose_directory_match`), so a
+        contact never moves an address away from its holder. ``replaces`` are
         the links of records a merge at the source folded into this one: whatever
         they stated on the person that this record restates moves to ``link``
         (statements are keyed by source, subject and aspect), and the rest is
@@ -2470,6 +2520,11 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
                     link=link,
                     evidence=[EvidenceReference.of(row) for row in evidence],
                 )
+            claims, others = (
+                self._contested_emails(person, parsed, source=source)
+                if stream.direction == StreamDirection.PULL
+                else (set(), [])
+            )
             self._land_handles(
                 parent,
                 parsed,
@@ -2479,7 +2534,10 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
                 created_by_id=created_by_id,
                 replaces=replaces,
                 through=through,
+                claims=claims,
             )
+            for other, handle in others:
+                self.propose_directory_match(person, other, evidence=[link, *([handle] if handle is not None else [])])
             apps.get_model("parties", "Address").objects.land_addresses(
                 person,
                 parsed.addresses,
