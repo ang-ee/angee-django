@@ -27,6 +27,7 @@ import {
 import type { UiTranslate } from "../../i18n";
 import { errorFromUnknown } from "../../data/errors";
 import type { CollectionGroupRequest } from "./collection-source";
+import type { SelectedGroup, SelectionGroupPath, SelectionPlace } from "./resource-view-types";
 
 /** Default size of a server-grouped bucket's first page; a source may declare its own. */
 const GROUPED_LEAF_PAGE_SIZE = 20;
@@ -70,6 +71,19 @@ export interface GroupedRenderModel<TRow extends Row> {
   carriedLeaves: ReadonlyMap<string, AngeeListBatchEntry>;
   items: GroupedListItem<TRow>[];
   rootResult: GroupedQueryResult | undefined;
+  shown: GroupedRenderShown;
+}
+
+/** What a grouped render shows, for checking a selection's captured places against it. */
+export interface GroupedRenderShown {
+  /**
+   * Every page the render shows, by key: the bucket keys a level's page of groups
+   * lists, or the row ids a group's page of records lists; null while the page loads
+   * or after it failed. A page the render does not show is absent.
+   */
+  pages: ReadonlyMap<string, ReadonlySet<string> | null>;
+  /** Each group's position among its level's groups, where a settled page lists it. */
+  positions: ReadonlyMap<string, number>;
 }
 
 /** Native and authored transports expose the same server group facts. */
@@ -116,6 +130,8 @@ export function buildGroupedRenderModel<TRow extends Row>(
   const leafKeys: string[] = [];
   const carriedLeaves = new Map<string, AngeeListBatchEntry>();
   const items: GroupedListItem<TRow>[] = [];
+  const pages = new Map<string, Set<string> | null>();
+  const positions = new Map<string, number>();
   let rootResult: GroupedQueryResult | undefined;
   const resourceQuery =
     params.query ?? (modelMetadata ? ResourceQuery.from(modelMetadata) : null);
@@ -128,6 +144,7 @@ export function buildGroupedRenderModel<TRow extends Row>(
     bucket: AggregateBucket,
     depth: number,
     groups: GroupedQueryResult,
+    groupPath: SelectionGroupPath,
   ): GroupedListPager => {
     const pagination = paginationByScope[bucketKey];
     const leafPageSize = pagination?.pageSize ?? declaredLeafPageSize;
@@ -157,6 +174,8 @@ export function buildGroupedRenderModel<TRow extends Row>(
     }
     const leaf = carriedLeaves.get(bucketKey) ?? leafResults.get(bucketKey);
     const rows = rowModelsByScopeKey.get(bucketKey) ?? EMPTY_ARRAY;
+    const place: SelectionPlace = { path: groupPath, page: stableSerialize([bucketKey, currentPage, leafPageSize]) };
+    pages.set(place.page, leaf && !leaf.fetching && !leaf.error ? new Set(rows.map((row) => row.id)) : null);
     const nav: GroupedRecordNav = {
       filter: cumulativeFilter,
       order: leafOrder,
@@ -196,6 +215,7 @@ export function buildGroupedRenderModel<TRow extends Row>(
           itemKey: `${bucketKey}:${row.id}`,
           row,
           nav,
+          place,
         });
       }
     }
@@ -212,14 +232,13 @@ export function buildGroupedRenderModel<TRow extends Row>(
   const walkLevel = (
     depth: number,
     parentFilter: ResourceViewFilter | undefined,
+    parentPath: SelectionGroupPath,
   ): GroupedListPager | undefined => {
     const axisGroup = groupStack[depth];
     if (!axisGroup) return;
     if (!resourceQuery)
       throw new Error("Resource metadata is required for server grouping.");
     const axis = resourceQuery.group(axisGroup);
-    const projection = axis.groupBy();
-    const levelWhere = resourceQuery.toWhere(parentFilter);
     const levelScopeKey = stableSerialize({
       axis: axis.spec,
       filter: parentFilter ?? null,
@@ -231,9 +250,7 @@ export function buildGroupedRenderModel<TRow extends Row>(
       depth === 0 ? rootPage : (pagination?.pageIndex ?? 0) + 1;
     const isLeafLevel = depth === groupStack.length - 1;
     const query: GroupByRequestOptions = {
-      dimensions: projection.dimensions,
-      ...(projection.orderBy ? { orderBy: projection.orderBy } : {}),
-      ...(levelWhere !== undefined ? { where: levelWhere } : {}),
+      ...resourceQuery.toGroupRead(axis, parentFilter),
       measures: queryMeasures,
       page: storedPage,
       pageSize: levelPageSize,
@@ -253,6 +270,9 @@ export function buildGroupedRenderModel<TRow extends Row>(
     });
     const result = groupByResults.get(levelScopeKey);
     if (depth === 0) rootResult = result;
+    const levelPage = stableSerialize([levelScopeKey, storedPage, levelPageSize]);
+    const listed = result && !result.fetching && !result.error ? new Set<string>() : null;
+    pages.set(levelPage, listed);
     const pager: GroupedListPager = {
       pageKey: levelScopeKey,
       page:
@@ -299,13 +319,18 @@ export function buildGroupedRenderModel<TRow extends Row>(
       return pager;
     }
 
-    for (const bucket of result.buckets) {
+    for (const [index, bucket] of result.buckets.entries()) {
       const bucketFilter = axis.drill(bucket);
       const expandable = bucketFilter !== undefined;
       const bucketKey = stableSerialize({
         scope: levelScopeKey,
         bucket: bucket.key ?? null,
       });
+      const position = (storedPage - 1) * levelPageSize + index;
+      if (listed) {
+        listed.add(bucketKey);
+        positions.set(bucketKey, position);
+      }
       const expanded = expandable && expandedKeys.has(bucketKey);
       const label = bucketLabel(
         bucket,
@@ -331,15 +356,24 @@ export function buildGroupedRenderModel<TRow extends Row>(
       items.push(header);
       if (!expanded || bucketFilter === undefined) continue;
       const cumulativeFilter = Filter.combine(parentFilter ?? {}, bucketFilter);
+      const identity = axis.bucketIdentity(bucket);
+      const groupPath: SelectionGroupPath = [...parentPath, {
+        group: axis.spec,
+        key: identity === null ? null : String(identity),
+        label,
+        position,
+        bucketKey,
+        page: levelPage,
+      }];
       header.pager = isLeafLevel
-        ? emitLeaf(bucketKey, cumulativeFilter, bucket, depth, result)
-        : walkLevel(depth + 1, cumulativeFilter);
+        ? emitLeaf(bucketKey, cumulativeFilter, bucket, depth, result, groupPath)
+        : walkLevel(depth + 1, cumulativeFilter, groupPath);
     }
     return pager;
   };
 
-  walkLevel(0, baseFilter);
-  return { groupScopes, leafScopes, leafKeys, carriedLeaves, items, rootResult };
+  walkLevel(0, baseFilter, []);
+  return { groupScopes, leafScopes, leafKeys, carriedLeaves, items, rootResult, shown: { pages, positions } };
 }
 
 function bucketLabel(
@@ -361,6 +395,99 @@ function bucketLabel(
     query,
   );
   return label ?? allRecordsLabel;
+}
+
+/**
+ * Where the render shows each loaded record: its place, or null when it shows the
+ * record under more than one group path (a stale page of one group beside a fresh
+ * page of another), which places it nowhere.
+ */
+export function placedRecords<TRow extends Row>(
+  items: readonly GroupedListItem<TRow>[],
+): ReadonlyMap<string, SelectionPlace | null> {
+  const placed = new Map<string, SelectionPlace | null>();
+  for (const item of items) {
+    if (item.kind !== "record") continue;
+    const seen = placed.get(item.row.id);
+    placed.set(item.row.id, seen === undefined || (seen !== null && groupPathId(seen.path) === groupPathId(item.place.path))
+      ? item.place : null);
+  }
+  return placed;
+}
+
+/** Whether a page the render shows still lists a member; a page it does not show cannot tell. */
+function stillListed(shown: GroupedRenderShown, page: string, member: string): boolean {
+  const listed = shown.pages.get(page);
+  return listed === undefined || (listed !== null && listed.has(member));
+}
+
+/**
+ * Split the selected ids by `grouping`, the levels the surface renders: from the
+ * places captured with them, checked against the render's items and the pages it
+ * shows now; null when the surface places no rows. See `ListViewProps.bulkActions`
+ * for the three states.
+ */
+export function selectedGroupsOf<TRow extends Row>(
+  selectedIds: Iterable<string>,
+  grouping: readonly ResourceViewGroup[],
+  render: {
+    places: Readonly<Record<string, SelectionPlace>>;
+    items: readonly GroupedListItem<TRow>[];
+    shown: GroupedRenderShown;
+  } | null,
+): readonly SelectedGroup[] | null | undefined {
+  if (grouping.length === 0) return undefined;
+  if (render === null) return null;
+  const placed = placedRecords(render.items);
+  // Whole level specs in order: field, granularity and `repeated`.
+  const levels = stableSerialize(grouping);
+  const entries = new Map<string, { path: SelectionGroupPath; ids: string[] }>();
+  for (const id of selectedIds) {
+    const captured = render.places[id];
+    const current = placed.get(id);
+    // Never a partial or stale split. A row has no place when it was selected without
+    // one or under other levels; when it shows now under another group or several; or
+    // when a page that listed it or one of its groups shows again, loading or settled
+    // without it.
+    if (!captured || current === null || stableSerialize(captured.path.map(({ group }) => group)) !== levels
+      || !stillListed(render.shown, captured.page, id)
+      || captured.path.some(({ page, bucketKey }) => !stillListed(render.shown, page, bucketKey))) return null;
+    const identity = groupPathId(captured.path);
+    if (current !== undefined && groupPathId(current.path) !== identity) return null;
+    const entry = entries.get(identity);
+    if (!entry) entries.set(identity, { path: current?.path ?? captured.path, ids: [id] });
+    else {
+      entry.ids.push(id);
+      // A loaded row carries the group's current label.
+      if (current) entry.path = current.path;
+    }
+  }
+  // One rank per group, so the order is consistent under nested grouping: its
+  // position in this render where a settled page lists it, else the position the
+  // first selected entry captured; then selection-map order, so ties keep it and
+  // siblings stay together under their parent.
+  const ranked = [...entries.values()].map((entry) => ({
+    ...entry, groups: entry.path.map((_, depth) => groupPathId(entry.path.slice(0, depth + 1))),
+  }));
+  const ranks = new Map<string, readonly [number, number]>();
+  for (const { path, groups } of ranked) groups.forEach((group, depth) => {
+    if (!ranks.has(group)) ranks.set(group, [render.shown.positions.get(path[depth]!.bucketKey) ?? path[depth]!.position, ranks.size]);
+  });
+  return ranked
+    .sort((left, right) => {
+      const depth = left.groups.findIndex((group, index) => group !== right.groups[index]);
+      const [leftRank, rightRank] = [ranks.get(left.groups[depth]!)!, ranks.get(right.groups[depth]!)!];
+      return leftRank[0] - rightRank[0] || leftRank[1] - rightRank[1];
+    })
+    .map(({ path, ids }) => {
+      const levels = path.map(({ group, key, label }) => ({ field: group.field, key, label }));
+      return { ...levels.at(-1)!, parents: levels.slice(0, -1), ids };
+    });
+}
+
+/** A path's identity: each level's axis spec and group key. */
+export function groupPathId(path: SelectionGroupPath): string {
+  return stableSerialize(path.map(({ group, key }) => [group, key]));
 }
 
 export function groupScopesEqual(

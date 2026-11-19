@@ -1145,6 +1145,52 @@ describe("FormView", () => {
     expect(screen.queryByText("Untitled")).toBeNull();
   });
 
+  test("a missing record renders the form's renderUnavailable with its id and the default state", () => {
+    const renderUnavailable = vi.fn((id: string, unavailable: ReactElement) => <div>
+      <p>{`Moved: ${id}`}</p>
+      {unavailable}
+    </div>);
+    renderWithProviders(<FormView resource="notes.Note" id="missing"
+      fields={[{ name: "title", title: true }]}
+      acknowledgedSource={{ record: null, values: null, loading: false }}
+      renderUnavailable={renderUnavailable} />);
+    expect(screen.getByText("Moved: missing")).toBeTruthy();
+    expect(screen.getByText("Record unavailable")).toBeTruthy();
+    expect(renderUnavailable).toHaveBeenCalledWith("missing", expect.anything());
+  });
+
+  test("a renderUnavailable that returns the element it was passed renders the default unchanged", () => {
+    renderWithProviders(<FormView resource="notes.Note" id="missing"
+      fields={[{ name: "title", title: true }]}
+      acknowledgedSource={{ record: null, values: null, loading: false }}
+      renderUnavailable={(_id, unavailable) => unavailable} />);
+    expect(screen.getByText("Record unavailable")).toBeTruthy();
+  });
+
+  test("renderUnavailable is not called while loading, on a load error, or for a new record", async () => {
+    const renderUnavailable = vi.fn(() => <p>Moved</p>);
+    renderWithProviders(<FormView resource="notes.Note" id="loading"
+      fields={[{ name: "title", title: true }]}
+      acknowledgedSource={{ record: null, values: null, loading: true }}
+      renderUnavailable={renderUnavailable} />);
+    expect(screen.queryByText("Moved")).toBeNull();
+    cleanup();
+
+    sdkMocks.record = null;
+    renderWithProviders(<FormView resource="notes.Note" id="failing"
+      fields={[{ name: "title", title: true }]}
+      renderUnavailable={renderUnavailable} />);
+    expect(await screen.findByText("Could not load this record.")).toBeTruthy();
+    expect(screen.queryByText("Moved")).toBeNull();
+    cleanup();
+
+    renderWithProviders(<FormView resource="notes.Note" fields={[{ name: "title", title: true }]}
+      renderUnavailable={renderUnavailable} />);
+    expect(screen.queryByText("Moved")).toBeNull();
+    expect(screen.queryByText("Record unavailable")).toBeNull();
+    expect(renderUnavailable).not.toHaveBeenCalled();
+  });
+
   test("lets a long saved title wrap in the hero", async () => {
     sdkMocks.record = { ...sdkMocks.record, title: "A long record title with several words that need wrapping" };
     renderWithProviders(<FormView resource="notes.Note" id="note-1" readOnly fields={[{ name: "title", title: true }]} />);

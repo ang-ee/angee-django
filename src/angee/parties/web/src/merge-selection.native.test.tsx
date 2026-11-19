@@ -2,7 +2,16 @@
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { RouterProvider, createMemoryHistory, createRootRoute, createRoute, createRouter, retainSearchParams } from "@tanstack/react-router";
 import { isValidElement, type ReactElement, type ReactNode } from "react";
-import { AppRuntimeProvider, ToastProvider, aliasRouteHref, createRouteHref, pageChildren, pageElementProps, type ListProps } from "@angee/ui";
+import {
+  AppRuntimeProvider,
+  ToastProvider,
+  aliasRouteHref,
+  createRouteHref,
+  pageChildren,
+  pageElementProps,
+  type ListProps,
+  type SelectedGroup,
+} from "@angee/ui";
 import { createUiTestProviders } from "@angee/ui/testing";
 import { afterEach, describe, expect, test, vi } from "vitest";
 
@@ -45,7 +54,11 @@ const mountedRouteHref = aliasRouteHref(
 );
 
 /** The selection bar's Merge for `ids` on the mounted people list, which a scope search narrows. */
-function renderMountedSelection(ids: readonly string[], search = "peopleScope=UNASSIGNED") {
+function renderMountedSelection(
+  ids: readonly string[],
+  search = "peopleScope=UNASSIGNED",
+  selectedGroups?: readonly SelectedGroup[] | null,
+) {
   // The app's root keeps `?app=` across links and redirects, as `createApp` declares it.
   const root = createRootRoute({ search: { middlewares: [retainSearchParams(["app"])] } });
   const router = createRouter({
@@ -53,7 +66,7 @@ function renderMountedSelection(ids: readonly string[], search = "peopleScope=UN
       createRoute({
         getParentRoute: () => root,
         path: MOUNTED_PEOPLE,
-        component: () => <MergeSelectionAction ids={new Set(ids)} />,
+        component: () => <MergeSelectionAction ids={new Set(ids)} selectedGroups={selectedGroups} />,
       }),
       createRoute({ getParentRoute: () => root, path: MERGE_PATH, component: () => <div>Comparison</div> }),
     ]),
@@ -67,6 +80,17 @@ function renderMountedSelection(ids: readonly string[], search = "peopleScope=UN
     </Provider>,
   );
   return router;
+}
+
+/** One group of a list grouped by name, holding the ticked `ids`. */
+function nameGroup(key: string | null, ids: readonly string[]): SelectedGroup {
+  return { field: "display_name", key, label: key ?? "No value", parents: [], ids };
+}
+
+/** The verb's accessible description: the text of the nodes its aria-describedby names. */
+function description(element: HTMLElement): string {
+  return (element.getAttribute("aria-describedby") ?? "").split(" ").filter(Boolean)
+    .map((id) => document.getElementById(id)?.textContent ?? "").join(" ");
 }
 
 /** The first `List` a page declares, through its fragments and resource list. */
@@ -110,6 +134,73 @@ describe("Merge in a parties list's selection bar", () => {
     expect(await screen.findByText(enPartiesMessages["duplicates.title"]!)).toBeTruthy();
     expect(reads.variables).toContainEqual({ sets: [["ada", "grace", "joan"]], certain: false });
     expect(screen.queryByText("Comparison")).toBeNull();
+  });
+
+  test("a grouped list's selection is one set per group: two groups of two are two sets, never one of four", async () => {
+    renderMountedSelection(["ada", "grace", "joan", "mary"], undefined, [
+      nameGroup("Ada Example", ["ada", "grace"]),
+      nameGroup("Joan Example", ["joan", "mary"]),
+    ]);
+
+    fireEvent.click(await screen.findByRole("button", { name: MERGE }));
+
+    expect(await screen.findByText(enPartiesMessages["duplicates.title"]!)).toBeTruthy();
+    expect(reads.variables).toContainEqual({ sets: [["ada", "grace"], ["joan", "mary"]], certain: false });
+    expect(reads.variables).not.toContainEqual({ sets: [["ada", "grace", "joan", "mary"]], certain: false });
+  });
+
+  test("a group of one and a group without a value are left out, and the dialog says so", async () => {
+    renderMountedSelection(["ada", "grace", "joan", "mary", "nell"], undefined, [
+      nameGroup("Ada Example", ["ada", "grace"]),
+      nameGroup("Joan Example", ["joan"]),
+      nameGroup(null, ["mary"]),
+      nameGroup("", ["nell"]),
+    ]);
+
+    fireEvent.click(await screen.findByRole("button", { name: MERGE }));
+
+    expect(await screen.findByText("Left out, with no one else selected in their group: 1.")).toBeTruthy();
+    expect(screen.getByText("Left out, in a group without a value: 2.")).toBeTruthy();
+    expect(reads.variables).toContainEqual({ sets: [["ada", "grace"]], certain: false });
+  });
+
+  test("more groups than one batch takes merge the first fifty, and the dialog says how many remain", async () => {
+    const groups = Array.from({ length: 60 }, (_, index) => nameGroup(`Person ${index}`, [`a${index}`, `b${index}`]));
+    renderMountedSelection(groups.flatMap((group) => group.ids), undefined, groups);
+
+    fireEvent.click(await screen.findByRole("button", { name: MERGE }));
+
+    expect(await screen.findByText("This merges the first 50 of 60 groups; select Merge… again for the rest.")).toBeTruthy();
+    expect(reads.variables).toContainEqual({ sets: groups.slice(0, 50).map((group) => [...group.ids]), certain: false });
+  });
+
+  test("three ticked on a grouped list that cannot place them are not offered as a batch", async () => {
+    renderMountedSelection(["ada", "grace", "joan"], undefined, null);
+
+    const verb = await screen.findByRole("button", { name: MERGE });
+    expect(verb.getAttribute("aria-disabled")).toBe("true");
+    expect(description(verb)).toBe(enPartiesMessages["merge.selection.unplaceable"]);
+    fireEvent.click(verb);
+    expect(screen.queryByText(enPartiesMessages["duplicates.title"]!)).toBeNull();
+  });
+
+  test("a grouping that holds no group of two or more with a value offers no batch", async () => {
+    renderMountedSelection(["ada", "grace", "joan"], undefined, [
+      nameGroup("Ada Example", ["ada"]),
+      nameGroup(null, ["grace", "joan"]),
+    ]);
+
+    const verb = await screen.findByRole("button", { name: MERGE });
+    expect(verb.getAttribute("aria-disabled")).toBe("true");
+    expect(description(verb)).toBe(enPartiesMessages["merge.selection.noGroups"]);
+  });
+
+  test("two ticked open their comparison whatever the grouping says", async () => {
+    renderMountedSelection(["ada", "grace"], undefined, null);
+
+    fireEvent.click(await screen.findByRole("button", { name: MERGE }));
+
+    expect(await screen.findByText("Comparison")).toBeTruthy();
   });
 
   test("one selected opens Merge into, where the person chooses the other record", async () => {

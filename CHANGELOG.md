@@ -10,6 +10,75 @@ live in code docstrings.
 
 ## Unreleased — shared addon contracts, native embeddings and graph retrieval
 
+- `@angee/ui`: `FormView` (and so `Form` and every registered form) takes an
+  optional `renderUnavailable(id, unavailable)`: what a saved record's form
+  shows when its id reads no record, given the default "Record unavailable"
+  state to render when it has nothing else; omitted, the default shows as
+  before. `angee.parties`: the person's and organization's own pages pass it,
+  so a direct link to a merged-away person or organization opens the survivor's
+  page for someone who reads both records (through `party_record`, keeping the
+  app they are in) and shows "Record unavailable" to anyone else. Debt:
+  following a merged-away record to its survivor (`merged_into`) is the shared
+  merge owner's fact, used beyond parties, yet `party_record` keeps it under
+  parties. Its fix is a generic survivor-of-an-id root beside `merge_records`
+  (`src/angee/graphql/merge.py`) with the same authorization, which the shared
+  record form asks whenever a resource its metadata marks `mergeable` misses, so
+  no form passes a hook and parties keeps only its concrete page
+  (`party_record`'s `concrete_kind`).
+- `angee.parties`: a merged-away party is no longer a row. The `people`,
+  `organizations` and `parties` resources read `canonical()` parties, as
+  handles, addresses and relationships already did, so a party merged into
+  another (or trashed) leaves the lists, their counts and groups, the
+  repeated-values groups and the pickers, and the People list's pager agrees
+  with the workbench's "All people" count. The new `party_record(id)` root
+  resolves a party id, a merged-away one included, to the live party it names
+  now; the record redirect (`/parties/records/<id>`, where references to a
+  party link) and the Party form read it, so such a link to a merged-away
+  record opens its survivor. Fixes the merged record appearing beside its
+  survivor (and the batch merge refusing that group). Limits: a party that was
+  trashed but never merged leaves the lists and cannot be found in the
+  interface to restore until the framework has a trash surface (the shared
+  `restore_record` verb still restores it by its id); a party that every one
+  of its sources has withdrawn leaves the lists too.
+- `angee.parties`: a list's Merge reads the list's grouping
+  (`collection.selectedGroups`). One ticked record opens "Merge into…" and two
+  open the compare page, whatever the grouping. Three or more on an ungrouped
+  list are one set; on a grouped list, one set per group of two or more ticked
+  records with a value, never one set across groups, each headed by its group and
+  marking a member that no longer matches it; a group of one or without a value is
+  left out and the batch dialog says how many. A grouped list that cannot place a
+  ticked record offers no batch, and neither does a grouping that yields no set:
+  the verb is disabled with its reason. A batch takes the first 50 sets in the
+  list's order and the dialog says how many remain.
+
+- Grouped lists find repeated values. People group by `display_name`,
+  `given_name` and `family_name`, Organizations by `display_name` and
+  `legal_name`, beside their existing axes (`people_groups` and
+  `organizations_groups` gain those group-by values). A group level's
+  `repeated` (`GroupSpec`, "Repeated values only", `?group=display_name:repeated`)
+  makes the server group read keep only groups of more than one record the actor
+  reads (`having: {count_gt: 1}`) and leave out the records with no value (null,
+  and blank text), so counts and group pages are the repeated groups'. The switch
+  is offered per level, where the level's axis at its granularity can tell its
+  empty group apart. A view switch or a URL that leaves the flag on a view grouping
+  without the native server read (client row model, authored `source`,
+  `RowsListView`, a gantt or contributed kind) drops it and keeps the grouping;
+  only an authored default asking for it is refused. A repeated grouping shows no
+  footer totals. `ResourceQuery.toGroupRead` assembles a level's read;
+  `groupAxisId` and `groupSpecsFrom` (`@angee/metadata`) own a level's axis
+  identity and the stack decoder. A page's `bulkActions` receives
+  `collection.selectedGroups`, the only read of the split: absent on an ungrouped
+  list, `null` when a selected row cannot be placed (selected without its group,
+  shown now under another group or several, missing from a page that listed it or
+  its groups and shows again, or loading; or on a surface that places no rows:
+  browser grouping, lane boards), else the selection split by its innermost groups
+  with their parents; a hint the server never trusts.
+  `Button` and `SelectionBarAction` take a `disabledReason`: the verb's tooltip
+  and accessible description, focusable while disabled, dimmed through
+  `data-disabled`, without an `href` on a link it renders, and one element tree as
+  the reason comes and goes; an empty reason is no reason (`PaneRow` too). The
+  record action bar's band verbs compose it.
+
 - `angee.parties`: one owner proposes same-person pairs. A pull-only
   directory's contact that may only claim an address another live party is
   linked to proposes them through `Party.objects.propose_same_person_as_system`
@@ -768,8 +837,10 @@ live in code docstrings.
   holding a record the person may not read, or one the person may not merge in a
   batch is refused before anything is read further or locked; a set merges exactly as confirmed, judged again under
   one lock pass of its members, their same-person partners and their handles; the oldest record survives and the others fold into it in
-  key order; a lock conflict (deadlock, lock not granted) is that set's
-  `stopped`, any other database error stops the call. A batch records no value
+  key order; each set runs in its own transaction: a lock conflict (deadlock,
+  lock not granted) is that set's `stopped`, and any other database failure (a
+  statement timeout, a lost connection) its `failed`, with a reason for the
+  person and the error in the log, and the next set still runs. A batch records no value
   as the person's choice (`PartyManager.BATCH_CONFIRMED_FIELDS`): statements move
   as their sources' own and an empty survivor field takes a merged record's
   value as a plain value (`Party.merge_values`). A pair is certain when both are
@@ -837,8 +908,39 @@ live in code docstrings.
   link supports; the hourly task reads the shared-sender providers once for both
   passes (`PartyManager.shared_sender_ids`, the new `shared=` argument of
   `reconcile_suggestions` and `reconcile_same_as`). The review list
-  (`same_as_pairs`) drops a pair the reader cannot read before it fills a page,
-  and walks at most `PartyQuerySet.SAME_AS_REVIEW_PAGES` (four) pages to fill it.
+  (`same_as_pairs`) pages by cursor: `same_as_pairs(limit, after)` returns the
+  pairs after the pair `after` names, in the pair rows' key order, each with
+  its `id`, so a page continues after the last pair seen and a pair merged or
+  kept apart meanwhile moves no other one. Which pairs a reader may review
+  (both endpoints and every cited handle readable) is decided for every pair at
+  once in a fixed number of queries, and only the page is read in full; a pair
+  the reader cannot read never ends a page early. `certain_same_as_pairs(limit,
+  after)` gives the certain pairs a batch at a time the same way, and
+  `same_as_pair_counts { pairs certain }` (`PartyManager.same_as_review_counts`)
+  says how many of each the reader may review. The Review page shows both totals
+  and gives each of its lists its own pager (the claims list embedded in its
+  section, the pairs under their cards); "Merge certain pairs (50 of 180)" names
+  the batch and the dialog says the next batch follows; the overview counts every
+  pair instead of a capped read. In the dialog each set that may merge has its
+  own Include toggle, off by default when the set carries a warning (a
+  disagreement, a member that no longer matches its group) and off again when
+  the set changes from the state the person saw or ticked it in, and the
+  mutation sends only the included sets. A disagreement is a field the records
+  state at least two different values for; a field one value is stated for,
+  the rest empty, is a fill (`DuplicateSetPreview.fills`, the same
+  `MergeFieldValues` rows), which the merge gives the survivor and which warns
+  nobody. The group-match mark reads either list, so a member whose grouping
+  value was cleared since the selection still no longer matches its group; when
+  every member moved to the same new value nothing differs and nothing is
+  marked. Each set that may merge carries a `digest`
+  (`DuplicateSetPreview.digest`, `keyed_facts_digest`, the keyed hashing
+  `IdentityBasis.facts_hash` now shares) of what the dialog shows of it: each
+  member's id, name, creation time and first-met note as the reader's gates
+  leave them, the readable handle statements with their source and handle, the
+  survivor and the disagreements with the values that will show. The mutation
+  requires the digests (`merge_duplicates(sets, digests, certain)`), and a set
+  whose digest no longer matches under the lock is refused with a reason that
+  asks the person to look again.
 
 - Parties: a handle's holder is always the projection of a statement. A holder
   written onto the row with no statement behind it lost its address the moment

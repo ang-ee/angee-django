@@ -77,7 +77,10 @@ export function resourceSnapshotOperations(resources: readonly DataResourceMetad
         if (!buckets.has(id)) buckets.set(id, { key, rows: [] });
         buckets.get(id)!.rows.push(row);
       }
-      return [...buckets.values()].map((bucket) => ({ ...bucket, aggregate: aggregate(bucket.rows) }));
+      const having = args.having as { count_gt?: number } | undefined;
+      return [...buckets.values()]
+        .filter((bucket) => having?.count_gt === undefined || bucket.rows.length > having.count_gt)
+        .map((bucket) => ({ ...bucket, aggregate: aggregate(bucket.rows) }));
     };
     const { roots } = resource;
     if (roots.list) operations[roots.list] = (args) => selected(args).slice(Number(args.offset ?? 0), args.limit == null ? undefined : Number(args.offset ?? 0) + Number(args.limit));

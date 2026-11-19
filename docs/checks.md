@@ -454,6 +454,8 @@ measurements.
 | All composed fragment types | Stack root, after SDL/codegen | `pnpm --config.verify-deps-before-run=false --dir web run typecheck` |
 | All composed fragment tests, one package at a time since each Vitest run sizes its workers to the machine | Stack root, after SDL/codegen | `pnpm --config.verify-deps-before-run=false --fail-if-no-match -r --workspace-concurrency=1 --filter '!./workspaces/src/angee/packages/**' run test` |
 
+CI's stack job also runs each composed fragment's own `typecheck` script, which covers its test files; `pnpm -r` skips a package without the script, so the architecture guardrail requires every addon web fragment to declare one.
+
 After changing export annotations, story owners or token CSS, regenerate with
 `pnpm --config.verify-deps-before-run=false --filter @angee/storybook --fail-if-no-match run catalog:generate`
 from the stack root.

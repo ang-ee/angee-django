@@ -12,6 +12,7 @@ import type { ColumnDescriptor } from "../../page";
 import { type ResolvedBoardLaneSource } from "../resource-view-board-lanes";
 import type { BoardCardPlacement, BoardOrder } from "../resource-view-types";
 import type { CollectionSource } from "../collection-source";
+import type { GroupedRenderShown } from "../resource-view-grouped-model";
 export type RowRecord = BaseRecord & Row;
 export type ResourceFilterInput = Record<string, unknown>;
 
@@ -167,6 +168,8 @@ export interface GroupedResourceViewSurface<TRow extends Row = Row>
   setScopePageSize: (key: string, pageSize: number) => void;
   /** The windowed server-grouped render stream. */
   groupedItems: readonly GroupedListItem<TRow>[];
+  /** The pages that stream shows, for checking a selection's captured places against it. */
+  shown: GroupedRenderShown;
   /** Server `_groups` bucket expansion keys. */
   expandedKeys: ReadonlySet<string>;
   toggleGroup: (key: string) => void;

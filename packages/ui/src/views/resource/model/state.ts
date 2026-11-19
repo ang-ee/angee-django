@@ -1,5 +1,5 @@
 import type { PaginationState, RowSelectionState, SortingState, VisibilityState } from "@tanstack/react-table";
-import type { ResourceQuery } from "@angee/metadata";
+import { QueryParseError, type ResourceQuery } from "@angee/metadata";
 import { DEFAULT_CALENDAR_VIEW_MODE, DEFAULT_RESOURCE_VIEW_PAGE_SIZE, type CalendarViewMode, type ResourceViewKind } from "./capabilities";
 import { Filter, type ResourceViewFilter, type ResourceViewGroup, type ResourceViewInitialState } from "./filter";
 import { normaliseGroupStack, normaliseSourceKeys, todayCalendarAnchor } from "./search";
@@ -52,12 +52,24 @@ export function createResourceViewState(initial: ResourceViewInitialState = {}):
   };
 }
 
-/** Validate native view query facts through their resource owner before reads. */
-export function validateResourceViewState(state: ResourceViewState, query: ResourceQuery): ResourceViewState {
+/**
+ * Validate native view query facts through their resource owner before reads.
+ * `appliesRepeated` is false where the surface groups its stored stack without the
+ * native server group read (in the browser, or through an authored groups
+ * document): a level asking for `GroupSpec.repeated` there is refused, so the URL
+ * never names a grouping the list does not apply.
+ */
+export function validateResourceViewState(
+  state: ResourceViewState,
+  query: ResourceQuery,
+  { appliesRepeated = true }: { appliesRepeated?: boolean } = {},
+): ResourceViewState {
   if (state.queryError) return state;
   try {
     const filter = query.filterFrom(state.filter);
     const groupStack = query.groupsFrom(state.groupStack).map((axis) => axis.spec);
+    const repeated = appliesRepeated ? undefined : groupStack.find((level) => level.repeated);
+    if (repeated) throw new QueryParseError(`groups.${repeated.field}.repeated`, "this list cannot list only repeated values");
     query.sortFrom(state.sorting?.map(({ id, desc }) => ({ field: id, direction: desc ? "DESC" : "ASC" })));
     return { ...state, filter, groupStack };
   } catch (error) {

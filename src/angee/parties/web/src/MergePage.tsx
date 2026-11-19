@@ -235,7 +235,7 @@ export function MergePage(): React.ReactElement {
     if (!left || !right) return;
     const into = survivor === "left" ? left : right;
     const source = survivor === "left" ? right : left;
-    // Merging is irreversible: the source record disappears into the survivor.
+    // The source record folds into the survivor; the merge reverts from its changeset, as the confirmation says.
     const ok = await confirm({
       title: t("merge.confirmTitle", { name: into.display_name }),
       body: t("merge.confirmBody", { source: source.display_name, name: into.display_name }),

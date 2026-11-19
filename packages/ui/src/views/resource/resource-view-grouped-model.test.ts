@@ -330,6 +330,20 @@ describe("buildGroupedRenderModel", () => {
 });
 
 
+test("a repeated level asks the server for groups of more than one record and leaves the empty group out", () => {
+  const read = (group: { field: string; repeated?: true }) => buildGroupedRenderModel<Row>(new Map(), EMPTY_LEAVES, EMPTY_ROWS,
+    params({ groupStack: [group], baseFilter: { owner: { exact: "Ada" } } })).groupScopes[0]!;
+  const repeated = read({ field: "status", repeated: true });
+  expect(repeated.query.having).toEqual({ count_gt: 1 });
+  expect(repeated.query.where).toEqual({ _and: [{ owner: { _eq: "Ada" } }, { status: { _is_null: false, _neq: "" } }] });
+  // The list's own filter is unchanged; only the server read narrows.
+  expect(repeated.filter).toEqual({ owner: { exact: "Ada" } });
+  const every = read({ field: "status" });
+  expect(every.query).not.toHaveProperty("having");
+  expect(every.query.where).toEqual({ owner: { _eq: "Ada" } });
+  expect(every.key).not.toBe(repeated.key);
+});
+
 test("subgroup page sizes keep stable scope identity and feed the native request", () => {
   const { rootKey, rootResult, bucketKey } = rootFixture();
   const expanded = params({ expandedKeys: new Set([bucketKey]) });

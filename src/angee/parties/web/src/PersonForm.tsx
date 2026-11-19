@@ -10,6 +10,7 @@ import { PartyAddresses } from "./PartyAddresses";
 import { PersonRelationshipsTab } from "./PersonRelationships";
 import { usePartiesT } from "./i18n";
 import { useMergeIntoAction } from "./merge-into";
+import { renderPartyUnavailable } from "./PartyRecordRedirect";
 import { usePartyContactActions } from "./party-contact-actions";
 
 const MODEL = "parties.Person";
@@ -86,7 +87,8 @@ export function PersonForm({ resource: _resource, recordTabs, ...props }: Regist
   const contactActions = usePartyContactActions();
   const mergeInto = useMergeIntoAction();
   const tabs = React.useMemo(() => personTabs(t), [t]);
-  return <Form {...props} resource={MODEL} eyebrow={t("person.eyebrow")} recordTabs={recordTabs ?? tabs}>
+  return <Form {...props} resource={MODEL} eyebrow={t("person.eyebrow")} recordTabs={recordTabs ?? tabs}
+    renderUnavailable={renderPartyUnavailable}>
     {personFields(t, extraFields)}
     {contactActions}
     <Action {...mergeInto} />

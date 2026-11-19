@@ -17,7 +17,7 @@ export const switchVariants = tv({
     root: "relative inline-flex shrink-0 cursor-pointer items-center rounded-full bg-border-strong outline-none transition-colors focus-visible:focus-ring data-[checked]:bg-brand data-[disabled]:cursor-not-allowed data-[disabled]:opacity-60",
     thumb:
       "pointer-events-none block translate-x-0.5 rounded-full bg-sheet shadow-sm transition-transform data-[checked]:translate-x-4",
-    row: "flex items-center justify-between gap-3 rounded-6 border border-border-subtle bg-sheet px-3 py-2",
+    row: "flex items-center justify-between gap-3",
     rowText: "min-w-0 space-y-0.5",
     label: "text-13 font-medium text-fg",
     description: textRoleVariants({ role: "caption" }),
@@ -33,16 +33,22 @@ export const switchVariants = tv({
         thumb: "size-5",
       },
     },
+    /** A row framed on its own, or flush inside a host that already frames it. */
+    frame: {
+      inset: { row: "rounded-6 border border-border-subtle bg-sheet px-3 py-2" },
+      flush: {},
+    },
   },
   defaultVariants: {
     size: "sm",
+    frame: "inset",
   },
 });
 
 type SwitchRecipeProps = VariantProps<typeof switchVariants>;
 
 export type SwitchRootProps = Omit<BaseSwitchRootProps, "className"> &
-  SwitchRecipeProps & Pick<WidgetControlSurfaceProps, "presentation"> & {
+  Pick<SwitchRecipeProps, "size"> & Pick<WidgetControlSurfaceProps, "presentation"> & {
     className?: string;
   };
 
@@ -64,7 +70,7 @@ export const SwitchRoot = React.forwardRef<HTMLElement, SwitchRootProps>(
 SwitchRoot.displayName = "SwitchRoot";
 
 export type SwitchThumbProps = Omit<BaseSwitchThumbProps, "className"> &
-  SwitchRecipeProps & {
+  Pick<SwitchRecipeProps, "size"> & {
     className?: string;
   };
 
@@ -105,7 +111,7 @@ export const Switch = React.forwardRef<HTMLElement, SwitchProps>(
 );
 Switch.displayName = "Switch";
 
-export type SwitchRowProps = Omit<SwitchProps, "className"> & {
+export type SwitchRowProps = Omit<SwitchProps, "className"> & Pick<SwitchRecipeProps, "frame"> & {
   label: React.ReactNode;
   description?: React.ReactNode;
   className?: string;
@@ -117,10 +123,10 @@ export type SwitchRowProps = Omit<SwitchProps, "className"> & {
  */
 export const SwitchRow = React.forwardRef<HTMLElement, SwitchRowProps>(
   function SwitchRow(
-    { label, description, className, switchClassName, ...props },
+    { label, description, className, switchClassName, frame, ...props },
     ref,
   ) {
-    const styles = switchVariants();
+    const styles = switchVariants({ frame });
     return (
       <label className={styles.row({ className })}>
         <span className={styles.rowText()}>
