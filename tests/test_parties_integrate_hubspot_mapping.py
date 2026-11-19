@@ -15,6 +15,7 @@ from typing import Any
 
 import pytest
 from django.utils import timezone
+from rebac import system_context
 
 from angee.integrate.states import LinkStatus, StreamPhase
 from angee.messaging.testing.models import Person
@@ -240,6 +241,10 @@ def test_adding_a_mapping_replays_the_baseline_asking_hubspot_for_the_new_proper
 
 def test_an_adopted_contact_is_mapped_like_a_minted_one(hubspot: HubSpot, settings: Any) -> None:
     person, _handle = _existing(hubspot.directory.owner, email=ADA["email"])
+    # Binding a contact to an existing person is the directory's option, off by default.
+    with system_context(reason="tests.hubspot.adoption"):
+        hubspot.directory.config = {**hubspot.directory.config, "adopt_existing_people": True}
+        hubspot.directory.save(update_fields=["config"])
     _register(settings, ColourMapping)
     hubspot.reopen()
     ada = hubspot.server.add("contacts", {**ADA, "preferred_colour": "green"}, modified=ago(days=1))

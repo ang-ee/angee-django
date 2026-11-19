@@ -616,8 +616,10 @@ class HttpClient:
         the permanent :class:`RequestNotBuiltError`.
         With ``error``, a transport failure and a success over the cap or
         whose body httpx2 cannot decode raise what ``error`` returns for their
-        :class:`HttpRefusal` instead, chained to the failure the refusal keeps;
-        the response is returned whatever its status. A request not built
+        :class:`HttpRefusal` instead, chained to the failure the refusal keeps,
+        or that failure itself, unchanged, when ``error`` returns it (a request
+        not sent that its caller passes on); the response is returned whatever
+        its status. A request not built
         chains nothing: the library's text for it quotes the header value, which
         can be a credential, so its refusal keeps only the owner's own failure.
         ``HttpRefusal.cause`` tells a request not sent from one that may already
@@ -685,10 +687,9 @@ class HttpClient:
                         raise RedirectOriginError("Redirects must retain the request origin.")
                     url = str(destination)
         except (httpx2.TransportError, httpx2.DecodingError, RequestNotSentError, ResponseTooLargeError) as failure:
-            if error is None:
+            if error is None or (refused := error(HttpRefusal(failure=failure))) is failure:
                 raise
-            chained = None if isinstance(failure, RequestNotBuiltError) else failure
-            raise error(HttpRefusal(failure=failure)) from chained
+            raise refused from None if isinstance(failure, RequestNotBuiltError) else failure
         return response
 
     @overload

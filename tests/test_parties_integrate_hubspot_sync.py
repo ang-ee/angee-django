@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from time import monotonic
@@ -93,6 +94,7 @@ class HubSpot:
     backend: HubSpotDirectoryBackend
     server: HubSpotServer
     stream: Any
+    """The contacts stream; ``None`` for an undiscovered directory until :meth:`reopen` after its first sync."""
 
     def add_people(self, count: int) -> list[str]:
         """Add ``count`` invented contacts with an email each, modified a minute apart a day ago."""
@@ -141,8 +143,13 @@ class HubSpot:
         pytest.fail("The absence sweep did not finish")
 
     def discover(self) -> dict[str, Any]:
-        """Run the directory's connection discovery, as the discovery task does."""
+        """Run the directory's connection discovery for its current generation, as the discovery task does.
 
+        A re-entered secret or a newly attached key starts a new generation, so the
+        row is read again first.
+        """
+
+        self.directory.refresh_from_db()
         result = self.directory.run_discovery(
             credential_pk=self.directory.credential_id, generation=self.directory.discovery_generation
         )
@@ -178,9 +185,10 @@ class HubSpot:
         ]
 
 
-@pytest.fixture
-def hubspot(db: None) -> Iterator[HubSpot]:
-    del db
+@contextmanager
+def scripted_directory(*, discovered: bool) -> Iterator[HubSpot]:
+    """A HubSpot directory connected to a scripted account, discovered (as connecting leaves it) or not yet."""
+
     with system_context(reason="test HubSpot directory"), serve(HubSpotServer()) as server:
         directory = make_integration(
             "hubspot-directory", model=Directory, backend_class="hubspot", material={"api_key": TOKEN}
@@ -189,21 +197,41 @@ def hubspot(db: None) -> Iterator[HubSpot]:
             slug="employee", name="Employee", inverse_name="Employer", category="professional",
             other_party_kind="organization",
         )
-        # The stream driver commits nothing while discovery is pending, so the directory is discovered first, as
-        # connecting leaves it; the discovery's requests are not part of what a test reads from the server.
-        assert directory.run_discovery(credential_pk=directory.credential_id, generation=directory.discovery_generation)[
-            "ok"
-        ]
-        directory.refresh_from_db()
-        server.requests.clear()
         backend = directory.backend
         assert isinstance(backend, HubSpotDirectoryBackend)
+        if not discovered:
+            # The stream driver commits nothing while discovery is pending: the test discovers, then syncs.
+            yield HubSpot(directory, backend, server, None)
+            backend.close()
+            return
+        hubspot = HubSpot(directory, backend, server, None)
+        assert hubspot.discover()["ok"]
+        server.requests.clear()  # The discovery's requests are not part of what a test reads from the server.
         (books,) = backend.streams()
         advance_stream(SyncStream.objects.current(directory, books), backend)
         (_, contacts) = backend.streams()
         assert (contacts.partition, contacts.direction) == ("contacts", StreamDirection.PULL)
-        yield HubSpot(directory, backend, server, SyncStream.objects.current(directory, contacts))
+        hubspot.stream = SyncStream.objects.current(directory, contacts)
+        yield hubspot
         backend.close()
+
+
+@pytest.fixture
+def hubspot(db: None) -> Iterator[HubSpot]:
+    """The scripted directory, discovered, with its address book landed and its contacts stream open."""
+
+    del db
+    with scripted_directory(discovered=True) as directory:
+        yield directory
+
+
+@pytest.fixture
+def undiscovered_hubspot(db: None) -> Iterator[HubSpot]:
+    """The scripted directory as connected, its first discovery still pending."""
+
+    del db
+    with scripted_directory(discovered=False) as directory:
+        yield directory
 
 
 def asserted(party_id: Any, link: Any) -> Any:
@@ -695,7 +723,6 @@ def test_a_refusal_reaches_the_operator_and_the_contacts_wait_where_they_were(
     wait: timedelta | None,
 ) -> None:
     ada = hubspot.server.add("contacts", ADA, modified=ago(days=1))
-    assert hubspot.discover()["ok"]
     assert hubspot.directory.run_sync(now=timezone.now()) == 1
     hubspot.stream.refresh_from_db()
     cursor, applications = hubspot.stream.cursor, applied_history().count()
@@ -761,7 +788,7 @@ def test_a_rejected_key_without_a_service_keys_usual_shape_says_to_check_it_and_
     assert hubspot.discover() == {"ok": False, "reason": "discovery-failed"}
     assert hubspot.directory.last_error == f"{REJECTED} {CHECK_THE_KEY}"
 
-    hubspot.server.token = "a key of another shape"
+    hubspot.server.token = "a-key-of-another-shape"  # Sendable in a header, as integrate requires of a token.
     held.replace_material({"api_key": hubspot.server.token})
     assert hubspot.directory.test_connection() == CONNECTED
 
@@ -782,25 +809,32 @@ def test_a_credential_that_needs_reconnecting_is_neither_reported_connected_nor_
 
 
 def test_admission_judges_the_key_as_the_header_sends_it(hubspot: HubSpot) -> None:
-    """Only an empty key, with nothing to send, is refused before HubSpot sees it; HubSpot judges any other."""
+    """Only an empty key, with nothing to send, is refused before HubSpot sees it; HubSpot judges any other.
+
+    A static token is stored stripped, so a key of spaces is an empty one.
+    """
 
     owner = hubspot.directory.owner
     blank = Credential.objects.create_local_credential(
         owner, kind="static_token", name="A blank key", material={"api_key": "   "}
     )
     empty = Credential.objects.create_local_credential(owner, kind="static_token", name="No key", material={})
-
-    assert (hubspot.directory.credential_blocker(empty), hubspot.directory.credential_blocker(blank)) == (
-        NOT_A_SERVICE_KEY,
-        None,
+    odd = Credential.objects.create_local_credential(
+        owner, kind="static_token", name="A key of another shape", material={"api_key": "a-key-of-another-shape"}
     )
-    hubspot.directory.attach_connection(blank)
+
+    assert (
+        hubspot.directory.credential_blocker(empty),
+        hubspot.directory.credential_blocker(blank),
+        hubspot.directory.credential_blocker(odd),
+    ) == (NOT_A_SERVICE_KEY, NOT_A_SERVICE_KEY, None)
+    hubspot.directory.attach_connection(odd)
     hubspot.server.requests.clear()
     with pytest.raises(HubSpotError) as rejected:
         hubspot.directory.test_connection()
     assert rejected.value.public_message == f"{REJECTED} {CHECK_THE_KEY}"
     (sent,) = hubspot.server.requests
-    assert sent.headers["authorization"] == "Bearer    "
+    assert sent.headers["authorization"] == "Bearer a-key-of-another-shape"
 
 
 def test_the_connection_test_reads_a_saved_directorys_key_afresh_and_an_unsaved_ones_as_attached(
@@ -821,10 +855,9 @@ def test_the_connection_test_reads_a_saved_directorys_key_afresh_and_an_unsaved_
     assert connecting.test_connection() == CONNECTED
 
 
-def test_discovery_learns_the_account_a_contacts_source_link_opens(hubspot: HubSpot) -> None:
+def test_discovery_learns_the_account_a_contacts_source_link_opens(undiscovered_hubspot: HubSpot) -> None:
+    hubspot = undiscovered_hubspot
     ada = hubspot.server.add("contacts", ADA, modified=ago(days=1))
-    hubspot.drain()
-    assert hubspot.link(ada).source_url is None
     with pytest.raises(IntegrationError, match="discovery"):
         hubspot.directory.run_sync(now=timezone.now())
     hubspot.server.requests.clear()
@@ -834,6 +867,8 @@ def test_discovery_learns_the_account_a_contacts_source_link_opens(hubspot: HubS
     assert [request.url.path for request in hubspot.server.requests] == ["/account-info/2026-09/details"]
     state = hubspot.directory.subscription_state
     assert (state["hub_id"], state["ui_domain"]) == (HUB_ID, "app.hubspot.com")
+    assert hubspot.directory.run_sync(now=timezone.now()) == 2  # The address book, then the contact.
+    hubspot.reopen()
     link = hubspot.link(ada)
     assert link.source_url == f"https://app.hubspot.com/contacts/{HUB_ID}/record/0-1/{ada}"
     assert link.source_label == "Ada Example"
@@ -842,20 +877,25 @@ def test_discovery_learns_the_account_a_contacts_source_link_opens(hubspot: HubS
     assert hubspot.directory.discovery_ready
 
 
-def test_discovery_without_a_web_host_still_learns_the_account(hubspot: HubSpot) -> None:
+def test_discovery_without_a_web_host_still_learns_the_account(undiscovered_hubspot: HubSpot) -> None:
+    hubspot = undiscovered_hubspot
     ada = hubspot.server.add("contacts", ADA, modified=ago(days=1))
     hubspot.server.queue(httpx2.Response(200, json={"portalId": HUB_ID}))
 
     assert hubspot.discover() == {"ok": True, "reason": "applied"}
 
     assert hubspot.directory.subscription_state["hub_id"] == HUB_ID
-    assert hubspot.directory.run_sync(now=timezone.now()) == 1
+    assert hubspot.directory.run_sync(now=timezone.now()) == 2  # The address book, then the contact.
+    hubspot.reopen()
     assert hubspot.link(ada).source_url is None
 
 
-def test_a_key_refused_the_account_call_for_a_scope_learns_its_hub_from_introspection(hubspot: HubSpot) -> None:
+def test_a_key_refused_the_account_call_for_a_scope_learns_its_hub_from_introspection(
+    undiscovered_hubspot: HubSpot,
+) -> None:
     """Introspection names the hub; the scopes it lists are never read, since HubSpot need not list each one."""
 
+    hubspot = undiscovered_hubspot
     ada = hubspot.server.add("contacts", ADA, modified=ago(days=1))
     hubspot.server.queue(
         error_response(403, category="MISSING_SCOPES"), httpx2.Response(200, json={"hubId": HUB_ID, "scopes": []})
@@ -868,11 +908,13 @@ def test_a_key_refused_the_account_call_for_a_scope_learns_its_hub_from_introspe
         "/oauth/v2/private-apps/get/access-token-info",
     ]
     assert hubspot.directory.subscription_state["hub_id"] == HUB_ID
-    assert hubspot.directory.run_sync(now=timezone.now()) == 1
+    assert hubspot.directory.run_sync(now=timezone.now()) == 2  # The address book, then the contact.
+    hubspot.reopen()
     assert hubspot.link(ada).source_url is None
 
 
-def test_a_discovery_that_fails_transiently_waits_and_then_succeeds(hubspot: HubSpot) -> None:
+def test_a_discovery_that_fails_transiently_waits_and_then_succeeds(undiscovered_hubspot: HubSpot) -> None:
+    hubspot = undiscovered_hubspot
     ada = hubspot.server.add("contacts", ADA, modified=ago(days=1))
     hubspot.server.queue(error_response(503))
 
@@ -886,13 +928,13 @@ def test_a_discovery_that_fails_transiently_waits_and_then_succeeds(hubspot: Hub
     assert hubspot.discover() == {"ok": True, "reason": "applied"}
 
     assert hubspot.directory.discovery_ready
-    assert hubspot.directory.run_sync(now=timezone.now()) == 1
+    assert hubspot.directory.run_sync(now=timezone.now()) == 2  # The address book, then the contact.
+    hubspot.reopen()
     assert hubspot.contact(ada).display_name == "Ada Example"
 
 
 def test_a_key_of_another_account_is_refused_and_the_directory_keeps_reading_its_own(hubspot: HubSpot) -> None:
     ada = hubspot.server.add("contacts", ADA, modified=ago(days=1))
-    assert hubspot.discover()["ok"]
     assert hubspot.directory.run_sync(now=timezone.now()) == 1
 
     hubspot.server.token = SECOND_KEY
@@ -923,7 +965,8 @@ def test_a_key_of_another_account_is_refused_and_the_directory_keeps_reading_its
     assert (Person.objects.count(), hubspot.link(ada).status) == (1, LinkStatus.CURRENT)
 
 
-def test_a_rejected_key_stops_at_discovery_with_the_operator_message(hubspot: HubSpot) -> None:
+def test_a_rejected_key_stops_at_discovery_with_the_operator_message(undiscovered_hubspot: HubSpot) -> None:
+    hubspot = undiscovered_hubspot
     hubspot.server.token = OTHER_KEY
 
     assert hubspot.discover() == {"ok": False, "reason": "discovery-failed"}

@@ -35,6 +35,7 @@ function person(id: string, values: Partial<MergePersonRecord> = {}): MergePerso
     name_suffix: "",
     nickname: "",
     birthday: null,
+    anniversary: null,
     ...values,
   };
 }
