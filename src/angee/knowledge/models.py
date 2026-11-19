@@ -14,6 +14,7 @@ import re
 from collections.abc import Iterable, Mapping
 from contextlib import nullcontext
 from dataclasses import dataclass, replace
+from datetime import datetime
 from enum import StrEnum
 from graphlib import CycleError, TopologicalSorter
 from typing import Any, ClassVar, Self, cast
@@ -419,8 +420,10 @@ class PageManager[PageT: Page](_PageManagerBase[PageT]):
     def create_in(self, vault: Any, **fields: Any) -> PageT:
         """Create a page in ``vault`` after the REBAC create preflight.
 
-        The preflight evaluates the schema's ``create = vault->write`` with
-        the relations the new row would carry, so only actors who can write
+        An owner that makes the page from a source's text states when the source
+        says it was written with ``created_at`` (``CreatedAtField``); a page made
+        here stamps its insert. The preflight evaluates the schema's
+        ``create = vault->write`` with the relations the new row would carry, so only actors who can write
         the vault may add pages to it. Without an actor, inside a system
         context (an import), the page is system work: no preflight, and no
         author. A parent from another vault is
@@ -704,7 +707,7 @@ class RecordBindingManager[BindingT: RecordBinding](_RecordBindingManagerBase[Bi
 
     def write_sourced_page(
         self, party: models.Model, *, vault: Vault, role: str, folder_title: str, title: str, body: str,
-        written: str | None,
+        written: str | None, created_at: datetime | None = None,
     ) -> SourcedWrite:
         """Write a source's text ``body`` into ``party``'s note bound to it under ``role``, never over a person's edit.
 
@@ -717,8 +720,11 @@ class RecordBindingManager[BindingT: RecordBinding](_RecordBindingManagerBase[Bi
         ``folder_title``) and bound under ``role``: the title must be free in the
         vault. ``written`` is the text this source last wrote there, ``None`` for
         none (a directory mapping reads it from its link:
-        ``DirectoryMapping.applied``). The same text again, or an empty first one,
-        writes nothing, not even the folder (``UNCHANGED``). A new note, or one
+        ``DirectoryMapping.applied``): the compare-and-set token below, never a
+        time. ``created_at`` is when the source says it wrote ``body``: a note this
+        call makes takes it as its creation time (:meth:`PageManager.create_in`), and
+        an existing note and the party's folder keep their own. The same text again,
+        or an empty first one, writes nothing, not even the folder (``UNCHANGED``). A new note, or one
         that still holds ``written`` (an empty one when there is none), takes
         ``body``, compare-and-set on the hash it holds (``WRITTEN``). A note a
         person has edited since keeps their text, and the newer text is appended
@@ -745,7 +751,8 @@ class RecordBindingManager[BindingT: RecordBinding](_RecordBindingManagerBase[Bi
                          "new note a title of its own."}
                     )
                 folder = self.party_folder(party, vault=vault, title=folder_title)
-                note = page_model.objects.create_in(vault, parent=folder, title=title, body=body)
+                stated = {"created_at": created_at} if created_at is not None else {}
+                note = page_model.objects.create_in(vault, parent=folder, title=title, body=body, **stated)
                 self.upsert(target=party, page=note, role=role)
                 return SourcedWrite.WRITTEN
             markdown = self._readable(markdown_model, found)
